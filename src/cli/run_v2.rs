@@ -65,7 +65,7 @@ fn cmd_run_v2(
     let manifest = run_manifest_preamble(filename, output, manifest_override, no_manifest);
     // A file of a package with other modules runs the whole package, as
     // one source (project mode, B-2026-10-22-14).
-    let project = package_source(filename, no_manifest, output, "run");
+    let project = package_source_at(filename, no_manifest, manifest_override, output, "run");
     let source = match &project {
         Some(a) => a.text.clone(),
         None => read_source(filename),
@@ -260,11 +260,28 @@ pub(super) fn package_source(
     output: OutputMode,
     cmd: &str,
 ) -> Option<super::project_v2::Amalgam> {
+    package_source_at(filename, no_manifest, None, output, cmd)
+}
+
+/// [`package_source`] with `karac run --manifest`'s manifest, which names
+/// the package instead of the walk up from the file.
+pub(super) fn package_source_at(
+    filename: &str,
+    no_manifest: bool,
+    manifest: Option<&str>,
+    output: OutputMode,
+    cmd: &str,
+) -> Option<super::project_v2::Amalgam> {
     if let Some(e) = super::project_v2::package_walk_refusal(filename, no_manifest) {
         super::build_cmds::emit_walker_error(&e, output);
         process::exit(1);
     }
-    let (root, tree) = super::project_v2::package_tree(filename, no_manifest, false)?;
+    let (root, tree) = super::project_v2::package_tree_at(
+        filename,
+        no_manifest,
+        false,
+        manifest.map(std::path::Path::new),
+    )?;
     if tree.modules.iter().filter(|m| !m.is_synthetic).count() > 1 {
         return Some(combine(&root, &tree, output, cmd));
     }

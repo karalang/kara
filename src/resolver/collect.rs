@@ -2068,8 +2068,27 @@ impl<'a> super::Resolver<'a> {
                 })
                 .collect();
             let candidates: Vec<&str> = all_paths.iter().map(|s| s.as_str()).collect();
-            let suggestion = suggest_similar(&wanted, &candidates);
+            // Only other platforms' files define it (design.md § 4, Missing
+            // platforms): say which, and that this one has none.
+            let elsewhere = tree.elsewhere.get(&imp.path);
+            let suggestion = match elsewhere {
+                Some(_) => None,
+                None => suggest_similar(&wanted, &candidates),
+            };
             let mut message = format!("unknown module `{wanted}`");
+            if let Some(on) = elsewhere {
+                let files: Vec<String> = on
+                    .iter()
+                    .map(|p| format!("`{}_{p}.kara`", imp.path.join("/")))
+                    .collect();
+                message.push_str(&format!(
+                    ": it is defined only for {} ({}), and no file defines it for this \
+                     platform; add a shared `{}.kara` or a file for this platform",
+                    on.join(", "),
+                    files.join(", "),
+                    imp.path.join("/")
+                ));
+            }
             if let Some(ref s) = suggestion {
                 message.push_str(&format!(", did you mean `{s}`?"));
             }

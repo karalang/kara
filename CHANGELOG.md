@@ -1364,6 +1364,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- An import of a module that only other platforms' files define
+  (`poller_macos.kara` alone, on Linux) is `E0112` naming those platforms
+  and their files, as design.md § 4 Missing platforms says, rather than a
+  bare unknown module with a "did you mean" (B-2026-11-16-200).
 - Rust ports found by the modbus_server app: `use std::io::{Read, Write};`
   (and `BufRead`, `Seek`) is deleted, since Kāra's `read`, `write_all` and
   `read_line` are methods of the handle with no trait to import, and
@@ -1928,6 +1932,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `karac run --manifest <path> file.kara` gives the file the dependencies
+  of the package that manifest names, as a script inside that package gets
+  them (design.md § 4, Finding the package); the manifest was read and its
+  dependencies dropped, so `import dep.f;` was an unknown module
+  (B-2026-11-16-198).
+- `karac build --target-cpu=native` builds for the build host's CPU and
+  its features, which `--target-features` then adjusts (design.md § CPU
+  baseline); it was refused as an unknown CPU. A wasm or cross build
+  refuses it by name. `--target-cpu=help` prints its header once, names
+  `native`, and carries the wasm32 registry after the host's
+  (B-2026-11-16-199).
 - `karac fmt` keeps a `///` before a function's first parameter, or before
   a method's receiver, where it was: it moved it into the function's body,
   where it documents nothing and `karac check` warned that it is discarded

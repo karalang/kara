@@ -1351,11 +1351,26 @@ pub(super) fn package_tree(
     no_manifest: bool,
     with_tests: bool,
 ) -> Option<(std::path::PathBuf, ProgramTree)> {
+    package_tree_at(filename, no_manifest, with_tests, None)
+}
+
+/// [`package_tree`] for the package whose manifest `karac run --manifest`
+/// names, when it names one (design.md § 4, Finding the package): the file
+/// is that package's script, or its own module, wherever it lies.
+pub(super) fn package_tree_at(
+    filename: &str,
+    no_manifest: bool,
+    with_tests: bool,
+    manifest: Option<&std::path::Path>,
+) -> Option<(std::path::PathBuf, ProgramTree)> {
     if no_manifest {
         return None;
     }
     let entry = std::fs::canonicalize(filename).ok()?;
-    let root = manifest::discover_project_root(entry.parent()?)?;
+    let root = match manifest {
+        Some(m) => std::fs::canonicalize(m).ok()?.parent()?.to_path_buf(),
+        None => manifest::discover_project_root(entry.parent()?)?,
+    };
     let dep_walks = quiet_dep_package_walks(&root);
     // A script outside `src/` is a program of its own that gets the
     // package's dependencies (design.md § 4, Finding the package). With none

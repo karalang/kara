@@ -460,7 +460,7 @@ fn list_cpus_if_asked(a: &BuildArgs) {
 #[cfg(feature = "llvm")]
 fn apply_wasm_cpu(a: &BuildArgs) {
     list_cpus_if_asked(a);
-    apply_target_cpu_override(
+    let _ = apply_target_cpu_override(
         a.target_cpu
             .map(str::to_string)
             .or_else(read_target_cpu_env),
@@ -469,6 +469,7 @@ fn apply_wasm_cpu(a: &BuildArgs) {
         a.target_features
             .map(str::to_string)
             .or_else(read_target_features_env),
+        None,
     );
 }
 
@@ -488,7 +489,9 @@ fn apply_cpu(
     // baseline's names come from `cpu_baseline_native_override`'s fixed
     // table, every one of them in LLVM 18's registry, so a default build
     // installs them directly (B-2026-10-31-8).
-    match a
+    // `native` is the host's CPU with the host's features, which a feature
+    // list the user names then adjusts.
+    let host_features = match a
         .target_cpu
         .map(str::to_string)
         .or_else(read_target_cpu_env)
@@ -499,16 +502,22 @@ fn apply_cpu(
             if let Some(cpu) = baseline_cpu {
                 crate::target::set_target_cpu_override(&cpu);
             }
+            None
         }
-    }
-    match a
+    };
+    let named = a
         .target_features
         .map(str::to_string)
         .or_else(read_target_features_env)
-        .or_else(|| manifest_field(|m| m.release_target_features.clone()))
-    {
-        Some(features) => apply_target_features_override(Some(features)),
-        None => {
+        .or_else(|| manifest_field(|m| m.release_target_features.clone()));
+    match (host_features, named) {
+        (host, Some(features)) => apply_target_features_override(Some(features), host.as_deref()),
+        (Some(host), None) => {
+            if !host.is_empty() {
+                crate::target::set_target_features_override(&host);
+            }
+        }
+        (None, None) => {
             if let Some(features) = baseline_features {
                 crate::target::set_target_features_override(&features);
             }

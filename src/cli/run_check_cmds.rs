@@ -707,13 +707,17 @@ pub(super) fn run_manifest_preamble(
     // and running anyway. Path-dep-only (no network), same policy as `check`:
     // registry/git deps stay lenient (unsupported findings skipped). Scoped to
     // the normal project-discovery case — `--no-manifest` opts out (as does
-    // `karac run --example`, which passes it), and a `--manifest` override is a
-    // single-file-script mode where project dep resolution doesn't apply.
-    if !no_manifest && manifest_override.is_none() {
-        if let (Some(root), Some(mf)) = (
-            manifest::discover_project_root(&script_dir),
-            discovered_manifest.as_ref(),
-        ) {
+    // `karac run --example`, which passes it). A `--manifest` override names
+    // the package whose dependencies the file gets (design.md § 4, Finding
+    // the package), so its graph is the one checked.
+    if !no_manifest {
+        let root = match manifest_override {
+            Some(m) => std::fs::canonicalize(m)
+                .ok()
+                .and_then(|p| p.parent().map(std::path::Path::to_path_buf)),
+            None => manifest::discover_project_root(&script_dir),
+        };
+        if let (Some(root), Some(mf)) = (root, discovered_manifest.as_ref()) {
             let mf = manifest::merge_target_overlay(mf, Some(&default_resolution_target(mf)));
             let has_deps = !mf.dependencies.is_empty()
                 || !mf.dev_dependencies.is_empty()
@@ -2090,18 +2094,36 @@ pub(super) fn resolve_native_cpu_baseline(
 /// warn-and-fall-back-to-generic, i.e. exactly the silent baseline
 /// neutering the validation closes — then installed process-wide for
 /// the codegen driver's target-machine constructors.
+///
+/// `native` names the build host's CPU (design.md § CPU baseline), so it is
+/// the host's CPU and its features, and only a native build for the host
+/// takes it; the host's features are returned for the feature string.
 #[cfg(feature = "llvm")]
-pub(super) fn apply_target_cpu_override(resolved: Option<String>) {
-    let Some(cpu) = resolved else { return };
+pub(super) fn apply_target_cpu_override(resolved: Option<String>) -> Option<String> {
+    let cpu = resolved?;
     if cpu == "help" {
         crate::backend::driver::print_target_cpu_help();
         process::exit(0);
+    }
+    if cpu == "native" {
+        if crate::target::active_target_is_wasm() || crate::target::cross_triple().is_some() {
+            eprintln!(
+                "error: --target-cpu=native names the build host's CPU, so only a native \
+                 build for the host takes it; name the target's CPU instead \
+                 (`karac build --target-cpu=help` lists them)"
+            );
+            process::exit(1);
+        }
+        let (name, features) = crate::backend::driver::host_cpu();
+        crate::target::set_target_cpu_override(&name);
+        return Some(features);
     }
     if let Err(msg) = crate::backend::driver::validate_target_cpu(&cpu) {
         eprintln!("{msg}");
         process::exit(1);
     }
     crate::target::set_target_cpu_override(&cpu);
+    None
 }
 
 /// Act on the resolved `--target-features` value — the
@@ -2113,9 +2135,10 @@ pub(super) fn apply_target_cpu_override(resolved: Option<String>) {
 /// native behavior on an unknown feature is warn-and-ignore, the same
 /// silent neutering the CPU validation closes) and installed for the
 /// target-machine constructors, which append it after the per-target
-/// default features.
+/// default features. `host` is `--target-cpu=native`'s feature string,
+/// which the user's list follows and so adjusts.
 #[cfg(feature = "llvm")]
-pub(super) fn apply_target_features_override(resolved: Option<String>) {
+pub(super) fn apply_target_features_override(resolved: Option<String>, host: Option<&str>) {
     let Some(features) = resolved else { return };
     if features == "help" {
         crate::backend::driver::print_target_cpu_help();
@@ -2125,7 +2148,10 @@ pub(super) fn apply_target_features_override(resolved: Option<String>) {
         eprintln!("{msg}");
         process::exit(1);
     }
-    crate::target::set_target_features_override(&features);
+    match host.filter(|h| !h.is_empty()) {
+        Some(host) => crate::target::set_target_features_override(&format!("{host},{features}")),
+        None => crate::target::set_target_features_override(&features),
+    }
 }
 
 /// Normalize a rendered `DiagnosticJson` entry for cross-target

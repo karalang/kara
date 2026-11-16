@@ -177,6 +177,10 @@ pub struct WalkResult {
     pub src_dir: PathBuf,
     pub modules: Vec<WalkedModule>,
     pub entry: EntryKind,
+    /// Each module that only other platforms' files define, with those
+    /// platforms: it does not exist on this one, and an import of it says
+    /// where it does (design.md § 4, Missing platforms).
+    pub elsewhere: Vec<(ModulePath, Vec<Platform>)>,
 }
 
 // ── Errors ───────────────────────────────────────────────────────
@@ -296,6 +300,7 @@ impl Default for WalkerOpts {
 /// package's dependencies, which the caller adds beside this walk.
 pub fn walk_script(file: &Path) -> WalkResult {
     WalkResult {
+        elsewhere: Vec::new(),
         src_dir: file.parent().map(Path::to_path_buf).unwrap_or_default(),
         modules: vec![WalkedModule {
             file: file.to_path_buf(),
@@ -372,16 +377,25 @@ pub fn walk_project(project_root: &Path, opts: WalkerOpts) -> Result<WalkResult,
     }
 
     let mut modules: Vec<WalkedModule> = Vec::new();
+    let mut elsewhere: Vec<(ModulePath, Vec<Platform>)> = Vec::new();
     for ((path, role), candidates) in bucket {
         if role == ModuleRole::Test && !opts.include_tests {
             continue;
         }
-        if let Some(picked) = pick_for_target(&path, &candidates, opts.target)? {
-            modules.push(picked);
+        match pick_for_target(&path, &candidates, opts.target)? {
+            Some(picked) => modules.push(picked),
+            None if role != ModuleRole::Test => {
+                let mut on: Vec<Platform> = candidates.iter().filter_map(|c| c.platform).collect();
+                on.sort_by_key(|p| p.as_suffix());
+                on.dedup();
+                elsewhere.push((path, on));
+            }
+            None => {}
         }
     }
 
     modules.sort_by(|a, b| a.file.cmp(&b.file));
+    elsewhere.sort_by(|a, b| a.0.cmp(&b.0));
 
     let entry = match (&main_path, &lib_path) {
         (Some(_), None) => EntryKind::Bin,
@@ -394,6 +408,7 @@ pub fn walk_project(project_root: &Path, opts: WalkerOpts) -> Result<WalkResult,
         src_dir,
         modules,
         entry,
+        elsewhere,
     })
 }
 

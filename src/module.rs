@@ -151,6 +151,9 @@ pub struct ProgramTree {
     /// the renamed paths already; a pass that re-parses a dependency's file
     /// applies them with [`ProgramTree::rename_dependency_import`].
     pub import_renames: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// The package's modules that only other platforms' files define, with
+    /// those platforms' suffixes ([`crate::walker::WalkResult::elsewhere`]).
+    pub elsewhere: HashMap<ModulePath, Vec<&'static str>>,
 }
 
 impl ProgramTree {
@@ -855,6 +858,11 @@ pub fn build_program_tree_with_overlay(
         target_tombstones,
         wildcard_ambiguities: std::collections::HashMap::new(),
         import_renames,
+        elsewhere: walked
+            .elsewhere
+            .iter()
+            .map(|(path, on)| (path.clone(), on.iter().map(|p| p.as_suffix()).collect()))
+            .collect(),
     };
 
     // design.md § Module System > Wildcard imports. Rewrite every
@@ -1963,6 +1971,7 @@ mod tests {
             target_tombstones: HashMap::new(),
             wildcard_ambiguities: HashMap::new(),
             import_renames: HashMap::new(),
+            elsewhere: HashMap::new(),
         }
     }
 

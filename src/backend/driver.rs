@@ -2164,13 +2164,25 @@ pub fn print_target_cpu_listing() {
 /// [`capture_help_listing`] runs; when that yields nothing, the dump goes
 /// to stderr as before.
 pub fn print_target_cpu_help() {
-    match capture_help_listing().filter(|l| l.contains("Available CPUs")) {
+    // The child's listing opens with the header line already. A native
+    // build's listing names `native` and carries the wasm32 registry after
+    // its own (design.md § CPU baseline).
+    match capture_help_listing(crate::target::active_target())
+        .filter(|l| l.contains("Available CPUs"))
+    {
         Some(listing) => {
-            println!(
-                "Supported CPUs and features for target `{}`:",
-                target_label()
-            );
             print!("{listing}");
+            if !crate::target::active_target_is_wasm() && crate::target::cross_triple().is_none() {
+                println!(
+                    "\n`native` is also accepted: this host's CPU (`{}`) and its features.",
+                    host_cpu().0
+                );
+                if let Some(wasm) =
+                    capture_help_listing("wasm_wasi").filter(|l| l.contains("Available CPUs"))
+                {
+                    print!("\n{wasm}");
+                }
+            }
         }
         None => print_target_cpu_listing(),
     }
@@ -2333,6 +2345,15 @@ pub(crate) fn default_cpu_and_features(triple: &str) -> (&'static str, &'static 
     }
 }
 
+/// The build host's CPU and feature string, as LLVM detects them: what
+/// `--target-cpu=native` builds for (design.md § CPU baseline).
+pub fn host_cpu() -> (String, String) {
+    (
+        TargetMachine::get_host_cpu_name().to_string(),
+        TargetMachine::get_host_cpu_features().to_string(),
+    )
+}
+
 /// Validate a `--target-cpu` value against LLVM's CPU registry for the
 /// active target. `Err` carries the full user-facing diagnostic
 /// (unknown name + the supported listing — the tracker's `rustc -C
@@ -2413,7 +2434,8 @@ pub fn validate_target_features(features: &str) -> Result<(), String> {
 /// dump. `None` when the listing is unavailable (spawn failure, non-
 /// karac `current_exe`, non-llvm child) — callers degrade gracefully.
 fn supported_target_cpus() -> Option<Vec<String>> {
-    let names = parse_cpu_names_from_help_listing(&capture_help_listing()?);
+    let names =
+        parse_cpu_names_from_help_listing(&capture_help_listing(crate::target::active_target())?);
     if names.is_empty() {
         None
     } else {
@@ -2424,7 +2446,9 @@ fn supported_target_cpus() -> Option<Vec<String>> {
 /// Capture the active target's feature registry — same child dump as
 /// `supported_target_cpus`, parsing the `Available features` section.
 fn supported_target_features() -> Option<Vec<String>> {
-    let names = parse_feature_names_from_help_listing(&capture_help_listing()?);
+    let names = parse_feature_names_from_help_listing(&capture_help_listing(
+        crate::target::active_target(),
+    )?);
     if names.is_empty() {
         None
     } else {
@@ -2435,11 +2459,13 @@ fn supported_target_features() -> Option<Vec<String>> {
 /// Re-invoke karac with the hidden `__list-target-cpus` argv and return
 /// the child's stderr (the MCSubtargetInfo dump: CPUs table + features
 /// table). `None` on spawn failure.
-fn capture_help_listing() -> Option<String> {
+fn capture_help_listing(target: &str) -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let mut cmd = std::process::Command::new(exe);
-    cmd.args(["__list-target-cpus", crate::target::active_target()]);
-    if let Some(t) = crate::target::cross_triple() {
+    cmd.args(["__list-target-cpus", target]);
+    if let Some(t) =
+        crate::target::cross_triple().filter(|_| target == crate::target::active_target())
+    {
         cmd.arg(t);
     }
     let out = cmd.output().ok()?;
