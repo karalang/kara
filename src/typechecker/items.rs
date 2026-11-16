@@ -2832,6 +2832,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_iter_lets = std::mem::take(&mut self.iter_lets);
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
         let saved_list_lit_lets = std::mem::take(&mut self.list_lit_lets);
+        let saved_open_collection_lets = std::mem::take(&mut self.open_collection_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
         let saved_literal_tuple_pushes = std::mem::take(&mut self.literal_tuple_pushes);
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
@@ -2947,6 +2948,7 @@ impl<'a> super::TypeChecker<'a> {
         self.str_lit_lets = saved_str_lit_lets;
         self.explain_list_lit_lets();
         self.list_lit_lets = saved_list_lit_lets;
+        self.open_collection_lets = saved_open_collection_lets;
         self.literal_lets = saved_literal_lets;
         self.literal_tuple_pushes = saved_literal_tuple_pushes;
         self.read_only_slice_lets = saved_read_only_slice_lets;
@@ -11882,6 +11884,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.note_iter_let(name, pattern.span, &value.span, &expected_ty);
                         self.note_str_lit_let(name, pattern.span, value, &expected_ty);
                         self.note_list_lit_let(name, pattern.span, value);
+                        self.note_open_collection_let(name, pattern.span, value);
                         self.note_literal_let(name, pattern.span, value, &expected_ty);
                         self.note_read_only_slice_let(name, value, &expected_ty);
                     } else {
@@ -11889,6 +11892,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.iter_lets.remove(name.as_str());
                         self.str_lit_lets.remove(name.as_str());
                         self.list_lit_lets.remove(name.as_str());
+                        self.open_collection_lets.remove(name.as_str());
                         self.literal_lets.remove(name.as_str());
                     }
                 } else if let PatternKind::Tuple(pats) = &pattern.kind {
@@ -12491,6 +12495,9 @@ impl<'a> super::TypeChecker<'a> {
                     rhs_ty
                 };
                 self.note_list_lit_assign(target, &rhs_ty);
+                if let ExprKind::Identifier(t) = &target.kind {
+                    self.open_collection_lets.remove(t.as_str());
+                }
                 self.reject_owned_value_into_ref_local(target, value, &rhs_ty);
                 self.reject_plain_assign_through_mut_ref(target, &rhs_ty);
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.

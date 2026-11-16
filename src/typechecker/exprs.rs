@@ -3318,6 +3318,29 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Error;
             }
         }
+        // A literal in a `ref T` slot is a reference to a constant (design.md
+        // § References: the `0` of `counts.get(k).unwrap_or(0)`), so it is a
+        // `T`. Where `T` is still an open literal (a count a map's
+        // `or_insert(0)` made), the literal joins it rather than taking the
+        // default `i64` and fixing the map's counts with it, so a later use
+        // fixes both, as Rust's does (kata 1178, B-2026-11-16-228).
+        if let (ExprKind::Integer(_, None) | ExprKind::Float(_, None), Type::Ref(inner)) =
+            (&expr.kind, expected)
+        {
+            if let Type::TypeVar(v) = resolve_type_var_top(inner, &self.env.substitutions) {
+                if inference::literal_var_kind(v).is_some() {
+                    let t = self.infer_expr_open(expr);
+                    if unify_types(
+                        &t,
+                        &Type::TypeVar(v),
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    ) {
+                        return expected.clone();
+                    }
+                }
+            }
+        }
         // B-2026-07-09-7: a SUFFIXED integer literal at a differently-typed
         // boundary (`let x: u64 = -5i64`, `let x: u32 = 5_000_000_000i64`, and
         // the same at arg/return/field/match-arm positions) must still fit the
@@ -14778,6 +14801,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if self.list_lit_lets.contains_key(name.as_str()) {
                     self.list_lit_let_uses
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                }
+                if self.open_collection_lets.contains_key(name.as_str()) {
+                    self.open_collection_let_uses
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
                 if self.read_only_slice_lets.contains_key(name.as_str()) {

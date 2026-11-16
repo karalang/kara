@@ -4301,6 +4301,13 @@ pub struct TypeChecker<'a> {
     pub(super) list_lit_lets: FxHashMap<String, ListLitLet>,
     /// The spans of identifiers that read a [`ListLitLet`] binding.
     pub(super) list_lit_let_uses: FxHashMap<SpanKey, String>,
+    /// `let res = Vec.new()` / `Vec.with_capacity(n)` with no annotation,
+    /// by name, with the bound name's span: its element type is whatever
+    /// its first `push` gives it, so a use refused for a number nested in
+    /// that type offers the binding's annotation (kata 1178).
+    pub(super) open_collection_lets: FxHashMap<String, Span>,
+    /// The spans of identifiers that read an `open_collection_lets` binding.
+    pub(super) open_collection_let_uses: FxHashMap<SpanKey, String>,
     /// The `Peekable[I]` writes already refused (a signature is lowered
     /// more than once).
     pub(super) peekable_arity_reported: FxHashSet<SpanKey>,
@@ -4833,6 +4840,8 @@ impl<'a> TypeChecker<'a> {
             str_lit_let_uses: FxHashMap::default(),
             list_lit_lets: FxHashMap::default(),
             list_lit_let_uses: FxHashMap::default(),
+            open_collection_lets: FxHashMap::default(),
+            open_collection_let_uses: FxHashMap::default(),
             peekable_arity_reported: FxHashSet::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
@@ -7967,6 +7976,23 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Note `let name = Vec.new()` / `Vec.with_capacity(n)` (or a
+    /// `VecDeque`'s) with no annotation: its element type comes from what
+    /// is pushed, and a use that wants another one offers the annotation.
+    pub(super) fn note_open_collection_let(&mut self, name: &str, name_span: Span, value: &Expr) {
+        let open = matches!(&value.kind, ExprKind::Call { callee, .. }
+            if matches!(&callee.kind, ExprKind::Path { segments, .. }
+                if segments.len() == 2
+                    && (segments[0] == "Vec" || segments[0] == "VecDeque")
+                    && (segments[1] == "new" || segments[1] == "with_capacity")));
+        if open {
+            self.open_collection_lets
+                .insert(name.to_string(), name_span);
+        } else {
+            self.open_collection_lets.remove(name);
+        }
+    }
+
     /// `name = value`: another value may have another length, so `: Array`
     /// alone no longer fixes the binding, unless the value is an `Array`
     /// itself, whose type carries its length (`result = multiply(result,
@@ -9853,6 +9879,45 @@ impl<'a> TypeChecker<'a> {
         };
         let (want_now, found_now) = (resolved(expected), resolved(found));
         if let Some(msg) = nested_numeric_mismatch_message(&want_now, &found_now) {
+            // `let mut res = Vec.with_capacity(n)` took its element type from
+            // what was pushed, and `res` is refused where it goes: the
+            // binding's annotation gives it the type it is used as (kata
+            // 1178's Rust arm, `res.push(cnt)` with an `i64` `cnt` into a
+            // `Vec[i32]` return, B-2026-11-16-229). A narrowing push is the next round's.
+            let open_let = self
+                .open_collection_let_uses
+                .get(&SpanKey::from_span(&span))
+                .and_then(|n| self.open_collection_lets.get(n).map(|s| (n.clone(), *s)));
+            if let Some((name, at)) = open_let {
+                let want = match &want_now {
+                    Type::Ref(t) | Type::MutRef(t) => t.as_ref().clone(),
+                    t => t.clone(),
+                };
+                if matches!(&want, Type::Named { name, .. } if name == "Vec" || name == "VecDeque")
+                    && !types::type_display(&want).contains('?')
+                {
+                    let want = type_display(&want);
+                    self.type_error_with_fix_it(
+                        format!(
+                            "{msg}: `{name}` (bound at {}:{}) took its element type from \
+                             what was pushed into it; declare it `{name}: {want}`",
+                            at.line, at.column
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                        FixIt {
+                            span: Span {
+                                line: at.line,
+                                column: at.column + at.length,
+                                offset: at.offset + at.length,
+                                length: 0,
+                            },
+                            replacement: format!(": {want}"),
+                        },
+                    );
+                    return false;
+                }
+            }
             // `Vec[Vec[usize]]` for a `Vec[Vec[i64]]` is a `usize` meeting
             // the `i64` an index is: the written `usize` gets its fix to
             // `i64` (kata 2049's Rust arm, `children: &Vec<Vec<usize>>`).
