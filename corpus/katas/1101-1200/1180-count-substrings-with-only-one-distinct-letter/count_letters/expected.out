@@ -1,0 +1,6 @@
+example 1: 8
+example 2: 55
+small: [1, 2, 26, 23, 11]
+300 random strings: 36919 in all, checksum 887532465
+1000 of one letter: 500500
+2000 strings of 1000 letters: 3244448 in all, checksum 225722129

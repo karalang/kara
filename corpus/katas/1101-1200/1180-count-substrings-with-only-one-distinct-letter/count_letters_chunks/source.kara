@@ -1,0 +1,55 @@
+// LeetCode #1180: Count Substrings with Only One Distinct Letter -- the
+// runs taken as `chunk_by` groups of equal neighbours, each group's
+// `n * (n + 1) / 2` summed in one chain. O(n)
+
+fn count_letters(s: Str) -> i64 {
+    s.bytes().chunk_by(|a, b| a == b).into_iter().map(|g| g.len() * (g.len() + 1) / 2).sum()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` letters drawn from the first `m`.
+fn random_string(seed: mut ref i64, n: i64, m: i64) -> String {
+    String.from_utf8((0..n).map(|_| b'a' + (next_random(mut seed) % m) as u8).collect()).unwrap()
+}
+
+fn main() {
+    // LeetCode's two examples
+    println(f"example 1: {count_letters("aaaba")}");
+    println(f"example 2: {count_letters("aaaaaaaaaa")}");
+    // one letter; every letter different; a run at each end; runs of one
+    // letter split by another
+    let small = ["a", "ab", "abcdefghijklmnopqrstuvwxyz", "zzzzabczzzz", "aabaabaa"];
+    let answers: Vec[i64] = small.iter().map(|s| count_letters(s)).collect();
+    println(f"small: {answers}");
+    // 300 random strings of 1 to 40 letters over the first 1 to 3
+    let mut seed = 1180;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let m = 1 + next_random(mut seed) % 3;
+        let a = count_letters(random_string(mut seed, n, m));
+        total += a;
+        check = (check * 131 + a) % 1000000007;
+    }
+    println(f"300 random strings: {total} in all, checksum {check}");
+    // the constraints' most: 1000 letters, one letter throughout, and 2000
+    // random strings of 1000 letters over the first 2 to 4
+    let one_letter = "q".repeat(1000);
+    println(f"1000 of one letter: {count_letters(one_letter)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let m = 2 + next_random(mut seed) % 3;
+        let a = count_letters(random_string(mut seed, 1000, m));
+        total += a;
+        check = (check * 131 + a) % 1000000007;
+    }
+    println(f"2000 strings of 1000 letters: {total} in all, checksum {check}");
+}

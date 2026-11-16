@@ -1,0 +1,47 @@
+// LeetCode #1180: Count Substrings with Only One Distinct Letter -- the ★
+// arm's bench: one pass, the run of equal letters ending at each position
+// added at every step.
+
+fn count_letters(s: Str) -> i64 {
+    let mut total = 0;
+    let mut run = 0;
+    let mut last = 0u8;
+    for c in s.bytes().iter() {
+        if c == last {
+            run += 1;
+        } else {
+            run = 1;
+            last = c;
+        }
+        total += run;
+    }
+    total
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 1000 strings of 1000 letters, the constraints' most, each over the
+    // first 1 to 4 letters, built once; then 100 rounds over all of them,
+    // every answer folded into a checksum
+    let mut seed = 1180;
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..1000 {
+        let m = 1 + next_random(mut seed) % 4;
+        let bytes: Vec[u8] = (0..1000).map(|_| b'a' + (next_random(mut seed) % m) as u8).collect();
+        strings.push(String.from_utf8(bytes).unwrap());
+    }
+    let rounds = 100;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for s in strings.iter() {
+            check = (check * 131 + count_letters(s)) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 1000 strings: checksum {check}");
+}

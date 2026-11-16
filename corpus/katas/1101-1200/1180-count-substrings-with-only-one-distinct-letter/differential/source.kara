@@ -1,0 +1,224 @@
+// LeetCode #1180: Count Substrings with Only One Distinct Letter -- the
+// differential: the six arms against the statement read literally, and
+// six properties of what they return.
+
+// ---- count_letters.kara ----
+
+fn a0_count_letters(s: Str) -> i64 {
+    let mut total = 0;
+    let mut run = 0;
+    let mut last = 0u8;
+    for c in s.bytes().iter() {
+        if c == last {
+            run += 1;
+        } else {
+            run = 1;
+            last = c;
+        }
+        total += run;
+    }
+    total
+}
+
+// ---- count_letters_runs.kara ----
+
+fn a1_count_letters(s: Str) -> i64 {
+    let bytes = s.bytes();
+    let mut total = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let mut j = i;
+        while j < bytes.len() and bytes[j] == bytes[i] {
+            j += 1;
+        }
+        let n = j - i;
+        total += n * (n + 1) / 2;
+        i = j;
+    }
+    total
+}
+
+// ---- count_letters_brute.kara ----
+
+fn a2_count_letters(s: Str) -> i64 {
+    let bytes = s.bytes();
+    let mut total = 0;
+    for i in 0..bytes.len() {
+        for j in i..bytes.len() {
+            if bytes[j] != bytes[i] {
+                break;
+            }
+            total += 1;
+        }
+    }
+    total
+}
+
+// ---- count_letters_chunks.kara ----
+
+fn a3_count_letters(s: Str) -> i64 {
+    s.bytes().chunk_by(|a, b| a == b).into_iter().map(|g| g.len() * (g.len() + 1) / 2).sum()
+}
+
+// ---- count_letters_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn count_letters(s: String) -> i32 {
+        let b = s.bytes();
+        let mut ans = 0;
+        let mut cnt = 0;
+        for i in 0..b.len() {
+            if i > 0 and b[i] == b[i - 1] {
+                cnt += 1;
+            } else {
+                cnt = 1;
+            }
+            ans += cnt;
+        }
+        ans
+    }
+}
+
+fn a4_count_letters(s: Str) -> i64 {
+    A4Solution.count_letters(s.to_string())
+}
+
+// ---- count_letters_chain.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn count_letters(s: String) -> i32 {
+        s.bytes()
+            .chunk_by(|a, b| a == b).into_iter()
+            .map(|g| {
+                let n = g.len() as i32;
+                n * (n + 1) / 2
+            })
+            .sum()
+    }
+}
+
+fn a5_count_letters(s: Str) -> i64 {
+    A5Solution.count_letters(s.to_string())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(w: i64, s: Str) -> i64 {
+    match w {
+        0 => a0_count_letters(s),
+        1 => a1_count_letters(s),
+        2 => a2_count_letters(s),
+        3 => a3_count_letters(s),
+        4 => a4_count_letters(s),
+        _ => a5_count_letters(s),
+    }
+}
+
+// The statement read literally: every substring `s[i..j]`, counted when it
+// holds one distinct letter, its letters gathered into a `Set`.
+fn literal(s: Str) -> i64 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut total = 0;
+    for i in 0..n {
+        for j in i + 1..=n {
+            let letters: Set[u8] = bytes[i..j].iter().collect();
+            if letters.len() == 1 {
+                total += 1;
+            }
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text(bytes: Vec[u8]) -> String {
+    String.from_utf8(bytes).unwrap()
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: i64, want: i64) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 400 strings of 1 to 30 letters over the first 1 to 4; the first five
+    // have one letter and the first ten one distinct letter
+    let mut seed = 11800;
+    for plan in 0..400 {
+        let n = if plan < 5 { 1 } else { 1 + next_random(mut seed) % 30 };
+        let m = if plan < 10 { 1 } else { 1 + next_random(mut seed) % 4 };
+        let bytes: Vec[u8] = (0..n).map(|_| b'a' + (next_random(mut seed) % m) as u8).collect();
+        let s = text(bytes);
+        let reversed = text(bytes.iter().rev().collect());
+        // the alphabet shuffled, each letter sent to another
+        let mut perm: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+        for i in (1..26).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            perm.swap(i, j);
+        }
+        let renamed = text(bytes.iter().map(|c| perm[c - b'a']).collect());
+        let mut doubled: Vec[u8] = Vec.new();
+        for c in bytes.iter() {
+            doubled.push(c);
+            doubled.push(c);
+        }
+        let doubled = text(doubled);
+        // the run of letters equal to the last
+        let mut last_run = 0;
+        while last_run < n and bytes[n - 1 - last_run] == bytes[n - 1] {
+            last_run += 1;
+        }
+        let shorter = text(bytes[..n - 1].to_vec());
+        let want = literal(s);
+        let star = arm(0, s);
+        for w in 0..6 {
+            let a = arm(w, s);
+            t.check = (t.check * 131 + a) % 1000000007;
+            // P1: the statement read literally
+            expect(mut t, w, 1, plan, a, want);
+            // P2: the string read backwards
+            expect(mut t, w, 2, plan, arm(w, reversed), a);
+            // P3: the letters renamed
+            expect(mut t, w, 3, plan, arm(w, renamed), a);
+            // P4: every letter doubled turns a run of `k` into one of `2k`,
+            // `k(k + 1)/2` substrings into `k(2k + 1)`: four times the
+            // count, less one for each letter
+            expect(mut t, w, 4, plan, arm(w, doubled), 4 * a - n);
+            // P5: the last letter dropped takes away the substrings that
+            // end at it, as many as its run is long; one letter alone is
+            // one substring
+            let without = if n == 1 { 0 } else { arm(w, shorter) };
+            expect(mut t, w, 5, plan, a - without, last_run);
+            // P6: the ★ arm's answer
+            expect(mut t, w, 6, plan, a, star);
+        }
+    }
+    println(f"400 strings: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
