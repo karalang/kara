@@ -112,10 +112,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
-| B-2026-11-16-218 | 2026-11-16 | cli | medium | karac build had no -O0..-O3 flags though design.md § 16 karac build documents them, and KARAC_OPT_LEVEL outside 0-3 (s, z, 9) silently built at -O2 | — |
-| B-2026-11-16-219 | 2026-11-16 | cli | medium | A package's [build] targets did not choose what a plain karac build builds, and karac run ran a package whose targets leave out native | — |
-| B-2026-11-16-220 | 2026-11-16 | cli | low | [package].version accepted any string ("one", "1.0") though design.md § 4 makes it a semver version | — |
-| B-2026-11-16-221 | 2026-11-16 | cli | low | Text diagnostics named the phase (error[typecheck], error[effect], error[ownership]) where --output=json reports the catalogue code (E0221, E0400, E0500), and a package's per-module table coded every type error outside 28 kinds E0200 | — |
 
 ### Relocated
 
@@ -1407,6 +1403,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-215 | cli | low | A derivation names the checker's internal keys: `mk calls __builtin_heap_alloc`, `ovf calls __builtin_int_overflow` | f5ebb66465 |
 | B-2026-11-16-216 | cli | low | A derivation through a type-parameter bound names `__bound_ceiling.Store.load` | f5ebb66465 |
 | B-2026-11-16-217 | mir | low | `dbg` in a `par` branch carries no task id, and `KARAC_DBG_OUTPUT=json` / `karac run --output=json` leave `dbg` in the terminal format, on every lane | f5ebb66465 |
+| B-2026-11-16-218 | cli | medium | karac build had no -O0..-O3 flags though design.md § 16 karac build documents them, and KARAC_OPT_LEVEL outside 0-3 (s, z, 9) silently built at -O2 | e0cefb3802 |
+| B-2026-11-16-219 | cli | medium | A package's [build] targets did not choose what a plain karac build builds, and karac run ran a package whose targets leave out native | e0cefb3802 |
+| B-2026-11-16-220 | cli | low | [package].version accepted any string ("one", "1.0") though design.md § 4 makes it a semver version | e0cefb3802 |
+| B-2026-11-16-221 | cli | low | Text diagnostics named the phase (error[typecheck], error[effect], error[ownership]) where --output=json reports the catalogue code (E0221, E0400, E0… | e0cefb3802 |
 
 </details>
 
