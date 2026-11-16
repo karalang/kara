@@ -28,7 +28,22 @@ const REFUSED_ON_WASM: &[(&str, &str)] = &[
         "core/par_real_clients",
         "does not provide resource 'Network'",
     ),
+    // `std.crypto`'s digests come with the runtime's `tls` feature (`ring`),
+    // which no wasm archive carries, and the build stops at wasm-ld rather
+    // than with a refusal (B-2026-11-16-197).
+    (
+        "design/ok_crypto_known_answer_vectors",
+        "undefined symbol: karac_crypto_mir",
+    ),
 ];
+
+/// The driver's refusal when an entry needs a wasm opt-in archive
+/// (`std.regex`, `String.normalize`) this host has not built: the entry is
+/// skipped with a notice naming it, as the native opt-in tests skip.
+const OPT_IN_MISSING: &str = "which on wasm needs the runtime archive";
+
+/// Entries skipped for a missing opt-in archive.
+static SKIPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Runs a preview1 module under node: argv[2] is the module. The corpus
 /// runner pins the hash seed, so this does too.
@@ -162,6 +177,15 @@ fn run_one(e: &Entry, scratch: &Path) -> Option<String> {
         };
     }
     if !built.status.success() {
+        if stderr.contains(OPT_IN_MISSING) {
+            eprintln!(
+                "mir_wasm_core_corpus: skipped {}: its wasm opt-in runtime archive is not built (CLAUDE.md's archive recipe)",
+                e.name
+            );
+            SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = std::fs::remove_dir_all(&dir);
+            return None;
+        }
         return Some(format!("{}: build failed: {stderr}", e.name));
     }
     let run = Command::new("node")
@@ -248,5 +272,9 @@ fn wasm_runs_corpus_core_and_design_as_expected() {
         all.len(),
         failures.join("\n\n")
     );
-    eprintln!("mir_wasm_core_corpus: {} entries agree on wasm", all.len());
+    let skipped = SKIPPED.load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+        "mir_wasm_core_corpus: {} entries agree on wasm, {skipped} skipped",
+        all.len() - skipped
+    );
 }
