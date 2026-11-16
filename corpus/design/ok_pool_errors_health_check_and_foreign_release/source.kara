@@ -1,0 +1,35 @@
+import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration, sleep};
+import std.sync.{Atomic};
+
+struct Conn { id: i64, ok: bool }
+impl Drop for Conn { fn drop(mut ref self) { println(f"drop conn {self.id}") } }
+
+enum ConnectError { Refused }
+
+fn main() {
+    // CreateFailed does not count toward max_connections.
+    let c = Atomic.new(0);
+    let p: Pool[Conn, ConnectError] = Pool.new(|| { let n = c.fetch_add(1) + 1; if n == 1 { Err(ConnectError.Refused) } else { Ok(Conn { id: n, ok: n != 2 }) } }, 1, 0);
+    match p.acquire(Duration.ms(5)) { Err(PoolError.CreateFailed(_)) => println("create failed"), _ => println("??") }
+    let x = p.acquire(Duration.ms(5));
+    match ref x { Ok(c) => println(f"got {c.val.id}"), Err(_) => println("no") }
+    // max_waiters 0: a full pool turns the caller away at once.
+    match p.acquire(Duration.ms(500)) { Err(PoolError.Busy) => println("busy"), Err(PoolError.Timeout) => println("timeout"), _ => println("??") }
+    drop(x);
+    // health check: conn 2 fails, is dropped, a new one is made.
+    let p = p.with_health_check(|c| c.ok);
+    match p.acquire(Duration.ms(5)) { Ok(c) => println(f"healthy {c.val.id}"), Err(_) => println("no") }
+    // release into a different pool drops the value.
+    let m = Atomic.new(100);
+    let q: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: m.fetch_add(1) + 1, ok: true }), 1, 1);
+    match q.acquire(Duration.ms(5)) { Ok(c) => p.release(c), Err(_) => {} }
+    println("released to other pool");
+    match q.acquire(Duration.ms(5)) { Ok(c) => println(f"q made {c.val.id}"), Err(_) => println("no") }
+    // a loan that outlives its pool keeps its value until it drops.
+    let loan = q.acquire(Duration.ms(5));
+    drop(q);
+    println("pool q dropped");
+    drop(loan);
+    println("end");
+}

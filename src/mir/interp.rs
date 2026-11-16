@@ -898,6 +898,7 @@ fn run_with(
         root_unwind: false,
         tracing_sink: None,
         log_sink: None,
+        log_in_emit: false,
         log_min: 1,
         active_spans: Vec::new(),
         interners: Vec::new(),
@@ -1431,6 +1432,10 @@ struct Interp<'a> {
     /// the function that builds the record it receives. `None` sends
     /// records to the default backend.
     log_sink: Option<(Value, Ty, Value)>,
+    /// Inside the backend's `emit`: a call logged there goes to the
+    /// default backend, as the runtime's lock sends it (log.md § One
+    /// record at a time; B-2026-11-16-194).
+    log_in_emit: bool,
     /// `std.log`'s lowest level kept, by rank (debug 0 .. error 3).
     log_min: i128,
     /// The ids of the spans `with_span` made active, innermost last.
@@ -5331,9 +5336,15 @@ impl<'a> Interp<'a> {
     ) -> R<Value> {
         let elem = match self.pool(handle) {
             Some(p) => {
-                if p.out.remove(&conn) && keep && !p.closed {
+                let was_out = p.out.remove(&conn);
+                if was_out && keep && !p.closed {
                     p.slots.push(val);
                     return self.pool_unref(handle).map(|()| Value::Unit);
+                }
+                // The value drops: it no longer counts toward
+                // `max_connections` (B-2026-11-16-195).
+                if was_out {
+                    p.active = (p.active - 1).max(0);
                 }
                 p.elem
             }
@@ -18538,7 +18549,12 @@ impl<'a> Interp<'a> {
     /// Hands a kept call to the installed backend, or to `default` when
     /// there is none.
     fn log_emit(&mut self, call: Value, default: Value) -> R<()> {
-        let Some((sink, sink_ty, record)) = self.log_sink.clone() else {
+        let sink = if self.log_in_emit {
+            None
+        } else {
+            self.log_sink.clone()
+        };
+        let Some((sink, sink_ty, record)) = sink else {
             self.call_erased(default, vec![call])?;
             return Ok(());
         };
@@ -18574,7 +18590,9 @@ impl<'a> Interp<'a> {
         } else {
             rec.clone()
         };
+        self.log_in_emit = true;
         let out = self.call(&name, vec![recv, arg]);
+        self.log_in_emit = false;
         // The backend may have changed itself: keep what it holds now.
         let at = Addr {
             root: Root::Heap(recv_id),
@@ -18600,11 +18618,14 @@ impl<'a> Interp<'a> {
     fn log_route(&mut self, mut key: Option<usize>, call: Value, default: Value) -> R<()> {
         while let Some(k) = key {
             let Some(t) = self.tasks.get(k) else { break };
+            // A task its group has already moved past (it finished and
+            // its held calls went on) holds nothing back: a task it
+            // started, still running, logs on through it (B-2026-11-16-193).
             let first = t
                 .group
                 .checked_sub(1)
                 .and_then(|g| self.groups.get(g))
-                .is_some_and(|g| g.next == t.log_seq);
+                .is_some_and(|g| g.next >= t.log_seq);
             if !first {
                 self.tasks[k].log_held.push((call, default));
                 return Ok(());

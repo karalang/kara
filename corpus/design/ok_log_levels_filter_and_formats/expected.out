@@ -1,0 +1,10 @@
+{"level":"info","msg":"hello","a":1,"b":"two","c":2.5,"d":true,"e":"z","task_id":null}
+{"level":"warn","msg":"w","none":null,"some":3,"v":[1,2],"s":"a\"b\n","task_id":null}
+{"level":"error","msg":"e","p":{"x":1,"y":"q"},"big":9223372036854775807,"neg":-4,"f":1e+21,"task_id":null}
+DEBUG dbg k=plain
+INFO  info sp="has space" eq="a=b" q="say \"hi\"" empty="" n=3
+WARN  warn tab="a\tb" list=[1,2]
+ERROR err f=0.5
+WARN  kept
+true
+done

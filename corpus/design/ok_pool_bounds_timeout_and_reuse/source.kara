@@ -1,0 +1,43 @@
+import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration, Instant};
+import std.sync.{Atomic};
+
+struct Conn { id: i64 }
+impl Drop for Conn { fn drop(mut ref self) { println(f"drop conn {self.id}") } }
+
+enum ConnectError { Refused }
+
+fn kind(r: ref Result[PooledConnection[Conn], PoolError[ConnectError]]) -> String {
+    match r {
+        Ok(c) => f"ok {c.val.id}",
+        Err(PoolError.Timeout) => "timeout",
+        Err(PoolError.Busy) => "busy",
+        Err(PoolError.CreateFailed(_)) => "create failed",
+        Err(PoolError.PoolClosed) => "closed",
+        Err(_) => "other",
+    }
+}
+
+fn main() {
+    let next = Atomic.new(0);
+    let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: next.fetch_add(1) + 1 }), 2, 4);
+    let a = pool.acquire(Duration.ms(10));
+    println(kind(a));
+    let b = pool.acquire(Duration.ms(10));
+    println(kind(b));
+    let t = Instant.now();
+    let c = pool.acquire(Duration.ms(50));
+    let waited = t.elapsed().as_ms();
+    println(f"{kind(c)} waited>=50 {waited >= 50} waited<2000 {waited < 2000}");
+    drop(a);
+    let d = pool.acquire(Duration.ms(10));
+    println(f"reused {kind(d)}");
+    match b { Ok(conn) => pool.release(conn), Err(_) => {} }
+    let e = pool.acquire(Duration.ms(10));
+    println(f"after release {kind(e)}");
+    drop(d);
+    drop(e);
+    pool.close();
+    println(kind(pool.acquire(Duration.ms(10))));
+    println("end");
+}

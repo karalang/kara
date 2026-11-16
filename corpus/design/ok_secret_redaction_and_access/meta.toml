@@ -1,0 +1,9 @@
+source = "docs/library/secret.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "secret"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/secret.md (2026-11-16): Secret.new, expose and expose_mut on String, i64 and Vec[u8], and a derived Debug and Display on a struct holding a Secret printing the field as <redacted>. Zeroize on drop is pinned by the drop glue unit test mir_llvm_glue_zeroizes_a_secret_buffer_before_free. interp, mir-llvm and ASan agree."

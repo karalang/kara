@@ -1,0 +1,12 @@
+create failed
+got 2
+busy
+drop conn 2
+healthy 3
+drop conn 101
+released to other pool
+q made 102
+pool q dropped
+drop conn 102
+end
+drop conn 3

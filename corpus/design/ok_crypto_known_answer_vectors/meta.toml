@@ -1,0 +1,9 @@
+source = "docs/library/crypto.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "crypto"]
+expected_from = "mirror"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/crypto.md (2026-11-16): SHA-1, SHA-256, SHA-384 and SHA-512 over the NIST vectors (empty, abc, the two multi-block messages, 1000 and a million a's) one-shot and streamed in splits, HMAC-SHA256/384/512 over RFC 4231 cases 1-7 one-shot and streamed, the RFC 6455 WebSocket accept vector, and constant_time_eq. Every line checked against Python hashlib and hmac. interp, mir-llvm and ASan agree."

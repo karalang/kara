@@ -1,0 +1,26 @@
+import std.log;
+import std.log.{debug, info, warn, error};
+
+#[derive(Serialize)]
+struct P { x: i64, y: String }
+
+fn main() {
+    let nothing: Option[i64] = None;
+    info("default backend", n: 1);
+    debug("dropped by default", n: 2);
+    log.init(log.json_backend(log.Stream.Stdout));
+    debug("still dropped");
+    info("hello", a: 1, b: "two", c: 2.5, d: true, e: 'z');
+    warn("w", none: nothing, some: Some(3), v: [1, 2], s: "a\"b\n");
+    error("e", p: P { x: 1, y: "q" }, big: 9223372036854775807, neg: -4, f: 1.0e21);
+    log.init(log.text_backend(log.Stream.Stdout), level: log.Level.Debug);
+    debug("dbg", k: "plain");
+    info("info", sp: "has space", eq: "a=b", q: "say \"hi\"", empty: "", n: 3);
+    warn("warn", tab: "a\tb", list: [1, 2]);
+    error("err", f: 0.5);
+    log.init(log.text_backend(log.Stream.Stdout), level: log.Level.Warn);
+    info("filtered");
+    warn("kept");
+    println(log.Level.Debug < log.Level.Info and log.Level.Warn < log.Level.Error);
+    println("done");
+}

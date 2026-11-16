@@ -289,6 +289,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 if NOOP_DROPS.contains(&lib.as_str()) {
                     return Ok(());
                 }
+                if lib == "Secret" {
+                    // secret.md § Clone, drop and zeroize: the inner
+                    // buffer's bytes are overwritten before it is freed.
+                    self.zeroize_secret(p, ty)?;
+                }
                 if self.adt_has_drop_body(a)? {
                     // `fn T.drop(mut ref self)`: its argument slot holds
                     // the reference.
@@ -877,6 +882,61 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// Frees the buffer of the `String` or `Vec` at `p` when it has one.
+    /// Zeros the heap buffer of a `Secret[String]` or a `Secret[Vec[I]]`
+    /// over an integer `I`, whole capacity, with a volatile `memset` that
+    /// the free right after it cannot make dead (B-2026-11-16-192). Any
+    /// other inner type is left alone: its `Zeroize` is not implemented.
+    fn zeroize_secret(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<()> {
+        let Some(inner) = self
+            .tys
+            .tcx()
+            .adt_of(ty)
+            .and_then(|(_, a)| a.first().copied())
+        else {
+            return Ok(());
+        };
+        let elem = match self.tys.kind(inner) {
+            TyKind::Intrinsic(IntrinsicTy::String) => 1,
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => match self.tys.kind(e) {
+                TyKind::Int(_) => self.layout(e)?.size,
+                _ => return Ok(()),
+            },
+            _ => return Ok(()),
+        };
+        // The `Secret`'s one field sits at offset 0.
+        let cap = self.load_i64(self.offset(p, 16)?)?;
+        let has = self
+            .builder
+            .build_int_compare(IntPredicate::NE, cap, self.i64(0), "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(has, |cx| {
+            let buf = cx.load_ptr(p)?;
+            let n = cx
+                .builder
+                .build_int_mul(cap, cx.i64(elem), "")
+                .map_err(|e| e.to_string())?;
+            let i = inkwell::intrinsics::Intrinsic::find("llvm.memset")
+                .ok_or("no intrinsic llvm.memset")?;
+            let f = i
+                .get_declaration(&cx.module, &[cx.ptr_ty().into(), cx.llcx.i64_type().into()])
+                .ok_or("llvm.memset has no declaration")?;
+            let volatile = cx.llcx.bool_type().const_int(1, false);
+            cx.builder
+                .build_call(
+                    f,
+                    &[
+                        buf.into(),
+                        cx.llcx.i8_type().const_zero().into(),
+                        n.into(),
+                        volatile.into(),
+                    ],
+                    "",
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    }
+
     fn free_buffer(&mut self, p: PointerValue<'ctx>) -> R<()> {
         self.free_buffer_at(p, 16)
     }
@@ -1155,10 +1215,16 @@ mod tests {
 
     thread_local! {
         static LOG: RefCell<Vec<Ev>> = const { RefCell::new(Vec::new()) };
+        /// The first four bytes of each buffer as it was freed.
+        static FREED: RefCell<Vec<[u8; 4]>> = const { RefCell::new(Vec::new()) };
     }
 
     extern "C" fn logged_free(p: *mut c_void) {
         LOG.with(|l| l.borrow_mut().push(Ev::Free(p as usize)));
+        // SAFETY: every buffer a test frees came from `calloc`, whose
+        // smallest chunk holds more than four bytes.
+        let head = unsafe { (p as *const [u8; 4]).read_unaligned() };
+        FREED.with(|f| f.borrow_mut().push(head));
         // SAFETY: `p` came from `malloc` in the test that built the value.
         unsafe { libc::free(p) }
     }
@@ -1672,5 +1738,39 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
         assert_eq!(run(g[1], h), vec![]);
         unsafe { libc::free(cell as *mut c_void) };
         unsafe { libc::free(h as *mut c_void) };
+    }
+
+    /// A `Secret[String]` and a `Secret[Vec[i64]]` zero their buffers
+    /// before freeing them; a plain `String` does not (B-2026-11-16-192).
+    #[test]
+    fn mir_llvm_glue_zeroizes_a_secret_buffer_before_free() {
+        let src = "import std.secret.{Secret};
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f\"{self.id}\") } }
+fn main() {
+    let _r = R { id: 1 };
+    secrets(Secret.new(String.new()), Secret.new(Vec.new()), String.new());
+}
+fn secrets(a: own Secret[String], b: own Secret[Vec[i64]], c: own String) {}
+";
+        let l = build_source(src).unwrap();
+        let tys: Vec<Ty> = (1..4).map(|i| param_ty(&l, "secrets", i)).collect();
+        let c = Context::create();
+        let (_e, g) = jit(&c, &l, &tys);
+        for (i, &glue) in g.iter().enumerate() {
+            // Capacity 4: four bytes of a `String`, 32 of a `Vec[i64]`.
+            let (p, buf) = (alloc(24), alloc(32));
+            put(p, 0, buf as u64);
+            put(p, 8, 1);
+            put(p, 16, 4);
+            for (k, b) in b"abcd".iter().enumerate() {
+                put_u8(buf, k as u64, *b);
+            }
+            FREED.with(|f| f.borrow_mut().clear());
+            assert_eq!(run(glue, p), vec![Ev::Free(buf as usize)]);
+            let want: [u8; 4] = if i < 2 { [0; 4] } else { *b"abcd" };
+            assert_eq!(FREED.with(|f| f.borrow().clone()), vec![want], "glue {i}");
+            unsafe { libc::free(p as *mut c_void) };
+        }
     }
 }

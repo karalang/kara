@@ -1,0 +1,26 @@
+import std.secret.{Secret};
+
+#[derive(Debug)]
+struct User {
+    name: String,
+    token: Secret[String],
+}
+
+#[derive(Display)]
+struct Key {
+    id: i64,
+    k: Secret[Vec[u8]],
+}
+
+fn main() {
+    let mut tok: Secret[String] = Secret.new("hunter2".to_string());
+    println(tok.expose().len());
+    tok.expose_mut().push_str("!");
+    println(tok.expose());
+    let u = User { name: "alice".to_string(), token: Secret.new("t0k".to_string()) };
+    println(u.fmt_debug());
+    let s: Secret[i64] = Secret.new(42);
+    println(s.expose() + 1);
+    let k = Key { id: 7, k: Secret.new([1u8, 2u8]) };
+    println(f"{k}");
+}

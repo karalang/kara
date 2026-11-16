@@ -1,0 +1,9 @@
+source = "docs/library/pool.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "pool"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/pool.md (2026-11-16): acquire creates up to max_connections, then waits the whole timeout outside a task and fails with Timeout; a dropped loan and a released one are reused; close drops idle values and later acquires fail with PoolClosed. interp, mir-llvm and ASan agree."

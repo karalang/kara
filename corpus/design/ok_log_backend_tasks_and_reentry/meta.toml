@@ -1,0 +1,9 @@
+source = "docs/library/log.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "log", "tasks"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "A custom Backend receives every record from two TaskGroup tasks and two par branches, each with a task_id, and a record logged inside its own emit goes to the default backend rather than back into it. The interpreter lost the TaskGroup tasks' records when the spawns were auto-parallelized (B-2026-11-16-193) and fed the re-entrant record back to the backend (B-2026-11-16-194)."

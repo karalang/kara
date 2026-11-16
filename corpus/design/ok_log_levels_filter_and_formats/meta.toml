@@ -1,0 +1,9 @@
+source = "docs/library/log.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "log"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/log.md (2026-11-16): the default backend and level (Info, JSON on stderr, so not in stdout), log.init with json_backend and text_backend, the level filter, the JSON key order and field values (int, string, float, bool, char, Option, Vec, a derived Serialize struct, i64.MAX, 1e+21), the text format's padded level names and the quoting rule for strings with a space, =, a quote, a control character or nothing, and Level ordering. interp, mir-llvm and ASan agree."

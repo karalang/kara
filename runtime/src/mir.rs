@@ -4901,11 +4901,17 @@ pub unsafe extern "C" fn karac_mir_pool_return(
     // SAFETY: the caller's contract.
     let took = unsafe {
         with_pool(h, |p| {
-            if p.out.remove(&conn) && (into.is_null() || into == h) && !p.closed {
+            let was_out = p.out.remove(&conn);
+            if was_out && (into.is_null() || into == h) && !p.closed {
                 // SAFETY: as above.
                 p.slots.push(bytes(val, p.size).into());
                 1
             } else {
+                // The caller drops a value this pool lent out: it no
+                // longer counts toward `max_connections` (B-2026-11-16-195).
+                if was_out {
+                    p.active = (p.active - 1).max(0);
+                }
                 0
             }
         })

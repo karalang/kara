@@ -1,0 +1,9 @@
+source = "docs/library/pool.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "pool"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "CreateFailed does not count toward max_connections; max_waiters 0 gives Busy at once; a health check drops a failing idle value and a new one is made; a loan released into another pool is dropped and frees its slot in its own pool (B-2026-11-16-195); a loan that outlives its pool keeps its value until it drops."
