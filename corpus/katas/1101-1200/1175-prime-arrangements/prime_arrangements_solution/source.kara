@@ -1,0 +1,50 @@
+// LeetCode #1175: Prime Arrangements -- a Rust solution as LeetCode's Rust
+// users write it (`impl Solution` over `i32`, a closure for the primality
+// test by trial division, the primes counted with `filter(|&x| ..).count()`,
+// and each factorial a `fold` in `i64`), carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn num_prime_arrangements(n: i32) -> i32 {
+        const MOD: i64 = 1_000_000_007;
+        let is_prime = |x: i32| {
+            if x < 2 {
+                return false;
+            }
+            let mut i = 2;
+            while i * i <= x {
+                if x % i == 0 {
+                    return false;
+                }
+                i += 1;
+            }
+            true
+        };
+        let primes = (1..=n).filter(|x| is_prime(x)).count();
+        let factorial = |k: i64| { (1..=k).fold(1, |acc, x| acc * x % MOD) };
+        (factorial(primes) * factorial(n - primes) % MOD) as i32
+    }
+}
+
+fn num_prime_arrangements(n: i64) -> i64 {
+    Solution.num_prime_arrangements(n as i32)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's two examples
+    println(f"n = 5: {num_prime_arrangements(5)}");
+    println(f"n = 100: {num_prime_arrangements(100)}");
+    // the smallest, where 1 is not prime and 2 is the first prime
+    let small: Vec[i64] = (1..=12).map(|n| num_prime_arrangements(n)).collect();
+    println(f"n = 1 to 12: {small}");
+    // around the primes 97 and 89, and every n the constraints allow
+    println(f"n = 88, 89, 96, 97, 99: {num_prime_arrangements(88)} {num_prime_arrangements(89)} {num_prime_arrangements(96)} {num_prime_arrangements(97)} {num_prime_arrangements(99)}");
+    let mut check = 0;
+    for n in 1..=100 {
+        check = (check * 131 + num_prime_arrangements(n)) % 1000000007;
+    }
+    println(f"n = 1 to 100: checksum {check}");
+}

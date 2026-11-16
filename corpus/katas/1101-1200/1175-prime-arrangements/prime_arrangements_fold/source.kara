@@ -1,0 +1,32 @@
+// LeetCode #1175: Prime Arrangements -- through iterators: the primes
+// counted as the numbers in 2..=n with no divisor in 2..x below its square
+// root, each factorial a `fold` over its range.
+
+const MOD: i64 = 1000000007;
+
+fn factorial(k: i64) -> i64 {
+    (1..=k).fold(1, |acc, i| acc * i % MOD)
+}
+
+fn num_prime_arrangements(n: i64) -> i64 {
+    let primes = (2..=n).filter(|x| (2..x).take_while(|d| d * d <= x).all(|d| x % d != 0)).count();
+    factorial(primes) * factorial(n - primes) % MOD
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's two examples
+    println(f"n = 5: {num_prime_arrangements(5)}");
+    println(f"n = 100: {num_prime_arrangements(100)}");
+    // the smallest, where 1 is not prime and 2 is the first prime
+    let small: Vec[i64] = (1..=12).map(|n| num_prime_arrangements(n)).collect();
+    println(f"n = 1 to 12: {small}");
+    // around the primes 97 and 89, and every n the constraints allow
+    println(f"n = 88, 89, 96, 97, 99: {num_prime_arrangements(88)} {num_prime_arrangements(89)} {num_prime_arrangements(96)} {num_prime_arrangements(97)} {num_prime_arrangements(99)}");
+    let mut check = 0;
+    for n in 1..=100 {
+        check = (check * 131 + num_prime_arrangements(n)) % 1000000007;
+    }
+    println(f"n = 1 to 100: checksum {check}");
+}

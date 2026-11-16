@@ -1,0 +1,50 @@
+// LeetCode #1175: Prime Arrangements -- trial division: each of 2..=n
+// tested by the divisors up to its square root, the primes counted, and
+// the answer `p! * (n - p)!` modulo 10^9 + 7 from one running product that
+// multiplies in 1..=p and then 1..=n-p.
+
+const MOD: i64 = 1000000007;
+
+fn is_prime(x: i64) -> bool {
+    if x < 2 {
+        return false;
+    }
+    let mut d = 2;
+    while d * d <= x {
+        if x % d == 0 {
+            return false;
+        }
+        d += 1;
+    }
+    true
+}
+
+fn num_prime_arrangements(n: i64) -> i64 {
+    let primes = (1..=n).filter(|x| is_prime(x)).count();
+    let mut ans = 1;
+    for i in 1..=primes {
+        ans = ans * i % MOD;
+    }
+    for i in 1..=n - primes {
+        ans = ans * i % MOD;
+    }
+    ans
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's two examples
+    println(f"n = 5: {num_prime_arrangements(5)}");
+    println(f"n = 100: {num_prime_arrangements(100)}");
+    // the smallest, where 1 is not prime and 2 is the first prime
+    let small: Vec[i64] = (1..=12).map(|n| num_prime_arrangements(n)).collect();
+    println(f"n = 1 to 12: {small}");
+    // around the primes 97 and 89, and every n the constraints allow
+    println(f"n = 88, 89, 96, 97, 99: {num_prime_arrangements(88)} {num_prime_arrangements(89)} {num_prime_arrangements(96)} {num_prime_arrangements(97)} {num_prime_arrangements(99)}");
+    let mut check = 0;
+    for n in 1..=100 {
+        check = (check * 131 + num_prime_arrangements(n)) % 1000000007;
+    }
+    println(f"n = 1 to 100: checksum {check}");
+}

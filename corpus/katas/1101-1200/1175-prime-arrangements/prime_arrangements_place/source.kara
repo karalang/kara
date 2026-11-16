@@ -1,0 +1,42 @@
+// LeetCode #1175: Prime Arrangements -- one pass over the places 1..=n:
+// the primes found so far kept in a vector, each place tested against them,
+// and the count multiplied as each value is placed: the k-th prime place
+// can take any of the k primes up to it, and the k-th other place any of
+// the k other values up to it, so the product is `p! * (n - p)!`.
+
+const MOD: i64 = 1000000007;
+
+fn num_prime_arrangements(n: i64) -> i64 {
+    let mut primes: Vec[i64] = Vec.new();
+    let mut others = 0;
+    let mut ways = 1;
+    for x in 1..=n {
+        let prime = x >= 2 and primes.iter().take_while(|q| q * q <= x).all(|q| x % q != 0);
+        if prime {
+            primes.push(x);
+            ways = ways * primes.len() % MOD;
+        } else {
+            others += 1;
+            ways = ways * others % MOD;
+        }
+    }
+    ways
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's two examples
+    println(f"n = 5: {num_prime_arrangements(5)}");
+    println(f"n = 100: {num_prime_arrangements(100)}");
+    // the smallest, where 1 is not prime and 2 is the first prime
+    let small: Vec[i64] = (1..=12).map(|n| num_prime_arrangements(n)).collect();
+    println(f"n = 1 to 12: {small}");
+    // around the primes 97 and 89, and every n the constraints allow
+    println(f"n = 88, 89, 96, 97, 99: {num_prime_arrangements(88)} {num_prime_arrangements(89)} {num_prime_arrangements(96)} {num_prime_arrangements(97)} {num_prime_arrangements(99)}");
+    let mut check = 0;
+    for n in 1..=100 {
+        check = (check * 131 + num_prime_arrangements(n)) % 1000000007;
+    }
+    println(f"n = 1 to 100: checksum {check}");
+}

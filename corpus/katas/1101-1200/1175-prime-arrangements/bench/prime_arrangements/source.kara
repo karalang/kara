@@ -1,0 +1,49 @@
+// LeetCode #1175: Prime Arrangements -- the ★ arm's bench: a sieve of
+// Eratosthenes counts the primes up to `n`, and the answer is
+// `p! * (n - p)!` modulo 10^9 + 7.
+
+const MOD: i64 = 1000000007;
+
+fn factorial(k: i64) -> i64 {
+    let mut f = 1;
+    for i in 2..=k {
+        f = f * i % MOD;
+    }
+    f
+}
+
+fn num_prime_arrangements(n: i64) -> i64 {
+    let mut composite = Vec.filled(n + 1, false);
+    let mut primes = 0;
+    for i in 2..=n {
+        if not composite[i] {
+            primes += 1;
+            let mut j = i * i;
+            while j <= n {
+                composite[j] = true;
+                j += i;
+            }
+        }
+    }
+    factorial(primes) * factorial(n - primes) % MOD
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // a million calls at an `n` drawn from 1 to 100, the constraints' range,
+    // every answer folded into a checksum
+    let calls = 1000000;
+    let mut seed = 1175;
+    let mut check = 0;
+    for _ in 0..calls {
+        let n = 1 + next_random(mut seed) % 100;
+        check = (check * 131 + num_prime_arrangements(n)) % 1000000007;
+    }
+    println(f"{calls} calls: checksum {check}");
+}

@@ -1,0 +1,2 @@
+literal, n = 1 to 8: [1, 1, 2, 4, 12, 36, 144, 576]
+n = 1 to 100: checksum 959400679, 1842 checks over 6 arms: 0 failures

@@ -1,0 +1,275 @@
+// LeetCode #1175: Prime Arrangements -- the differential: the six arms
+// against the statement read literally, and four properties of what they
+// return.
+
+// ---- prime_arrangements.kara ----
+
+const A0_MOD: i64 = 1000000007;
+
+fn a0_factorial(k: i64) -> i64 {
+    let mut f = 1;
+    for i in 2..=k {
+        f = f * i % A0_MOD;
+    }
+    f
+}
+
+fn a0_num_prime_arrangements(n: i64) -> i64 {
+    let mut composite = Vec.filled(n + 1, false);
+    let mut primes = 0;
+    for i in 2..=n {
+        if not composite[i] {
+            primes += 1;
+            let mut j = i * i;
+            while j <= n {
+                composite[j] = true;
+                j += i;
+            }
+        }
+    }
+    a0_factorial(primes) * a0_factorial(n - primes) % A0_MOD
+}
+
+// ---- prime_arrangements_trial.kara ----
+
+const A1_MOD: i64 = 1000000007;
+
+fn a1_is_prime(x: i64) -> bool {
+    if x < 2 {
+        return false;
+    }
+    let mut d = 2;
+    while d * d <= x {
+        if x % d == 0 {
+            return false;
+        }
+        d += 1;
+    }
+    true
+}
+
+fn a1_num_prime_arrangements(n: i64) -> i64 {
+    let primes = (1..=n).filter(|x| a1_is_prime(x)).count();
+    let mut ans = 1;
+    for i in 1..=primes {
+        ans = ans * i % A1_MOD;
+    }
+    for i in 1..=n - primes {
+        ans = ans * i % A1_MOD;
+    }
+    ans
+}
+
+// ---- prime_arrangements_place.kara ----
+
+const A2_MOD: i64 = 1000000007;
+
+fn a2_num_prime_arrangements(n: i64) -> i64 {
+    let mut primes: Vec[i64] = Vec.new();
+    let mut others = 0;
+    let mut ways = 1;
+    for x in 1..=n {
+        let prime = x >= 2 and primes.iter().take_while(|q| q * q <= x).all(|q| x % q != 0);
+        if prime {
+            primes.push(x);
+            ways = ways * primes.len() % A2_MOD;
+        } else {
+            others += 1;
+            ways = ways * others % A2_MOD;
+        }
+    }
+    ways
+}
+
+// ---- prime_arrangements_fold.kara ----
+
+const A3_MOD: i64 = 1000000007;
+
+fn a3_factorial(k: i64) -> i64 {
+    (1..=k).fold(1, |acc, i| acc * i % A3_MOD)
+}
+
+fn a3_num_prime_arrangements(n: i64) -> i64 {
+    let primes = (2..=n).filter(|x| (2..x).take_while(|d| d * d <= x).all(|d| x % d != 0)).count();
+    a3_factorial(primes) * a3_factorial(n - primes) % A3_MOD
+}
+
+// ---- prime_arrangements_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn num_prime_arrangements(n: i32) -> i32 {
+        const A4_MOD: i64 = 1_000_000_007;
+        let a4_is_prime = |x: i32| {
+            if x < 2 {
+                return false;
+            }
+            let mut i = 2;
+            while i * i <= x {
+                if x % i == 0 {
+                    return false;
+                }
+                i += 1;
+            }
+            true
+        };
+        let primes = (1..=n).filter(|x| a4_is_prime(x)).count();
+        let a4_factorial = |k: i64| { (1..=k).fold(1, |acc, x| acc * x % A4_MOD) };
+        (a4_factorial(primes) * a4_factorial(n - primes) % A4_MOD) as i32
+    }
+}
+
+fn a4_num_prime_arrangements(n: i64) -> i64 {
+    A4Solution.num_prime_arrangements(n as i32)
+}
+
+// ---- prime_arrangements_sieve.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn num_prime_arrangements(n: i32) -> i32 {
+        let n = n as i64;
+        let mut sieve = Vec.filled(n + 1, true);
+        let mut count = 0;
+        for i in 2..=n {
+            if sieve[i] {
+                count += 1;
+                let mut j = i * i;
+                while j <= n {
+                    sieve[j] = false;
+                    j += i;
+                }
+            }
+        }
+        let m = 1_000_000_007u64;
+        let mut ans = 1u64;
+        for i in 1..=count {
+            ans = ans * i as u64 % m;
+        }
+        for i in 1..=(n - count) {
+            ans = ans * i as u64 % m;
+        }
+        ans as i32
+    }
+}
+
+fn a5_num_prime_arrangements(n: i64) -> i64 {
+    A5Solution.num_prime_arrangements(n as i32)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(w: i64, n: i64) -> i64 {
+    match w {
+        0 => a0_num_prime_arrangements(n),
+        1 => a1_num_prime_arrangements(n),
+        2 => a2_num_prime_arrangements(n),
+        3 => a3_num_prime_arrangements(n),
+        4 => a4_num_prime_arrangements(n),
+        _ => a5_num_prime_arrangements(n),
+    }
+}
+
+// The statement read literally: a prime has exactly two divisors.
+fn literal_prime(x: i64) -> bool {
+    (1..=x).filter(|d| x % d == 0).count() == 2
+}
+
+// Every permutation of 1..=n, built one place at a time; one counts when
+// every prime value sits at a prime index (1-indexed).
+fn count_from(n: i64, place: Vec[i64], used: mut ref Vec[bool]) -> i64 {
+    if place.len() == n {
+        let ok = place.iter().enumerate().all(|(i, v)| not literal_prime(v) or literal_prime(i + 1));
+        return if ok { 1 } else { 0 };
+    }
+    let mut total = 0;
+    for v in 1..=n {
+        if not used[v] {
+            used[v] = true;
+            let mut next = place.clone();
+            next.push(v);
+            total += count_from(n, next, mut used);
+            used[v] = false;
+        }
+    }
+    total
+}
+
+fn literal(n: i64) -> i64 {
+    let mut used = Vec.filled(n + 1, false);
+    count_from(n, Vec.new(), mut used)
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn fail(t: mut ref Tally, w: i64, p: i64, n: i64, got: i64, want: i64) {
+    t.failures += 1;
+    t.by[p] += 1;
+    if t.failures <= 5 {
+        println(f"arm {w}, P{p}, n = {n}: got {got}, want {want}");
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(5, 0) };
+    // the literal count, for every n small enough to try every permutation
+    let small: Vec[i64] = (1..=8).map(|n| literal(n)).collect();
+    // each n's kind among 1..=n: how many of 1..=n are prime, or not
+    let mut kinds = Vec.filled(101, 0);
+    let mut primes = 0;
+    for n in 1..=100 {
+        if literal_prime(n) {
+            primes += 1;
+            kinds[n] = primes;
+        } else {
+            kinds[n] = n - primes;
+        }
+    }
+    let star: Vec[i64] = (1..=100).map(|n| arm(0, n)).collect();
+    for w in 0..6 {
+        let got: Vec[i64] = (1..=100).map(|n| arm(w, n)).collect();
+        for n in 1..=100 {
+            let a = got[n - 1];
+            t.check = (t.check * 131 + a) % 1000000007;
+            // P1: the literal count, where it can be had
+            if n <= 8 {
+                t.checks += 1;
+                if a != small[n - 1] {
+                    fail(mut t, w, 1, n, a, small[n - 1]);
+                }
+            }
+            // P2: one more place multiplies by the values of its kind
+            if n < 100 {
+                t.checks += 1;
+                let want = a * kinds[n + 1] % 1000000007;
+                if got[n] != want {
+                    fail(mut t, w, 2, n + 1, got[n], want);
+                }
+            }
+            // P3: an answer modulo 10^9 + 7, and never 0, since 10^9 + 7
+            // is a prime above every factor of p! * (n - p)!
+            t.checks += 1;
+            if a < 1 or a >= 1000000007 {
+                fail(mut t, w, 3, n, a, -1);
+            }
+            // P4: the ★ arm's answer
+            t.checks += 1;
+            if a != star[n - 1] {
+                fail(mut t, w, 4, n, a, star[n - 1]);
+            }
+        }
+    }
+    println(f"literal, n = 1 to 8: {small}");
+    println(f"n = 1 to 100: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..5).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

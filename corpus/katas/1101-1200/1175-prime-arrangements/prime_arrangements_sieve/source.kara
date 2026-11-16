@@ -1,0 +1,55 @@
+// LeetCode #1175: Prime Arrangements -- another Rust solution as LeetCode's
+// Rust users write it (a `vec![true; n + 1]` sieve over `usize`, the primes
+// counted as it runs, and the answer multiplied up in `u64`), carried to
+// Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn num_prime_arrangements(n: i32) -> i32 {
+        let n = n as i64;
+        let mut sieve = Vec.filled(n + 1, true);
+        let mut count = 0;
+        for i in 2..=n {
+            if sieve[i] {
+                count += 1;
+                let mut j = i * i;
+                while j <= n {
+                    sieve[j] = false;
+                    j += i;
+                }
+            }
+        }
+        let m = 1_000_000_007u64;
+        let mut ans = 1u64;
+        for i in 1..=count {
+            ans = ans * i as u64 % m;
+        }
+        for i in 1..=(n - count) {
+            ans = ans * i as u64 % m;
+        }
+        ans as i32
+    }
+}
+
+fn num_prime_arrangements(n: i64) -> i64 {
+    Solution.num_prime_arrangements(n as i32)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // LeetCode's two examples
+    println(f"n = 5: {num_prime_arrangements(5)}");
+    println(f"n = 100: {num_prime_arrangements(100)}");
+    // the smallest, where 1 is not prime and 2 is the first prime
+    let small: Vec[i64] = (1..=12).map(|n| num_prime_arrangements(n)).collect();
+    println(f"n = 1 to 12: {small}");
+    // around the primes 97 and 89, and every n the constraints allow
+    println(f"n = 88, 89, 96, 97, 99: {num_prime_arrangements(88)} {num_prime_arrangements(89)} {num_prime_arrangements(96)} {num_prime_arrangements(97)} {num_prime_arrangements(99)}");
+    let mut check = 0;
+    for n in 1..=100 {
+        check = (check * 131 + num_prime_arrangements(n)) % 1000000007;
+    }
+    println(f"n = 1 to 100: checksum {check}");
+}
