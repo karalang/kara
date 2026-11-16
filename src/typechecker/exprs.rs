@@ -1551,7 +1551,56 @@ impl<'a> super::TypeChecker<'a> {
                 return ty;
             }
         }
+        if is_byte_slice(&resolve_type_var_top(expected, &self.env.substitutions)) {
+            let errors_before = self.errors.len();
+            let ty = self.check_expr_unexplained(expr, expected);
+            self.fix_text_for_bytes(expr, errors_before);
+            return ty;
+        }
         self.check_expr_unexplained(expr, expected)
+    }
+
+    /// Text where its bytes are wanted (`stdin.write(text)`, a `Slice[u8]`
+    /// parameter given a `String`): the fix reads them with `.bytes()`
+    /// (library/strings.md), as Rust's `.as_bytes()` would
+    /// (B-2026-11-16-251).
+    fn fix_text_for_bytes(&mut self, expr: &Expr, errors_before: usize) {
+        if !self.errors[errors_before..]
+            .iter()
+            .any(|e| e.span == expr.span && e.kind == TypeErrorKind::TypeMismatch)
+        {
+            return;
+        }
+        let Some(found) = self.expr_types.get(&SpanKey::from_span(&expr.span)) else {
+            return;
+        };
+        let text = |t: &Type| matches!(t, Type::Str) || is_str_view(t);
+        let is_text = match found {
+            Type::Ref(inner) => text(inner),
+            t => text(t),
+        };
+        let end = match &expr.kind {
+            ExprKind::MethodCall {
+                args_close_span, ..
+            } => args_close_span.offset + args_close_span.length,
+            ExprKind::Identifier(_)
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Call { .. } => expr.span.offset + expr.span.length,
+            _ => return,
+        };
+        if !is_text {
+            return;
+        }
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(&expr.span),
+            vec![crate::resolver::TextEdit {
+                offset: end,
+                length: 0,
+                replacement: ".bytes()".to_string(),
+            }],
+        );
     }
 
     /// `let (odd, even): (Vec[i64], Vec[i64]) = nums.iter().partition(..)`:
@@ -1590,9 +1639,17 @@ impl<'a> super::TypeChecker<'a> {
             .iter()
             .zip(want.iter())
             .all(|(h, w)| match (vec_elem(h), vec_elem(w)) {
+                // An array literal's items are still an integer literal's
+                // type variable here (`let v = [1, 2]`), so the halves'
+                // items are asked whether they unify, on a scratch copy of
+                // the substitutions (B-2026-11-16-250).
                 (Some(Type::Ref(inner)), Some(w)) => {
-                    resolve_type_var_top(&inner, &self.env.substitutions)
-                        == resolve_type_var_top(&w, &self.env.substitutions)
+                    let mut subs = self.env.substitutions.clone();
+                    let mut consts = self.env.const_substitutions.clone();
+                    !matches!(
+                        resolve_type_var_top(&w, &self.env.substitutions),
+                        Type::Ref(_) | Type::MutRef(_)
+                    ) && unify_types(&inner, &w, &mut subs, &mut consts)
                 }
                 _ => false,
             });
@@ -2966,11 +3023,15 @@ impl<'a> super::TypeChecker<'a> {
                             matches!((&e.kind, n), (ExprKind::Identifier(i), Some(n)) if i == n)
                         }) =>
                 {
-                    Some(t.span)
+                    Some((t.span, true))
                 }
                 // With no `let`, a tail is the last branch as it is.
                 _ if names.iter().all(Option::is_none) => None,
-                _ => return,
+                // Any other tail is the block's value, computed from the
+                // `let`s' values after the branches join: it moves to a
+                // statement of its own after the comma form, when the block
+                // is a `let`'s value (B-2026-11-16-252).
+                _ => Some((t.span, false)),
             },
         };
         if let Some(branches) = branches {
@@ -18602,4 +18663,9 @@ fn clone_place_text(e: &Expr) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// `Slice[u8]`, as a parameter or a `write` wants it.
+fn is_byte_slice(t: &Type) -> bool {
+    matches!(t, Type::Slice { element, .. } if matches!(**element, Type::UInt(UIntSize::U8)))
 }

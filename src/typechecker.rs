@@ -1964,9 +1964,10 @@ pub struct ImplTraitCaptures {
 pub type ProjTraits = FxHashMap<(String, String), String>;
 
 /// A `par` block written as statements (B-2026-11-16-182): the block, each
-/// statement's start and its expression (a `let`'s value), and a tail that
-/// is the tuple of the `let`s' names.
-pub type ParStmtBranches = (Span, Vec<(usize, Span)>, Option<Span>);
+/// statement's start and its expression (a `let`'s value), and its tail,
+/// with whether the tail is the tuple of the `let`s' names
+/// (B-2026-11-16-252).
+pub type ParStmtBranches = (Span, Vec<(usize, Span)>, Option<(Span, bool)>);
 
 #[derive(Default, Clone)]
 pub struct TypeCheckResult {

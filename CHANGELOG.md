@@ -1516,6 +1516,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   stopped at "expected 'Job', found 'ref Job'" (B-2026-11-16-206). The
   result of a closure that returns a bare parameter (`let g = || w; g()`)
   gets the same fix (B-2026-11-16-207).
+- `partition` over an array literal's `iter()` into a tuple of `Vec`s gets
+  the `.cloned()` fix a `Vec` receiver already got (B-2026-11-16-250). Text
+  given where bytes are wanted (a `Slice[u8]` parameter, a child process's
+  `stdin.write(text)`) gets `.bytes()` (B-2026-11-16-251). A `par` block
+  written as statements whose tail computes from its `let`s (`let total =
+  par { let a = f(); let b = g(); a + b };`) is rewritten to `let (a, b) =
+  par { f(), g() };` and `let total = a + b;` (B-2026-11-16-252).
 - **An array literal a `map` closure returns into a `Vec` of arrays is
   that array.** `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` checked
   against a `Vec[Array[i64, 3]]` was refused as `FromIterator[Vec[i64]]`;

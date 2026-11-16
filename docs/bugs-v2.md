@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 395 |
+| diagnostics | 398 |
 | false-positive | 234 |
 | missing-feature | 182 |
 | perf | 178 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 528 |
+| typecheck | 531 |
 | mir-llvm | 266 |
 | mir | 228 |
-| cli | 162 |
+| cli | 163 |
 | parser | 93 |
 | ownership | 90 |
 | interp | 82 |
@@ -111,6 +111,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-243 | 2026-11-16 | mir-llvm | low | A hashed `Map` or `Set` that removes about as often as it inserts (a sliding window, a toggle set) pays the ordered table's holes, compaction and index rebuild on top of the probe: kata 220, 340 and 391 run 1.6-2.0x Rust's instructions | — |
+| B-2026-11-16-250 | 2026-11-16 | typecheck | low | `partition` over an array literal's `iter()` into `(Vec[i64], Vec[i64])` (`let v = [1, 2, 3]; let (e, o): (Vec[i64], Vec[i64]) = v.iter().partition(..)`) is refused with "expected '(Vec[i64], Vec[i64])', found '(Vec[ref i64], Vec[ref i64])'" and no fix, where a `Vec` receiver gets `.cloned()` | — |
+| B-2026-11-16-251 | 2026-11-16 | typecheck | low | Text where bytes are wanted (`fn f(b: Slice[u8])` called with a `String` or `Str`, a child process's `stdin.write(text)`) is refused with "expected 'Slice[u8]', found 'String'" and no fix; the library's spelling is `text.bytes()` | — |
+| B-2026-11-16-252 | 2026-11-16 | typecheck+cli | medium | A `par` block written as statements whose tail computes from its `let`s (`let total = par { let a = f(); let b = g(); a + b };`) is refused (core-semantics §11.1, E0520) with no machine fix; B-2026-11-16-182's fix covered only a tail that is the tuple of the `let`s' names. 28 errors in 28 sweep files, the largest fixless shape left | — |
 
 ### Relocated
 

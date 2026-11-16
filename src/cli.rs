@@ -4406,7 +4406,7 @@ fn par_comma_form(
     source: &str,
     block: &crate::token::Span,
     spans: &[(usize, crate::token::Span)],
-    tail: Option<crate::token::Span>,
+    tail: Option<(crate::token::Span, bool)>,
 ) -> Option<Vec<crate::resolver::TextEdit>> {
     use crate::resolver::TextEdit;
     let mut edits = Vec::new();
@@ -4463,7 +4463,7 @@ fn par_comma_form(
     // A tail gathering the `let`s' values is the comma form's own value:
     // it goes, from the last branch's separator to its end, and the block
     // keeps the binding it had.
-    if let Some(t) = tail {
+    if let Some((t, gathers)) = tail {
         let last = edits.last()?;
         let from = last.offset + last.length;
         edits.push(TextEdit {
@@ -4471,6 +4471,42 @@ fn par_comma_form(
             length: (t.offset + t.length).checked_sub(from)?,
             replacement: String::new(),
         });
+        if !gathers {
+            // B-2026-11-16-252: any other tail is computed from the `let`s'
+            // values once the branches join, so `let total = par { let a =
+            // f(); let b = g(); a + b };` binds the branches' tuple to their
+            // patterns and computes `total` in a statement after it: `let (a,
+            // b) = par { f(), g() };` then `let total = a + b;`.
+            let named = patterns.iter().filter(|p| *p != "_").count();
+            if named == 0 || patterns.len() < 2 {
+                return None;
+            }
+            let indent_len = source[line_start..]
+                .find(|c: char| c != ' ' && c != '\t')
+                .unwrap_or(0);
+            let let_at = line_start + indent_len;
+            let head = source.get(let_at..par_at)?.trim_end();
+            if !head.starts_with("let ") || !head.ends_with('=') || head.contains('\n') {
+                return None;
+            }
+            let block_end = block.offset + block.length;
+            let rest = source.get(block_end..)?;
+            let semi = block_end + (rest.len() - rest.trim_start().len());
+            if source.as_bytes().get(semi) != Some(&b';') {
+                return None;
+            }
+            let value = source.get(t.offset..t.offset + t.length)?;
+            edits.push(TextEdit {
+                offset: let_at,
+                length: par_at - let_at,
+                replacement: format!("let ({}) = ", patterns.join(", ")),
+            });
+            edits.push(TextEdit {
+                offset: semi + 1,
+                length: 0,
+                replacement: format!("\n{}{head} {value};", &source[line_start..let_at]),
+            });
+        }
         edits.sort_by_key(|e| e.offset);
         return Some(edits);
     }
