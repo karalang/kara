@@ -95,11 +95,7 @@ impl super::EffectChecker<'_> {
             let effect_str = if tagged.effect.resource.is_empty() {
                 verb_name(&tagged.effect.verb)
             } else {
-                format!(
-                    "{}({})",
-                    verb_name(&tagged.effect.verb),
-                    tagged.effect.resource
-                )
+                tagged.effect.to_string()
             };
             let declared_str = if forbidden.resources.is_empty() {
                 verb_name(&forbidden.kind)

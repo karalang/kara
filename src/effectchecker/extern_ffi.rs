@@ -307,7 +307,7 @@ impl<'a> super::EffectChecker<'a> {
         let effect_str = if effect.resource.is_empty() {
             verb_name(&effect.verb)
         } else {
-            format!("{}({})", verb_name(&effect.verb), effect.resource)
+            effect.to_string()
         };
         Some(format!(
             "extern \"{}\" fn {} declares effect `{}`, which is forbidden by the '{}' profile",

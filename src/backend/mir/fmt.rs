@@ -421,37 +421,48 @@ impl<'ctx> Cx<'ctx, '_> {
     /// `dbg(line, text, value)`: `[file:line] text = value` on standard
     /// error, the value in its `Debug` form.
     pub(super) fn dbg(&mut self, args: &[Operand]) -> R<()> {
-        let [line, text, value] = args else {
-            return Err("dbg takes a line, a text and a value".into());
+        let [line, text, value, ty] = args else {
+            return Err("dbg takes a line, a text, a value and a type".into());
         };
+        // The value's `Debug` text in a buffer of its own; the runtime
+        // assembles the line around it, terminal or structured, with the
+        // task's id (design.md §12 Observability, B-2026-11-16-217).
         self.rt("fmt_begin", &[])?;
-        // The builder passes the line as a constant, so a package's combined
-        // source maps it to its file here (project mode, B-2026-10-22-14).
-        if let Operand::Const(crate::mir::syntax::Const {
-            kind: crate::mir::syntax::ConstKind::Scalar(n),
-            ..
-        }) = line
-        {
-            let (file, l) = crate::mir::interp::source_at(*n as usize);
-            self.lit(&format!("[{file}:{l}] "))?;
-        } else {
-            let file = crate::mir::interp::source_name().unwrap_or("<unknown>");
-            self.lit(&format!("[{file}:"))?;
-            let l = self.int_arg(line)?;
-            self.rt("fmt_i64", &[l.into()])?;
-            self.lit("] ")?;
-        }
-        let (s, n) = self.str_parts(text)?;
-        self.rt("fmt_str", &[s.into(), n.into()])?;
-        self.lit(" = ")?;
         let vt = self.operand_type(value)?;
         let p = self.operand_ptr(value)?;
         self.fmt.debug = true;
         let f = self.fmt_fn(vt);
         self.fmt.debug = false;
         self.builder.build_call(f, &[p.into()], "").map_err(e)?;
-        let f = self.llcx.i32_type().const_int(3, false);
-        self.rt("print_end", &[f.into()])?;
+        // The builder passes the line as a constant, so a package's combined
+        // source maps it to its file here (project mode, B-2026-10-22-14).
+        let (file, l) = if let Operand::Const(crate::mir::syntax::Const {
+            kind: crate::mir::syntax::ConstKind::Scalar(n),
+            ..
+        }) = line
+        {
+            let (file, l) = crate::mir::interp::source_at(*n as usize);
+            let l = self.llcx.i64_type().const_int(l as u64, false);
+            (file.to_string(), l)
+        } else {
+            let file = crate::mir::interp::source_name().unwrap_or("<unknown>");
+            (file.to_string(), self.int_arg(line)?)
+        };
+        let (fp, fl) = self.str_const(&file)?;
+        let (sp, sl) = self.str_parts(text)?;
+        let (tp, tl) = self.str_parts(ty)?;
+        self.rt(
+            "dbg_end",
+            &[
+                fp.into(),
+                fl.into(),
+                l.into(),
+                sp.into(),
+                sl.into(),
+                tp.into(),
+                tl.into(),
+            ],
+        )?;
         self.drop_moved(args)
     }
 

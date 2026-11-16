@@ -2280,15 +2280,18 @@ impl<'a> Interp<'a> {
                 Ok(Value::Ref(at.child(1)))
             }
             ("dbg", "") => {
-                // `[file:line] text = value` on stderr.
-                let [line, text, value] = args.as_slice() else {
-                    return err("dbg takes a line, a text and a value");
+                // `[file:line] text = value` on stderr, tagged inside a task
+                // and structured under `KARAC_DBG_OUTPUT`, as the runtime's
+                // `karac_mir_dbg_end` writes it (B-2026-11-16-217).
+                let [line, text, value, ty] = args.as_slice() else {
+                    return err("dbg takes a line, a text, a value and a type");
                 };
                 let line = match line {
                     Value::Int(l) => *l,
                     _ => 0,
                 };
                 let text = self.string_at(text)?;
+                let ty = self.string_at(ty)?;
                 self.debug_render = true;
                 let shown = match arg_tys.get(2) {
                     Some(&t) => self.display_typed(value, t),
@@ -2297,7 +2300,9 @@ impl<'a> Interp<'a> {
                 self.debug_render = false;
                 let shown = shown?;
                 let (file, line) = source_at(usize::try_from(line).unwrap_or(0));
-                self.write_out(true, &format!("[{file}:{line}] {text} = {shown}\n"));
+                let task = u64::try_from(self.log_task_id()).unwrap_or(0);
+                let out = dbg_line(file, line as i64, &text, &ty, &shown, task);
+                self.write_out(true, &out);
                 Ok(Value::Unit)
             }
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
@@ -20245,6 +20250,54 @@ fn pause_of(name: &str, n: i128) -> std::time::Duration {
     } else {
         std::time::Duration::from_millis(n)
     }
+}
+
+/// One `dbg` line (design.md §12 Observability): the terminal form
+/// `[task:N file:line] expr = value`, the task tag only inside a task, or
+/// under `KARAC_DBG_OUTPUT=json`/`jsonl` the structured object, with
+/// `task_id` null outside a task. The runtime's `dbg_line` writes the same
+/// bytes for the compiled lanes.
+fn dbg_line(file: &str, line: i64, expr: &str, ty: &str, value: &str, task: u64) -> String {
+    let json = matches!(
+        std::env::var("KARAC_DBG_OUTPUT").as_deref(),
+        Ok("json") | Ok("jsonl")
+    );
+    if !json {
+        let tag = if task == 0 {
+            String::new()
+        } else {
+            format!("task:{task} ")
+        };
+        return format!("[{tag}{file}:{line}] {expr} = {value}\n");
+    }
+    let q = |s: &str| {
+        let mut o = String::from("\"");
+        for c in s.chars() {
+            match c {
+                '"' => o.push_str("\\\""),
+                '\\' => o.push_str("\\\\"),
+                '\n' => o.push_str("\\n"),
+                '\r' => o.push_str("\\r"),
+                '\t' => o.push_str("\\t"),
+                c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+                c => o.push(c),
+            }
+        }
+        o.push('"');
+        o
+    };
+    let task = if task == 0 {
+        "null".to_string()
+    } else {
+        task.to_string()
+    };
+    format!(
+        "{{\"kind\":\"dbg\",\"task_id\":{task},\"file\":{},\"line\":{line},\"expr\":{},\"type\":{},\"value\":{}}}\n",
+        q(file),
+        q(expr),
+        q(ty),
+        q(value)
+    )
 }
 
 #[cfg(test)]

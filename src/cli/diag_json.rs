@@ -47,6 +47,7 @@ fn undeclared_effects_json(
     effects: &crate::effectchecker::EffectCheckResult,
     u: &crate::effectchecker::UndeclaredEffects,
     filename: &str,
+    library_start: Option<usize>,
 ) -> String {
     use crate::effect_graph::{derivation, derivation_json, effect_display};
     let display = |set: &crate::effectchecker::EffectSet| -> Vec<String> {
@@ -69,7 +70,7 @@ fn undeclared_effects_json(
     let steps: Vec<_> = u
         .effects
         .iter()
-        .flat_map(|effect| derivation(effects, &u.function, effect, filename))
+        .flat_map(|effect| derivation(effects, &u.function, effect, filename, library_start))
         .collect();
     format!(
         "\"inferred_effects\":{},\"declared_effects\":{},\"derivation\":{}",
@@ -2360,10 +2361,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     json_string(&r.replacement),
                 )
             });
-            let undeclared_json = err
-                .undeclared
-                .as_deref()
-                .map(|u| undeclared_effects_json(e, u, filename));
+            let undeclared_json = err.undeclared.as_deref().map(|u| {
+                undeclared_effects_json(e, u, filename, pipeline.parsed.program.library_start)
+            });
             let extra_json = [subtype_json, replacement_json, undeclared_json]
                 .into_iter()
                 .flatten()
@@ -2647,10 +2647,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
 /// An effect as source writes it: `writes(Stdout)`, and a verb with no
 /// resource bare, `panics` rather than `panics()` (B-2026-11-16-48).
 fn effect_text(e: &crate::effectchecker::Effect) -> String {
-    match e.resource.is_empty() {
-        true => effect_verb_str(&e.verb).to_string(),
-        false => format!("{}({})", effect_verb_str(&e.verb), e.resource),
-    }
+    e.to_string()
 }
 
 pub(super) fn program_effects_json(pipeline: &Pipeline) -> String {

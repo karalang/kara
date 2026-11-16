@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use crate::ast::*;
 use crate::intern::Symbol;
 
-use super::{verb_name, Effect, EffectError, EffectErrorKind, EffectOrigin, EffectSet};
+use super::{Effect, EffectError, EffectErrorKind, EffectOrigin, EffectSet};
 
 impl<'a> super::EffectChecker<'a> {
     ///
@@ -243,10 +243,8 @@ impl<'a> super::EffectChecker<'a> {
                             .collect();
                         if first_concrete != arg_concrete {
                             let render = |s: &HashSet<Effect>| -> String {
-                                let mut parts: Vec<String> = s
-                                    .iter()
-                                    .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
-                                    .collect();
+                                let mut parts: Vec<String> =
+                                    s.iter().map(|e| e.to_string()).collect();
                                 parts.sort();
                                 if parts.is_empty() {
                                     "{}".to_string()

@@ -55,7 +55,7 @@ fn suspends_declaration_refuses_a_blocks_callee() {
     );
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
-        errors[0].contains("performs blocks() but does not declare it"),
+        errors[0].contains("performs blocks but does not declare it"),
         "{errors:?}"
     );
 }
@@ -99,7 +99,7 @@ fn suspends_trait_ceiling_refuses_a_blocking_impl() {
          }",
     );
     assert_eq!(errors.len(), 1, "{errors:?}");
-    assert!(errors[0].contains("performs blocks()"), "{errors:?}");
+    assert!(errors[0].contains("performs blocks"), "{errors:?}");
 }
 
 #[test]

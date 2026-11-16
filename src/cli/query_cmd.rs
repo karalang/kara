@@ -716,7 +716,13 @@ pub(super) fn query_effects(pipeline: &Pipeline, function: &str, filename: &str)
                 .iter()
                 .filter(|te| seen.insert(te.effect.clone()))
                 .flat_map(|te| {
-                    crate::effect_graph::derivation(effects, function, &te.effect, filename)
+                    crate::effect_graph::derivation(
+                        effects,
+                        function,
+                        &te.effect,
+                        filename,
+                        pipeline.parsed.program.library_start,
+                    )
                 })
                 .collect()
         })

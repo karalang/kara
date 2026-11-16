@@ -56,8 +56,7 @@
 //! "why isn't my loop parallel" question gets asked.
 
 use crate::ast::{
-    EffectVerbKind, Expr, ExprKind, Function, ImplBlock, ImplItem, Item, Program, Stmt, StmtKind,
-    TypeKind,
+    Expr, ExprKind, Function, ImplBlock, ImplItem, Item, Program, Stmt, StmtKind, TypeKind,
 };
 use crate::concurrency::ConcurrencyAnalysis;
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectSet};
@@ -447,11 +446,7 @@ fn render_stmt_effects(stmt: &Stmt, effects: &EffectCheckResult) -> String {
 
 fn push_effects(set: &EffectSet, out: &mut Vec<String>) {
     for te in &set.effects {
-        out.push(format!(
-            "{}({})",
-            verb_name(&te.effect.verb),
-            te.effect.resource
-        ));
+        out.push(te.effect.to_string());
     }
 }
 
@@ -470,20 +465,6 @@ fn extract_callee_name(expr: &Expr) -> Option<String> {
         },
         ExprKind::MethodCall { method, .. } => Some(method.clone()),
         _ => None,
-    }
-}
-
-fn verb_name(verb: &EffectVerbKind) -> &'static str {
-    match verb {
-        EffectVerbKind::Reads => "reads",
-        EffectVerbKind::Writes => "writes",
-        EffectVerbKind::Sends => "sends",
-        EffectVerbKind::Receives => "receives",
-        EffectVerbKind::Allocates => "allocates",
-        EffectVerbKind::Panics => "panics",
-        EffectVerbKind::Blocks => "blocks",
-        EffectVerbKind::Suspends => "suspends",
-        EffectVerbKind::UserDefined(_) => "user",
     }
 }
 

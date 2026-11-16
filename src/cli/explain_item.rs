@@ -64,7 +64,13 @@ fn report(file: &str, item: &str) -> Result<ItemReport, String> {
                 .iter()
                 .filter(|te| seen.insert(te.effect.clone()))
                 .map(|te| {
-                    let steps = derivation(effects.unwrap(), item, &te.effect, file);
+                    let steps = derivation(
+                        effects.unwrap(),
+                        item,
+                        &te.effect,
+                        file,
+                        pipeline.parsed.program.library_start,
+                    );
                     (effect_display(&te.effect), steps)
                 })
                 .collect()

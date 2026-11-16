@@ -90,11 +90,7 @@ impl super::EffectChecker<'_> {
             let effect_str = if tagged.effect.resource.is_empty() {
                 verb_name(&tagged.effect.verb)
             } else {
-                format!(
-                    "{}({})",
-                    verb_name(&tagged.effect.verb),
-                    tagged.effect.resource
-                )
+                tagged.effect.to_string()
             };
             let profile_list = profile_names.join(", ");
             let forbidding_str = if forbidding.len() == 1 {

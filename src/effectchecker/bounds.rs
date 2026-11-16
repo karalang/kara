@@ -616,11 +616,7 @@ impl<'a> super::EffectChecker<'a> {
                         // Find effects that this caller inherited from this callee
                         if let Some(callee_effects) = self.inferred_effects.get(&callee) {
                             for te in &callee_effects.effects {
-                                let effect_str = format!(
-                                    "{}({})",
-                                    verb_name(&te.effect.verb),
-                                    te.effect.resource,
-                                );
+                                let effect_str = format!("{}", te.effect,);
                                 trace.push(ResolvedEffect {
                                     call_site_function: self.interner.resolve(fn_name).to_string(),
                                     call_site_line: span.line,

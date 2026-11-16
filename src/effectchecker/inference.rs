@@ -723,7 +723,7 @@ impl<'a> super::EffectChecker<'a> {
             let rendered = if effect.resource.is_empty() {
                 super::verb_name(&effect.verb)
             } else {
-                format!("{}({})", super::verb_name(&effect.verb), effect.resource)
+                effect.to_string()
             };
             self.errors.push(super::EffectError {
                 message: format!(

@@ -68,6 +68,19 @@ pub struct Effect {
     pub resource: String,
 }
 
+/// An effect as a `with` clause writes it: `writes(Stdout)`, and a verb with
+/// no resource bare, `blocks` rather than `blocks()`, which would not parse
+/// (B-2026-11-16-213). Every user-facing rendering of an effect goes through
+/// this: diagnostics, `karac explain`, `karac query effects`, JSON.
+impl std::fmt::Display for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.resource.is_empty() {
+            true => f.write_str(&verb_name(&self.verb)),
+            false => write!(f, "{}({})", verb_name(&self.verb), self.resource),
+        }
+    }
+}
+
 /// Whether a declared effect clause covers `effect`, wherever a declared set
 /// is checked as a ceiling: a public function's `with`, the fixed part of
 /// `with E ...`, a trait method's ceiling, and a function-typed slot.
@@ -3828,7 +3841,7 @@ pub(crate) fn resolve_effect_list_for_render(
             EffectItem::Variable(name) => {
                 if let Some(set) = var_bindings.get(name) {
                     for e in set {
-                        effects.push(format!("{}({})", verb_name(&e.verb), e.resource));
+                        effects.push(e.to_string());
                     }
                 } else {
                     // Unbound variable — render the variable name itself.

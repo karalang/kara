@@ -51,7 +51,7 @@ pub(super) fn effect_text(e: &Effect) -> String {
     if e.resource.is_empty() {
         verb_name(&e.verb)
     } else {
-        format!("{}({})", verb_name(&e.verb), e.resource)
+        e.to_string()
     }
 }
 

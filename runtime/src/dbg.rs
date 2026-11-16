@@ -190,43 +190,57 @@ pub unsafe extern "C" fn karac_dbg_emit(
         let expr = crate::clone::str_from_raw(expr, expr_len);
         let ty = crate::clone::str_from_raw(ty, ty_len);
         let value = crate::clone::str_from_raw(value, value_len);
-        let task = current_task_id();
-
-        let mut out = String::with_capacity(file.len() + expr.len() + ty.len() + value.len() + 48);
-        if json_mode() {
-            out.push_str("{\"kind\":\"dbg\",\"task_id\":");
-            if task == 0 {
-                out.push_str("null");
-            } else {
-                out.push_str(&task.to_string());
-            }
-            out.push_str(",\"file\":");
-            json_escape(file, &mut out);
-            out.push_str(",\"line\":");
-            out.push_str(&line.to_string());
-            out.push_str(",\"expr\":");
-            json_escape(expr, &mut out);
-            out.push_str(",\"type\":");
-            json_escape(ty, &mut out);
-            out.push_str(",\"value\":");
-            json_escape(value, &mut out);
-            out.push_str("}\n");
-        } else {
-            out.push('[');
-            if task != 0 {
-                out.push_str("task:");
-                out.push_str(&task.to_string());
-                out.push(' ');
-            }
-            out.push_str(file);
-            out.push(':');
-            out.push_str(&line.to_string());
-            out.push_str("] ");
-            out.push_str(expr);
-            out.push_str(" = ");
-            out.push_str(value);
-            out.push('\n');
-        }
+        let out = dbg_line(file, line, expr, ty, value, current_task_id());
         crate::fatal::write_stderr(out.as_bytes());
     }
+}
+
+/// One `dbg` line, terminal or structured (design.md §12 Observability):
+/// `[task:N file:line] expr = value` with the task tag only inside a task,
+/// or the JSON object with `task_id` null outside one. Shared by
+/// [`karac_dbg_emit`] and the MIR backends' `karac_mir_dbg_end`.
+pub(crate) fn dbg_line(
+    file: &str,
+    line: i64,
+    expr: &str,
+    ty: &str,
+    value: &str,
+    task: u64,
+) -> String {
+    let mut out = String::with_capacity(file.len() + expr.len() + ty.len() + value.len() + 48);
+    if json_mode() {
+        out.push_str("{\"kind\":\"dbg\",\"task_id\":");
+        if task == 0 {
+            out.push_str("null");
+        } else {
+            out.push_str(&task.to_string());
+        }
+        out.push_str(",\"file\":");
+        json_escape(file, &mut out);
+        out.push_str(",\"line\":");
+        out.push_str(&line.to_string());
+        out.push_str(",\"expr\":");
+        json_escape(expr, &mut out);
+        out.push_str(",\"type\":");
+        json_escape(ty, &mut out);
+        out.push_str(",\"value\":");
+        json_escape(value, &mut out);
+        out.push_str("}\n");
+    } else {
+        out.push('[');
+        if task != 0 {
+            out.push_str("task:");
+            out.push_str(&task.to_string());
+            out.push(' ');
+        }
+        out.push_str(file);
+        out.push(':');
+        out.push_str(&line.to_string());
+        out.push_str("] ");
+        out.push_str(expr);
+        out.push_str(" = ");
+        out.push_str(value);
+        out.push('\n');
+    }
+    out
 }

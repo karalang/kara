@@ -50,8 +50,8 @@ fn tcp_read_under_a_network_only_clause_is_refused() {
          }
          fn main() {}",
         &[
-            "performs blocks() but does not declare it (via call to 'TcpStream.read'",
-            "performs suspends() but does not declare it (via call to 'TcpStream.read'",
+            "performs blocks but does not declare it (via call to 'TcpStream.read'",
+            "performs suspends but does not declare it (via call to 'TcpStream.read'",
         ],
     );
 }
@@ -95,7 +95,7 @@ fn child_wait_under_a_process_only_clause_is_refused() {
              }
          }
          fn main() {}",
-        &["performs blocks() but does not declare it (via call to 'Child.wait'"],
+        &["performs blocks but does not declare it (via call to 'Child.wait'"],
     );
 }
 
@@ -122,7 +122,7 @@ fn websocket_send_under_a_network_only_clause_is_refused() {
              ws.send_text(\"hi\").is_ok()
          }
          fn main() {}",
-        &["performs blocks() but does not declare it (via call to 'WebSocket.send_text'"],
+        &["performs blocks but does not declare it (via call to 'WebSocket.send_text'"],
     );
 }
 
@@ -138,7 +138,7 @@ fn udp_recv_under_a_network_only_clause_is_refused() {
              }
          }
          fn main() {}",
-        &["performs blocks() but does not declare it (via call to 'UdpSocket.recv'"],
+        &["performs blocks but does not declare it (via call to 'UdpSocket.recv'"],
     );
 }
 

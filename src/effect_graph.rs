@@ -997,23 +997,75 @@ pub struct DerivationStep {
 
 /// `verb(Resource)`, as a `with` clause writes the effect.
 pub fn effect_display(effect: &crate::effectchecker::Effect) -> String {
-    format!("{}({})", effect_verb_str(&effect.verb), effect.resource)
+    effect.to_string()
+}
+
+/// How a function the checker keys internally reads in a derivation: a
+/// call through a bound or a `dyn` value is charged to a seeded key, and
+/// the step names the trait method and how it was reached instead
+/// (B-2026-11-16-216).
+fn shown_callee(key: &str) -> String {
+    if let Some(m) = key.strip_prefix("__bound_ceiling.") {
+        return format!("{m} (through a bound: the trait's clause)");
+    }
+    if let Some(m) = key.strip_prefix("__dyn_every.") {
+        return format!("{m} (through a `dyn` value with no clause)");
+    }
+    if let Some(rest) = key.strip_prefix("__dyn_clause[") {
+        if let Some((clause, m)) = rest.split_once("].") {
+            return format!("{m} (through a `dyn` value `with {clause}`)");
+        }
+    }
+    if let Some(r) = key.strip_prefix("__providers_bind::") {
+        return format!("the provider bound for {r}");
+    }
+    key.to_string()
+}
+
+/// [`shown_callee`] without how the method was reached: the name a step
+/// starting at the seeded key gives it, once the call into it said how.
+fn trait_method_name(key: &str) -> String {
+    let shown = shown_callee(key);
+    match shown.split_once(" (through ") {
+        Some((m, _)) => m.to_string(),
+        None => shown,
+    }
+}
+
+/// What an internal effect key stands for in the source: the construct
+/// that performs the effect without a call to charge it to.
+fn builtin_construct(key: &str) -> Option<&'static str> {
+    match key {
+        crate::effectchecker::HEAP_ALLOC_KEY => {
+            Some("a collection literal or f-string that allocates")
+        }
+        crate::effectchecker::INT_OVERFLOW_KEY => Some("integer arithmetic that can overflow"),
+        crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY => Some("a fallible allocation"),
+        _ => None,
+    }
 }
 
 /// Why `function` has `effect`: the chain of calls from `function` to the
 /// function that performs it, each step at the line of its call, the last
 /// at the line where the effect happens. The chain follows the origin the
 /// effect checker recorded for the effect in each function's inferred set,
-/// so it is the path inference took. Every step is placed in `file`.
-/// Empty when `function` does not have `effect`.
+/// so it is the path inference took. Every step is placed in `file`, and
+/// the chain ends at the first library function: a span at or past
+/// `library_start` is the library's appended source, not a line of `file`
+/// (B-2026-11-16-214), so the call into it says what the library function
+/// has. Empty when `function` does not have `effect`.
 pub fn derivation(
     effects: &EffectCheckResult,
     function: &str,
     effect: &crate::effectchecker::Effect,
     file: &str,
+    library_start: Option<usize>,
 ) -> Vec<DerivationStep> {
     use crate::effectchecker::EffectOrigin;
-    let mut steps = Vec::new();
+    let in_library = |span: &crate::token::Span| {
+        span.line == 0 || library_start.is_some_and(|n| span.offset >= n)
+    };
+    let mut steps: Vec<DerivationStep> = Vec::new();
     let mut at = function.to_string();
     let mut seen = std::collections::HashSet::new();
     while seen.insert(at.clone()) {
@@ -1025,33 +1077,60 @@ pub fn derivation(
             break;
         };
         match &traced.origin {
+            EffectOrigin::Callee { span, .. } if in_library(span) => {
+                // A library function calling another: the step into the
+                // library already names the function the user called.
+                if let Some(last) = steps.last_mut() {
+                    last.reason
+                        .push_str(&format!(", which has {}", effect_display(effect)));
+                }
+                break;
+            }
+            // The checker charges a construct with no call of its own to
+            // an internal key; the step names the construct, not the key
+            // (B-2026-11-16-215).
+            EffectOrigin::Callee { fn_name, span } if builtin_construct(fn_name).is_some() => {
+                let what = builtin_construct(fn_name).unwrap_or_default();
+                steps.push(DerivationStep {
+                    file: file.to_string(),
+                    line: span.line,
+                    reason: format!(
+                        "{} has {} ({what})",
+                        shown_callee(&at),
+                        effect_display(effect)
+                    ),
+                });
+                break;
+            }
             EffectOrigin::Callee { fn_name, span } => {
                 steps.push(DerivationStep {
                     file: file.to_string(),
                     line: span.line,
-                    reason: format!("{at} calls {fn_name}"),
+                    reason: format!("{} calls {}", trait_method_name(&at), shown_callee(fn_name)),
                 });
                 at = fn_name.clone();
             }
             EffectOrigin::Direct(span) => {
                 // A function with a `with` clause is trusted for what it
                 // declares: its set is the clause, not its body's.
-                let declared = matches!(
-                    effects.declared_effects.get(&at),
-                    Some(DeclaredEffects::Explicit(set)) if set.effects.iter().any(|d| d.effect == *effect)
-                );
+                let declared = at.starts_with("__bound_ceiling.")
+                    || at.starts_with("__dyn_clause[")
+                    || matches!(
+                        effects.declared_effects.get(&at),
+                        Some(DeclaredEffects::Explicit(set)) if set.effects.iter().any(|d| d.effect == *effect)
+                    );
                 let verb = if declared { "declares" } else { "has" };
                 let what = format!("{verb} {}", effect_display(effect));
                 match steps.last_mut() {
                     // A library function has no line of its own in `file`:
                     // the call names it.
-                    Some(last) if span.line == 0 => {
+                    Some(last) if in_library(span) => {
                         last.reason.push_str(&format!(", which {what}"));
                     }
                     _ => steps.push(DerivationStep {
                         file: file.to_string(),
                         line: span.line,
-                        reason: format!("{at} {what}"),
+                        reason: format!("{} {what}", trait_method_name(&at)),
                     }),
                 }
                 break;

@@ -519,6 +519,35 @@ pub extern "C" fn karac_mir_print_end(flags: u32) {
     fmt_pop(|text| write(flags & 2 != 0, text));
 }
 
+/// Ends a `dbg` line: the innermost format buffer holds the value's
+/// `Debug` text, and the line goes to standard error whole, in the
+/// terminal or the structured format (`KARAC_DBG_OUTPUT`), tagged with the
+/// running task's id as `std.log`'s records are (design.md §12
+/// Observability, B-2026-11-16-217).
+///
+/// # Safety
+/// Each `(ptr, len)` pair is readable UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_dbg_end(
+    file: *const u8,
+    file_len: u64,
+    line: i64,
+    expr: *const u8,
+    expr_len: u64,
+    ty: *const u8,
+    ty_len: u64,
+) {
+    let text = |p: *const u8, n: u64| {
+        // SAFETY: the caller's contract.
+        String::from_utf8_lossy(unsafe { bytes(p, n as usize) }).into_owned()
+    };
+    let (file, expr, ty) = (text(file, file_len), text(expr, expr_len), text(ty, ty_len));
+    let value = fmt_pop(|v| String::from_utf8_lossy(v).into_owned());
+    let task = crate::mir_task::log_task_id();
+    let out = crate::dbg::dbg_line(&file, line, &expr, &ty, &value, task);
+    write(true, out.as_bytes());
+}
+
 /// Ends a `format` into the `String` at `out`.
 ///
 /// # Safety

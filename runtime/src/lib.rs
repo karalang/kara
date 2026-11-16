@@ -261,6 +261,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_fmt_bool,
         mir::karac_mir_fmt_char,
         mir::karac_mir_print_end,
+        mir::karac_mir_dbg_end,
         mir::karac_mir_fmt_end_string,
         mir::karac_mir_string_from,
         mir::karac_mir_env_args,

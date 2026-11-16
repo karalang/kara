@@ -43,7 +43,7 @@ fn clause_text(effects: &[Effect]) -> String {
         let part = if e.resource.is_empty() {
             verb_name(&e.verb).to_string()
         } else {
-            format!("{}({})", verb_name(&e.verb), e.resource)
+            e.to_string()
         };
         if !parts.contains(&part) {
             parts.push(part);
@@ -203,14 +203,9 @@ impl<'a> super::EffectChecker<'a> {
                             self.errors.push(EffectError {
                                 message: format!(
                                     "public function '{}' is declared `with E` (purely \
-                                     polymorphic) but performs {}({}){}; add it to the \
-                                     declaration as `with E {}({})` or remove the call",
-                                    name,
-                                    verb_name(&te.effect.verb),
-                                    te.effect.resource,
-                                    origin_msg,
-                                    verb_name(&te.effect.verb),
-                                    te.effect.resource,
+                                     polymorphic) but performs {}{}; add it to the \
+                                     declaration as `with E {}` or remove the call",
+                                    name, te.effect, origin_msg, te.effect,
                                 ),
                                 span,
                                 kind: EffectErrorKind::MissingEffectDeclaration,
@@ -258,15 +253,10 @@ impl<'a> super::EffectChecker<'a> {
                                 let origin_msg = self.format_effect_origin(sym, &te.effect);
                                 self.errors.push(EffectError {
                                     message: format!(
-                                        "public function '{}' performs {}({}){} but it is not \
+                                        "public function '{}' performs {}{} but it is not \
                                          in the fixed part of its `with E ...` declaration; \
-                                         add {}({}) to the declaration",
-                                        name,
-                                        verb_name(&te.effect.verb),
-                                        te.effect.resource,
-                                        origin_msg,
-                                        verb_name(&te.effect.verb),
-                                        te.effect.resource,
+                                         add {} to the declaration",
+                                        name, te.effect, origin_msg, te.effect,
                                     ),
                                     span,
                                     kind: EffectErrorKind::MissingEffectDeclaration,
@@ -303,10 +293,9 @@ impl<'a> super::EffectChecker<'a> {
                                 let origin_msg = self.format_effect_origin(sym, effect);
                                 self.errors.push(EffectError {
                                     message: format!(
-                                        "public function '{}' performs {}({}) but does not declare it{}",
+                                        "public function '{}' performs {} but does not declare it{}",
                                         name,
-                                        verb_name(&effect.verb),
-                                        effect.resource,
+                                        effect,
                                         origin_msg,
                                     ),
                                     span,
@@ -326,10 +315,8 @@ impl<'a> super::EffectChecker<'a> {
                             if !inferred_effects.contains(effect) {
                                 self.errors.push(EffectError {
                                     message: format!(
-                                        "public function '{}' declares {}({}) but does not perform it",
-                                        name,
-                                        verb_name(&effect.verb),
-                                        effect.resource,
+                                        "public function '{}' declares {} but does not perform it",
+                                        name, effect,
                                     ),
                                     span,
                                     kind: EffectErrorKind::OverDeclaredEffect,
@@ -404,11 +391,7 @@ impl<'a> super::EffectChecker<'a> {
                                         if e.effect.resource.is_empty() {
                                             verb_name(&e.effect.verb).to_string()
                                         } else {
-                                            format!(
-                                                "{}({})",
-                                                verb_name(&e.effect.verb),
-                                                e.effect.resource
-                                            )
+                                            e.effect.to_string()
                                         }
                                     })
                                     .collect();
@@ -597,18 +580,13 @@ impl<'a> super::EffectChecker<'a> {
                 let advice = if te.effect.resource == super::EVERY_RESOURCE {
                     String::new()
                 } else {
-                    format!(
-                        "; add {}({}) to the clause or remove the call",
-                        verb_name(&te.effect.verb),
-                        te.effect.resource,
-                    )
+                    format!("; add {} to the clause or remove the call", te.effect,)
                 };
                 new_errors.push(EffectError {
                     message: format!(
-                        "{what} '{name}' performs {}({}){origin_msg} but its `with` clause does \
+                        "{what} '{name}' performs {}{origin_msg} but its `with` clause does \
                          not declare it{advice}",
-                        verb_name(&te.effect.verb),
-                        te.effect.resource,
+                        te.effect,
                     ),
                     span,
                     kind: EffectErrorKind::MissingEffectDeclaration,
@@ -886,7 +864,7 @@ impl<'a> super::EffectChecker<'a> {
                 let mut ceiling_display: Vec<String> = ceiling_set
                     .iter()
                     .filter(|e| !self.is_transparent_verb(&e.verb))
-                    .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
+                    .map(|e| e.to_string())
                     .collect();
                 ceiling_display.sort();
                 let ceiling_str = if ceiling_display.is_empty() {
@@ -908,12 +886,11 @@ impl<'a> super::EffectChecker<'a> {
                     if !declared_admits(&ceiling_set, &te.effect) {
                         new_errors.push(EffectError {
                             message: format!(
-                                "impl method '{}.{}' performs {}({}) but trait '{}.{}' \
+                                "impl method '{}.{}' performs {} but trait '{}.{}' \
                                  ceiling is {}; narrow the impl or widen the trait ceiling",
                                 type_name,
                                 method.name,
-                                verb_name(&te.effect.verb),
-                                te.effect.resource,
+                                te.effect,
                                 trait_name,
                                 method.name,
                                 ceiling_str,
@@ -1059,7 +1036,7 @@ impl<'a> super::EffectChecker<'a> {
                 let mut ceiling_display: Vec<String> = ceiling_set
                     .iter()
                     .filter(|e| !self.is_transparent_verb(&e.verb))
-                    .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
+                    .map(|e| e.to_string())
                     .collect();
                 ceiling_display.sort();
                 let ceiling_str = if ceiling_display.is_empty() {
@@ -1081,14 +1058,10 @@ impl<'a> super::EffectChecker<'a> {
                     if !declared_admits(&ceiling_set, &te.effect) {
                         new_errors.push(EffectError {
                             message: format!(
-                                "default body of '{}.{}' performs {}({}) but the method \
+                                "default body of '{}.{}' performs {} but the method \
                                  ceiling is {}; declare the effect on the method or remove \
                                  it from the default body",
-                                t.name,
-                                m.name,
-                                verb_name(&te.effect.verb),
-                                te.effect.resource,
-                                ceiling_str,
+                                t.name, m.name, te.effect, ceiling_str,
                             ),
                             span: m.span,
                             kind: EffectErrorKind::TraitDefaultExceedsCeiling,

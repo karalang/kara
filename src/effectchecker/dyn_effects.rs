@@ -658,11 +658,10 @@ impl<'a> super::EffectChecker<'a> {
                 }
                 errors.push(EffectError {
                     message: format!(
-                        "{subject} coerces `{concrete}` to `{written}`, but `{}` has effect {}({}), \
+                        "{subject} coerces `{concrete}` to `{written}`, but `{}` has effect {}, \
                          which the clause does not allow",
                         self.interner.resolve(key),
-                        verb_name(&te.effect.verb),
-                        te.effect.resource,
+                        te.effect,
                     ),
                     span,
                     kind: EffectErrorKind::EffectSubtypeViolation,

@@ -12785,9 +12785,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         if release_strips("KARAC_STRIP_DBG") {
             return;
         }
-        if let Ok(t) = self.expr_ty(a) {
-            self.queue_nested_debugs(t);
-        }
+        let ty_text = match self.expr_ty(a) {
+            Ok(t) => {
+                self.queue_nested_debugs(t);
+                self.tys().display(t)
+            }
+            Err(_) => String::new(),
+        };
         let (off, len) = (a.span.offset, a.span.length);
         let text = self
             .lcx
@@ -12802,7 +12806,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         });
         let unit = self.unit();
         let out = self.temp(unit);
-        self.call_native("dbg", vec![line, text, value], Place::local(out));
+        // The type's text rides along for the structured format's `type`
+        // (design.md §12 Observability, B-2026-11-16-217).
+        let ty_text = self.static_str(&ty_text);
+        self.call_native("dbg", vec![line, text, value, ty_text], Place::local(out));
     }
 
     /// The library's `impl From for IoError` of a `VarError` (`env.var(k)?`
