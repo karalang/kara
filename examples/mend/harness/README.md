@@ -124,6 +124,15 @@ python3 examples/mend/harness/mend_batch.py
 All transcripts land under `runs/batch_<timestamp>/<example>/` and the
 aggregate report prints at the end.
 
+### Fix passes
+
+Since 9452e21278 (B-2026-11-15-131) one `karac fix` runs passes until a pass
+applies nothing. `mend.py` pins `KARAC_FIX_PASSES=1`, so each iteration still
+applies one pass and the machine-fix rate, the applied-fix counts and the
+iteration a run converges at mean what they meant in earlier runs. Set
+`MEND_FIX_PASSES=10` to measure the fixpoint instead, and say so beside any
+rate quoted from such a run: it is not comparable with the pinned history.
+
 ### Curated demo vs. uncurated measurement
 
 **The dry-run (canned) numbers are a demonstration, not a measurement.**

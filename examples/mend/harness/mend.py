@@ -75,13 +75,23 @@ def karac_check(path: Path) -> dict:
 
 
 def karac_fix(path: Path) -> str:
-    """Run `karac fix` against `path`. Return the human-readable output."""
+    """Run `karac fix` against `path`. Return the human-readable output.
+
+    One `karac fix` runs to a fixpoint since 9452e21278 (B-2026-11-15-131).
+    The harness pins one pass per iteration (`KARAC_FIX_PASSES=1`) so the
+    machine-fix rate and the applied-fix counts stay comparable with runs
+    from before it; `MEND_FIX_PASSES` overrides (e.g. 10 to measure what
+    one invocation now does). See README § Fix passes.
+    """
+    env = dict(os.environ)
+    env["KARAC_FIX_PASSES"] = os.environ.get("MEND_FIX_PASSES", "1")
     proc = subprocess.run(
         KARAC + ["fix", str(path)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     return proc.stdout + proc.stderr
 
