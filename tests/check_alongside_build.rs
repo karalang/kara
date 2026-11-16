@@ -50,7 +50,7 @@ fn a_check_error_is_reported_instead_of_the_builders() {
             let out = karac(&[cmd], &path);
             let all = text(&out);
             assert_eq!(out.status.code(), Some(1), "{cmd}: {all}");
-            assert!(all.contains("error[typecheck]"), "{cmd}: {all}");
+            assert!(all.contains("error[E0200]"), "{cmd}: {all}");
             assert!(
                 all.contains("expected 'i64', found 'String'"),
                 "{cmd}: {all}"

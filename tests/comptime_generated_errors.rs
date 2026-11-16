@@ -46,7 +46,7 @@ fn check_reports_a_resolve_error_in_a_derived_item_at_the_derive() {
         String::from_utf8_lossy(&o.stderr)
     );
     assert_eq!(o.status.code(), Some(1), "{all}");
-    assert!(all.contains("error[resolve]"), "{all}");
+    assert!(all.contains("error[E0102]"), "{all}");
     assert!(
         all.contains(
             "reserved.kara:7:1: in the code generated here: `i8` is a primitive type name"

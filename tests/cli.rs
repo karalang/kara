@@ -834,7 +834,7 @@ fn test_run_resolve_error_exits_nonzero() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[resolve]"));
+    assert!(stderr.contains("error[E0100]"));
     assert!(stderr.contains("undefined name"));
 }
 
@@ -859,7 +859,7 @@ fn test_check_parse_error() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[parse]"));
+    assert!(stderr.contains("error[E0002]"));
     assert!(stderr.contains("2:13")); // line:column
 }
 
@@ -871,7 +871,7 @@ fn test_check_type_error() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[typecheck]"));
+    assert!(stderr.contains("error[E0202]"));
     assert!(stderr.contains("expected 2 argument(s), found 3"));
 }
 
@@ -892,7 +892,7 @@ fn test_build_typecheck_error_does_not_fall_through_to_codegen() {
     assert!(!out.status.success(), "build should exit nonzero");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[typecheck]"),
+        stderr.contains("error[E0236]"),
         "expected typecheck error in stderr, got: {stderr}"
     );
     assert!(
@@ -919,7 +919,7 @@ fn test_check_provider_escape_error() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[provider_escape]"),
+        stderr.contains("error[E0600]"),
         "expected provider_escape error, got: {}",
         stderr
     );
@@ -983,7 +983,7 @@ fn test_run_rejects_provider_escape() {
     assert!(!out.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[typecheck]") || stderr.contains("error[provider_escape]"),
+        stderr.contains("error[E0600]"),
         "run must reject the escaping program with a hard error, got: {}",
         stderr
     );
@@ -1368,8 +1368,8 @@ fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
         .unwrap();
     let herr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        herr.contains("error[resolve]"),
-        "a hard resolve error keeps its phase label: {herr}"
+        herr.contains("error[E0100]"),
+        "a hard resolve error prints its code: {herr}"
     );
     assert!(
         !out.status.success(),
@@ -1467,7 +1467,7 @@ fn test_run_interp_gates_on_fatal_ownership() {
         "run --interp must refuse an ownership-rejected program; stdout={stdout} stderr={stderr}",
     );
     assert!(
-        stderr.contains("error[ownership]") && stderr.contains("uninitialized"),
+        stderr.contains("error[E0505]") && stderr.contains("uninitialized"),
         "the refusal must be the ownership diagnostic, not a downstream symptom; stderr={stderr}",
     );
     assert!(
@@ -1693,7 +1693,7 @@ fn test_rc_fallback_site_is_a_maybe_moved_error_under_check() {
         String::from_utf8_lossy(&text.stderr)
     );
     assert!(
-        combined.contains("error[ownership]")
+        combined.contains("error[E0500]")
             && combined.contains("value 'd' may have been moved (moved at line 5:"),
         "check must report the RC site as a maybe-moved error; got [{combined}]"
     );
@@ -5981,7 +5981,7 @@ fn test_build_project_surfaces_per_file_parse_errors() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[parse]"),
+        stderr.contains("error[E0002]"),
         "expected parse error diagnostic, got stderr={stderr}",
     );
     assert!(
@@ -18723,8 +18723,7 @@ fn main() {
         "fetch stub body should execute and surface its message: {stdout}",
     );
     assert!(
-        stderr.contains("warning[effect]")
-            && stderr.contains("does not provide resource 'Display'"),
+        stderr.contains("warning[E0411]") && stderr.contains("does not provide resource 'Display'"),
         "the E0411 target-gate finding should surface as a warning under run: {stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
@@ -18774,7 +18773,7 @@ fn build_rejects_an_effect_violation_like_check_does() {
         "an effect violation must abort `karac build`: {stderr}",
     );
     assert!(
-        stderr.contains("error[effect]")
+        stderr.contains("error[E0400]")
             && stderr.contains("public function 'risky' performs effects [reads(Db)]"),
         "build must RENDER the finding, not just exit non-zero: {stderr}",
     );
@@ -18890,13 +18889,13 @@ fn main() {
         "program must NOT execute past the rejected effect violation: {stdout}",
     );
     assert!(
-        stderr.contains("error[effect]")
+        stderr.contains("error[E0400]")
             && stderr.contains("public function 'api' performs effects [writes(Db)]"),
-        "the E0400 finding should surface as a hard error[effect] on stderr: {stderr}",
+        "the E0400 finding should surface as a hard error[E0400] on stderr: {stderr}",
     );
     assert!(
-        !stderr.contains("warning[effect]"),
-        "the effect violation must NOT downgrade to warning[effect]: {stderr}",
+        !stderr.contains("warning[E0400]"),
+        "the effect violation must NOT downgrade to warning[E0400]: {stderr}",
     );
 
     // Symmetry: `karac check` rejects the same program — run now agrees.
@@ -19017,12 +19016,12 @@ fn run_soft_type_error_aborts() {
         "program must NOT execute past the rejected type error: {stdout}",
     );
     assert!(
-        stderr.contains("error[typecheck]"),
-        "the arity mismatch should surface as a hard error[typecheck]: {stderr}",
+        stderr.contains("error[E0202]"),
+        "the arity mismatch should surface as a hard error[E0202]: {stderr}",
     );
     assert!(
-        !stderr.contains("warning[typecheck]"),
-        "the type error must NOT downgrade to warning[typecheck]: {stderr}",
+        !stderr.contains("warning[E0202]"),
+        "the type error must NOT downgrade to warning[E0202]: {stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -25008,8 +25007,8 @@ fn use_after_move_renders_as_error_under_check() {
     let out = karac_bin().arg("check").arg(&path).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[ownership]") && stderr.contains("moved here, used again here"),
-        "use after move should render as error[ownership]; got: {stderr}"
+        stderr.contains("error[E0500]") && stderr.contains("moved here, used again here"),
+        "use after move should render as error[E0500]; got: {stderr}"
     );
     assert!(
         stderr.contains("`v.clone()`"),
@@ -25030,8 +25029,8 @@ fn fatal_ownership_diagnostic_still_renders_as_error() {
     let out = karac_bin().arg("check").arg(&path).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[ownership]") && stderr.contains("cannot reassign"),
-        "reassign-to-immutable should render as error[ownership]; got: {stderr}"
+        stderr.contains("error[E0506]") && stderr.contains("cannot reassign"),
+        "reassign-to-immutable should render as error[E0506]; got: {stderr}"
     );
     assert!(
         !out.status.success(),
@@ -25296,7 +25295,7 @@ fn check_renders_a_source_snippet_with_a_caret_under_the_span() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[typecheck]: spaces.kara:2:18: expected 'i64', found 'String'"),
+        stderr.contains("error[E0200]: spaces.kara:2:18: expected 'i64', found 'String'"),
         "header line changed shape:\n{stderr}"
     );
     assert!(
@@ -25895,8 +25894,8 @@ fn a_lint_diagnostic_is_prefixed_once_and_names_its_lint() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        stderr.contains("error[typecheck]"),
-        "a non-lint type error keeps the phase label: {stderr}"
+        stderr.contains("error[E0200]"),
+        "a non-lint type error prints its code: {stderr}"
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

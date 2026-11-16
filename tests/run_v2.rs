@@ -105,7 +105,7 @@ fn run_v2_refuses_what_check_refuses() {
         let out = karac(lane, &path);
         let err = text(&out.stderr);
         assert_eq!(text(&out.stdout), "", "{lane:?}");
-        assert!(err.contains("error[typecheck]"), "{lane:?}: {err}");
+        assert!(err.contains("error[E0200]"), "{lane:?}: {err}");
         assert!(err.contains("1 error(s) found."), "{lane:?}: {err}");
         assert_eq!(out.status.code(), Some(1), "{lane:?}");
     }

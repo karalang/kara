@@ -459,6 +459,9 @@ pub(super) fn run_multi_file_late_phases(
 /// produces this and the text renderer sits on top of it. One traversal, so
 /// the two spellings cannot drift.
 pub(super) struct LateDiag {
+    /// The catalogue code and severity `--output=json` gives the finding.
+    pub(super) code: &'static str,
+    pub(super) severity: &'static str,
     pub(super) file: Option<String>,
     pub(super) line: usize,
     pub(super) column: usize,
@@ -481,7 +484,15 @@ pub(super) fn collect_pipeline_diags(
     let push_resolve = |p: &Pipeline, out: &mut Vec<LateDiag>| {
         if let Some(r) = &p.resolved {
             for e in &r.errors {
+                let code = super::diag_json::resolve_error_code(&e.kind);
+                let severity = if crate::resolver::resolve_kind_is_note(&e.kind) {
+                    "warning"
+                } else {
+                    "error"
+                };
                 out.push(LateDiag {
+                    code,
+                    severity,
                     file: file_of(&e.span),
                     line: e.span.line,
                     column: e.span.column,
@@ -493,7 +504,10 @@ pub(super) fn collect_pipeline_diags(
     let push_typed = |p: &Pipeline, out: &mut Vec<LateDiag>| {
         if let Some(t) = &p.typed {
             for e in &t.errors {
+                let (code, severity) = (type_error_code(&e.kind), "error");
                 out.push(LateDiag {
+                    code,
+                    severity,
                     file: file_of(&e.span),
                     line: e.span.line,
                     column: e.span.column,
@@ -505,7 +519,10 @@ pub(super) fn collect_pipeline_diags(
     let push_effects = |p: &Pipeline, out: &mut Vec<LateDiag>| {
         if let Some(e) = &p.effects {
             for err in &e.errors {
+                let (code, severity) = super::diag_json::effect_error_code(&err.kind);
                 out.push(LateDiag {
+                    code,
+                    severity,
                     file: file_of(&err.span),
                     line: err.span.line,
                     column: err.span.column,
@@ -517,7 +534,15 @@ pub(super) fn collect_pipeline_diags(
     let push_ownership = |p: &Pipeline, out: &mut Vec<LateDiag>| {
         if let Some(o) = &p.ownership {
             for err in &o.errors {
+                let code = super::diag_json::ownership_code(&err.kind);
+                let severity = if p.is_fatal_ownership_kind(&err.kind) {
+                    "error"
+                } else {
+                    "warning"
+                };
                 out.push(LateDiag {
+                    code,
+                    severity,
                     file: file_of(&err.span),
                     line: err.span.line,
                     column: err.span.column,
@@ -579,7 +604,8 @@ pub(super) fn print_parse_errors_text(parse_errors: &[ModuleParseErrors]) {
     for pe in parse_errors {
         for err in &pe.errors {
             eprintln!(
-                "error[parse]: {}:{}:{}: {}",
+                "error[{}]: {}:{}:{}: {}",
+                err.kind.code(),
                 super::project_v2::shown(&pe.file),
                 err.span.line,
                 err.span.column,
@@ -829,55 +855,7 @@ pub(super) fn resolve_modules(
 }
 
 pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
-    match kind {
-        // NOTE severity — the spec calls this a warning, so it gets a `W`
-        // code, not an `E` one (B-2026-08-21-2 follow-up).
-        ResolveErrorKind::LayoutUnassignedFields => "W0150",
-        // The private half is a lint (W); the `pub` half is the hard
-        // FFI-contract error the spec mandates (E) — B-2026-08-21-2.
-        ResolveErrorKind::LayoutReprCIgnored => "W0151",
-        ResolveErrorKind::LayoutReprCOnPubStruct => "E0151",
-        ResolveErrorKind::FloatInSerializedType => "W0152",
-        ResolveErrorKind::UnknownModule => "E0112",
-        ResolveErrorKind::UnknownItemInModule => "E0113",
-        ResolveErrorKind::PrivateItemAccess => "E0111",
-        ResolveErrorKind::AmbiguousWildcardImport => "E0124",
-        ResolveErrorKind::UndefinedName => "E0100",
-        ResolveErrorKind::DuplicateDefinition => "E0101",
-        ResolveErrorKind::ReservedIdentifier => "E0102",
-        ResolveErrorKind::BindingNameClass => "E0127",
-        ResolveErrorKind::PrivateAccess => "E0103",
-        ResolveErrorKind::UndefinedType => "E0104",
-        ResolveErrorKind::UndefinedVariant => "E0105",
-        ResolveErrorKind::UndefinedField => "E0106",
-        ResolveErrorKind::UndefinedLabel => "E0107",
-        ResolveErrorKind::OperatorTraitImplRestricted => "E0108",
-        ResolveErrorKind::IntoTraitImplNotAllowed => "E0109",
-        ResolveErrorKind::TraitEffectVarNotAllowed => "E0110",
-        ResolveErrorKind::EffectVarKindMismatch => "E0125",
-        ResolveErrorKind::EffectArgsMissingInPublicSignature => "E0126",
-        ResolveErrorKind::ReservedEffectResource => "E0114",
-        ResolveErrorKind::CompilerBuiltinReserved => "E0115",
-        ResolveErrorKind::ContinueOnBlockLabel => "E0116",
-        ResolveErrorKind::NonExhaustiveInvalidTarget => "E0117",
-        ResolveErrorKind::TrackCallerInvalidTarget => "E0118",
-        ResolveErrorKind::GpuInvalidTarget => "E0800",
-        ResolveErrorKind::CodegenHintInvalidTarget => "E_CODEGEN_HINT_INVALID_POSITION",
-        ResolveErrorKind::CodegenHintOnExternDecl => "E_CODEGEN_HINT_ON_EXTERN_DECL",
-        ResolveErrorKind::DeprecatedOnImpl => "E0119",
-        ResolveErrorKind::DeprecatedOnField => "E0120",
-        ResolveErrorKind::UnknownAttribute => "E0121",
-        ResolveErrorKind::ProfileInvalidTarget => "E0122",
-        ResolveErrorKind::UnknownProfile => "E0123",
-        ResolveErrorKind::QueryResolutionConflict => "E_QUERY_RESOLUTION_CONFLICT",
-        ResolveErrorKind::UnionNonExhaustiveForbidden => "E_UNION_NON_EXHAUSTIVE_FORBIDDEN",
-        ResolveErrorKind::DefaultAttributeInvalidPosition => "E_DEFAULT_ATTRIBUTE_INVALID_POSITION",
-        ResolveErrorKind::DefaultAttributeWithoutDerive => "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE",
-        ResolveErrorKind::HelperAttributeInvalidPosition => "E_HELPER_ATTRIBUTE_INVALID_POSITION",
-        ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
-        ResolveErrorKind::TestOutsideTestFile => "E_TEST_OUTSIDE_TEST_FILE",
-        ResolveErrorKind::MalformedAttributeArgs => "E_MALFORMED_ATTRIBUTE_ARGS",
-    }
+    super::diag_json::resolve_error_code(kind)
 }
 
 pub(super) fn print_resolve_errors_text(per_module: &[ModuleResolveErrors]) {
@@ -974,7 +952,9 @@ pub(super) fn late_failure_json(f: &MultiFileLateFailure) -> Vec<String> {
         .iter()
         .map(|d| {
             format!(
-                "{{\"severity\":\"error\",\"phase\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+                "{{\"severity\":{},\"code\":{},\"phase\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+                json_string(d.severity),
+                json_string(d.code),
                 json_string(&f.phase),
                 json_string(super::explain::concept_for(&f.phase, "", None, None)),
                 json_string(d.file.as_deref().unwrap_or("")),
@@ -987,7 +967,22 @@ pub(super) fn late_failure_json(f: &MultiFileLateFailure) -> Vec<String> {
 }
 
 pub(super) fn print_late_failure_text(f: &MultiFileLateFailure) {
-    eprintln!("error[{}]: {}", f.phase, f.message);
+    // Each finding under its catalogue code, as JSON reports it and the
+    // single-file renderer prints it (review-thread ruling 2026-11-16).
+    if f.diags.is_empty() {
+        eprintln!("error[{}]: {}", f.phase, f.message);
+    }
+    for d in &f.diags {
+        let file = d
+            .file
+            .as_deref()
+            .map(|f| format!("{f}:"))
+            .unwrap_or_default();
+        eprintln!(
+            "{}[{}]: {file}{}:{}: {}",
+            d.severity, d.code, d.line, d.column, d.message
+        );
+    }
 }
 
 pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
@@ -1149,39 +1144,9 @@ pub(super) fn typecheck_modules(
 }
 
 pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
-    use crate::typechecker::TypeErrorKind as K;
-    match kind {
-        K::PrivateTypeInPublicSignature => "E0221",
-        // design.md §4: direct access to an invisible item, a field included.
-        K::PrivateFieldAccess => "E0111",
-        K::TypeMismatch => "E0200",
-        K::UndefinedField => "E0201",
-        K::WrongNumberOfArgs => "E0202",
-        K::MissingField => "E0203",
-        K::ExtraField => "E0204",
-        K::NonExhaustiveMatch => "E0205",
-        K::NotCallable => "E0206",
-        K::NotAStruct => "E0207",
-        K::InvalidBinaryOp => "E0208",
-        K::InvalidUnaryOp => "E0209",
-        K::InvalidCast => "E0210",
-        K::ConditionNotBool => "E0211",
-        K::BranchTypeMismatch => "E0212",
-        K::ReturnTypeMismatch => "E0213",
-        K::GpuNotSafe => "E0801",
-        K::StringNotIndexable => "E0268",
-        K::IteratorNotIndexable => "E0274",
-        K::TypeNotIndexable => "E0275",
-        K::NilCoalesceNotWrapped => "E0276",
-        K::OptionalChainNotOption => "E0277",
-        K::SharedFieldNotMut => "E0269",
-        K::AtomicMissingOrdering => "E0270",
-        K::AtomicInvalidInnerType => "E0272",
-        K::BufferedIoInvalidSource => "E0297",
-        K::PatternScrutineeMismatch => "E0273",
-        K::BindingNameClass => "E0128",
-        _ => "E0200",
-    }
+    // The JSON feed's table, whole: this one used to list 28 kinds and code
+    // every other kind `E0200` (review-thread ruling 2026-11-16).
+    super::diag_json::type_error_code(kind)
 }
 
 /// The warning-severity twin of [`print_type_errors_text`]. Same layout, with
@@ -1190,7 +1155,10 @@ pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
 pub(super) fn print_type_warnings_text(per_module: &[ModuleTypeErrors]) {
     for te in per_module {
         for warn in &te.errors {
-            let label = warn.lint_name.as_deref().unwrap_or("typecheck");
+            let label = warn
+                .lint_name
+                .as_deref()
+                .unwrap_or_else(|| super::diag_json::type_warning_code(&warn.kind));
             eprintln!(
                 "warning[{label}]: {}:{}:{}: {}",
                 super::project_v2::shown(&te.file),
@@ -1609,20 +1577,21 @@ impl PackageCheck {
         }
         // A type error's catalogue code, as the single-file check gives it
         // (B-2026-11-07-46).
-        let coded = |mut d: crate::PlaygroundDiagnostic, kind| {
-            d.code = Some(type_error_code(kind).to_string());
+        // A warning takes its `W` code, as the single-file feed gives it.
+        let coded = |mut d: crate::PlaygroundDiagnostic, code: &str| {
+            d.code = Some(code.to_string());
             d
         };
         for m in &self.type_warnings {
             for e in &m.errors {
                 let d = diag("typecheck", "warning", &e.message, &e.span, Vec::new());
-                out.push(coded(d, &e.kind));
+                out.push(coded(d, super::diag_json::type_warning_code(&e.kind)));
             }
         }
         for m in &self.type_errors {
             for e in &m.errors {
                 let d = diag("typecheck", "error", &e.message, &e.span, Vec::new());
-                out.push(coded(d, &e.kind));
+                out.push(coded(d, type_error_code(&e.kind)));
             }
         }
         out

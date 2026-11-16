@@ -3118,7 +3118,7 @@ The `par { }` rule
 A `par { }` branch or `spawn()`-ed task whose TRANSITIVE effect set
 contains `writes(BINDING_resource)` is a compile error:
 
-    error[effect]: module-level let mut 'COUNTER' cannot be written
+    error[E0408]: module-level let mut 'COUNTER' cannot be written
     from inside par { } — wrap in Atomic[T], Mutex[T], or use
     #[thread_local] for per-task state (binding declared at line 1)
 

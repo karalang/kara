@@ -1705,69 +1705,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     if let Some(ref r) = pipeline.resolved {
         for err in &r.errors {
             id_counter += 1;
-            let code = match err.kind {
-                crate::resolver::ResolveErrorKind::LayoutUnassignedFields => "W0150",
-                crate::resolver::ResolveErrorKind::LayoutReprCIgnored => "W0151",
-                crate::resolver::ResolveErrorKind::LayoutReprCOnPubStruct => "E0151",
-                crate::resolver::ResolveErrorKind::FloatInSerializedType => "W0152",
-                crate::resolver::ResolveErrorKind::UndefinedName => "E0100",
-                crate::resolver::ResolveErrorKind::DuplicateDefinition => "E0101",
-                crate::resolver::ResolveErrorKind::ReservedIdentifier => "E0102",
-                crate::resolver::ResolveErrorKind::BindingNameClass => "E0127",
-                crate::resolver::ResolveErrorKind::PrivateAccess => "E0103",
-                crate::resolver::ResolveErrorKind::UndefinedType => "E0104",
-                crate::resolver::ResolveErrorKind::UndefinedVariant => "E0105",
-                crate::resolver::ResolveErrorKind::UndefinedField => "E0106",
-                crate::resolver::ResolveErrorKind::UndefinedLabel => "E0107",
-                crate::resolver::ResolveErrorKind::OperatorTraitImplRestricted => "E0108",
-                crate::resolver::ResolveErrorKind::IntoTraitImplNotAllowed => "E0109",
-                crate::resolver::ResolveErrorKind::TraitEffectVarNotAllowed => "E0110",
-                crate::resolver::ResolveErrorKind::EffectVarKindMismatch => "E0125",
-                crate::resolver::ResolveErrorKind::EffectArgsMissingInPublicSignature => "E0126",
-                crate::resolver::ResolveErrorKind::UnknownModule => "E0112",
-                crate::resolver::ResolveErrorKind::UnknownItemInModule => "E0113",
-                crate::resolver::ResolveErrorKind::PrivateItemAccess => "E0111",
-                crate::resolver::ResolveErrorKind::AmbiguousWildcardImport => "E0124",
-                crate::resolver::ResolveErrorKind::ReservedEffectResource => "E0114",
-                crate::resolver::ResolveErrorKind::CompilerBuiltinReserved => "E0115",
-                crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0116",
-                crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0117",
-                crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0118",
-                crate::resolver::ResolveErrorKind::GpuInvalidTarget => "E0800",
-                crate::resolver::ResolveErrorKind::CodegenHintInvalidTarget => {
-                    "E_CODEGEN_HINT_INVALID_POSITION"
-                }
-                crate::resolver::ResolveErrorKind::CodegenHintOnExternDecl => {
-                    "E_CODEGEN_HINT_ON_EXTERN_DECL"
-                }
-                crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0119",
-                crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0120",
-                crate::resolver::ResolveErrorKind::UnknownAttribute => "E0121",
-                crate::resolver::ResolveErrorKind::ProfileInvalidTarget => "E0122",
-                crate::resolver::ResolveErrorKind::UnknownProfile => "E0123",
-                crate::resolver::ResolveErrorKind::QueryResolutionConflict => {
-                    "E_QUERY_RESOLUTION_CONFLICT"
-                }
-                crate::resolver::ResolveErrorKind::UnionNonExhaustiveForbidden => {
-                    "E_UNION_NON_EXHAUSTIVE_FORBIDDEN"
-                }
-                crate::resolver::ResolveErrorKind::DefaultAttributeInvalidPosition => {
-                    "E_DEFAULT_ATTRIBUTE_INVALID_POSITION"
-                }
-                crate::resolver::ResolveErrorKind::DefaultAttributeWithoutDerive => {
-                    "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE"
-                }
-                crate::resolver::ResolveErrorKind::HelperAttributeInvalidPosition => {
-                    "E_HELPER_ATTRIBUTE_INVALID_POSITION"
-                }
-                crate::resolver::ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
-                crate::resolver::ResolveErrorKind::TestOutsideTestFile => {
-                    "E_TEST_OUTSIDE_TEST_FILE"
-                }
-                crate::resolver::ResolveErrorKind::MalformedAttributeArgs => {
-                    "E_MALFORMED_ATTRIBUTE_ARGS"
-                }
-            };
+            let code = resolve_error_code(&err.kind);
             // Surface the machine-applicable replacement (when present)
             // alongside the human-readable suggestion. Consumers like
             // `karac fix` and IDE quick-fix UIs read this directly to
@@ -1848,221 +1786,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     if let Some(ref t) = pipeline.typed {
         for err in &t.errors {
             id_counter += 1;
-            let code = match err.kind {
-                crate::typechecker::TypeErrorKind::TypeMismatch => "E0200",
-                crate::typechecker::TypeErrorKind::UndefinedField => "E0201",
-                crate::typechecker::TypeErrorKind::WrongNumberOfArgs => "E0202",
-                crate::typechecker::TypeErrorKind::MissingField => "E0203",
-                crate::typechecker::TypeErrorKind::ExtraField => "E0204",
-                crate::typechecker::TypeErrorKind::NonExhaustiveMatch => "E0205",
-                crate::typechecker::TypeErrorKind::NotCallable => "E0206",
-                crate::typechecker::TypeErrorKind::NotAStruct => "E0207",
-                crate::typechecker::TypeErrorKind::InvalidBinaryOp => "E0208",
-                crate::typechecker::TypeErrorKind::InvalidUnaryOp => "E0209",
-                crate::typechecker::TypeErrorKind::InvalidCast => "E0210",
-                crate::typechecker::TypeErrorKind::ConditionNotBool => "E0211",
-                crate::typechecker::TypeErrorKind::BranchTypeMismatch => "E0212",
-                crate::typechecker::TypeErrorKind::ReturnTypeMismatch => "E0213",
-                crate::typechecker::TypeErrorKind::InvalidTupleIndex => "E0214",
-                crate::typechecker::TypeErrorKind::LabelMismatch => "E0215",
-                crate::typechecker::TypeErrorKind::NonContiguousLabels => "E0216",
-                crate::typechecker::TypeErrorKind::InvalidPipePlaceholder => "E0217",
-                crate::typechecker::TypeErrorKind::MissingMutMarker => "E0218",
-                crate::typechecker::TypeErrorKind::InvalidMutMarker => "E0219",
-                crate::typechecker::TypeErrorKind::UnsupportedNumericSuffix => "E0220",
-                crate::typechecker::TypeErrorKind::PrivateTypeInPublicSignature => "E0221",
-                crate::typechecker::TypeErrorKind::PrivateFieldAccess => "E0111",
-                crate::typechecker::TypeErrorKind::RefutablePattern => "E0222",
-                crate::typechecker::TypeErrorKind::MissingSupertrait => "E0229",
-                crate::typechecker::TypeErrorKind::TraitBoundNotSatisfied => "E0232",
-                crate::typechecker::TypeErrorKind::AmbiguousAssocFn => "E0233",
-                crate::typechecker::TypeErrorKind::CannotInferAssocFn => "E0234",
-                crate::typechecker::TypeErrorKind::OnceFnIntoFnSlot => "E0235",
-                crate::typechecker::TypeErrorKind::NoMethodFound => "E0236",
-                crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
-                crate::typechecker::TypeErrorKind::RefinementDomainTooWide => "W0238",
-                crate::typechecker::TypeErrorKind::CannotInferTypeParam => "E0238",
-                crate::typechecker::TypeErrorKind::AmbiguousMethod => "E0239",
-                crate::typechecker::TypeErrorKind::AmbiguousBareVariant => "E0279",
-                // `redundant_suffix` escalated to an error by `-D`/`#[deny]`;
-                // the warning twin is `W0280` in the loop below
-                // (B-2026-08-20-36).
-                crate::typechecker::TypeErrorKind::RedundantSuffix => "E0280",
-                crate::typechecker::TypeErrorKind::RedundantCast => "E0291",
-                // A style lint escalated by `-D`/`#[deny]`; `W0295` below.
-                crate::typechecker::TypeErrorKind::StyleLint => "E0295",
-                crate::typechecker::TypeErrorKind::UnusedDocComment => "E0296",
-                crate::typechecker::TypeErrorKind::RedundantAliasBound => "E0293",
-                crate::typechecker::TypeErrorKind::WeakReadUnwrap => "E0294",
-                crate::typechecker::TypeErrorKind::PreludeShadow => "E0282",
-                // `module_mut_binding` escalated to an error by `-D`/`#[deny]`;
-                // the warning twin is `W0281` in the loop below
-                // (B-2026-08-21-2).
-                crate::typechecker::TypeErrorKind::ModuleMutBinding => "E0281",
-                // `return_clause_on_fn` escalated by `-D`/`#[deny]`; the
-                // warning twin is `W0290` (B-2026-10-30-9).
-                crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "E0290",
-                crate::typechecker::TypeErrorKind::LaterTrack => "E0292",
-                crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
-                crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
-                crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
-                crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackagePattern => "E0243",
-                crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
-                // `Deprecated` only appears as a warning under default
-                // settings; if `#[deny(deprecated)]` promotes it to an
-                // error the same code is reused as `E0245`.
-                crate::typechecker::TypeErrorKind::Deprecated => "E0245",
-                // `MissingNonExhaustive` is `Deny`-by-default per
-                // `STARTER_LINTS`, so it normally surfaces as an error
-                // (W-prefixed because the underlying carrier is a lint).
-                crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
-                // Lint-level slice 4b polish — emitted only when the
-                // CLI sets `-F NAME` and an inner `#[allow(NAME)]`
-                // is rejected; never appears as a warning (the
-                // diagnostic is a hard error by construction).
-                crate::typechecker::TypeErrorKind::ForbiddenLintAllow => "E0247",
-                // Lint-level slice 5 — `#[expect(unfulfilled_lint_expectation)]`
-                // rejection (would be circular).
-                crate::typechecker::TypeErrorKind::ExpectOnUnfulfilled => "E0248",
-                // Lint-level slice 5 — appears on the errors path only
-                // when promoted via `#[deny(unfulfilled_lint_expectation)]`.
-                crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "E0249",
-                // Module-level `let` / `let mut` slice 4 — see
-                // `docs/implementation_checklist/phase-8-stdlib-floor.md`
-                // mod-let entry. The const-init structural rule and the
-                // §1297 heap-String rejection both surface here.
-                crate::typechecker::TypeErrorKind::ModuleBindingEffectfulInit => "E0250",
-                crate::typechecker::TypeErrorKind::ModuleBindingHeapType => "E0251",
-                crate::typechecker::TypeErrorKind::ModuleLet => "E_MODULE_LET",
-                // Slice 5 — assignment to a module-level immutable `let`.
-                crate::typechecker::TypeErrorKind::ReassignToImmutableModuleBinding => "E0252",
-                // Phase 6 line 218 slice 2 — ScopeLocal escape
-                // diagnostic (design.md § ScopeLocal). Fires when a
-                // `ScopeLocal` marker-trait type appears in a
-                // function return, struct/enum field, or
-                // `Sender.send` argument.
-                crate::typechecker::TypeErrorKind::ScopeLocalEscape => "E0253",
-                // Phase 6 line 170 slice 3a — cross-task-safe boundary
-                // check at `spawn(closure)` / `TaskGroup.spawn(closure)`
-                // call sites. Fires when a captured binding's type
-                // reaches a cross-task-unsafe leaf (`Rc[T]`, `shared`,
-                // `OnceCell[T]`, raw pointer) per
-                // `src/cross_task_safe.rs`'s closed structural list.
-                crate::typechecker::TypeErrorKind::CrossTaskUnsafeCapture => "E0254",
-                // Phase-8 line 49 — `#[unstable]` use-site lint
-                // promoted to error via `#[deny(unstable_api)]`.
-                // Reuses the same numeric slot as the warning
-                // (`W0255`) by convention with `Deprecated`.
-                crate::typechecker::TypeErrorKind::UnstableApi => "E0255",
-                // Phase 9 line 25 step 1 — a refinement type's `where`
-                // predicate uses a construct outside the allowed
-                // constraint language (design.md § Refinement Types).
-                crate::typechecker::TypeErrorKind::InvalidRefinementPredicate => "E0256",
-                // Phase 6 `sync struct` slice A — a `mut` field of a
-                // `sync struct` / `sync enum` is not `Atomic[T]` / `Mutex[T]`
-                // (design.md § Part 5b > Field constraints).
-                crate::typechecker::TypeErrorKind::ParFieldNotConcurrent => "E0257",
-                // Phase 6 `sync struct` slice A — a `sync struct` / `sync enum`
-                // method declares a `mut self` receiver; only `ref self` (and
-                // consuming `self`) are permitted because `par` values are
-                // always Arc with potential multiple holders (design.md
-                // § Part 5b > `ref self` receivers only).
-                crate::typechecker::TypeErrorKind::ParMutSelfReceiver => "E0258",
-                // E0259 retired: a `lock` block body MAY now contain early exits
-                // (`return` / `break` / `continue`) — codegen seeds the release
-                // as a cleanup-frame action so it fires on every exit path.
-                // Phase 6 `Mutex` / `lock` — the `lock` target is not a
-                // `Mutex[T]` binding.
-                crate::typechecker::TypeErrorKind::LockTargetNotMutex => "E0260",
-                // `#[repr(transparent)]` carrier-shape violation (design.md §
-                // `#[repr(transparent)]` for distinct-type FFI). One numeric
-                // code for the family; the specific `E_REPR_TRANSPARENT_*`
-                // symbolic code is in the message.
-                crate::typechecker::TypeErrorKind::ReprTransparentInvalid => "E0803",
-                crate::typechecker::TypeErrorKind::ExternSignatureInvalid => "E0805",
-                crate::typechecker::TypeErrorKind::ReprArgumentInvalid => "E0806",
-                crate::typechecker::TypeErrorKind::DiscriminantInvalid => "E0804",
-                // Phase 8 `@` bindings slice 4 — owned scrutinee, outer
-                // `@` alias and an inner sub-pattern binding both claim
-                // non-Copy ownership of overlapping content (design.md
-                // § @ Bindings > Owned scrutinee).
-                crate::typechecker::TypeErrorKind::AtBindingDoubleConsume => "E0261",
-                // Type Aliases (v60 item 50) — a generic alias use-site arg
-                // fails a trait bound declared on the alias parameter.
-                crate::typechecker::TypeErrorKind::TypeAliasBoundNotSatisfied => "E0262",
-                // Range Patterns (v60 item 51) — a const-named range bound
-                // does not resolve to a module-level int/char const.
-                crate::typechecker::TypeErrorKind::RangePatternBoundNotConst => "E0263",
-                // Fallible Allocation (v60 item 46) — a panicking heap-allocating
-                // operation appears under `panic_on_alloc_failure = false`.
-                crate::typechecker::TypeErrorKind::PanickingAllocRejected => "E0264",
-                // Fallible Allocation (v60 item 46) — `#[derive(Clone)]` whose
-                // synthesized clone may panic on allocation failure under
-                // `panic_on_alloc_failure = false`.
-                crate::typechecker::TypeErrorKind::DeriveCloneAllocates => "E0265",
-                // Phase-8 entry-point contract Slice C — `main()` declares a
-                // return type outside `()` / `Result[(), E: Display]` /
-                // `ExitCode` (design.md § Entry Point).
-                crate::typechecker::TypeErrorKind::MainReturnType => "E0266",
-                // Slice C — `main() -> Result[(), E]` where `E` lacks `Display`.
-                crate::typechecker::TypeErrorKind::MainErrNotDisplay => "E0267",
-                // B-2026-09-20-59 — `main()` is `pub`, takes parameters, or is
-                // generic (design.md § Entry Point).
-                crate::typechecker::TypeErrorKind::MainSignature => "E0286",
-                // B-2026-10-04-61 — an assignment target that is not a place.
-                crate::typechecker::TypeErrorKind::AssignTargetNotPlace => "E0287",
-                // core-semantics.md §4.7 — an impl method's mode is stronger
-                // than its trait's.
-                crate::typechecker::TypeErrorKind::ImplModeStrongerThanTrait => "E0288",
-                crate::typechecker::TypeErrorKind::MoveOutOfNoMovePlace => "E0289",
-                // `s[i]` (scalar index) on a `String` — UTF-8 is
-                // variable-width, so `[]` is rejected in favour of
-                // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).
-                crate::typechecker::TypeErrorKind::StringNotIndexable => "E0268",
-                crate::typechecker::TypeErrorKind::IteratorNotIndexable => "E0274",
-                crate::typechecker::TypeErrorKind::TypeNotIndexable => "E0275",
-                crate::typechecker::TypeErrorKind::RefOperandUnsupported => "E0283",
-                crate::typechecker::TypeErrorKind::BorrowConflict => "E0516",
-                crate::typechecker::TypeErrorKind::WriteThroughSharedRef => "E0517",
-                crate::typechecker::TypeErrorKind::BorrowOutlivesOwner => "E0509",
-                crate::typechecker::TypeErrorKind::FnKindMismatch => "E0518",
-                crate::typechecker::TypeErrorKind::CapturePrefixRemoved => "E0519",
-                crate::typechecker::TypeErrorKind::RemovedInCore => "E0520",
-                crate::typechecker::TypeErrorKind::BareVariantConstructor => "E0521",
-                crate::typechecker::TypeErrorKind::DeferredToM4a => "E_DEFERRED_M4A",
-                crate::typechecker::TypeErrorKind::ArchivedWithLegacy => "E_ARCHIVED",
-                crate::typechecker::TypeErrorKind::DeferredToLaterTrack => "E_DEFERRED_TRACK",
-                crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
-                // core-semantics.md §3.7 names this one (B-2026-10-19-61).
-                crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E_INDEX_MOVE_NON_COPY",
-                crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",
-                crate::typechecker::TypeErrorKind::OptionalChainNotOption => "E0277",
-                // B-2026-06-30-3 — reassignment of a non-`mut` field on a
-                // `shared struct` / `sync struct` (design.md § Shared Types).
-                crate::typechecker::TypeErrorKind::SharedFieldNotMut => "E0269",
-                // An `Atomic[T]` op (`load`/`store`/`fetch_*`/`swap`) called
-                // without its required explicit `MemoryOrdering` argument
-                // (deferred.md § Atomic Operations — no implicit-ordering form).
-                crate::typechecker::TypeErrorKind::AtomicMissingOrdering => "E0270",
-                // A return-position `impl Trait` yielding 2+ distinct concrete
-                // witnesses (design.md § `impl Trait`: one witness per
-                // monomorphization). Run-fatal (B-2026-07-08-1).
-                crate::typechecker::TypeErrorKind::ImplTraitMultipleWitnesses => "E0271",
-                // `Atomic[T]` with a non-atomic inner type (`T` must be an
-                // integer, `bool`, or raw pointer). Run-fatal: codegen crashes
-                // the LLVM verifier while the interpreter silently accepts it.
-                crate::typechecker::TypeErrorKind::AtomicInvalidInnerType => "E0272",
-                // B-2026-11-10-14 — `BufReader.new(x)` / `BufWriter.new(x)`
-                // over something other than a file or a child's pipe.
-                crate::typechecker::TypeErrorKind::BufferedIoInvalidSource => "E0297",
-                // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
-                crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
-                // B-2026-07-17-6 — an enum-variant pattern (`Some(v)`, `Ok(e)`,
-                // `Color.Red`, or a bare unit-variant name like `None`) matched
-                // against a scrutinee whose type cannot own that variant.
-                crate::typechecker::TypeErrorKind::PatternScrutineeMismatch => "E0273",
-                crate::typechecker::TypeErrorKind::BindingNameClass => "E0128",
-            };
+            let code = type_error_code(&err.kind);
             // Also surface a typecheck fix-it as the top-level
             // `"replacement":{offset,length,text}` shape every other phase
             // (resolver/parse/effect/ownership) uses, so `karac fix` and the
@@ -2118,27 +1842,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         }
         for warn in &t.warnings {
             id_counter += 1;
-            let code = match warn.kind {
-                crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
-                crate::typechecker::TypeErrorKind::RefinementDomainTooWide => "W0238",
-                crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
-                crate::typechecker::TypeErrorKind::Deprecated => "W0245",
-                crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
-                crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "W0249",
-                crate::typechecker::TypeErrorKind::UnstableApi => "W0255",
-                crate::typechecker::TypeErrorKind::RedundantSuffix => "W0280",
-                crate::typechecker::TypeErrorKind::RedundantCast => "W0291",
-                crate::typechecker::TypeErrorKind::RedundantAliasBound => "W0293",
-                crate::typechecker::TypeErrorKind::WeakReadUnwrap => "W0294",
-                crate::typechecker::TypeErrorKind::PreludeShadow => "W0282",
-                crate::typechecker::TypeErrorKind::ModuleMutBinding => "W0281",
-                crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "W0290",
-                crate::typechecker::TypeErrorKind::LaterTrack => "W0292",
-                crate::typechecker::TypeErrorKind::StyleLint => "W0295",
-                crate::typechecker::TypeErrorKind::UnusedDocComment => "W0296",
-                // Other kinds aren't expected to appear as warnings today.
-                _ => "W0299",
-            };
+            let code = type_warning_code(&warn.kind);
             // A multi-edit fix (the style lints', B-2026-11-05-31), rendered
             // as an error's is above.
             let fix_diff = t
@@ -2274,67 +1978,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
             id_counter += 1;
-            let (code, severity) = match err.kind {
-                crate::effectchecker::EffectErrorKind::MissingEffectDeclaration => {
-                    ("E0400", "error")
-                }
-                crate::effectchecker::EffectErrorKind::OverDeclaredEffect => ("E0401", "error"),
-                crate::effectchecker::EffectErrorKind::CircularEffectGroup => ("E0402", "error"),
-                crate::effectchecker::EffectErrorKind::UndefinedEffectGroup => ("E0403", "error"),
-                crate::effectchecker::EffectErrorKind::EffectSubtypeViolation => ("E0404", "error"),
-                crate::effectchecker::EffectErrorKind::ProfileViolation => ("E0405", "error"),
-                crate::effectchecker::EffectErrorKind::ImplExceedsTraitCeiling => {
-                    ("E0230", "error")
-                }
-                crate::effectchecker::EffectErrorKind::TraitDefaultExceedsCeiling => {
-                    ("E0231", "error")
-                }
-                crate::effectchecker::EffectErrorKind::FfiLintHint => ("L0001", "note"),
-                // `mutual_recursion_note` — a note, never an error, exactly as
-                // design.md words it ("emits a note (not an error)").
-                crate::effectchecker::EffectErrorKind::MutualRecursionNote => ("L0002", "note"),
-                // `pure_loop_in_par` — design.md spells it `warn[...]`, so it
-                // is a WARNING: advisory like the two notes above (it never
-                // blocks a build), but rendered and counted as a warning
-                // rather than a note (B-2026-08-21-2).
-                crate::effectchecker::EffectErrorKind::PureLoopInPar => ("L0003", "warning"),
-                crate::effectchecker::EffectErrorKind::EffectVariableConflict => ("E0406", "error"),
-                crate::effectchecker::EffectErrorKind::ProfileIncompatibleEffect => {
-                    ("E0407", "error")
-                }
-                // Sibling of E0407 — same guarantee, declared per function
-                // with `#[no_effect(...)]` instead of via a profile.
-                crate::effectchecker::EffectErrorKind::NoEffectViolated => ("E0416", "error"),
-                crate::effectchecker::EffectErrorKind::ModuleBindingWriteInPar => {
-                    ("E0408", "error")
-                }
-                crate::effectchecker::EffectErrorKind::PubFnSyntheticResource => ("E0409", "error"),
-                crate::effectchecker::EffectErrorKind::ForbiddenEffectInContract => {
-                    ("E0410", "error")
-                }
-                crate::effectchecker::EffectErrorKind::TargetGateViolation => ("E0411", "error"),
-                crate::effectchecker::EffectErrorKind::ResourceReceiverContradiction => {
-                    ("E0412", "error")
-                }
-                crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresPanics => {
-                    ("E0413", "error")
-                }
-                crate::effectchecker::EffectErrorKind::ExternExportSuspendsUnsupported => {
-                    ("E0414", "error")
-                }
-                crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresUnwindProfile => {
-                    ("E0415", "error")
-                }
-                crate::effectchecker::EffectErrorKind::DropBodyMayPanic => ("E0417", "error"),
-                crate::effectchecker::EffectErrorKind::ParBranchConflict => ("E0418", "error"),
-                crate::effectchecker::EffectErrorKind::NoProvider => ("E0419", "error"),
-                crate::effectchecker::EffectErrorKind::StatefulDefault => ("E0420", "error"),
-                crate::effectchecker::EffectErrorKind::ProviderUnsupported => ("E0421", "error"),
-                crate::effectchecker::EffectErrorKind::HandleUsesOverride => ("E0422", "error"),
-                crate::effectchecker::EffectErrorKind::DynProvider => ("E0423", "error"),
-                crate::effectchecker::EffectErrorKind::TaskProviderConflict => ("E0424", "error"),
-                crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
-            };
+            let (code, severity) = effect_error_code(&err.kind);
             let subtype_json = err.subtype_trace.as_ref().map(|t| {
                 let slot = json_string_list(&t.slot_effects);
                 let arg = json_string_list(&t.argument_effects);
@@ -2393,53 +2037,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     if let Some(ref o) = pipeline.ownership {
         for err in &o.errors {
             id_counter += 1;
-            let code = match err.kind {
-                crate::ownership::OwnershipErrorKind::UseAfterMove => "E0500",
-                crate::ownership::OwnershipErrorKind::ParBranchConflict => "E0418",
-                crate::ownership::OwnershipErrorKind::MovedFieldRefilledAcrossCall => "E0513",
-                crate::ownership::OwnershipErrorKind::RcFallbackOfDropType => "E0514",
-                crate::ownership::OwnershipErrorKind::MoveOutOfPlace => "E0515",
-                crate::ownership::OwnershipErrorKind::MoveInCleanupBlock => "E0522",
-                crate::ownership::OwnershipErrorKind::OwnershipCycle => "E0501",
-                crate::ownership::OwnershipErrorKind::NoRcViolation => "E0502",
-                crate::ownership::OwnershipErrorKind::RcFallbackNote => "N0503",
-                crate::ownership::OwnershipErrorKind::CaptureModeViolation => "E0504",
-                crate::ownership::OwnershipErrorKind::UseOfUninitialized => "E0505",
-                crate::ownership::OwnershipErrorKind::ReassignToImmutable => "E0506",
-                crate::ownership::OwnershipErrorKind::MutateImmutableBinding => "E0510",
-                crate::ownership::OwnershipErrorKind::FrozenParamEscapes => "E0511",
-                crate::ownership::OwnershipErrorKind::FrozenTypeNotFreezable => "E0512",
-                crate::ownership::OwnershipErrorKind::UnusedMutCaptureNote => "N0507",
-                crate::ownership::OwnershipErrorKind::RefCaptureEscapesScope => "E0508",
-                crate::ownership::OwnershipErrorKind::SliceFromTemporaryEscapes => {
-                    "E_SLICE_FROM_TEMPORARY_ESCAPES"
-                }
-                crate::ownership::OwnershipErrorKind::SliceBorrowConflict { .. } => {
-                    "E_SLICE_BORROW_CONFLICT"
-                }
-                crate::ownership::OwnershipErrorKind::CrossBorrowConflict => {
-                    "E_CROSS_BORROW_CONFLICT"
-                }
-                crate::ownership::OwnershipErrorKind::ClosureCaptureBorrowConflict => {
-                    "E_CLOSURE_CAPTURE_BORROW_CONFLICT"
-                }
-                crate::ownership::OwnershipErrorKind::RcBudgetExceeded { .. } => {
-                    "E_RC_BUDGET_EXCEEDED"
-                }
-                crate::ownership::OwnershipErrorKind::ConcurrentSharedStruct { .. } => {
-                    "E_CONCURRENT_SHARED_STRUCT"
-                }
-                crate::ownership::OwnershipErrorKind::ConcurrentPlainStruct { .. } => {
-                    "E_CONCURRENT_PLAIN_STRUCT"
-                }
-                crate::ownership::OwnershipErrorKind::BorrowReturnNotSourcePinned { .. } => "E0509",
-                crate::ownership::OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile => {
-                    "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE"
-                }
-                crate::ownership::OwnershipErrorKind::ExclusiveBorrowAliasedArgs => {
-                    "E_EXCLUSIVE_BORROW_ALIASED_ARGS"
-                }
-            };
+            let code = ownership_code(&err.kind);
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(
                     "\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
@@ -3542,6 +3140,414 @@ pub(super) fn lint_entries_for_compile_path(
     let user_end = crate::must_use_lint::user_text_end(&pipeline.parsed.program);
     out.retain(|(_, _, _, span)| span.offset < user_end);
     out
+}
+
+/// The catalogue code of a resolve diagnostic: the one table the JSON feed, the
+/// single-file text renderer and the package renderers all read, so the code a
+/// text line prints is the code `--output=json` reports (review-thread ruling
+/// 2026-11-16).
+pub(crate) fn resolve_error_code(kind: &crate::resolver::ResolveErrorKind) -> &'static str {
+    match kind {
+        crate::resolver::ResolveErrorKind::LayoutUnassignedFields => "W0150",
+        crate::resolver::ResolveErrorKind::LayoutReprCIgnored => "W0151",
+        crate::resolver::ResolveErrorKind::LayoutReprCOnPubStruct => "E0151",
+        crate::resolver::ResolveErrorKind::FloatInSerializedType => "W0152",
+        crate::resolver::ResolveErrorKind::UndefinedName => "E0100",
+        crate::resolver::ResolveErrorKind::DuplicateDefinition => "E0101",
+        crate::resolver::ResolveErrorKind::ReservedIdentifier => "E0102",
+        crate::resolver::ResolveErrorKind::BindingNameClass => "E0127",
+        crate::resolver::ResolveErrorKind::PrivateAccess => "E0103",
+        crate::resolver::ResolveErrorKind::UndefinedType => "E0104",
+        crate::resolver::ResolveErrorKind::UndefinedVariant => "E0105",
+        crate::resolver::ResolveErrorKind::UndefinedField => "E0106",
+        crate::resolver::ResolveErrorKind::UndefinedLabel => "E0107",
+        crate::resolver::ResolveErrorKind::OperatorTraitImplRestricted => "E0108",
+        crate::resolver::ResolveErrorKind::IntoTraitImplNotAllowed => "E0109",
+        crate::resolver::ResolveErrorKind::TraitEffectVarNotAllowed => "E0110",
+        crate::resolver::ResolveErrorKind::EffectVarKindMismatch => "E0125",
+        crate::resolver::ResolveErrorKind::EffectArgsMissingInPublicSignature => "E0126",
+        crate::resolver::ResolveErrorKind::UnknownModule => "E0112",
+        crate::resolver::ResolveErrorKind::UnknownItemInModule => "E0113",
+        crate::resolver::ResolveErrorKind::PrivateItemAccess => "E0111",
+        crate::resolver::ResolveErrorKind::AmbiguousWildcardImport => "E0124",
+        crate::resolver::ResolveErrorKind::ReservedEffectResource => "E0114",
+        crate::resolver::ResolveErrorKind::CompilerBuiltinReserved => "E0115",
+        crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0116",
+        crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0117",
+        crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0118",
+        crate::resolver::ResolveErrorKind::GpuInvalidTarget => "E0800",
+        crate::resolver::ResolveErrorKind::CodegenHintInvalidTarget => {
+            "E_CODEGEN_HINT_INVALID_POSITION"
+        }
+        crate::resolver::ResolveErrorKind::CodegenHintOnExternDecl => {
+            "E_CODEGEN_HINT_ON_EXTERN_DECL"
+        }
+        crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0119",
+        crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0120",
+        crate::resolver::ResolveErrorKind::UnknownAttribute => "E0121",
+        crate::resolver::ResolveErrorKind::ProfileInvalidTarget => "E0122",
+        crate::resolver::ResolveErrorKind::UnknownProfile => "E0123",
+        crate::resolver::ResolveErrorKind::QueryResolutionConflict => "E_QUERY_RESOLUTION_CONFLICT",
+        crate::resolver::ResolveErrorKind::UnionNonExhaustiveForbidden => {
+            "E_UNION_NON_EXHAUSTIVE_FORBIDDEN"
+        }
+        crate::resolver::ResolveErrorKind::DefaultAttributeInvalidPosition => {
+            "E_DEFAULT_ATTRIBUTE_INVALID_POSITION"
+        }
+        crate::resolver::ResolveErrorKind::DefaultAttributeWithoutDerive => {
+            "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE"
+        }
+        crate::resolver::ResolveErrorKind::HelperAttributeInvalidPosition => {
+            "E_HELPER_ATTRIBUTE_INVALID_POSITION"
+        }
+        crate::resolver::ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
+        crate::resolver::ResolveErrorKind::TestOutsideTestFile => "E_TEST_OUTSIDE_TEST_FILE",
+        crate::resolver::ResolveErrorKind::MalformedAttributeArgs => "E_MALFORMED_ATTRIBUTE_ARGS",
+    }
+}
+
+/// The catalogue code of a type error; see [`resolve_error_code`].
+pub(crate) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
+    match kind {
+        crate::typechecker::TypeErrorKind::TypeMismatch => "E0200",
+        crate::typechecker::TypeErrorKind::UndefinedField => "E0201",
+        crate::typechecker::TypeErrorKind::WrongNumberOfArgs => "E0202",
+        crate::typechecker::TypeErrorKind::MissingField => "E0203",
+        crate::typechecker::TypeErrorKind::ExtraField => "E0204",
+        crate::typechecker::TypeErrorKind::NonExhaustiveMatch => "E0205",
+        crate::typechecker::TypeErrorKind::NotCallable => "E0206",
+        crate::typechecker::TypeErrorKind::NotAStruct => "E0207",
+        crate::typechecker::TypeErrorKind::InvalidBinaryOp => "E0208",
+        crate::typechecker::TypeErrorKind::InvalidUnaryOp => "E0209",
+        crate::typechecker::TypeErrorKind::InvalidCast => "E0210",
+        crate::typechecker::TypeErrorKind::ConditionNotBool => "E0211",
+        crate::typechecker::TypeErrorKind::BranchTypeMismatch => "E0212",
+        crate::typechecker::TypeErrorKind::ReturnTypeMismatch => "E0213",
+        crate::typechecker::TypeErrorKind::InvalidTupleIndex => "E0214",
+        crate::typechecker::TypeErrorKind::LabelMismatch => "E0215",
+        crate::typechecker::TypeErrorKind::NonContiguousLabels => "E0216",
+        crate::typechecker::TypeErrorKind::InvalidPipePlaceholder => "E0217",
+        crate::typechecker::TypeErrorKind::MissingMutMarker => "E0218",
+        crate::typechecker::TypeErrorKind::InvalidMutMarker => "E0219",
+        crate::typechecker::TypeErrorKind::UnsupportedNumericSuffix => "E0220",
+        crate::typechecker::TypeErrorKind::PrivateTypeInPublicSignature => "E0221",
+        crate::typechecker::TypeErrorKind::PrivateFieldAccess => "E0111",
+        crate::typechecker::TypeErrorKind::RefutablePattern => "E0222",
+        crate::typechecker::TypeErrorKind::MissingSupertrait => "E0229",
+        crate::typechecker::TypeErrorKind::TraitBoundNotSatisfied => "E0232",
+        crate::typechecker::TypeErrorKind::AmbiguousAssocFn => "E0233",
+        crate::typechecker::TypeErrorKind::CannotInferAssocFn => "E0234",
+        crate::typechecker::TypeErrorKind::OnceFnIntoFnSlot => "E0235",
+        crate::typechecker::TypeErrorKind::NoMethodFound => "E0236",
+        crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
+        crate::typechecker::TypeErrorKind::RefinementDomainTooWide => "W0238",
+        crate::typechecker::TypeErrorKind::CannotInferTypeParam => "E0238",
+        crate::typechecker::TypeErrorKind::AmbiguousMethod => "E0239",
+        crate::typechecker::TypeErrorKind::AmbiguousBareVariant => "E0279",
+        // `redundant_suffix` escalated to an error by `-D`/`#[deny]`;
+        // the warning twin is `W0280` in the loop below
+        // (B-2026-08-20-36).
+        crate::typechecker::TypeErrorKind::RedundantSuffix => "E0280",
+        crate::typechecker::TypeErrorKind::RedundantCast => "E0291",
+        // A style lint escalated by `-D`/`#[deny]`; `W0295` below.
+        crate::typechecker::TypeErrorKind::StyleLint => "E0295",
+        crate::typechecker::TypeErrorKind::UnusedDocComment => "E0296",
+        crate::typechecker::TypeErrorKind::RedundantAliasBound => "E0293",
+        crate::typechecker::TypeErrorKind::WeakReadUnwrap => "E0294",
+        crate::typechecker::TypeErrorKind::PreludeShadow => "E0282",
+        // `module_mut_binding` escalated to an error by `-D`/`#[deny]`;
+        // the warning twin is `W0281` in the loop below
+        // (B-2026-08-21-2).
+        crate::typechecker::TypeErrorKind::ModuleMutBinding => "E0281",
+        // `return_clause_on_fn` escalated by `-D`/`#[deny]`; the
+        // warning twin is `W0290` (B-2026-10-30-9).
+        crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "E0290",
+        crate::typechecker::TypeErrorKind::LaterTrack => "E0292",
+        crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
+        crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
+        crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
+        crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackagePattern => "E0243",
+        crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
+        // `Deprecated` only appears as a warning under default
+        // settings; if `#[deny(deprecated)]` promotes it to an
+        // error the same code is reused as `E0245`.
+        crate::typechecker::TypeErrorKind::Deprecated => "E0245",
+        // `MissingNonExhaustive` is `Deny`-by-default per
+        // `STARTER_LINTS`, so it normally surfaces as an error
+        // (W-prefixed because the underlying carrier is a lint).
+        crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
+        // Lint-level slice 4b polish — emitted only when the
+        // CLI sets `-F NAME` and an inner `#[allow(NAME)]`
+        // is rejected; never appears as a warning (the
+        // diagnostic is a hard error by construction).
+        crate::typechecker::TypeErrorKind::ForbiddenLintAllow => "E0247",
+        // Lint-level slice 5 — `#[expect(unfulfilled_lint_expectation)]`
+        // rejection (would be circular).
+        crate::typechecker::TypeErrorKind::ExpectOnUnfulfilled => "E0248",
+        // Lint-level slice 5 — appears on the errors path only
+        // when promoted via `#[deny(unfulfilled_lint_expectation)]`.
+        crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "E0249",
+        // Module-level `let` / `let mut` slice 4 — see
+        // `docs/implementation_checklist/phase-8-stdlib-floor.md`
+        // mod-let entry. The const-init structural rule and the
+        // §1297 heap-String rejection both surface here.
+        crate::typechecker::TypeErrorKind::ModuleBindingEffectfulInit => "E0250",
+        crate::typechecker::TypeErrorKind::ModuleBindingHeapType => "E0251",
+        crate::typechecker::TypeErrorKind::ModuleLet => "E_MODULE_LET",
+        // Slice 5 — assignment to a module-level immutable `let`.
+        crate::typechecker::TypeErrorKind::ReassignToImmutableModuleBinding => "E0252",
+        // Phase 6 line 218 slice 2 — ScopeLocal escape
+        // diagnostic (design.md § ScopeLocal). Fires when a
+        // `ScopeLocal` marker-trait type appears in a
+        // function return, struct/enum field, or
+        // `Sender.send` argument.
+        crate::typechecker::TypeErrorKind::ScopeLocalEscape => "E0253",
+        // Phase 6 line 170 slice 3a — cross-task-safe boundary
+        // check at `spawn(closure)` / `TaskGroup.spawn(closure)`
+        // call sites. Fires when a captured binding's type
+        // reaches a cross-task-unsafe leaf (`Rc[T]`, `shared`,
+        // `OnceCell[T]`, raw pointer) per
+        // `src/cross_task_safe.rs`'s closed structural list.
+        crate::typechecker::TypeErrorKind::CrossTaskUnsafeCapture => "E0254",
+        // Phase-8 line 49 — `#[unstable]` use-site lint
+        // promoted to error via `#[deny(unstable_api)]`.
+        // Reuses the same numeric slot as the warning
+        // (`W0255`) by convention with `Deprecated`.
+        crate::typechecker::TypeErrorKind::UnstableApi => "E0255",
+        // Phase 9 line 25 step 1 — a refinement type's `where`
+        // predicate uses a construct outside the allowed
+        // constraint language (design.md § Refinement Types).
+        crate::typechecker::TypeErrorKind::InvalidRefinementPredicate => "E0256",
+        // Phase 6 `sync struct` slice A — a `mut` field of a
+        // `sync struct` / `sync enum` is not `Atomic[T]` / `Mutex[T]`
+        // (design.md § Part 5b > Field constraints).
+        crate::typechecker::TypeErrorKind::ParFieldNotConcurrent => "E0257",
+        // Phase 6 `sync struct` slice A — a `sync struct` / `sync enum`
+        // method declares a `mut self` receiver; only `ref self` (and
+        // consuming `self`) are permitted because `par` values are
+        // always Arc with potential multiple holders (design.md
+        // § Part 5b > `ref self` receivers only).
+        crate::typechecker::TypeErrorKind::ParMutSelfReceiver => "E0258",
+        // E0259 retired: a `lock` block body MAY now contain early exits
+        // (`return` / `break` / `continue`) — codegen seeds the release
+        // as a cleanup-frame action so it fires on every exit path.
+        // Phase 6 `Mutex` / `lock` — the `lock` target is not a
+        // `Mutex[T]` binding.
+        crate::typechecker::TypeErrorKind::LockTargetNotMutex => "E0260",
+        // `#[repr(transparent)]` carrier-shape violation (design.md §
+        // `#[repr(transparent)]` for distinct-type FFI). One numeric
+        // code for the family; the specific `E_REPR_TRANSPARENT_*`
+        // symbolic code is in the message.
+        crate::typechecker::TypeErrorKind::ReprTransparentInvalid => "E0803",
+        crate::typechecker::TypeErrorKind::ExternSignatureInvalid => "E0805",
+        crate::typechecker::TypeErrorKind::ReprArgumentInvalid => "E0806",
+        crate::typechecker::TypeErrorKind::DiscriminantInvalid => "E0804",
+        // Phase 8 `@` bindings slice 4 — owned scrutinee, outer
+        // `@` alias and an inner sub-pattern binding both claim
+        // non-Copy ownership of overlapping content (design.md
+        // § @ Bindings > Owned scrutinee).
+        crate::typechecker::TypeErrorKind::AtBindingDoubleConsume => "E0261",
+        // Type Aliases (v60 item 50) — a generic alias use-site arg
+        // fails a trait bound declared on the alias parameter.
+        crate::typechecker::TypeErrorKind::TypeAliasBoundNotSatisfied => "E0262",
+        // Range Patterns (v60 item 51) — a const-named range bound
+        // does not resolve to a module-level int/char const.
+        crate::typechecker::TypeErrorKind::RangePatternBoundNotConst => "E0263",
+        // Fallible Allocation (v60 item 46) — a panicking heap-allocating
+        // operation appears under `panic_on_alloc_failure = false`.
+        crate::typechecker::TypeErrorKind::PanickingAllocRejected => "E0264",
+        // Fallible Allocation (v60 item 46) — `#[derive(Clone)]` whose
+        // synthesized clone may panic on allocation failure under
+        // `panic_on_alloc_failure = false`.
+        crate::typechecker::TypeErrorKind::DeriveCloneAllocates => "E0265",
+        // Phase-8 entry-point contract Slice C — `main()` declares a
+        // return type outside `()` / `Result[(), E: Display]` /
+        // `ExitCode` (design.md § Entry Point).
+        crate::typechecker::TypeErrorKind::MainReturnType => "E0266",
+        // Slice C — `main() -> Result[(), E]` where `E` lacks `Display`.
+        crate::typechecker::TypeErrorKind::MainErrNotDisplay => "E0267",
+        // B-2026-09-20-59 — `main()` is `pub`, takes parameters, or is
+        // generic (design.md § Entry Point).
+        crate::typechecker::TypeErrorKind::MainSignature => "E0286",
+        // B-2026-10-04-61 — an assignment target that is not a place.
+        crate::typechecker::TypeErrorKind::AssignTargetNotPlace => "E0287",
+        // core-semantics.md §4.7 — an impl method's mode is stronger
+        // than its trait's.
+        crate::typechecker::TypeErrorKind::ImplModeStrongerThanTrait => "E0288",
+        crate::typechecker::TypeErrorKind::MoveOutOfNoMovePlace => "E0289",
+        // `s[i]` (scalar index) on a `String` — UTF-8 is
+        // variable-width, so `[]` is rejected in favour of
+        // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).
+        crate::typechecker::TypeErrorKind::StringNotIndexable => "E0268",
+        crate::typechecker::TypeErrorKind::IteratorNotIndexable => "E0274",
+        crate::typechecker::TypeErrorKind::TypeNotIndexable => "E0275",
+        crate::typechecker::TypeErrorKind::RefOperandUnsupported => "E0283",
+        crate::typechecker::TypeErrorKind::BorrowConflict => "E0516",
+        crate::typechecker::TypeErrorKind::WriteThroughSharedRef => "E0517",
+        crate::typechecker::TypeErrorKind::BorrowOutlivesOwner => "E0509",
+        crate::typechecker::TypeErrorKind::FnKindMismatch => "E0518",
+        crate::typechecker::TypeErrorKind::CapturePrefixRemoved => "E0519",
+        crate::typechecker::TypeErrorKind::RemovedInCore => "E0520",
+        crate::typechecker::TypeErrorKind::BareVariantConstructor => "E0521",
+        crate::typechecker::TypeErrorKind::DeferredToM4a => "E_DEFERRED_M4A",
+        crate::typechecker::TypeErrorKind::ArchivedWithLegacy => "E_ARCHIVED",
+        crate::typechecker::TypeErrorKind::DeferredToLaterTrack => "E_DEFERRED_TRACK",
+        crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
+        // core-semantics.md §3.7 names this one (B-2026-10-19-61).
+        crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E_INDEX_MOVE_NON_COPY",
+        crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",
+        crate::typechecker::TypeErrorKind::OptionalChainNotOption => "E0277",
+        // B-2026-06-30-3 — reassignment of a non-`mut` field on a
+        // `shared struct` / `sync struct` (design.md § Shared Types).
+        crate::typechecker::TypeErrorKind::SharedFieldNotMut => "E0269",
+        // An `Atomic[T]` op (`load`/`store`/`fetch_*`/`swap`) called
+        // without its required explicit `MemoryOrdering` argument
+        // (deferred.md § Atomic Operations — no implicit-ordering form).
+        crate::typechecker::TypeErrorKind::AtomicMissingOrdering => "E0270",
+        // A return-position `impl Trait` yielding 2+ distinct concrete
+        // witnesses (design.md § `impl Trait`: one witness per
+        // monomorphization). Run-fatal (B-2026-07-08-1).
+        crate::typechecker::TypeErrorKind::ImplTraitMultipleWitnesses => "E0271",
+        // `Atomic[T]` with a non-atomic inner type (`T` must be an
+        // integer, `bool`, or raw pointer). Run-fatal: codegen crashes
+        // the LLVM verifier while the interpreter silently accepts it.
+        crate::typechecker::TypeErrorKind::AtomicInvalidInnerType => "E0272",
+        // B-2026-11-10-14 — `BufReader.new(x)` / `BufWriter.new(x)`
+        // over something other than a file or a child's pipe.
+        crate::typechecker::TypeErrorKind::BufferedIoInvalidSource => "E0297",
+        // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
+        crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
+        // B-2026-07-17-6 — an enum-variant pattern (`Some(v)`, `Ok(e)`,
+        // `Color.Red`, or a bare unit-variant name like `None`) matched
+        // against a scrutinee whose type cannot own that variant.
+        crate::typechecker::TypeErrorKind::PatternScrutineeMismatch => "E0273",
+        crate::typechecker::TypeErrorKind::BindingNameClass => "E0128",
+    }
+}
+
+/// The catalogue code and severity of an effect diagnostic; see
+/// [`resolve_error_code`].
+pub(crate) fn effect_error_code(
+    kind: &crate::effectchecker::EffectErrorKind,
+) -> (&'static str, &'static str) {
+    match kind {
+        crate::effectchecker::EffectErrorKind::MissingEffectDeclaration => ("E0400", "error"),
+        crate::effectchecker::EffectErrorKind::OverDeclaredEffect => ("E0401", "error"),
+        crate::effectchecker::EffectErrorKind::CircularEffectGroup => ("E0402", "error"),
+        crate::effectchecker::EffectErrorKind::UndefinedEffectGroup => ("E0403", "error"),
+        crate::effectchecker::EffectErrorKind::EffectSubtypeViolation => ("E0404", "error"),
+        crate::effectchecker::EffectErrorKind::ProfileViolation => ("E0405", "error"),
+        crate::effectchecker::EffectErrorKind::ImplExceedsTraitCeiling => ("E0230", "error"),
+        crate::effectchecker::EffectErrorKind::TraitDefaultExceedsCeiling => ("E0231", "error"),
+        crate::effectchecker::EffectErrorKind::FfiLintHint => ("L0001", "note"),
+        // `mutual_recursion_note` — a note, never an error, exactly as
+        // design.md words it ("emits a note (not an error)").
+        crate::effectchecker::EffectErrorKind::MutualRecursionNote => ("L0002", "note"),
+        // `pure_loop_in_par` — design.md spells it `warn[...]`, so it
+        // is a WARNING: advisory like the two notes above (it never
+        // blocks a build), but rendered and counted as a warning
+        // rather than a note (B-2026-08-21-2).
+        crate::effectchecker::EffectErrorKind::PureLoopInPar => ("L0003", "warning"),
+        crate::effectchecker::EffectErrorKind::EffectVariableConflict => ("E0406", "error"),
+        crate::effectchecker::EffectErrorKind::ProfileIncompatibleEffect => ("E0407", "error"),
+        // Sibling of E0407 — same guarantee, declared per function
+        // with `#[no_effect(...)]` instead of via a profile.
+        crate::effectchecker::EffectErrorKind::NoEffectViolated => ("E0416", "error"),
+        crate::effectchecker::EffectErrorKind::ModuleBindingWriteInPar => ("E0408", "error"),
+        crate::effectchecker::EffectErrorKind::PubFnSyntheticResource => ("E0409", "error"),
+        crate::effectchecker::EffectErrorKind::ForbiddenEffectInContract => ("E0410", "error"),
+        crate::effectchecker::EffectErrorKind::TargetGateViolation => ("E0411", "error"),
+        crate::effectchecker::EffectErrorKind::ResourceReceiverContradiction => ("E0412", "error"),
+        crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresPanics => ("E0413", "error"),
+        crate::effectchecker::EffectErrorKind::ExternExportSuspendsUnsupported => {
+            ("E0414", "error")
+        }
+        crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresUnwindProfile => {
+            ("E0415", "error")
+        }
+        crate::effectchecker::EffectErrorKind::DropBodyMayPanic => ("E0417", "error"),
+        crate::effectchecker::EffectErrorKind::ParBranchConflict => ("E0418", "error"),
+        crate::effectchecker::EffectErrorKind::NoProvider => ("E0419", "error"),
+        crate::effectchecker::EffectErrorKind::StatefulDefault => ("E0420", "error"),
+        crate::effectchecker::EffectErrorKind::ProviderUnsupported => ("E0421", "error"),
+        crate::effectchecker::EffectErrorKind::HandleUsesOverride => ("E0422", "error"),
+        crate::effectchecker::EffectErrorKind::DynProvider => ("E0423", "error"),
+        crate::effectchecker::EffectErrorKind::TaskProviderConflict => ("E0424", "error"),
+        crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
+    }
+}
+
+/// The catalogue code of a typecheck WARNING (a `W` code); see
+/// [`resolve_error_code`].
+pub(crate) fn type_warning_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
+    match kind {
+        crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
+        crate::typechecker::TypeErrorKind::RefinementDomainTooWide => "W0238",
+        crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
+        crate::typechecker::TypeErrorKind::Deprecated => "W0245",
+        crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
+        crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "W0249",
+        crate::typechecker::TypeErrorKind::UnstableApi => "W0255",
+        crate::typechecker::TypeErrorKind::RedundantSuffix => "W0280",
+        crate::typechecker::TypeErrorKind::RedundantCast => "W0291",
+        crate::typechecker::TypeErrorKind::RedundantAliasBound => "W0293",
+        crate::typechecker::TypeErrorKind::WeakReadUnwrap => "W0294",
+        crate::typechecker::TypeErrorKind::PreludeShadow => "W0282",
+        crate::typechecker::TypeErrorKind::ModuleMutBinding => "W0281",
+        crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "W0290",
+        crate::typechecker::TypeErrorKind::LaterTrack => "W0292",
+        crate::typechecker::TypeErrorKind::StyleLint => "W0295",
+        crate::typechecker::TypeErrorKind::UnusedDocComment => "W0296",
+        // Other kinds aren't expected to appear as warnings today.
+        _ => "W0299",
+    }
+}
+
+/// The catalogue code of an ownership diagnostic; see [`resolve_error_code`].
+pub(crate) fn ownership_code(kind: &crate::ownership::OwnershipErrorKind) -> &'static str {
+    match kind {
+        crate::ownership::OwnershipErrorKind::UseAfterMove => "E0500",
+        crate::ownership::OwnershipErrorKind::ParBranchConflict => "E0418",
+        crate::ownership::OwnershipErrorKind::MovedFieldRefilledAcrossCall => "E0513",
+        crate::ownership::OwnershipErrorKind::RcFallbackOfDropType => "E0514",
+        crate::ownership::OwnershipErrorKind::MoveOutOfPlace => "E0515",
+        crate::ownership::OwnershipErrorKind::MoveInCleanupBlock => "E0522",
+        crate::ownership::OwnershipErrorKind::OwnershipCycle => "E0501",
+        crate::ownership::OwnershipErrorKind::NoRcViolation => "E0502",
+        crate::ownership::OwnershipErrorKind::RcFallbackNote => "N0503",
+        crate::ownership::OwnershipErrorKind::CaptureModeViolation => "E0504",
+        crate::ownership::OwnershipErrorKind::UseOfUninitialized => "E0505",
+        crate::ownership::OwnershipErrorKind::ReassignToImmutable => "E0506",
+        crate::ownership::OwnershipErrorKind::MutateImmutableBinding => "E0510",
+        crate::ownership::OwnershipErrorKind::FrozenParamEscapes => "E0511",
+        crate::ownership::OwnershipErrorKind::FrozenTypeNotFreezable => "E0512",
+        crate::ownership::OwnershipErrorKind::UnusedMutCaptureNote => "N0507",
+        crate::ownership::OwnershipErrorKind::RefCaptureEscapesScope => "E0508",
+        crate::ownership::OwnershipErrorKind::SliceFromTemporaryEscapes => {
+            "E_SLICE_FROM_TEMPORARY_ESCAPES"
+        }
+        crate::ownership::OwnershipErrorKind::SliceBorrowConflict { .. } => {
+            "E_SLICE_BORROW_CONFLICT"
+        }
+        crate::ownership::OwnershipErrorKind::CrossBorrowConflict => "E_CROSS_BORROW_CONFLICT",
+        crate::ownership::OwnershipErrorKind::ClosureCaptureBorrowConflict => {
+            "E_CLOSURE_CAPTURE_BORROW_CONFLICT"
+        }
+        crate::ownership::OwnershipErrorKind::RcBudgetExceeded { .. } => "E_RC_BUDGET_EXCEEDED",
+        crate::ownership::OwnershipErrorKind::ConcurrentSharedStruct { .. } => {
+            "E_CONCURRENT_SHARED_STRUCT"
+        }
+        crate::ownership::OwnershipErrorKind::ConcurrentPlainStruct { .. } => {
+            "E_CONCURRENT_PLAIN_STRUCT"
+        }
+        crate::ownership::OwnershipErrorKind::BorrowReturnNotSourcePinned { .. } => "E0509",
+        crate::ownership::OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile => {
+            "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE"
+        }
+        crate::ownership::OwnershipErrorKind::ExclusiveBorrowAliasedArgs => {
+            "E_EXCLUSIVE_BORROW_ALIASED_ARGS"
+        }
+    }
 }
 
 #[cfg(test)]

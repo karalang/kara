@@ -98,7 +98,7 @@ fn fmt_reports_a_file_that_does_not_parse_and_formats_the_rest() {
     assert!(
         String::from_utf8_lossy(&out.stderr)
             .replace('\\', "/")
-            .contains("error[parse]: src/bad.kara:"),
+            .contains("error[E0002]: src/bad.kara:"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );

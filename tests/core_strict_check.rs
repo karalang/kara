@@ -89,7 +89,7 @@ fn use_after_move_is_an_error() {
              take(s);\n\
              println(s);\n\
          }\n",
-        "error[ownership]",
+        "error[E0500]",
     );
 }
 
@@ -135,7 +135,7 @@ fn moved_into_a_container_then_used_is_an_error() {
              b.add(s);\n\
              println(f\"{a.items.len()} {b.items.len()}\");\n\
          }\n",
-        "error[ownership]",
+        "error[E0500]",
     );
 }
 
@@ -3039,7 +3039,7 @@ fn a_function_type_parameter_borrows() {
              println(f(s));\n\
              println(s);\n\
          }\n",
-        "error[ownership]",
+        "error[E0500]",
     );
 }
 

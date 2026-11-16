@@ -67,7 +67,7 @@ fn doc_with_a_parse_error_exits_nonzero() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("error[parse]"), "{stderr}");
+    assert!(stderr.contains("error[E0002]"), "{stderr}");
     assert!(
         stderr.contains("error[doc]: the docs are incomplete"),
         "{stderr}"

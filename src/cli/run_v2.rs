@@ -63,6 +63,31 @@ fn cmd_run_v2(
         std::env::set_var(crate::mir::interp::PANIC_RECORD_ENV, "1");
     }
     let manifest = run_manifest_preamble(filename, output, manifest_override, no_manifest);
+    // `karac run` runs on this host, so a package whose `[build] targets`
+    // leave `native` out is not run here (review-thread ruling 2026-11-16).
+    if let Some(m) = manifest.as_ref() {
+        if !m.build_targets.is_empty() && !m.build_targets.iter().any(|t| t == "native") {
+            emit_build_error(
+                &format!(
+                    "package `{}` declares `[build] targets = [{}]`, which leave out `native`, \
+                     so `karac run` cannot run it on this host; `karac build` builds {}",
+                    m.name,
+                    m.build_targets
+                        .iter()
+                        .map(|t| format!("\"{t}\""))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if m.build_targets.len() == 1 {
+                        "it"
+                    } else {
+                        "each of them"
+                    },
+                ),
+                output,
+            );
+            process::exit(1);
+        }
+    }
     // A file of a package with other modules runs the whole package, as
     // one source (project mode, B-2026-10-22-14).
     let project = package_source_at(filename, no_manifest, manifest_override, output, "run");

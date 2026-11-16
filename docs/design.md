@@ -704,7 +704,7 @@ target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host
 - **Hyphens in a package name.** A package name may contain `-`, and a path segment may not, so a dependent's path starts with the name with each `-` replaced by `_`: a dependency on `kara-data` is imported from `kara_data`. Two dependencies whose names differ only by `-` against `_` would claim one segment, which is an error at the manifest; an `alias` resolves it.
 - `[package].import` is optional. It declares the import name dependents use instead of the name, and must be an identifier: `kara-data` declares `import = "data"`, so its dependents write `import data.{Column, DataFrame}`. A dependent's `alias` overrides both.
 - `[package].edition` is optional and validated.
-- `version` and `authors` are recognized. An unknown key in `[package]` is a warning; invalid TOML is an error.
+- `version` and `authors` are recognized. `version` is a semver version, `MAJOR.MINOR.PATCH`, and anything else is an error (review-thread ruling 2026-11-16). An unknown key in `[package]` is a warning; invalid TOML is an error.
 - `[build].target` selects the default manifest overlay ([Conditional compilation](#conditional-compilation)); `[build].targets` lists the targets `karac check` verifies ([§16](#16-targets-and-compilation)).
 - **Dependencies in 0.8.** `check`, `run`, `build` and `test` resolve dependencies the same way. A path dependency (`{ path = "../logging" }`) resolves, type-checks across the package boundary and links. A git dependency (`{ git = "<url>" }`, optionally with one of `branch`, `tag` or `rev`) is fetched; a fetch that fails is `E_GIT_FETCH_FAILED`. A registry dependency (`"1.2"`, `{ version = .. }`) is fetched through the registry proxy named by `KARAC_REGISTRY_PROXY`. With no proxy configured it is the error `E_REGISTRY_DEP_UNSUPPORTED`, with a help line to use a `path` dependency on a local checkout instead, never a warning: a declared dependency that is silently dropped would surface later as an unknown module (review-thread ruling 2026-11-13, B-2026-11-13-41). A dependency cycle is `E_DEPENDENCY_CYCLE` in every command.
 
@@ -748,7 +748,7 @@ target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host
 
 **Package identity and the proxy.** A package is identified by its git URL (`git+https://github.com/example/json-kara`). There is no central namespace and no publish step. The package proxy (`proxy.kara-lang.org` or a self-hosted equivalent) mirrors every URL and ref resolved through it, immutably, addressed by content hash. Resolution goes through the proxy by default; `--no-proxy` fetches directly. The proxy is what makes decentralized identity reproducible: a force-pushed branch, a deleted repository or a network failure cannot change a locked build. A central registry is not planned; the manifest accepts an optional `registry = "https://..."` so one can be added later without a break.
 
-**Reproducible builds.** Given a committed `kara.lock`, a pinned toolchain and the same target triple, builds are bit-identical. The compiler must be deterministic: no timestamps, sorted symbol output, no host paths in binaries, no nondeterministic linking. Any nondeterminism is a compiler bug.
+**Reproducible builds.** Given a committed `kara.lock`, a pinned toolchain and the same target triple, builds are bit-identical. The compiler must be deterministic: no timestamps, sorted symbol output, no host paths in binaries, no nondeterministic linking. Any nondeterminism is a compiler bug. A package is the reproducible form: its files are named from the package root. A single-file build records the file's path as it was typed (a panic location reads `../p/oob.kara:3:13`), so an absolute path puts a host path in the binary (review-thread ruling 2026-11-16).
 
 **Toolchain pinning and library MSRV.**
 - A library states the oldest compiler it supports with `[package].kara-version = ">=0.42"`; the resolver enforces it.
@@ -760,9 +760,6 @@ target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host
 ```toml
 [target.wasm32-wasip1.dependencies]
 wasi-helpers = "0.2"
-
-[target.wasm32-wasip1.profile]
-opt-level = "z"
 ```
 
 Each `karac build --target X` produces one artifact. Building a matrix of targets is a CI concern.
@@ -6890,6 +6887,7 @@ The compiler runs the target gate **after** effect inference, once per target in
 When a package declares several targets, `karac check` type-checks and effect-checks the source tree **once per target**, with that target's resource set, and tags each diagnostic with its target.
 
 - **Declaration.** The manifest declares `[build] targets = ["native", "wasm_wasi"]`, an array of target names. It is distinct from `[build].target`, a rustc-style triple that selects the per-target manifest overlay for `karac build`.
+- **Building.** A plain `karac build` builds each declared target in order, as `--target=<name>` would, and stops at the first that fails; `--target` builds one. `karac run` runs on the host, so it refuses a package whose targets leave out `native`, naming them (review-thread ruling 2026-11-16).
 - **Errors.** Unknown names and duplicates are hard manifest errors. A soft warning would let a typo silently drop a target from a CI matrix.
 - **Discovery.** `karac check <file>` finds the manifest by walking upward from the file's directory, the same rule as `karac run`.
 - **Override.** `karac check <file> --targets=<list|all>`.
@@ -6914,11 +6912,11 @@ Within the `native` target, karac keeps a **per-target-triple CPU baseline table
 **CPU override**, in precedence order:
 1. `--target-cpu=<name>` on `karac build`, in single-file and project mode;
 2. `KARAC_TARGET_CPU=<name>`;
-3. `[profile.release] target-cpu = "<name>"` in `kara.toml` (found by the `karac run` walk-up rule in single-file mode; the project's manifest in project mode).
+3. `[profile.release] target-cpu = "<name>"` in `kara.toml` (found by the `karac run` walk-up rule in single-file mode; the project's manifest in project mode). It applies to every `karac build`, with or without `--release`, since there is no separate development code-generation profile (review-thread ruling 2026-11-16).
 
 An unknown CPU name for the active target is a hard error listing the supported names. (LLVM's own behaviour, warning and falling back to `generic`, is exactly the silent baseline loss this prevents.) `karac build --target-cpu=help` prints the annotated per-target list, including the wasm32 registry. An override replaces the CPU only; the table's feature string stays, so aarch64 Linux keeps `+outline-atomics` under `--target-cpu=neoverse-v1`. `--target-cpu=native` is available for deploys where the runtime hardware matches the build host; it is never the default.
 
-**Feature override.** `--target-features="+feat,-feat,..."` adjusts the baseline's feature set, with the same precedence resolved independently of the CPU: `--target-features=<list>`, then `KARAC_TARGET_FEATURES=<list>`, then `[profile.release] target-features = "<list>"`.
+**Feature override.** `--target-features="+feat,-feat,..."` adjusts the baseline's feature set, with the same precedence resolved independently of the CPU: `--target-features=<list>`, then `KARAC_TARGET_FEATURES=<list>`, then `[profile.release] target-features = "<list>"`, which like `target-cpu` applies to every `karac build`.
 - The list is appended after the table's default features, and LLVM resolves duplicates last-wins, so `-outline-atomics` really disables a table default.
 - Every token needs an explicit `+` or `-` and must name a feature in LLVM's registry for the active target; anything else is a hard error with the supported list. `karac build --target-features=help` prints it.
 - The two knobs compose: `--target-cpu=neoverse-v1 --target-features=-sve` builds the Neoverse baseline with SVE code generation suppressed.
@@ -6944,7 +6942,7 @@ The baseline is the floor every function compiles against. Per-function feature 
 
 On `wasm_wasi` the runtime carries a cooperative FIFO scheduler. Spawning a task enqueues it, a join point runs the queue, and `par {}` runs its branches in source order. There are no extra threads and no shared memory.
 
-Channel `send`, `recv` and `try_recv` work on every target. On `native`, `recv` blocks until a value arrives or every `Sender` has been dropped; a `Sender` moved into a task is dropped by that task, so a producer-consumer pair ends when the producer does. On `wasm_wasi`, `recv` on an empty channel yields to the other tasks; if no task can run, the program panics with kind `deadlock` ([Panic record](#panic-record)).
+Channel `send`, `recv` and `try_recv` work on every target. On `native`, `recv` blocks until a value arrives or every `Sender` has been dropped; a `Sender` moved into a task is dropped by that task, so a producer-consumer pair ends when the producer does. On `wasm_wasi`, `recv` on an empty channel yields to the other tasks; if no task can run, the program panics with kind `deadlock` ([Panic record](#panic-record)). The native runtime and the MIR interpreter detect the same state, every task waiting on a channel no running task can serve, and stop the program the same way, with exit code 101, rather than blocking forever (review-thread ruling 2026-11-16).
 
 Shared-memory threads on WebAssembly (`--features wasm-threads`) and compiler-managed transparent threading on WebAssembly belong to the [web track](deferred.md#web). The commitments above keep both open without a source change.
 
@@ -6952,9 +6950,9 @@ Shared-memory threads on WebAssembly (`--features wasm-threads`) and compiler-ma
 
 `karac build --target T` produces a target-specific artifact set under `dist/`. The layout is stable, so downstream tools can integrate without per-project adaptation.
 
-- **`native`.** A single executable, or a static or dynamic library, at `dist/native/<pkg>` (no extension on Unix; `.exe` on Windows). Library builds use the platform's archive format.
+- **`native`.** A single executable at `dist/native/<pkg>` (no extension on Unix; `.exe` on Windows). A library package has no artifact of its own in v1: `karac build` checks it, and the packages that depend on it compile it into theirs. Static and dynamic libraries for other languages arrive with the [exported C ABI](deferred.md#exported-c-abi) (review-thread ruling 2026-11-16).
 - **`wasm_wasi`.** A core WebAssembly module for WASI preview 1 at `dist/wasm/<pkg>.wasm`, with the package name from `kara.toml`; a single-file build writes `<stem>.wasm` in the working directory. The module exports `_start`, which runs `main`. Each `host fn` is an import in the `kara_host` namespace ([Lowering on `wasm_wasi`](#lowering-on-wasm_wasi)). The Component Model form, browser bindings and the export of other functions arrive with the [web track](deferred.md#web), and the `--bindings` option returns with them.
-- **Release builds** run `strip -x` on the linked binary and pass linker dead-code elimination flags: `-Wl,-dead_strip` on macOS, and `-Wl,--gc-sections` with `-ffunction-sections -fdata-sections` on Linux ELF.
+- **Every build** runs `strip -x` on the linked binary and passes linker dead-code elimination flags: `-Wl,-dead_strip` on macOS and `-Wl,--gc-sections` on Linux ELF. The MIR builder emits only the functions the program reaches, so the program's own object needs no per-function sections (review-thread ruling 2026-11-16).
 
 A structured manifest describing the artifact set (`.karapack`) is deferred to the [tooling track](deferred.md#tooling).
 
@@ -7031,7 +7029,7 @@ Kāra has one semantics, defined by the MIR interpreter, and two ways to run a p
 
 #### `karac build`
 
-The default path: source → MIR → LLVM object → native executable linked with `cc`, with the runtime archive linked statically. The optimization level is configurable (`-O0` to `-O3`; default `-O2`). The CPU baseline follows [CPU baseline](#cpu-baseline). Bounds-check elision ([Bounds checks and `get_unchecked`](#bounds-checks-and-get_unchecked)) is what lets loops vectorize.
+The default path: source → MIR → LLVM object → native executable linked with `cc`, with the runtime archive linked statically. The optimization level is `-O0` to `-O3` on `karac build` (default `-O2`), or the `KARAC_OPT_LEVEL` environment variable with the same four values, which the flag overrides; any other value is an error (review-thread ruling 2026-11-16). A manifest profile has no optimization-level key in v1. The CPU baseline follows [CPU baseline](#cpu-baseline). Bounds-check elision ([Bounds checks and `get_unchecked`](#bounds-checks-and-get_unchecked)) is what lets loops vectorize.
 
 #### `karac run`
 

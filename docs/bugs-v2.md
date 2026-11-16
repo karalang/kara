@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 386 |
+| diagnostics | 388 |
 | false-positive | 229 |
-| missing-feature | 179 |
+| missing-feature | 181 |
 | perf | 175 |
 | soundness | 72 |
 | miscompile | 71 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 520 |
 | mir-llvm | 260 |
 | mir | 224 |
-| cli | 155 |
+| cli | 159 |
 | parser | 92 |
 | ownership | 89 |
 | interp | 76 |
@@ -112,6 +112,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
+| B-2026-11-16-218 | 2026-11-16 | cli | medium | karac build had no -O0..-O3 flags though design.md § 16 karac build documents them, and KARAC_OPT_LEVEL outside 0-3 (s, z, 9) silently built at -O2 | — |
+| B-2026-11-16-219 | 2026-11-16 | cli | medium | A package's [build] targets did not choose what a plain karac build builds, and karac run ran a package whose targets leave out native | — |
+| B-2026-11-16-220 | 2026-11-16 | cli | low | [package].version accepted any string ("one", "1.0") though design.md § 4 makes it a semver version | — |
+| B-2026-11-16-221 | 2026-11-16 | cli | low | Text diagnostics named the phase (error[typecheck], error[effect], error[ownership]) where --output=json reports the catalogue code (E0221, E0400, E0500), and a package's per-module table coded every type error outside 28 kinds E0200 | — |
 
 ### Relocated
 

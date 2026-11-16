@@ -2553,15 +2553,12 @@ fn parse_feature_names_from_help_listing(listing: &str) -> Vec<String> {
 /// |-----------|------------------------------|----------------------|
 /// | `0`       | `None`                       | (passes skipped)     |
 /// | `1`       | `Less`                       | `default<O1>`        |
-/// | unset / `2` / `s` / `z` | `Default`         | `default<O2>` *(default)* |
+/// | unset / `2` | `Default`                       | `default<O2>` *(default)* |
 /// | `3`       | `Aggressive`                 | `default<O3>`        |
 ///
-/// `s` and `z` (size-optimized) map onto `-O2` for the backend at v1 — LLVM's
-/// new-pass-manager pipeline strings have native `default<Os>` / `default<Oz>`
-/// counterparts but inkwell's `OptimizationLevel` enum has no separate
-/// size-tier. Until size-tier is wired through `--target` flags, the env var
-/// gives users a way to ask for size-optimization mid-end passes while
-/// keeping the backend at `-O2` parity with `Default`.
+/// `karac build -O<n>` sets it; the CLI refuses any other value before a
+/// build starts (`cli::args::check_opt_level_env`, review-thread ruling
+/// 2026-11-16), so the fallback below only serves library callers.
 pub(crate) fn read_opt_level_env() -> &'static str {
     // OnceLock cache so repeated `karac build` invocations within one
     // compiler-process lifetime (e.g., tests that compile many .kara files)
@@ -2576,8 +2573,7 @@ pub(crate) fn read_opt_level_env_uncached() -> &'static str {
         Ok("0") => "0",
         Ok("1") => "1",
         Ok("3") => "3",
-        // Default + explicit "2", "s", "z" all map to the `-O2` mid-end
-        // pipeline. See doc-comment table above.
+        // Unset or "2": the `-O2` mid-end pipeline. See the table above.
         _ => "2",
     }
 }

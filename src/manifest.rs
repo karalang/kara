@@ -969,6 +969,28 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         None => DEFAULT_EDITION.to_string(),
     };
 
+    // `[package].version` is a semver version, as design.md § 4 writes it
+    // (review-thread ruling 2026-11-16): a dependent's requirement is read
+    // against it, so `"one"` or `"1.0"` is refused here, not passed over.
+    match package.get("version") {
+        Some(toml::Value::String(v)) if semver::Version::parse(v).is_ok() => {}
+        Some(toml::Value::String(_)) => {
+            return Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "version".to_string(),
+                expected: "a semver version: MAJOR.MINOR.PATCH, such as \"0.1.0\"",
+            });
+        }
+        Some(_) => {
+            return Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "version".to_string(),
+                expected: "a string holding a semver version, such as \"0.1.0\"",
+            });
+        }
+        None => {}
+    }
+
     // `version` and `authors` are recognized at `[package]` level but carry no
     // v1 semantic behavior — they parse silently so `karac init`'s canonical
     // manifest does not warn on first build. Anything else inside `[package]`

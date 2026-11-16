@@ -20,6 +20,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
+  as `"0.1.0"`), as design.md § 4 says; any string was accepted
+  (B-2026-11-16-220).
+- `KARAC_OPT_LEVEL` outside 0 to 3 is an error naming the value; `s`, `z`
+  and anything else silently built at `-O2` (B-2026-11-16-218).
+- `karac run` of a package whose `[build] targets` leave out `native` is
+  refused with a message naming the targets, since it cannot run on this
+  host (B-2026-11-16-219).
 - A method call that only a dependency's unimported trait answers is an
   error that names the import (design.md § Method resolution): with
   `import kdep.util.W;` alone, `W { v: 1 }.show()` resolved through
@@ -1378,6 +1386,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A text diagnostic's bracket is its catalogue code, the one
+  `--output=json` reports: `error[E0221]`, `error[E0400]`, `error[E0500]`,
+  where it named the phase (`error[typecheck]`, `error[effect]`,
+  `error[ownership]`). A lint-backed diagnostic still names its lint. A
+  package's per-module text and JSON take the JSON table whole: it coded
+  every type error outside 28 kinds `E0200`, and a type warning with an `E`
+  code (B-2026-11-16-221).
 - An import of a module that only other platforms' files define
   (`poller_macos.kara` alone, on Linux) is `E0112` naming those platforms
   and their files, as design.md § 4 Missing platforms says, rather than a
@@ -1960,6 +1975,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `karac build -O0` to `-O3` choose the optimization level, as design.md
+  § 16 says; only `KARAC_OPT_LEVEL` did (B-2026-11-16-218).
+- A package's `[build] targets` name what a plain `karac build` builds: each
+  of them, in order, into `dist/<target>/`, where only the host was built
+  (B-2026-11-16-219).
 - `karac run --manifest <path> file.kara` gives the file the dependencies
   of the package that manifest names, as a script inside that package gets
   them (design.md § 4, Finding the package); the manifest was read and its

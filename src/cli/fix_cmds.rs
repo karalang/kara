@@ -89,8 +89,12 @@ fn format_file(filename: &str) -> Option<(String, String)> {
     if !parsed.errors.is_empty() {
         for err in &parsed.errors {
             eprintln!(
-                "error[parse]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+                "error[{}]: {}:{}:{}: {}",
+                err.kind.code(),
+                filename,
+                err.span.line,
+                err.span.column,
+                err.message
             );
         }
         return None;
@@ -316,8 +320,12 @@ fn fix_pass(filename: &str, dry_run: bool, first: bool) -> usize {
             }
             for err in &pipeline.parsed.errors {
                 eprintln!(
-                    "error[parse]: {}:{}:{}: {}",
-                    filename, err.span.line, err.span.column, err.message
+                    "error[{}]: {}:{}:{}: {}",
+                    err.kind.code(),
+                    filename,
+                    err.span.line,
+                    err.span.column,
+                    err.message
                 );
             }
             process::exit(1);
@@ -1127,8 +1135,12 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
         if pipeline.has_parse_errors() {
             for err in &pipeline.parsed.errors {
                 eprintln!(
-                    "error[parse]: {}:{}:{}: {}",
-                    filename, err.span.line, err.span.column, err.message
+                    "error[{}]: {}:{}:{}: {}",
+                    err.kind.code(),
+                    filename,
+                    err.span.line,
+                    err.span.column,
+                    err.message
                 );
             }
             process::exit(1);
@@ -1369,8 +1381,12 @@ pub(super) fn compute_migration_edits_for_file(
             .iter()
             .map(|err| {
                 format!(
-                    "error[parse]: {}:{}:{}: {}",
-                    filename, err.span.line, err.span.column, err.message
+                    "error[{}]: {}:{}:{}: {}",
+                    err.kind.code(),
+                    filename,
+                    err.span.line,
+                    err.span.column,
+                    err.message
                 )
             })
             .collect();

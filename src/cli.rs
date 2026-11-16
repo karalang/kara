@@ -3474,8 +3474,8 @@ fn render_lint_block_text(
 /// double-print.
 ///
 /// The bracket names the LINT when there is one — that is what `-A <name>`
-/// takes, so it is the actionable label — and falls back to the phase, matching
-/// the `error[typecheck]` convention.
+/// takes, so it is the actionable label — and falls back to the catalogue code
+/// JSON reports (review-thread ruling 2026-11-16).
 pub(crate) fn render_typecheck_warning_blocks(
     typed: &crate::typechecker::TypeCheckResult,
     filename: &str,
@@ -3485,7 +3485,10 @@ pub(crate) fn render_typecheck_warning_blocks(
         .warnings
         .iter()
         .map(|warn| {
-            let label = warn.lint_name.as_deref().unwrap_or("typecheck");
+            let label = warn
+                .lint_name
+                .as_deref()
+                .unwrap_or_else(|| crate::cli::diag_json::type_warning_code(&warn.kind));
             with_snippet(
                 format!(
                     "warning[{label}]: {}:{}:{}: {}",
@@ -3507,8 +3510,12 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     for err in &pipeline.parsed.errors {
         out.push(with_snippet(
             format!(
-                "error[parse]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+                "error[{}]: {}:{}:{}: {}",
+                err.kind.code(),
+                filename,
+                err.span.line,
+                err.span.column,
+                err.message
             ),
             source,
             err.span.line,
@@ -3534,7 +3541,11 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // `layout_unassigned_fields` that attribute is prescribed by
             // design.md § Layout Rules and works — it was just undiscoverable
             // from its own warning.
-            let label = crate::resolver::resolve_kind_lint_name(&err.kind).unwrap_or("resolve");
+            // Otherwise the bracket is the catalogue code, the one JSON
+            // reports (review-thread ruling 2026-11-16): `error[resolve]`
+            // named the phase, which no index or `--explain` takes.
+            let label = crate::resolver::resolve_kind_lint_name(&err.kind)
+                .unwrap_or_else(|| crate::cli::diag_json::resolve_error_code(&err.kind));
             out.push(with_snippet(
                 format!(
                     "{sev}[{label}]: {}:{}:{}: {}",
@@ -3556,7 +3567,11 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // repeating the lint name itself. The bracket is the actionable
             // label in the warning renderer below for exactly this reason;
             // this is the same rule on the promoted side.
-            let label = err.lint_name.as_deref().unwrap_or("typecheck");
+            // Otherwise the catalogue code, as JSON reports it.
+            let label = err
+                .lint_name
+                .as_deref()
+                .unwrap_or_else(|| crate::cli::diag_json::type_error_code(&err.kind));
             out.push(with_snippet(
                 format!(
                     "error[{label}]: {}:{}:{}: {}",
@@ -3647,10 +3662,10 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // NOTE-severity effect diagnostics — one shared predicate, so
             // this renderer cannot drift from the exit-code count above
             // (B-2026-08-21-2). Not `kind_blocks_production`:
-            // `TargetGateViolation` prints `error[effect]` on this path.
+            // `TargetGateViolation` prints `error[E0411]` on this path.
             if crate::effectchecker::kind_is_lint_warning(&err.kind) {
                 // design.md spells this band `warn[<lint>]`, so it renders as a
-                // warning rather than the `error[effect]` default below — it
+                // warning rather than the `error[<code>]` default below — it
                 // blocks nothing (B-2026-08-21-2).
                 out.push(with_snippet(
                     format!(
@@ -3663,9 +3678,10 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                     err.span.length,
                 ));
             } else if crate::effectchecker::kind_is_note(&err.kind) {
+                let (code, _) = crate::cli::diag_json::effect_error_code(&err.kind);
                 out.push(with_snippet(
                     format!(
-                        "note[effect]: {}:{}:{}: {}",
+                        "note[{code}]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
                     ),
                     source,
@@ -3674,9 +3690,10 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                     err.span.length,
                 ));
             } else {
+                let (code, _) = crate::cli::diag_json::effect_error_code(&err.kind);
                 out.push(with_snippet(
                     format!(
-                        "error[effect]: {}:{}:{}: {}",
+                        "error[{code}]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
                     ),
                     source,
@@ -3695,10 +3712,14 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // `error[ownership]` — including the advisory `UseAfterMove` that
             // codegen compiles by design — which produced the nonsense pairing
             // of an `error[…]` line immediately followed by `All checks passed.`
+            //
+            // The bracket is the catalogue code JSON reports (review-thread
+            // ruling 2026-11-16).
+            let code = crate::cli::diag_json::ownership_code(&err.kind);
             let label = if pipeline.is_fatal_ownership_kind(&err.kind) {
-                "error[ownership]"
+                format!("error[{code}]")
             } else {
-                "warning[ownership]"
+                format!("warning[{code}]")
             };
             // An ownership error's `suggestion` had never reached the terminal:
             // this loop printed only `message`, while the sibling notes loop
@@ -3758,7 +3779,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     if let Some(ref esc) = pipeline.provider_escape {
         for err in esc {
             out.push(format!(
-                "error[provider_escape]: {}:{}:{}: {}",
+                "error[E0600]: {}:{}:{}: {}",
                 filename,
                 err.closure_span.line,
                 err.closure_span.column,

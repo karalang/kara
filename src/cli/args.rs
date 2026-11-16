@@ -515,6 +515,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         );
         process::exit(1);
     };
+    check_opt_level_env();
     Command::Run {
         file: f,
         output,
@@ -896,6 +897,17 @@ fn parse_build_command(args: &[String]) -> Command {
             // emitted binary, in both single-file and project mode. See
             // `Command::Build.release` / `Command::BuildProject.release`.
             release = true;
+        } else if let Some(level) = arg.strip_prefix("-O") {
+            // `-O0` to `-O3` (design.md § `karac build`, review-thread ruling
+            // 2026-11-16): the level `KARAC_OPT_LEVEL` sets, which the flag
+            // overrides.
+            if !matches!(level, "0" | "1" | "2" | "3") {
+                eprintln!(
+                    "error: unknown optimization level '{arg}': use -O0, -O1, -O2 (the default) or -O3"
+                );
+                process::exit(1);
+            }
+            std::env::set_var("KARAC_OPT_LEVEL", level);
         } else if arg == "--mir" {
             // The redesign's pipeline, which is now the default: kept so a
             // script that asks for it explicitly still works.
@@ -1059,6 +1071,7 @@ fn parse_build_command(args: &[String]) -> Command {
         }
         i += 1;
     }
+    check_opt_level_env();
     match file {
         Some(f) => Command::Build {
             file: f,
@@ -1111,6 +1124,18 @@ fn parse_build_command(args: &[String]) -> Command {
                 out_path,
                 lint_overrides,
             }
+        }
+    }
+}
+
+/// `KARAC_OPT_LEVEL` names a level `-O` takes, 0 to 3, or nothing; any
+/// other value is an error rather than a silent `-O2` (review-thread ruling
+/// 2026-11-16).
+pub(super) fn check_opt_level_env() {
+    if let Ok(v) = std::env::var("KARAC_OPT_LEVEL") {
+        if !matches!(v.as_str(), "0" | "1" | "2" | "3") {
+            eprintln!("error: KARAC_OPT_LEVEL={v}: expected 0, 1, 2 or 3 (the levels -O0 to -O3)");
+            process::exit(1);
         }
     }
 }

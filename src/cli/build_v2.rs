@@ -68,6 +68,13 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
 /// from its `src/main.kara`, into `<root>/dist/<package name>` (or `-o`).
 pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     refuse_unsupported(&a);
+    // `[build] targets` names what a plain build builds (review-thread ruling
+    // 2026-11-16): each of them, in order, as `--target=<name>` builds it.
+    if a.target.is_none() {
+        if let Some(targets) = declared_build_targets() {
+            build_each_target(&targets);
+        }
+    }
     // Every pass, the package check included, checks for the build's
     // target, so it is set whether or not this binary has a backend
     // (B-2026-10-31-36).
@@ -236,6 +243,43 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     );
     let fields = (output == OutputMode::Json).then(|| summary.json_fields());
     build(&filename, project, Some(&mf), a, &exe, fields.as_deref());
+}
+
+/// The package's `[build] targets` when a plain build must build them one by
+/// one: declared, not `native` alone, and with no `[build].target` choosing.
+fn declared_build_targets() -> Option<Vec<String>> {
+    let cwd = std::env::current_dir().ok()?;
+    let (_, mf) = manifest::load_from_cwd(&cwd).ok()?;
+    let one_native = mf.build_targets.len() == 1 && mf.build_targets[0] == "native";
+    (!mf.is_virtual
+        && !mf.build_targets.is_empty()
+        && !one_native
+        && mf.build_default_target.is_none())
+    .then_some(mf.build_targets)
+}
+
+/// Run this `karac build` once per target, adding `--target=<name>`; the
+/// first failure ends the command with its exit code.
+fn build_each_target(targets: &[String]) -> ! {
+    let exe = std::env::current_exe().unwrap_or_else(|e| {
+        eprintln!("error: cannot find the karac executable to build each target: {e}");
+        process::exit(1);
+    });
+    for t in targets {
+        let status = process::Command::new(&exe)
+            .args(std::env::args().skip(1))
+            .arg(format!("--target={t}"))
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(s) => process::exit(s.code().unwrap_or(1)),
+            Err(e) => {
+                eprintln!("error: cannot run karac for target `{t}`: {e}");
+                process::exit(1);
+            }
+        }
+    }
+    process::exit(0);
 }
 
 /// `--target=wasm_wasi`: a plain wasm32-wasip1 module, linked against

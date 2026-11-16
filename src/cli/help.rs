@@ -267,12 +267,16 @@ OPTIONS:
                             key in [profile.dev] / [profile.release] overrides
                             it) — all kept in debug builds, stripped in
                             release per design.md. Optimization is already -O2
-                            by default (see KARAC_OPT_LEVEL), so --release
+                            by default (see -O), so --release
                             removes runtime cost rather than turning the
                             optimizer on. Works in both single-file and project
                             mode. Composes (OR) with the KARAC_STRIP_CONTRACTS,
                             KARAC_STRIP_ERROR_TRACE and
                             KARAC_STRIP_DEBUG_METADATA env vars.
+    -O0, -O1, -O2, -O3      Optimization level; -O2 is the default.
+                            Overrides the KARAC_OPT_LEVEL env var, which
+                            takes the same four values (any other is an
+                            error).
     --mir                   The default build (accepted so
                             scripts that ask for it keep working).
     --enable-hot-swap       Emit PLT-style indirection for extern-public
