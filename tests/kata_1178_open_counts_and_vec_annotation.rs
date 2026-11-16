@@ -12,6 +12,11 @@
 //! `res` as `Vec[i32]`. The refusal named the annotation in prose with no
 //! fix; now `karac fix` writes `: Vec[i32]` on `res`, and in the same round
 //! `: i32` on `cnt` (B-2026-11-08-20). B-2026-11-16-229.
+//!
+//! The chain arm mutated to count each set once,
+//! `*count.entry(m).or_insert(0) = 1`, stored a literal through `*` into
+//! the open count and fixed it to `i64`; now the store joins it, as
+//! `v[i] = 7` on an open `Vec` already did. B-2026-11-16-230.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -116,5 +121,42 @@ fn kata_1178_open_vec_refused_at_its_use_gets_its_annotation() {
     let (ok, out, _) = karac(&dir, &["__mir-run"]);
     assert!(ok, "{out}");
     assert_eq!(out, "[1, 2, 2]\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A literal or a typed value stored through `*` into an open map count
+/// leaves the count to its use; a count no use fixes stays `i64`, and a
+/// concrete count range-checks the literal.
+#[test]
+fn kata_1178_store_through_deref_leaves_map_counts_open() {
+    let src = "fn f() -> i32 {\n    let mut m = Map.new();\n    \
+               *m.entry(1).or_insert(0) = 1;\n    m[1]\n}\n\n\
+               fn g() -> i32 {\n    let mut m = Map.new();\n    \
+               let r = m.entry(1).or_insert(0);\n    *r = 5;\n    m[1]\n}\n\n\
+               fn h(y: i32) -> i32 {\n    let mut m = Map.new();\n    \
+               *m.entry(1).or_insert(0) = y;\n    m[1] + 1\n}\n\n\
+               fn main() {\n    let mut big = Map.new();\n    \
+               *big.entry(1).or_insert(0) = 3000000000;\n    \
+               let mut small: Map[i64, u8] = Map.new();\n    \
+               *small.entry(1).or_insert(0) = 200;\n    \
+               println(f\"{f()} {g()} {h(6)} {big[1]} {small[1]}\");\n}\n";
+    let dir = cell("store", src);
+    let (ok, out, _) = karac(&dir, &["check"]);
+    assert!(ok, "{out}");
+    for mode in modes() {
+        let (ok, out, _) = karac(&dir, &[mode]);
+        assert!(ok, "{mode}: {out}");
+        assert_eq!(out, "1 5 7 3000000000 200\n", "{mode}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = "fn main() {\n    let mut small: Map[i64, u8] = Map.new();\n    \
+               *small.entry(1).or_insert(0) = 300;\n    println(f\"{small[1]}\");\n}\n";
+    let dir = cell("store-range", src);
+    let (ok, out, _) = karac(&dir, &["check"]);
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("integer literal 300 out of range for 'u8'"),
+        "{out}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

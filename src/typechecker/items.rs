@@ -12510,7 +12510,9 @@ impl<'a> super::TypeChecker<'a> {
                     operand,
                 } = &target.kind
                 {
-                    let ref_ty = self.infer_expr(operand);
+                    // Read open: the place may hold a number no use has fixed
+                    // yet, which the value stored fixes (B-2026-11-16-230).
+                    let ref_ty = self.infer_expr_open(operand);
                     if matches!(ref_ty, Type::Ref(_)) {
                         self.type_error(
                             "cannot assign through a shared reference ('ref T'); use 'mut ref T'"
@@ -12573,6 +12575,21 @@ impl<'a> super::TypeChecker<'a> {
                     // `let r: i32 = t[1]` still fixes it (design.md §8
                     // Literals, B-2026-11-12-12).
                     self.infer_expr_open(target)
+                } else if matches!(
+                    target.kind,
+                    ExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        ..
+                    }
+                ) {
+                    // The place behind a `mut ref` whose number no use has
+                    // fixed yet (`*count.entry(m).or_insert(0) = 1`) is
+                    // fixed by the value stored as an open binding is (`b =
+                    // y`), and a literal stored joins it, so a later use fixes
+                    // both
+                    // (kata 1178, B-2026-11-16-230).
+                    let t = self.infer_expr_open(target);
+                    self.fix_literal_from_assigned(target, &t, value)
                 } else {
                     self.infer_expr(target)
                 };
