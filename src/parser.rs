@@ -1239,10 +1239,22 @@ impl Parser {
     /// program with both kinds of heap, is unsure, and then no heap and no
     /// `Reverse` in the program gets a fix (the resolver holds them back).
     fn rust_heap_ctor_sides(&self) -> crate::ast::RustHeapSides {
+        let sides = self.rust_heap_ctor_sides_told();
+        // An imported `std.cmp.Reverse` keeps every heap's `Reverse`, unless
+        // some heap's side cannot be told: see [`Self::rust_reverse_stays`].
+        if sides.unsure.is_empty() && self.imports_std_cmp_reverse() {
+            return crate::ast::RustHeapSides::default();
+        }
+        sides
+    }
+
+    /// [`Self::rust_heap_ctor_sides`] from the heaps' own evidence, before
+    /// an imported `std.cmp.Reverse` is weighed.
+    fn rust_heap_ctor_sides_told(&self) -> crate::ast::RustHeapSides {
         let mut sides = crate::ast::RustHeapSides::default();
         // Where a `Reverse` stays, every one does, as `std.cmp.Reverse`, so
         // every heap keeps Rust's largest-first order (B-2026-11-10-41).
-        if self.rust_heap_ctor.is_empty() || self.rust_reverse_stays() {
+        if self.rust_heap_ctor.is_empty() || self.rust_reverse_stays_in_text() {
             return sides;
         }
         let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
@@ -1459,7 +1471,14 @@ impl Parser {
             // by a `let` (kata 2034): the edit writes `x`.
             let let_bound = matches!(tok(i + 1), Some(Token::LeftParen))
                 && matches!(tok(i - 1), Some(Token::Let));
-            if !in_type && !let_bound {
+            // `Some(&Reverse(i))` over `heap.peek()` (kata 1172): the edit
+            // writes `i`, and the `&` goes by its own fix.
+            let some_borrowed = i >= 3
+                && matches!(tok(i + 1), Some(Token::LeftParen))
+                && matches!(tok(i - 1), Some(Token::Amp))
+                && matches!(tok(i - 2), Some(Token::LeftParen))
+                && ident(i - 3, "Some");
+            if !in_type && !let_bound && !some_borrowed {
                 if !matches!(tok(i + 1), Some(Token::LeftParen))
                     || !matches!(tok(i - 1), Some(Token::LeftParen))
                 {
@@ -3419,10 +3438,44 @@ impl Parser {
     /// stays, every `Reverse` does, as `std.cmp.Reverse` (B-2026-11-10-41):
     /// none is dropped, so a heap of them stays largest-first.
     fn rust_reverse_stays(&self) -> bool {
+        // Once a round has written Kāra's `import std.cmp.Reverse;`, it kept
+        // every `Reverse`, and a later round, which may no longer see what
+        // kept them, must not read a heap as smallest-first (kata 1172,
+        // B-2026-11-16-185). The exception is a program whose heaps' sides
+        // cannot all be told: that round held every `Reverse` back, its
+        // import included, and the program stays held (kata 2034).
+        self.rust_reverse_stays_in_text()
+            || (self.imports_std_cmp_reverse()
+                && self.rust_heap_ctor_sides_told().unsure.is_empty())
+    }
+
+    /// Whether the program imports Kāra's `std.cmp.Reverse`.
+    fn imports_std_cmp_reverse(&self) -> bool {
+        (0..self.tokens.len()).any(|i| {
+            matches!(self.tokens[i].token, Token::Import)
+                && self.tokens[i + 1..]
+                    .iter()
+                    .take_while(|t| !matches!(t.token, Token::Semicolon))
+                    .any(
+                        |t| matches!(&t.token, Token::Identifier { name, .. } if name == "Reverse"),
+                    )
+        })
+    }
+
+    /// [`Self::rust_reverse_stays`] from the `Reverse`s the text holds.
+    fn rust_reverse_stays_in_text(&self) -> bool {
         let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
         let ident = |i: usize, want: &str| matches!(tok(i), Some(Token::Identifier { name, .. }) if name == want);
         let opens = |i: usize| matches!(tok(i), Some(Token::LeftBracket | Token::LessThan));
         let sort_keys = self.rust_reverse_sort_keys();
+        // `Some(&Reverse(i))`, Rust's pattern over `heap.peek()`: the `&`
+        // goes in the same round, so it is a heap item like `Some(Reverse(`.
+        let some_borrowed = |i: usize| {
+            i >= 3
+                && matches!(tok(i - 1), Some(Token::Amp))
+                && matches!(tok(i - 2), Some(Token::LeftParen))
+                && ident(i - 3, "Some")
+        };
         let mut in_import = false;
         for i in 0..self.tokens.len() {
             match tok(i) {
@@ -3436,9 +3489,12 @@ impl Parser {
             }
             let call = matches!(tok(i + 1), Some(Token::LeftParen));
             let wrapped = call
-                && matches!(tok(i - 1), Some(Token::LeftParen))
-                && ((ident(i - 2, "push") && i >= 3 && matches!(tok(i - 3), Some(Token::Dot)))
-                    || ident(i - 2, "Some"));
+                && ((matches!(tok(i - 1), Some(Token::LeftParen))
+                    && ((ident(i - 2, "push")
+                        && i >= 3
+                        && matches!(tok(i - 3), Some(Token::Dot)))
+                        || ident(i - 2, "Some")))
+                    || some_borrowed(i));
             let let_bound = call && matches!(tok(i - 1), Some(Token::Let));
             // `|Reverse(s)| s` over such a heap's items (kata 1086).
             let param = call && matches!(tok(i - 1), Some(Token::Pipe));
