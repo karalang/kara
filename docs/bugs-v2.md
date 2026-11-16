@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 73 |
 | other | 58 |
 | run-vs-build | 50 |
-| crash | 34 |
+| crash | 35 |
 | codegen-gap | 33 |
 | leak | 4 |
 | use-after-free | 3 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 163 |
 | parser | 93 |
 | ownership | 90 |
-| interp | 82 |
+| interp | 83 |
 | runtime | 50 |
 | resolver | 36 |
 | effect | 36 |
@@ -1437,6 +1437,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-250 | typecheck | low | `partition` over an array literal's `iter()` into `(Vec[i64], Vec[i64])` (`let v = [1, 2, 3]; let (e, o): (Vec[i64], Vec[i64]) = v.iter().partition(.… | 84c49b5431 |
 | B-2026-11-16-251 | typecheck | low | Text where bytes are wanted (`fn f(b: Slice[u8])` called with a `String` or `Str`, a child process's `stdin.write(text)`) is refused with "expected '… | 84c49b5431 |
 | B-2026-11-16-252 | typecheck+cli | medium | A `par` block written as statements whose tail computes from its `let`s (`let total = par { let a = f(); let b = g(); a + b };`) is refused (core-sem… | 84c49b5431 |
+| B-2026-11-16-253 | interp | medium | On AArch64 (macOS CI) the MIR interpreter refused an `extern "C"` call whose arguments fill more than six integer registers ("8 integer and 0 float a… | 54a14fdd6b |
 
 </details>
 
