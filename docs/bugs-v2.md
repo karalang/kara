@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 388 |
+| diagnostics | 390 |
 | false-positive | 229 |
 | missing-feature | 181 |
 | perf | 175 |
-| soundness | 72 |
+| soundness | 73 |
 | miscompile | 71 |
-| other | 57 |
-| run-vs-build | 45 |
+| other | 58 |
+| run-vs-build | 46 |
 | crash | 34 |
 | codegen-gap | 33 |
 | leak | 4 |
@@ -77,15 +77,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 520 |
-| mir-llvm | 260 |
-| mir | 224 |
-| cli | 159 |
+| mir-llvm | 261 |
+| mir | 225 |
+| cli | 161 |
 | parser | 92 |
 | ownership | 89 |
 | interp | 76 |
 | runtime | 50 |
+| effect | 36 |
 | resolver | 35 |
-| effect | 35 |
 | codegen | 22 |
 | other | 8 |
 | autopar | 5 |
@@ -112,6 +112,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
+| B-2026-11-16-223 | 2026-11-16 | mir | low | An error's `?` frames outlive the error value: an `Err` that is only printed and dropped leaves its frame in a later trace (review-thread ruling 2026-11-16 item 3) | — |
+| B-2026-11-16-224 | 2026-11-16 | cli | low | karac exits 101 with a panic message when the reader of its stdout closes (`karac check --output=json f.kara | head -c 1`) | — |
+| B-2026-11-16-225 | 2026-11-16 | mir-llvm | low | Compiled lanes number `par` branches' task ids from 2 (`std.log` `task_id`, dbg `task:N`); the interpreter from 1 | — |
+| B-2026-11-16-226 | 2026-11-16 | effect | low | A call through a type-parameter bound is charged the instance's impl besides the trait's clause: `get[T: Store]` gets `panics` from `A.load` | — |
+| B-2026-11-16-227 | 2026-11-16 | cli | low | An empty function-type slot is written `[pure]` in its diagnostic; the source writes `with ()` | — |
 
 ### Relocated
 
