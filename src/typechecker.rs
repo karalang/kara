@@ -3593,6 +3593,14 @@ pub struct TypeChecker<'a> {
     /// collected into a `Vec[Array[i64, 3]]` checks the closure's literal
     /// against `Array[i64, 3]` (design.md § List literals, B-2026-11-16-181).
     pub(super) closure_result_hints: FxHashMap<crate::ids::NodeId, Type>,
+    /// `let job = ref o.job;` out of a bare parameter `o`, by binding name:
+    /// the span of the `ref ` a give-away fix deletes when it takes `o`
+    /// `own` (B-2026-11-16-206).
+    pub(super) d5_ref_lets: FxHashMap<String, Span>,
+    /// `let g = || w;` whose closure returns the bare parameter `w`, by
+    /// binding name: `w`, which a give-away of `g()` takes `own`
+    /// (B-2026-11-16-207).
+    pub(super) d5_closure_returns: FxHashMap<String, String>,
     /// The arguments of every call and method call met so far: a
     /// `collect()` there may collect into a `Vec[T]` for a `Slice[T]` slot,
     /// since the temporary outlives the call (B-2026-11-15-21).
@@ -4638,6 +4646,8 @@ impl<'a> TypeChecker<'a> {
             open_tuple_literal: None,
             open_closure_values: FxHashSet::default(),
             closure_result_hints: FxHashMap::default(),
+            d5_ref_lets: FxHashMap::default(),
+            d5_closure_returns: FxHashMap::default(),
             call_arg_exprs: FxHashSet::default(),
             open_match_arms: false,
             compound_assign_target: None,

@@ -2209,6 +2209,7 @@ impl<'a> super::TypeChecker<'a> {
         let name = match &expr.kind {
             ExprKind::Identifier(n) => n.as_str(),
             ExprKind::SelfValue => "self",
+            ExprKind::Call { .. } => return self.d5_give_away_closure_result(expr, expected),
             _ => return None,
         };
         if name != "self"
@@ -2406,6 +2407,20 @@ impl<'a> super::TypeChecker<'a> {
     /// is still the borrow (not shadowed), or a binding already bound out
     /// of one.
     fn d5_param_root(&self, scrutinee: &Expr) -> Option<String> {
+        // A field of the parameter, or a borrow of one (`ref o.job`, the
+        // fix a move out of `o.job` takes), is the parameter's too
+        // (B-2026-11-16-206).
+        let mut scrutinee = scrutinee;
+        if let ExprKind::Unary {
+            op: UnaryOp::Ref,
+            operand,
+        } = &scrutinee.kind
+        {
+            scrutinee = operand;
+        }
+        while let ExprKind::FieldAccess { object, .. } = &scrutinee.kind {
+            scrutinee = object;
+        }
         let ExprKind::Identifier(n) = &scrutinee.kind else {
             return None;
         };
@@ -2481,12 +2496,112 @@ impl<'a> super::TypeChecker<'a> {
                 format!("`{param}: own {param_shown}`"),
             )
         };
+        // A `let name = ref <part>;` borrows on its own: taking the
+        // parameter `own` also drops that `ref`, one fix of two edits
+        // (B-2026-11-16-206).
+        let fix_it = match self.d5_ref_lets.get(name).copied() {
+            Some(r) => {
+                self.error_fix_diffs.insert(
+                    SpanKey::from_span(&expr.span),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: at.offset,
+                            length: 0,
+                            replacement: "own ".to_string(),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: r.offset,
+                            length: r.length,
+                            replacement: String::new(),
+                        },
+                    ],
+                );
+                None
+            }
+            None => Some(FixIt {
+                span: at,
+                replacement: "own ".to_string(),
+            }),
+        };
         self.errors.push(TypeError {
             message: format!(
                 "cannot give away `{name}`, bound out of {subject}: a bare parameter \
                  borrows (core-semantics §4.1), so `{name}` is a borrow too, and an owned \
                  '{shown}' is wanted here. Take `{param}` by value with {spelling}, or \
                  hand on a copy with `.clone()`"
+            ),
+            span: expr.span,
+            kind: TypeErrorKind::TypeMismatch,
+            lint_name: None,
+            fix_it,
+            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+            expected: Some(type_display(expected)),
+            got: Some(format!("ref {shown}")),
+        });
+        Some(expected.clone())
+    }
+
+    /// The bare parameter a closure literal hands back as its result
+    /// (`|| w`, `|| { ..; w }`), when it is the enclosing function's bare
+    /// parameter and not one of the closure's own (B-2026-11-16-207).
+    pub(super) fn closure_returning_d5_param(&self, value: &Expr) -> Option<String> {
+        if !self.cli_lint_overrides.strict_core {
+            return None;
+        }
+        let ExprKind::Closure { params, body, .. } = &value.kind else {
+            return None;
+        };
+        let mut tail = body.as_ref();
+        while let ExprKind::Block(b) = &tail.kind {
+            tail = b.final_expr.as_deref()?;
+        }
+        let ExprKind::Identifier(p) = &tail.kind else {
+            return None;
+        };
+        let own_param = params
+            .iter()
+            .any(|cp| cp.pattern.binding_names().iter().any(|n| n == p));
+        (!own_param
+            && self.current_fn_d5_params.contains_key(p.as_str())
+            && matches!(self.local_scope.lookup(p), Some(Type::Ref(_))))
+        .then(|| p.clone())
+    }
+
+    /// [`Self::d5_give_away`] for a call of a closure that returns a bare
+    /// parameter (`let g = || w; g()`): the result is `w`'s borrow, so the
+    /// fix is `w`'s `own` (B-2026-11-16-207).
+    fn d5_give_away_closure_result(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(g) = &callee.kind else {
+            return None;
+        };
+        if !args.is_empty() {
+            return None;
+        }
+        let param = self.d5_closure_returns.get(g)?.clone();
+        let at = *self.current_fn_d5_params.get(&param)?;
+        let Type::Ref(ty) = self.infer_expr(expr) else {
+            return None;
+        };
+        if !self.type_cannot_leave_a_borrowed_place(&ty)
+            || !unify_types(
+                &ty,
+                expected,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            )
+        {
+            return None;
+        }
+        let shown = type_display(&ty);
+        self.errors.push(TypeError {
+            message: format!(
+                "cannot give away the result of `{g}()`: the closure returns parameter \
+                 `{param}`, and a bare parameter borrows (core-semantics §4.1), so the \
+                 result is a borrow, where an owned '{shown}' is wanted. Take `{param}` by \
+                 value with `{param}: own {shown}`, or hand on a copy with `.clone()`"
             ),
             span: expr.span,
             kind: TypeErrorKind::TypeMismatch,

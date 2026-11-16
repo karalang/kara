@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 380 |
+| diagnostics | 382 |
 | false-positive | 227 |
 | missing-feature | 178 |
 | perf | 175 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 516 |
+| typecheck | 518 |
 | mir-llvm | 257 |
 | mir | 223 |
 | cli | 151 |
@@ -112,6 +112,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
+| B-2026-11-16-206 | 2026-11-16 | typecheck | low | Giving away a part of a bare parameter dead-ended: `let job = o.job;` out of a bare `o`, then `self.dead.push(job)`. The let's move-out fix wrote `ref o.job`, and the next check stopped at "expected 'Job', found 'ref Job'" with no fix | — |
+| B-2026-11-16-207 | 2026-11-16 | typecheck | low | A closure that returns a bare parameter, called where an owned value is wanted (`fn f(w: W) -> W { let g = || w; g() }`), is refused with "expected 'W', found 'ref W'" and no fix | — |
 
 ### Relocated
 

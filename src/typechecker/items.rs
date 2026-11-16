@@ -12109,6 +12109,41 @@ impl<'a> super::TypeChecker<'a> {
                 // The parameter `value` is bound out of, read before the
                 // pattern's bindings can shadow it (`let mut node = node;`).
                 let d5_root = self.d5_param_root_for_let(value);
+                // `let job = ref o.job;` out of a bare `o`: giving `job` away
+                // takes `o` `own` and drops this `ref` (B-2026-11-16-206).
+                if let PatternKind::Binding(n) = &pattern.kind {
+                    match (&value.kind, &d5_root) {
+                        (
+                            ExprKind::Unary {
+                                op: UnaryOp::Ref,
+                                operand,
+                            },
+                            Some(_),
+                        ) if operand.span.offset > value.span.offset => {
+                            self.d5_ref_lets.insert(
+                                n.clone(),
+                                Span {
+                                    length: operand.span.offset - value.span.offset,
+                                    ..value.span
+                                },
+                            );
+                        }
+                        _ => {
+                            self.d5_ref_lets.remove(n);
+                        }
+                    }
+                    // `let g = || w;` over a bare `w`: the closure hands back
+                    // `w`'s borrow, so giving `g()` away takes `w` `own`
+                    // (B-2026-11-16-207).
+                    match self.closure_returning_d5_param(value) {
+                        Some(p) => {
+                            self.d5_closure_returns.insert(n.clone(), p);
+                        }
+                        None => {
+                            self.d5_closure_returns.remove(n);
+                        }
+                    }
+                }
                 self.bind_pattern_types(pattern, &expected_ty);
                 self.current_scrutinee_core_borrowed = prev_core;
                 if matches!(pattern.kind, PatternKind::Binding(_))

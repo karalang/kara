@@ -1461,6 +1461,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - Two imports of one library module, such as `import std.pool.{Pool};` and
   `import std.pool.{PoolError};`, no longer refuse the program with a
   conflicting impl (B-2026-11-16-190).
+- Giving away a value bound out of a bare parameter's field (`let job =
+  o.job; ... push(job)`) gets the fix that takes the parameter `own`, and
+  drops the `ref` an earlier fix wrote on the `let`. Before, `karac fix`
+  stopped at "expected 'Job', found 'ref Job'" (B-2026-11-16-206). The
+  result of a closure that returns a bare parameter (`let g = || w; g()`)
+  gets the same fix (B-2026-11-16-207).
 - **An array literal a `map` closure returns into a `Vec` of arrays is
   that array.** `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` checked
   against a `Vec[Array[i64, 3]]` was refused as `FromIterator[Vec[i64]]`;
