@@ -3518,6 +3518,9 @@ pub(crate) fn ownership_code(kind: &crate::ownership::OwnershipErrorKind) -> &'s
         crate::ownership::OwnershipErrorKind::CaptureModeViolation => "E0504",
         crate::ownership::OwnershipErrorKind::UseOfUninitialized => "E0505",
         crate::ownership::OwnershipErrorKind::ReassignToImmutable => "E0506",
+        crate::ownership::OwnershipErrorKind::PtrMutOfImmutableBinding => {
+            "E_PTR_MUT_REQUIRES_MUTABLE_PLACE"
+        }
         crate::ownership::OwnershipErrorKind::MutateImmutableBinding => "E0510",
         crate::ownership::OwnershipErrorKind::FrozenParamEscapes => "E0511",
         crate::ownership::OwnershipErrorKind::FrozenTypeNotFreezable => "E0512",

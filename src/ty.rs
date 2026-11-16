@@ -344,6 +344,30 @@ pub struct TyCtxt {
     /// (`VecIter[i64].Item` → `i64`), so a generic ADT's field typed
     /// `I.Item` instantiates to the binding (B-2026-10-18-23).
     projs: RefCell<FxHashMap<Ty, Ty>>,
+    /// The C tag of each C-like enum declared `#[repr(intN)]` or
+    /// `#[repr(C)]` ([`CTag`]).
+    c_tags: RefCell<FxHashMap<DefId, std::rc::Rc<CTag>>>,
+}
+
+/// How a C-like enum declared `#[repr(intN)]` or `#[repr(C)]` sits in
+/// memory, as C sees it (design.md §15 `#[repr]`): a tag of the repr's
+/// width (`int`'s, 4 bytes, for `#[repr(C)]`) holding the variant's
+/// declared discriminant, not its index (B-2026-11-16-233).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CTag {
+    pub bytes: u64,
+    /// A signed repr (`i8` .. `i64`, or C's `int` for `#[repr(C)]`).
+    pub signed: bool,
+    /// The value each variant stores, by variant index.
+    pub values: Vec<i64>,
+}
+
+impl CTag {
+    /// Whether every variant stores its own index, so the tag needs no
+    /// mapping between index and value.
+    pub fn is_index(&self) -> bool {
+        self.values.iter().enumerate().all(|(i, &v)| v == i as i64)
+    }
 }
 
 impl Default for TyCtxt {
@@ -361,7 +385,18 @@ impl TyCtxt {
             witnesses: RefCell::new(FxHashMap::default()),
             trait_rpits: RefCell::new(FxHashMap::default()),
             projs: RefCell::new(FxHashMap::default()),
+            c_tags: RefCell::new(FxHashMap::default()),
         }
+    }
+
+    /// Record the C tag of the enum `def`.
+    pub fn add_c_tag(&self, def: DefId, tag: CTag) {
+        self.c_tags.borrow_mut().insert(def, std::rc::Rc::new(tag));
+    }
+
+    /// The C tag of the enum `def`, when it declares one.
+    pub fn c_tag(&self, def: DefId) -> Option<std::rc::Rc<CTag>> {
+        self.c_tags.borrow().get(&def).cloned()
     }
 
     /// Record that the projection `proj` normalizes to `to`; `subst`

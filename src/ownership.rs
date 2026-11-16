@@ -830,6 +830,10 @@ pub enum OwnershipErrorKind {
     /// reassignment, since that form has no first-assignment phase.
     /// B-2026-07-27-9.
     ReassignToImmutable,
+    /// `ptr.mut(place)` of a place rooted at a `let` without `mut`
+    /// (design.md §15, E_PTR_MUT_REQUIRES_MUTABLE_PLACE): a write through
+    /// the pointer would change an immutable binding (B-2026-11-16-235).
+    PtrMutOfImmutableBinding,
     /// A `mut ref self` method was called on a binding introduced by a
     /// non-`mut` `let` — design.md § Variable Binding Rules: "`let` declares
     /// an immutable binding. Reassigning the binding or calling a method with
@@ -1029,6 +1033,7 @@ pub(crate) fn class_for_ownership_error_kind(
         | OwnershipErrorKind::RcFallbackNote
         | OwnershipErrorKind::CaptureModeViolation
         | OwnershipErrorKind::ReassignToImmutable
+        | OwnershipErrorKind::PtrMutOfImmutableBinding
         | OwnershipErrorKind::MutateImmutableBinding
         | OwnershipErrorKind::FrozenParamEscapes
         | OwnershipErrorKind::FrozenTypeNotFreezable

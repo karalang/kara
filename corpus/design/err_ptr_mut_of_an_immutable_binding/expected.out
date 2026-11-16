@@ -1,0 +1,1 @@
+ERROR at line 6: 'ptr.mut' requires a mutably reachable place, and `x` is not

@@ -65,6 +65,10 @@ impl<'ctx> Cx<'ctx, '_> {
             if let Some(s) = c_abi::single_scalar(self.tys, t) {
                 return Ok(Crossing::Scalar(s));
             }
+            // A `#[repr]` enum is its C tag, an integer held in place.
+            if let Some(s) = c_abi::c_enum_int(self.tys, t) {
+                return Ok(Crossing::Scalar(s));
+            }
             if !matches!(self.tys.kind(t), TyKind::Adt(_)) {
                 return Ok(Crossing::Scalar(t));
             }

@@ -943,7 +943,29 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
         let repr_ty = Self::int_type_named(&disc.repr);
-        let arg_ty = self.infer_expr(&args[0].value);
+        // An unsuffixed literal (`E.try_from(9)`, `E.try_from(-5)`) is a
+        // value of the repr type, as at any other parameter of that type
+        // (B-2026-11-16-237); a typed value must already be one.
+        let a = &args[0].value;
+        let literal = match &a.kind {
+            ExprKind::Integer(_, None) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => matches!(operand.kind, ExprKind::Integer(_, None)),
+            _ => false,
+        };
+        let arg_ty = if literal {
+            match self.check_expr(a, &repr_ty) {
+                Type::Error => Type::Error,
+                _ => {
+                    self.record_expr_type(&a.span, &repr_ty);
+                    repr_ty.clone()
+                }
+            }
+        } else {
+            self.infer_expr(a)
+        };
         if arg_ty == Type::Error {
             return Type::Error;
         }

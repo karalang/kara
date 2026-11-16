@@ -1,0 +1,31 @@
+// A C-like enum declared `#[repr(intN)]` or `#[repr(C)]` sits in memory as
+// C lays it out: a tag of the repr's width (C's `int` for `#[repr(C)]`)
+// holding the declared discriminant (design.md §15 `#[repr]`,
+// B-2026-11-16-233). glibc reads it by value; the struct's bytes are
+// gcc's (tests/s15_conformance_pass.rs checks them against cc).
+#[repr(u8)] enum Kind { Audio = 0x01, Hid = 0x03, Mass = 0x08 }
+#[repr(i32)] enum Level { Low = -5, High = 9 }
+#[repr(u16)] enum Port { Http = 80, Https = 443 }
+#[repr(C)] enum Mode { Off = 2, On = 7 }
+#[repr(C)] struct Desc { k: Kind, l: Level, p: Port }
+/// # Safety
+/// glibc: `abs` reads an `int`.
+unsafe extern "C" {
+    pure fn abs(x: Level) -> i32;
+}
+fn name(l: Level) -> String {
+    match l { Level.Low => "low".to_string(), Level.High => "high".to_string() }
+}
+fn main() {
+    println(f"{Kind.size_of()} {Level.size_of()} {Port.size_of()} {Mode.size_of()} {Desc.size_of()} {Desc.align_of()}");
+    println(f"{abs(Level.Low)} {abs(Level.High)}");
+    let d = Desc { k: Kind.Mass, l: Level.Low, p: Port.Https };
+    println(f"{d.k.discriminant()} {d.l.discriminant()} {d.p.discriminant()}");
+    match Level.try_from(9) { Ok(l) => println(name(l)), Err(e) => println(f"{e}") }
+    match Level.try_from(-5) { Ok(l) => println(name(l)), Err(e) => println(f"{e}") }
+    match Kind.try_from(2) { Ok(_) => println("some kind"), Err(e) => println(f"{e}") }
+    let ls: Vec[Level] = [Level.High, Level.Low, Level.High];
+    let mut n = 0;
+    for l in ls.iter() { if l.discriminant() > 0 { n += 1; } }
+    println(f"{n} {Mode.On.discriminant()} {Port.Https.discriminant()}");
+}

@@ -10,7 +10,10 @@
 //! - A tuple, struct or closure places each part at the next multiple of
 //!   its alignment, in order; the whole is padded to its largest alignment.
 //! - An enum is a tag (the smallest unsigned integer that counts its
-//!   variants) followed by the largest variant laid out as a struct.
+//!   variants) followed by the largest variant laid out as a struct. A
+//!   C-like enum declared `#[repr(intN)]` or `#[repr(C)]` is its C tag
+//!   instead: the repr's width (C's `int` for `#[repr(C)]`), holding the
+//!   declared discriminant ([`crate::ty::CTag`]).
 //! - A field whose type holds its own ADT again by value is boxed: a
 //!   pointer to a malloc'd value ([`boxed_field`]).
 //! - An `Option` of a thin pointer that is never null (a `shared` handle,
@@ -199,11 +202,19 @@ fn adt_body(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
 
 /// The tag of the enum `t` (plain or `shared`): the smallest unsigned
 /// integer that counts its variants, at offset 0, holding the variant's
-/// index. `None` for a struct or an enum with no variants.
+/// index, or a `#[repr]` enum's C tag, which holds its declared value.
+/// `None` for a struct or an enum with no variants.
 pub fn enum_tag(tys: &TyInterner, t: Ty) -> Option<Layout> {
     let (adt, _) = tys.tcx().adt_of(t)?;
     if !adt.is_enum {
         return None;
+    }
+    if let Some(c) = tys
+        .tcx()
+        .c_tag(adt.def)
+        .filter(|_| !adt.variants.is_empty())
+    {
+        return Some(scalar(c.bytes));
     }
     Some(match adt.variants.len() as u64 {
         0 => return None,

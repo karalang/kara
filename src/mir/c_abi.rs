@@ -22,7 +22,7 @@
 //! both ABIs do with a one-field `#[repr(C)]` struct.
 
 use super::layout;
-use super::ty::{FloatTy, Ty, TyInterner, TyKind};
+use super::ty::{FloatTy, IntTy, Ty, TyInterner, TyKind};
 
 /// One register's worth of a struct: the bytes `[offset, offset + size)`,
 /// in a float register when `float`.
@@ -95,9 +95,34 @@ pub fn crosses(tys: &TyInterner, t: Ty) -> bool {
     match tys.kind(t) {
         TyKind::Int(_) | TyKind::Bool | TyKind::RawPtr { .. } => true,
         TyKind::Float(f) => matches!(f, FloatTy::F32 | FloatTy::F64),
-        TyKind::Adt(_) => plain_struct(tys, t),
+        TyKind::Adt(_) => plain_struct(tys, t) || c_enum_int(tys, t).is_some(),
         _ => false,
     }
+}
+
+/// The integer a C-like `#[repr(intN)]` or `#[repr(C)]` enum crosses as:
+/// its C tag, which holds the declared discriminant (design.md §15,
+/// B-2026-11-16-233).
+pub fn c_enum_int(tys: &TyInterner, t: Ty) -> Option<Ty> {
+    if !matches!(tys.kind(t), TyKind::Adt(_)) {
+        return None;
+    }
+    let (adt, _) = tys.tcx().adt_of(t)?;
+    if !adt.is_enum {
+        return None;
+    }
+    let c = tys.tcx().c_tag(adt.def)?;
+    let it = match (c.bytes, c.signed) {
+        (1, true) => IntTy::I8,
+        (1, false) => IntTy::U8,
+        (2, true) => IntTy::I16,
+        (2, false) => IntTy::U16,
+        (8, true) => IntTy::I64,
+        (8, false) => IntTy::U64,
+        (_, true) => IntTy::I32,
+        (_, false) => IntTy::U32,
+    };
+    Some(tys.intern(TyKind::Int(it)))
 }
 
 /// A non-generic-cell, non-enum struct whose every field is plain data.
@@ -156,6 +181,11 @@ fn leaves(tys: &TyInterner, t: Ty, base: u64, out: &mut Vec<Leaf>) -> Option<()>
             float: Some(f),
         }),
         TyKind::Int(_) | TyKind::Bool | TyKind::RawPtr { .. } => out.push(Leaf {
+            offset: base,
+            size: layout::layout(tys, t)?.size,
+            float: None,
+        }),
+        TyKind::Adt(_) if c_enum_int(tys, t).is_some() => out.push(Leaf {
             offset: base,
             size: layout::layout(tys, t)?.size,
             float: None,

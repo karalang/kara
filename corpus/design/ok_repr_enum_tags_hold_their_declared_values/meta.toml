@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "unsafe-ffi", "s15"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-233: a #[repr(intN)] / #[repr(C)] C-like enum was one byte holding its variant index, so a #[repr(C)] struct with one had the wrong layout and C read the wrong values. The struct bytes are checked against gcc in tests/s15_conformance_pass.rs; interp, mir-llvm and ASan agree."

@@ -497,6 +497,7 @@ fn lower_program_inner<'a>(
             .collect(),
         fns: FxHashMap::default(),
         builtin_owns: FxHashMap::default(),
+        builtin_fn_borrows: FxHashMap::default(),
         builtin_mut_self: FxHashSet::default(),
         builtin_own_self: FxHashSet::default(),
         consts: FxHashMap::default(),
@@ -1360,6 +1361,12 @@ struct Lcx<'a> {
     /// Which arguments of each `#[compiler_builtin]` method (by its type's
     /// name and its own) are declared `own`: the native keeps them.
     builtin_owns: FxHashMap<(String, String), Vec<bool>>,
+    /// A library `#[compiler_builtin]` free function's parameters that take
+    /// a closure without storing it (`with_span(span, || body)`): a
+    /// function-typed parameter not declared `escaping`. A closure passed
+    /// there captures as the checker judged it, by borrow (core semantics
+    /// §9.3, B-2026-11-16-231).
+    builtin_fn_borrows: FxHashMap<String, Vec<bool>>,
     /// The library's `#[compiler_builtin]` methods declared `mut ref self`
     /// that return a borrow (`BufReader.fill_buf`'s view of the reader's
     /// buffer, B-2026-10-14-72), whose receiver is lent mutably so the
@@ -2108,6 +2115,23 @@ impl<'a> Lcx<'a> {
     /// declare `own`.
     fn note_builtin_owns(&mut self, program: &ast::Program) {
         for item in &program.items {
+            if let Item::Function(f) = item {
+                if f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) {
+                    let borrows: Vec<bool> = f
+                        .params
+                        .iter()
+                        .map(|p| {
+                            matches!(p.ty.kind, ast::TypeKind::FnType { .. })
+                                && !program
+                                    .escaping_fn_types
+                                    .contains(&SpanKey::from_span(&p.ty.span))
+                        })
+                        .collect();
+                    if borrows.iter().any(|&b| b) {
+                        self.builtin_fn_borrows.insert(f.name.clone(), borrows);
+                    }
+                }
+            }
             let Item::ImplBlock(b) = item else { continue };
             let ast::TypeKind::Path(tp) = &b.target_type.kind else {
                 continue;
@@ -3454,6 +3478,31 @@ impl<'a> Lcx<'a> {
         }
         let sync = tc.struct_info.get(&name).is_some_and(|s| s.is_par)
             || tc.enum_info.get(&name).is_some_and(|e| e.is_par);
+        // A C-like enum declared `#[repr(intN)]` or `#[repr(C)]` keeps the
+        // tag C would (B-2026-11-16-233).
+        if let Some(d) = tc
+            .enum_discriminants
+            .get(&name)
+            .filter(|d| user && is_enum && (d.repr_declared || d.repr_c))
+            .filter(|_| vdefs.iter().all(|v| v.fields.is_empty()))
+        {
+            let bytes = match (d.repr_declared, d.repr.as_str()) {
+                (true, "i8" | "u8") => 1,
+                (true, "i16" | "u16") => 2,
+                (true, "i64" | "u64") => 8,
+                _ => 4,
+            };
+            let values = d.values.iter().map(|&(_, v)| v).collect();
+            let signed = !d.repr_declared || d.repr.starts_with('i');
+            self.tys.tcx().add_c_tag(
+                def,
+                crate::ty::CTag {
+                    bytes,
+                    signed,
+                    values,
+                },
+            );
+        }
         self.tys.tcx().add_adt_def(AdtDef {
             def,
             name: name.clone(),
@@ -3893,6 +3942,11 @@ struct Bx<'l, 'a> {
     /// The next closure literal lowered escapes (it is stored as a
     /// function value), so it captures by move.
     closure_escapes: bool,
+    /// The next closure literal lowered is an argument for a parameter that
+    /// is not `escaping` (core semantics §9.3), though the slot is an erased
+    /// function type: it captures as §9.1 infers, not by move
+    /// (B-2026-11-16-231).
+    closure_arg_nonescaping: bool,
     /// Expressions already evaluated, and the places that hold their
     /// values: an assertion's operands, which its failure message reads
     /// again without running them twice.
@@ -4031,6 +4085,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_exit: None,
             par_exit: None,
             closure_escapes: false,
+            closure_arg_nonescaping: false,
             pinned: FxHashMap::default(),
             read_now: FxHashSet::default(),
             upgraded: FxHashSet::default(),
@@ -9449,7 +9504,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // A closure stored as a function value escapes, so it
                 // captures by move (core semantics §9.3).
                 let dt = self.place_type(&dest);
-                self.closure_escapes = matches!(self.tys().tcx().kind(dt), HK::Fn { .. });
+                let nonescaping = std::mem::take(&mut self.closure_arg_nonescaping);
+                self.closure_escapes =
+                    !nonescaping && matches!(self.tys().tcx().kind(dt), HK::Fn { .. });
                 let (op, _) = self.closure_value(e)?;
                 self.assign(dest, Rvalue::Use(op));
                 Ok(())
@@ -20440,6 +20497,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                             return Ok(());
                         }
                     }
+                    // A closure for a parameter the builtin does not
+                    // store borrows its captures (`with_span`).
+                    let borrows_closure = match self.lcx.def_owner(d) {
+                        None => self
+                            .lcx
+                            .builtin_fn_borrows
+                            .get(self.lcx.def_name(d).as_str())
+                            .cloned()
+                            .unwrap_or_default(),
+                        Some(_) => Vec::new(),
+                    };
                     let mut ops = Vec::new();
                     for (i, a) in args.iter().enumerate() {
                         let t = self.expr_ty(&a.value)?;
@@ -20477,7 +20545,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                             continue;
                         }
                         let by_ref = !moves && !self.is_copy(t);
-                        ops.push(self.lib_arg(&a.value, by_ref)?);
+                        self.closure_arg_nonescaping =
+                            borrows_closure.get(i).copied().unwrap_or(false)
+                                && matches!(a.value.kind, ExprKind::Closure { .. });
+                        let op = self.lib_arg(&a.value, by_ref);
+                        self.closure_arg_nonescaping = false;
+                        ops.push(op?);
                     }
                     // `Env.var(name)` on a program-rooted resource: its
                     // provider's method, the provider first (§14.7).
@@ -21228,7 +21301,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 continue;
             }
             let pt = self.callee_param_ty(p, &inst_args)?;
-            ops.push(self.arg_pending(&a.value, pt)?);
+            self.closure_arg_nonescaping = self.closure_arg_borrows(&a.value, p);
+            let arg = self.arg_pending(&a.value, pt);
+            self.closure_arg_nonescaping = false;
+            ops.push(arg?);
             fn_tys.push(None);
         }
         let mut ops = self.finish_args(ops)?;
@@ -24824,7 +24900,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                         continue;
                     }
                     let pt = self.callee_param_ty(p, &inst_args)?;
-                    rest.push(self.arg_pending(&a.value, pt)?);
+                    self.closure_arg_nonescaping = self.closure_arg_borrows(&a.value, p);
+                    let arg = self.arg_pending(&a.value, pt);
+                    self.closure_arg_nonescaping = false;
+                    rest.push(arg?);
                     fn_tys.push(None);
                 }
                 let mut rest = self.finish_args(rest)?;
@@ -25450,6 +25529,16 @@ impl<'l, 'a> Bx<'l, 'a> {
     // ── function values ─────────────────────────────────────────────
 
     /// Whether the checker gave node `id` a function type.
+    /// Whether `a` is a closure literal handed to a function-typed `p`
+    /// that is not `escaping`: the callee may only call it (core semantics
+    /// §9.3), so its captures are inferred, not moved, even where the slot
+    /// erases it (a library function's `own OnceFn` such as `with_span`).
+    fn closure_arg_borrows(&self, a: &Expr, p: &ast::Param) -> bool {
+        matches!(a.kind, ExprKind::Closure { .. })
+            && matches!(p.ty.kind, ast::TypeKind::FnType { .. })
+            && !self.fn_param_owned(p)
+    }
+
     fn is_fn_typed(&self, id: NodeId) -> bool {
         self.lcx
             .node_types

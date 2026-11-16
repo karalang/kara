@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "unsafe-ffi", "s15"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-234: an `unsafe { }` block did not pass its `let`'s annotation to the tail, so `ptr.null()` / `ptr.from_exposed(a)` inside one stopped check with an unlowerable `T`; a plain block passed it. interp, mir-llvm and ASan agree."

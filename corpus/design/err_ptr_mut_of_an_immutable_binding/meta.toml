@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "error:E_PTR_MUT_REQUIRES_MUTABLE_PLACE"
+exit = 1
+tags = ["design", "unsafe-ffi", "s15"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-235: `ptr.mut(x)` of a `let` without `mut` passed check, and a write through the pointer changed the immutable binding (it printed 9). design.md §15 refuses it with E_PTR_MUT_REQUIRES_MUTABLE_PLACE. expected.out is the design-pin form: the line and a substring of the first error."

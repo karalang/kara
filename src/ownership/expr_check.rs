@@ -806,6 +806,19 @@ impl<'a> super::OwnershipChecker<'a> {
                 if method == "mut" && crate::ownership::is_ptr_place_call(expr) {
                     if let Some(root) = args.first().and_then(|a| Self::root_identifier(&a.value)) {
                         self.mark_mut_let_written(&root);
+                        // A place rooted at a `let` without `mut` is not
+                        // mutably reachable (design.md §15): a write through
+                        // the pointer would change a binding declared
+                        // immutable (B-2026-11-16-235).
+                        self.report_write_to_immutable_binding(
+                            &root,
+                            &expr.span,
+                            OwnershipErrorKind::PtrMutOfImmutableBinding,
+                            format!(
+                                "'ptr.mut' requires a mutably reachable place, and `{root}` \
+                                 is not"
+                            ),
+                        );
                     }
                 }
                 // Step 1 (consume-predicate): receiver mode comes from the

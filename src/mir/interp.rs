@@ -17330,9 +17330,22 @@ impl<'a> Interp<'a> {
         let mut params = Vec::with_capacity(args.len());
         let mut vals = Vec::with_capacity(args.len());
         for (v, &t) in args.iter().zip(&sig.params) {
+            if let Some(it) = c_abi::c_enum_int(self.tys, t) {
+                vals.push(Value::Int(i128::from(self.c_enum_value(name, v, t)?)));
+                params.push(it);
+                continue;
+            }
             let (v, t) = self.peel_scalar_struct(v.clone(), t);
             vals.push(v);
             params.push(t);
+        }
+        // A `#[repr]` enum result is its C tag (B-2026-11-16-233).
+        if let Some(it) = c_abi::c_enum_int(self.tys, sig.ret) {
+            let r = self.foreign_scalars(name, f, &params, it, &vals)?;
+            let Value::Int(n) = r else {
+                return err(format!("`{name}`: its result is no integer"));
+            };
+            return self.c_enum_variant(name, n as i64, sig.ret);
         }
         let (ret, wraps) = self.peel_scalar_ty(sig.ret);
         let is_struct = |me: &Self, t: Ty| matches!(me.tys.kind(t), TyKind::Adt(_));
@@ -17624,6 +17637,47 @@ impl<'a> Interp<'a> {
         v
     }
 
+    /// The declared discriminant the `#[repr]` enum value `v` of type `t`
+    /// stores, as C reads it (design.md §15, B-2026-11-16-233).
+    fn c_enum_value(&self, name: &str, v: &Value, t: Ty) -> R<i64> {
+        let tag = self
+            .tys
+            .tcx()
+            .adt_of(t)
+            .and_then(|(a, _)| self.tys.tcx().c_tag(a.def));
+        match (tag, v) {
+            (Some(c), Value::Variant(i, _)) => match c.values.get(*i as usize) {
+                Some(&n) => Ok(n),
+                None => err(format!(
+                    "`{name}`: variant {i} of `{}`",
+                    self.tys.display(t)
+                )),
+            },
+            (_, other) => err(format!(
+                "`{name}`: {other:?} cannot cross to C as a `{}`",
+                self.tys.display(t)
+            )),
+        }
+    }
+
+    /// The variant of the `#[repr]` enum `t` whose declared discriminant
+    /// C handed back as `n`.
+    fn c_enum_variant(&self, name: &str, n: i64, t: Ty) -> R<Value> {
+        let tag = self
+            .tys
+            .tcx()
+            .adt_of(t)
+            .and_then(|(a, _)| self.tys.tcx().c_tag(a.def));
+        let at = tag.and_then(|c| c.values.iter().position(|&v| v == n));
+        match at {
+            Some(i) => Ok(Value::Variant(i as u32, Vec::new())),
+            None => err(format!(
+                "`{name}`: C handed back {n} as a `{}`, which names none of its variants",
+                self.tys.display(t)
+            )),
+        }
+    }
+
     /// The size of the C type `t` in bytes.
     fn c_size(&self, name: &str, t: Ty) -> R<usize> {
         match super::layout::layout(self.tys, t) {
@@ -17650,6 +17704,12 @@ impl<'a> Interp<'a> {
                 buf[off..off + size].copy_from_slice(&n.to_ne_bytes()[..size]);
             }
             (TyKind::Bool, Value::Bool(b)) => buf[off] = u8::from(*b),
+            (TyKind::Adt(_), Value::Variant(..))
+                if super::c_abi::c_enum_int(self.tys, t).is_some() =>
+            {
+                let n = self.c_enum_value(name, v, t)?;
+                buf[off..off + size].copy_from_slice(&n.to_ne_bytes()[..size]);
+            }
             (TyKind::Array(e, _), Value::Agg(xs)) => {
                 let w = self.c_size(name, e)?;
                 for (i, x) in xs.iter().enumerate() {
@@ -17705,6 +17765,14 @@ impl<'a> Interp<'a> {
             TyKind::Int(it) => Value::Int(from_c_word(word(size), it)),
             TyKind::RawPtr { .. } => Value::Int(i128::from(word(8))),
             TyKind::Bool => Value::Bool(buf[off] != 0),
+            TyKind::Adt(_) if super::c_abi::c_enum_int(self.tys, t).is_some() => {
+                let it = super::c_abi::c_enum_int(self.tys, t).map(|i| self.tys.kind(i));
+                let n = match it {
+                    Some(TyKind::Int(it)) => from_c_word(word(size), it),
+                    _ => i128::from(word(size)),
+                };
+                self.c_enum_variant(name, n as i64, t)?
+            }
             TyKind::Array(e, n) => {
                 let w = self.c_size(name, e)?;
                 let mut xs = Vec::with_capacity(n as usize);
@@ -17755,13 +17823,36 @@ impl<'a> Interp<'a> {
         // `*mut Tm`; FF5): the one value pointed at.
         if super::c_abi::plain_struct(self.tys, pointee) {
             let size = self.c_size(name, pointee)?;
-            let mut bytes = vec![0u8; size + 8];
+            // An element of an array of them is the array from it on, as C
+            // indexing past the pointer reads it (B-2026-11-16-238).
             let v = self.slot_ref(at)?.clone();
-            self.c_encode(name, &v, pointee, &mut bytes, 0)?;
+            let mut parent = at.clone();
+            let within = match (parent.path.pop(), &v) {
+                (Some(i), Value::Agg(me)) => match self.slot_ref(&parent)? {
+                    Value::Agg(xs)
+                        if xs.len() > 1
+                            && xs
+                                .iter()
+                                .all(|x| matches!(x, Value::Agg(f) if f.len() == me.len())) =>
+                    {
+                        Some((i, xs[i as usize..].to_vec()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let (base, start, cells) = match within {
+                Some((i, cells)) => (parent, Some(i), cells),
+                None => (at.clone(), None, vec![v]),
+            };
+            let mut bytes = vec![0u8; size * cells.len() + 8];
+            for (k, c) in cells.iter().enumerate() {
+                self.c_encode(name, c, pointee, &mut bytes, k * size)?;
+            }
             let copy = NativeCopy {
-                base: at.clone(),
-                start: None,
-                count: 1,
+                base,
+                start,
+                count: cells.len(),
                 width: size,
                 signed: false,
                 bools: false,
@@ -17824,8 +17915,14 @@ impl<'a> Interp<'a> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     fn read_back(&mut self, bytes: &[u8], c: &NativeCopy) -> R<()> {
         if let Some(t) = c.record {
-            let v = self.c_decode("a C call", bytes, t, 0)?;
-            *self.slot_mut(&c.base)? = v;
+            for k in 0..c.count {
+                let v = self.c_decode("a C call", bytes, t, k * c.width)?;
+                let at = match c.start {
+                    Some(i) => c.base.child(i + k as u64),
+                    None => c.base.clone(),
+                };
+                *self.slot_mut(&at)? = v;
+            }
             return Ok(());
         }
         for k in 0..c.count {

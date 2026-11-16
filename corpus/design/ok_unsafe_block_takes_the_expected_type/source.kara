@@ -1,0 +1,17 @@
+// An `unsafe { }` block at a typed `let` passes the annotation to its tail,
+// as a plain block does, so a pointer constructor generic only in its
+// result takes `T` from it (design.md §15 Pointer provenance: `let
+// recovered: *const u32 = unsafe { ptr.from_exposed(..) }`,
+// B-2026-11-16-234).
+import std.mem;
+fn main() {
+    // Safety: constructing pointers reads nothing.
+    let p: *const i64 = unsafe { ptr.null() };
+    // Safety: as above.
+    let q: *mut u8 = unsafe { ptr.null_mut() };
+    // Safety: as above.
+    let d: *const u32 = unsafe { ptr.dangling() };
+    // Safety: zero is a u64.
+    let z: u64 = unsafe { mem.zeroed() };
+    println(f"{ptr.is_null(p)} {ptr.is_null(q)} {ptr.is_null(d)} {z}");
+}

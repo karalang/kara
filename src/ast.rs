@@ -310,6 +310,8 @@ pub struct EnumDiscriminants {
     /// (B-2026-08-21-26). `.discriminant()` is NOT gated on this — the spec
     /// grants it to every C-like enum and only notes the weaker guarantee.
     pub repr_declared: bool,
+    /// Declared `#[repr(C)]`: the tag is C's `int` (design.md §15).
+    pub repr_c: bool,
     /// `(variant name, declared value)` in declaration order.
     pub values: Vec<(String, i64)>,
 }

@@ -2023,7 +2023,32 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(v.into_int_value());
         }
         let v = self.builder.build_load(it, p, "tag").map_err(e)?;
-        Ok(v.into_int_value())
+        let v = v.into_int_value();
+        let Some(c) = self.c_tag_values(ty) else {
+            return Ok(v);
+        };
+        // A `#[repr]` enum stores its declared discriminant, as C does: the
+        // variant is the one whose value it is (B-2026-11-16-233).
+        let mut k = it.const_zero();
+        for (i, &val) in c.values.iter().enumerate().rev() {
+            let hit = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, v, it.const_int(val as u64, true), "")
+                .map_err(e)?;
+            k = self
+                .builder
+                .build_select(hit, it.const_int(i as u64, false), k, "")
+                .map_err(e)?
+                .into_int_value();
+        }
+        Ok(k)
+    }
+
+    /// The C tag of the enum `ty` when the values it stores are not its
+    /// variant indices (a `#[repr]` enum with declared discriminants).
+    pub(super) fn c_tag_values(&self, ty: Ty) -> Option<std::rc::Rc<crate::ty::CTag>> {
+        let (adt, _) = self.tys.tcx().adt_of(ty)?;
+        self.tys.tcx().c_tag(adt.def).filter(|c| !c.is_index())
     }
 
     pub(super) fn store_tag(&mut self, p: PointerValue<'ctx>, ty: Ty, v: u32) -> R<()> {
@@ -2040,6 +2065,10 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(());
         }
         let it = self.int_ty(tag.size as u32 * 8);
+        if let Some(c) = self.c_tag_values(ty) {
+            let val = c.values.get(v as usize).copied().unwrap_or(0);
+            return self.store(p, it.const_int(val as u64, true).into());
+        }
         self.store(p, it.const_int(u64::from(v), false).into())
     }
 

@@ -1,0 +1,10 @@
+// `ptr.mut(place)` needs a mutably reachable place (design.md §15): a
+// `let` without `mut` is not one, so a write through the pointer cannot
+// change a binding declared immutable (B-2026-11-16-235).
+fn main() {
+    let x: i64 = 3;
+    let p: *mut i64 = ptr.mut(x);
+    // Safety: p points at x.
+    unsafe { p.write(9); }
+    println(x);
+}

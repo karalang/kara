@@ -1929,6 +1929,27 @@ impl<'ctx> Cx<'ctx, '_> {
             return self.store(p, v);
         }
         let tt = self.int_ty(tag.size as u32 * 8);
+        if let Some(c) = self.c_tag_values(ty) {
+            // The declared discriminant of variant `k` (B-2026-11-16-233).
+            let mut v = tt.const_zero();
+            for (i, &val) in c.values.iter().enumerate().rev() {
+                let hit = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        k,
+                        k.get_type().const_int(i as u64, false),
+                        "",
+                    )
+                    .map_err(e)?;
+                v = self
+                    .builder
+                    .build_select(hit, tt.const_int(val as u64, true), v, "")
+                    .map_err(e)?
+                    .into_int_value();
+            }
+            return self.store(p, v.into());
+        }
         let k = self
             .builder
             .build_int_cast_sign_flag(k, tt, false, "")

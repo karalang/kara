@@ -4823,6 +4823,16 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, &ty);
             return ty;
         }
+        // An `unsafe { .. }` block too, so `let p: *const u32 = unsafe {
+        // ptr.from_exposed(a) }` takes `T` from the annotation as the plain
+        // block does (design.md §15 Pointer provenance, B-2026-11-16-234).
+        if let ExprKind::Unsafe(block) = &expr.kind {
+            self.unsafe_depth += 1;
+            let ty = self.check_block_against(block, expected);
+            self.unsafe_depth -= 1;
+            self.record_expr_type(&expr.span, &ty);
+            return ty;
+        }
         // A `comptime { .. }` at check position is checked as its block is,
         // so its literals take `expected` (`let n: i32 = comptime { 4 }`):
         // the constant it folds to does. A block that quotes code

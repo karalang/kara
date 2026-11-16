@@ -336,6 +336,7 @@ fn check_unsafe_span(
 /// `line` holds a `// Safety:` comment.
 fn safety_comment_above(line: usize, lines: &[&str]) -> bool {
     let mut idx = line as isize - 2;
+    let mut later_text = false;
     while idx >= 0 {
         let Some(text) = lines.get(idx as usize).map(|l| l.trim()) else {
             return false;
@@ -343,9 +344,12 @@ fn safety_comment_above(line: usize, lines: &[&str]) -> bool {
         if !text.starts_with("//") {
             return false;
         }
-        if is_safety_comment(text) {
+        // `Safety:` is followed by at least one word (design.md §15), on its
+        // own line or on a comment line below it (B-2026-11-16-236).
+        if is_safety_comment(text) && (safety_has_words(text) || later_text) {
             return true;
         }
+        later_text |= !comment_body(text).trim().is_empty();
         idx -= 1;
     }
     false
@@ -364,17 +368,28 @@ fn in_stmt(line: usize, f: impl FnOnce()) {
     STMT_LINE.with(|l| l.set(saved));
 }
 
+/// The text of a `//` or `///` comment line after its slashes.
+fn comment_body(line: &str) -> &str {
+    line.strip_prefix("///")
+        .or_else(|| line.strip_prefix("//"))
+        .unwrap_or("")
+}
+
 fn is_safety_comment(line: &str) -> bool {
-    let body = if let Some(rest) = line.strip_prefix("///") {
-        rest
-    } else if let Some(rest) = line.strip_prefix("//") {
-        rest
-    } else {
+    if !line.starts_with("//") {
         return false;
-    };
-    body.trim_start()
+    }
+    comment_body(line)
+        .trim_start()
         .to_ascii_lowercase()
         .starts_with("safety:")
+}
+
+/// A `Safety:` comment line with a word after the colon.
+fn safety_has_words(line: &str) -> bool {
+    let body = comment_body(line).trim_start();
+    body.get("safety:".len()..)
+        .is_some_and(|rest| rest.chars().any(char::is_alphanumeric))
 }
 
 // ── AST walker ────────────────────────────────────────────────────

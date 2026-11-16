@@ -1,0 +1,9 @@
+source = "docs/core-semantics.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "tracing", "closure"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-231: the checker borrowed the closure's capture of a local for with_span's non-escaping parameter, but MIR captured it by move, so the later use failed MIR's move check. interp, mir-llvm and ASan agree."

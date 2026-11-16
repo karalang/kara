@@ -3770,6 +3770,9 @@ impl<'a> super::TypeChecker<'a> {
             });
         let repr_declared = declared_repr.is_some();
         let repr = declared_repr.unwrap_or_else(|| "u32".to_string());
+        let repr_c = super::repr_arg_head_names(&e.attributes)
+            .iter()
+            .any(|n| n == "C");
 
         // Same constant environment `check_enum_discriminants` folds against,
         // so a declared `Audio = BASE + 1` resolves identically here and there.
@@ -3803,6 +3806,7 @@ impl<'a> super::TypeChecker<'a> {
             crate::ast::EnumDiscriminants {
                 repr,
                 repr_declared,
+                repr_c,
                 values,
             },
         );
