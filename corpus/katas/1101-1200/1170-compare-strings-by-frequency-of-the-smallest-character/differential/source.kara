@@ -1,0 +1,360 @@
+// LeetCode #1170: Compare Strings by Frequency of the Smallest Character --
+// a differential over the five arms. Each answer is checked against the
+// statement read literally and against five properties that do not compute
+// it; see the README.
+
+// ---- compare_strings.kara ----
+
+fn a0_f(s: Str) -> i64 {
+    let mut smallest = b'z' + 1;
+    let mut count = 0;
+    for b in s.bytes() {
+        if b < smallest {
+            smallest = b;
+            count = 1;
+        } else if b == smallest {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn a0_num_smaller_by_frequency(queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    // above[k]: the words whose frequency is at least k
+    let mut above = [0; 12];
+    for w in words.iter() {
+        above[a0_f(w)] += 1;
+    }
+    for k in (0..11).rev() {
+        above[k] += above[k + 1];
+    }
+    queries.iter().map(|q| above[a0_f(q) + 1]).collect()
+}
+
+// ---- compare_strings_pairs.kara ----
+
+fn a1_f(s: Str) -> i64 {
+    let smallest = s.bytes().iter().min().unwrap();
+    s.bytes().iter().filter(|b| b == smallest).count()
+}
+
+fn a1_num_smaller_by_frequency(queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    let word_f: Vec[i64] = words.iter().map(|w| a1_f(w)).collect();
+    let mut out = Vec.new();
+    for q in queries.iter() {
+        let fq = a1_f(q);
+        let mut n = 0;
+        for fw in word_f.iter() {
+            if fq < fw {
+                n += 1;
+            }
+        }
+        out.push(n);
+    }
+    out
+}
+
+// ---- compare_strings_sorted.kara ----
+
+fn a2_f(s: Str) -> i64 {
+    let mut tally = [0; 26];
+    for b in s.bytes() {
+        tally[(b - b'a') as usize] += 1;
+    }
+    for c in tally {
+        if c > 0 {
+            return c;
+        }
+    }
+    0
+}
+
+fn a2_num_smaller_by_frequency(queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    let mut word_f: Vec[i64] = words.iter().map(|w| a2_f(w)).collect();
+    word_f.sort();
+    queries
+        .iter()
+        .map(|q| {
+            let fq = a2_f(q);
+            word_f.len() - word_f.partition_point(|x| x <= fq)
+        })
+        .collect()
+}
+
+// ---- compare_strings_tree.kara ----
+
+fn a3_f(s: Str) -> i64 {
+    let smallest = s.chars().min().unwrap();
+    let mut n = 0;
+    for c in s.chars() {
+        if c == smallest {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn a3_num_smaller_by_frequency(queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    let mut by_f: SortedMap[i64, i64] = SortedMap.new();
+    for w in words.iter() {
+        *by_f.entry(a3_f(w)).or_insert(0) += 1;
+    }
+    let mut out = Vec.new();
+    for q in queries.iter() {
+        let above: i64 = by_f.range(a3_f(q) + 1, 11).map(|(_, n)| n).sum();
+        out.push(above);
+    }
+    out
+}
+
+// ---- compare_strings_solution.kara ----
+
+fn a4_f(s: Str) -> i32 {
+    let min = s.chars().min().unwrap();
+    s.chars().filter(|c| c == min).count() as i32
+}
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn a4_num_smaller_by_frequency(queries: Vec[String], words: Vec[String]) -> Vec[i32] {
+        let mut wf: Vec[i32] = words.iter().map(|w| a4_f(w)).collect();
+        wf.sort();
+        queries
+            .iter()
+            .map(|q| {
+                let fq = a4_f(q);
+                (wf.len() - wf.partition_point(|x| x <= fq)) as i32
+            })
+            .collect()
+    }
+}
+
+fn a4_num_smaller_by_frequency(queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    A4Solution.a4_num_smaller_by_frequency(queries, words).iter().map(|x| x as i64).collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(w: i64, queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    match w {
+        0 => a0_num_smaller_by_frequency(queries, words),
+        1 => a1_num_smaller_by_frequency(queries, words),
+        2 => a2_num_smaller_by_frequency(queries, words),
+        3 => a3_num_smaller_by_frequency(queries, words),
+        _ => a4_num_smaller_by_frequency(queries, words),
+    }
+}
+
+// The statement read literally: f(s) is the frequency of the
+// lexicographically smallest character in s, and each query's answer is the
+// number of words W where f(query) < f(W).
+fn literal(queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    let freq = |s: Str| {
+        let chars: Vec[char] = s.chars().collect();
+        let mut smallest = chars[0];
+        for c in chars.iter() {
+            if c < smallest {
+                smallest = c;
+            }
+        }
+        chars.iter().filter(|c| c == smallest).count()
+    };
+    let word_f: Vec[i64] = words.iter().map(|w| freq(w)).collect();
+    queries
+        .iter()
+        .map(|q| {
+            let fq = freq(q);
+            word_f.iter().filter(|fw| fq < fw).count()
+        })
+        .collect()
+}
+
+// A string of `n` letters drawn from the first `letters`.
+fn random_word(seed: mut ref i64, letters: i64) -> String {
+    let n = 1 + next_random(mut seed) % 10;
+    let mut w = String.new();
+    for _ in 0..n {
+        w.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    w
+}
+
+// A string whose smallest letter comes `k` times, for `k` from 1 to 10, the
+// rest of it larger letters, in a random order.
+fn word_of_frequency(seed: mut ref i64) -> String {
+    let k = 1 + next_random(mut seed) % 10;
+    let n = k + next_random(mut seed) % (11 - k);
+    let low = next_random(mut seed) % 5;
+    let mut bytes: Vec[u8] = Vec.new();
+    for i in 0..n {
+        let b = if i < k { low } else { low + 1 + next_random(mut seed) % 4 };
+        bytes.push(b'a' + b as u8);
+    }
+    for x in (1..n).rev() {
+        let y = next_random(mut seed) % (x + 1);
+        bytes.swap(x, y);
+    }
+    bytes.iter().map(|b| b as char).collect()
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut order: Vec[i64] = (0..n).collect();
+    for x in (1..n).rev() {
+        let y = next_random(mut seed) % (x + 1);
+        order.swap(x, y);
+    }
+    order
+}
+
+// Each string's letters in another order.
+fn scrambled(seed: mut ref i64, s: Str) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let order = shuffled(mut seed, chars.len());
+    order.iter().map(|i| chars[i]).collect()
+}
+
+struct Case {
+    queries: Vec[String],
+    words: Vec[String],
+    // P2's orders; P3's strings with their letters in another order; P4's
+    // order-keeping renaming of the letters; P6's added words
+    q_order: Vec[i64],
+    w_order: Vec[i64],
+    q_scrambled: Vec[String],
+    w_scrambled: Vec[String],
+    letter_to: Vec[u8],
+    ten: String,
+    one: String,
+}
+
+fn renamed(s: Str, c: Case) -> String {
+    s.bytes().iter().map(|b| c.letter_to[b - b'a'] as char).collect()
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let qs = ref c.queries;
+    let ws = ref c.words;
+    let want = literal(qs, ws);
+    let q_reordered: Vec[String] = c.q_order.iter().map(|i| qs[i].clone()).collect();
+    let w_reordered: Vec[String] = c.w_order.iter().map(|i| ws[i].clone()).collect();
+    let q_renamed: Vec[String] = qs.iter().map(|s| renamed(s, c)).collect();
+    let w_renamed: Vec[String] = ws.iter().map(|s| renamed(s, c)).collect();
+    let mut twice = ws.clone();
+    twice.extend(ws.iter().cloned());
+    let mut with_ten = ws.clone();
+    with_ten.push(c.ten.clone());
+    let mut with_one = ws.clone();
+    with_one.push(c.one.clone());
+    for a in 0..5 {
+        let got = arm(a, qs, ws);
+        let what = f"arm {a}, case {t.cases} {qs} / {ws} -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literally {want}");
+        // P2: the queries in another order answer in that order; the words
+        // in another order change nothing
+        let rq = arm(a, q_reordered, ws);
+        let rw = arm(a, qs, w_reordered);
+        let permuted: Vec[i64] = c.q_order.iter().map(|i| got[i]).collect();
+        expect(mut t, 2, rq == permuted and rw == got, f"P2 {what}, reordered: {rq} / {rw}");
+        // P3: each string's letters in another order change nothing
+        let sc = arm(a, c.q_scrambled, c.w_scrambled);
+        expect(mut t, 3, sc == got, f"P3 {what}, scrambled: {sc}");
+        // P4: every letter renamed by a map that keeps their order changes
+        // nothing
+        let rn = arm(a, q_renamed, w_renamed);
+        expect(mut t, 4, rn == got, f"P4 {what}, renamed: {rn}");
+        // P5: every word given twice doubles every answer
+        let tw = arm(a, qs, twice);
+        let doubled: Vec[i64] = got.iter().map(|n| 2 * n).collect();
+        expect(mut t, 5, tw == doubled, f"P5 {what}, twice: {tw}");
+        // P6: a word of ten equal letters adds at most one to each answer,
+        // and one to the answer of each query under ten letters; a word of
+        // one letter changes nothing
+        let te = arm(a, qs, with_ten);
+        let mut grows = te.len() == got.len();
+        for i in 0..got.len().min(te.len()) {
+            let d = te[i] - got[i];
+            grows = grows and (d == 0 or d == 1) and (qs[i].len() == 10 or d == 1);
+        }
+        let on = arm(a, qs, with_one);
+        expect(mut t, 6, grows and on == got, f"P6 {what}, with {c.ten}: {te}, with {c.one}: {on}");
+    }
+    t.cases += 1;
+    let mut h = 0;
+    for x in want.iter() {
+        h = (h * 131 + x + 1) % 1000000007;
+    }
+    t.check = (t.check * 31 + h) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 600 lists in four kinds, 150 each: 1 to 10 queries and 1 to 10 words
+    // over two letters; 1 to 40 of each over three; 30 to 120 of each over
+    // all 26; and 1 to 40 of each made to a frequency from 1 to 10, so that
+    // equal frequencies and the most, 10, are common. Every choice the
+    // properties make is drawn before any arm answers.
+    let mut seed = 11701;
+    let mut cases: Vec[Case] = Vec.new();
+    for i in 0..600 {
+        let kind = i % 4;
+        let (lo, hi, letters) = match kind {
+            0 => (1, 10, 2),
+            1 => (1, 40, 3),
+            2 => (30, 120, 26),
+            _ => (1, 40, 9),
+        };
+        let nq = lo + next_random(mut seed) % (hi - lo + 1);
+        let nw = lo + next_random(mut seed) % (hi - lo + 1);
+        let draw = |seed: mut ref i64| {
+            if kind == 3 { word_of_frequency(mut seed) } else { random_word(mut seed, letters) }
+        };
+        let queries: Vec[String] = (0..nq).map(|_| draw(mut seed)).collect();
+        let words: Vec[String] = (0..nw).map(|_| draw(mut seed)).collect();
+        let q_order = shuffled(mut seed, nq);
+        let w_order = shuffled(mut seed, nw);
+        let q_scrambled: Vec[String] = queries.iter().map(|s| scrambled(mut seed, s)).collect();
+        let w_scrambled: Vec[String] = words.iter().map(|s| scrambled(mut seed, s)).collect();
+        // the letters in use sent, in order, to `letters` of the 26
+        let mut picked: Vec[i64] = shuffled(mut seed, 26).iter().take(letters).cloned().collect();
+        picked.sort();
+        let letter_to: Vec[u8] = picked.iter().map(|p| b'a' + p as u8).collect();
+        let ten_letter = (b'a' + (next_random(mut seed) % 26) as u8) as char;
+        let ten: String = (0..10).map(|_| ten_letter).collect();
+        let one = ((b'a' + (next_random(mut seed) % 26) as u8) as char).to_string();
+        cases.push(Case { queries, words, q_order, w_order, q_scrambled, w_scrambled, letter_to, ten, one });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} lists: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

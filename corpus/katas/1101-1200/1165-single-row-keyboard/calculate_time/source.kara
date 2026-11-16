@@ -5,12 +5,12 @@
 fn calculate_time(keyboard: Str, word: Str) -> i64 {
     let mut place = [0; 26];
     for (i, c) in keyboard.bytes().iter().enumerate() {
-        place[(c - b'a')] = i;
+        place[c - b'a'] = i;
     }
     let mut at = 0;
     let mut time = 0;
     for c in word.bytes().iter() {
-        let next = place[(c - b'a')];
+        let next = place[c - b'a'];
         time += (next - at).abs();
         at = next;
     }

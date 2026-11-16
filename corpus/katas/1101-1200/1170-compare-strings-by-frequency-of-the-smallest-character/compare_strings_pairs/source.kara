@@ -1,0 +1,93 @@
+// LeetCode #1170: Compare Strings by Frequency of the Smallest Character --
+// every pair: each string's frequency found with `min` and `filter`, once,
+// and every query compared with every word. O(total letters + queries x
+// words).
+
+fn f(s: Str) -> i64 {
+    let smallest = s.bytes().iter().min().unwrap();
+    s.bytes().iter().filter(|b| b == smallest).count()
+}
+
+fn num_smaller_by_frequency(queries: Vec[String], words: Vec[String]) -> Vec[i64] {
+    let word_f: Vec[i64] = words.iter().map(|w| f(w)).collect();
+    let mut out = Vec.new();
+    for q in queries.iter() {
+        let fq = f(q);
+        let mut n = 0;
+        for fw in word_f.iter() {
+            if fq < fw {
+                n += 1;
+            }
+        }
+        out.push(n);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digest(xs: Vec[i64]) -> i64 {
+    let mut h = 0;
+    for x in xs.iter() {
+        h = (h * 131 + x + 1) % 1000000007;
+    }
+    h
+}
+
+fn strings(xs: Vec[Str]) -> Vec[String] {
+    xs.iter().map(|x| x.to_string()).collect()
+}
+
+fn show(queries: Vec[Str], words: Vec[Str]) {
+    let got = num_smaller_by_frequency(strings(queries), strings(words));
+    println(f"{queries.join(" ")} / {words.join(" ")} -> {got}");
+}
+
+fn random_word(seed: mut ref i64, letters: i64) -> String {
+    let n = 1 + next_random(mut seed) % 10;
+    let mut w = String.new();
+    for _ in 0..n {
+        w.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+    }
+    w
+}
+
+fn main() {
+    // LeetCode's examples; an equal frequency does not count; ten of one
+    // letter, the most; the smallest letter last, first, and twice apart
+    show(["cbd"], ["zaaaz"]);
+    show(["bbb", "cc"], ["a", "aa", "aaa", "aaaa"]);
+    show(["ab", "aab"], ["ba", "bba", "zz"]);
+    show(["aaaaaaaaaa", "z"], ["bbbbbbbbbb", "a", "yzyzyzyzyz"]);
+    show(["zzza", "azzz", "zaza"], ["q", "qq", "qqq"]);
+    // 300 random lists of 1 to 50 queries and 1 to 50 words of 1 to 10
+    // letters, from the first three letters (so the smallest repeats) or
+    // from all 26
+    let mut seed = 1170;
+    let mut total = 0;
+    let mut check = 0;
+    for i in 0..300 {
+        let letters = if i % 2 == 0 { 3 } else { 26 };
+        let nq = 1 + next_random(mut seed) % 50;
+        let nw = 1 + next_random(mut seed) % 50;
+        let queries: Vec[String] = (0..nq).map(|_| random_word(mut seed, letters)).collect();
+        let words: Vec[String] = (0..nw).map(|_| random_word(mut seed, letters)).collect();
+        let got = num_smaller_by_frequency(queries, words);
+        total += got.iter().sum();
+        check = (check * 31 + digest(got)) % 1000000007;
+    }
+    println(f"300 random lists: total {total}, checksum {check}");
+    // 2000 queries and 2000 words, the constraints' most
+    for letters in [2, 5, 26] {
+        let queries: Vec[String] = (0..2000).map(|_| random_word(mut seed, letters)).collect();
+        let words: Vec[String] = (0..2000).map(|_| random_word(mut seed, letters)).collect();
+        let got = num_smaller_by_frequency(queries, words);
+        let total: i64 = got.iter().sum();
+        println(f"2000 by 2000 over {letters} letters: total {total}, checksum {digest(got)}");
+    }
+}

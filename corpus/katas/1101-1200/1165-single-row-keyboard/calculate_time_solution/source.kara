@@ -10,12 +10,12 @@ impl Solution {
     pub fn calculate_time(keyboard: String, word: String) -> i32 {
         let mut pos = [0; 26];
         for (i, b) in keyboard.bytes().iter().enumerate() {
-            pos[(b - b'a')] = i;
+            pos[b - b'a'] = i;
         }
         let mut prev = 0;
         let mut ans: i32 = 0;
         for b in word.bytes() {
-            let cur = pos[(b - b'a')];
+            let cur = pos[b - b'a'];
             ans += (cur as i32 - prev as i32).abs();
             prev = cur;
         }

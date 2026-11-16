@@ -8,12 +8,12 @@
 fn a0_calculate_time(keyboard: Str, word: Str) -> i64 {
     let mut place = [0; 26];
     for (i, c) in keyboard.bytes().iter().enumerate() {
-        place[(c - b'a')] = i;
+        place[c - b'a'] = i;
     }
     let mut at = 0;
     let mut time = 0;
     for c in word.bytes().iter() {
-        let next = place[(c - b'a')];
+        let next = place[c - b'a'];
         time += (next - at).abs();
         at = next;
     }
@@ -63,12 +63,12 @@ impl A4Solution {
     pub fn a4_calculate_time(keyboard: String, word: String) -> i32 {
         let mut pos = [0; 26];
         for (i, b) in keyboard.bytes().iter().enumerate() {
-            pos[(b - b'a')] = i;
+            pos[b - b'a'] = i;
         }
         let mut prev = 0;
         let mut ans: i32 = 0;
         for b in word.bytes() {
-            let cur = pos[(b - b'a')];
+            let cur = pos[b - b'a'];
             ans += (cur as i32 - prev as i32).abs();
             prev = cur;
         }

@@ -1,0 +1,9 @@
+cbd / zaaaz -> [1]
+bbb cc / a aa aaa aaaa -> [1, 2]
+ab aab / ba bba zz -> [1, 0]
+aaaaaaaaaa z / bbbbbbbbbb a yzyzyzyzyz -> [0, 2]
+zzza azzz zaza / q qq qqq -> [2, 2, 1]
+300 random lists: total 46133, checksum 778495680
+2000 by 2000 over 2 letters: total 1646417, checksum 883074887
+2000 by 2000 over 5 letters: total 1187130, checksum 43169533
+2000 by 2000 over 26 letters: total 379920, checksum 5803665
