@@ -23272,28 +23272,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => return Ok(false),
         };
         let (_, elem) = self.strip_ty_full(elem);
-        // A sequence of `Slice`s flattens too (Rust's `[&[u8]].concat()`,
-        // B-2026-11-16-172).
-        let (item, of_slices) = match self.tys().tcx().kind(elem) {
+        // A sequence of `Slice`s or arrays flattens too (Rust's
+        // `[&[u8]].concat()`, B-2026-11-16-172; `[[u8; 2]].concat()`,
+        // B-2026-11-16-173). An array's length is the helper's `const N`,
+        // carried as the length of a `()` array (`TyCtxt::subst_len`).
+        let (item, of, len) = match self.tys().tcx().kind(elem) {
             HK::Intrinsic {
                 kind: IntrinsicKind::Vec,
                 args,
-            } => (self.tys().tcx().list(args)[0], false),
-            HK::Slice { elem: item, .. } => (item, true),
+            } => (self.tys().tcx().list(args)[0], "vecs", None),
+            HK::Slice { elem: item, .. } => (item, "slices", None),
+            HK::Array { elem: item, len } => (item, "arrays", Some(len)),
             _ => return Ok(false),
         };
-        let helper = match (slice, of_slices) {
-            (true, false) => "slice_concat_vecs",
-            (false, false) => "vec_concat_vecs",
-            (true, true) => "slice_concat_slices",
-            (false, true) => "vec_concat_slices",
-        };
+        let helper = format!("{}_concat_{of}", if slice { "slice" } else { "vec" });
+        let helper = helper.as_str();
         let Some(d) = self.lcx.defs.lookup(0, helper) else {
             return self
                 .unsupported(e.span, "`concat` of a sequence of `Vec`s")
                 .map(|()| true);
         };
-        let inst_args = vec![item];
+        let mut inst_args = vec![item];
+        if let Some(len) = len {
+            let unit = self.unit();
+            inst_args.push(self.tys().tcx().intern(HK::Array { elem: unit, len }));
+        }
         let ops = if slice {
             let f = self.lcx.fns[&d].f;
             let pt = self.callee_param_ty(&f.params[0], &inst_args)?;
@@ -30173,6 +30176,8 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "slice_concat_vecs",
     "vec_concat_slices",
     "slice_concat_slices",
+    "vec_concat_arrays",
+    "slice_concat_arrays",
     "deque_contains_str",
     "deque_contains_slice",
     "map_eq",

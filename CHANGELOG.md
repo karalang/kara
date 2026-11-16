@@ -180,10 +180,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
-- `concat()` flattens a sequence of `Slice`s as it does one of `Vec`s:
-  Rust's `parts.concat()` over a `Slice[Slice[u8]]` gives the `Vec[u8]` of
-  every part's bytes, where it took the deprecated `Display` join and its
-  fix to `join("")` did not check (B-2026-11-16-172).
+- `concat()` flattens a sequence of `Slice`s or arrays as it does one of
+  `Vec`s: Rust's `parts.concat()` over a `Slice[Slice[u8]]` gives the
+  `Vec[u8]` of every part's bytes, where it took the deprecated `Display`
+  join and its fix to `join("")` did not check (B-2026-11-16-172), and
+  `Vec[Array[u8, 2]]` flattens too (B-2026-11-16-173).
 
 - A function taking a `frozen` handle may `match` on an `Option` field of
   it, `mut` or not: `match n.next { Some(m) => walk(m), None => 0 }` walks

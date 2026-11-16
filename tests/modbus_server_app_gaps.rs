@@ -5,7 +5,8 @@
 //! (B-2026-11-16-170); `[[5], be16(n)]` passed as a `Slice[Slice[u8]]`
 //! checked but built invalid MIR (B-2026-11-16-171); and Rust's
 //! `parts.concat()` over a `Slice[Slice[u8]]` mended to a `join("")` that
-//! does not check (B-2026-11-16-172).
+//! does not check (B-2026-11-16-172); a sequence of arrays did the same
+//! (B-2026-11-16-173).
 
 use std::process::{Command, Output};
 
@@ -158,4 +159,25 @@ fn main() {
     let said = text(&check);
     assert!(!said.contains("deprecated"), "{said}");
     assert_eq!(run_stdout(&path), "5 5 0 5 255 0 4 7\n");
+}
+
+#[test]
+fn concat_flattens_a_sequence_of_arrays() {
+    let path = scratch(
+        "arrays.kara",
+        "fn main() {
+    let a: Array[u8, 2] = [1, 2];
+    let v: Vec[Array[u8, 2]] = [a, [3, 4]];
+    let j = v.concat();
+    let s = v.as_slice().concat();
+    let w: Vec[Array[String, 1]] = [[\"x\".to_string()], [\"y\".to_string()]];
+    let t = w.concat();
+    println(f\"{j.len()} {j[0]} {j[3]} {s.len()} {s[2]} {t.len()} {t[1]}\");
+}
+",
+    );
+    let check = karac(&["check"], &path);
+    let said = text(&check);
+    assert!(!said.contains("deprecated"), "{said}");
+    assert_eq!(run_stdout(&path), "4 1 4 4 3 2 y\n");
 }

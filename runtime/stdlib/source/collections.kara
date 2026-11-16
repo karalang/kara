@@ -2149,6 +2149,26 @@ fn slice_concat_slices[T: Clone](v: Slice[Slice[T]]) -> Vec[T] {
     out
 }
 
+fn vec_concat_arrays[T: Clone, const N: i64](v: ref Vec[Array[T, N]]) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    for e in v.iter() {
+        for x in e.iter() {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+fn slice_concat_arrays[T: Clone, const N: i64](v: Slice[Array[T, N]]) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    for e in v.iter() {
+        for x in e.iter() {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
 fn vec_contains_slice[T: PartialEq](v: ref Vec[Vec[T]], x: Slice[T]) -> bool {
     for e in v.iter() {
         if e.as_slice() == x {
