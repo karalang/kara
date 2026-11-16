@@ -417,6 +417,7 @@ impl super::Parser {
                     || self.reject_rust_rc_import()
                     || self.reject_rust_thread_import()
                     || self.reject_rust_fmt_import()
+                    || self.reject_rust_io_trait_import()
                 {
                     return None;
                 }
@@ -440,6 +441,7 @@ impl super::Parser {
                     || self.reject_rust_rc_import()
                     || self.reject_rust_thread_import()
                     || self.reject_rust_fmt_import()
+                    || self.reject_rust_io_trait_import()
                 {
                     return None;
                 }
@@ -3380,7 +3382,14 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
 
         let span = self.span_from(&start);
-        Some(Self::group_import_leaves(leaves, span, is_pub))
+        let mut decls = Self::group_import_leaves(leaves, span, is_pub);
+        if !self.rust_only_import_leaves.is_empty() {
+            for d in &mut decls {
+                d.items
+                    .retain(|it| !self.rust_only_import_leaves.contains(&it.span.offset));
+            }
+        }
+        Some(decls)
     }
 
     /// Parse one dotted path and everything that hangs off it, appending a

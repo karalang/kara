@@ -17,6 +17,7 @@ mod items_effects;
 mod items_extern;
 mod items_trait;
 mod patterns;
+mod rust_io_import;
 mod rust_rc;
 mod rust_thread;
 mod stmts;
@@ -653,6 +654,9 @@ pub struct Parser {
     /// line right after deleted ones sees their start as its own when it
     /// decides whether a blank line goes with it (B-2026-11-15-17).
     pub(crate) deleted_use_lines: Vec<(usize, usize)>,
+    /// The offsets of import names [`Self::reject_rust_io_trait_import`]
+    /// reported as Rust's alone (`Shutdown`), which the import drops.
+    pub(crate) rust_only_import_leaves: Vec<usize>,
     /// Each turbofish rejected so far (`collect::<Vec<char>>`): the
     /// diagnostic's span, the method's name, the index of the token after
     /// the list, and the list's Kāra spelling when it is one type a binding
@@ -800,6 +804,7 @@ impl Parser {
             source: None,
             item_start: None,
             deleted_use_lines: Vec::new(),
+            rust_only_import_leaves: Vec::new(),
             turbofishes: Vec::new(),
             from_iter_ends: Vec::new(),
             closure_returns: Vec::new(),

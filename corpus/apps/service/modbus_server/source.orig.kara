@@ -1,0 +1,589 @@
+// modbus_server: a Modbus/TCP server (the industrial register protocol
+// PLCs, meters and drives speak) on loopback TCP, and the clients that use
+// it. A frame is the MBAP header (transaction id, protocol id, length, unit,
+// all big-endian) and a PDU whose first byte is the function code. Each
+// connection is served by its own task; the data model (coils, discrete
+// inputs, holding and input registers) is shared under one lock, and
+// writing ON to the last coil stops the server.
+
+use std::sync::{TaskGroup, Mutex};
+use std::net::{TcpListener, TcpStream, Shutdown};
+use std::io::{Read, Write};
+use std::collections::BTreeMap;
+
+const N_COILS: usize = 64;
+const N_DISCRETE: usize = 32;
+const N_HOLDING: usize = 32;
+const N_INPUT: usize = 16;
+const HALT_COIL: usize = 63;
+const UNIT: u8 = 1;
+
+const DEVICE: [&str; 3] = ["Kara Industrial", "KX-485", "v0.8.2"];
+
+fn exception_name(code: u8) -> &'static str {
+    match code {
+        1 => "illegal function",
+        2 => "illegal data address",
+        3 => "illegal data value",
+        11 => "gateway target failed to respond",
+        _ => "unknown",
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Exception(u8);
+
+struct Server {
+    coils: Vec<bool>,
+    discrete: Vec<bool>,
+    holding: Vec<u16>,
+    inputs: Vec<u16>,
+    log: Vec<String>,
+    counts: BTreeMap<String, usize>,
+    conns: BTreeMap<usize, usize>,
+    stopping: bool,
+}
+
+impl Server {
+    fn new() -> Server {
+        Server {
+            coils: (0..N_COILS).map(|i| i % 3 == 0).collect(),
+            discrete: (0..N_DISCRETE).map(|i| (i * 7) % 5 < 2).collect(),
+            holding: (0..N_HOLDING).map(|i| (i * 100) as u16).collect(),
+            inputs: (0..N_INPUT).map(|i| (0x1000 + i * 3) as u16).collect(),
+            log: Vec::new(),
+            counts: BTreeMap::new(),
+            conns: BTreeMap::new(),
+            stopping: false,
+        }
+    }
+
+    fn count(&mut self, key: &str) {
+        *self.counts.entry(key.to_string()).or_insert(0) += 1;
+    }
+}
+
+fn u16_at(b: &[u8], i: usize) -> u16 {
+    ((b[i] as u16) << 8) | b[i + 1] as u16
+}
+
+fn be16(v: u16) -> [u8; 2] {
+    v.to_be_bytes()
+}
+
+fn pack_bits(bits: &[bool]) -> Vec<u8> {
+    let mut out = vec![0u8; (bits.len() + 7) / 8];
+    for (i, on) in bits.iter().enumerate() {
+        if *on {
+            out[i / 8] |= 1 << (i % 8);
+        }
+    }
+    out
+}
+
+fn unpack_bits(data: &[u8], n: usize) -> Vec<bool> {
+    (0..n).map(|i| (data[i / 8] >> (i % 8)) & 1 == 1).collect()
+}
+
+fn need(pdu: &[u8], n: usize) -> Result<(), Exception> {
+    if pdu.len() < n {
+        return Err(Exception(3));
+    }
+    Ok(())
+}
+
+fn check_range(addr: usize, qty: usize, size: usize) -> Result<(), Exception> {
+    if addr + qty > size {
+        return Err(Exception(2));
+    }
+    Ok(())
+}
+
+fn regs_reply(fc: u8, regs: &[u16]) -> Vec<u8> {
+    let mut out = vec![fc, (regs.len() * 2) as u8];
+    for v in regs {
+        out.extend_from_slice(&be16(*v));
+    }
+    out
+}
+
+/// The response PDU for a request PDU (function code first).
+fn handle(srv: &mut Server, pdu: &[u8]) -> Result<Vec<u8>, Exception> {
+    let fc = pdu[0];
+    match fc {
+        1 | 2 => {
+            need(pdu, 5)?;
+            let addr = u16_at(pdu, 1) as usize;
+            let qty = u16_at(pdu, 3) as usize;
+            if qty < 1 || qty > 2000 {
+                return Err(Exception(3));
+            }
+            let table = if fc == 1 { &srv.coils } else { &srv.discrete };
+            check_range(addr, qty, table.len())?;
+            let data = pack_bits(&table[addr..addr + qty]);
+            let mut out = vec![fc, data.len() as u8];
+            out.extend(data);
+            Ok(out)
+        }
+        3 | 4 => {
+            need(pdu, 5)?;
+            let addr = u16_at(pdu, 1) as usize;
+            let qty = u16_at(pdu, 3) as usize;
+            if qty < 1 || qty > 125 {
+                return Err(Exception(3));
+            }
+            let table = if fc == 3 { &srv.holding } else { &srv.inputs };
+            check_range(addr, qty, table.len())?;
+            Ok(regs_reply(fc, &table[addr..addr + qty]))
+        }
+        5 => {
+            need(pdu, 5)?;
+            let addr = u16_at(pdu, 1) as usize;
+            let value = u16_at(pdu, 3);
+            if value != 0xFF00 && value != 0 {
+                return Err(Exception(3));
+            }
+            check_range(addr, 1, N_COILS)?;
+            srv.coils[addr] = value == 0xFF00;
+            if addr == HALT_COIL && value == 0xFF00 {
+                srv.stopping = true;
+            }
+            Ok(pdu[..5].to_vec())
+        }
+        6 => {
+            need(pdu, 5)?;
+            let addr = u16_at(pdu, 1) as usize;
+            check_range(addr, 1, N_HOLDING)?;
+            srv.holding[addr] = u16_at(pdu, 3);
+            Ok(pdu[..5].to_vec())
+        }
+        15 => {
+            need(pdu, 6)?;
+            let addr = u16_at(pdu, 1) as usize;
+            let qty = u16_at(pdu, 3) as usize;
+            let nbytes = pdu[5] as usize;
+            if qty < 1 || qty > 1968 || nbytes != (qty + 7) / 8 || pdu.len() < 6 + nbytes {
+                return Err(Exception(3));
+            }
+            check_range(addr, qty, N_COILS)?;
+            for (i, on) in unpack_bits(&pdu[6..6 + nbytes], qty).into_iter().enumerate() {
+                srv.coils[addr + i] = on;
+            }
+            Ok(pdu[..5].to_vec())
+        }
+        16 => {
+            need(pdu, 6)?;
+            let addr = u16_at(pdu, 1) as usize;
+            let qty = u16_at(pdu, 3) as usize;
+            let nbytes = pdu[5] as usize;
+            if qty < 1 || qty > 123 || nbytes != qty * 2 || pdu.len() < 6 + nbytes {
+                return Err(Exception(3));
+            }
+            check_range(addr, qty, N_HOLDING)?;
+            for i in 0..qty {
+                srv.holding[addr + i] = u16_at(pdu, 6 + 2 * i);
+            }
+            Ok(pdu[..5].to_vec())
+        }
+        22 => {
+            need(pdu, 7)?;
+            let addr = u16_at(pdu, 1) as usize;
+            let and_mask = u16_at(pdu, 3);
+            let or_mask = u16_at(pdu, 5);
+            check_range(addr, 1, N_HOLDING)?;
+            let cur = srv.holding[addr];
+            srv.holding[addr] = (cur & and_mask) | (or_mask & !and_mask);
+            Ok(pdu[..7].to_vec())
+        }
+        23 => {
+            need(pdu, 10)?;
+            let raddr = u16_at(pdu, 1) as usize;
+            let rqty = u16_at(pdu, 3) as usize;
+            let waddr = u16_at(pdu, 5) as usize;
+            let wqty = u16_at(pdu, 7) as usize;
+            let nbytes = pdu[9] as usize;
+            if rqty < 1 || rqty > 125 || wqty < 1 || wqty > 121 || nbytes != wqty * 2
+                || pdu.len() < 10 + nbytes
+            {
+                return Err(Exception(3));
+            }
+            check_range(raddr, rqty, N_HOLDING)?;
+            check_range(waddr, wqty, N_HOLDING)?;
+            for i in 0..wqty {
+                srv.holding[waddr + i] = u16_at(pdu, 10 + 2 * i);
+            }
+            Ok(regs_reply(fc, &srv.holding[raddr..raddr + rqty]))
+        }
+        43 => {
+            need(pdu, 2)?;
+            if pdu[1] != 14 {
+                return Err(Exception(1));
+            }
+            need(pdu, 4)?;
+            let code = pdu[2];
+            let obj = pdu[3] as usize;
+            let ids: Vec<usize> = match code {
+                1 => vec![0, 1, 2],
+                4 => {
+                    if obj >= DEVICE.len() {
+                        return Err(Exception(2));
+                    }
+                    vec![obj]
+                }
+                _ => return Err(Exception(3)),
+            };
+            let mut out = vec![fc, 14, code, 1, 0, 0, ids.len() as u8];
+            for i in ids {
+                out.push(i as u8);
+                out.push(DEVICE[i].len() as u8);
+                out.extend_from_slice(DEVICE[i].as_bytes());
+            }
+            Ok(out)
+        }
+        _ => Err(Exception(1)),
+    }
+}
+
+/// Up to `n` bytes: fewer only when the peer stopped sending.
+fn read_full(sock: &mut TcpStream, n: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; n];
+    let mut got = 0;
+    while got < n {
+        match sock.read(&mut buf[got..]) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => got += k,
+        }
+    }
+    buf.truncate(got);
+    buf
+}
+
+fn serve_conn(srv: &Mutex<Server>, mut sock: TcpStream, conn_no: usize) {
+    let mut served = 0;
+    loop {
+        let head = read_full(&mut sock, 7);
+        if head.is_empty() {
+            break;
+        }
+        if head.len() < 7 {
+            srv.lock().unwrap().log.push(format!("conn {}: truncated header ({} bytes)", conn_no, head.len()));
+            break;
+        }
+        let tid = u16_at(&head, 0);
+        let pid = u16_at(&head, 2);
+        let length = u16_at(&head, 4) as usize;
+        let unit = head[6];
+        if length < 2 || length > 254 {
+            let mut s = srv.lock().unwrap();
+            s.log.push(format!("conn {}: bad length {}, closing", conn_no, length));
+            s.count("bad length");
+            break;
+        }
+        let pdu = read_full(&mut sock, length - 1);
+        if pdu.len() < length - 1 {
+            srv.lock().unwrap().log.push(format!(
+                "conn {}: truncated frame t={:04x} ({} of {} bytes)",
+                conn_no,
+                tid,
+                pdu.len(),
+                length - 1
+            ));
+            break;
+        }
+        let reply = {
+            let mut s = srv.lock().unwrap();
+            if pid != 0 {
+                s.log.push(format!("conn {}: t={:04x} protocol id {}, dropped", conn_no, tid, pid));
+                s.count("dropped");
+                continue;
+            }
+            served += 1;
+            let fc = pdu[0];
+            s.count(&format!("fc {:02x}", fc));
+            let result = if unit != UNIT && unit != 255 {
+                Err(Exception(11))
+            } else {
+                handle(&mut s, &pdu)
+            };
+            match result {
+                Ok(r) => {
+                    s.log.push(format!("conn {}: t={:04x} u={} fc={:02x} -> ok", conn_no, tid, unit, fc));
+                    r
+                }
+                Err(Exception(code)) => {
+                    s.log.push(format!(
+                        "conn {}: t={:04x} u={} fc={:02x} -> exception {:02x}",
+                        conn_no, tid, unit, fc, code
+                    ));
+                    s.count(&format!("exception {:02x}", code));
+                    vec![fc | 0x80, code]
+                }
+            }
+        };
+        let mut frame = head[..4].to_vec();
+        frame.extend_from_slice(&be16((reply.len() + 1) as u16));
+        frame.push(unit);
+        frame.extend(reply);
+        sock.write_all(&frame).unwrap();
+    }
+    drop(sock);
+    srv.lock().unwrap().conns.insert(conn_no, served);
+}
+
+fn serve(srv: &Mutex<Server>, listener: TcpListener) {
+    let group = TaskGroup::new();
+    let mut conn_no = 0;
+    loop {
+        let (sock, _) = listener.accept().unwrap();
+        if srv.lock().unwrap().stopping {
+            drop(sock);
+            break;
+        }
+        conn_no += 1;
+        let n = conn_no;
+        group.spawn(move || serve_conn(srv, sock, n));
+    }
+    drop(listener);
+}
+
+// ------------------------------------------------------------ the clients
+
+fn bits_text(bits: &[bool]) -> String {
+    bits.iter().map(|b| if *b { '1' } else { '0' }).collect()
+}
+
+struct Client {
+    name: String,
+    sock: TcpStream,
+    tid: u16,
+}
+
+impl Client {
+    fn connect(name: &str, addr: &str) -> Client {
+        Client { name: name.to_string(), sock: TcpStream::connect(addr).unwrap(), tid: 0 }
+    }
+
+    fn frame(&mut self, unit: u8, pdu: &[u8], tid: Option<u16>, pid: u16) -> Vec<u8> {
+        let tid = match tid {
+            Some(t) => t,
+            None => {
+                self.tid += 1;
+                self.tid
+            }
+        };
+        let mut out = Vec::new();
+        out.extend_from_slice(&be16(tid));
+        out.extend_from_slice(&be16(pid));
+        out.extend_from_slice(&be16((pdu.len() + 1) as u16));
+        out.push(unit);
+        out.extend_from_slice(pdu);
+        out
+    }
+
+    /// One response: (tid, unit, pdu), or None at the end of the stream.
+    fn recv(&mut self) -> Option<(u16, u8, Vec<u8>)> {
+        let head = read_full(&mut self.sock, 7);
+        if head.len() < 7 {
+            return None;
+        }
+        let pdu = read_full(&mut self.sock, u16_at(&head, 4) as usize - 1);
+        Some((u16_at(&head, 0), head[6], pdu))
+    }
+
+    fn show(&self, what: &str, reply: Option<(u16, u8, Vec<u8>)>, qty: usize) {
+        let (tid, unit, pdu) = match reply {
+            None => {
+                println!("{}: {} -> closed by server", self.name, what);
+                return;
+            }
+            Some(r) => r,
+        };
+        let fc = pdu[0];
+        let text = if fc & 0x80 != 0 {
+            format!("exception {:02x} {}", pdu[1], exception_name(pdu[1]))
+        } else {
+            match fc {
+                1 | 2 => format!("bits {} ({} bytes)", bits_text(&unpack_bits(&pdu[2..], qty)), pdu[1]),
+                3 | 4 | 23 => {
+                    let n = pdu[1] as usize / 2;
+                    let regs: Vec<String> = (0..n).map(|i| format!("{:04x}", u16_at(&pdu, 2 + 2 * i))).collect();
+                    format!("regs {}", regs.join(" "))
+                }
+                5 | 6 => format!("echo addr={} value={:04x}", u16_at(&pdu, 1), u16_at(&pdu, 3)),
+                15 | 16 => format!("wrote addr={} qty={}", u16_at(&pdu, 1), u16_at(&pdu, 3)),
+                22 => format!(
+                    "masked addr={} and={:04x} or={:04x}",
+                    u16_at(&pdu, 1),
+                    u16_at(&pdu, 3),
+                    u16_at(&pdu, 5)
+                ),
+                43 => {
+                    let n = pdu[6] as usize;
+                    let mut i = 7;
+                    let mut parts = Vec::new();
+                    for _ in 0..n {
+                        let obj = pdu[i];
+                        let len = pdu[i + 1] as usize;
+                        let text = String::from_utf8(pdu[i + 2..i + 2 + len].to_vec()).unwrap();
+                        parts.push(format!("{}={}", obj, text));
+                        i += 2 + len;
+                    }
+                    format!("device code={} {}", pdu[2], parts.join(", "))
+                }
+                _ => "?".to_string(),
+            }
+        };
+        println!("{}: t={:04x} u={} {} -> {}", self.name, tid, unit, what, text);
+    }
+
+    fn ask_unit(&mut self, what: &str, pdu: &[u8], unit: u8, qty: usize) {
+        let frame = self.frame(unit, pdu, None, 0);
+        self.sock.write_all(&frame).unwrap();
+        let reply = self.recv();
+        self.show(what, reply, qty);
+    }
+
+    fn ask(&mut self, what: &str, pdu: &[u8]) {
+        self.ask_unit(what, pdu, UNIT, 0);
+    }
+
+    fn read_bits(&mut self, fc: u8, addr: u16, qty: u16) {
+        let kind = if fc == 1 { "coils" } else { "inputs" };
+        let mut pdu = vec![fc];
+        pdu.extend_from_slice(&be16(addr));
+        pdu.extend_from_slice(&be16(qty));
+        self.ask_unit(&format!("read {} {}+{}", kind, addr, qty), &pdu, UNIT, qty as usize);
+    }
+
+    fn read_regs(&mut self, fc: u8, addr: u16, qty: u16, unit: u8) {
+        let kind = if fc == 3 { "holding" } else { "input regs" };
+        let mut pdu = vec![fc];
+        pdu.extend_from_slice(&be16(addr));
+        pdu.extend_from_slice(&be16(qty));
+        self.ask_unit(&format!("read {} {}+{}", kind, addr, qty), &pdu, unit, 0);
+    }
+}
+
+fn pdu(parts: &[&[u8]]) -> Vec<u8> {
+    parts.concat()
+}
+
+fn main() {
+    let srv = Mutex::new(Server::new());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let group = TaskGroup::new();
+    group.spawn(|| serve(&srv, listener));
+
+    println!("== plc");
+    let mut c = Client::connect("plc", &addr);
+    c.read_bits(1, 0, 20);
+    c.read_bits(2, 0, 10);
+    c.read_regs(3, 0, 5, UNIT);
+    c.read_regs(4, 0, 4, UNIT);
+    c.ask("write coil 5 on", &pdu(&[&[5], &be16(5), &be16(0xFF00)]));
+    c.ask("write coil 6 = 1234", &pdu(&[&[5], &be16(6), &be16(0x1234)]));
+    c.read_bits(1, 0, 10);
+    c.ask("write holding 3", &pdu(&[&[6], &be16(3), &be16(0xBEEF)]));
+    c.read_regs(3, 0, 5, UNIT);
+    c.ask("write coils 10+10", &pdu(&[&[15], &be16(10), &be16(10), &[2, 0b1010_1100, 0b01]]));
+    c.read_bits(1, 8, 16);
+    c.ask("write holding 20+3", &pdu(&[&[16], &be16(20), &be16(3), &[6], &be16(1), &be16(2), &be16(3)]));
+    c.read_regs(3, 18, 6, UNIT);
+    c.ask("mask holding 3", &pdu(&[&[22], &be16(3), &be16(0xF0F2), &be16(0x0025)]));
+    c.read_regs(3, 3, 1, UNIT);
+    c.ask(
+        "read 0+4, write 1+2",
+        &pdu(&[&[23], &be16(0), &be16(4), &be16(1), &be16(2), &[4], &be16(0x1111), &be16(0x2222)]),
+    );
+    drop(c);
+
+    println!("== edge");
+    let mut e = Client::connect("edge", &addr);
+    e.read_bits(1, 0, 0);
+    e.read_bits(1, 0, 2001);
+    e.read_bits(1, 60, 10);
+    e.read_bits(2, 31, 1);
+    e.read_regs(3, 0, 126, UNIT);
+    e.read_regs(3, 30, 5, UNIT);
+    e.read_regs(4, 15, 1, UNIT);
+    e.ask("function 07", &[7]);
+    e.ask("encapsulated 0d", &[43, 13, 1, 0]);
+    e.ask("device basic", &[43, 14, 1, 0]);
+    e.ask("device object 1", &[43, 14, 4, 1]);
+    e.ask("device object 9", &[43, 14, 4, 9]);
+    e.ask("device code 2", &[43, 14, 2, 0]);
+    e.read_regs(4, 0, 2, 7);
+    e.read_regs(4, 0, 2, 255);
+    e.ask("write coils, short count", &pdu(&[&[15], &be16(0), &be16(9), &[1, 0xFF]]));
+    e.ask("short read", &[3, 0, 1]);
+    e.ask("write holding 40", &pdu(&[&[6], &be16(40), &be16(1)]));
+    e.ask("write coil 64", &pdu(&[&[5], &be16(64), &be16(0)]));
+    drop(e);
+
+    println!("== pipeline");
+    let mut p = Client::connect("pipeline", &addr);
+    let mut burst = Vec::new();
+    for a in [0u16, 4, 8] {
+        let f = p.frame(UNIT, &pdu(&[&[3], &be16(a), &be16(2)]), Some(0x10 + a), 0);
+        burst.extend(f);
+    }
+    p.sock.write_all(&burst).unwrap();
+    for a in [0u16, 4, 8] {
+        let reply = p.recv();
+        p.show(&format!("burst read holding {}+2", a), reply, 0);
+    }
+    let mut two = p.frame(UNIT, &pdu(&[&[3], &be16(0), &be16(1)]), None, 5);
+    two.extend(p.frame(UNIT, &pdu(&[&[4], &be16(1), &be16(1)]), None, 0));
+    p.sock.write_all(&two).unwrap();
+    let reply = p.recv();
+    p.show("after a foreign protocol id", reply, 0);
+    drop(p);
+
+    println!("== broken");
+    let mut b = Client::connect("broken", &addr);
+    b.sock.write_all(&pdu(&[&be16(0x77), &be16(0), &be16(300), &[UNIT]])).unwrap();
+    let reply = b.recv();
+    b.show("length 300", reply, 0);
+    drop(b);
+    let mut t = Client::connect("torn", &addr);
+    let f = t.frame(UNIT, &pdu(&[&[3], &be16(0), &be16(2)]), None, 0);
+    t.sock.write_all(&f[..9]).unwrap();
+    t.sock.shutdown(Shutdown::Write).unwrap();
+    let reply = t.recv();
+    t.show("half a frame", reply, 0);
+    drop(t);
+    let mut t = Client::connect("torn", &addr);
+    t.sock.write_all(&[0, 1, 0]).unwrap();
+    t.sock.shutdown(Shutdown::Write).unwrap();
+    let reply = t.recv();
+    t.show("three bytes", reply, 0);
+    drop(t);
+
+    println!("== admin");
+    let mut a = Client::connect("admin", &addr);
+    a.ask("write coil 63 on", &pdu(&[&[5], &be16(HALT_COIL as u16), &be16(0xFF00)]));
+    drop(a);
+    drop(TcpStream::connect(&addr).unwrap()); // wakes the accept loop
+    group.join();
+
+    let srv = srv.into_inner().unwrap();
+    println!("== server log");
+    for line in &srv.log {
+        println!("{}", line);
+    }
+    println!("== counts");
+    for (key, n) in &srv.counts {
+        println!("{}: {}", key, n);
+    }
+    println!("== connections");
+    for (conn_no, n) in &srv.conns {
+        println!("conn {}: {} requests", conn_no, n);
+    }
+    println!("== tables");
+    println!("coils   {}", bits_text(&srv.coils));
+    let first: Vec<String> = srv.holding[..8].iter().map(|v| format!("{:04x}", v)).collect();
+    println!("holding {}", first.join(" "));
+    let second: Vec<String> = srv.holding[16..24].iter().map(|v| format!("{:04x}", v)).collect();
+    println!("holding {}", second.join(" "));
+}

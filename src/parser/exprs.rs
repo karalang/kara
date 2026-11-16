@@ -689,16 +689,22 @@ impl super::Parser {
                             // directly after `.` (design.md §3): `ptr.const(x)`,
                             // `ptr.mut(x)`, `opt.or(alt)` (B-2026-07-14-6),
                             // `handle.await`.
-                            let method = self.expect_method_name()?;
+                            let mut method = self.expect_method_name()?;
                             self.reject_method_turbofish(lhs.span);
+                            let rust_shutdown = method == "shutdown"
+                                && self.reject_rust_shutdown_call(self.tokens[self.pos - 1].span);
                             let turbofish = None;
                             if self.check(&Token::LeftParen) {
                                 // Method call
                                 let name_span = self.tokens[self.pos - 1].span;
                                 self.advance();
-                                let args = self.parse_arg_list()?;
+                                let mut args = self.parse_arg_list()?;
                                 self.expect(&Token::RightParen)?;
                                 let args_close_span = self.tokens[self.pos - 1].span;
+                                if rust_shutdown {
+                                    method = "shutdown_write".to_string();
+                                    args.clear();
+                                }
                                 if method == "range" && args.len() == 1 {
                                     self.note_range_arg(name_span, &args[0].value, args_close_span);
                                 }

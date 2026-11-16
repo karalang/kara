@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 356 |
+| diagnostics | 357 |
 | false-positive | 224 |
-| missing-feature | 172 |
+| missing-feature | 174 |
 | perf | 169 |
 | miscompile | 70 |
 | soundness | 70 |
 | other | 50 |
 | run-vs-build | 42 |
+| crash | 33 |
 | codegen-gap | 32 |
-| crash | 32 |
 | leak | 4 |
 | use-after-free | 3 |
 | double-free | 2 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 499 |
+| typecheck | 501 |
 | mir-llvm | 240 |
-| mir | 214 |
+| mir | 217 |
 | cli | 145 |
-| parser | 90 |
+| parser | 91 |
 | ownership | 88 |
 | interp | 64 |
 | runtime | 50 |
@@ -110,6 +110,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
+| B-2026-11-16-170 | 2026-11-16 | parser | low | Rust's `use std::io::{Read, Write};` and `Shutdown` in a `std::net` import mend to imports of names Kāra does not have, with no fix, and `sock.shutdown(Shutdown::Write)` ends at "undefined name 'Shutdown'" | — |
+| B-2026-11-16-171 | 2026-11-16 | mir | medium | An array literal of arrays passed as a `Slice[Slice[u8]]` (`pdu([[5], be16(n)])`) passes `karac check` and stops at "invalid MIR: array element of the wrong type" | — |
+| B-2026-11-16-172 | 2026-11-16 | typecheck+mir | low | Rust's `parts.concat()` over a `Slice[Slice[u8]]` takes the deprecated `Display` join, whose fix writes `join("")`, which does not check (`Slice[u8]` is not `Display`) | — |
+| B-2026-11-16-173 | 2026-11-16 | typecheck+mir | low | `concat()` over a sequence of arrays (`Vec[Array[u8, 2]]`) still takes the deprecated `Display` join, where Rust's flattens; remainder of B-2026-11-16-172 | — |
 
 ### Relocated
 

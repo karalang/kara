@@ -9050,6 +9050,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return self.arg_operand(e, want);
         }
+        // An array or `Vec` stored where a `Slice` is wanted (an element of
+        // `[[5], be16(n)]` passed as a `Slice[Slice[u8]]`) is viewed, as it
+        // would be at a parameter (B-2026-11-16-171).
+        if matches!(self.tys().tcx().kind(want), HK::Slice { .. })
+            && matches!(
+                self.tys().tcx().kind(et),
+                HK::Array { .. }
+                    | HK::Intrinsic {
+                        kind: IntrinsicKind::Vec,
+                        ..
+                    }
+            )
+        {
+            return self.arg_operand(e, want);
+        }
         if !matches!(self.tys().tcx().kind(want), HK::Ref(_) | HK::MutRef(_))
             && matches!(self.tys().tcx().kind(et), HK::Ref(_) | HK::MutRef(_))
         {
@@ -23257,17 +23272,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => return Ok(false),
         };
         let (_, elem) = self.strip_ty_full(elem);
-        let item = match self.tys().tcx().kind(elem) {
+        // A sequence of `Slice`s flattens too (Rust's `[&[u8]].concat()`,
+        // B-2026-11-16-172).
+        let (item, of_slices) = match self.tys().tcx().kind(elem) {
             HK::Intrinsic {
                 kind: IntrinsicKind::Vec,
                 args,
-            } => self.tys().tcx().list(args)[0],
+            } => (self.tys().tcx().list(args)[0], false),
+            HK::Slice { elem: item, .. } => (item, true),
             _ => return Ok(false),
         };
-        let helper = if slice {
-            "slice_concat_vecs"
-        } else {
-            "vec_concat_vecs"
+        let helper = match (slice, of_slices) {
+            (true, false) => "slice_concat_vecs",
+            (false, false) => "vec_concat_vecs",
+            (true, true) => "slice_concat_slices",
+            (false, true) => "vec_concat_slices",
         };
         let Some(d) = self.lcx.defs.lookup(0, helper) else {
             return self
@@ -30152,6 +30171,8 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "__select_unpredictable",
     "vec_concat_vecs",
     "slice_concat_vecs",
+    "vec_concat_slices",
+    "slice_concat_slices",
     "deque_contains_str",
     "deque_contains_slice",
     "map_eq",

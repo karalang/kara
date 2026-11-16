@@ -38,6 +38,18 @@ pub(crate) fn vec_items(elem: &Type) -> Option<Type> {
     }
 }
 
+/// The item type of a `Slice` element, through a borrow.
+fn slice_items(elem: &Type) -> Option<Type> {
+    let ty = match elem {
+        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+        t => t,
+    };
+    match ty {
+        Type::Slice { element, .. } => Some((**element).clone()),
+        _ => None,
+    }
+}
+
 impl TypeChecker<'_> {
     /// `xs.concat()` over `Vec`s: the flattened `Vec`. Over elements that
     /// are neither sequences nor text, the deprecation of the `Display`
@@ -65,7 +77,9 @@ impl TypeChecker<'_> {
         if own {
             return None;
         }
-        if let Some(items) = vec_items(&elem) {
+        // A sequence of `Slice`s flattens as one of `Vec`s does (Rust's
+        // `[&[u8]].concat()`, B-2026-11-16-172).
+        if let Some(items) = vec_items(&elem).or_else(|| slice_items(&elem)) {
             return Some(Type::Named {
                 name: "Vec".to_string(),
                 args: vec![items],

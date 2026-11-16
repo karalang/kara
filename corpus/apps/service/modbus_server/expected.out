@@ -1,0 +1,124 @@
+== plc
+plc: t=0001 u=1 read coils 0+20 -> bits 10010010010010010010 (3 bytes)
+plc: t=0002 u=1 read inputs 0+10 -> bits 1001010010 (2 bytes)
+plc: t=0003 u=1 read holding 0+5 -> regs 0000 0064 00c8 012c 0190
+plc: t=0004 u=1 read input regs 0+4 -> regs 1000 1003 1006 1009
+plc: t=0005 u=1 write coil 5 on -> echo addr=5 value=ff00
+plc: t=0006 u=1 write coil 6 = 1234 -> exception 03 illegal data value
+plc: t=0007 u=1 read coils 0+10 -> bits 1001011001 (2 bytes)
+plc: t=0008 u=1 write holding 3 -> echo addr=3 value=beef
+plc: t=0009 u=1 read holding 0+5 -> regs 0000 0064 00c8 beef 0190
+plc: t=000a u=1 write coils 10+10 -> wrote addr=10 qty=10
+plc: t=000b u=1 read coils 8+16 -> bits 0100110101100100 (2 bytes)
+plc: t=000c u=1 write holding 20+3 -> wrote addr=20 qty=3
+plc: t=000d u=1 read holding 18+6 -> regs 0708 076c 0001 0002 0003 08fc
+plc: t=000e u=1 mask holding 3 -> masked addr=3 and=f0f2 or=0025
+plc: t=000f u=1 read holding 3+1 -> regs b0e7
+plc: t=0010 u=1 read 0+4, write 1+2 -> regs 0000 1111 2222 b0e7
+== edge
+edge: t=0001 u=1 read coils 0+0 -> exception 03 illegal data value
+edge: t=0002 u=1 read coils 0+2001 -> exception 03 illegal data value
+edge: t=0003 u=1 read coils 60+10 -> exception 02 illegal data address
+edge: t=0004 u=1 read inputs 31+1 -> bits 0 (1 bytes)
+edge: t=0005 u=1 read holding 0+126 -> exception 03 illegal data value
+edge: t=0006 u=1 read holding 30+5 -> exception 02 illegal data address
+edge: t=0007 u=1 read input regs 15+1 -> regs 102d
+edge: t=0008 u=1 function 07 -> exception 01 illegal function
+edge: t=0009 u=1 encapsulated 0d -> exception 01 illegal function
+edge: t=000a u=1 device basic -> device code=1 0=Kara Industrial, 1=KX-485, 2=v0.8.2
+edge: t=000b u=1 device object 1 -> device code=4 1=KX-485
+edge: t=000c u=1 device object 9 -> exception 02 illegal data address
+edge: t=000d u=1 device code 2 -> exception 03 illegal data value
+edge: t=000e u=7 read input regs 0+2 -> exception 0b gateway target failed to respond
+edge: t=000f u=255 read input regs 0+2 -> regs 1000 1003
+edge: t=0010 u=1 write coils, short count -> exception 03 illegal data value
+edge: t=0011 u=1 short read -> exception 03 illegal data value
+edge: t=0012 u=1 write holding 40 -> exception 02 illegal data address
+edge: t=0013 u=1 write coil 64 -> exception 02 illegal data address
+== pipeline
+pipeline: t=0010 u=1 burst read holding 0+2 -> regs 0000 1111
+pipeline: t=0014 u=1 burst read holding 4+2 -> regs 0190 01f4
+pipeline: t=0018 u=1 burst read holding 8+2 -> regs 0320 0384
+pipeline: t=0002 u=1 after a foreign protocol id -> regs 1003
+== broken
+broken: length 300 -> closed by server
+torn: half a frame -> closed by server
+torn: three bytes -> closed by server
+== admin
+admin: t=0001 u=1 write coil 63 on -> echo addr=63 value=ff00
+== server log
+conn 1: t=0001 u=1 fc=01 -> ok
+conn 1: t=0002 u=1 fc=02 -> ok
+conn 1: t=0003 u=1 fc=03 -> ok
+conn 1: t=0004 u=1 fc=04 -> ok
+conn 1: t=0005 u=1 fc=05 -> ok
+conn 1: t=0006 u=1 fc=05 -> exception 03
+conn 1: t=0007 u=1 fc=01 -> ok
+conn 1: t=0008 u=1 fc=06 -> ok
+conn 1: t=0009 u=1 fc=03 -> ok
+conn 1: t=000a u=1 fc=0f -> ok
+conn 1: t=000b u=1 fc=01 -> ok
+conn 1: t=000c u=1 fc=10 -> ok
+conn 1: t=000d u=1 fc=03 -> ok
+conn 1: t=000e u=1 fc=16 -> ok
+conn 1: t=000f u=1 fc=03 -> ok
+conn 1: t=0010 u=1 fc=17 -> ok
+conn 2: t=0001 u=1 fc=01 -> exception 03
+conn 2: t=0002 u=1 fc=01 -> exception 03
+conn 2: t=0003 u=1 fc=01 -> exception 02
+conn 2: t=0004 u=1 fc=02 -> ok
+conn 2: t=0005 u=1 fc=03 -> exception 03
+conn 2: t=0006 u=1 fc=03 -> exception 02
+conn 2: t=0007 u=1 fc=04 -> ok
+conn 2: t=0008 u=1 fc=07 -> exception 01
+conn 2: t=0009 u=1 fc=2b -> exception 01
+conn 2: t=000a u=1 fc=2b -> ok
+conn 2: t=000b u=1 fc=2b -> ok
+conn 2: t=000c u=1 fc=2b -> exception 02
+conn 2: t=000d u=1 fc=2b -> exception 03
+conn 2: t=000e u=7 fc=04 -> exception 0b
+conn 2: t=000f u=255 fc=04 -> ok
+conn 2: t=0010 u=1 fc=0f -> exception 03
+conn 2: t=0011 u=1 fc=03 -> exception 03
+conn 2: t=0012 u=1 fc=06 -> exception 02
+conn 2: t=0013 u=1 fc=05 -> exception 02
+conn 3: t=0010 u=1 fc=03 -> ok
+conn 3: t=0014 u=1 fc=03 -> ok
+conn 3: t=0018 u=1 fc=03 -> ok
+conn 3: t=0001 protocol id 5, dropped
+conn 3: t=0002 u=1 fc=04 -> ok
+conn 4: bad length 300, closing
+conn 5: truncated frame t=0001 (2 of 5 bytes)
+conn 6: truncated header (3 bytes)
+conn 7: t=0001 u=1 fc=05 -> ok
+== counts
+bad length: 1
+dropped: 1
+exception 01: 2
+exception 02: 5
+exception 03: 7
+exception 0b: 1
+fc 01: 6
+fc 02: 2
+fc 03: 10
+fc 04: 5
+fc 05: 4
+fc 06: 2
+fc 07: 1
+fc 0f: 2
+fc 10: 1
+fc 16: 1
+fc 17: 1
+fc 2b: 5
+== connections
+conn 1: 16 requests
+conn 2: 19 requests
+conn 3: 4 requests
+conn 4: 0 requests
+conn 5: 0 requests
+conn 6: 0 requests
+conn 7: 1 requests
+== tables
+coils   1001011001001101011001001001001001001001001001001001001001001001
+holding 0000 1111 2222 b0e7 0190 01f4 0258 02bc
+holding 0640 06a4 0708 076c 0001 0002 0003 08fc

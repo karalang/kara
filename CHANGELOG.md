@@ -180,6 +180,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `concat()` flattens a sequence of `Slice`s as it does one of `Vec`s:
+  Rust's `parts.concat()` over a `Slice[Slice[u8]]` gives the `Vec[u8]` of
+  every part's bytes, where it took the deprecated `Display` join and its
+  fix to `join("")` did not check (B-2026-11-16-172).
+
 - A function taking a `frozen` handle may `match` on an `Option` field of
   it, `mut` or not: `match n.next { Some(m) => walk(m), None => 0 }` walks
   a frozen linked list as `for k in n.kids` walks a tree, and `m` is a
@@ -533,6 +538,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `fn other(ld: i64)` made `ld()` in `main` an undefined name. The import
   now stays bound wherever no such local is in scope, and the local stays
   the local where it is (B-2026-11-16-6).
+- An array literal whose elements are arrays or `Vec`s, passed where a
+  `Slice[Slice[T]]` goes (`pdu([[5], be16(n)])`), views each element as a
+  call argument does: it passed `karac check` and stopped at "invalid MIR:
+  array element of the wrong type" (B-2026-11-16-171).
 - The playground's checker, which runs without the library, accepts a
   trait default method that calls `self.req()` in an impl for one
   instantiation of a generic type (`impl Tr for Pr[i64]`), as `karac check`
@@ -1309,6 +1318,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Rust ports found by the modbus_server app: `use std::io::{Read, Write};`
+  (and `BufRead`, `Seek`) is deleted, since Kāra's `read`, `write_all` and
+  `read_line` are methods of the handle with no trait to import, and
+  `Shutdown` leaves a `std::net` import, the rest of the group kept;
+  `stream.shutdown(Shutdown::Write)` becomes `stream.shutdown_write()`
+  (B-2026-11-16-170).
 - Rust ports found by the coap_server app: `handle.join().unwrap()` on a
   `TaskHandle` drops the `.unwrap()`, since `join` returns the task's result
   itself (B-2026-11-15-150); `it.collect::<Vec<_>>().join(..)` gets the
