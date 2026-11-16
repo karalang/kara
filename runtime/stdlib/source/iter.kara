@@ -897,18 +897,19 @@ impl[I: Iterator, F: MutFn(own I.Item) -> U, U: Iterator] Iterator for IterFlatM
 
     fn next(mut ref self) -> Option[U.Item] {
         loop {
-            match self.cur.take() {
-                Some(inner) => {
-                    let mut inner = inner;
-                    match inner.next() {
-                        Some(x) => {
-                            self.cur = Some(inner);
-                            return Some(x);
-                        }
-                        None => {}
-                    }
-                }
-                None => {}
+            // The inner iterator advances in place: moving it out of
+            // `cur` and back for every item costs a copy of the whole
+            // adaptor each time (B-2026-11-14-62). An exhausted one is
+            // dropped before the next is made, as before.
+            let exhausted = match self.cur {
+                Some(mut ref inner) => match inner.next() {
+                    Some(x) => return Some(x),
+                    None => true,
+                },
+                None => false,
+            };
+            if exhausted {
+                self.cur = None;
             }
             match self.it.next() {
                 Some(x) => self.cur = Some((self.f)(x)),
@@ -928,18 +929,19 @@ impl[I: Iterator[Item = U], U: Iterator] Iterator for IterFlatten[I, U] {
 
     fn next(mut ref self) -> Option[U.Item] {
         loop {
-            match self.cur.take() {
-                Some(inner) => {
-                    let mut inner = inner;
-                    match inner.next() {
-                        Some(x) => {
-                            self.cur = Some(inner);
-                            return Some(x);
-                        }
-                        None => {}
-                    }
-                }
-                None => {}
+            // The inner iterator advances in place: moving it out of
+            // `cur` and back for every item costs a copy of the whole
+            // adaptor each time (B-2026-11-14-62). An exhausted one is
+            // dropped before the next is made, as before.
+            let exhausted = match self.cur {
+                Some(mut ref inner) => match inner.next() {
+                    Some(x) => return Some(x),
+                    None => true,
+                },
+                None => false,
+            };
+            if exhausted {
+                self.cur = None;
             }
             match self.it.next() {
                 Some(x) => self.cur = Some(x),

@@ -255,40 +255,46 @@ pub struct Addr {
 }
 
 /// The field and element indices of an [`Addr`] below its root. Nearly
-/// every path is one or two steps long, so those are held inline: the
+/// every path is a few steps long, so those are held inline: the
 /// interpreter makes an address on most steps, and a heap allocation for
-/// each was its largest single cost.
+/// each was its largest single cost. An iterator adaptor's state reached
+/// through a `for` loop's iterator is three or four steps down
+/// (`count`'s `self.it` holding a `flat_map`'s current inner `map`'s
+/// range), so five steps fit, as `u32`s, in the same 24 bytes that held
+/// two `u64`s (B-2026-11-14-62).
 #[derive(Clone)]
 enum Path {
-    Inline(u8, [u64; 2]),
+    Inline(u8, [u32; PATH_INLINE]),
     // Boxed so the long form costs one word and `Path` stays 24 bytes.
     #[allow(clippy::box_collection)]
     Heap(Box<Vec<u64>>),
 }
 
+const PATH_INLINE: usize = 5;
+
+const _: () = assert!(std::mem::size_of::<Path>() <= 24);
+
 impl Path {
     fn new() -> Path {
-        Path::Inline(0, [0; 2])
+        Path::Inline(0, [0; PATH_INLINE])
     }
 
     fn from_slice(s: &[u64]) -> Path {
-        if s.len() <= 2 {
-            let mut a = [0; 2];
-            a[..s.len()].copy_from_slice(s);
-            Path::Inline(s.len() as u8, a)
-        } else {
-            Path::Heap(Box::new(s.to_vec()))
+        let mut p = Path::new();
+        for &i in s {
+            p.push(i);
         }
+        p
     }
 
     fn push(&mut self, i: u64) {
         match self {
-            Path::Inline(n, a) if (*n as usize) < a.len() => {
-                a[*n as usize] = i;
+            Path::Inline(n, a) if (*n as usize) < PATH_INLINE && i <= u64::from(u32::MAX) => {
+                a[*n as usize] = i as u32;
                 *n += 1;
             }
             Path::Inline(n, a) => {
-                let mut v = a[..*n as usize].to_vec();
+                let mut v: Vec<u64> = a[..*n as usize].iter().map(|&x| u64::from(x)).collect();
                 v.push(i);
                 *self = Path::Heap(Box::new(v));
             }
@@ -301,42 +307,47 @@ impl Path {
             Path::Inline(0, _) => None,
             Path::Inline(n, a) => {
                 *n -= 1;
-                Some(a[*n as usize])
+                Some(u64::from(a[*n as usize]))
             }
             Path::Heap(v) => v.pop(),
         }
     }
-}
 
-impl std::ops::Deref for Path {
-    type Target = [u64];
-
-    fn deref(&self) -> &[u64] {
+    #[inline(always)]
+    fn len(&self) -> usize {
         match self {
-            Path::Inline(n, a) => &a[..*n as usize],
-            Path::Heap(v) => v,
+            Path::Inline(n, _) => *n as usize,
+            Path::Heap(v) => v.len(),
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Step `k`, which must be below [`Path::len`].
+    #[inline(always)]
+    fn get(&self, k: usize) -> u64 {
+        match self {
+            Path::Inline(_, a) => u64::from(a[k]),
+            Path::Heap(v) => v[k],
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = u64> + '_ {
+        (0..self.len()).map(|k| self.get(k))
     }
 }
 
 impl PartialEq for Path {
     fn eq(&self, other: &Path) -> bool {
-        **self == **other
+        self.len() == other.len() && self.iter().eq(other.iter())
     }
 }
 
 impl fmt::Debug for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
-    }
-}
-
-impl<'p> IntoIterator for &'p Path {
-    type Item = &'p u64;
-    type IntoIter = std::slice::Iter<'p, u64>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
     }
 }
 
@@ -13988,7 +13999,8 @@ impl<'a> Interp<'a> {
 
     fn slot_mut(&mut self, addr: &Addr) -> R<&mut Value> {
         let mut v = self.root_mut(&addr.root)?;
-        for &i in &addr.path {
+        for k in 0..addr.path.len() {
+            let i = addr.path.get(k);
             v = match v {
                 Value::Agg(fs) | Value::Variant(_, fs) => {
                     let n = fs.len();
@@ -14057,7 +14069,8 @@ impl<'a> Interp<'a> {
     /// alongside `self` and is cloned only when it is kept.
     fn slot_ref(&self, addr: &Addr) -> R<&Value> {
         let mut v = self.root_ref(&addr.root)?;
-        for &i in &addr.path {
+        for k in 0..addr.path.len() {
+            let i = addr.path.get(k);
             // A path made field by field (`Addr::child`) can run through a
             // boxed field, which reads through as `resolve` would start at
             // its box ([`Interp::slot_mut`] refuses it).
@@ -14375,7 +14388,9 @@ impl<'a> Interp<'a> {
                 }
                 ty = tys.pointee(ty)?;
                 depth = a.path.len();
-                path[..depth].copy_from_slice(&a.path);
+                for (d, i) in path.iter_mut().zip(a.path.iter()) {
+                    *d = i;
+                }
                 elems = &elems[1..];
                 a.root.clone()
             }

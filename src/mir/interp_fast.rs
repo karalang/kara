@@ -170,6 +170,18 @@ pub(super) enum Op {
     RefFieldDeref { dst: u32, src: u32, field: u32 },
     /// `dst = discriminant(src)` of an enum local held in place.
     Discr { dst: u32, src: u32 },
+    /// `dst = discriminant((*src))`: of the enum a local reference points
+    /// at, as `match self.cur { .. }` reads it in an adaptor's `next`.
+    DiscrDeref { dst: u32, src: u32 },
+    /// `dst = &((*src) as variant).field` (or `&mut`): a reference into
+    /// the payload of the enum a local reference points at, which a
+    /// `match` on a `mut ref` scrutinee binds (B-2026-11-14-62).
+    RefVariantField {
+        dst: u32,
+        src: u32,
+        variant: u32,
+        field: u32,
+    },
     /// `dst = copy (src as variant).field`, a scalar or a reference.
     VariantField {
         dst: u32,
@@ -799,6 +811,21 @@ impl<'a> Interp<'a> {
     /// Whether `ty` is a reference to a tuple, a struct or a closure
     /// environment: an aggregate held in place (not behind a `shared`
     /// handle, whose fields the general step reaches through the box).
+    /// A reference to an enum (not a `shared` one, whose value is
+    /// behind a handle: the general step follows it).
+    fn enum_behind(&self, ty: Ty) -> bool {
+        let Some(to) = self.tys.pointee(ty) else {
+            return false;
+        };
+        match self.tys.kind(to) {
+            TyKind::Adt(a) => {
+                self.tys.adt(a).is_enum
+                    && !matches!(self.tys.tcx().kind(to), crate::ty::TyKind::Shared { .. })
+            }
+            _ => false,
+        }
+    }
+
     fn aggregate_behind(&self, ty: Ty) -> bool {
         let Some(to) = self.tys.pointee(ty) else {
             return false;
@@ -1115,6 +1142,27 @@ impl<'a> Interp<'a> {
                     field: f.0,
                 }
             }
+            Rvalue::Ref(_, q)
+                if matches!(
+                    q.projection.as_slice(),
+                    [ProjElem::Deref, ProjElem::Downcast(_), ProjElem::Field(..)]
+                ) =>
+            {
+                let [ProjElem::Deref, ProjElem::Downcast(v), ProjElem::Field(f, _)] =
+                    q.projection.as_slice()
+                else {
+                    return None;
+                };
+                if !self.enum_behind(body.local(q.local).ty) {
+                    return None;
+                }
+                Op::RefVariantField {
+                    dst,
+                    src: q.local.0,
+                    variant: v.0,
+                    field: f.0,
+                }
+            }
             Rvalue::Ref(_, q) => {
                 if !self.aggregate_behind(body.local(q.local).ty) {
                     return None;
@@ -1135,6 +1183,15 @@ impl<'a> Interp<'a> {
                         }
                     }
                     _ => return None,
+                }
+            }
+            Rvalue::Discriminant(q)
+                if matches!(q.projection.as_slice(), [ProjElem::Deref])
+                    && self.enum_behind(body.local(q.local).ty) =>
+            {
+                Op::DiscrDeref {
+                    dst,
+                    src: q.local.0,
                 }
             }
             Rvalue::Discriminant(q) if q.projection.is_empty() => {
@@ -1869,6 +1926,48 @@ impl<'a> Interp<'a> {
                     return false;
                 };
                 let r = Value::Ref(b.clone());
+                self.set_local(dst, r);
+                true
+            }
+            Op::DiscrDeref { dst, src } => {
+                let Some(Value::Ref(a)) =
+                    self.frames.last().and_then(|f| f.locals.get(src as usize))
+                else {
+                    return false;
+                };
+                let v = match self.slot_ref(a) {
+                    Ok(&Value::Variant(v, _)) => v,
+                    _ => return false,
+                };
+                Value::overwrite(&mut self.locals()[dst as usize], Value::Int(i128::from(v)));
+                true
+            }
+            Op::RefVariantField {
+                dst,
+                src,
+                variant,
+                field,
+            } => {
+                let Some(Value::Ref(a)) =
+                    self.frames.last().and_then(|f| f.locals.get(src as usize))
+                else {
+                    return false;
+                };
+                // As the general step: the variant must be the one held,
+                // and a boxed field's value is in its box.
+                let r = match self.slot_ref(a) {
+                    Ok(Value::Variant(cur, fs)) if *cur == variant => {
+                        match fs.get(field as usize) {
+                            Some(Value::Boxed(b)) => Value::Ref(Addr {
+                                root: Root::Heap(*b),
+                                path: Path::new(),
+                            }),
+                            Some(Value::Uninit) | None => return false,
+                            Some(_) => Value::Ref(a.child(u64::from(field))),
+                        }
+                    }
+                    _ => return false,
+                };
                 self.set_local(dst, r);
                 true
             }
