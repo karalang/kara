@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 356 |
-| false-positive | 223 |
+| false-positive | 224 |
 | missing-feature | 172 |
 | perf | 169 |
 | miscompile | 70 |
@@ -85,7 +85,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 64 |
 | runtime | 50 |
 | effect | 35 |
-| resolver | 30 |
+| resolver | 31 |
 | codegen | 22 |
 | other | 8 |
 | autopar | 5 |
@@ -1338,6 +1338,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-3 | mir | high | `Vec.filled`, `resize` and `fill` never ran an element type's user `Clone` unless the program wrote `.clone()` somewhere: the copies were field by fi… | f8fb1c6a10 |
 | B-2026-11-16-4 | mir | low | `windows(0)` / `chunks(0)` panicked with the message "explicit panic", and a float `Map`/`Set` key's diagnostic suggested `to_bits()` where design.md… | f8fb1c6a10 |
 | B-2026-11-16-5 | interp+mir-llvm | low | base64_decode and base64url_decode report more than two trailing `=` (`Z===`, `====`, `Zm9v====`) as InvalidByte at the third `=`, where docs/library… | 9cb3bbd69e |
+| B-2026-11-16-6 | resolver | high | In a package, a local binding anywhere in a file with the name of a file-level import erases that import for the whole file: `import a.load as ld;` w… | d1d8bdcc45 |
 
 </details>
 
