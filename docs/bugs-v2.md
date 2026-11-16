@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-200 | 2026-11-16 | resolver | low | An import of a module that only other platforms' files define (poller_macos.kara alone, on Linux) was a bare E0112 unknown module, without design.md § 4's note listing the platforms that define it | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
-| B-2026-11-16-205 | 2026-11-16 | typecheck | low | `karac fix` deletes `as u64` from `ans * i as u64` over a `usize` `i` (lossless_cast) in the same round that makes `i` an `i64` (`n as usize` to `n as i64`), so the program stops checking with no fix | — |
 
 ### Relocated
 
@@ -1388,6 +1387,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-195 | interp+mir-llvm | medium | A loan released into a different pool (`p.release(conn_from_q)`) is dropped but still counts toward its own pool's max_connections, so that pool lose… | 4ade899ce2 |
 | B-2026-11-16-203 | typecheck | medium | The pre-v1 `r.read_to_string().unwrap_or(x)` on a child's pipe left "expects 1 argument(s), found 0" with no machine fix, plus an `i64` cascade (`no… | fa56486e69 |
 | B-2026-11-16-204 | typecheck | low | The pre-v1 `ws.recv_text(mut buf)` said only "no method 'recv_text' on type 'WebSocket'", with nothing naming `recv()` and `WsMessage` | fa56486e69 |
+| B-2026-11-16-205 | typecheck | low | `karac fix` deletes `as u64` from `ans * i as u64` over a `usize` `i` (lossless_cast) in the same round that makes `i` an `i64` (`n as usize` to `n a… | 13f42dda1f |
 
 </details>
 
