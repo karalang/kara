@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 362 |
-| false-positive | 225 |
+| diagnostics | 364 |
+| false-positive | 226 |
 | perf | 175 |
 | missing-feature | 175 |
 | soundness | 72 |
 | miscompile | 70 |
-| other | 51 |
+| other | 53 |
 | run-vs-build | 42 |
 | crash | 34 |
 | codegen-gap | 32 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 509 |
-| mir-llvm | 249 |
-| mir | 219 |
+| typecheck | 510 |
+| mir-llvm | 252 |
+| mir | 221 |
 | cli | 145 |
 | parser | 91 |
 | ownership | 88 |
-| interp | 67 |
+| interp | 70 |
 | runtime | 50 |
 | effect | 35 |
 | resolver | 31 |
@@ -1360,6 +1360,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-182 | typecheck | medium | A `par` block written as statements (`par { a(); b(); }`, `par { let _a = read(c); let _b = read(c); }`) is refused (core-semantics §11.1, E0520) wit… | 7a81dbfcf1 |
 | B-2026-11-16-183 | typecheck | medium | A `let` that keeps a view of a temporary (`let req: Vec[Str] = line.substring(a, b).split(" ").collect();`, core-semantics §5.5) is refused with "Bin… | 7a81dbfcf1 |
 | B-2026-11-16-184 | typecheck | low | The legacy `ExitStatus.code` field (`if st.code == 0`) is refused with "`code` is a method now .. | 7a81dbfcf1 |
+| B-2026-11-16-40 | typecheck | low | `flatten` over `Option` or `Result` items hints, and `karac fix` writes, `.flat_map(\|v\| v.into_iter())` / `.flat_map(\|v\| v.iter())`, but neither type… | 7040092362 |
+| B-2026-11-16-41 | mir+interp+mir-llvm | low | `step_by` with a step of 0 or below stepped by 1 going forward, but `rev` panicked "division by zero" (step 0) or stepped by the magnitude (`(0..5).s… | 2ba6f53155 |
+| B-2026-11-16-42 | mir | medium | A closure argument's captures were held by any call result or `mut ref` pointee that could hold a reference: `let f = it.find(\|z\| *z == t); t = 3; us… | 31d41b74ba |
+| B-2026-11-16-43 | interp+mir-llvm | low | `u8.parse("-0")` (any unsigned type, and `from_str_radix`) was `Err(InvalidDigit)`; review ruled minus zero is zero, so it is `Ok(0)`, as `i64.parse(… | 331a01c410 |
+| B-2026-11-16-44 | interp+mir-llvm | low | `char.from_digit`'s panic for a radix outside 2..=36 said "the radix is not in 2..=36" without the radix, where `to_digit` and `is_digit` print it ("… | 331a01c410 |
 
 </details>
 
