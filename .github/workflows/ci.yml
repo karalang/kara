@@ -513,9 +513,27 @@ jobs:
       # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
       # archive half of the B-2026-07-28-1 vacuous-pass hole).
       KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
+      # The target list outgrew the runner's disk: run 43931012258 at
+      # baefa43c79 died linking with "No space left on device" / "ld
+      # terminated with signal 7". CLAUDE.md § "A red gate with no named test
+      # is probably a full disk": the --features llvm leg fits without
+      # debuginfo (each backend test binary is ~400 MB with it).
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_DEV_STRIP: debuginfo
+      CARGO_PROFILE_TEST_STRIP: debuginfo
 
     steps:
       - uses: actions/checkout@v4
+
+      # The runner's preinstalled toolchains this job never uses, as the
+      # `test` job frees them.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
 
       # inkwell `llvm22-1-prefer-dynamic` + llvm-sys `221` → LLVM 22, linked
       # dynamically (libLLVM-22.so must be present at build AND run time).
