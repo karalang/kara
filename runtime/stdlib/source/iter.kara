@@ -82,8 +82,12 @@ trait Iterator {
         IterEnumerate { it: self, i: 0 }
     }
 
-    /// The first item, then every `step`-th.
+    /// The first item, then every `step`-th. A step below 1 panics
+    /// (B-2026-11-16-41).
     fn step_by(own self, step: i64) -> IterStepBy[Self] {
+        if step <= 0 {
+            panic("step_by: step must be positive");
+        }
         IterStepBy { it: self, step: step, first: true }
     }
 

@@ -1,10 +1,11 @@
 source = "tests/interpreter/iter_range.rs::test_iter_step_by_zero_clamps_to_one"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "panic:101"
+exit = 101
 tags = []
 class = "a"
-expected_from = "assert"
+expected_from = "decision"
+note = "step_by with a step below 1 panics: review-thread ruling 2026-11-16, B-2026-11-16-41 (was: clamps to 1; the directory keeps its legacy name)"
 legacy_backend = "legacy-interp"
 legacy_exit = 0
 rules = []

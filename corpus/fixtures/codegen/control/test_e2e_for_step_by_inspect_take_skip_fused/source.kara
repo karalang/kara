@@ -7,7 +7,7 @@ let mut b: i64 = 0;
 for x in v.iter().filter(|w| w % 2 == 0).step_by(2) { b = b + x; }
 println(b);
 let mut c: i64 = 0;
-for x in v.iter().step_by(0) { c = c + x; }
+for x in v.iter().step_by(1) { c = c + x; }
 println(c);
 let mut seen: i64 = 0;
 let mut d: i64 = 0;
@@ -36,7 +36,7 @@ println(v.iter().skip(5).sum());
 println(v.iter().take(3).fold(1, |p, q| p * q));
 println(v.iter().step_by(3).count());
 println(v.iter().skip(6).all(|w| w > 5));
-let sv: Vec[i64] = v.iter().step_by(0).collect();
+let sv: Vec[i64] = v.iter().step_by(1).collect();
 println(sv.len());
 let names: Vec[String] = [f"ant", f"bee", f"cat", f"dog", f"elk"];
 let mut s: String = f"";

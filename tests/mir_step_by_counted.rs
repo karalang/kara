@@ -4,7 +4,8 @@
 //! loop written with `while` (kata 1144). It is now a counting loop that
 //! steps while the distance left exceeds the step. Each line pairs the
 //! loop with the library iterator's own `collect`, so the two agree,
-//! including a step below 1, an empty range and the `i64` extremes.
+//! including an empty range and the `i64` extremes. A step below 1 panics
+//! on both paths (B-2026-11-16-41; tests/iterators_conformance.rs).
 
 use std::process::{Command, Stdio};
 
@@ -27,10 +28,6 @@ fn main() {
     let mut c: Vec[i64] = Vec.new();
     for i in (1..=n).step_by(n) { c.push(i); }
     println(f"{walk(c)} |{walk((1..=n).step_by(n).collect())}");
-    let mut d: Vec[i64] = Vec.new();
-    for i in (2..6).step_by(0) { d.push(i); }
-    for i in (2..5).step_by(-4) { d.push(i); }
-    println(f"{walk(d)} |{walk((2..6).step_by(0).collect())}{walk((2..5).step_by(-4).collect())}");
     let mut e: Vec[i64] = Vec.new();
     for i in (5..5).step_by(2) { e.push(i); }
     for i in (6..=5).step_by(2) { e.push(i); }
@@ -58,7 +55,6 @@ fn main() {
 const WANT: &str = r#" 0 3 6 9 | 0 3 6 9
  0 3 6 9 | 0 3 6 9
  1 | 1
- 2 3 4 5 2 3 4 | 2 3 4 5 2 3 4
  -1 -1 -1 -1 |
  9223372036854775800 9223372036854775803 9223372036854775806 9223372036854775800 9223372036854775807 -9223372036854775808 -1 9223372036854775806
  0 0 5 10 -14 0 5 10 0 5 10 0 5 10 0 5 10 0 5 10 0 5 10

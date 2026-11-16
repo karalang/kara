@@ -3642,6 +3642,11 @@ struct ParForTasks {
 /// The most tasks an auto-par loop's iterations are cut into (M4 item 14).
 const AUTO_PAR_TASKS: u128 = 16;
 
+/// The panic of `step_by` with a step below 1, which the counting loop of
+/// `for i in (a..b).step_by(k)` raises as the library does
+/// (`runtime/stdlib/source/iter.kara`; B-2026-11-16-41).
+const STEP_BY_NOT_POSITIVE: &str = "step_by: step must be positive";
+
 /// An auto-par loop's task (M4 item 14): a run of the loop's iterations,
 /// from the capture `lo` to the capture `hi`, with the loop's own pattern
 /// and body.
@@ -15548,8 +15553,8 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `for pattern in (start..end).step_by(step)` (`..=` when
     /// `inclusive`) over `i64`, with the bounds and the step evaluated: the
     /// values `start`, `start + step`, ... below (or up to) `end`, as the
-    /// library's `IterStepBy` yields them. A step below 1 steps by 1, as
-    /// its `advance_by(step - 1)` does. The step is taken only while the
+    /// library's `IterStepBy` yields them. A step below 1 panics, as the
+    /// library's `step_by` does. The step is taken only while the
     /// distance left to `end` exceeds it (or reaches it, inclusive), so
     /// the counter never steps past `end` or overflows.
     #[allow(clippy::too_many_arguments)]
@@ -15581,9 +15586,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         let small = self.temp(bool_t);
         self.assign(
             small,
-            Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(Place::local(step_t)), one.clone()),
+            Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(Place::local(step_t)), one),
         );
-        self.when(small, |b| b.assign(step_t, Rvalue::Use(one)));
+        // A step below 1 panics, as the library's `step_by` does
+        // (B-2026-11-16-41).
+        self.when(small, |b| {
+            let msg = b.static_str(STEP_BY_NOT_POSITIVE);
+            let unit = b.tys().unit();
+            let l = b.temp(unit);
+            b.call_native("panic_message", vec![msg], Place::local(l));
+            b.diverge(TerminatorKind::Abort {
+                reason: AbortReason::Panic,
+            });
+        });
         let step_u = self.temp(ut);
         self.assign(
             step_u,
