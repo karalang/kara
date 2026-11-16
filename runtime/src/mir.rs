@@ -3361,16 +3361,44 @@ pub unsafe extern "C" fn karac_mir_panic_info(out: *mut RawVec, which: i32) {
     unsafe { string_of(out, text.as_bytes()) };
 }
 
-/// A deadlock, which is a panic (core semantics §10.1): `error: deadlock:
-/// {what}` on standard error, the panic handler, then exit 101.
-pub(crate) fn deadlock(what: &str) -> ! {
-    if panic_begins() {
-        crate::mir_task::drain_logs();
-        karac_mir_flush();
-        eprintln!("error: deadlock: {what}");
-        run_panic_handler(&format!("deadlock: {what}"), "");
+/// The place of the root task's last wait that could not go on at once
+/// ([`karac_mir_wait_site`]): its `file:line:col` text and length, or
+/// null when codegen had none to give.
+static ROOT_WAIT_AT: std::sync::atomic::AtomicPtr<u8> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static ROOT_WAIT_LEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The root task (or a program with no executor) is about to wait at `at`
+/// (`file:line:col`, `n` bytes; null for no place): where a deadlock
+/// reports it waits (B-2026-11-16-202). Other tasks' waits are not kept.
+#[no_mangle]
+pub extern "C" fn karac_mir_wait_site(at: *const u8, n: u64) {
+    if !crate::mir_task::in_root() {
+        return;
     }
-    karac_mir_exit(101)
+    ROOT_WAIT_LEN.store(n, std::sync::atomic::Ordering::Relaxed);
+    ROOT_WAIT_AT.store(at.cast_mut(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A deadlock, which is a panic (core semantics §10.1), of kind
+/// `deadlock`: `runtime error: deadlock: {what}` and the root task's
+/// waiting place, as any panic reports one ([`karac_mir_abort_at`]), the
+/// panic record and handler, then exit 101 (B-2026-11-16-202).
+pub(crate) fn deadlock(what: &str) -> ! {
+    crate::mir_task::drain_logs();
+    karac_mir_flush();
+    let at = ROOT_WAIT_AT.load(std::sync::atomic::Ordering::Relaxed);
+    let n = if at.is_null() {
+        0
+    } else {
+        ROOT_WAIT_LEN.load(std::sync::atomic::Ordering::Relaxed)
+    };
+    set_panic_bytes(format!("deadlock: {what}").as_bytes());
+    karac_mir_panic_kind(9);
+    // SAFETY: `at` is null with `n` 0, or the place codegen gave
+    // `karac_mir_wait_site`, a constant of `n` bytes; the reason is a
+    // literal.
+    unsafe { karac_mir_abort_at(b"deadlock".as_ptr(), 8, at, n) }
 }
 
 /// An abort's message, marked when it was raised while a contract

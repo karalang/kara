@@ -369,6 +369,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_select_epoch,
         mir_task::karac_mir_ready_select,
         mir_task::karac_mir_select_park,
+        mir::karac_mir_wait_site,
         mir_io::karac_mir_file,
         fs_provider::karac_mir_fs_enter,
         fs_provider::karac_mir_fs_exit,

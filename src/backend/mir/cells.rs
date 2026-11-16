@@ -257,6 +257,7 @@ impl<'ctx> Cx<'ctx, '_> {
             self.rt("mutex_release", &[cell.into()])?;
             return Ok(Some(()));
         }
+        self.wait_site()?;
         self.rt("mutex_acquire", &[cell.into()])?;
         let d = self.place_ptr(dest)?;
         self.store(d, cell.into())?;

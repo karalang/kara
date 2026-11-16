@@ -895,6 +895,8 @@ fn run_with(
         error_trace: Vec::new(),
         error_trace_truncated: false,
         abort_reported: false,
+        user_call_span: crate::token::Span::default(),
+        root_wait_at: None,
         panic_info: None,
         inline_tasks: Vec::new(),
         root_unwind: false,
@@ -1424,6 +1426,13 @@ struct Interp<'a> {
     /// Whether an abort has been reported on stderr: the innermost frame
     /// reports it, where it happened.
     abort_reported: bool,
+    /// The place of the last terminator run in the program's own source:
+    /// inside a library body, the call into the library.
+    user_call_span: crate::token::Span,
+    /// Where the root task last waited for what it could not have at once,
+    /// in the program's source: the place a deadlock the executor finds
+    /// reports (B-2026-11-16-202).
+    root_wait_at: Option<crate::token::Span>,
     /// The panic the `#[panic_handler]` is running for, its message and
     /// location; set once, so the handler runs at most once.
     panic_info: Option<(String, String)>,
@@ -2215,7 +2224,15 @@ impl<'a> Interp<'a> {
                     env: Some((slot, frame_ty)),
                 })
             }
-            ("__ready", "") => self.ready(&args),
+            ("__ready", "") => {
+                let r = self.ready(&args)?;
+                // The root's wait is the place a deadlock reports
+                // (B-2026-11-16-202).
+                if self.cur_task == 0 && matches!(r, Value::Bool(false)) {
+                    self.root_wait_at = Some(self.user_call_span);
+                }
+                Ok(r)
+            }
             // The interpreter's descriptor calls complete when made.
             ("__io_again", "") => Ok(Value::Bool(false)),
             // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`).
@@ -2534,6 +2551,7 @@ impl<'a> Interp<'a> {
                 if *until < 0 {
                     return Err(self.deadlock(
                         "a `select` waits on channels that no running task sends to or receives from",
+                        true,
                     ));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -8717,7 +8735,9 @@ impl<'a> Interp<'a> {
                 self.held_locks.push(cell.clone());
                 Ok(Value::Ref(cell))
             }
-            ("acquire", Some(_)) => Err(self.deadlock("lock of a mutex that is already held")),
+            ("acquire", Some(_)) => {
+                Err(self.deadlock("lock of a mutex that is already held", true))
+            }
             (_, Some(i)) => {
                 self.held_locks.swap_remove(i);
                 Ok(Value::Unit)
@@ -13625,6 +13645,7 @@ impl<'a> Interp<'a> {
                     .finish_frame(body, &decoded.droppable)
                     .map_err(|s| locate(s, body, format!("{bb}[term]")));
             }
+            self.note_user_span(block.terminator.source_info.span);
             let next = match fast_block.term {
                 fast::Term::Native { ret } => self.native_call(body, &block.terminator.kind, ret),
                 fast::Term::Call {
@@ -13686,6 +13707,7 @@ impl<'a> Interp<'a> {
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
             self.tick()?;
+            self.note_user_span(block.terminator.source_info.span);
             let next = self.terminator(body, &block.terminator.kind, strict);
             let span = block.terminator.source_info.span;
             let next = self
@@ -13826,14 +13848,44 @@ impl<'a> Interp<'a> {
         let _ = self.call(crate::mir::lower::PANIC_THUNK, Vec::new());
     }
 
-    /// A deadlock is a panic (core semantics §10.1): the message the
-    /// compiled runtime prints, then exit 101 (B-2026-10-19-56).
-    fn deadlock(&mut self, what: &str) -> Stop {
+    /// Notes `span` as the last place run in the program's own source.
+    #[inline(always)]
+    fn note_user_span(&mut self, span: crate::token::Span) {
+        if self.program.user_source_len.is_none_or(|n| span.offset < n) {
+            self.user_call_span = span;
+        }
+    }
+
+    /// A deadlock is a panic (core semantics §10.1, B-2026-10-19-56) of
+    /// kind `deadlock`, reported as any panic is (B-2026-11-16-202): where
+    /// a frame is running, by the frame; found by the executor, which runs
+    /// outside every frame (`in_frame` false), here, at the place the root
+    /// task waits.
+    fn deadlock(&mut self, what: &str, in_frame: bool) -> Stop {
         if !self.abort_reported {
-            self.abort_reported = true;
-            self.drain_logs();
-            self.write_out(true, &format!("error: deadlock: {what}\n"));
-            self.run_panic_handler(format!("deadlock: {what}"), String::new());
+            self.panic_message = Some(format!("deadlock: {what}"));
+            self.panic_kind = Some(crate::mir::syntax::panic_kind_code("deadlock"));
+            if !in_frame {
+                self.abort_reported = true;
+                self.drain_logs();
+                let msg = self.abort_message(&AbortReason::Panic);
+                let at = self.root_wait_at.filter(|s| s.line > 0).map(|span| {
+                    let (file, line) = source_at(span.line);
+                    format!("{file}:{line}:{}", span.column)
+                });
+                let report = match &at {
+                    Some(at) => {
+                        let trace = self.error_trace_text(Some(at));
+                        format!("runtime error: {msg}\n  at {at}\n{trace}")
+                    }
+                    None => format!("runtime error: {msg}\n"),
+                };
+                self.write_out(true, &report);
+                if panic_record_asked() {
+                    self.write_out(true, &panic_record_line("deadlock"));
+                }
+                self.run_panic_handler(msg, at.unwrap_or_default());
+            }
         }
         if self.trace {
             self.events.push(Event::Abort(AbortReason::Panic));
@@ -16454,6 +16506,7 @@ impl<'a> Interp<'a> {
             (None, false) => {
                 return Err(self.deadlock(
                     "every task waits on a channel that no running task sends to or receives from",
+                    false,
                 ));
             }
             (None, true) => step,

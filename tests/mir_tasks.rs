@@ -525,9 +525,9 @@ fn main() {
 
 /// A deadlock is a panic (core semantics §10.1): a lone `recv` nothing can
 /// answer, and a second lock of a held `Mutex`, print the runtime's
-/// `error: deadlock:` line and exit 101 on both backends, after the output
-/// that came before (B-2026-10-19-56). The interpreter exited 3 with a run
-/// error.
+/// `runtime error: deadlock:` line, at the blocked operation's site
+/// (B-2026-11-16-202), and exit 101 on both backends, after the output that
+/// came before (B-2026-10-19-56). The interpreter exited 3 with a run error.
 #[test]
 fn mir_a_deadlock_is_a_panic_on_both_backends() {
     let recv = r#"
@@ -548,17 +548,20 @@ fn main() {
     println("unreached");
 }
 "#;
-    for (name, src, what) in [
-        ("deadlock-recv", recv, "error: deadlock: every task waits"),
+    for (name, src, line) in [
+        ("deadlock-recv", recv, 5),
         // A second `lock` waits for the holder, which is this task, so it
         // is the scheduler's every-task-waits deadlock on both backends.
-        ("deadlock-lock", lock, "error: deadlock: every task waits"),
+        ("deadlock-lock", lock, 7),
     ] {
+        let what = "runtime error: deadlock: every task waits";
+        let at = format!("main.kara:{line}:13\n");
         let (i, _) = interp_run(name, src);
         assert_eq!(i.status.code(), Some(101), "{name}");
         assert_eq!(String::from_utf8_lossy(&i.stdout), "start\n", "{name}");
         let err = String::from_utf8_lossy(&i.stderr);
         assert!(err.starts_with(what), "{name}: {err}");
+        assert!(err.contains(&at), "{name}: {err}");
         let Some((out, _)) = build_and_run(name, src) else {
             continue;
         };
@@ -566,6 +569,7 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), "start\n", "{name}");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.starts_with(what), "{name}: {err}");
+        assert!(err.contains(&at), "{name}: {err}");
     }
 }
 

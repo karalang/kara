@@ -1177,6 +1177,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("__select_park", "") if args.len() == 2 => {
                 let epoch = self.int_arg(&args[0])?;
                 let until = self.int_arg(&args[1])?;
+                self.wait_site()?;
                 self.rt("select_park", &[epoch.into(), until.into()])
             }
             ("sleep_ms", "") if args.len() == 1 => {

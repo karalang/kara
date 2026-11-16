@@ -2646,6 +2646,12 @@ impl Waiter {
 
 /// Records the running task's readiness: when `ready` is 0 the task is
 /// about to suspend on `wait`. Outside the executor every call is ready.
+/// Whether the code running now is the root task's: `main` under the
+/// executor (task 1), or a program with no executor running.
+pub(crate) fn in_root() -> bool {
+    current_task().is_none_or(|id| id == 1)
+}
+
 fn note(ready: bool, wait: Wait) -> u8 {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();

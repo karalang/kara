@@ -1405,6 +1405,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   argument(s), found 0" with no fix and an `i64` error at every use of the
   text (B-2026-11-16-203). `ws.recv_text(mut buf)` names `recv()` and the
   `WsMessage` it returns (B-2026-11-16-204).
+- A deadlock is reported as a runtime error at the blocked operation's site
+  (the `recv`, `join`, `lock` or `select` the root task waits in), on the
+  JIT, the MIR interpreter and a built binary alike, and `run --output=json`
+  writes its `runtime_errors` record with `"kind":"deadlock"`. It printed a
+  bare `error: deadlock: ...` line with no location and no JSON record
+  (B-2026-11-16-202).
 - Rust ports found by the modbus_server app: `use std::io::{Read, Write};`
   (and `BufRead`, `Seek`) is deleted, since Kāra's `read`, `write_all` and
   `read_line` are methods of the handle with no trait to import, and

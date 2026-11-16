@@ -228,7 +228,32 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             _ => return Err(format!("__ready of {name}, which does not suspend")),
         };
+        // A wait that cannot go on at once tells the runtime its place,
+        // which a deadlock reports (B-2026-11-16-202).
+        let f = self.cur_fn()?;
+        let (park, go) = (
+            self.llcx.append_basic_block(f, "ready.park"),
+            self.llcx.append_basic_block(f, "ready.go"),
+        );
+        let waits = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, r, r.get_type().const_zero(), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(waits, park, go)
+            .map_err(e)?;
+        self.builder.position_at_end(park);
+        self.wait_site()?;
+        self.builder.build_unconditional_branch(go).map_err(e)?;
+        self.builder.position_at_end(go);
         self.store_bool(dest, r)
+    }
+
+    /// `karac_mir_wait_site` with this call's place, or none: the place a
+    /// deadlock reports the root task waits at (B-2026-11-16-202).
+    pub(super) fn wait_site(&mut self) -> R<()> {
+        let (at, n) = self.abort_site()?;
+        self.rt("wait_site", &[at.into(), n.into()])
     }
 
     /// The runtime state a `TaskGroup` operand (the group, or a reference

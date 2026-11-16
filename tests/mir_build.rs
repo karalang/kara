@@ -7524,8 +7524,9 @@ fn mir_panic_handler_runs_once_before_the_exit() {
              println(f\"[{info.message}] [{info.location}]\");\n}\n\
              fn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n    \
              let v = rx.recv();\n    println(v.is_some());\n    let _ = tx.send(1);\n}\n",
+            // The location is the blocked `recv` (B-2026-11-16-202).
             "[deadlock: every task waits on a channel that no running task sends to or receives \
-             from] []\n",
+             from] [{f}:7:13]\n",
         ),
     ];
     for (src, want) in cases {
