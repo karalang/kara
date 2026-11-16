@@ -1,0 +1,246 @@
+// LeetCode #1177: Can Make Palindrome from Substring -- the differential: the six arms
+// against the statement read literally, and five properties of what they
+// return.
+
+// ---- can_make_palindrome.kara ----
+
+fn a0_can_make_pali_queries(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    let mut masks = [0];
+    for c in s.bytes().iter() {
+        let m = masks[masks.len() - 1] ^ (1 << (c - b'a'));
+        masks.push(m);
+    }
+    queries.iter().map(|q| (masks[q[1] + 1] ^ masks[q[0]]).count_ones() / 2 <= q[2]).collect()
+}
+
+// ---- can_make_palindrome_counts.kara ----
+
+fn a1_can_make_pali_queries(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    let mut counts: Vec[Array[i64, 26]] = [[0; 26]];
+    for c in s.bytes().iter() {
+        let mut next = counts[counts.len() - 1];
+        next[c - b'a'] += 1;
+        counts.push(next);
+    }
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let (left, right, k) = (q[0], q[1], q[2]);
+        let mut odd = 0;
+        for c in 0..26 {
+            if (counts[right + 1][c] - counts[left][c]) % 2 == 1 {
+                odd += 1;
+            }
+        }
+        answer.push(odd / 2 <= k);
+    }
+    answer
+}
+
+// ---- can_make_palindrome_direct.kara ----
+
+fn a2_can_make_pali_queries(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    let bytes = s.bytes();
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let mut count = [0; 26];
+        for i in q[0]..=q[1] {
+            count[bytes[i] - b'a'] += 1;
+        }
+        let odd = count.iter().filter(|n| n % 2 == 1).count();
+        answer.push(odd / 2 <= q[2]);
+    }
+    answer
+}
+
+// ---- can_make_palindrome_kernighan.kara ----
+
+fn a3_can_make_pali_queries(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    let mut masks = Vec.filled(s.len() + 1, 0);
+    for (i, c) in s.bytes().iter().enumerate() {
+        masks[i + 1] = masks[i] ^ (1 << (c - b'a'));
+    }
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let mut m = masks[q[1] + 1] ^ masks[q[0]];
+        let mut odd = 0;
+        while m != 0 and odd <= 2 * q[2] + 1 {
+            m &= m - 1;
+            odd += 1;
+        }
+        answer.push(odd / 2 <= q[2]);
+    }
+    answer
+}
+
+// ---- can_make_palindrome_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn diet_plan_performance(s: String, queries: Vec[Vec[i32]]) -> Vec[bool] {
+        let mut prefix = Vec.filled(s.len() + 1, 0u32);
+        for (i, b) in s.bytes().iter().enumerate() {
+            prefix[i + 1] = prefix[i] ^ (1 << (b - b'a'));
+        }
+        queries
+            .iter()
+            .map(|q| {
+                let (l, r, k) = (q[0] as usize, q[1] as usize, q[2] as u32);
+                (prefix[r + 1] ^ prefix[l]).count_ones() / 2 <= k
+            })
+            .collect()
+    }
+}
+
+fn a4_can_make_pali_queries(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    A4Solution.diet_plan_performance(s.to_string(), queries.iter().map(|q| q.iter().map(|x| x as i32).collect()).collect())
+}
+
+// ---- can_make_palindrome_prefix.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn diet_plan_performance(s: String, queries: Vec[Vec[i32]]) -> Vec[bool] {
+        let s = s.bytes();
+        let n = s.len();
+        let mut cnt = Vec.filled(n + 1, [0; 26]);
+        for i in 0..n {
+            cnt[i + 1] = cnt[i];
+            cnt[i + 1][s[i] - b'a'] += 1;
+        }
+        let mut ans = Vec.with_capacity(queries.len());
+        for q in ref queries {
+            let (l, r, k) = (q[0] as i64, q[1] as i64, q[2] as i64);
+            let odd = (0..26).filter(|j| (cnt[r + 1][j] - cnt[l][j]) % 2 == 1).count();
+            ans.push(odd / 2 <= k);
+        }
+        ans
+    }
+}
+
+fn a5_can_make_pali_queries(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    A5Solution.diet_plan_performance(s.to_string(), queries.iter().map(|q| q.iter().map(|x| x as i32).collect()).collect())
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(w: i64, s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    match w {
+        0 => a0_can_make_pali_queries(s, queries),
+        1 => a1_can_make_pali_queries(s, queries),
+        2 => a2_can_make_pali_queries(s, queries),
+        3 => a3_can_make_pali_queries(s, queries),
+        4 => a4_can_make_pali_queries(s, queries),
+        _ => a5_can_make_pali_queries(s, queries),
+    }
+}
+
+// The statement read literally: the substring's letters sorted and paired
+// off, equal beside equal. A palindrome takes every pair, one either side,
+// and at most one letter left over in the middle; each replacement turns
+// one leftover into a copy of another and pairs them, so the leftovers,
+// halved, are the replacements needed.
+fn literal(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    let bytes = s.bytes();
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let mut part: Vec[u8] = Vec.new();
+        for i in q[0]..=q[1] {
+            part.push(bytes[i]);
+        }
+        part.sort();
+        let mut left_over = 0;
+        let mut i = 0;
+        while i < part.len() {
+            if i + 1 < part.len() and part[i] == part[i + 1] {
+                i += 2;
+            } else {
+                left_over += 1;
+                i += 1;
+            }
+        }
+        answer.push(left_over / 2 <= q[2]);
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: Vec[bool], want: Vec[bool]) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(6, 0) };
+    // 400 strings of 1 to 30 letters over the first 1 to 26, 20 queries
+    // each, k up to 7; a letter permutation and the string reversed
+    let mut seed = 11770;
+    for plan in 0..400 {
+        let n = 1 + next_random(mut seed) % 30;
+        let m = 1 + next_random(mut seed) % 26;
+        let bytes: Vec[u8] = (0..n).map(|_| b'a' + (next_random(mut seed) % m) as u8).collect();
+        let s = String.from_utf8(bytes.clone()).unwrap();
+        let mut queries: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..20 {
+            let a = next_random(mut seed) % n;
+            let b = next_random(mut seed) % n;
+            queries.push([a.min(b), a.max(b), next_random(mut seed) % 8]);
+        }
+        // the alphabet shuffled, each letter sent to another
+        let mut perm: Vec[u8] = (0..26).map(|i| b'a' + i as u8).collect();
+        for i in (1..26).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            perm.swap(i, j);
+        }
+        let relabeled = String.from_utf8(bytes.iter().map(|c| perm[c - b'a']).collect()).unwrap();
+        let reversed = String.from_utf8(bytes.iter().rev().collect()).unwrap();
+        let flipped: Vec[Vec[i64]] = queries.iter().map(|q| [n - 1 - q[1], n - 1 - q[0], q[2]]).collect();
+        let one_more: Vec[Vec[i64]] = queries.iter().map(|q| [q[0], q[1], q[2] + 1]).collect();
+        let half: Vec[Vec[i64]] = queries.iter().map(|q| [q[0], q[1], (q[1] - q[0] + 1) / 2]).collect();
+        let want = literal(s, queries);
+        let star = arm(0, s, queries);
+        for w in 0..6 {
+            let a = arm(w, s, queries);
+            for x in a.iter() {
+                t.check = (t.check * 3 + if x { 2 } else { 1 }) % 1000000007;
+            }
+            // P1: the statement read literally
+            expect(mut t, w, 1, plan, a, want);
+            // P2: one more replacement keeps every query that held, and
+            // half the substring's length is always enough
+            let more = arm(w, s, one_more);
+            let kept: Vec[bool] = (0..20).map(|i| a[i] and not more[i]).collect();
+            expect(mut t, w, 2, plan, kept, Vec.filled(20, false));
+            expect(mut t, w, 2, plan, arm(w, s, half), Vec.filled(20, true));
+            // P3: the same substrings read from the other end
+            expect(mut t, w, 3, plan, arm(w, reversed, flipped), a);
+            // P4: the letters renamed, the answers the same
+            expect(mut t, w, 4, plan, arm(w, relabeled, queries), a);
+            // P5: the ★ arm's answer
+            expect(mut t, w, 5, plan, a, star);
+        }
+    }
+    println(f"400 strings: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..6).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

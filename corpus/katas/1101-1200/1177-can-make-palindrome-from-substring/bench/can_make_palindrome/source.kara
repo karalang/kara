@@ -1,0 +1,42 @@
+// LeetCode #1177: Can Make Palindrome from Substring -- the ★ arm's bench:
+// the parity masks of every prefix, then each query's odd letters counted
+// with `count_ones()` on two masks XORed.
+
+fn can_make_pali_queries(s: Str, queries: Vec[Vec[i64]]) -> Vec[bool] {
+    let mut masks = [0];
+    for c in s.bytes().iter() {
+        let m = masks[masks.len() - 1] ^ (1 << (c - b'a'));
+        masks.push(m);
+    }
+    queries.iter().map(|q| (masks[q[1] + 1] ^ masks[q[0]]).count_ones() / 2 <= q[2]).collect()
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // one string of 100000 letters and 100000 queries over any range with
+    // k up to 13, the constraints' most, built once; then 200 calls, each
+    // call's answers folded into a checksum
+    let mut seed = 1177;
+    let bytes: Vec[u8] = (0..100000).map(|_| b'a' + (next_random(mut seed) % 26) as u8).collect();
+    let s = String.from_utf8(bytes).unwrap();
+    let mut queries: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..100000 {
+        let a = next_random(mut seed) % 100000;
+        let b = next_random(mut seed) % 100000;
+        queries.push([a.min(b), a.max(b), next_random(mut seed) % 14]);
+    }
+    let calls = 200;
+    let mut check = 0;
+    for _ in 0..calls {
+        for a in can_make_pali_queries(s, queries).iter() {
+            check = (check * 3 + if a { 2 } else { 1 }) % 1000000007;
+        }
+    }
+    println(f"{calls} calls: checksum {check}");
+}

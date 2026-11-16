@@ -1,0 +1,6 @@
+example 1: [true, false, false, true, true]
+example 2: [false, true]
+small: [true] [true, true, false] [false, true, true]
+alphabet: [false, true, true, false]
+300 random strings: 4981 of 6000 true, checksum 789008839
+100000 letters, 100000 queries: 64008 true, checksum 663494522

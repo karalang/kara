@@ -1,0 +1,10 @@
+example 1: 0
+example 2: 1
+example 3: 0
+one window: -1 1
+at the bounds: 0
+all zero: 0 -4
+300 random plans: 1160 points, checksum 470125271
+100000 days, k = 1: -4877
+100000 days, k = 317: 516
+100000 days, k = 100000: 0

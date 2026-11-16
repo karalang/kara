@@ -1,0 +1,47 @@
+// LeetCode #1176: Diet Plan Performance -- the ★ arm's bench: one window
+// of `k` days slid across the plan, its sum kept as it goes, each window
+// scored as it is reached.
+
+fn diet_plan_performance(calories: Vec[i64], k: i64, lower: i64, upper: i64) -> i64 {
+    let mut points = 0;
+    let mut total = 0;
+    for (i, c) in calories.iter().enumerate() {
+        total += c;
+        if i >= k {
+            total -= calories[i - k];
+        }
+        if i >= k - 1 {
+            if total < lower {
+                points -= 1;
+            } else if total > upper {
+                points += 1;
+            }
+        }
+    }
+    points
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // one plan of 100000 days, the constraints' most, each up to 20000,
+    // then 2000 calls at a `k` drawn from 1 to 100000 and bounds around the
+    // mean window's sum, every answer folded into a checksum
+    let mut seed = 1176;
+    let calories: Vec[i64] = (0..100000).map(|_| next_random(mut seed) % 20001).collect();
+    let calls = 2000;
+    let mut check = 0;
+    for _ in 0..calls {
+        let k = 1 + next_random(mut seed) % 100000;
+        let mean = 10000 * k;
+        let spread = next_random(mut seed) % 100 * k;
+        let p = diet_plan_performance(calories, k, mean - spread, mean + spread);
+        check = (check * 131 + p + 100000) % 1000000007;
+    }
+    println(f"{calls} calls: checksum {check}");
+}
