@@ -1,0 +1,9 @@
+source = "docs/library/time-random-env.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "time", "random", "env"]
+expected_from = "mirror"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/time-random-env.md (2026-11-16): Duration constructors, as_ readers rounding toward zero (negative spans too), + - * / and compound forms, Instant ordering and arithmetic, elapsed, sleep, uuid.v4 shape, a seeded RandomProvider (an LCG) giving the same draws and UUID on every lane (checked against a Python LCG), fake Clock and Env providers, env.set and env.var on Unicode values and an unset name. interp, mir-llvm and ASan agree."

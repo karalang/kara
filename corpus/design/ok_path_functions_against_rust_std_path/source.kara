@@ -1,0 +1,46 @@
+import std.path.*;
+
+fn q(o: Option[Str]) -> String {
+    match o { Some(s) => f"<{s}>", None => "None" }
+}
+
+fn main() {
+    println(f"{q(parent("a/b/c.txt"))} {q(file_name("a/b/c.txt"))} {q(extension("a/b/c.txt"))} {q(stem("a/b/c.txt"))} {is_absolute("a/b/c.txt")} <{normalize("a/b/c.txt")}> {components("a/b/c.txt")}");
+    println(f"{q(parent("a"))} {q(file_name("a"))} {q(extension("a"))} {q(stem("a"))} {is_absolute("a")} <{normalize("a")}> {components("a")}");
+    println(f"{q(parent("/a"))} {q(file_name("/a"))} {q(extension("/a"))} {q(stem("/a"))} {is_absolute("/a")} <{normalize("/a")}> {components("/a")}");
+    println(f"{q(parent("/"))} {q(file_name("/"))} {q(extension("/"))} {q(stem("/"))} {is_absolute("/")} <{normalize("/")}> {components("/")}");
+    println(f"{q(parent(""))} {q(file_name(""))} {q(extension(""))} {q(stem(""))} {is_absolute("")} <{normalize("")}> {components("")}");
+    println(f"{q(parent("a/b/"))} {q(file_name("a/b/"))} {q(extension("a/b/"))} {q(stem("a/b/"))} {is_absolute("a/b/")} <{normalize("a/b/")}> {components("a/b/")}");
+    println(f"{q(parent("a//b"))} {q(file_name("a//b"))} {q(extension("a//b"))} {q(stem("a//b"))} {is_absolute("a//b")} <{normalize("a//b")}> {components("a//b")}");
+    println(f"{q(parent("./a"))} {q(file_name("./a"))} {q(extension("./a"))} {q(stem("./a"))} {is_absolute("./a")} <{normalize("./a")}> {components("./a")}");
+    println(f"{q(parent("../a"))} {q(file_name("../a"))} {q(extension("../a"))} {q(stem("../a"))} {is_absolute("../a")} <{normalize("../a")}> {components("../a")}");
+    println(f"{q(parent("a/.."))} {q(file_name("a/.."))} {q(extension("a/.."))} {q(stem("a/.."))} {is_absolute("a/..")} <{normalize("a/..")}> {components("a/..")}");
+    println(f"{q(parent("a/."))} {q(file_name("a/."))} {q(extension("a/."))} {q(stem("a/."))} {is_absolute("a/.")} <{normalize("a/.")}> {components("a/.")}");
+    println(f"{q(parent(".."))} {q(file_name(".."))} {q(extension(".."))} {q(stem(".."))} {is_absolute("..")} <{normalize("..")}> {components("..")}");
+    println(f"{q(parent("."))} {q(file_name("."))} {q(extension("."))} {q(stem("."))} {is_absolute(".")} <{normalize(".")}> {components(".")}");
+    println(f"{q(parent("/.."))} {q(file_name("/.."))} {q(extension("/.."))} {q(stem("/.."))} {is_absolute("/..")} <{normalize("/..")}> {components("/..")}");
+    println(f"{q(parent("c.tar.gz"))} {q(file_name("c.tar.gz"))} {q(extension("c.tar.gz"))} {q(stem("c.tar.gz"))} {is_absolute("c.tar.gz")} <{normalize("c.tar.gz")}> {components("c.tar.gz")}");
+    println(f"{q(parent("f."))} {q(file_name("f."))} {q(extension("f."))} {q(stem("f."))} {is_absolute("f.")} <{normalize("f.")}> {components("f.")}");
+    println(f"{q(parent(".bashrc"))} {q(file_name(".bashrc"))} {q(extension(".bashrc"))} {q(stem(".bashrc"))} {is_absolute(".bashrc")} <{normalize(".bashrc")}> {components(".bashrc")}");
+    println(f"{q(parent("a/.bashrc"))} {q(file_name("a/.bashrc"))} {q(extension("a/.bashrc"))} {q(stem("a/.bashrc"))} {is_absolute("a/.bashrc")} <{normalize("a/.bashrc")}> {components("a/.bashrc")}");
+    println(f"{q(parent("..a"))} {q(file_name("..a"))} {q(extension("..a"))} {q(stem("..a"))} {is_absolute("..a")} <{normalize("..a")}> {components("..a")}");
+    println(f"{q(parent("a.."))} {q(file_name("a.."))} {q(extension("a.."))} {q(stem("a.."))} {is_absolute("a..")} <{normalize("a..")}> {components("a..")}");
+    println(f"{q(parent("a.b/"))} {q(file_name("a.b/"))} {q(extension("a.b/"))} {q(stem("a.b/"))} {is_absolute("a.b/")} <{normalize("a.b/")}> {components("a.b/")}");
+    println(f"{q(parent("x/y.z/"))} {q(file_name("x/y.z/"))} {q(extension("x/y.z/"))} {q(stem("x/y.z/"))} {is_absolute("x/y.z/")} <{normalize("x/y.z/")}> {components("x/y.z/")}");
+    println(f"{q(parent("é/ü.ñ"))} {q(file_name("é/ü.ñ"))} {q(extension("é/ü.ñ"))} {q(stem("é/ü.ñ"))} {is_absolute("é/ü.ñ")} <{normalize("é/ü.ñ")}> {components("é/ü.ñ")}");
+    println(f"{q(parent("//a//b//"))} {q(file_name("//a//b//"))} {q(extension("//a//b//"))} {q(stem("//a//b//"))} {is_absolute("//a//b//")} <{normalize("//a//b//")}> {components("//a//b//")}");
+    println(f"{q(parent("a/./b/../c"))} {q(file_name("a/./b/../c"))} {q(extension("a/./b/../c"))} {q(stem("a/./b/../c"))} {is_absolute("a/./b/../c")} <{normalize("a/./b/../c")}> {components("a/./b/../c")}");
+    println(f"{q(parent("../../x"))} {q(file_name("../../x"))} {q(extension("../../x"))} {q(stem("../../x"))} {is_absolute("../../x")} <{normalize("../../x")}> {components("../../x")}");
+    println(f"{q(parent("/a/../../b"))} {q(file_name("/a/../../b"))} {q(extension("/a/../../b"))} {q(stem("/a/../../b"))} {is_absolute("/a/../../b")} <{normalize("/a/../../b")}> {components("/a/../../b")}");
+    println(f"{q(parent("a/b/../../.."))} {q(file_name("a/b/../../.."))} {q(extension("a/b/../../.."))} {q(stem("a/b/../../.."))} {is_absolute("a/b/../../..")} <{normalize("a/b/../../..")}> {components("a/b/../../..")}");
+    println(f"{q(parent("a\\b.c"))} {q(file_name("a\\b.c"))} {q(extension("a\\b.c"))} {q(stem("a\\b.c"))} {is_absolute("a\\b.c")} <{normalize("a\\b.c")}> {components("a\\b.c")}");
+    println(join("data", "x"));
+    println(join("data/", "x"));
+    println(join("data", "/etc/passwd"));
+    println(join("data", "../../x"));
+    println(join("", "x"));
+    println(join("data", ""));
+    println(join("/", "x"));
+    println(join("a//", "/"));
+    println(join("a", "b/"));
+}

@@ -1,0 +1,38 @@
+<a/b> <c.txt> <txt> <c> false <a/b/c.txt> [a, b, c.txt]
+<> <a> None <a> false <a> [a]
+</> <a> None <a> true </a> [/, a]
+None None None None true </> [/]
+None None None None false <.> []
+<a> <b> None <b> false <a/b> [a, b]
+<a> <b> None <b> false <a/b> [a, b]
+<.> <a> None <a> false <a> [., a]
+<..> <a> None <a> false <../a> [.., a]
+<a> None None None false <.> [a, ..]
+<a> None None None false <a> [a]
+<> None None None false <..> [..]
+<> None None None false <.> [.]
+</> None None None true </> [/, ..]
+<> <c.tar.gz> <gz> <c.tar> false <c.tar.gz> [c.tar.gz]
+<> <f.> <> <f> false <f.> [f.]
+<> <.bashrc> None <.bashrc> false <.bashrc> [.bashrc]
+<a> <.bashrc> None <.bashrc> false <a/.bashrc> [a, .bashrc]
+<> <..a> <a> <.> false <..a> [..a]
+<> <a..> <> <a.> false <a..> [a..]
+<> <a.b> <b> <a> false <a.b> [a.b]
+<x> <y.z> <z> <y> false <x/y.z> [x, y.z]
+<é> <ü.ñ> <ñ> <ü> false <é/ü.ñ> [é, ü.ñ]
+<//a> <b> None <b> true </a/b> [/, a, b]
+<a/./b/..> <c> None <c> false <a/c> [a, b, .., c]
+<../..> <x> None <x> false <../../x> [.., .., x]
+</a/../..> <b> None <b> true </b> [/, a, .., .., b]
+<a/b/../..> None None None false <..> [a, b, .., .., ..]
+<> <a\b.c> <c> <a\b> false <a\b.c> [a\b.c]
+data/x
+data/x
+/etc/passwd
+data/../../x
+x
+data/
+/x
+/
+a/b/

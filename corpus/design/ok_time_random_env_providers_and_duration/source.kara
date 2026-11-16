@@ -1,0 +1,70 @@
+import std.time.{Duration, Instant, SystemTime, sleep};
+import std.random;
+import std.uuid;
+
+struct Lcg { s: u64 }
+impl RandomProvider for Lcg {
+    fn next_u64(mut ref self) -> u64 {
+        self.s = self.s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.s
+    }
+}
+
+struct FakeClock {}
+impl ClockProvider for FakeClock {
+    fn monotonic_ns(ref self) -> i64 { 5000 }
+    fn wall_ns(ref self) -> i64 { 1700000000123456789 }
+    fn now(ref self) -> i64 { 1700000000 }
+}
+
+struct FakeEnv {}
+impl EnvProvider for FakeEnv {
+    fn args(ref self) -> Vec[String] { ["prog", "--verbose"] }
+    fn var(ref self, name: Str) -> Result[String, VarError] {
+        if name == "U" { Ok("héllo😀") } else { Err(VarError.NotPresent) }
+    }
+}
+
+fn main() {
+    let a = Duration.us(1500);
+    println(f"{a.as_ms()} {a.as_us()} {a.as_ns()} {a.as_secs()}");
+    let n = Duration.ms(-1500);
+    println(f"{n.as_secs()} {n.as_ms()}");
+    let b = Duration.secs(2) - Duration.secs(5);
+    println(f"{b.as_ms()} {(b * 3).as_ms()} {(Duration.ns(7) / 2).as_ns()} {(Duration.ns(-7) / 2).as_ns()}");
+    let mut t = Duration.ms(1);
+    t += Duration.ms(2);
+    t -= Duration.us(500);
+    t *= 4;
+    t /= 3;
+    println(t.as_us());
+    println(Duration.secs(9223372036).as_secs());
+    let i1 = Instant.now();
+    let i2 = i1 + Duration.ms(5);
+    println(f"{i2 > i1} {i1 < i2} {i1 == i1} {(i2 - i1).as_ms()} {(i1 - i2).as_ms()}");
+    let e = i1.elapsed();
+    println(e.as_ns() >= 0);
+    let s = SystemTime.now().since_epoch().as_secs();
+    println(s > 1700000000);
+    sleep(Duration.ms(1));
+    println(i1.elapsed().as_ms() >= 1);
+    let u = uuid.v4();
+    println(f"{u.len()} {u.char_at(14)} {u.char_at(8)}");
+    with_provider[RandomSource](Lcg { s: 42 }, || {
+        println(f"{random.next_u64()} {random.next_u64()}");
+        println(uuid.v4());
+    });
+    with_provider[Clock](FakeClock {}, || {
+        println(f"{Clock.now()} {SystemTime.now().since_epoch().as_ns()}");
+        let x = Instant.now();
+        println((x + Duration.ns(1) - x).as_ns());
+    });
+    with_provider[Env](FakeEnv {}, || {
+        println(env.args().len());
+        println(env.var("U"));
+        match env.var("NOPE") { Ok(_) => println("?"), Err(VarError.NotPresent) => println("absent"), Err(_) => println("other") }
+    });
+    env.set("KARA_T", "ü=1");
+    println(env.var("KARA_T"));
+    println(env.var("KARA_SURELY_UNSET_X").is_err());
+}

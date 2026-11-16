@@ -1,0 +1,9 @@
+source = "docs/library/path.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "path"]
+expected_from = "mirror"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/path.md (2026-11-16): parent, file_name, extension, stem, is_absolute, normalize and components over 29 paths (.., trailing and repeated slashes, empty components, dot files, non-ASCII) and nine joins (absolute b replaces a, .. kept). Mirror: Rust std::path (normalize by the doc's rule), which agrees on every line but a/. (review-thread question 2026-11-16). interp, mir-llvm and ASan agree."

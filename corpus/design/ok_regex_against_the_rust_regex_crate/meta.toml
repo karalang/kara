@@ -1,0 +1,9 @@
+source = "docs/library/regex.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "regex"]
+expected_from = "mirror"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/regex.md (2026-11-16): Unicode classes, ASCII-only (?-u:\\d), flags i m s x, anchors, \\p classes, empty matches (a* in baaab), optional groups, named groups both spellings, split, replace with $1 ${1} $name $$ and missing groups, refusals (lookbehind, backreference, bad ranges, duplicate names, unknown class), escape, and (a+)+$ over 30 a's answering at once. Mirror: the Rust regex crate 1.12.3, identical on every line. interp, mir-llvm and ASan agree."
