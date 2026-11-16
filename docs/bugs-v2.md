@@ -112,11 +112,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
-| B-2026-11-16-213 | 2026-11-16 | cli | low | `karac explain` / `query effects` and the impl-ceiling and public-declaration diagnostics write a resource-less effect as `blocks()` / `suspends()` | — |
-| B-2026-11-16-214 | 2026-11-16 | cli | low | A derivation step into a library function places the library's line in the user's file (`f10.kara:180 sleep declares blocks`) | — |
-| B-2026-11-16-215 | 2026-11-16 | cli | low | A derivation names the checker's internal keys: `mk calls __builtin_heap_alloc`, `ovf calls __builtin_int_overflow` | — |
-| B-2026-11-16-216 | 2026-11-16 | cli | low | A derivation through a type-parameter bound names `__bound_ceiling.Store.load` | — |
-| B-2026-11-16-217 | 2026-11-16 | mir | low | `dbg` in a `par` branch carries no task id, and `KARAC_DBG_OUTPUT=json` / `karac run --output=json` leave `dbg` in the terminal format, on every lane | — |
 
 ### Relocated
 
@@ -1403,6 +1398,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-210 | interp+mir-llvm | medium | The HTTP server kept an HTTP/1.0 connection open for `Connection: keep-alive` but its response carried no `connection: keep-alive`, so a 1.0 client r… | 8a9607ce78 |
 | B-2026-11-16-211 | typecheck | medium | A closure whose body is a join of literals (`\|s: i32\| if s < lower { -1 } else if s > upper { 1 } else { 0 }`) is typed `i64` where it is written, so… | a3ae3b2036 |
 | B-2026-11-16-212 | typecheck | medium | A comparison of a signed and an unsigned integer is refused even when one side holds every value of the other (`count_ones() / 2 <= k` with `k: u32`,… | a3ae3b2036 |
+| B-2026-11-16-213 | cli | low | `karac explain` / `query effects` and the impl-ceiling and public-declaration diagnostics write a resource-less effect as `blocks()` / `suspends()` | f5ebb66465 |
+| B-2026-11-16-214 | cli | low | A derivation step into a library function places the library's line in the user's file (`f10.kara:180 sleep declares blocks`) | f5ebb66465 |
+| B-2026-11-16-215 | cli | low | A derivation names the checker's internal keys: `mk calls __builtin_heap_alloc`, `ovf calls __builtin_int_overflow` | f5ebb66465 |
+| B-2026-11-16-216 | cli | low | A derivation through a type-parameter bound names `__bound_ceiling.Store.load` | f5ebb66465 |
+| B-2026-11-16-217 | mir | low | `dbg` in a `par` branch carries no task id, and `KARAC_DBG_OUTPUT=json` / `karac run --output=json` leave `dbg` in the terminal format, on every lane | f5ebb66465 |
 
 </details>
 
