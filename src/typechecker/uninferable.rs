@@ -23,6 +23,22 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let library = self.program.library_start.unwrap_or(usize::MAX);
+        // `Map[K, V, H]` loses its hasher argument at the parser, which
+        // records it by span (`Program::container_hashers`): a parameter
+        // named there is named in the signature.
+        let hashers: Vec<(usize, String)> = self
+            .program
+            .container_hashers
+            .iter()
+            .map(|(k, h)| (k.0, format!("{h:?}")))
+            .collect();
+        let in_span = |span: &Span| -> Vec<String> {
+            hashers
+                .iter()
+                .filter(|(at, _)| *at >= span.offset && *at < span.offset + span.length)
+                .map(|(_, h)| h.clone())
+                .collect()
+        };
         let mut found: Vec<(String, String, Span)> = Vec::new();
         for item in &self.program.items {
             match item {
@@ -33,6 +49,7 @@ impl<'a> super::TypeChecker<'a> {
                         &f.params,
                         f.return_type.as_ref(),
                         f.where_clause.as_ref(),
+                        &in_span(&f.span),
                     ));
                 }
                 // A trait impl's method has the trait's signature, which is
@@ -49,6 +66,7 @@ impl<'a> super::TypeChecker<'a> {
                             &f.params,
                             f.return_type.as_ref(),
                             f.where_clause.as_ref(),
+                            &in_span(&f.span),
                         ));
                     }
                 }
@@ -61,6 +79,7 @@ impl<'a> super::TypeChecker<'a> {
                             &m.params,
                             m.return_type.as_ref(),
                             m.where_clause.as_ref(),
+                            &in_span(&m.span),
                         ));
                     }
                 }
@@ -93,6 +112,7 @@ fn uninferable(
     params: &[Param],
     ret: Option<&TypeExpr>,
     where_clause: Option<&WhereClause>,
+    hashers: &[String],
 ) -> Vec<(String, String, Span)> {
     let Some(g) = generics else {
         return Vec::new();
@@ -105,6 +125,7 @@ fn uninferable(
         .iter()
         .map(|p| format!("{:?}", p.ty))
         .chain(ret.map(|r| format!("{r:?}")))
+        .chain(hashers.iter().cloned())
         .collect();
     g.params
         .iter()
