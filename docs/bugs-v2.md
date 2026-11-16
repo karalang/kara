@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 169 |
 | soundness | 70 |
 | miscompile | 69 |
-| other | 49 |
+| other | 50 |
 | run-vs-build | 42 |
 | codegen-gap | 32 |
 | crash | 31 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 495 |
+| typecheck | 496 |
 | mir-llvm | 238 |
 | mir | 212 |
 | cli | 145 |
@@ -1329,6 +1329,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-152 | parser | low | `use std::thread;` in a program that spawns becomes `import std.thread;`, "unknown module `std.thread`" with no fix, and once the spawn is moved into… | 4dbfebec42 |
 | B-2026-11-15-153 | typecheck | medium | `set_read_timeout(Some(Duration::from_millis(n)))` mends to `Some(Duration.ms(n))`, then "expected 'i64', found 'Duration'" with no fix: Kāra's takes… | 4dbfebec42 |
 | B-2026-11-15-154 | mir+ownership | medium | A `filter` predicate's capture is held against the collected result: `self.options.iter().filter(\|(n, _)\| *n == num).map(\|(_, v)\| v).collect()` retur… | 4dbfebec42 |
+| B-2026-11-15-156 | typecheck | low | The checker without the library (bare `crate::typecheck`: the wasm playground's run_static_checks, the REPL's ownership view, the borrowck core-pin c… | 9903db3d4f |
 
 </details>
 
