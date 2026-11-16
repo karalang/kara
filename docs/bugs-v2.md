@@ -121,9 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-38 | 2026-11-15 | typecheck | medium | A list literal returned by a closure (`d.iter().map(|e| [e[0], e[1], 1 - e[2]]).collect()` into a `Vec[Array[i64, 3]]`) is a `Vec`, so the `collect` fails ("`Vec[Array[i64, 3]]` implements `FromIterator[Array[i64, 3]]`, not `FromIterator[Vec[i64]]`") with no fix, and a closure cannot declare its return type (`|e| -> Array[i64, 3] { .. }` is refused as Rust syntax), so the only spelling is a typed `let` inside the closure | — |
 | B-2026-11-15-40 | 2026-11-15 | typecheck+cli | medium | `println(f"{v} -> {total(v)}")` with `v` owned and `total(v: own Vec[i64])` is refused with E0516 ("cannot move `v` while it is still borrowed") and no machine fix, though the message names `.clone()`; in kata 2202 it is where `karac fix`'s own `own` edits end, three rounds after a bare parameter was stored in a struct field | — |
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
-| B-2026-11-15-134 | 2026-11-15 | runtime | medium | The HTTP client returns Ok for a 3xx it does not follow (300, 304, a 302 with no Location), where io.md makes every status outside 2xx an Err that keeps the response | — |
-| B-2026-11-15-135 | 2026-11-15 | runtime | medium | Past five redirects the HTTP client's Err drops the response that arrived and names the unfollowed Location instead of the URL asked for | — |
-| B-2026-11-15-136 | 2026-11-15 | runtime | medium | RequestBuilder.timeout(0) or a negative timeout silently means no timeout; io.md now refuses a timeout below 1 ms with an Err from send | — |
 | B-2026-11-15-155 | 2026-11-15 | typecheck | high | `Some(w)` with `w: u64` passed where an `Option[i64]` is wanted is accepted with no `as`, and `u64.MAX` prints -1; `let x: i64 = w` is refused. Same for `Ok(w)` / `Err(w)` payloads | — |
 
 ### Relocated
@@ -1322,6 +1319,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-131 | cli | low | karac fix is not idempotent on a file that checks clean: manual_compound_assign turns `i = i + 1` into `i += 1`, and counter_while_loop only sees the… | 9452e21278 |
 | B-2026-11-15-132 | ownership+cli | medium | karac fix applies two fixes on one span and produces a refused program: `let hop = hs[0].inner.word;` with `word` in a `shared struct` gets both owne… | 9452e21278 |
 | B-2026-11-15-133 | typecheck+cli | low | A match on a temporary whose arm yields a `ref` binding gets a fixless typecheck error as a call argument, where the same match in a `let` gets borro… | 9452e21278 |
+| B-2026-11-15-134 | runtime | medium | The HTTP client returns Ok for a 3xx it does not follow (300, 304, a 302 with no Location), where io.md makes every status outside 2xx an Err that ke… | 4c174caf42 |
+| B-2026-11-15-135 | runtime | medium | Past five redirects the HTTP client's Err drops the response that arrived and names the unfollowed Location instead of the URL asked for | 4c174caf42 |
+| B-2026-11-15-136 | runtime | medium | RequestBuilder.timeout(0) or a negative timeout silently means no timeout; io.md now refuses a timeout below 1 ms with an Err from send | 4c174caf42 |
 | B-2026-11-15-137 | mir | low | A panic printed a stale error return trace from an `Err` the program had already handled: after `match twice(5) { . | 9107bd0aff |
 | B-2026-11-15-138 | cli | low | E_REGISTRY_DEP_UNSUPPORTED's help said registry dependencies are not in 0.8, though they resolve through `KARAC_REGISTRY_PROXY` and are refused only… | 13e7f2c08a |
 | B-2026-11-15-150 | typecheck | low | `handle.join().unwrap()` on a `TaskHandle[T]` (Rust's `JoinHandle::join` returns a `Result`) says only "no method 'unwrap' on type 'T'", with no fix | 4dbfebec42 |
