@@ -110,9 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
-| B-2026-11-16-170 | 2026-11-16 | parser | low | Rust's `use std::io::{Read, Write};` and `Shutdown` in a `std::net` import mend to imports of names Kāra does not have, with no fix, and `sock.shutdown(Shutdown::Write)` ends at "undefined name 'Shutdown'" | — |
-| B-2026-11-16-171 | 2026-11-16 | mir | medium | An array literal of arrays passed as a `Slice[Slice[u8]]` (`pdu([[5], be16(n)])`) passes `karac check` and stops at "invalid MIR: array element of the wrong type" | — |
-| B-2026-11-16-172 | 2026-11-16 | typecheck+mir | low | Rust's `parts.concat()` over a `Slice[Slice[u8]]` takes the deprecated `Display` join, whose fix writes `join("")`, which does not check (`Slice[u8]` is not `Display`) | — |
 | B-2026-11-16-173 | 2026-11-16 | typecheck+mir | low | `concat()` over a sequence of arrays (`Vec[Array[u8, 2]]`) still takes the deprecated `Display` join, where Rust's flattens; remainder of B-2026-11-16-172 | — |
 
 ### Relocated
@@ -1343,6 +1340,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-4 | mir | low | `windows(0)` / `chunks(0)` panicked with the message "explicit panic", and a float `Map`/`Set` key's diagnostic suggested `to_bits()` where design.md… | f8fb1c6a10 |
 | B-2026-11-16-5 | interp+mir-llvm | low | base64_decode and base64url_decode report more than two trailing `=` (`Z===`, `====`, `Zm9v====`) as InvalidByte at the third `=`, where docs/library… | 9cb3bbd69e |
 | B-2026-11-16-6 | resolver | high | In a package, a local binding anywhere in a file with the name of a file-level import erases that import for the whole file: `import a.load as ld;` w… | d1d8bdcc45 |
+| B-2026-11-16-170 | parser | low | Rust's `use std::io::{Read, Write};` and `Shutdown` in a `std::net` import mend to imports of names Kāra does not have, with no fix, and `sock.shutdo… | 9cbbd28e56 |
+| B-2026-11-16-171 | mir | medium | An array literal of arrays passed as a `Slice[Slice[u8]]` (`pdu([[5], be16(n)])`) passes `karac check` and stops at "invalid MIR: array element of th… | 9cbbd28e56 |
+| B-2026-11-16-172 | typecheck+mir | low | Rust's `parts.concat()` over a `Slice[Slice[u8]]` takes the deprecated `Display` join, whose fix writes `join("")`, which does not check (`Slice[u8]`… | 9cbbd28e56 |
 
 </details>
 
