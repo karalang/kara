@@ -107,3 +107,64 @@ fn mir_range_map_collect_runs_the_closure_in_a_counting_loop() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// The same into a `String` when the closure answers a `char`
+/// (B-2026-11-16-7, kata 1573's `(0..n).map(|_| .. '1' ..).collect()`):
+/// each char is pushed, a wide one as its UTF-8 bytes.
+const CHARS: &str = r#"fn main() {
+    let a: String = (0..5).map(|i| if i % 2 == 0 { 'a' } else { 'é' }).collect();
+    println(f"{a} {a.len()}");
+    let e: String = (3..3).map(|_| 'x').collect();
+    println(f"[{e}]");
+    let mut k = 0;
+    let b: String = (1..=4).map(|i| { k += i; if k > 5 { '😀' } else { 'z' } }).collect();
+    println(f"{b} {k}");
+}
+"#;
+
+const CHARS_WANT: &str = "aéaéa 7\n[]\nzz😀😀 10\n";
+
+#[test]
+fn mir_range_map_collect_into_a_string_pushes_each_char() {
+    let d = std::env::temp_dir().join(format!("karac-range-map-chars-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let file = d.join("main.kara");
+    std::fs::write(&file, CHARS).unwrap();
+    let file = file.to_str().unwrap();
+    let interp = karac().args(["__mir-run", file]).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stdout),
+        CHARS_WANT,
+        "{}",
+        String::from_utf8_lossy(&interp.stderr)
+    );
+    let exe = d.join("main");
+    let ll = d.join("main.ll");
+    let built = karac()
+        .env("KARAC_MIR_LL", &ll)
+        .args(["build", file, "-o", exe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let why = String::from_utf8_lossy(&built.stderr).to_string();
+    if common::link_or_skip(if built.status.success() {
+        Ok(())
+    } else {
+        Err(why)
+    })
+    .is_none()
+    {
+        return;
+    }
+    let ran = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), CHARS_WANT);
+    let ir = std::fs::read_to_string(&ll).unwrap();
+    for name in ["].map[", "].collect["] {
+        assert!(
+            !ir.lines()
+                .any(|l| l.starts_with("define") && l.contains(name)),
+            "the library's {name} is still emitted"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}

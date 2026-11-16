@@ -996,8 +996,69 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_int_compare(IntPredicate::UGT, an, self.i64(STR_CONTAINS_INLINE_HAY), "")
             .map_err(e)?;
         let to_rt = self.builder.build_and(multi, far, "").map_err(e)?;
+        let inline = block("contains.inline");
         self.builder
-            .build_conditional_branch(to_rt, long, pre)
+            .build_conditional_branch(to_rt, long, inline)
+            .map_err(e)?;
+        // One byte in a haystack of at most 16, as `"aeiou".contains(
+        // c.to_string())` asks, is a scan in line: a constant haystack
+        // unrolls to its compares, where `memchr` cost a call per test and
+        // the rest's `memcmp` another (B-2026-11-16-9, kata 2063).
+        self.builder.position_at_end(inline);
+        let one = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, bn, self.i64(1), "")
+            .map_err(e)?;
+        let small = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, an, self.i64(16), "")
+            .map_err(e)?;
+        let scan_it = self.builder.build_and(one, small, "").map_err(e)?;
+        let (scan, scan_head, scan_body) = (
+            block("contains.scan"),
+            block("contains.scan.head"),
+            block("contains.scan.body"),
+        );
+        self.builder
+            .build_conditional_branch(scan_it, scan, pre)
+            .map_err(e)?;
+        self.builder.position_at_end(scan);
+        let byte = self
+            .builder
+            .build_load(i8t, bp, "byte")
+            .map_err(e)?
+            .into_int_value();
+        self.builder
+            .build_unconditional_branch(scan_head)
+            .map_err(e)?;
+        self.builder.position_at_end(scan_head);
+        let i64t = self.llcx.i64_type();
+        let i = self.builder.build_phi(i64t, "i").map_err(e)?;
+        i.add_incoming(&[(&self.i64(0), scan)]);
+        let iv = i.as_basic_value().into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, an, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(more, scan_body, done)
+            .map_err(e)?;
+        self.builder.position_at_end(scan_body);
+        // SAFETY of the read: i < an.
+        let at = unsafe { self.builder.build_in_bounds_gep(i8t, ap, &[iv], "") }.map_err(e)?;
+        let b = self
+            .builder
+            .build_load(i8t, at, "")
+            .map_err(e)?
+            .into_int_value();
+        let hit = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, b, byte, "")
+            .map_err(e)?;
+        let next_i = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
+        i.add_incoming(&[(&next_i, scan_body)]);
+        self.builder
+            .build_conditional_branch(hit, yes, scan_head)
             .map_err(e)?;
         // `end` is one past the last place the needle can start.
         self.builder.position_at_end(pre);
@@ -1291,6 +1352,86 @@ impl<'ctx> Cx<'ctx, '_> {
                 let errv = self.variant_of(dty, "Err")?;
                 let d = self.place_ptr(dest)?;
                 let payload = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+                // A `Vec[u8]` moved in whose bytes are all ASCII becomes the
+                // `String` itself, its buffer kept, as Rust's `from_utf8`
+                // keeps it: the runtime's copy and the vector's free cost a
+                // second allocation per call (B-2026-11-16-11, kata 2194's
+                // `String.from_utf8([col, row].to_vec())`).
+                let moved_vec = match b {
+                    Operand::Move(place) => {
+                        let t = self.place_type(place)?;
+                        matches!(self.tys.kind(t), TyKind::Intrinsic(IntrinsicTy::Vec(_)))
+                            .then_some(place.clone())
+                    }
+                    _ => None,
+                };
+                let join = if let Some(place) = moved_vec {
+                    let f = self.cur_fn()?;
+                    let (head, body, adopt, copy, join) = (
+                        self.llcx.append_basic_block(f, "utf8.head"),
+                        self.llcx.append_basic_block(f, "utf8.byte"),
+                        self.llcx.append_basic_block(f, "utf8.adopt"),
+                        self.llcx.append_basic_block(f, "utf8.copy"),
+                        self.llcx.append_basic_block(f, "utf8.done"),
+                    );
+                    let i64t = self.llcx.i64_type();
+                    let i8t = self.llcx.i8_type();
+                    let entry = self.builder.get_insert_block().ok_or("no insert block")?;
+                    self.builder.build_unconditional_branch(head).map_err(e)?;
+                    self.builder.position_at_end(head);
+                    let i = self.builder.build_phi(i64t, "i").map_err(e)?;
+                    let acc = self.builder.build_phi(i8t, "hi").map_err(e)?;
+                    i.add_incoming(&[(&self.i64(0), entry)]);
+                    acc.add_incoming(&[(&i8t.const_zero(), entry)]);
+                    let iv = i.as_basic_value().into_int_value();
+                    let av = acc.as_basic_value().into_int_value();
+                    let more = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, iv, n, "")
+                        .map_err(e)?;
+                    let ascii = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGE, av, i8t.const_zero(), "")
+                        .map_err(e)?;
+                    let go = self.builder.build_and(more, ascii, "").map_err(e)?;
+                    let tail = self.llcx.append_basic_block(f, "utf8.end");
+                    self.builder
+                        .build_conditional_branch(go, body, tail)
+                        .map_err(e)?;
+                    self.builder.position_at_end(body);
+                    // SAFETY of the read: i < n.
+                    let at = unsafe { self.builder.build_in_bounds_gep(i8t, p, &[iv], "") }
+                        .map_err(e)?;
+                    let byte = self
+                        .builder
+                        .build_load(i8t, at, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let next_acc = self.builder.build_or(av, byte, "").map_err(e)?;
+                    let next_i = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
+                    i.add_incoming(&[(&next_i, body)]);
+                    acc.add_incoming(&[(&next_acc, body)]);
+                    self.builder.build_unconditional_branch(head).map_err(e)?;
+                    self.builder.position_at_end(tail);
+                    let ascii = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGE, av, i8t.const_zero(), "")
+                        .map_err(e)?;
+                    self.builder
+                        .build_conditional_branch(ascii, adopt, copy)
+                        .map_err(e)?;
+                    self.builder.position_at_end(adopt);
+                    let v = self.place_ptr(&place)?;
+                    self.builder
+                        .build_memcpy(payload, 8, v, 8, self.i64(24))
+                        .map_err(e)?;
+                    self.store_tag(d, dty, ok)?;
+                    self.builder.build_unconditional_branch(join).map_err(e)?;
+                    self.builder.position_at_end(copy);
+                    Some(join)
+                } else {
+                    None
+                };
                 let r = self.rt_int("str_from_utf8", &[payload.into(), p.into(), n.into()], 32)?;
                 self.store_tag(d, dty, ok)?;
                 let bad = self
@@ -1332,6 +1473,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     cx.store_tag_dyn(q, ety, k)
                 })?;
                 self.drop_moved(args)?;
+                if let Some(join) = join {
+                    self.builder.build_unconditional_branch(join).map_err(e)?;
+                    self.builder.position_at_end(join);
+                }
             }
             ("replace", [s, a, b]) => {
                 let (sp, sn) = self.str_parts(s)?;

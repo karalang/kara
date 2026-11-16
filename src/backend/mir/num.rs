@@ -965,7 +965,54 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.build_store(slot, v).map_err(e)?;
         let fast_end = self.builder.get_insert_block().ok_or("no insert block")?;
         self.builder.build_unconditional_branch(join).map_err(e)?;
+        // Text that starts with an ASCII byte no number or the whitespace
+        // `parse` trims can start with (a word, as kata 2042 parses every
+        // token of a sentence) is none without the runtime's call, which
+        // it paid on every word (B-2026-11-16-10). Any other byte, a
+        // non-ASCII one included (Unicode whitespace), still asks it.
         self.builder.position_at_end(slow);
+        let call = self.llcx.append_basic_block(f, "dec.call");
+        let first = self.llcx.append_basic_block(f, "dec.first");
+        let empty = self.is_zero(n)?;
+        self.builder
+            .build_conditional_branch(empty, call, first)
+            .map_err(e)?;
+        self.builder.position_at_end(first);
+        let b0 = self
+            .builder
+            .build_load(i8t, s, "")
+            .map_err(e)?
+            .into_int_value();
+        let b0 = self.builder.build_int_z_extend(b0, i64t, "").map_err(e)?;
+        let in_range = |cx: &mut Self, lo: u8, width: u64| -> R<IntValue<'ctx>> {
+            let d = cx
+                .builder
+                .build_int_sub(b0, cx.i64(u64::from(lo)), "")
+                .map_err(e)?;
+            cx.builder
+                .build_int_compare(IntPredicate::ULT, d, cx.i64(width), "")
+                .map_err(e)
+        };
+        let mut may = Vec::new();
+        may.push(in_range(self, b'0', 10)?);
+        may.push(in_range(self, b'\t', 5)?);
+        may.push(in_range(self, 0x80, 0x80)?);
+        for c in *b"+- " {
+            may.push(
+                self.builder
+                    .build_int_compare(IntPredicate::EQ, b0, self.i64(u64::from(c)), "")
+                    .map_err(e)?,
+            );
+        }
+        let mut can = may[0];
+        for m in &may[1..] {
+            can = self.builder.build_or(can, *m, "").map_err(e)?;
+        }
+        let first_end = self.builder.get_insert_block().ok_or("no insert block")?;
+        self.builder
+            .build_conditional_branch(can, call, join)
+            .map_err(e)?;
+        self.builder.position_at_end(call);
         let bits = self.llcx.i32_type().const_int(u64::from(it.bits()), false);
         let sg = i8t.const_int(u64::from(it.signed()), false);
         let ten = self.i64(10);
@@ -984,7 +1031,11 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.build_unconditional_branch(join).map_err(e)?;
         self.builder.position_at_end(join);
         let r = self.builder.build_phi(i8t, "parsed.ok").map_err(e)?;
-        r.add_incoming(&[(&fits, fast_end), (&got, slow_end)]);
+        r.add_incoming(&[
+            (&fits, fast_end),
+            (&got, slow_end),
+            (&i8t.const_zero(), first_end),
+        ]);
         Ok(r.as_basic_value().into_int_value())
     }
 

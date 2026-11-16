@@ -1,11 +1,12 @@
 //! An integer `cmp` computes its `Ordering` without a branch: both
-//! compares, `(a > b) - (a < b)` as an `i8`, then one switch on it
-//! (B-2026-11-06-1). Lowered as a branch per compare, a two-key `sort_by`
+//! compares, `(a > b) - (a < b)` as an `i8`, then the variant picked by
+//! selects (B-2026-11-06-1; a switch on it until B-2026-11-16-12, whose
+//! phi let jump threading put a branch back into a tie-broken comparator). Lowered as a branch per compare, a two-key `sort_by`
 //! comparator kept a branch per element in the sort's partition loop that
 //! LLVM could not turn into a select, and kata 354 ran 1.3x its time on
 //! x86. The pins: every ordering over the extremes of `i64`, `u64`, `i8`,
 //! `i128`, `u128`, `char` and `bool` prints the same under both backends,
-//! and `order`'s IR has both compares ahead of its one switch.
+//! and `order`'s IR has both compares ahead of its selects and no switch.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -113,7 +114,7 @@ fn out(o: &Output) -> String {
 }
 
 #[test]
-fn an_integer_cmp_compares_both_ways_before_one_switch() {
+fn an_integer_cmp_compares_both_ways_then_selects() {
     let d = dir();
     let file = d.join("main.kara");
     std::fs::write(&file, SRC).unwrap();
@@ -144,13 +145,12 @@ fn an_integer_cmp_compares_both_ways_before_one_switch() {
     assert!(!body.is_empty(), "no `order` in the IR\n{ir}");
     let text = body.join("\n");
     let at = |s: &str| body.iter().position(|l| l.contains(s));
-    let switch = at("switch ").unwrap_or_else(|| panic!("no switch\n{text}"));
+    let select = at("select i1").unwrap_or_else(|| panic!("no select\n{text}"));
     for c in ["icmp sgt", "icmp slt"] {
-        let ahead = at(c).is_some_and(|i| i < switch);
-        assert!(ahead, "{c} is not ahead of the switch\n{text}");
+        let ahead = at(c).is_some_and(|i| i < select);
+        assert!(ahead, "{c} is not ahead of the select\n{text}");
     }
-    let switches = body.iter().filter(|l| l.contains("switch ")).count();
-    assert_eq!(switches, 1, "{text}");
+    assert!(at("switch ").is_none(), "{text}");
     if common::link_or_skip(if built.status.success() {
         Ok(())
     } else {

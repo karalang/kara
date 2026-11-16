@@ -1203,6 +1203,35 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   view, so `date[5..7]`'s length is the constant 2. Kata 1154's three
   parses a call went from 318 instructions to 155 (checked Rust 125), and
   its bench from 2.4x checked Rust to 1.1x (B-2026-11-14-43).
+- **`(a..b).map(|i| ..).collect()` into a `String` pushes each char.**
+  When the closure answers a `char`, the collect is the same counting loop
+  as into a `Vec`, a wide char pushed as its UTF-8 bytes (B-2026-11-16-7,
+  kata 1573).
+- **`f64.total_cmp` and `f32.total_cmp` compare in line.** Each side's
+  bits are turned into a signed key and compared, NaN canonicalized as
+  before, where each comparison was a runtime call. Kata 2208's heap of
+  `Reverse[F64]` went from 2.43x checked Rust's instructions to 1.33x
+  (B-2026-11-16-8).
+- **`"aeiou".contains(c.to_string())` scans bytes.** A one-byte needle in
+  a haystack of at most 16 bytes is a byte loop, and a `String` literal
+  the compiler hoists out of a loop is a constant global, so LLVM sees its
+  length. Kata 2063 went from 3.37x checked Rust's instructions to 1.17x
+  (B-2026-11-16-9).
+- **`i64.parse` of a word fails without a call.** The runtime is asked
+  only when the first byte could start a number (a digit, a sign,
+  whitespace or a non-ASCII byte); the errors are the same. Kata 2042's
+  token scan went from 2.55x checked Rust's instructions to 1.48x
+  (B-2026-11-16-10).
+- **`String.from_utf8` of a fresh `Vec` keeps its buffer when it is
+  ASCII.** The bytes are checked in line and the `Vec` becomes the
+  `String`; other text takes the copying path as before. Kata 2194 went
+  from 1.85x checked Rust's instructions to parity (B-2026-11-16-11).
+- **A sort comparator with a tie break no longer branches.** `x.cmp(y)`
+  on integers picks its variant with selects, where a switch's phi let
+  LLVM thread `then`'s choice into a branch on `x > y` inside the merge,
+  one the sort mispredicts half the time. Kata 2099's
+  `sort_by(|a, b| nums[b].cmp(nums[a]).then(a.cmp(b)))` went from 1.87 s
+  to 0.80 s, against checked Rust's 0.85 s (B-2026-11-16-12).
 - **A `chars()` walk falls through on an ASCII char.** The ASCII and
   in-range tests of `next` and `next_back` are weighted toward the ASCII
   path, so block placement lays the multi-byte path out of line instead

@@ -72,6 +72,9 @@ impl<'ctx> Cx<'ctx, '_> {
                     })
                     .collect();
                 let _ = ty;
+                if self.switch_to_variant(v, targets)? {
+                    return Ok(());
+                }
                 self.builder
                     .build_switch(v, self.blocks[targets.otherwise.index()], &cases)
                     .map_err(e)?;
@@ -107,6 +110,95 @@ impl<'ctx> Cx<'ctx, '_> {
             TerminatorKind::Drop { .. } => return Err("`Drop` is drop.rs's".into()),
         }
         Ok(())
+    }
+
+    /// A switch whose every arm only sets one local to a variant of a
+    /// fieldless enum and goes on to one block, as `a.cmp(b)` on integers
+    /// lowers: the variant is chosen with selects and stored, and the
+    /// switch is not built. Left a switch, its arms join in a phi of
+    /// constants, which jump threading follows into what reads the
+    /// result: `x.cmp(y).then(i.cmp(j))` in a sort's comparator became a
+    /// branch on `x > y` that a merge mispredicts half the time
+    /// (B-2026-11-16-12). `KARAC_MIR_SWITCH_SELECT=0` keeps the switch.
+    fn switch_to_variant(
+        &mut self,
+        v: IntValue<'ctx>,
+        targets: &crate::mir::SwitchTargets,
+    ) -> R<bool> {
+        if targets.values.is_empty()
+            || targets.values.len() > 3
+            || std::env::var("KARAC_MIR_SWITCH_SELECT").as_deref() == Ok("0")
+        {
+            return Ok(false);
+        }
+        let body = self.cur()?;
+        let arm = |bb: crate::mir::BasicBlock| {
+            let b = &body.blocks[bb.index()];
+            let TerminatorKind::Goto { target } = b.terminator.kind else {
+                return None;
+            };
+            let mut set = None;
+            for st in &b.statements {
+                match &st.kind {
+                    StatementKind::StorageLive(_)
+                    | StatementKind::StorageDead(_)
+                    | StatementKind::Nop => {}
+                    StatementKind::Assign(
+                        p,
+                        Rvalue::Aggregate(AggregateKind::Adt { ty, variant }, ops),
+                    ) if set.is_none() && ops.is_empty() && p.projection.is_empty() => {
+                        set = Some((p.local, *ty, variant.0));
+                    }
+                    _ => return None,
+                }
+            }
+            set.map(|(l, t, var)| (l, t, var, target))
+        };
+        let Some((local, ty, other, join)) = arm(targets.otherwise) else {
+            return Ok(false);
+        };
+        let mut arms = Vec::new();
+        for &(val, bb) in &targets.values {
+            match arm(bb) {
+                Some((l, t, var, j)) if l == local && t == ty && j == join => arms.push((val, var)),
+                _ => return Ok(false),
+            }
+        }
+        let fieldless = matches!(
+            self.tys.tcx().adt_of(ty),
+            Some((adt, _)) if adt.variants.iter().all(|v| v.fields.is_empty())
+        );
+        if !fieldless
+            || layout::null_niche(self.tys, ty).is_some()
+            || layout::enum_tag(self.tys, ty).is_none()
+        {
+            return Ok(false);
+        }
+        let it = v.get_type();
+        let i32t = self.llcx.i32_type();
+        let mut k = i32t.const_int(u64::from(other), false);
+        for &(val, var) in arms.iter().rev() {
+            let c = if it.get_bit_width() > 64 {
+                it.const_int_arbitrary_precision(&[val as u64, (val >> 64) as u64])
+            } else {
+                it.const_int(val as u64, false)
+            };
+            let hit = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, v, c, "")
+                .map_err(e)?;
+            k = self
+                .builder
+                .build_select(hit, i32t.const_int(u64::from(var), false), k, "")
+                .map_err(e)?
+                .into_int_value();
+        }
+        let dst = self.place_ptr(&Place::local(local))?;
+        self.store_tag_dyn(dst, ty, k)?;
+        self.builder
+            .build_unconditional_branch(self.blocks[join.index()])
+            .map_err(e)?;
+        Ok(true)
     }
 
     /// What an abort for `reason` reports when no message was given.
@@ -555,6 +647,68 @@ impl<'ctx> Cx<'ctx, '_> {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The text of an immutable `String` static whose initializer is only
+    /// `String.from` of a string literal (a literal receiver the MIR
+    /// builder hoists, `"aeiou".contains(..)` in a loop): its value is the
+    /// borrowed-literal header `{ptr, len, 0}`, a constant global, so LLVM
+    /// sees the literal's bytes and length where the loop reads them. A
+    /// global zeroed until `main` fills it hid both, so `contains` over a
+    /// five-byte literal was a loop of unknown length (B-2026-11-16-9).
+    pub(super) fn const_str_static(&self, def: &StaticDef) -> Option<String> {
+        if def.mutable
+            || !matches!(
+                self.tys.kind(def.ty),
+                TyKind::Intrinsic(IntrinsicTy::String)
+            )
+            || std::env::var("KARAC_MIR_BORROW_LITERALS").as_deref() == Ok("0")
+        {
+            return None;
+        }
+        let body = self.program.bodies.get(&def.init)?;
+        let mut text = None;
+        for b in &body.blocks {
+            if b.statements.iter().any(|s| {
+                !matches!(
+                    s.kind,
+                    StatementKind::StorageLive(_)
+                        | StatementKind::StorageDead(_)
+                        | StatementKind::Nop
+                )
+            }) {
+                return None;
+            }
+            match &b.terminator.kind {
+                TerminatorKind::Goto { .. }
+                | TerminatorKind::Return
+                | TerminatorKind::Unreachable => {}
+                TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(f),
+                            ..
+                        }),
+                    args,
+                    destination,
+                    ..
+                } if text.is_none()
+                    && *destination == Place::local(Local::RETURN_PLACE)
+                    && f.name == "String.from" =>
+                {
+                    let [Operand::Const(Const {
+                        kind: ConstKind::Str(t),
+                        ..
+                    })] = args.as_slice()
+                    else {
+                        return None;
+                    };
+                    text = Some(t.clone());
+                }
+                _ => return None,
+            }
+        }
+        text
     }
 
     /// The constant global [`Self::const_table`] found the elements of:

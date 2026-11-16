@@ -16917,15 +16917,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !library(self, object.id) || !library(self, e.id) {
             return Ok(None);
         }
+        // A `Vec`, or a `String` of the closure's chars (kata 1573's
+        // `(0..n).map(|_| .. '1' ..).collect()`, B-2026-11-16-7).
         let vt = self.expr_ty(e)?;
-        if !matches!(
-            self.tys().tcx().kind(vt),
+        match self.tys().tcx().kind(vt) {
             HK::Intrinsic {
                 kind: IntrinsicKind::Vec,
                 ..
+            } => {}
+            HK::Str => {
+                let ExprKind::Closure { body, .. } = &args[0].value.kind else {
+                    return Ok(None);
+                };
+                let bt = self.expr_ty(body)?;
+                if !matches!(self.tys().tcx().kind(bt), HK::Char) {
+                    return Ok(None);
+                }
             }
-        ) {
-            return Ok(None);
+            _ => return Ok(None),
         }
         let (left, right, inclusive): (&'a Expr, &'a Expr, bool) = match &range.kind {
             ExprKind::Binary {
@@ -16965,10 +16974,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         let vt = self.place_type(&dest);
         let name = self.tys().display(vt);
-        let HK::Intrinsic { args: va, .. } = self.tys().tcx().kind(vt) else {
-            return self.unsupported(f.span, "this collect");
+        let ut = match self.tys().tcx().kind(vt) {
+            HK::Intrinsic { args: va, .. } => self.tys().tcx().list(va)[0],
+            HK::Str => self.tys().tcx().intern(HK::Char),
+            _ => return self.unsupported(f.span, "this collect"),
         };
-        let ut = self.tys().tcx().list(va)[0];
         self.push_scope();
         let (start, end, t) = self.range_bounds(left, Some(right))?;
         let end = end.expect("a bounded range");
@@ -23148,6 +23158,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                         || (owner, m) == ("CString", "from_bytes")
                     {
                         let t = self.expr_ty(&a.value)?;
+                        // A `Vec[u8]` the call itself makes (`[c, r].to_vec()`)
+                        // has no holder: it is moved in, and the native keeps
+                        // its buffer as the `String` when the bytes are ASCII
+                        // rather than copying them and freeing it
+                        // (B-2026-11-16-11, kata 2194).
+                        let fresh_vec = (owner, m) == ("String", "from_utf8")
+                            && matches!(
+                                a.value.kind,
+                                ExprKind::MethodCall { .. } | ExprKind::Call { .. }
+                            )
+                            && matches!(
+                                self.tys().tcx().kind(t),
+                                HK::Intrinsic {
+                                    kind: IntrinsicKind::Vec,
+                                    ..
+                                }
+                            );
+                        if fresh_vec {
+                            ops.push(self.expr_operand(&a.value)?);
+                            continue;
+                        }
                         if !self.is_copy(t) {
                             self.note_eval_order(&a.value);
                             let p = self.expr_place(&a.value, false)?;

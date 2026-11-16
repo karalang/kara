@@ -1376,36 +1376,65 @@ impl<'ctx> Cx<'ctx, '_> {
                         self.builder.build_float_ext(v, f64t, "").map_err(e)?
                     });
                 }
-                let narrow = self
-                    .llcx
-                    .i8_type()
-                    .const_int(u64::from(base == "f32"), false);
+                // In line, as `f64::total_cmp` is: each value's bits, with
+                // the magnitude bits flipped when the sign is set, compare as
+                // signed integers. Every NaN is first the positive quiet one,
+                // as the interpreter and the runtime's `karac_mir_total_cmp`
+                // canonicalize it. Through that call, kata 2208's heap of
+                // `F64` spent half its instructions in it (B-2026-11-16-8).
+                let narrow = base == "f32";
+                let it = if narrow {
+                    self.llcx.i32_type()
+                } else {
+                    self.llcx.i64_type()
+                };
+                let bits = if narrow { 32 } else { 64 };
+                let mut keys = Vec::with_capacity(2);
+                for v in x {
+                    let nan = self
+                        .builder
+                        .build_float_compare(inkwell::FloatPredicate::UNO, v, v, "")
+                        .map_err(e)?;
+                    let v = self
+                        .builder
+                        .build_select(nan, f64t.const_float(f64::NAN), v, "")
+                        .map_err(e)?
+                        .into_float_value();
+                    let v: inkwell::values::BasicValueEnum = if narrow {
+                        self.builder
+                            .build_float_trunc(v, self.llcx.f32_type(), "")
+                            .map_err(e)?
+                            .into()
+                    } else {
+                        v.into()
+                    };
+                    let b = self
+                        .builder
+                        .build_bit_cast(v, it, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let sign = self
+                        .builder
+                        .build_right_shift(b, it.const_int(bits - 1, false), true, "")
+                        .map_err(e)?;
+                    let mag = self
+                        .builder
+                        .build_right_shift(sign, it.const_int(1, false), false, "")
+                        .map_err(e)?;
+                    keys.push(self.builder.build_xor(b, mag, "").map_err(e)?);
+                }
                 let i32t = self.llcx.i32_type();
-                let f = self.extern_fn(
-                    "karac_mir_total_cmp",
-                    i32t.fn_type(
-                        &[f64t.into(), f64t.into(), self.llcx.i8_type().into()],
-                        false,
-                    ),
-                );
-                let o = self
-                    .builder
-                    .build_call(f, &[x[0].into(), x[1].into(), narrow.into()], "")
-                    .map_err(e)?
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_int_value();
                 let d = self.place_ptr(dest)?;
                 let tag_of = |name: &str| self.variant_of(dty, name);
                 let (lt, eq, gt) = (tag_of("Less")?, tag_of("Equal")?, tag_of("Greater")?);
                 let tag = |v: u32| i32t.const_int(u64::from(v), false);
                 let is_lt = self
                     .builder
-                    .build_int_compare(IntPredicate::SLT, o, i32t.const_zero(), "")
+                    .build_int_compare(IntPredicate::SLT, keys[0], keys[1], "")
                     .map_err(e)?;
                 let is_gt = self
                     .builder
-                    .build_int_compare(IntPredicate::SGT, o, i32t.const_zero(), "")
+                    .build_int_compare(IntPredicate::SGT, keys[0], keys[1], "")
                     .map_err(e)?;
                 let k = self
                     .builder

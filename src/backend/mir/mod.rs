@@ -2152,6 +2152,21 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             self.statics.insert(i, p);
             return Ok(p);
         }
+        if let Some(text) = self.const_str_static(def) {
+            let name = format!("kara.static.{}", def.name);
+            let (s, n) = self.str_const(&text)?;
+            let i64t = self.llcx.i64_type();
+            let header = self
+                .llcx
+                .const_struct(&[s.into(), n.into(), i64t.const_zero().into()], false);
+            let g = self.module.add_global(header.get_type(), None, &name);
+            g.set_initializer(&header);
+            g.set_constant(true);
+            g.set_alignment(8);
+            let p = g.as_pointer_value();
+            self.statics.insert(i, p);
+            return Ok(p);
+        }
         let l = self.layout(def.ty)?;
         let ty = self.llcx.i8_type().array_type(l.size.max(1) as u32);
         let g = self
@@ -2170,8 +2185,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let program = self.program;
         for (i, def) in program.statics.iter().enumerate() {
             let g = self.static_ptr(i as u32)?;
-            // A constant table is its own initializer.
-            if self.const_table(def).is_some() {
+            // A constant table or literal is its own initializer.
+            if self.const_table(def).is_some() || self.const_str_static(def).is_some() {
                 continue;
             }
             let f = self.function(&def.init)?;
