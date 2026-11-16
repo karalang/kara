@@ -570,10 +570,15 @@ impl<'a> super::TypeChecker<'a> {
                 // clone_codegen_safe` is the typecheck-side twin of codegen's
                 // `result_field_direct_vecstr_halves_ok` (widened to also accept
                 // the all-scalar heap-free case, where shallow == deep).
+                // `Result[T, E]`: as `Option`, clonable when both halves are
+                // (FX3). MIR clones it variant by variant, each half with its
+                // own clone, so the legacy codegen's in-place helper and its
+                // shape limits (B-2026-07-30-10) no longer apply.
                 if name == "Result" {
-                    return (args.iter().all(|a| self.type_supports_clone(a))
-                        && Self::result_halves_clone_codegen_safe(args))
-                    .then(|| ty.clone());
+                    return args
+                        .iter()
+                        .all(|a| self.type_supports_clone(a))
+                        .then(|| ty.clone());
                 }
                 // User struct / enum / distinct type carrying `#[derive(Clone)]`
                 // (or a `Clone` impl recorded in the impl table).
@@ -616,27 +621,10 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// B-2026-07-30-10 — the typecheck-side twin of codegen's
-    /// `result_field_direct_vecstr_halves_ok`: `Result[T, E].clone()` is
-    /// admitted only when BOTH halves are a shape `emit_result_value_clone_fn`
-    /// can deep-copy in place — a heap-free scalar, a `String`, or a
-    /// `Vec`/`VecDeque` whose element is itself half-safe. Every other
-    /// heap-bearing half (user struct/enum, `shared` handle, nested
-    /// `Option`/`Result`, `Map`) would take the shallow overlay copy and alias
-    /// the source buffer, so it is kept rejected until the in-place helper
-    /// grows those arms. Deliberately a STRICT SUBSET of the codegen predicate
-    /// (which also accepts a `Vec` of a non-shared struct element): every shape
-    /// this admits is one codegen provably clones correctly, so the gate can
-    /// never let a silent-alias miscompile through.
-    fn result_halves_clone_codegen_safe(args: &[Type]) -> bool {
-        args.len() == 2 && args.iter().all(Self::result_half_clone_codegen_safe)
-    }
-
     /// Which tuple COMPONENTS `emit_tuple_clone_fn` provably clones correctly.
     ///
-    /// A strict subset, and deliberately narrower than
-    /// `result_half_clone_codegen_safe` (which admits `Vec`), because the tuple
-    /// emitter was measured against each shape rather than assumed. Reading a
+    /// A strict subset, because the tuple emitter was measured against each
+    /// shape rather than assumed. Reading a
     /// tuple element out of a container and cloning it:
     ///
     ///   (i64, String)          ok      (String, String)  ok
@@ -664,32 +652,6 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Str => true,
             Type::Named { name, args } if name == "Option" && args.len() == 1 => {
                 Self::tuple_component_clone_codegen_safe(&args[0])
-            }
-            _ => false,
-        }
-    }
-
-    fn result_half_clone_codegen_safe(ty: &Type) -> bool {
-        match ty {
-            Type::Refinement { base, .. } => Self::result_half_clone_codegen_safe(base),
-            // Heap-free scalars: the shallow whole-value copy is already exact.
-            Type::Int(_)
-            | Type::UInt(_)
-            | Type::Float(_)
-            | Type::Bool
-            | Type::Char
-            | Type::Unit => true,
-            // The `String` half the overlay helper deep-copies.
-            Type::Str => true,
-            // A `Vec`/`VecDeque` half: the defensive copy duplicates the buffer
-            // and recursively deep-copies each element. Restricted to a
-            // half-safe element (scalar / String / nested Vec) so a shared or
-            // struct-heap element — which the buffer copy alone would alias —
-            // never slips through.
-            Type::Named { name, args }
-                if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
-            {
-                Self::result_half_clone_codegen_safe(&args[0])
             }
             _ => false,
         }

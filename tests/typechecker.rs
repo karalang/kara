@@ -1816,21 +1816,15 @@ fn test_result_clone_rejected_for_uncovered_heap_half() {
 }
 
 #[test]
-fn test_result_clone_rejected_for_nested_option_half() {
-    // A nested `Option[String]` half is heap-owning but outside the direct
-    // String/Vec class — kept rejected.
-    let errors = typecheck_errors(
+fn test_result_clone_accepted_for_nested_option_half() {
+    // A nested `Option[String]` half was refused while a legacy codegen
+    // helper could not deep-copy it in place; MIR clones each half with its
+    // own clone, so it checks (FX3).
+    typecheck_ok(
         "fn main() {\n\
              let r: Result[Option[String], i64] = Result.Ok(Option.Some(\"z\"));\n\
              let _c = r.clone();\n\
          }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
-        "expected NoMethodFound on Result[Option[String], i64].clone(), got {:?}",
-        errors
     );
 }
 

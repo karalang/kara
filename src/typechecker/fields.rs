@@ -1611,7 +1611,25 @@ impl<'a> super::TypeChecker<'a> {
                                 .map(|(p, v)| (p.clone(), v.clone()))
                                 .collect();
                             let opened = substitute_type_params(&actual, &foreign);
-                            if opened != actual {
+                            // FX1 — a parameter of the value's own type that
+                            // only shares this struct's parameter's NAME (the
+                            // `T` of a bare `None`'s `Option[T]`, in a `v: T`
+                            // field of a `G[T]`) is not this struct's: opening
+                            // it would bind `?T` to `Option[?T]`, a type that
+                            // contains itself. The value keeps its own.
+                            let field_slot = projected.clone().unwrap_or_else(|| {
+                                substitute_type_params(expected_ty, &param_subs)
+                            });
+                            let cyclic =
+                                match resolve_type_var_top(&field_slot, &self.env.substitutions) {
+                                    Type::TypeVar(id) => super::inference::occurs_in(
+                                        id,
+                                        &opened,
+                                        &self.env.substitutions,
+                                    ),
+                                    _ => false,
+                                };
+                            if opened != actual && !cyclic {
                                 for v in foreign.values() {
                                     if let Some(Type::TypeVar(id)) = v.as_type() {
                                         echoed.insert(*id);

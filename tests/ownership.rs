@@ -14025,13 +14025,12 @@ fn uam_hint_stays_silent_for_types_with_no_clone() {
 }
 
 #[test]
-fn uam_hint_rejects_result_halves_codegen_cannot_deep_copy() {
-    // The reason the hint consults `clone_receiver_self_type` (the
-    // METHOD-side predicate) and not `type_supports_clone` (the BOUND-side
-    // one): these three satisfy the bound-side predicate but `.clone()` is
-    // genuinely rejected on them, because `emit_result_value_clone_fn` has
-    // no in-place deep copy for such a half (B-2026-07-30-10). Consulting
-    // the bound-side twin here would auto-insert code that does not compile.
+fn uam_hint_offers_clone_for_result_with_any_clonable_half() {
+    // These three were refused as `Result[..].clone()` while a legacy
+    // codegen helper had no in-place deep copy for such a half
+    // (B-2026-07-30-10), and this fixture pinned the hint's silence. MIR
+    // clones a `Result` half by half, so `.clone()` checks on each and the
+    // hint offers it (FX3).
     for (ty, ctor) in [
         ("Result[P, i64]", "Result.Ok(P { a: 1 })"),
         (
@@ -14042,13 +14041,10 @@ fn uam_hint_rejects_result_halves_codegen_cannot_deep_copy() {
     ] {
         let (hint, has_edit) = uam_clone_hint(&uam_program(CLONE_PRELUDE, ty, ctor));
         assert!(
-            hint.contains("has no `.clone()`"),
-            "{ty}: `.clone()` does not resolve here, hint must not offer it — {hint:?}"
+            hint.contains("at the move site") && !hint.contains("has no `.clone()`"),
+            "{ty}: expected the clone hint, got {hint:?}"
         );
-        assert!(
-            !has_edit,
-            "{ty}: offered a `.clone()` edit that cannot compile"
-        );
+        assert!(has_edit, "{ty}: karac fix withheld a valid `.clone()` edit");
     }
 }
 

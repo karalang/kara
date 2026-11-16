@@ -145,6 +145,44 @@ pub(super) fn is_collection_literal(e: &Expr) -> bool {
     )
 }
 
+/// An empty list literal (`[]`, `Vec[]`) that only its slot can type,
+/// reached through tuple literals and `Some` / `Ok` / `Err` payloads, at
+/// any depth: `Some(([], 0i32))` against `Option[(Vec[i64], i32)]`,
+/// `Some(Ok([]))`, `((1i8, []), 2u8)`. Synthesis gives the `[]` no element
+/// type, and the expectation was not carried past the first tuple or
+/// constructor (FX5).
+pub(super) fn nested_empty_literal_needs_slot(e: &Expr, slot: &Type) -> bool {
+    match (&e.kind, slot) {
+        (ExprKind::ArrayLiteral(items), Type::Named { .. })
+        | (ExprKind::PrefixCollectionLiteral { items, .. }, Type::Named { .. }) => {
+            items.is_empty() && expectation_is_concrete(slot)
+        }
+        (ExprKind::Tuple(items), Type::Tuple(slots)) if items.len() == slots.len() => items
+            .iter()
+            .zip(slots.iter())
+            .any(|(e, s)| nested_empty_literal_needs_slot(e, s)),
+        (ExprKind::Call { callee, args }, Type::Named { name, args: ta }) if args.len() == 1 => {
+            let ctor = match &callee.kind {
+                ExprKind::Identifier(c) => c.as_str(),
+                ExprKind::Path { segments, .. }
+                    if segments.len() == 2
+                        && matches!(segments[0].as_str(), "Option" | "Result") =>
+                {
+                    segments[1].as_str()
+                }
+                _ => return false,
+            };
+            let inner = match (ctor, name.as_str(), ta.len()) {
+                ("Some", "Option", 1) | ("Ok", "Result", 2) => &ta[0],
+                ("Err", "Result", 2) => &ta[1],
+                _ => return false,
+            };
+            nested_empty_literal_needs_slot(&args[0].value, inner)
+        }
+        _ => false,
+    }
+}
+
 /// An associated-function call with a bare numeric or list literal among
 /// its arguments: `Vec.filled(n, 0)` builds the `Vec[T]` its slot names, as
 /// it does under a `let` annotation, where otherwise the literal mints its
@@ -3462,7 +3500,13 @@ impl<'a> super::TypeChecker<'a> {
                                 // and a tuple with a `dyn` slot, whose
                                 // elements coerce into it: `Some((1, Hello {}))`.
                                 || (matches!(args[0].value.kind, ExprKind::Tuple(_))
-                                    && tuple_has_dyn_slot(&slot));
+                                    && tuple_has_dyn_slot(&slot))
+                                // FX5: an empty `[]` under a tuple or another
+                                // constructor: `Some(([], 0))`, `Some(Ok([]))`.
+                                || (matches!(
+                                    args[0].value.kind,
+                                    ExprKind::Tuple(_) | ExprKind::Call { .. }
+                                ) && nested_empty_literal_needs_slot(&args[0].value, &slot));
                         // B-2026-11-03-14 — a slot that is still an unsolved
                         // metavar (`Err(0)` returned to `or_else`'s `F`) has no
                         // type for the literal to adopt; returning `expected`
@@ -3640,6 +3684,10 @@ impl<'a> super::TypeChecker<'a> {
                             && expectation_is_concrete(slot))
                         || is_dyn_slot(slot)
                         || (matches!(e.kind, ExprKind::Tuple(_)) && tuple_has_dyn_slot(slot))
+                        // FX5: a nested tuple or constructor holding an empty
+                        // `[]`: `((1i8, []), 2u8)`.
+                        || (matches!(e.kind, ExprKind::Tuple(_) | ExprKind::Call { .. })
+                            && nested_empty_literal_needs_slot(e, slot))
                 };
                 if elems
                     .iter()

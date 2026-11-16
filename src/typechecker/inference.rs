@@ -770,6 +770,40 @@ fn substitute_const_param_to_var(
 /// `find_unbound_type_param` (slice 2a) detects them at the consuming
 /// context. Each substitution result is itself recursively resolved so
 /// `?M0 → ?M1 → i32` collapses to `i32`.
+/// Whether binding `id` to `ty` would make a type that contains itself:
+/// `id` is reached from `ty` through the substitutions. Walked with a
+/// visited set, so a cycle already present cannot loop it (FX1).
+pub(super) fn occurs_in(
+    id: TypeVarId,
+    ty: &Type,
+    substitutions: &FxHashMap<TypeVarId, Type>,
+) -> bool {
+    let mut stack = Vec::new();
+    super::exprs::type_var_ids(ty, &mut stack);
+    let mut seen: HashSet<TypeVarId> = HashSet::new();
+    while let Some(v) = stack.pop() {
+        if v == id {
+            return true;
+        }
+        if seen.insert(v) {
+            if let Some(t) = substitutions.get(&v) {
+                super::exprs::type_var_ids(t, &mut stack);
+            }
+        }
+    }
+    false
+}
+
+/// How deep `resolve_type_vars` may follow variables into their bindings
+/// before it gives up with `Type::Error` rather than overflow the stack on a
+/// cyclic substitution: no shape of program may crash `check` (FX1). Far
+/// beyond any type a program writes.
+const RESOLVE_DEPTH_LIMIT: u32 = 2048;
+
+thread_local! {
+    static RESOLVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) fn resolve_type_vars(
     ty: &Type,
     substitutions: &FxHashMap<TypeVarId, Type>,
@@ -789,7 +823,17 @@ pub(super) fn resolve_type_vars(
     match ty {
         Type::TypeVar(id) => {
             if let Some(resolved) = substitutions.get(id) {
-                recur(resolved)
+                let depth = RESOLVE_DEPTH.with(|d| {
+                    d.set(d.get() + 1);
+                    d.get()
+                });
+                let out = if depth > RESOLVE_DEPTH_LIMIT {
+                    Type::Error
+                } else {
+                    recur(resolved)
+                };
+                RESOLVE_DEPTH.with(|d| d.set(d.get() - 1));
+                out
             } else if let Some(name) = id_to_name.get(id) {
                 Type::TypeParam(name.clone())
             } else {
@@ -961,10 +1005,16 @@ pub(super) fn unify_types(
         // input (defensive; normally unreachable).
         (Type::TypeVar(id_a), Type::TypeVar(id_b)) if id_a == id_b => true,
         (Type::TypeVar(id), _) => {
+            if occurs_in(*id, &b, substitutions) {
+                return false;
+            }
             substitutions.insert(*id, b.clone());
             true
         }
         (_, Type::TypeVar(id)) => {
+            if occurs_in(*id, &a, substitutions) {
+                return false;
+            }
             substitutions.insert(*id, a.clone());
             true
         }
@@ -1263,6 +1313,10 @@ fn unify_type_var(
                 _ => false,
             }
         }
+        // A variable never takes a type that contains it: `?T = Option[?T]`
+        // is an infinite type, which every later walk of it would follow
+        // forever (FX1). It is a mismatch.
+        None if occurs_in(id, &other, substitutions) => false,
         None => {
             substitutions.insert(id, other);
             true
@@ -1270,6 +1324,9 @@ fn unify_type_var(
         Some(cur) => {
             let cur = resolve_type_var_top(&cur, substitutions);
             if cur == Type::Never && other != Type::Never && other != Type::Error {
+                if occurs_in(id, &other, substitutions) {
+                    return false;
+                }
                 substitutions.insert(id, other);
                 true
             } else if other == Type::Never {
