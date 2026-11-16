@@ -140,7 +140,10 @@ fn run_one(e: &Entry, scratch: &Path) -> Option<String> {
         .arg(&src)
         .arg("-o")
         .arg(&wasm)
-        .env("KARAC_RUNTIME", wasm_archive())
+        // No `KARAC_RUNTIME`: the driver picks the archive from the object's
+        // symbols, so a `std.regex` entry takes `libkarac_runtime_wasm_regex.a`
+        // as a user's build does. Forced to the plain archive, that entry's
+        // link failed on `karac_regex_mir`.
         .current_dir(&dir)
         .output()
         .unwrap();
