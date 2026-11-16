@@ -110,10 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
-| B-2026-11-16-181 | 2026-11-16 | typecheck | medium | An array literal a `map` / `filter_map` closure returns does not follow the element the `collect` names: `d.iter().map(|e| [e[0], e[1], 1 - e[2]]).collect()` checked against a `Vec[Array[i64, 3]]` is refused as `FromIterator[Vec[i64]]`, where design.md § List literals says a literal follows the type its use asks for (the -38 remainder) | — |
-| B-2026-11-16-182 | 2026-11-16 | typecheck | medium | A `par` block written as statements (`par { a(); b(); }`, `par { let _a = read(c); let _b = read(c); }`) is refused (core-semantics §11.1, E0520) with no machine fix; it is the most common fixless refusal in the corpus fix-coverage sweep: 94 errors in 90 of 1154 refused or pre-fix programs | — |
-| B-2026-11-16-183 | 2026-11-16 | typecheck | medium | A `let` that keeps a view of a temporary (`let req: Vec[Str] = line.substring(a, b).split(" ").collect();`, core-semantics §5.5) is refused with "Bind the temporary to a variable first" and no machine fix, 11 errors in the corpus fix-coverage sweep | — |
-| B-2026-11-16-184 | 2026-11-16 | typecheck | low | The legacy `ExitStatus.code` field (`if st.code == 0`) is refused with "`code` is a method now ... the old field's -1 is `code().unwrap_or(-1)`" and no machine fix, though `success` gets one; 15 errors in 9 programs of the corpus fix-coverage sweep | — |
 
 ### Relocated
 
@@ -1360,6 +1356,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-10 | mir-llvm | low | `i64.parse(token)` of a word (`"box"`) calls the runtime's parser to learn it is not a number: kata 2042's token scan costs 2.55x checked Rust | 817ac3649e |
 | B-2026-11-16-11 | mir-llvm | low | `String.from_utf8([col, row].to_vec()).unwrap()` copies the fresh `Vec` into a new allocation and frees it: kata 2194 costs 1.85x checked Rust | 817ac3649e |
 | B-2026-11-16-12 | mir-llvm | low | A `sort_by` comparator `nums[b].cmp(nums[a]).then(a.cmp(b))` branches on `nums[b] > nums[a]` inside the merge: kata 2099 runs 2.2x checked Rust's wal… | 817ac3649e |
+| B-2026-11-16-181 | typecheck | medium | An array literal a `map` / `filter_map` closure returns does not follow the element the `collect` names: `d.iter().map(\|e\| [e[0], e[1], 1 - e[2]]).co… | 7a81dbfcf1 |
+| B-2026-11-16-182 | typecheck | medium | A `par` block written as statements (`par { a(); b(); }`, `par { let _a = read(c); let _b = read(c); }`) is refused (core-semantics §11.1, E0520) wit… | 7a81dbfcf1 |
+| B-2026-11-16-183 | typecheck | medium | A `let` that keeps a view of a temporary (`let req: Vec[Str] = line.substring(a, b).split(" ").collect();`, core-semantics §5.5) is refused with "Bin… | 7a81dbfcf1 |
+| B-2026-11-16-184 | typecheck | low | The legacy `ExitStatus.code` field (`if st.code == 0`) is refused with "`code` is a method now .. | 7a81dbfcf1 |
 
 </details>
 
