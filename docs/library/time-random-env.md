@@ -44,7 +44,7 @@ impl Duration {
 }
 ```
 
-A `Duration` holds nanoseconds. Two of them add and subtract (`a + b`, `a - b`, which is negative when `b` is longer), and one scales by an `i64` (`d * 2`, `d / 4`, rounded toward zero). Each operator has its compound assignment (`total += d`). Each `as_` reader gives the whole units in the span, rounded toward zero, so `Duration.us(1500).as_ms()` is `1`. `sleep(d)` pauses for `d`, to the nanosecond.
+A `Duration` holds nanoseconds. Two of them add and subtract (`a + b`, `a - b`, which is negative when `b` is longer), and one scales by an `i64` (`d * 2`, `d / 4`, rounded toward zero). Each operator has its compound assignment (`total += d`). Each `as_` reader gives the whole units in the span, rounded toward zero, so `Duration.us(1500).as_ms()` is `1`. A span is an `i64` count of nanoseconds, about ±292 years. A constructor, an operator or a compound assignment whose result leaves that range panics, as integer arithmetic does (`Duration.secs(9223372037)`, `Duration.ns(i64.MAX) + Duration.ns(1)`), and `d / 0` panics. Nothing saturates, and there are no `checked_*` forms yet (review-thread ruling 2026-11-16). `sleep(d)` pauses for `d`, to the nanosecond.
 
 ```kara
 import std.time.{Duration, Instant, sleep};

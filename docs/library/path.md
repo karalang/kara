@@ -18,8 +18,8 @@ The functions are imported by name, all at once with `import std.path.*;`, or as
 
 | Function | Signature | Notes |
 |---|---|---|
-| `parent` | `fn parent(p: Str) -> Option[Str]` | The path without its last component: `"a/b/c.txt"` gives `"a/b"`, `"a"` gives `""`, `"/a"` gives `"/"`. `None` for `"/"` and `""`. Trailing separators are ignored |
-| `file_name` | `fn file_name(p: Str) -> Option[Str]` | The last component: `"a/b/c.txt"` gives `"c.txt"`. `None` when there is none, or when it is `.` or `..`. Trailing separators are ignored |
+| `parent` | `fn parent(p: Str) -> Option[Str]` | The path without its last component: `"a/b/c.txt"` gives `"a/b"`, `"a"` gives `""`, `"/a"` gives `"/"`. `None` for `"/"` and `""`. Trailing separators are ignored, and so is a trailing `.` component, as `components` drops it: `"a/."` gives `""` (review-thread ruling 2026-11-16) |
+| `file_name` | `fn file_name(p: Str) -> Option[Str]` | The last component: `"a/b/c.txt"` gives `"c.txt"`. `None` when there is none, or when it is `.` or `..`. Trailing separators and a trailing `.` component are ignored, so `"a/."` gives `"a"`, as its `components` end in `a` (review-thread ruling 2026-11-16) |
 | `extension` | `fn extension(p: Str) -> Option[Str]` | The file name after its last `.`: `"c.tar.gz"` gives `"gz"`, `"f."` gives `""`. `None` without a file name, without a `.`, or with only a leading one (`".bashrc"`) |
 | `stem` | `fn stem(p: Str) -> Option[Str]` | The file name before its last `.`: `"c.tar.gz"` gives `"c.tar"`; `".bashrc"` gives `".bashrc"`. `None` without a file name |
 | `join` | `fn join(a: Str, b: Str) -> String` | `b` after `a`, with one separator between them. See the warnings below |

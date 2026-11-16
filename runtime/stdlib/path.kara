@@ -13,15 +13,30 @@ pub fn is_absolute(p: Str) -> bool {
     p.starts_with("/")
 }
 
+/// `p` without trailing separators and trailing `.` components, as
+/// `components` reads it: `"a/./"` is `"a"`, so its parent is `""` and its
+/// file name `a` (review-thread ruling 2026-11-16, B-2026-11-16-179). A
+/// lone `/` or `.` is kept.
+fn path_trimmed(p: Str) -> Str {
+    let mut end = p.len();
+    loop {
+        while end > 1 and p.slice(0, end).ends_with("/") {
+            end = end - 1;
+        }
+        if end > 2 and p.slice(0, end).ends_with("/.") {
+            end = end - 1;
+        } else {
+            break;
+        }
+    }
+    p.slice(0, end)
+}
+
 /// The path without its last component: `"a/b/c.txt"` gives `"a/b"`, `"a"`
 /// gives `""` and `"/a"` gives `"/"`. `None` for the root and for an empty
 /// path. Trailing separators are ignored.
 pub fn parent(p: Str) -> Option[Str] {
-    let mut end = p.len();
-    while end > 1 and p.slice(0, end).ends_with("/") {
-        end = end - 1;
-    }
-    let t = p.slice(0, end);
+    let t = path_trimmed(p);
     if t.is_empty() or t == "/" {
         return None;
     }
@@ -40,11 +55,7 @@ pub fn parent(p: Str) -> Option[Str] {
 /// The last component: `"a/b/c.txt"` gives `"c.txt"`. `None` when there is
 /// none, or when it is `.` or `..`. Trailing separators are ignored.
 pub fn file_name(p: Str) -> Option[Str] {
-    let mut end = p.len();
-    while end > 1 and p.slice(0, end).ends_with("/") {
-        end = end - 1;
-    }
-    let t = p.slice(0, end);
+    let t = path_trimmed(p);
     let name = match t.rfind("/") {
         Some(i) => t.slice(i + 1, t.len()),
         None => t,
@@ -59,11 +70,7 @@ pub fn file_name(p: Str) -> Option[Str] {
 /// The file name after its last `.`: `"c.tar.gz"` gives `"gz"`. `None` when
 /// there is no file name, no `.`, or only a leading one (`".bashrc"`).
 pub fn extension(p: Str) -> Option[Str] {
-    let mut end = p.len();
-    while end > 1 and p.slice(0, end).ends_with("/") {
-        end = end - 1;
-    }
-    let t = p.slice(0, end);
+    let t = path_trimmed(p);
     let name = match t.rfind("/") {
         Some(i) => t.slice(i + 1, t.len()),
         None => t,
@@ -80,11 +87,7 @@ pub fn extension(p: Str) -> Option[Str] {
 /// The file name before its last `.`: `"c.tar.gz"` gives `"c.tar"`, and
 /// `".bashrc"` gives itself. `None` when there is no file name.
 pub fn stem(p: Str) -> Option[Str] {
-    let mut end = p.len();
-    while end > 1 and p.slice(0, end).ends_with("/") {
-        end = end - 1;
-    }
-    let t = p.slice(0, end);
+    let t = path_trimmed(p);
     let name = match t.rfind("/") {
         Some(i) => t.slice(i + 1, t.len()),
         None => t,

@@ -1,0 +1,5 @@
+import std.time.{Duration};
+fn main() {
+    let d = Duration.secs(9223372037);
+    println(d.as_secs());
+}

@@ -1,0 +1,5 @@
+import std.time.{Duration};
+fn main() {
+    let d = Duration.ns(5) / 0;
+    println(d.as_ns());
+}

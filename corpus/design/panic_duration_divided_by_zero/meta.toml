@@ -1,0 +1,9 @@
+source = "docs/library/time-random-env.md"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["design", "library", "time", "panic"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "Review-thread ruling 2026-11-16: a Duration is i64 nanoseconds and leaving that range panics as integer arithmetic does; d / 0 panics. Nothing saturates."
