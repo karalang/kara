@@ -3326,6 +3326,10 @@ fn main() -> () {
             "ok_view_param_results_live_together",
             "ok_view_param_through_struct_field",
             "ok_view_receiver_results_live_together",
+            // `find`, `position`, `peekable` and `next_if` are iter.kara's
+            // (B-2026-11-16-42).
+            "ok_find_closure_loan_not_in_result",
+            "ok_next_if_closure_loan_not_stored",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

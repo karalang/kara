@@ -1,6 +1,6 @@
 fn main() {
     let v: Vec[i64] = [1, 2, 3, 10, 11];
-    let mut p = v.iter().map(|x| *x).peekable();
+    let mut p = v.iter().map(|x| x + 0).peekable();
     let mut runs: Vec[i64] = Vec.new();
     while let Some(x) = p.next() {
         let mut c = 1;
