@@ -159,12 +159,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-301 | 2026-11-16 | typecheck+cli | low | E0208 (comparison without the trait) offers the `#[derive]` machine fix at an `==` site but none at a `<` / `>` site | — |
 | B-2026-11-16-302 | 2026-11-16 | other | low | [doc-only] design.md's streaming-phase-events example shows code E0099, which the compiler never emits (parse errors are E0001/E0002) and explain does not know | — |
 | B-2026-11-16-303 | 2026-11-16 | other | low | 389 of the 491 codes `karac explain` knows are produced by no corpus program under `karac check` (102 distinct codes appear over all 21918 sources), so most catalogue entries have no pin that the code is reachable or that its text matches | — |
-| B-2026-11-16-304 | 2026-11-16 | typecheck | low | An irrefutable `let ... else` pattern gives no warning; irrefutable_let_pattern covers it too (review ruling) | — |
-| B-2026-11-16-305 | 2026-11-16 | typecheck | low | `let r = ref make_value()` says 'only `ref <sequence>[i]` is supported in 0.8' instead of the temporary-borrow error and its fix | — |
-| B-2026-11-16-306 | 2026-11-16 | typecheck | low | An empty `match e { }` on an enum says 'missing variants: _' instead of naming the variants | — |
-| B-2026-11-16-307 | 2026-11-16 | typecheck | low | `a, b = (1, 2, 3)` adds a spurious E0222 'refutable pattern in `let` binding' next to the arity error | — |
-| B-2026-11-16-308 | 2026-11-16 | parser | low | A float range pattern `0.0..=1.0` is a parse error at `..=`, not the spec's 'float ranges are not supported' | — |
-| B-2026-11-16-309 | 2026-11-16 | typecheck | low | A default naming an earlier parameter gets a duplicate 'not a known const' error, or only 'undefined name' once the function is called | — |
 
 ### Relocated
 
@@ -1492,6 +1486,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-251 | typecheck | low | Text where bytes are wanted (`fn f(b: Slice[u8])` called with a `String` or `Str`, a child process's `stdin.write(text)`) is refused with "expected '… | 84c49b5431 |
 | B-2026-11-16-252 | typecheck+cli | medium | A `par` block written as statements whose tail computes from its `let`s (`let total = par { let a = f(); let b = g(); a + b };`) is refused (core-sem… | 84c49b5431 |
 | B-2026-11-16-253 | interp | medium | On AArch64 (macOS CI) the MIR interpreter refused an `extern "C"` call whose arguments fill more than six integer registers ("8 integer and 0 float a… | 54a14fdd6b |
+| B-2026-11-16-304 | typecheck | low | An irrefutable `let .. | b31d77e15a |
+| B-2026-11-16-305 | typecheck | low | `let r = ref make_value()` says 'only `ref <sequence>[i]` is supported in 0.8' instead of the temporary-borrow error and its fix | b31d77e15a |
+| B-2026-11-16-306 | typecheck | low | An empty `match e { }` on an enum says 'missing variants: _' instead of naming the variants | b31d77e15a |
+| B-2026-11-16-307 | typecheck | low | `a, b = (1, 2, 3)` adds a spurious E0222 'refutable pattern in `let` binding' next to the arity error | b31d77e15a |
+| B-2026-11-16-308 | parser | low | A float range pattern `0.0..=1.0` is a parse error at `..=`, not the spec's 'float ranges are not supported' | b31d77e15a |
+| B-2026-11-16-309 | typecheck | low | A default naming an earlier parameter gets a duplicate 'not a known const' error, or only 'undefined name' once the function is called | b31d77e15a |
 
 </details>
 
