@@ -23115,6 +23115,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     _ => None,
                 };
+                // Its copies are the element type's own `Clone`s.
+                if let Some(el) = elem {
+                    self.queue_nested_clones(el);
+                }
                 let mut ops = Vec::new();
                 for (i, a) in args.iter().enumerate() {
                     if calls_in_place && matches!(a.value.kind, ExprKind::Closure { .. }) {
@@ -23581,6 +23585,29 @@ impl<'l, 'a> Bx<'l, 'a> {
         if method == "clone" && args.is_empty() {
             let rt = self.expr_ty(object)?;
             self.queue_nested_clones(rt);
+        }
+        // A library method that clones elements of its receiver or its
+        // argument calls each element type's own `Clone`, which nothing else
+        // may queue: `v.resize(n, d)` with no `.clone()` written anywhere
+        // made field-by-field copies of a `D` with a user `Clone`
+        // (collections conformance pass).
+        if matches!(
+            method.strip_prefix("try_").unwrap_or(method),
+            "resize"
+                | "fill"
+                | "to_vec"
+                | "extend_from_slice"
+                | "cloned"
+                | "clone"
+                | "concat"
+                | "repeat"
+        ) {
+            let rt = self.expr_ty(object)?;
+            self.queue_nested_clones(rt);
+            for a in args {
+                let at = self.expr_ty(&a.value)?;
+                self.queue_nested_clones(at);
+            }
         }
         let array_recv = method == "clone" && {
             let rt = self.expr_ty(object)?;

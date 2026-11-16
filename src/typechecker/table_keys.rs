@@ -306,6 +306,15 @@ impl<'a> super::TypeChecker<'a> {
             _ => "`Eq`",
         };
         let hint = match key {
+            // design.md § Floats: the total-order `F32` / `F64` are the
+            // key types, named in the fix.
+            Type::Float(_) if shown == "f64" || shown == "f32" => {
+                let total = shown.to_uppercase();
+                format!(
+                    " A float has neither: `NaN != NaN`. Use `{total}`, the total-order \
+                     float, as the key (`{total}.from(x)`): it implements `Hash`, `Eq` and `Ord`."
+                )
+            }
             Type::Float(_) => " A float has neither: `NaN != NaN`. Key by its bits \
                                (`x.to_bits()`) or use an integer."
                 .to_string(),

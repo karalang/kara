@@ -2183,14 +2183,59 @@ impl<'ctx> Cx<'ctx, '_> {
                     vt = i;
                 }
                 let drops = self.tys.needs_drop(el);
-                self.count_loop(n, |cx, i| {
+                // As the interpreter does: every old element drops first,
+                // then each slot but the last takes a clone and the last
+                // takes the value itself; with no slot the value drops.
+                // A value reached through a reference is cloned into
+                // every slot.
+                let own = vt == el && matches!(v, Operand::Move(_) | Operand::Copy(_));
+                if drops {
+                    self.count_loop(n, |cx, i| {
+                        let x = cx.elem_ptr(p, i, size)?;
+                        cx.call_glue(x, el)
+                    })?;
+                }
+                let clones = if own {
+                    let some = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGT, n, self.i64(0), "")
+                        .map_err(e)?;
+                    let less1 = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
+                    self.builder
+                        .build_select(some, less1, self.i64(0), "")
+                        .map_err(e)?
+                        .into_int_value()
+                } else {
+                    n
+                };
+                self.count_loop(clones, |cx, i| {
                     let x = cx.elem_ptr(p, i, size)?;
-                    if drops {
-                        cx.call_glue(x, el)?;
-                    }
                     cx.clone_into(x, vp, el)
                 })?;
-                self.drop_moved(&args[1..])?;
+                if own {
+                    let none = self.is_zero(n)?;
+                    let at = self.elem_ptr(p, clones, size)?;
+                    let f = self.cur_fn()?;
+                    let (bt, bf, done) = (
+                        self.llcx.append_basic_block(f, "fill.drop"),
+                        self.llcx.append_basic_block(f, "fill.take"),
+                        self.llcx.append_basic_block(f, "fill.done"),
+                    );
+                    self.builder
+                        .build_conditional_branch(none, bt, bf)
+                        .map_err(e)?;
+                    self.builder.position_at_end(bt);
+                    if drops && matches!(v, Operand::Move(_)) {
+                        self.call_glue(vp, el)?;
+                    }
+                    self.builder.build_unconditional_branch(done).map_err(e)?;
+                    self.builder.position_at_end(bf);
+                    self.copy(at, vp, el)?;
+                    self.builder.build_unconditional_branch(done).map_err(e)?;
+                    self.builder.position_at_end(done);
+                } else {
+                    self.drop_moved(&args[1..])?;
+                }
             }
             ("swap", [i, j]) => {
                 let (i, j) = (self.int_arg(i)?, self.int_arg(j)?);
@@ -2370,7 +2415,12 @@ impl<'ctx> Cx<'ctx, '_> {
                     .builder
                     .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
                     .map_err(e)?;
-                self.abort_unless(pos, "explicit panic")?;
+                let why = if method == "chunks" {
+                    "chunks: size must be positive"
+                } else {
+                    "windows: size must be positive"
+                };
+                self.abort_unless(pos, why)?;
                 let b = &self.builder;
                 let count = if method == "chunks" {
                     let m = b.build_int_add(n, k, "").map_err(e)?;
@@ -2485,7 +2535,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.reserve_via_copy(v, grow, self.i64(size))?;
                 let buf = self.load_ptr(v)?;
                 let vp = self.operand_ptr(val)?;
-                let moved = matches!(val, Operand::Move(_)) && self.tys.needs_drop(el);
+                // The last new slot takes the value itself, as the
+                // interpreter's does, whether or not the element needs a
+                // drop: a user `Clone` makes the copies observable
+                // (collections.md § Vec `resize`).
+                let moved = matches!(val, Operand::Move(_) | Operand::Copy(_));
+                let drops_val = matches!(val, Operand::Move(_)) && self.tys.needs_drop(el);
                 let clones = if moved {
                     let some = self
                         .builder
@@ -2521,7 +2576,9 @@ impl<'ctx> Cx<'ctx, '_> {
                         .build_conditional_branch(none, bt, bf)
                         .map_err(e)?;
                     self.builder.position_at_end(bt);
-                    self.call_glue(vp, el)?;
+                    if drops_val {
+                        self.call_glue(vp, el)?;
+                    }
                     self.builder.build_unconditional_branch(done).map_err(e)?;
                     self.builder.position_at_end(bf);
                     self.copy(at, vp, el)?;

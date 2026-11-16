@@ -8906,10 +8906,8 @@ impl<'a> Interp<'a> {
                 // Views into the receiver: back to back, the last one
                 // shorter, or every run of `n` in a row.
                 if *n <= 0 {
-                    if self.trace {
-                        self.events.push(Event::Abort(AbortReason::Panic));
-                    }
-                    return Err(Stop::Abort(AbortReason::Panic));
+                    self.panic_message = Some(format!("{method}: size must be positive"));
+                    return self.native_panic();
                 }
                 let n = *n as u64;
                 let mut views = Vec::new();
