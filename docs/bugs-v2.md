@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 354 |
+| diagnostics | 356 |
 | false-positive | 223 |
 | missing-feature | 172 |
 | perf | 169 |
@@ -70,19 +70,19 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | crash | 32 |
 | leak | 4 |
 | use-after-free | 3 |
-| double-free | 1 |
+| double-free | 2 |
 
 ### By surface
 
 | surface | total |
 |---|---|
 | typecheck | 499 |
-| mir-llvm | 239 |
-| mir | 212 |
+| mir-llvm | 240 |
+| mir | 214 |
 | cli | 145 |
 | parser | 90 |
 | ownership | 88 |
-| interp | 63 |
+| interp | 64 |
 | runtime | 50 |
 | effect | 35 |
 | resolver | 30 |
@@ -1335,6 +1335,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-159 | typecheck | low | `.clone()` on `Result[H, String]` with a `#[derive(Clone)]` `H` was "no method clone on type Result", while `Option[H].clone()` and `Result[i64, Stri… | 649b27f77e |
 | B-2026-11-16-1 | interp+mir-llvm | low | A derived `Debug` on an enum that also derives `Display(snake_case)` prints the snake_case name (`Dir.BigDown.fmt_debug()` gives `big_down`, not `Big… | 9452e21278 |
 | B-2026-11-16-2 | ownership | low | Shadowing a method receiver's name inside its own argument (`m.push({ let mut m: Vec[i64] = Vec.new(); m.push(1); m })`) is refused as a conflicting… | 9452e21278 |
+| B-2026-11-16-3 | mir | high | `Vec.filled`, `resize` and `fill` never ran an element type's user `Clone` unless the program wrote `.clone()` somewhere: the copies were field by fi… | f8fb1c6a10 |
+| B-2026-11-16-4 | mir | low | `windows(0)` / `chunks(0)` panicked with the message "explicit panic", and a float `Map`/`Set` key's diagnostic suggested `to_bits()` where design.md… | f8fb1c6a10 |
+| B-2026-11-16-5 | interp+mir-llvm | low | base64_decode and base64url_decode report more than two trailing `=` (`Z===`, `====`, `Zm9v====`) as InvalidByte at the third `=`, where docs/library… | 9cb3bbd69e |
 
 </details>
 
