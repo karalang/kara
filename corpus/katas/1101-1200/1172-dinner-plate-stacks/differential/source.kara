@@ -1,0 +1,587 @@
+// LeetCode #1172: Dinner Plate Stacks -- the differential: the six arms
+// against the statement read literally, and five properties of what they
+// return.
+
+// ---- dinner_plates.kara ----
+
+struct A0Plates {
+    capacity: i64,
+    stacks: Vec[Vec[i64]],
+    // indices that may have room, smallest first; one whose stack is full
+    // or gone is dropped when it comes to the top
+    open: PriorityQueue[i64],
+}
+
+impl A0Plates {
+    fn new(capacity: i64) -> A0Plates {
+        A0Plates { capacity, stacks: Vec.new(), open: PriorityQueue.new() }
+    }
+
+    fn push(mut ref self, val: i64) {
+        while let Some(i) = self.open.peek() {
+            if i < self.stacks.len() and self.stacks[i].len() < self.capacity {
+                break;
+            }
+            self.open.pop();
+        }
+        if self.open.is_empty() {
+            self.open.push(self.stacks.len());
+            self.stacks.push(Vec.new());
+        }
+        let i = *self.open.peek().unwrap();
+        self.stacks[i].push(val);
+        if self.stacks[i].len() == self.capacity {
+            self.open.pop();
+        }
+    }
+
+    fn pop(mut ref self) -> i64 {
+        if self.stacks.is_empty() {
+            return -1;
+        }
+        self.pop_at_stack(self.stacks.len() - 1)
+    }
+
+    fn pop_at_stack(mut ref self, index: i64) -> i64 {
+        if index >= self.stacks.len() or self.stacks[index].is_empty() {
+            return -1;
+        }
+        let val = self.stacks[index].pop().unwrap();
+        self.open.push(index);
+        while not self.stacks.is_empty() and self.stacks[self.stacks.len() - 1].is_empty() {
+            self.stacks.pop();
+        }
+        val
+    }
+}
+
+// ---- dinner_plates_sorted.kara ----
+
+struct A1Plates {
+    capacity: i64,
+    stacks: Vec[Vec[i64]],
+    // the stacks below `stacks.len()` with room for a plate
+    open: SortedSet[i64],
+}
+
+impl A1Plates {
+    fn new(capacity: i64) -> A1Plates {
+        A1Plates { capacity, stacks: Vec.new(), open: SortedSet.new() }
+    }
+
+    fn push(mut ref self, val: i64) {
+        if self.open.is_empty() {
+            self.open.insert(self.stacks.len());
+            self.stacks.push(Vec.new());
+        }
+        let i = *self.open.min().unwrap();
+        self.stacks[i].push(val);
+        if self.stacks[i].len() == self.capacity {
+            self.open.remove(i);
+        }
+    }
+
+    fn pop(mut ref self) -> i64 {
+        if self.stacks.is_empty() {
+            return -1;
+        }
+        self.pop_at_stack(self.stacks.len() - 1)
+    }
+
+    fn pop_at_stack(mut ref self, index: i64) -> i64 {
+        if index >= self.stacks.len() or self.stacks[index].is_empty() {
+            return -1;
+        }
+        let val = self.stacks[index].pop().unwrap();
+        self.open.insert(index);
+        while not self.stacks.is_empty() and self.stacks[self.stacks.len() - 1].is_empty() {
+            self.open.remove(self.stacks.len() - 1);
+            self.stacks.pop();
+        }
+        val
+    }
+}
+
+// ---- dinner_plates_cursor.kara ----
+
+struct A2Plates {
+    capacity: i64,
+    stacks: Vec[Vec[i64]],
+    // every stack below it is full, so never empty: the trim that drops
+    // the empty stacks on the right never passes it
+    left: i64,
+}
+
+impl A2Plates {
+    fn new(capacity: i64) -> A2Plates {
+        A2Plates { capacity, stacks: Vec.new(), left: 0 }
+    }
+
+    fn push(mut ref self, val: i64) {
+        while self.left < self.stacks.len() and self.stacks[self.left].len() == self.capacity {
+            self.left += 1;
+        }
+        if self.left == self.stacks.len() {
+            self.stacks.push(Vec.new());
+        }
+        self.stacks[self.left].push(val);
+    }
+
+    fn pop(mut ref self) -> i64 {
+        if self.stacks.is_empty() {
+            return -1;
+        }
+        self.pop_at_stack(self.stacks.len() - 1)
+    }
+
+    fn pop_at_stack(mut ref self, index: i64) -> i64 {
+        if index >= self.stacks.len() or self.stacks[index].is_empty() {
+            return -1;
+        }
+        let val = self.stacks[index].pop().unwrap();
+        if index < self.left {
+            self.left = index;
+        }
+        while not self.stacks.is_empty() and self.stacks[self.stacks.len() - 1].is_empty() {
+            self.stacks.pop();
+        }
+        val
+    }
+}
+
+// ---- dinner_plates_tree.kara ----
+
+struct A3Plates {
+    capacity: i64,
+    stacks: Vec[Vec[i64]],
+    // `n` leaves, the tree's nodes at 1..2n and its leaves at n..2n:
+    // lo[k] the smallest size under node k, hi[k] the largest
+    n: i64,
+    lo: Vec[i64],
+    hi: Vec[i64],
+}
+
+impl A3Plates {
+    fn new(capacity: i64) -> A3Plates {
+        A3Plates { capacity, stacks: Vec.new(), n: 1, lo: [0, 0], hi: [0, 0] }
+    }
+
+    fn set(mut ref self, i: i64, size: i64) {
+        let mut k = self.n + i;
+        self.lo[k] = size;
+        self.hi[k] = size;
+        while k > 1 {
+            k /= 2;
+            self.lo[k] = self.lo[2 * k].min(self.lo[2 * k + 1]);
+            self.hi[k] = self.hi[2 * k].max(self.hi[2 * k + 1]);
+        }
+    }
+
+    // twice the leaves, every size kept
+    fn grow(mut ref self) {
+        let n = 2 * self.n;
+        let mut lo = Vec.filled(2 * n, 0);
+        let mut hi = Vec.filled(2 * n, 0);
+        for (i, s) in self.stacks.iter().enumerate() {
+            lo[n + i] = s.len();
+            hi[n + i] = s.len();
+        }
+        for k in (1..n).rev() {
+            lo[k] = lo[2 * k].min(lo[2 * k + 1]);
+            hi[k] = hi[2 * k].max(hi[2 * k + 1]);
+        }
+        self.n = n;
+        self.lo = lo;
+        self.hi = hi;
+    }
+
+    fn push(mut ref self, val: i64) {
+        if self.lo[1] >= self.capacity {
+            self.grow();
+        }
+        let mut k = 1;
+        while k < self.n {
+            k = if self.lo[2 * k] < self.capacity { 2 * k } else { 2 * k + 1 };
+        }
+        let i = k - self.n;
+        if i == self.stacks.len() {
+            self.stacks.push(Vec.new());
+        }
+        self.stacks[i].push(val);
+        self.set(i, self.stacks[i].len());
+    }
+
+    fn pop(mut ref self) -> i64 {
+        if self.hi[1] == 0 {
+            return -1;
+        }
+        let mut k = 1;
+        while k < self.n {
+            k = if self.hi[2 * k + 1] > 0 { 2 * k + 1 } else { 2 * k };
+        }
+        self.pop_at_stack(k - self.n)
+    }
+
+    fn pop_at_stack(mut ref self, index: i64) -> i64 {
+        if index >= self.stacks.len() or self.stacks[index].is_empty() {
+            return -1;
+        }
+        let val = self.stacks[index].pop().unwrap();
+        self.set(index, self.stacks[index].len());
+        val
+    }
+}
+
+// ---- dinner_plates_solution.kara ----
+
+struct A4Plates {
+    capacity: i64,
+    stacks: Vec[Vec[i32]],
+    available: PriorityQueue[i64],
+}
+
+impl A4Plates {
+    fn new(capacity: i32) -> Self {
+        A4Plates {
+            capacity: capacity,
+            stacks: Vec.new(),
+            available: PriorityQueue.new(),
+        }
+    }
+
+    fn push(mut ref self, val: i32) {
+        while let Some(i) = self.available.peek().cloned() {
+            if i < self.stacks.len() and self.stacks[i].len() < self.capacity {
+                break;
+            }
+            self.available.pop();
+        }
+        if let Some(i) = self.available.peek().cloned() {
+            self.stacks[i].push(val);
+            if self.stacks[i].len() == self.capacity {
+                self.available.pop();
+            }
+        } else {
+            self.stacks.push([val]);
+            if self.capacity > 1 {
+                self.available.push(self.stacks.len() - 1);
+            }
+        }
+    }
+
+    fn pop(mut ref self) -> i32 {
+        while let Some(last) = self.stacks.last() {
+            if last.is_empty() {
+                self.stacks.pop();
+            } else {
+                break;
+            }
+        }
+        if self.stacks.is_empty() {
+            return -1;
+        }
+        let i = self.stacks.len() - 1;
+        self.pop_at_stack(i as i32)
+    }
+
+    fn pop_at_stack(mut ref self, index: i32) -> i32 {
+        let i = index as i64;
+        if i < self.stacks.len() and not self.stacks[i].is_empty() {
+            self.available.push(i);
+            self.stacks[i].pop().unwrap()
+        } else {
+            -1
+        }
+    }
+}
+
+// ---- dinner_plates_btree.kara ----
+
+struct A5Plates {
+    cap: i64,
+    stacks: Vec[Vec[i32]],
+    open: SortedSet[i64],
+}
+
+impl A5Plates {
+    fn new(capacity: i32) -> Self {
+        A5Plates {
+            cap: capacity,
+            stacks: Vec.new(),
+            open: SortedSet.new(),
+        }
+    }
+
+    fn push(mut ref self, val: i32) {
+        if let Some(i) = self.open.iter().next().cloned() {
+            self.stacks[i].push(val);
+            if self.stacks[i].len() == self.cap {
+                self.open.remove(i);
+            }
+        } else {
+            self.stacks.push([val]);
+            if self.cap > 1 {
+                self.open.insert(self.stacks.len() - 1);
+            }
+        }
+    }
+
+    fn pop(mut ref self) -> i32 {
+        if self.stacks.is_empty() {
+            return -1;
+        }
+        self.pop_at_stack(self.stacks.len() as i32 - 1)
+    }
+
+    fn pop_at_stack(mut ref self, index: i32) -> i32 {
+        let i = index as i64;
+        if i >= self.stacks.len() or self.stacks[i].is_empty() {
+            return -1;
+        }
+        let val = self.stacks[i].pop().unwrap();
+        self.open.insert(i);
+        while let Some(last) = self.stacks.last() {
+            if not last.is_empty() {
+                break;
+            }
+            self.open.remove(self.stacks.len() - 1);
+            self.stacks.pop();
+        }
+        val
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The calls run on arm `w`: 0 is `push(arg)`, 1 is `pop()`, 2 is
+// `popAtStack(arg)`; what each pop returns.
+fn arm(w: i64, capacity: i64, ops: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut out = Vec.new();
+    if w == 0 {
+        let mut d = A0Plates.new(capacity);
+        for (kind, arg) in ops.iter() {
+            match kind {
+                0 => d.push(arg),
+                1 => out.push(d.pop()),
+                _ => out.push(d.pop_at_stack(arg)),
+            }
+        }
+    } else if w == 1 {
+        let mut d = A1Plates.new(capacity);
+        for (kind, arg) in ops.iter() {
+            match kind {
+                0 => d.push(arg),
+                1 => out.push(d.pop()),
+                _ => out.push(d.pop_at_stack(arg)),
+            }
+        }
+    } else if w == 2 {
+        let mut d = A2Plates.new(capacity);
+        for (kind, arg) in ops.iter() {
+            match kind {
+                0 => d.push(arg),
+                1 => out.push(d.pop()),
+                _ => out.push(d.pop_at_stack(arg)),
+            }
+        }
+    } else if w == 3 {
+        let mut d = A3Plates.new(capacity);
+        for (kind, arg) in ops.iter() {
+            match kind {
+                0 => d.push(arg),
+                1 => out.push(d.pop()),
+                _ => out.push(d.pop_at_stack(arg)),
+            }
+        }
+    } else if w == 4 {
+        let mut d = A4Plates.new(capacity as i32);
+        for (kind, arg) in ops.iter() {
+            match kind {
+                0 => d.push(arg as i32),
+                1 => out.push(d.pop()),
+                _ => out.push(d.pop_at_stack(arg as i32)),
+            }
+        }
+    } else {
+        let mut d = A5Plates.new(capacity as i32);
+        for (kind, arg) in ops.iter() {
+            match kind {
+                0 => d.push(arg as i32),
+                1 => out.push(d.pop()),
+                _ => out.push(d.pop_at_stack(arg as i32)),
+            }
+        }
+    }
+    out
+}
+
+// The statement read literally: the stacks from the left, none ever taken
+// away; a push goes on the leftmost stack below capacity, opening a new
+// one at the right end when there is none, `pop` takes from the rightmost
+// stack that holds a plate, and `popAtStack` from the stack it names.
+fn literal(capacity: i64, ops: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut stacks: Vec[Vec[i64]] = Vec.new();
+    let mut out = Vec.new();
+    for (kind, arg) in ops.iter() {
+        if kind == 0 {
+            let mut placed = false;
+            for s in stacks.iter_mut() {
+                if s.len() < capacity {
+                    s.push(arg);
+                    placed = true;
+                    break;
+                }
+            }
+            if not placed {
+                stacks.push([arg]);
+            }
+        } else if kind == 1 {
+            let mut got = -1;
+            for s in stacks.iter_mut().rev() {
+                if not s.is_empty() {
+                    got = s.pop().unwrap();
+                    break;
+                }
+            }
+            out.push(got);
+        } else if arg < stacks.len() and not stacks[arg].is_empty() {
+            out.push(stacks[arg].pop().unwrap());
+        } else {
+            out.push(-1);
+        }
+    }
+    out
+}
+
+struct Case {
+    capacity: i64,
+    ops: Vec[(i64, i64)],
+    // P2's shift of every value
+    shift: i64,
+    // P5's place for a `popAtStack` past every stack
+    at: i64,
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_case(t: mut ref Tally, c: Case) {
+    let ops = ref c.ops;
+    let want = literal(c.capacity, ops);
+    let pushes = ops.iter().filter(|(k, _)| k == 0).count();
+    // P2: every value shifted shifts every plate popped
+    let shifted: Vec[(i64, i64)] = ops.iter().map(|(k, a)| if k == 0 { (k, a + c.shift) } else { (k, a) }).collect();
+    // P3: a capacity no stack can fill gives one stack, the same at any such
+    // capacity
+    let one_stack = pushes + 1;
+    // P4: as many pops again as pushes, appended, return every plate pushed
+    let mut drained = ops.clone();
+    for _ in 0..pushes + 1 {
+        drained.push((1, 0));
+    }
+    let mut pushed: Vec[i64] = ops.iter().filter(|(k, _)| k == 0).map(|(_, a)| a).collect();
+    pushed.sort();
+    // P5: a `popAtStack` past every stack, put in anywhere, returns -1 and
+    // changes nothing else
+    let mut probed = ops.clone();
+    probed.insert(c.at, (2, pushes + 100000));
+    for a in 0..6 {
+        let got = arm(a, c.capacity, ops);
+        let what = f"arm {a}, case {t.cases}, capacity {c.capacity} {ops} -> {got}";
+        // P1: the statement read literally
+        expect(mut t, 1, got == want, f"P1 {what}, literal {want}");
+        let sh = arm(a, c.capacity, shifted);
+        let moved: Vec[i64] = got.iter().map(|x| if x == -1 { -1 } else { x + c.shift }).collect();
+        expect(mut t, 2, sh == moved, f"P2 {what}, shifted by {c.shift}: {sh}");
+        let x = arm(a, one_stack, ops);
+        let y = arm(a, 2 * one_stack + 7, ops);
+        expect(mut t, 3, x == y, f"P3 {what}, capacity {one_stack}: {x}, {2 * one_stack + 7}: {y}");
+        let dr = arm(a, c.capacity, drained);
+        let mut back: Vec[i64] = dr.iter().filter(|x| x != -1).cloned().collect();
+        back.sort();
+        let tail_ok = dr[dr.len() - 1] == -1;
+        expect(mut t, 4, back == pushed and tail_ok, f"P4 {what}, drained: {dr}");
+        let pr = arm(a, c.capacity, probed);
+        let mut without = pr.clone();
+        // the probe's own answer sits where its call did among the pops
+        let before = probed[..c.at].iter().filter(|(k, _)| k != 0).count();
+        let probe = without.remove(before);
+        expect(mut t, 5, probe == -1 and without == got, f"P5 {what}, probe at {c.at}: {pr}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 31 + digest(want)) % 1000000007;
+}
+
+fn digest(xs: Vec[i64]) -> i64 {
+    let mut h = 0;
+    for x in xs.iter() {
+        h = (h * 131 + x + 2) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(6, 0) };
+    // 600 streams in four kinds, 150 each: 1 to 20 calls at capacity 1 to
+    // 3 with indices below 6; 1 to 80 at capacity 1 to 5 below 20; 100 to
+    // 400 at capacity 1 to 50 below 100; and 1 to 100 at capacity 2 with
+    // half of them `popAtStack` below 10, so that holes open and fill all
+    // the time. Every choice the properties make is drawn before any arm
+    // answers.
+    let mut seed = 11721;
+    let mut cases: Vec[Case] = Vec.new();
+    for i in 0..600 {
+        let kind = i % 4;
+        let (lo, hi, caps, spread, push, pop, at) = match kind {
+            0 => (1, 20, 3, 6, 5, 2, 3),
+            1 => (1, 80, 5, 20, 5, 2, 3),
+            2 => (100, 400, 50, 100, 6, 2, 2),
+            _ => (1, 100, 1, 10, 4, 1, 5),
+        };
+        let capacity = if kind == 3 { 2 } else { 1 + next_random(mut seed) % caps };
+        let n = lo + next_random(mut seed) % (hi - lo + 1);
+        let mut ops: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let r = next_random(mut seed) % (push + pop + at);
+            if r < push {
+                ops.push((0, 1 + next_random(mut seed) % 20000));
+            } else if r < push + pop {
+                ops.push((1, 0));
+            } else {
+                ops.push((2, next_random(mut seed) % spread));
+            }
+        }
+        let shift = 1 + next_random(mut seed) % 1000;
+        let at = next_random(mut seed) % (n + 1);
+        cases.push(Case { capacity, ops, shift, at });
+    }
+    for c in cases.iter() {
+        check_case(mut t, c);
+    }
+    println(f"{t.cases} streams: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..6).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

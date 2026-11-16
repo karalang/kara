@@ -1,0 +1,134 @@
+// LeetCode #1172: Dinner Plate Stacks -- a cursor: the stacks in a vector
+// and the index `left`, below which every stack is full. A push walks
+// `left` right past the full stacks; `popAtStack` below it moves it back.
+// Empty stacks at the right end are dropped as they empty, so `pop` is
+// `popAtStack` on the last stack. O(1) a call but for the walk, which can
+// cover every stack.
+
+struct DinnerPlates {
+    capacity: i64,
+    stacks: Vec[Vec[i64]],
+    // every stack below it is full, so never empty: the trim that drops
+    // the empty stacks on the right never passes it
+    left: i64,
+}
+
+impl DinnerPlates {
+    fn new(capacity: i64) -> DinnerPlates {
+        DinnerPlates { capacity, stacks: Vec.new(), left: 0 }
+    }
+
+    fn push(mut ref self, val: i64) {
+        while self.left < self.stacks.len() and self.stacks[self.left].len() == self.capacity {
+            self.left += 1;
+        }
+        if self.left == self.stacks.len() {
+            self.stacks.push(Vec.new());
+        }
+        self.stacks[self.left].push(val);
+    }
+
+    fn pop(mut ref self) -> i64 {
+        if self.stacks.is_empty() {
+            return -1;
+        }
+        self.pop_at_stack(self.stacks.len() - 1)
+    }
+
+    fn pop_at_stack(mut ref self, index: i64) -> i64 {
+        if index >= self.stacks.len() or self.stacks[index].is_empty() {
+            return -1;
+        }
+        let val = self.stacks[index].pop().unwrap();
+        if index < self.left {
+            self.left = index;
+        }
+        while not self.stacks.is_empty() and self.stacks[self.stacks.len() - 1].is_empty() {
+            self.stacks.pop();
+        }
+        val
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// One call: 0 is `push(arg)`, 1 is `pop()`, 2 is `popAtStack(arg)`.
+fn run(capacity: i64, ops: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut d = DinnerPlates.new(capacity);
+    let mut out = Vec.new();
+    for (kind, arg) in ops.iter() {
+        match kind {
+            0 => d.push(arg),
+            1 => out.push(d.pop()),
+            _ => out.push(d.pop_at_stack(arg)),
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digest(xs: Vec[i64]) -> i64 {
+    let mut h = 0;
+    for x in xs.iter() {
+        h = (h * 131 + x + 2) % 1000000007;
+    }
+    h
+}
+
+// `n` calls: a push with weight `push`, a pop with weight `pop`, and a
+// `popAtStack` with weight `at` at an index below `spread`
+fn random_ops(seed: mut ref i64, n: i64, push: i64, pop: i64, at: i64, spread: i64) -> Vec[(i64, i64)] {
+    let mut ops = Vec.new();
+    for _ in 0..n {
+        let r = next_random(mut seed) % (push + pop + at);
+        if r < push {
+            ops.push((0, 1 + next_random(mut seed) % 20000));
+        } else if r < push + pop {
+            ops.push((1, 0));
+        } else {
+            ops.push((2, next_random(mut seed) % spread));
+        }
+    }
+    ops
+}
+
+fn main() {
+    // LeetCode's example
+    let example = [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (2, 0), (0, 20), (0, 21), (2, 0), (2, 2), (1, 0), (1, 0), (1, 0), (1, 0), (1, 0)];
+    println(f"example, capacity 2: {run(2, example)}");
+    // nothing to pop; a stack past the last; capacity 1; a hole refilled
+    // before a new stack opens; popping from the left until the right stack
+    // is the only one, then emptying it
+    println(f"empty: {run(3, [(1, 0), (2, 0), (2, 99999)])}");
+    println(f"past the last: {run(2, [(0, 7), (0, 8), (0, 9), (2, 2), (2, 1), (2, 5), (1, 0)])}");
+    println(f"capacity 1: {run(1, [(0, 1), (0, 2), (0, 3), (2, 1), (0, 4), (1, 0), (1, 0), (1, 0), (1, 0)])}");
+    println(f"holes refilled: {run(2, [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6), (2, 0), (2, 1), (2, 0), (0, 7), (0, 8), (0, 9), (1, 0), (1, 0), (1, 0), (1, 0), (1, 0), (1, 0), (1, 0)])}");
+    println(f"left emptied first: {run(2, [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (2, 0), (2, 0), (2, 1), (2, 1), (1, 0), (1, 0), (0, 6), (2, 0), (1, 0)])}");
+    // 300 random streams of 1 to 60 calls, capacity 1 to 4, `popAtStack`
+    // below 12, so that holes open and fill often
+    let mut seed = 1172;
+    let mut pops = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let capacity = 1 + next_random(mut seed) % 4;
+        let n = 1 + next_random(mut seed) % 60;
+        let ops = random_ops(mut seed, n, 5, 2, 3, 12);
+        let got = run(capacity, ops);
+        pops += got.len();
+        check = (check * 31 + digest(got)) % 1000000007;
+    }
+    println(f"300 random streams: {pops} pops, checksum {check}");
+    // 200000 calls, the constraints' most, at capacity 7 and 20000, and
+    // 50000 at capacity 1, where the cursor arm's walks are longest; every
+    // index up to 100000
+    for (capacity, n) in [(1, 50000), (7, 200000), (20000, 200000)] {
+        let ops = random_ops(mut seed, n, 6, 2, 2, 100000);
+        let got = run(capacity, ops);
+        let misses = got.iter().filter(|x| x == -1).count();
+        println(f"{n} calls, capacity {capacity}: {got.len()} pops, {misses} empty, checksum {digest(got)}");
+    }
+}

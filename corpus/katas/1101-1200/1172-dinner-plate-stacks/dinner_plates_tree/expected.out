@@ -1,0 +1,10 @@
+example, capacity 2: [2, 20, 21, 5, 4, 3, 1, -1]
+empty: [-1, -1, -1]
+past the last: [-1, 9, -1, 8]
+capacity 1: [2, 3, 4, 1, -1]
+holes refilled: [2, 4, 1, 6, 5, 9, 3, 8, 7, -1]
+left emptied first: [2, 1, 4, 3, 5, -1, 6, -1]
+300 random streams: 4540 pops, checksum 947906389
+50000 calls, capacity 1: 19944 pops, 7180 empty, checksum 579300809
+200000 calls, capacity 7: 80185 pops, 33321 empty, checksum 643796424
+200000 calls, capacity 20000: 79980 pops, 40038 empty, checksum 296432627

@@ -1,0 +1,97 @@
+// LeetCode #1172: Dinner Plate Stacks -- the ★ arm's bench: the stacks in a
+// vector and a min-heap of the indices that may have room, an index whose
+// stack is full or gone dropped when it comes to the top.
+
+struct DinnerPlates {
+    capacity: i64,
+    stacks: Vec[Vec[i64]],
+    // indices that may have room, smallest first; one whose stack is full
+    // or gone is dropped when it comes to the top
+    open: PriorityQueue[i64],
+}
+
+impl DinnerPlates {
+    fn new(capacity: i64) -> DinnerPlates {
+        DinnerPlates { capacity, stacks: Vec.new(), open: PriorityQueue.new() }
+    }
+
+    fn push(mut ref self, val: i64) {
+        while let Some(i) = self.open.peek() {
+            if i < self.stacks.len() and self.stacks[i].len() < self.capacity {
+                break;
+            }
+            self.open.pop();
+        }
+        if self.open.is_empty() {
+            self.open.push(self.stacks.len());
+            self.stacks.push(Vec.new());
+        }
+        let i = *self.open.peek().unwrap();
+        self.stacks[i].push(val);
+        if self.stacks[i].len() == self.capacity {
+            self.open.pop();
+        }
+    }
+
+    fn pop(mut ref self) -> i64 {
+        if self.stacks.is_empty() {
+            return -1;
+        }
+        self.pop_at_stack(self.stacks.len() - 1)
+    }
+
+    fn pop_at_stack(mut ref self, index: i64) -> i64 {
+        if index >= self.stacks.len() or self.stacks[index].is_empty() {
+            return -1;
+        }
+        let val = self.stacks[index].pop().unwrap();
+        self.open.push(index);
+        while not self.stacks.is_empty() and self.stacks[self.stacks.len() - 1].is_empty() {
+            self.stacks.pop();
+        }
+        val
+    }
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 60 streams of 200000 calls, the constraints' most, at capacity 1, 7,
+    // 100 and 20000 in turn: a push with weight 6, a pop with weight 2 and
+    // a `popAtStack` with weight 2, at an index below 20000 / capacity + 1,
+    // about as many stacks as the stream ever holds
+    let streams = 60;
+    let calls = 200000;
+    let capacities = [1, 7, 100, 20000];
+    let mut seed = 1172;
+    let mut pops = 0;
+    let mut misses = 0;
+    let mut check = 0;
+    for s in 0..streams {
+        let capacity = capacities[s % 4];
+        let spread = 20000 / capacity + 1;
+        let mut d = DinnerPlates.new(capacity);
+        for _ in 0..calls {
+            let r = next_random(mut seed) % 10;
+            let got = if r < 6 {
+                d.push(1 + next_random(mut seed) % 20000);
+                continue;
+            } else if r < 8 {
+                d.pop()
+            } else {
+                d.pop_at_stack(next_random(mut seed) % spread)
+            };
+            pops += 1;
+            if got == -1 {
+                misses += 1;
+            }
+            check = (check * 131 + got + 2) % 1000000007;
+        }
+    }
+    println(f"{streams} streams of {calls} calls: {pops} pops, {misses} empty, checksum {check}");
+}
