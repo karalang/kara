@@ -1433,6 +1433,22 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   line.substring(a, b);`, and takes the view of that (B-2026-11-16-183).
 - The legacy `ExitStatus.code` field gets the fix its message names,
   `code().unwrap_or(-1)` (B-2026-11-16-184).
+- `karac fix` rewrites the legacy `Stdio.Piped`, `Stdio.Null` and
+  `Stdio.Inherit` to `Stdio.piped()` and the other constructors again. The
+  rewrite never fired on a program that did not also spell the constructor
+  (B-2026-11-16-186).
+- A type from a library module used without its import (`Pool`,
+  `PoolError`) gets a fix that adds `import std.pool.{Pool};`
+  (B-2026-11-16-187). An undefined type is no longer "fixed" to a primitive
+  or a local variable of a similar name: `Pool[Conn]` used to become
+  `bool[Conn]` or `pool[Conn]` (B-2026-11-16-191).
+- An escaping closure that captures a bare parameter gets the fix that takes
+  the parameter `own` (B-2026-11-16-188). `assert_eq` and `assert_ne` on the
+  program's own type without `Debug` get `#[derive(Debug)]`
+  (B-2026-11-16-189).
+- Two imports of one library module, such as `import std.pool.{Pool};` and
+  `import std.pool.{PoolError};`, no longer refuse the program with a
+  conflicting impl (B-2026-11-16-190).
 - **An array literal a `map` closure returns into a `Vec` of arrays is
   that array.** `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` checked
   against a `Vec[Array[i64, 3]]` was refused as `FromIterator[Vec[i64]]`;

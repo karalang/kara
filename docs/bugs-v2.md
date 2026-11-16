@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 365 |
-| false-positive | 226 |
+| diagnostics | 370 |
+| false-positive | 227 |
 | missing-feature | 176 |
 | perf | 175 |
 | soundness | 72 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 510 |
+| typecheck | 512 |
 | mir-llvm | 252 |
 | mir | 221 |
 | cli | 147 |
 | parser | 92 |
-| ownership | 88 |
+| ownership | 89 |
 | interp | 70 |
 | runtime | 50 |
 | effect | 35 |
-| resolver | 31 |
+| resolver | 34 |
 | codegen | 22 |
 | other | 8 |
 | autopar | 5 |
@@ -110,6 +110,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
+| B-2026-11-16-186 | 2026-11-16 | typecheck | low | `karac fix` never rewrote the legacy `Stdio.Piped` / `Stdio.Null` / `Stdio.Inherit` to the constructors that docs/library/io.md:581 says it does: on the MIR pipeline the rewrite found no `piped` method, because library pruning had dropped it | — |
+| B-2026-11-16-187 | 2026-11-16 | resolver | low | A type that a gated library module defines, named without its import (`Pool[Conn, E]`, `PoolError`), got no import fix. As a type it was offered the nearest visible name instead (see B-2026-11-16-191) | — |
+| B-2026-11-16-188 | 2026-11-16 | ownership | low | An escaping closure that captures a bare parameter (`fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }`) is refused with "take `p` by value (`own`)", but carried no fix, although the parameter borrows only because it is bare | — |
+| B-2026-11-16-189 | 2026-11-16 | typecheck | low | `assert_eq` / `assert_ne` on the program's own struct or enum without `Debug` says to add `#[derive(Debug)]` but carried no fix | — |
+| B-2026-11-16-190 | 2026-11-16 | resolver | medium | Two imports of one gated library module (`import std.pool.{Pool};` then `import std.pool.{PoolError};`) are refused with "conflicting impl: `PoolError` already implements `Error`": each import line spliced the module items it reaches, so `PoolError`'s impl came in twice | — |
+| B-2026-11-16-191 | 2026-11-16 | resolver | medium | An undefined type was machine-renamed to a primitive or a value binding: `Pool[Conn]` became `bool[Conn]`, and in the same program `pool[Conn]` (the local `pool`), because the undefined-type did-you-mean drew on every visible name | — |
 
 ### Relocated
 

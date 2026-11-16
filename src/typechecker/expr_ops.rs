@@ -1786,11 +1786,19 @@ impl<'a> super::TypeChecker<'a> {
             // `Stdio.piped()`.
             if type_name == "Stdio" && matches!(member.as_str(), "Inherit" | "Null" | "Piped") {
                 let lower = member.to_lowercase();
+                // The constructor may have been pruned from the appended
+                // library, which keeps a method only when the program spells
+                // it (`library_prune`), and `Piped` does not spell `piped`
+                // (B-2026-11-16-186).
                 let constructor = self
                     .env
                     .impls
                     .iter()
-                    .any(|imp| imp.target_type == "Stdio" && imp.methods.contains_key(&lower));
+                    .any(|imp| imp.target_type == "Stdio" && imp.methods.contains_key(&lower))
+                    || self
+                        .pruned_library_methods
+                        .get("Stdio")
+                        .is_some_and(|m| m.contains(&lower));
                 if constructor {
                     self.type_error_with_fix_it(
                         format!(
@@ -1824,6 +1832,10 @@ impl<'a> super::TypeChecker<'a> {
                         .impls
                         .iter()
                         .any(|imp| imp.target_type == "Duration" && imp.methods.contains_key(m))
+                        || self
+                            .pruned_library_methods
+                            .get("Duration")
+                            .is_some_and(|p| p.contains(m))
                 };
                 if let Some(k) = kara.filter(|k| has(k)) {
                     // The path's span runs to the call's `)`, so the fix

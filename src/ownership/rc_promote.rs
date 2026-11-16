@@ -495,11 +495,18 @@ impl<'a> super::OwnershipChecker<'a> {
         // v2 core §9.3: an escaping closure captures by move, and a place
         // behind a borrow cannot be moved out of it (§3.7, B-2026-10-25-20).
         let mut seen = HashSet::new();
-        for (span, place) in &self.core_escaping_borrow_captures {
+        for (span, place, own_at) in &self.core_escaping_borrow_captures {
             if !seen.insert(SpanKey::from_span(span)) {
                 continue;
             }
             let root = place.split('.').next().unwrap_or(place);
+            let replacement = own_at.map(|at| {
+                Box::new(crate::resolver::TextEdit {
+                    offset: at.offset,
+                    length: 0,
+                    replacement: "own ".to_string(),
+                })
+            });
             out.push(OwnershipError {
                 message: format!(
                     "an escaping closure captures `{place}` by move (core-semantics §9.3), \
@@ -511,7 +518,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     "take `{root}` by value (`own`), or clone `{place}` into a new binding \
                      before the closure and capture that"
                 )),
-                replacement: None,
+                replacement,
                 consume_span: None,
             });
         }

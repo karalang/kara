@@ -1988,8 +1988,10 @@ pub struct OwnershipChecker<'a> {
     pub(crate) core_borrow_moves: Vec<Span>,
     /// [`crate::cfg::Classification::core_escaping_borrow_captures`], across
     /// every function; turned into `MoveOutOfPlace` errors by
-    /// `core_move_errors`.
-    pub(crate) core_escaping_borrow_captures: Vec<(Span, String)>,
+    /// `core_move_errors`. The third field is where `own ` makes the
+    /// captured place's root parameter owned, when it borrows only because
+    /// it is bare.
+    pub(crate) core_escaping_borrow_captures: Vec<(Span, String, Option<Span>)>,
     /// Non-`Copy` places returned bare into a `ref` / `mut ref` slot of the
     /// return type (B-2026-10-22-28); turned into `MoveOutOfPlace` errors by
     /// `core_move_errors`.
@@ -3805,8 +3807,22 @@ impl<'a> OwnershipChecker<'a> {
         self.core_index_moves.extend(index_moves);
         self.core_borrow_moves
             .extend(classification.core_borrow_moves.iter().copied());
-        self.core_escaping_borrow_captures
-            .extend(classification.core_escaping_borrow_captures.iter().cloned());
+        // A capture rooted at a parameter that borrows only because it is
+        // bare is fixed by taking that parameter `own` (B-2026-11-16-188).
+        let implied = if classification.core_escaping_borrow_captures.is_empty() {
+            Default::default()
+        } else {
+            crate::d5_params::implied_borrows(f)
+        };
+        self.core_escaping_borrow_captures.extend(
+            classification
+                .core_escaping_borrow_captures
+                .iter()
+                .map(|(span, place)| {
+                    let root = place.split('.').next().unwrap_or(place);
+                    (*span, place.clone(), implied.get(root).copied())
+                }),
+        );
         self.core_projection_consumes.extend(
             classification
                 .core_projection_consumes

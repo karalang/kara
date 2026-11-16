@@ -962,6 +962,11 @@ pub struct Program {
     /// `Reverse` it does not drop (B-2026-11-10-41). `None` when no
     /// `Reverse` is written.
     pub std_cmp_reverse_import: Option<crate::resolver::TextEdit>,
+    /// Where a fix adds an import line (an absolute offset), and what
+    /// follows the line there: nothing after the last import, a blank line
+    /// above the first item. Set by the PARSER; the resolver's fix for a type
+    /// a gated library module defines imports it here (B-2026-11-16-187).
+    pub import_insert: Option<(usize, &'static str)>,
     /// Rust's `std::mem::take` written with dots, `std.mem.take(..)`, and
     /// the like (`core.cmp.max`, `cmp.max`), keyed by the offset of the
     /// root segment, with the message and the edit that deletes the module

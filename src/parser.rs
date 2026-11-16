@@ -1177,6 +1177,7 @@ impl Parser {
             }
         }
         let std_cmp_reverse_import = self.std_cmp_reverse_import(&items);
+        let import_insert = self.import_insert(&items);
         Program {
             script_main,
             items,
@@ -1205,6 +1206,7 @@ impl Parser {
             },
             rust_reverse_sort_keys: self.rust_reverse_sort_keys(),
             std_cmp_reverse_import,
+            import_insert,
             rust_std_paths: self.rust_std_paths(),
             parse_target_edits: std::mem::take(&mut self.parse_target_edits),
             range_arg_edits: std::mem::take(&mut self.range_arg_edits),
@@ -3518,6 +3520,19 @@ impl Parser {
         if !uses {
             return None;
         }
+        let (at, after) = self.import_insert(items)?;
+        Some(crate::resolver::TextEdit {
+            offset: at,
+            length: 0,
+            replacement: format!("import std.cmp.Reverse;\n{after}"),
+        })
+    }
+
+    /// Where a fix adds an import line: just past the line of the program's
+    /// last import, or above its first item, with what follows the line
+    /// there (nothing, or a blank line). See
+    /// [`crate::ast::Program::import_insert`].
+    fn import_insert(&self, items: &[Item]) -> Option<(usize, &'static str)> {
         let (source, base) = self.source.as_ref()?;
         let last_import = items
             .iter()
@@ -3526,20 +3541,15 @@ impl Parser {
                 _ => None,
             })
             .max();
-        let (at, replacement) = match last_import {
+        Some(match last_import {
             Some(end) => (
-                crate::library_imports::line_end(source, end.checked_sub(*base)?),
-                "import std.cmp.Reverse;\n",
+                crate::library_imports::line_end(source, end.checked_sub(*base)?) + base,
+                "",
             ),
             None => (
-                crate::library_imports::above_first_item(source),
-                "import std.cmp.Reverse;\n\n",
+                crate::library_imports::above_first_item(source) + base,
+                "\n",
             ),
-        };
-        Some(crate::resolver::TextEdit {
-            offset: at + base,
-            length: 0,
-            replacement: replacement.to_string(),
         })
     }
 

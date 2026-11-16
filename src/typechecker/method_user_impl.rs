@@ -2395,6 +2395,18 @@ impl<'a> super::TypeChecker<'a> {
             "hash" => "Hash",
             _ => return None,
         };
+        self.derive_trait_fix_it(type_name, tr, msg)
+    }
+
+    /// The fix-it that adds `#[derive(tr)]` to a struct or enum this program
+    /// declares and that does not derive `tr` yet, appending the explanation
+    /// to `msg`. Also `assert_eq`'s `Debug` (B-2026-11-16-189).
+    pub(super) fn derive_trait_fix_it(
+        &self,
+        type_name: &str,
+        tr: &str,
+        msg: &mut String,
+    ) -> Option<FixIt> {
         let decl = self.env.user_type_decl_spans.get(type_name)?;
         // A library type is not the program's to derive on: say what it
         // lacks instead of where to add a derive (B-2026-11-09-48).

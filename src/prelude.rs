@@ -1796,6 +1796,33 @@ pub fn gated_module_defines(path: &[String], name: &str) -> bool {
         })
 }
 
+/// The one gated module whose public struct, enum or trait is `name`, as its
+/// dotted path (`std.pool` for `Pool`): what a program that names the type
+/// without importing it imports (B-2026-11-16-187). `None` when no module, or
+/// more than one, defines it. Only the modules whose text spells `name` are
+/// parsed.
+pub fn gated_module_defining_type(name: &str) -> Option<String> {
+    let mut found = None;
+    for (i, (path, src)) in GATED_STDLIB_SOURCES.iter().enumerate() {
+        if !src.contains(name) {
+            continue;
+        }
+        let defines = gated_stdlib_program(i).items.iter().any(|item| match item {
+            Item::StructDef(s) => s.is_pub && s.name == name,
+            Item::EnumDef(e) => e.is_pub && e.name == name,
+            Item::TraitDef(t) => t.is_pub && t.name == name,
+            _ => false,
+        });
+        if defines {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(path.join("."));
+        }
+    }
+    found
+}
+
 /// Whether the gated module at `path` defines a trait `name`: one an import
 /// may not rename yet (B-2026-10-27-23).
 pub fn gated_module_trait(path: &[String], name: &str) -> bool {
@@ -2594,6 +2621,54 @@ pub fn library_module_item_error(
     Some(msg)
 }
 
+/// Fold every named import of one gated module into its first import:
+/// `import std.pool.{Pool};` and `import std.pool.{PoolError};` are one
+/// `import std.pool.{Pool, PoolError};`. Each import splices the module
+/// items it reaches, so two lines of one module spliced `PoolError`'s
+/// `impl Error` twice, a conflicting impl (B-2026-11-16-190).
+fn merge_gated_imports(program: &mut Program) {
+    let mut first: HashMap<Vec<String>, usize> = HashMap::new();
+    let mut moved: Vec<(usize, Vec<crate::ast::ImportItem>)> = Vec::new();
+    // Only the imports folded away go, not a plain `import m;`.
+    let mut emptied = vec![false; program.items.len()];
+    for (i, item) in program.items.iter_mut().enumerate() {
+        let Item::Import(imp) = item else { continue };
+        if imp.is_wildcard || imp.items.is_empty() || !is_gated_stdlib_module(&imp.path) {
+            continue;
+        }
+        match first.get(&imp.path) {
+            Some(&at) => {
+                moved.push((at, std::mem::take(&mut imp.items)));
+                emptied[i] = true;
+            }
+            None => {
+                first.insert(imp.path.clone(), i);
+            }
+        }
+    }
+    if moved.is_empty() {
+        return;
+    }
+    for (at, items) in moved {
+        if let Item::Import(imp) = &mut program.items[at] {
+            for ii in items {
+                if !imp
+                    .items
+                    .iter()
+                    .any(|have| have.name == ii.name && have.alias == ii.alias)
+                {
+                    imp.items.push(ii);
+                }
+            }
+        }
+    }
+    let mut i = 0;
+    program.items.retain(|_| {
+        i += 1;
+        !emptied[i - 1]
+    });
+}
+
 pub fn expand_gated_stdlib_imports(program: &mut Program) {
     // `import std.mem;` names the module whose functions every program
     // already calls as `mem.f(..)` (design.md §15 `mem.zeroed`), so it binds
@@ -2601,6 +2676,7 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
     program.items.retain(|item| !is_std_mem_import(item));
     // `import std.path;` + `path.f(..)` → `import std.path.{f};` + `f(..)`.
     crate::module_binding::expand_single_file_std_module_bindings(program);
+    merge_gated_imports(program);
     let mut appended: Vec<Item> = Vec::new();
     // A program's own items and its explicit imports beat a wildcard
     // (design.md § Wildcards).

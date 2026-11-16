@@ -2064,6 +2064,9 @@ impl<'a> Resolver<'a> {
         if self.report_foreign_name(name, span) {
             return;
         }
+        if self.report_unimported_library_type(name, span, ResolveErrorKind::UndefinedName) {
+            return;
+        }
         // A value name is suggested a value name: `range` is not `Range`,
         // nor `null` `Mul` (B-2026-11-07-40).
         let upper = |s: &str| s.starts_with(|c: char| c.is_ascii_uppercase());
@@ -2195,6 +2198,9 @@ impl<'a> Resolver<'a> {
             return;
         }
         if self.report_foreign_name(name, span) {
+            return;
+        }
+        if self.report_unimported_library_type(name, span, ResolveErrorKind::UndefinedName) {
             return;
         }
         // A value name is suggested a value name: `range` is not `Range`,
@@ -2542,6 +2548,46 @@ impl<'a> Resolver<'a> {
         true
     }
 
+    /// A type a gated library module defines (`Pool`, `PoolError` in
+    /// `std.pool`), named without its import: the error says which module,
+    /// and its fix adds `import <module>.{Name};` after the program's last
+    /// import (B-2026-11-16-187). Each name is its own import line, so two
+    /// names of one module take a second `karac fix` pass; the uses of one
+    /// name share the edit, which applies once.
+    fn report_unimported_library_type(
+        &mut self,
+        name: &str,
+        span: Span,
+        kind: ResolveErrorKind,
+    ) -> bool {
+        if !name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return false;
+        }
+        let Some(module) = crate::prelude::gated_module_defining_type(name) else {
+            return false;
+        };
+        let import = format!("import {module}.{{{name}}};");
+        let replacement = self.program.import_insert.map(|(offset, after)| {
+            Box::new(TextEdit {
+                offset,
+                length: 0,
+                replacement: format!("{import}\n{after}"),
+            })
+        });
+        self.errors.push(ResolveError {
+            message: format!(
+                "`{name}` is in the library module `{module}`, which a program imports \
+                 before it uses it: `{import}`"
+            ),
+            span,
+            kind,
+            suggestion: None,
+            replacement,
+            stub_hint: None,
+        });
+        true
+    }
+
     /// Whether the program builds a Rust heap and wraps a heap's items in
     /// `Reverse` where [`Self::report_rust_reverse`] drops it: the heap then
     /// pops the smallest first, and its constructor is `PriorityQueue.new()`.
@@ -2613,7 +2659,34 @@ impl<'a> Resolver<'a> {
             });
             return;
         }
-        let visible = self.suggestable_names();
+        if self.report_unimported_library_type(name, span, ResolveErrorKind::UndefinedType) {
+            return;
+        }
+        // A type's correction is a type: a binding, function or constant
+        // in scope is no candidate (`Pool[Conn]` once became `pool[Conn]`,
+        // the local `pool`). A capitalised name is a primitive's misspelling
+        // only when it is that primitive in another case (`Bool`, `I64`),
+        // so `Pool[Conn]` does not become `bool[Conn]` (B-2026-11-16-191).
+        let mut visible = self.suggestable_names();
+        visible.retain(|n| {
+            let Some(sym) = self.table.lookup(n) else {
+                return true;
+            };
+            match sym.kind {
+                SymbolKind::Variable { .. }
+                | SymbolKind::Function { .. }
+                | SymbolKind::Constant
+                | SymbolKind::EnumVariant { .. }
+                | SymbolKind::SelfValue
+                | SymbolKind::ExternFunction
+                | SymbolKind::ConstParam
+                | SymbolKind::EffectVerb => false,
+                SymbolKind::Primitive => {
+                    !name.starts_with(char::is_uppercase) || n.eq_ignore_ascii_case(name)
+                }
+                _ => true,
+            }
+        });
         // A known rename wins over edit distance — `TreeMap` is nowhere near
         // `SortedMap` by distance, so the generic suggester cannot find it.
         let suggestion = Self::renamed_stdlib_type(name)

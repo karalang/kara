@@ -2204,17 +2204,34 @@ impl<'a> super::TypeChecker<'a> {
                             continue;
                         }
                         if !self.type_supports_debug(t) {
-                            self.type_error(
-                                format!(
-                                    "`{name}` needs its operands to implement `Debug`, to print \
-                                     them when it fails, and `{}` does not (design.md §14 \
-                                     Assertions: `{name}[T: PartialEq + Debug]`); add \
-                                     `#[derive(Debug)]` to it, or compare with `assert(a == b)`",
-                                    type_display(t)
-                                ),
-                                arg.value.span,
-                                TypeErrorKind::TraitBoundNotSatisfied,
+                            let message = format!(
+                                "`{name}` needs its operands to implement `Debug`, to print \
+                                 them when it fails, and `{}` does not (design.md §14 \
+                                 Assertions: `{name}[T: PartialEq + Debug]`); add \
+                                 `#[derive(Debug)]` to it, or compare with `assert(a == b)`",
+                                type_display(t)
                             );
+                            // The program's own struct or enum takes the derive
+                            // as a fix (B-2026-11-16-189).
+                            let fix = match t {
+                                Type::Named { name: ty, .. } => {
+                                    self.derive_trait_fix_it(ty, "Debug", &mut String::new())
+                                }
+                                _ => None,
+                            };
+                            match fix {
+                                Some(fix) => self.type_error_with_fix_it(
+                                    message,
+                                    arg.value.span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                    fix,
+                                ),
+                                None => self.type_error(
+                                    message,
+                                    arg.value.span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                ),
+                            }
                             break;
                         }
                     }
