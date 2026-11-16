@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 382 |
-| false-positive | 227 |
+| false-positive | 229 |
 | missing-feature | 178 |
 | perf | 175 |
 | soundness | 72 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 518 |
+| typecheck | 520 |
 | mir-llvm | 260 |
 | mir | 223 |
 | cli | 151 |
@@ -112,6 +112,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
 | B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
+| B-2026-11-16-211 | 2026-11-16 | typecheck | medium | A closure whose body is a join of literals (`|s: i32| if s < lower { -1 } else if s > upper { 1 } else { 0 }`) is typed `i64` where it is written, so a Rust scoring closure whose results build an `i32` return is refused as a narrowing with no fix; a `let` with the same value stays open (design.md §8, a join of literals is a literal) | — |
+| B-2026-11-16-212 | 2026-11-16 | typecheck | medium | A comparison of a signed and an unsigned integer is refused even when one side holds every value of the other (`count_ones() / 2 <= k` with `k: u32`, `i64 < u8`), though design.md § Mixed-width operands widens the narrower operand of a comparison as of `+` and `i64 * u32` is accepted; no fix is offered | — |
 
 ### Relocated
 
