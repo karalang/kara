@@ -31,7 +31,7 @@ payload after a `0xFF` marker.
 The mirror `coap_server.py` is the same server and clients written
 independently with `socket` and `threading`; it wrote `expected.out`.
 
-Written 2026-11-15 by the real-world apps thread; karac at KARAC_SHA,
+Written 2026-11-15 by the real-world apps thread; karac at 9fb41e9f76,
 which carries the fixes below.
 
 ## From coap_server.orig.kara to coap_server.kara

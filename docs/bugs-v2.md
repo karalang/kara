@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-38 | 2026-11-15 | typecheck | medium | A list literal returned by a closure (`d.iter().map(|e| [e[0], e[1], 1 - e[2]]).collect()` into a `Vec[Array[i64, 3]]`) is a `Vec`, so the `collect` fails ("`Vec[Array[i64, 3]]` implements `FromIterator[Array[i64, 3]]`, not `FromIterator[Vec[i64]]`") with no fix, and a closure cannot declare its return type (`|e| -> Array[i64, 3] { .. }` is refused as Rust syntax), so the only spelling is a typed `let` inside the closure | — |
 | B-2026-11-15-40 | 2026-11-15 | typecheck+cli | medium | `println(f"{v} -> {total(v)}")` with `v` owned and `total(v: own Vec[i64])` is refused with E0516 ("cannot move `v` while it is still borrowed") and no machine fix, though the message names `.clone()`; in kata 2202 it is where `karac fix`'s own `own` edits end, three rounds after a bare parameter was stored in a struct field | — |
 | B-2026-11-15-50 | 2026-11-15 | typecheck | low | An `as usize` index over a `u8` takes two fix rounds and keeps its parentheses: `pos[(b - b'a') as usize]` becomes `pos[(b - b'a') as i64]`, then `pos[(b - b'a')]` | — |
-| B-2026-11-15-155 | 2026-11-15 | typecheck | high | `Some(w)` with `w: u64` passed where an `Option[i64]` is wanted is accepted with no `as`, and `u64.MAX` prints -1; `let x: i64 = w` is refused. Same for `Ok(w)` / `Err(w)` payloads | — |
 
 ### Relocated
 
@@ -1329,6 +1328,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-15-152 | parser | low | `use std::thread;` in a program that spawns becomes `import std.thread;`, "unknown module `std.thread`" with no fix, and once the spawn is moved into… | 4dbfebec42 |
 | B-2026-11-15-153 | typecheck | medium | `set_read_timeout(Some(Duration::from_millis(n)))` mends to `Some(Duration.ms(n))`, then "expected 'i64', found 'Duration'" with no fix: Kāra's takes… | 4dbfebec42 |
 | B-2026-11-15-154 | mir+ownership | medium | A `filter` predicate's capture is held against the collected result: `self.options.iter().filter(\|(n, _)\| *n == num).map(\|(_, v)\| v).collect()` retur… | 4dbfebec42 |
+| B-2026-11-15-155 | typecheck | high | `Some(w)` with `w: u64` passed where an `Option[i64]` is wanted is accepted with no `as`, and `u64.MAX` prints -1; `let x: i64 = w` is refused | 9fb41e9f76 |
 | B-2026-11-15-156 | typecheck | low | The checker without the library (bare `crate::typecheck`: the wasm playground's run_static_checks, the REPL's ownership view, the borrowck core-pin c… | 9903db3d4f |
 | B-2026-11-15-157 | typecheck | high | `karac check` overflowed its stack on a generic struct literal holding `None` inside `Some`: `let s: Option[G[Option[i64]]] = Some(G { v: None })` wi… | 649b27f77e |
 | B-2026-11-15-158 | typecheck | medium | An empty `[]` one level inside a tuple inside `Some`/`Ok`, or inside a nested tuple, was refused with "a type that failed to check is not lowered yet" | 649b27f77e |
