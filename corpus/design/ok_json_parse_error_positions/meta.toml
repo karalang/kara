@@ -1,0 +1,9 @@
+source = "docs/library/json.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "json"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/json.md and design.md Serialize and Deserialize (2026-11-16): Json.parse errors: message and line:column for empty input, truncated literals, trailing commas, missing colon, unquoted key, leading zero, bad numbers, NaN/Infinity refused, unterminated strings, bad and lone-surrogate escapes, a raw control character, trailing characters and multi-line positions; serde_json 1.0 text. interp, mir-llvm and ASan agree."

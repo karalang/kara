@@ -1,0 +1,27 @@
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct P { a: i64, b: Option[String] }
+
+fn t(s: Str) {
+    let r: Result[P, DeserializeError] = Json.deserialize(s);
+    match r { Ok(v) => println(f"ok {v.fmt_debug()}"), Err(x) => println(f"err {x}") }
+}
+
+fn main() {
+    t("{\"a\":1}");
+    t("{\"a\":1,");
+    t("{\"a\":1");
+    t("{\"a\":");
+    t("{\"a\"");
+    t("{");
+    t("");
+    t("{\"a\":1}x");
+    t("{\"a\":\"1\"}");
+    t("{\"a\":1,\"b\":2}");
+    t("[1]");
+    t("{\"a\":9223372036854775808}");
+    t("{\"a\":1,\"a\":2}");
+    t("{\"b\":null,\"a\":-1}");
+    t("{\"a\":1e2}");
+}

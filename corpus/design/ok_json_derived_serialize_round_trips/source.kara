@@ -1,0 +1,73 @@
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct User { name: String, age: i64, active: bool, nick: Option[String], score: f64 }
+
+#[derive(Serialize, Deserialize, Debug)]
+enum Shape { Dot, Circle(f64), Rect { w: i64, h: i64 } }
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag: "type")]
+enum Ev { Start, Move { x: i64 } }
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+enum Num { I(i64), S(String) }
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Config {
+    #[serde(rename: "server_name")]
+    name: String,
+    #[serde(skip)]
+    cache: Vec[i64],
+    #[serde(default: 8080)]
+    port: i64,
+    pair: (i64, bool),
+}
+
+fn main() {
+    let u = User { name: "a\"é".to_string(), age: -3, active: true, nick: None, score: 2.5 };
+    let t = Json.serialize(u);
+    println(t);
+    let back: User = Json.deserialize(t).unwrap();
+    println(back.fmt_debug());
+    let u2 = User { name: "b".to_string(), age: 9223372036854775807, active: false, nick: Some("bb".to_string()), score: -0.0 };
+    let t2 = Json.serialize(u2);
+    println(t2);
+    let b2: User = Json.deserialize(t2).unwrap();
+    println(b2.fmt_debug());
+    for s in [Shape.Dot, Shape.Circle(1.5), Shape.Rect { w: 2, h: 3 }] {
+        let t = Json.serialize(s);
+        let b: Shape = Json.deserialize(t).unwrap();
+        println(f"{t} {b.fmt_debug()}");
+    }
+    for e in [Ev.Start, Ev.Move { x: 4 }] {
+        let t = Json.serialize(e);
+        let b: Ev = Json.deserialize(t).unwrap();
+        println(f"{t} {b.fmt_debug()}");
+    }
+    for n in [Num.I(7), Num.S("x".to_string())] {
+        let t = Json.serialize(n);
+        let b: Num = Json.deserialize(t).unwrap();
+        println(f"{t} {b.fmt_debug()}");
+    }
+    let c = Config { name: "srv".to_string(), cache: [1, 2], port: 1, pair: (5, true) };
+    let t = Json.serialize(c);
+    println(t);
+    let d: Config = Json.deserialize("{\"server_name\":\"x\",\"pair\":[1,false]}").unwrap();
+    println(d.fmt_debug());
+    let e: Result[User, DeserializeError] = Json.deserialize("{\"name\":\"a\",\"age\":1}");
+    match e { Ok(_) => println("ok?"), Err(x) => println(f"err {x}") }
+    let e2: Result[User, DeserializeError] = Json.deserialize("{\"name\":\"a\",\"age\":1.5,\"active\":true,\"nick\":null,\"score\":1}");
+    match e2 { Ok(v) => println(f"ok {v.fmt_debug()}"), Err(x) => println(f"err {x}") }
+    let e3: Result[User, DeserializeError] = Json.deserialize("{\"name\":\"a\",\"age\":1,\"active\":true,\"nick\":null,\"score\":1,\"extra\":[1]}");
+    match e3 { Ok(v) => println(f"ok {v.fmt_debug()}"), Err(x) => println(f"err {x}") }
+    let e4: Result[Config, DeserializeError] = Json.deserialize("{\"server_name\":\"x\",\"pair\":[1]}");
+    match e4 { Ok(_) => println("ok?"), Err(x) => println(f"err {x}") }
+    let e5: Result[User, DeserializeError] = Json.deserialize("{\"name\":\"a\",");
+    match e5 { Ok(_) => println("ok?"), Err(x) => println(f"err {x}") }
+    let e6: Result[Shape, DeserializeError] = Json.deserialize("\"Hex\"");
+    match e6 { Ok(_) => println("ok?"), Err(x) => println(f"err {x}") }
+    let v: Vec[Option[i64]] = Json.deserialize("[1,null,3]").unwrap();
+    println(f"{v} {Json.serialize(v)}");
+}

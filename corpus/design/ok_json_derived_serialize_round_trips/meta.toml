@@ -1,0 +1,9 @@
+source = "docs/library/json.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "json"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/json.md and design.md Serialize and Deserialize (2026-11-16): design.md Serialize and Deserialize: derived structs with Option and f64 fields, i64::MAX, externally tagged, internally tagged (tag) and untagged enums, rename, skip, default: expr, a tuple field, a missing field named by its key, an unknown field ignored, an integer read as f64, a short tuple refused, Vec[Option[i64]]. interp, mir-llvm and ASan agree."

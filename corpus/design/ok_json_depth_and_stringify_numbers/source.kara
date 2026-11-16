@@ -1,0 +1,35 @@
+import std.json.{Json, JsonError};
+
+fn nest(n: i64, open: Str, close: Str) -> String {
+    let mut s = String.new();
+    for _ in 0..n { s.push_str(open); }
+    for _ in 0..n { s.push_str(close); }
+    s
+}
+
+fn main() {
+    for n in [126, 127, 128, 200] {
+        match Json.parse(nest(n, "[", "]")) {
+            Ok(_) => println(f"{n} ok"),
+            Err(e) => println(f"{n} ERR {e.line}:{e.column} {e.message}"),
+        }
+    }
+    match Json.parse(nest(128, "{\"a\":", "}").replace("}", "1}").replace("1}1}", "1}}")) {
+        Ok(_) => println("obj ok"),
+        Err(e) => println(f"obj ERR {e.message}"),
+    }
+    let nan = Json.Number(0.0 / 0.0);
+    let inf = Json.Number(1.0 / 0.0);
+    let ninf = Json.Number(-1.0 / 0.0);
+    println(Json.Array([nan, inf, ninf, Json.Number(-0.0), Json.Number(1.0), Json.Number(1e21), Json.Number(1e-7), Json.Number(0.1), Json.Number(123456789.0), Json.Number(1e20), Json.Int(-5)]).stringify());
+    let s = Json.String("q\"b\\n\n\t\u{1}\u{7f}é😀</".to_string());
+    println(s.stringify());
+    let o = Json.Object([("k".to_string(), Json.Int(1)), ("j".to_string(), Json.Null), ("k".to_string(), Json.Int(2))]);
+    let c = o.clone();
+    println(o.stringify());
+    println(c.stringify());
+    match Json.parse("{\"name\": \"ada\", \"tags\": [1, 2.5]}") {
+        Ok(Json.Object(fields)) => println(f"{fields.len()} fields"),
+        _ => println("no"),
+    }
+}

@@ -1,0 +1,28 @@
+ERR 1:0 EOF while parsing a value at line 1 column 0
+ERR 1:1 EOF while parsing a value at line 1 column 1
+ERR 1:3 EOF while parsing a value at line 1 column 3
+ERR 1:3 EOF while parsing a value at line 1 column 3
+ERR 1:4 trailing comma at line 1 column 4
+ERR 1:4 expected `,` or `]` at line 1 column 4
+ERR 1:6 expected `:` at line 1 column 6
+ERR 1:8 trailing comma at line 1 column 8
+ERR 1:2 key must be a string at line 1 column 2
+ERR 1:2 invalid number at line 1 column 2
+ERR 1:2 EOF while parsing a value at line 1 column 2
+ERR 1:1 expected value at line 1 column 1
+ERR 1:1 EOF while parsing a value at line 1 column 1
+ERR 1:1 expected value at line 1 column 1
+ERR 1:2 EOF while parsing a value at line 1 column 2
+ERR 1:1 expected value at line 1 column 1
+ERR 1:1 expected value at line 1 column 1
+ERR 1:4 EOF while parsing a string at line 1 column 4
+ERR 1:3 invalid escape at line 1 column 3
+ERR 1:8 unexpected end of hex escape at line 1 column 8
+ERR 1:7 lone leading surrogate in hex escape at line 1 column 7
+ERR 1:6 EOF while parsing a string at line 1 column 6
+ERR 2:0 control character (\u0000-\u001F) found while parsing a string at line 2 column 0
+ERR 1:5 trailing characters at line 1 column 5
+ERR 2:6 expected ident at line 2 column 6
+ERR 4:2 expected value at line 4 column 2
+ERR 1:1 expected value at line 1 column 1
+ERR 1:13 lone leading surrogate in hex escape at line 1 column 13

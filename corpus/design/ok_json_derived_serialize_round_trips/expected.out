@@ -1,0 +1,20 @@
+{"name":"a\"é","age":-3,"active":true,"nick":null,"score":2.5}
+User { name: "a\"é", age: -3, active: true, nick: None, score: 2.5 }
+{"name":"b","age":9223372036854775807,"active":false,"nick":"bb","score":-0.0}
+User { name: "b", age: 9223372036854775807, active: false, nick: Some("bb"), score: -0.0 }
+"Dot" Dot
+{"Circle":1.5} Circle(1.5)
+{"Rect":{"w":2,"h":3}} Rect { w: 2, h: 3 }
+{"type":"Start"} Start
+{"type":"Move","x":4} Move { x: 4 }
+7 I(7)
+"x" S("x")
+{"server_name":"srv","port":1,"pair":[5,true]}
+Config { name: "x", cache: [], port: 8080, pair: (1, false) }
+err missing field `active`
+err age: `1.5` is not an integer at line 1 column 22
+ok User { name: "a", age: 1, active: true, nick: None, score: 1.0 }
+err too few values in a tuple
+err name: expected value at line 1 column 13
+err unknown variant `Hex` of Shape
+[Some(1), None, Some(3)] [1,null,3]

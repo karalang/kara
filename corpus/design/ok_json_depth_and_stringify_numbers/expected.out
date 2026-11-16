@@ -1,0 +1,10 @@
+126 ok
+127 ok
+128 ERR 1:128 recursion limit exceeded at line 1 column 128
+200 ERR 1:128 recursion limit exceeded at line 1 column 128
+obj ERR recursion limit exceeded at line 1 column 636
+[null,null,null,-0.0,1.0,1e+21,1e-7,0.1,123456789.0,1e+20,-5]
+"q\"b\\n\n\t\u0001é😀</"
+{"k":2,"j":null}
+{"k":2,"j":null}
+2 fields

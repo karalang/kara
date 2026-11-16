@@ -1,0 +1,17 @@
+import std.json.{Json, JsonError};
+
+fn show(t: Str) {
+    match Json.parse(t) {
+        Ok(v) => println(v.stringify()),
+        Err(e) => println(f"ERR {e.line}:{e.column} {e.message}"),
+    }
+}
+
+fn main() {
+    let cases = [
+        "", " ", "nul", "tru", "[1,]", "[1 2]", "{\"a\" 1}", "{\"a\":1,}", "{a:1}", "01", "1.", ".5", "-", "+1",
+        "1e", "NaN", "Infinity", "\"abc", "\"\\x\"", "\"\\ud83d\"", "\"\\ude00\"", "\"\\u12\"", "\"a\nb\"",
+        "[1] 2", "{\"a\":\n  tru}", "[\n1,\n\n x]", "'a'", "\"\\uD83D\\u0041\"",
+    ];
+    for c in cases { show(c); }
+}

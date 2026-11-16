@@ -1,0 +1,9 @@
+source = "docs/library/json.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "json"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/json.md and design.md Serialize and Deserialize (2026-11-16): Nesting: 127 arrays parse, 128 is a recursion-limit error, objects too. stringify writes NaN and the infinities as null, -0.0, 1.0, 1e+21, 1e-7, 0.1; escapes quote, backslash and control characters only; a built Object with a repeated key writes it once; Json implements Clone. interp, mir-llvm and ASan agree."

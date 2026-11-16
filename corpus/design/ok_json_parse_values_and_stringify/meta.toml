@@ -1,0 +1,9 @@
+source = "docs/library/json.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "json"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/json.md and design.md Serialize and Deserialize (2026-11-16): Json.parse then stringify over every value kind: literals, i64 bounds (one past either bound is a Number), -0 as Number(-0.0), exponents, out-of-range exponents refused as serde_json refuses them, every escape, \\u escapes and a surrogate pair, raw non-ASCII, duplicate keys (first place, last value). Checked against a Python json mirror with serde_json number rules. interp, mir-llvm and ASan agree."

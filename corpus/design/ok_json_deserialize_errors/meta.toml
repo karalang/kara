@@ -1,0 +1,9 @@
+source = "docs/library/json.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "json"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "Conformance pass over docs/library/json.md and design.md Serialize and Deserialize (2026-11-16): Json.deserialize errors for truncated, mistyped and out-of-range input; a repeated key takes the last value as Json.parse does; an exponent is not an integer. interp, mir-llvm and ASan agree."
