@@ -1815,6 +1815,11 @@ impl<'a> super::TypeChecker<'a> {
         );
         self.method_call_ends.push(ends);
         self.note_literal_push(object, method, args);
+        // The dependency traits the file this call is written in does not
+        // import supply none of its methods (B-2026-11-16-180).
+        if !self.trait_scopes.is_empty() {
+            self.env.hidden_traits = self.trait_scopes.at(span.offset);
+        }
         let errors_before = self.errors.len();
         self.call_receiver_roots
             .push(super::exprs::clone_place_root(object).map(str::to_string));

@@ -2958,6 +2958,10 @@ pub struct TypeChecker<'a> {
     /// scope cross-module visibility checks — an access is "cross-module"
     /// when the accessed item's origin differs from `current_module`.
     pub(super) current_module: Option<crate::module::ModuleId>,
+    /// The dependency traits not in scope, by where the code sits
+    /// (`crate::trait_scope`, B-2026-11-16-180): one set for a module checked with its
+    /// tree, one per file for a package's combined source.
+    pub(super) trait_scopes: crate::trait_scope::HiddenTraits,
     /// Local name → (canonical origin module path, canonical item name,
     /// declared visibility) for items imported into the current module from
     /// elsewhere in the tree. Slice 7: re-exports collapse to the canonical
@@ -4489,6 +4493,7 @@ impl<'a> TypeChecker<'a> {
             resolve_result,
             tree: None,
             current_module: None,
+            trait_scopes: Default::default(),
             type_origins: FxHashMap::default(),
             env: TypeEnv::new(),
             local_scope: LocalTypeScope::new(),
@@ -4867,6 +4872,13 @@ impl<'a> TypeChecker<'a> {
         self
     }
 
+    /// The dependency traits each file of the source does not import
+    /// ([`crate::trait_scope`]); none, unless a package's check sets them.
+    pub fn with_trait_scopes(mut self, scopes: crate::trait_scope::HiddenTraits) -> Self {
+        self.trait_scopes = scopes;
+        self
+    }
+
     pub fn library_methods_from_source(mut self) -> Self {
         self.library_methods_from_source = true;
         self.env.partial_eq_impl_dispatches = true;
@@ -4894,11 +4906,17 @@ impl<'a> TypeChecker<'a> {
     ) -> Self {
         self.tree = Some(tree);
         self.current_module = Some(module_id);
+        self.trait_scopes = crate::trait_scope::HiddenTraits::whole(
+            crate::trait_scope::hidden_traits(tree, module_id),
+        );
         self
     }
 
     pub fn check(mut self) -> TypeCheckResult {
         inference::clear_literal_vars();
+        if self.trait_scopes.is_empty() {
+            self.trait_scopes = self.cli_lint_overrides.hidden_traits.clone();
+        }
         self.build_type_env();
         self.validate_derive_copy();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, reject a

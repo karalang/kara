@@ -46,6 +46,9 @@ pub(super) struct Amalgam {
     /// rule: the v2 check of this source reports the refusal if it makes it
     /// too, and this is reported if it does not.
     pub refusal: Option<super::build_cmds::PackageCheck>,
+    /// The dependency traits each copied file does not import, by its byte
+    /// range in `text` (`crate::trait_scope`, B-2026-11-16-180).
+    pub hidden: crate::trait_scope::HiddenTraits,
 }
 
 impl Amalgam {
@@ -791,9 +794,15 @@ pub(super) fn amalgamate(
         text.push('\n');
         line += 1;
     }
+    let mut hidden = crate::trait_scope::HiddenTraits::default();
     for (f, body) in files.iter().zip(bodies) {
         lines.push((line, shown(f.path), 1));
         bytes.push((text.len(), body.len(), shown(f.path)));
+        hidden.push(
+            text.len(),
+            body.len(),
+            crate::trait_scope::hidden_traits(tree, f.module.id),
+        );
         line += body.matches('\n').count();
         text.push_str(&body);
         if !body.ends_with('\n') {
@@ -815,6 +824,7 @@ pub(super) fn amalgamate(
         originals,
         names,
         refusal: None,
+        hidden,
     })
 }
 

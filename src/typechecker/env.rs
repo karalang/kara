@@ -562,6 +562,10 @@ pub struct TypeEnv {
     /// can look it up. v60 item 55 / design.md § Marker Traits.
     pub marker_traits: FxHashSet<String>,
     pub impls: Vec<ImplInfo>,
+    /// The dependency traits not in scope where the method call being
+    /// checked is written (`crate::trait_scope`, B-2026-11-16-180): their impls answer
+    /// no method lookup there.
+    pub hidden_traits: Option<std::sync::Arc<crate::trait_scope::Hidden>>,
     /// Indices into `impls` keyed by trait name. Trait-less inherent impls
     /// are not indexed here.
     pub impls_by_trait: FxHashMap<String, Vec<usize>>,
@@ -667,6 +671,7 @@ impl TypeEnv {
             type_alias_canonical: FxHashMap::default(),
             marker_traits: FxHashSet::default(),
             impls: Vec::new(),
+            hidden_traits: None,
             impls_by_trait: FxHashMap::default(),
             impl_assoc_types: FxHashMap::default(),
             impl_own_assoc_types: FxHashMap::default(),
@@ -907,6 +912,36 @@ impl TypeEnv {
         inherent.or(trait_method)
     }
 
+    /// Whether `imp` is an impl of a dependency trait the call being checked
+    /// does not have in scope (design.md § Method resolution, B-2026-11-16-180).
+    pub fn trait_hidden(&self, imp: &ImplInfo) -> bool {
+        match (&self.hidden_traits, imp.trait_name.as_deref()) {
+            (Some(h), Some(t)) => h.contains_key(t),
+            _ => false,
+        }
+    }
+
+    /// The hidden dependency traits whose impls on `target_type` have
+    /// `method`, each with the path of its module: what a refused call would
+    /// have reached had the file imported the trait.
+    pub fn hidden_trait_providers(&self, target_type: &str, method: &str) -> Vec<(String, String)> {
+        let Some(h) = &self.hidden_traits else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, String)> = self
+            .impls
+            .iter()
+            .filter(|imp| imp.target_type == target_type && imp.methods.contains_key(method))
+            .filter_map(|imp| {
+                let t = imp.trait_name.as_deref()?;
+                h.get(t).map(|path| (t.to_string(), path.join(".")))
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// Whether `imp` may answer a lookup of `method` while a UFCS call
     /// names a trait ([`Self::ufcs_trait`]).
     fn ufcs_admits(&self, imp: &ImplInfo, method: &str) -> bool {
@@ -922,18 +957,6 @@ impl TypeEnv {
         }
     }
 
-    /// Slice 3 of the method-resolution CR — all-candidates variant of
-    /// [`Self::find_method_with_args`]. Returns every impl that matches
-    /// `target_type` + `method` after the conditional-impl-filtering pass
-    /// (`impl_bounds_discharge`), partitioned by inherent-vs-trait priority:
-    /// if any inherent impls match, only those are returned; otherwise the
-    /// surviving trait impls are returned. Each entry is `(&ImplInfo,
-    /// &FunctionSig)` so callers can render the source impl in ambiguity
-    /// diagnostics. The returned vec preserves source order.
-    ///
-    /// A length-1 result is the dispatch-normally case; length ≥ 2 is the
-    /// ambiguity case (item 4 of the parent CR — see
-    /// `phase-4-interpreter.md`).
     /// [`Self::find_methods_with_args`]'s trait-impl candidates, which it
     /// leaves out when an inherent method of the name applies: a trait's
     /// default body resolves `self.m()` through the trait whatever the
@@ -948,6 +971,7 @@ impl TypeEnv {
             .iter()
             .filter(|imp| {
                 imp.trait_name.is_some()
+                    && !self.trait_hidden(imp)
                     && imp.target_type == target_type
                     && impl_args_match(&imp.target_args, target_args)
                     && impl_shape_fits(imp, target_args)
@@ -958,6 +982,18 @@ impl TypeEnv {
             .collect()
     }
 
+    /// Slice 3 of the method-resolution CR — all-candidates variant of
+    /// [`Self::find_method_with_args`]. Returns every impl that matches
+    /// `target_type` + `method` after the conditional-impl-filtering pass
+    /// (`impl_bounds_discharge`), partitioned by inherent-vs-trait priority:
+    /// if any inherent impls match, only those are returned; otherwise the
+    /// surviving trait impls are returned. Each entry is `(&ImplInfo,
+    /// &FunctionSig)` so callers can render the source impl in ambiguity
+    /// diagnostics. The returned vec preserves source order.
+    ///
+    /// A length-1 result is the dispatch-normally case; length ≥ 2 is the
+    /// ambiguity case (item 4 of the parent CR — see
+    /// `phase-4-interpreter.md`).
     pub fn find_methods_with_args(
         &self,
         target_type: &str,
@@ -981,7 +1017,7 @@ impl TypeEnv {
             }
             if imp.trait_name.is_none() {
                 inherent.push((imp, sig));
-            } else {
+            } else if !self.trait_hidden(imp) {
                 trait_methods.push((imp, sig));
             }
         }

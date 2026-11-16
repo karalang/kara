@@ -2135,6 +2135,27 @@ impl<'a> super::TypeChecker<'a> {
                         return Type::Error;
                     }
                     let mut msg = format!("no method '{}' on type '{}'", method, type_name);
+                    // A dependency trait the file does not import has it
+                    // (design.md § Method resolution, B-2026-11-16-180).
+                    let hidden = self.env.hidden_trait_providers(&type_name, method);
+                    if !hidden.is_empty() {
+                        let named: Vec<String> = hidden
+                            .iter()
+                            .map(|(t, path)| format!("`{t}` (`import {path}.{t};`)"))
+                            .collect();
+                        let (list, verb) = match named.split_last() {
+                            Some((last, rest)) if !rest.is_empty() => {
+                                (format!("{} and {last}", rest.join(", ")), "are")
+                            }
+                            _ => (named.join(""), "is"),
+                        };
+                        msg.push_str(&format!(
+                            ": it is a method of {list}, which {verb} not in scope here; \
+                             a dependency's trait supplies methods only where it is imported"
+                        ));
+                        self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
+                        return Type::Error;
+                    }
                     // Iterator adaptors/terminals (`map`/`filter`/`collect`/…)
                     // are not methods on a `Vec`/`VecDeque` directly — they live
                     // on `Iterator[T]`, reached via `.iter()`. A direct

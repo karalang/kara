@@ -98,6 +98,7 @@ pub mod question_chain;
 pub mod select_desugar;
 pub mod struct_spread;
 pub mod tls_conn;
+pub mod trait_scope;
 pub mod work_pool;
 pub mod ws_frame;
 // `module`, `walker`, `manifest` carry data types consumed by `resolver`
@@ -396,6 +397,7 @@ pub fn typecheck_with_pruned_library_source(
     TypeChecker::new(program, resolve_result)
         .library_methods_from_source()
         .with_pruned_library_methods(pruned)
+        .with_trait_scopes(crate::trait_scope::program())
         .check()
 }
 

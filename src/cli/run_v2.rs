@@ -157,6 +157,12 @@ pub(super) fn check_v2_or_exit(
     if let Some(m) = manifest {
         lint_overrides.apply_manifest_lints(&m.lints);
     }
+    // A dependency's trait the file does not import supplies no method there,
+    // in this check and in the MIR builder's of the same source.
+    if let Some(a) = project {
+        lint_overrides.hidden_traits = a.hidden.clone();
+        crate::trait_scope::set_program(a.hidden.clone());
+    }
     // An error `karac check` reports fails the command too (core semantics
     // §0): the MIR builder does not repeat every rule.
     let checked = || v2_pipeline(filename, source, manifest, lint_overrides.clone());

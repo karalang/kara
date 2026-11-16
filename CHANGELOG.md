@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A method call that only a dependency's unimported trait answers is an
+  error that names the import (design.md § Method resolution): with
+  `import kdep.util.W;` alone, `W { v: 1 }.show()` resolved through
+  `kdep`'s trait `Show` and printed 8. With two dependency traits providing
+  the method, importing one of them now picks it rather than reporting the
+  call ambiguous (B-2026-11-16-180).
 - `Some(w)`, `Ok(w)` or `Err(w)` whose integer payload narrows or changes
   sign into the slot is an error, as `let x: i64 = w` is: `Some(w)` with
   `w: u64` passed for an `Option[i64]` printed -1 for `u64.MAX`

@@ -530,6 +530,10 @@ pub struct CliLintOverrides {
     /// check adds no refusal the v2 pipeline behind it would not make
     /// (B-2026-10-22-28: a returned place writes its `ref`).
     pub core_places: bool,
+    /// The dependency traits each file of a package does not have in scope
+    /// (`crate::trait_scope`, B-2026-11-16-180). Not a lint either: the check of a
+    /// package's combined source learns where each file sits through it.
+    pub hidden_traits: crate::trait_scope::HiddenTraits,
 }
 
 /// The lints that report a v2 core rule (`docs/core-semantics.md` §3.7: a
