@@ -89,6 +89,13 @@ pub trait Deserializer {
     /// tries its variants in turn, rereading the same value.
     fn deserialize_mark(mut ref self) -> i64;
     fn deserialize_reset(mut ref self, mark: i64);
+    /// The error for a field the input names twice. A derived
+    /// `Deserialize` refuses a repeated field rather than take either value,
+    /// so a validator that read one copy cannot be passed by the other
+    /// (B-2026-11-16-175). A format that knows where it is says so.
+    fn deserialize_duplicate(ref self, field: String) -> DeserializeError {
+        DeserializeError.new(f"duplicate field `{field}`")
+    }
 }
 
 pub trait Deserialize {
@@ -667,6 +674,9 @@ pub struct JsonDeserializer {
     /// The positions `deserialize_mark` handed out: `pos`, the depth of
     /// `first`, `in_key`, and the depth of `path`.
     marks: Vec[(i64, i64, bool, i64)],
+    /// Where the last field name read ended: a repeated field is reported
+    /// there, as serde_json reports it.
+    key_end: i64,
 }
 
 impl JsonDeserializer {
@@ -678,6 +688,7 @@ impl JsonDeserializer {
             in_key: false,
             path: Vec.new(),
             marks: Vec.new(),
+            key_end: 0,
         }
     }
 
@@ -1072,6 +1083,7 @@ impl Deserializer for JsonDeserializer {
         }
         self.ws();
         let name = self.string()?;
+        self.key_end = self.pos;
         self.expect(':')?;
         let n = self.path.len();
         self.path[n - 1] = name.clone();
@@ -1080,6 +1092,43 @@ impl Deserializer for JsonDeserializer {
 
     fn deserialize_skip(mut ref self) -> Result[(), DeserializeError] {
         self.skip_value()
+    }
+
+    /// `duplicate field `a` at line 1 column 11`: serde_json's text, at the
+    /// end of the repeated name, with the path of the struct it is in.
+    fn deserialize_duplicate(ref self, field: String) -> DeserializeError {
+        let mut line = 1;
+        let mut column = 0;
+        let mut i = 0;
+        while i < self.key_end and i < self.chars.len() {
+            let c = self.chars[i];
+            if c == '\n' {
+                line += 1;
+                column = 0;
+            } else {
+                column += c.len_utf8();
+            }
+            i += 1;
+        }
+        let mut at = String.new();
+        let n = self.path.len();
+        let mut k = 0;
+        while k + 1 < n {
+            let f = self.path[k].clone();
+            if not f.is_empty() {
+                if not at.is_empty() {
+                    at.push('.');
+                }
+                at.push_str(f);
+            }
+            k += 1;
+        }
+        let msg = f"duplicate field `{field}` at line {line} column {column}";
+        if at.is_empty() {
+            DeserializeError.new(msg)
+        } else {
+            DeserializeError.new(f"{at}: {msg}")
+        }
     }
 
     fn deserialize_variant(mut ref self, name: String) -> Result[(String, bool), DeserializeError] {
@@ -1128,12 +1177,27 @@ impl Json {
     /// selects `T` (`let u: User = Json.deserialize(text)?`).
     /// `text` is a view, as `Json.parse` takes it: a `String`, a line of
     /// `text.lines()` or a slice of one (B-2026-11-08-79).
+    /// Text that is not JSON is reported as `Json.parse` reports it,
+    /// message and position; the reader's own field-prefixed text is for
+    /// JSON of the wrong shape (B-2026-11-16-174).
     fn deserialize[T: Deserialize](text: Str) -> Result[T, DeserializeError] {
         let mut d = JsonDeserializer.new(text);
-        let v = T.deserialize(d)?;
-        d.end()?;
-        Ok(v)
+        let r: Result[T, DeserializeError] = serde_json_read(mut d);
+        match r {
+            Ok(v) => Ok(v),
+            Err(e) => match Json.parse(text.to_string()) {
+                Ok(_) => Err(e),
+                Err(pe) => Err(DeserializeError.new(pe.message)),
+            },
+        }
     }
+}
+
+/// One `T` from `d`, and nothing after it.
+fn serde_json_read[T: Deserialize](d: mut ref JsonDeserializer) -> Result[T, DeserializeError] {
+    let v = T.deserialize(d)?;
+    d.end()?;
+    Ok(v)
 }
 
 // ── The derives ────────────────────────────────────────────────────
@@ -1382,7 +1446,10 @@ comptime fn serde_read_fields(
             build = build + fname + ": " + value + ", ";
         } else {
             decls = decls + "let mut " + slot + ": Option[" + ty + "] = None; ";
-            arms = arms + "if serde_k == \"" + serde_key(fname, args) + "\" { " + slot + " = Some("
+            // A repeated field is refused (B-2026-11-16-175).
+            arms = arms + "if serde_k == \"" + serde_key(fname, args) + "\" { if " + slot
+                + ".is_some() { return Err(d.deserialize_duplicate(\"" + serde_key(fname, args)
+                + "\".to_string())); } " + slot + " = Some("
                 + serde_read_value(ty, tn, fname, 0) + "); } else ";
             let missing = if dflt != "" {
                 "match " + slot + " { Some(v) => v, None => " + dflt + " }"
@@ -1618,7 +1685,8 @@ comptime fn derive_deserialize(comptime T: own Type) -> Vec[Item] {
         body = "let serde_m = d.deserialize_mark(); d.deserialize_struct_begin(\"" + n + "\")?; "
             + "let mut serde_t: Option[String] = None; "
             + "loop { match d.deserialize_field()? { None => break, Some(serde_k) => { "
-            + "if serde_k == \"" + tag + "\" { serde_t = Some(d.deserialize_string()?); } "
+            + "if serde_k == \"" + tag + "\" { if serde_t.is_some() { return Err(d.deserialize_duplicate(\""
+            + tag + "\".to_string())); } serde_t = Some(d.deserialize_string()?); } "
             + "else { d.deserialize_skip()?; } } } } d.deserialize_reset(serde_m); "
             + "let serde_v = match serde_t { Some(v) => v, None => return Err(DeserializeError.new("
             + "\"missing field `" + tag + "`\".to_string())) }; ";

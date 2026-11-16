@@ -1,0 +1,11 @@
+err duplicate field `a` at line 1 column 10
+err duplicate field `b` at line 2 column 13
+err inner: duplicate field `x` at line 1 column 25
+ok P { a: 1, b: None, inner: None }
+err EOF while parsing a value at line 1 column 7
+err EOF while parsing a value at line 1 column 0
+err trailing comma at line 1 column 10
+err trailing characters at line 1 column 8
+err a: `1.5` is not an integer at line 1 column 9
+err duplicate field `type` at line 1 column 22
+{"a":2}

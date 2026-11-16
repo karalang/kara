@@ -15,6 +15,6 @@ err missing field `active`
 err age: `1.5` is not an integer at line 1 column 22
 ok User { name: "a", age: 1, active: true, nick: None, score: 1.0 }
 err too few values in a tuple
-err name: expected value at line 1 column 13
+err EOF while parsing a value at line 1 column 12
 err unknown variant `Hex` of Shape
 [Some(1), None, Some(3)] [1,null,3]

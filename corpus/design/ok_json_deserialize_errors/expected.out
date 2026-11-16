@@ -1,15 +1,15 @@
 ok P { a: 1, b: None }
-err a: expected value at line 1 column 8
-err a: expected ',' at line 1 column 7
-err a: expected value at line 1 column 6
-err expected ':' at line 1 column 5
-err expected value at line 1 column 2
-err expected value at line 1 column 1
+err EOF while parsing a value at line 1 column 7
+err EOF while parsing an object at line 1 column 6
+err EOF while parsing a value at line 1 column 5
+err EOF while parsing an object at line 1 column 4
+err EOF while parsing an object at line 1 column 1
+err EOF while parsing a value at line 1 column 0
 err trailing characters at line 1 column 8
 err a: expected an integer, found a string at line 1 column 6
 err b: expected a string, found 2 at line 1 column 12
 err expected an object, found an array at line 1 column 1
 err a: `9223372036854775808` is not an integer at line 1 column 25
-ok P { a: 2, b: None }
+err duplicate field `a` at line 1 column 10
 ok P { a: -1, b: None }
 err a: `1e2` is not an integer at line 1 column 9

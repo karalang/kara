@@ -6,4 +6,4 @@ tags = ["design", "library", "json"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "Conformance pass over docs/library/json.md and design.md Serialize and Deserialize (2026-11-16): Json.deserialize errors for truncated, mistyped and out-of-range input; a repeated key takes the last value as Json.parse does; an exponent is not an integer. interp, mir-llvm and ASan agree."
+note = "Conformance pass over docs/library/json.md and design.md Serialize and Deserialize (2026-11-16): Json.deserialize errors for truncated, mistyped and out-of-range input; a repeated field is refused (B-2026-11-16-175); syntax errors carry Json.parse's text (B-2026-11-16-174); an exponent is not an integer. interp, mir-llvm and ASan agree."

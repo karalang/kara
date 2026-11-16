@@ -1,0 +1,9 @@
+source = "B-2026-11-16-175"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "json", "serde"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "Review-thread ruling 2026-11-16 (json.md): a derived Deserialize refuses a repeated field with serde's text `duplicate field `a`` at the end of the repeated name (line 1 column 10 for {\"a\":1,\"a\":2}), the path of an enclosing struct before it, an internal tag included, and a repeated unknown field is skipped as any unknown field is (B-2026-11-16-175); Json.parse keeps the last value. Text that is not JSON is reported with Json.parse's message and position, and the field prefix stays on type errors only (B-2026-11-16-174)."

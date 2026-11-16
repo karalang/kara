@@ -1,0 +1,31 @@
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct In { x: i64 }
+
+#[derive(Serialize, Deserialize, Debug)]
+struct P { a: i64, b: Option[String], inner: Option[In] }
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag: "type")]
+enum Ev { Start, Move { x: i64 } }
+
+fn t(s: Str) {
+    let r: Result[P, DeserializeError] = Json.deserialize(s);
+    match r { Ok(v) => println(f"ok {v.fmt_debug()}"), Err(x) => println(f"err {x}") }
+}
+
+fn main() {
+    t("{\"a\":1,\"a\":2}");
+    t("{\"a\":1,\n \"b\":\"x\", \"b\":null}");
+    t("{\"a\":1,\"inner\":{\"x\":1,\"x\":2}}");
+    t("{\"a\":1,\"zz\":1,\"zz\":2}");
+    t("{\"a\":1,");
+    t("");
+    t("{\"a\":\"1\",}");
+    t("{\"a\":1}x");
+    t("{\"a\":1.5}");
+    let e: Result[Ev, DeserializeError] = Json.deserialize("{\"type\":\"Start\",\"type\":\"Move\",\"x\":1}");
+    match e { Ok(v) => println(f"ok {v.fmt_debug()}"), Err(x) => println(f"err {x}") }
+    match Json.parse("{\"a\":1,\"a\":2}") { Ok(v) => println(v.stringify()), Err(_) => println("no") }
+}
