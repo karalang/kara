@@ -2634,3 +2634,84 @@ fn f64_wrapper_from(value: f64) -> F64 {
 fn f32_wrapper_from(value: f32) -> F32 {
     F32.from(value)
 }
+
+// `cycle` on the views over a collection or a text: a view copies its
+// borrow and its positions, so it is `Clone` (IterCycle, B-2026-11-17-80).
+
+impl[T] Clone for VecIter[T] {
+    fn clone(self) -> VecIter[T] {
+        VecIter { v: self.v, front: self.front, back: self.back }
+    }
+}
+
+impl[T] VecIter[T] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[VecIter[T]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[T] Clone for SliceIter[T] {
+    fn clone(self) -> SliceIter[T] {
+        SliceIter { s: self.s, front: self.front, back: self.back }
+    }
+}
+
+impl[T] SliceIter[T] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[SliceIter[T]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[T] Clone for DequeIter[T] {
+    fn clone(self) -> DequeIter[T] {
+        DequeIter { d: self.d, front: self.front, back: self.back }
+    }
+}
+
+impl[T] DequeIter[T] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[DequeIter[T]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl Clone for StrChars {
+    fn clone(self) -> StrChars {
+        StrChars { s: self.s, pos: self.pos, back: self.back }
+    }
+}
+
+impl StrChars {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[StrChars] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl Clone for StrCharIndices {
+    fn clone(self) -> StrCharIndices {
+        StrCharIndices { s: self.s, pos: self.pos, back: self.back }
+    }
+}
+
+impl StrCharIndices {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[StrCharIndices] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl Clone for StrViewChars {
+    fn clone(self) -> StrViewChars {
+        StrViewChars { s: self.s, pos: self.pos, back: self.back }
+    }
+}
+
+impl StrViewChars {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[StrViewChars] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}

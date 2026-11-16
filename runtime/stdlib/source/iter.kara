@@ -91,6 +91,8 @@ trait Iterator {
         IterStepBy { it: self, step: step, first: true }
     }
 
+
+
     // A default method's own generics are named apart from every library
     // iterator impl's (`T`, `K`, `V`, `I`, `A`, `B`, `F`, `U`): a call's
     // generic arguments are matched by name, so a method `K` copied into
@@ -571,6 +573,50 @@ impl[I: Iterator] Iterator for IterStepBy[I] {
             return None;
         }
         self.it.next()
+    }
+}
+
+impl[I: Clone] Clone for IterStepBy[I] {
+    fn clone(self) -> IterStepBy[I] {
+        IterStepBy { it: self.it.clone(), step: self.step, first: self.first }
+    }
+}
+
+/// The items of a `Clone` iterator over and over: when it ends, a copy of
+/// it taken before the first item starts again, so an empty one gives an
+/// empty cycle. `cycle` is each `Clone` iterator's own method: a view over a
+/// collection, a range, and the adaptors that hold no closure
+/// (review-thread ruling 2026-11-16, B-2026-11-17-80). `it` runs, and
+/// `orig` is the copy each round starts from.
+struct IterCycle[I] {
+    orig: I,
+    it: I,
+}
+
+impl[I: Iterator + Clone] Iterator for IterCycle[I] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        match self.it.next() {
+            Some(x) => Some(x),
+            None => {
+                self.it = self.orig.clone();
+                self.it.next()
+            }
+        }
+    }
+}
+
+impl[I: Iterator + Clone] IterCycle[I] {
+    /// Cycling a cycle is the same cycle.
+    fn cycle(own self) -> IterCycle[I] {
+        self
+    }
+}
+
+impl[I: Clone] Clone for IterCycle[I] {
+    fn clone(self) -> IterCycle[I] {
+        IterCycle { orig: self.orig.clone(), it: self.it.clone() }
     }
 }
 
@@ -1290,5 +1336,107 @@ impl[T, E] Try for Result[T, E] {
     }
     fn from_output(output: own T) -> Result[T, E] {
         Ok(output)
+    }
+}
+
+// `cycle` on the adaptors that hold no closure: each is `Clone` when what
+// it wraps is (IterCycle, B-2026-11-17-80). An adaptor holding a closure
+// (`map`, `filter`, ..) is not, since a closure is not `Clone`.
+
+impl[I: Clone] Clone for IterTake[I] {
+    fn clone(self) -> IterTake[I] {
+        IterTake { it: self.it.clone(), left: self.left }
+    }
+}
+
+impl[I: Iterator + Clone] IterTake[I] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterTake[I]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[I: Clone] Clone for IterSkip[I] {
+    fn clone(self) -> IterSkip[I] {
+        IterSkip { it: self.it.clone(), left: self.left }
+    }
+}
+
+impl[I: Iterator + Clone] IterSkip[I] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterSkip[I]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[I: Clone] Clone for IterEnumerate[I] {
+    fn clone(self) -> IterEnumerate[I] {
+        IterEnumerate { it: self.it.clone(), i: self.i }
+    }
+}
+
+impl[I: Iterator + Clone] IterEnumerate[I] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterEnumerate[I]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[I: Iterator + Clone] IterStepBy[I] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterStepBy[I]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[A: Clone, B: Clone] Clone for IterChain[A, B] {
+    fn clone(self) -> IterChain[A, B] {
+        IterChain { a: self.a.clone(), b: self.b.clone(), a_done: self.a_done }
+    }
+}
+
+impl[A: Iterator + Clone, B: Iterator[Item = A.Item] + Clone] IterChain[A, B] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterChain[A, B]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[A: Clone, B: Clone] Clone for IterZip[A, B] {
+    fn clone(self) -> IterZip[A, B] {
+        IterZip { a: self.a.clone(), b: self.b.clone() }
+    }
+}
+
+impl[A: Iterator + Clone, B: Iterator + Clone] IterZip[A, B] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterZip[A, B]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[I: Clone] Clone for IterRev[I] {
+    fn clone(self) -> IterRev[I] {
+        IterRev { it: self.it.clone() }
+    }
+}
+
+impl[I: DoubleEndedIterator + Clone] IterRev[I] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterRev[I]] {
+        IterCycle { orig: self.clone(), it: self }
+    }
+}
+
+impl[I: Clone, V] Clone for IterCloned[I, V] {
+    fn clone(self) -> IterCloned[I, V] {
+        IterCloned { it: self.it.clone() }
+    }
+}
+
+impl[I: Iterator + Clone, V] IterCloned[I, V] {
+    /// The items over and over (`IterCycle`).
+    fn cycle(own self) -> IterCycle[IterCloned[I, V]] {
+        IterCycle { orig: self.clone(), it: self }
     }
 }

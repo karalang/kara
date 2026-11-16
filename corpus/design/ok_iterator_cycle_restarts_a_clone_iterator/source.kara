@@ -1,0 +1,46 @@
+// library/iterators.md § `cycle`: a `Clone` iterator's items over and over,
+// each round starting from a copy taken before the first item; an empty
+// iterator gives an empty cycle.
+fn main() {
+    let v = [10, 20, 30];
+    let a: Vec[i64] = (1..4).cycle().take(7).collect();
+    println(f"{a}");
+    let b: Vec[i64] = v.iter().cycle().take(5).cloned().collect();
+    println(f"{b}");
+    for (i, x) in v.iter().enumerate().cycle().take(4) {
+        println(f"{i}:{x}");
+    }
+    let c: Vec[i64] = (0..10).step_by(3).cycle().take(6).collect();
+    println(f"{c}");
+    let s = "ab".to_string();
+    let t: String = s.chars().cycle().take(5).collect();
+    println(t);
+    let w = [1, 2];
+    let z: Vec[(i64, i64)] = w.iter().cloned().zip(v.iter().cloned()).cycle().take(3).collect();
+    println(f"{z}");
+    let r: Vec[i64] = v.iter().rev().cycle().skip(1).take(4).cloned().collect();
+    println(f"{r}");
+    let ch: Vec[i64] = w.iter().chain(v.iter()).cycle().take(7).cloned().collect();
+    println(f"{ch}");
+    // The adaptor after `cycle` sees every round.
+    let m: Vec[i64] = w.iter().cycle().map(|x| x * 100).take(3).collect();
+    println(f"{m}");
+    let ri: Vec[i64] = (1..=2).cycle().take(5).collect();
+    println(f"{ri}");
+    let lit: String = "xyz".chars().cycle().take(4).collect();
+    println(lit);
+    for (i, c) in "hé".char_indices().cycle().take(3) {
+        println(f"{i}:{c}");
+    }
+    let none: Vec[i64] = [];
+    println(none.iter().cycle().take(3).count());
+    let mut it = v.iter().cycle();
+    let mut n = 0;
+    while n < 4 {
+        match it.next() {
+            Some(x) => println(x),
+            None => println("none"),
+        }
+        n += 1;
+    }
+}

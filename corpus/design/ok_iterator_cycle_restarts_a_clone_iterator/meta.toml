@@ -1,0 +1,9 @@
+source = "docs/library/iterators.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iterators", "lib:cycle"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "B-2026-11-17-80: `cycle` restarts a Clone iterator (ranges, collection and text views, and the adaptors holding no closure) from a copy taken before its first item; an empty iterator gives an empty cycle, Rust's semantics (review-thread ruling 2026-11-16)."

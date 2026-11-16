@@ -1610,6 +1610,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   written as statements whose tail computes from its `let`s (`let total =
   par { let a = f(); let b = g(); a + b };`) is rewritten to `let (a, b) =
   par { f(), g() };` and `let total = a + b;` (B-2026-11-16-252).
+- **Iterators have `cycle`.** `it.cycle()` yields the items over and over,
+  each round from a copy of the iterator taken before its first item, and an
+  empty iterator gives an empty cycle (library/iterators.md § `cycle`). It
+  needs a `Clone` iterator: the collection and text views, the ranges, and
+  `take`, `skip`, `enumerate`, `step_by`, `chain`, `zip`, `rev` and `cloned`
+  over one. An adaptor holding a closure is refused with the two rewrites
+  (B-2026-11-17-80).
 - **An array literal a `map` closure returns into a `Vec` of arrays is
   that array.** `d.iter().map(|e| [e[1], e[0], 1 - e[2]]).collect()` checked
   against a `Vec[Array[i64, 3]]` was refused as `FromIterator[Vec[i64]]`;

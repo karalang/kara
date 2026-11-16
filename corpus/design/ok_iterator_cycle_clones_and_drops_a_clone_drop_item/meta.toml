@@ -1,0 +1,9 @@
+source = "docs/library/iterators.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iterators", "lib:cycle", "drop"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "B-2026-11-17-80: `cycle` cycles over a user item type with its own Clone and Drop: cycling a view copies the view and never an item, `cloned()` before `cycle` clones each item it hands out once, and every value drops once (review-thread ruling 2026-11-16, given the clone double-free of the same day)."

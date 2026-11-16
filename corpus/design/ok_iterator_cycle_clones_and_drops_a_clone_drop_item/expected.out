@@ -1,0 +1,13 @@
+a b a b a seen 5
+clone a
+clone b
+clone a
+got a
+got b
+got a
+drop a
+drop b
+drop a
+end
+drop a
+drop b

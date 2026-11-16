@@ -1992,10 +1992,11 @@ impl<'a> super::TypeChecker<'a> {
                             return Type::Error;
                         }
                     }
-                    // `.clone()` on a library iterator (kata 2111's
-                    // `places.clone().count()`): no iterator is `Clone`, and
-                    // the edit-distance neighbour `cloned` maps the items,
-                    // so it is not offered. A second walk builds the
+                    // `.clone()` on a library iterator that is not `Clone`
+                    // (one holding a closure; a view, a range and the
+                    // closure-free adaptors are, B-2026-11-17-80): the
+                    // edit-distance neighbour `cloned` maps the items, so it
+                    // is not offered (kata 2111). A second walk builds the
                     // iterator again or walks a collected `Vec`.
                     if method == "clone"
                         && args.is_empty()
@@ -2004,9 +2005,10 @@ impl<'a> super::TypeChecker<'a> {
                         self.type_error(
                             format!(
                                 "no method 'clone' on type '{type_name}', an iterator: \
-                                 the library's iterators are not `Clone` -- for a second \
-                                 walk, build the iterator again from its source, or \
-                                 `collect` it once into a `Vec` and walk that"
+                                 an iterator that holds a closure (`map`, `filter`, ..) is \
+                                 not `Clone` -- for a second walk, build the iterator again \
+                                 from its source, or `collect` it once into a `Vec` and walk \
+                                 that"
                             ),
                             *span,
                             TypeErrorKind::NoMethodFound,
@@ -2097,6 +2099,28 @@ impl<'a> super::TypeChecker<'a> {
                                 },
                                 replacement: ".value".to_string(),
                             },
+                        );
+                        return Type::Error;
+                    }
+                    // `cycle` restarts from a copy of the iterator, which an
+                    // adaptor holding a closure cannot make (B-2026-11-17-80).
+                    if method == "cycle"
+                        && self.library_iter_item_type(receiver_for_lookup).is_some()
+                    {
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        self.type_error(
+                            format!(
+                                "no method 'cycle' on type '{type_name}': `cycle` starts each \
+                                 round from a copy of the iterator, and this one holds a \
+                                 closure (`map`, `filter`, ..), which is not `Clone`. Cycle \
+                                 the source and adapt after it (`v.iter().cycle().map(..)`), \
+                                 or collect the items into a `Vec` and cycle over its `iter()` \
+                                 (library/iterators.md § `cycle`)"
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
                         );
                         return Type::Error;
                     }

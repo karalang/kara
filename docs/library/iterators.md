@@ -41,6 +41,7 @@ A program's own function named `repeat`, `once` or `successors` takes the name, 
 | `take_while` | `fn take_while[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> impl Iterator[Item = Self.Item]` | Stops at the first item that fails, which it has pulled and drops |
 | `skip_while` | `fn skip_while[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> impl Iterator[Item = Self.Item]` | Skips items while `pred` holds, then yields the rest |
 | `step_by` | `fn step_by(own self, step: i64) -> impl Iterator[Item = Self.Item]` | The first item, then every `step`-th. Panics with `step_by: step must be positive` if `step <= 0`, forward and under `rev` alike (review-thread ruling 2026-11-16) |
+| `cycle` | `fn cycle(own self) -> impl Iterator[Item = Self.Item] where Self: Clone` | The items over and over; see [`cycle`](#cycle) below (review-thread ruling 2026-11-16) |
 | `rev` | `fn rev(own self) -> impl Iterator[Item = Self.Item] where Self: DoubleEndedIterator` | Back to front |
 | `peekable` | `fn peekable(own self) -> Peekable[Self, Self.Item]` | Adds `peek(mut ref self) -> Option[ref Self.Item]`, which looks at the next item without consuming it, and `next_if(mut ref self, pred: own MutFn(Self.Item) -> bool) -> Option[Self.Item]`, which takes the next item only when `pred` holds for it |
 | `inspect` | `fn inspect[F: MutFn(Self.Item)](own self, f: own F) -> impl Iterator[Item = Self.Item]` | Calls `f` on each item as it passes |
@@ -49,6 +50,12 @@ A program's own function named `repeat`, `once` or `successors` takes the name, 
 | `cloned` | `fn cloned[T: Clone](own self) -> impl Iterator[Item = T] where Self.Item = ref T` | An owned copy of each viewed item. For a `Copy` `T` it copies, and is only needed where §5.10 does not already read the item |
 
 There is no `chunks` or `windows` adaptor: those are `Vec`, `Slice` and `Array` methods, so write `v.chunks(n)` rather than `v.iter().chunks(n)`, and collect any other iterator into a `Vec` first.
+
+### `cycle`
+
+`it.cycle()` yields `it`'s items, and when `it` ends, starts again from a copy of `it` taken before its first item, for ever: round-robin over a fixed set of backends or workers is `backends.iter().cycle()`. An empty iterator gives an empty cycle, not an endless wait. Bound it with `take(n)`, `zip` against a finite iterator, or a `break`.
+
+It needs the iterator to be `Clone`, as in Rust. The views over a `Vec`, `Array`, `Slice` or `VecDeque` (`iter()`), a `String`'s `chars()` and `char_indices()`, the integer ranges, and `take`, `skip`, `enumerate`, `step_by`, `chain`, `zip`, `rev` and `cloned` over a `Clone` iterator are. Cycling a view copies the view, never an item; `v.iter().cloned().cycle()` clones each item as it hands it out. An adaptor that holds a closure (`map`, `filter`, `inspect`, ..) is not `Clone`, since a closure is not, and `cycle` on it is refused: cycle the source and adapt after it (`v.iter().cycle().map(f)`), or collect the items into a `Vec` and cycle over its `iter()`. An owning iterator (`v.into_iter()`) has no `cycle` either; cycle a view and clone what you keep.
 
 `filter`, `take_while`, `skip_while`, `find`, `position` and `partition` lend each item to the predicate (a bare `Self.Item`), so the test does not consume it; only items that pass are yielded by value.
 

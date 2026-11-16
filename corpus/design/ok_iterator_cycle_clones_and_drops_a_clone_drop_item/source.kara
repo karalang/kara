@@ -1,0 +1,34 @@
+// library/iterators.md § `cycle` over items with their own `Clone` and
+// `Drop`: cycling a view copies the view, never an item; `cloned()` before
+// `cycle` clones each item it hands out, once. Every value drops once.
+struct Tag { name: String }
+
+impl Clone for Tag {
+    fn clone(ref self) -> Tag {
+        println(f"clone {self.name}");
+        Tag { name: self.name.clone() }
+    }
+}
+
+impl Drop for Tag {
+    fn drop(mut ref self) {
+        println(f"drop {self.name}");
+    }
+}
+
+fn main() {
+    let tags = [Tag { name: "a".to_string() }, Tag { name: "b".to_string() }];
+    let mut seen = 0;
+    for t in tags.iter().cycle().take(5) {
+        print(f"{t.name} ");
+        seen += 1;
+    }
+    println(f"seen {seen}");
+    {
+        let picked: Vec[Tag] = tags.iter().cloned().cycle().take(3).collect();
+        for t in picked.iter() {
+            println(f"got {t.name}");
+        }
+    }
+    println("end");
+}

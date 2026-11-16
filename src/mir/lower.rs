@@ -708,6 +708,19 @@ fn lower_program_inner<'a>(
                 // spelled out (B-2026-11-10-7). A `ref` the impl writes
                 // keeps the receiver's borrow (core semantics §5, "Items
                 // borrow what the receiver borrows").
+                // A library `Clone` impl's `clone` (an iterator adaptor's,
+                // `IterTake[I]`) copies its receiver: the copy holds what the
+                // receiver holds, not a borrow of it, which `cycle` keeps
+                // beside the original (B-2026-11-17-80).
+                if i.f.name == "clone"
+                    && i.f.span.offset >= program.library_start.unwrap_or(usize::MAX)
+                    && lcx
+                        .method_trait
+                        .get(&SpanKey::from_span(&i.f.span))
+                        .is_some_and(|t| t.as_str() == "Clone")
+                {
+                    return true;
+                }
                 let written_ref = i.f.return_type.as_ref().is_some_and(writes_ref);
                 let declared = lcx
                     .method_trait
@@ -24187,7 +24200,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 | "repeat"
         ) {
             let rt = self.expr_ty(object)?;
-            self.queue_nested_clones(rt);
+            // An iterator's `cloned()` clones each item where it is read,
+            // which queues the item's `Clone` there: the iterator's own type
+            // has nothing to clone, and its `Clone` (an adaptor's, for
+            // `cycle`) holds only when what it wraps is `Clone`
+            // (B-2026-11-17-80).
+            let iterator = method == "cloned" && {
+                let (_, base) = self.strip_ty_full(rt);
+                self.user_impl_method(base, "Iterator", "next").is_some()
+            };
+            if !iterator {
+                self.queue_nested_clones(rt);
+            }
             for a in args {
                 let at = self.expr_ty(&a.value)?;
                 self.queue_nested_clones(at);

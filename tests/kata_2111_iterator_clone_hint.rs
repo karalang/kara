@@ -1,8 +1,9 @@
 //! Kata 2111's fold arm wrote `places.clone().count()` on a `step_by`
-//! range. No library iterator is `Clone`, yet the message offered
-//! "did you mean 'cloned'?", whose rename maps the items and leaves the
-//! call as wrong as before. The message now says what a second walk takes
-//! and offers no neighbour.
+//! range. The message offered "did you mean 'cloned'?", whose rename maps
+//! the items and leaves the call as wrong as before. An iterator holding a
+//! closure is still not `Clone`, and its message says what a second walk
+//! takes and offers no neighbour; a `step_by` over a range is `Clone` since
+//! B-2026-11-17-80, so the kata's own spelling checks.
 
 use std::process::{Command, Stdio};
 
@@ -29,11 +30,7 @@ fn kata_2111_step_by_clone_names_a_second_walk() {
 }
 ",
     );
-    assert!(
-        stderr.contains("the library's iterators are not `Clone`"),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("did you mean 'cloned'"), "{stderr}");
+    assert!(stderr.contains("All checks passed"), "{stderr}");
 }
 
 #[test]
@@ -49,7 +46,8 @@ fn kata_2111_vec_iter_clone_names_a_second_walk() {
 ",
     );
     assert!(
-        stderr.contains("the library's iterators are not `Clone`"),
+        stderr.contains("an iterator that holds a closure (`map`, `filter`, ..) is not `Clone`"),
         "{stderr}"
     );
+    assert!(!stderr.contains("did you mean 'cloned'"), "{stderr}");
 }

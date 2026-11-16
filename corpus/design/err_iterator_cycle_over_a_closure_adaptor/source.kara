@@ -1,0 +1,7 @@
+// library/iterators.md § `cycle`: an adaptor holding a closure is not
+// `Clone`, so it has no `cycle`; the refusal names both rewrites.
+fn main() {
+    let v = [1, 2, 3];
+    let a: Vec[i64] = v.iter().filter(|x| x > 1).cycle().take(5).cloned().collect();
+    println(f"{a}");
+}

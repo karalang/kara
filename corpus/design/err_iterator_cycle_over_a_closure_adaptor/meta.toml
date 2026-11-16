@@ -1,0 +1,9 @@
+source = "docs/library/iterators.md"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "iterators", "lib:cycle"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "B-2026-11-17-80: `cycle` needs a Clone iterator, and an adaptor holding a closure is not one, so `v.iter().filter(..).cycle()` is refused with the two rewrites (cycle the source, or collect first) (review-thread ruling 2026-11-16). The expected.out wording of an error pin is guidance, not a byte oracle."
