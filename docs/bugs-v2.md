@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 393 |
 | false-positive | 234 |
 | missing-feature | 181 |
-| perf | 175 |
+| perf | 178 |
 | soundness | 74 |
 | miscompile | 72 |
 | other | 58 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 525 |
-| mir-llvm | 262 |
+| mir-llvm | 265 |
 | mir | 227 |
 | cli | 162 |
 | parser | 92 |
@@ -111,12 +111,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
-| B-2026-11-16-202 | 2026-11-16 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind deadlock (design.md § Panic record) | — |
 | B-2026-11-16-223 | 2026-11-16 | mir | low | An error's `?` frames outlive the error value: an `Err` that is only printed and dropped leaves its frame in a later trace (review-thread ruling 2026-11-16 item 3) | — |
 | B-2026-11-16-230 | 2026-11-16 | typecheck | medium | A literal assigned through `*` to an open `T` (`*count.entry(m).or_insert(0) = 1`, or `let r = m.entry(k).or_insert(0); *r = 5`) fixes the map's open values to `i64`, so a later `i32` use is refused as a narrowing; `v[i] = 7` on an open `Vec` already leaves the element open | — |
 | B-2026-11-16-232 | 2026-11-16 | interp | low | A function whose declared return type names its `map` adapter's closure as `Fn(i64) -> i64` over a `VecIter[i64]` crashes the MIR interpreter (`deref of non-reference Int(1)` in the closure) while `karac build` prints the right answer: the closure is lowered taking `ref i64`, the type the iterator yields, not the `i64` the erased type declares | — |
 | B-2026-11-16-239 | 2026-11-16 | resolver | low | Two `unsafe extern` blocks declaring the same opaque type are a hard `already defined` error, where design.md §15 makes the duplicate `warning[W_OPAQUE_TYPE_REDECLARED]` because the C side has the final word | — |
 | B-2026-11-16-240 | 2026-11-16 | interp | low | `ptr.addr` / `ptr.expose` of a pointer to a Kāra local stop the MIR interpreter (`the address of a value the interpreter holds is not known here`), so design.md §15's tagging and round-trip examples run only compiled | — |
+| B-2026-11-16-243 | 2026-11-16 | mir-llvm | low | A hashed `Map` or `Set` that removes about as often as it inserts (a sliding window, a toggle set) pays the ordered table's holes, compaction and index rebuild on top of the probe: kata 220, 340 and 391 run 1.6-2.0x Rust's instructions | — |
 
 ### Relocated
 
@@ -1390,6 +1390,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-198 | cli | medium | karac run --manifest <path> file.kara read the manifest but gave the file none of its dependencies: import dep.hello; was an unknown module, against… | 4de4c4d06c |
 | B-2026-11-16-199 | cli | low | karac build --target-cpu=native was refused as an unknown CPU though design.md § CPU baseline offers it, and --target-cpu=help printed its header twi… | 4de4c4d06c |
 | B-2026-11-16-200 | resolver | low | An import of a module that only other platforms' files define (poller_macos.kara alone, on Linux) was a bare E0112 unknown module, without design.md… | 4de4c4d06c |
+| B-2026-11-16-202 | interp+mir-llvm | low | A channel deadlock is not a panic record: "error: deadlock: ..." carries no file:line:col, and karac run --output=json emits no record with kind dead… | 511801808d |
 | B-2026-11-16-203 | typecheck | medium | The pre-v1 `r.read_to_string().unwrap_or(x)` on a child's pipe left "expects 1 argument(s), found 0" with no machine fix, plus an `i64` cascade (`no… | fa56486e69 |
 | B-2026-11-16-204 | typecheck | low | The pre-v1 `ws.recv_text(mut buf)` said only "no method 'recv_text' on type 'WebSocket'", with nothing naming `recv()` and `WsMessage` | fa56486e69 |
 | B-2026-11-16-205 | typecheck | low | `karac fix` deletes `as u64` from `ans * i as u64` over a `usize` `i` (lossless_cast) in the same round that makes `i` an `i64` (`n as usize` to `n a… | 13f42dda1f |
@@ -1425,6 +1426,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-236 | cli | low | The `undocumented_unsafe` lint accepted a bare `// Safety:` with nothing after the colon, where design.md §15 requires at least one word | 2b5fa50f3f |
 | B-2026-11-16-237 | typecheck | low | `E.try_from(9)` with an unsuffixed literal was refused as `expects its #[repr] type i32, got i64`, so design.md §15's TryFrom could be called only on… | 2b5fa50f3f |
 | B-2026-11-16-238 | interp | low | The MIR interpreter passed C one element of an array of `#[repr(C)]` structs (`s1_arr_read(ptr.const(arr[0]), 3)`), so C indexing past the pointer re… | 2b5fa50f3f |
+| B-2026-11-16-241 | mir-llvm | low | A read-only walk over a `shared` value's `mut` vector field takes and gives back the field's borrow flag at every node, through the runtime's flag ta… | d4f87d8b6f |
+| B-2026-11-16-242 | mir-llvm | low | A handle bound out of a borrowed node's `mut` field (`match n.left { Some(c) => . | d4f87d8b6f |
 
 </details>
 
