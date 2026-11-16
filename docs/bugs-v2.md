@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 426 |
+| diagnostics | 430 |
 | false-positive | 235 |
 | missing-feature | 182 |
-| perf | 179 |
-| other | 82 |
-| soundness | 75 |
-| miscompile | 73 |
-| run-vs-build | 50 |
-| crash | 35 |
+| perf | 180 |
+| other | 86 |
+| miscompile | 76 |
+| soundness | 76 |
+| run-vs-build | 51 |
+| crash | 37 |
 | codegen-gap | 33 |
 | leak | 4 |
 | use-after-free | 3 |
@@ -76,17 +76,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 551 |
-| mir-llvm | 266 |
-| mir | 228 |
-| cli | 182 |
+| typecheck | 552 |
+| mir-llvm | 275 |
+| mir | 230 |
+| cli | 184 |
 | parser | 95 |
 | ownership | 91 |
-| interp | 83 |
-| runtime | 51 |
+| interp | 85 |
+| runtime | 57 |
 | resolver | 38 |
 | effect | 36 |
-| other | 26 |
+| other | 29 |
 | codegen | 22 |
 | autopar | 6 |
 | lexer | 1 |
@@ -159,6 +159,21 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-301 | 2026-11-16 | typecheck+cli | low | E0208 (comparison without the trait) offers the `#[derive]` machine fix at an `==` site but none at a `<` / `>` site | — |
 | B-2026-11-16-302 | 2026-11-16 | other | low | [doc-only] design.md's streaming-phase-events example shows code E0099, which the compiler never emits (parse errors are E0001/E0002) and explain does not know | — |
 | B-2026-11-16-303 | 2026-11-16 | other | low | 389 of the 491 codes `karac explain` knows are produced by no corpus program under `karac check` (102 distinct codes appear over all 21918 sources), so most catalogue entries have no pin that the code is reachable or that its text matches | — |
+| B-2026-11-16-310 | 2026-11-16 | runtime+mir-llvm | high | On wasm_wasi a capacity argument is truncated to 32 bits instead of reporting CapacityOverflow: `w.try_reserve(4294967297)` returns Ok with capacity 4, `v.try_reserve(1 << 58)` returns Ok, and `String.try_with_capacity(i64.MAX)` reports OutOfMemory of 4294967295 bytes | — |
+| B-2026-11-16-311 | 2026-11-16 | mir-llvm+runtime | medium | Dropping a deep two-child `shared` chain overflows the stack on wasm_wasi at about 20000 levels (RangeError: Maximum call stack size exceeded, exit 1), while native drops a 5,000,000-level chain; a one-field chain drops fine at 100000 on both | — |
+| B-2026-11-16-312 | 2026-11-16 | mir-llvm | medium | A 21,824-line program (apps/cli/mini_tldextract) takes 246 s and 11.4 GB peak RSS to build for wasm_wasi at the default -O2, against 18 s and 1.5 GB for native; KARAC_MIR_OPT=0 builds it for wasm in 9 s, O1 in 197 s | — |
+| B-2026-11-16-313 | 2026-11-16 | cli | low | `karac build --target=wasm32-wasip1` (or -threads) is taken as a native triple and fails at link with `wasm-ld: cannot open crt1.o`, `unable to find library -lpthread`, instead of mapping to wasm_wasi or pointing at it | — |
+| B-2026-11-16-314 | 2026-11-16 | cli | low | `karac build --help` describes `--target=wasm_browser` as emitting `.wasm` + `.js` glue + `.d.ts` with no 'Not in 0.8' mark, but the build refuses it ('builds the browser wasm bindings, which is not in 0.8') | — |
+| B-2026-11-16-315 | 2026-11-16 | other | low | [doc-only] design.md's resource table marks `Env` on wasm_wasi as '(limited)' without saying what is limited, and §16 names `libkarac_runtime_wasm_threads_{unicode,regex}.a` although no 0.8 build can link a threaded wasm module | — |
+| B-2026-11-16-316 | 2026-11-16 | runtime+mir-llvm | high | `v.reserve(n)` with n*8 past 2^64 (e.g. `reserve(1 << 61)`, `reserve(i64.MAX)`) sets a wrapped capacity without allocating, and the next pushes write past the buffer: heap-buffer-overflow under ASan, SIGSEGV in a plain build | — |
+| B-2026-11-16-317 | 2026-11-16 | runtime+mir-llvm+interp | medium | Allocation failure is not a panic: natively it prints `panic: out of memory` / `panic: capacity overflow` and aborts with SIGABRT (exit 134, no `runtime error:`, no location, no panic record, no handler); on wasm it traps with exit 1; the interpreter reports 'explicit panic' or does not fail at all | — |
+| B-2026-11-16-318 | 2026-11-16 | mir-llvm | medium | The compiled lanes drop the panic's `at file:line:col` when the panic is raised inside a `#[track_caller]` function: a user `#[track_caller] fn at(v, i) { v[i] }` and `Str.split_at` inside a char print the message with no location on llvm and wasm, while the interpreter prints the caller's location | — |
+| B-2026-11-16-319 | 2026-11-16 | mir-llvm+interp | medium | Stack overflow is not a specified outcome and differs per lane: the interpreter exits 134 with 'fatal runtime error: stack overflow', the -O2 native build turns the recursion into a loop and exits 0 with the answer, and wasm traps with exit 1; the corpus pins 134 | — |
+| B-2026-11-16-320 | 2026-11-16 | runtime+mir | low | The string-slicing panic text carries a diagnostic-style code (`runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..2 does not fall on UTF-8 char boundaries of "héllo"`) that `karac explain` treats as a compile-time code, and quotes the whole string into the report | — |
+| B-2026-11-16-321 | 2026-11-16 | other | medium | [doc-only] The library docs give the panic text for only windows, chunks, step_by and the provider-default methods; every other panic message the lanes print is undocumented, and design.md says the human report 'may change freely', which conflicts with documenting it word for word | — |
+| B-2026-11-16-322 | 2026-11-16 | mir-llvm | medium | A shift whose amount is an i128 at or above 2^64 does not trap on llvm or wasm: `x << a` with `a: i128 = 1 << 64` returns x unchanged (the amount is cut to its low 64 bits, 0), while the interpreter panics 'shift amount out of range' | — |
+| B-2026-11-16-323 | 2026-11-16 | typecheck+mir | medium | A constant shift whose amount is at least the width (`let y: i8 = 1 << 8;`, `let y: i32 = 1 << 32;`, `let y: u8 = 255 >> 8;`) passes `karac check` and evaluates to 0 on every lane, though the same shift through a variable traps and constant arithmetic out of range is a compile error | — |
+| B-2026-11-16-324 | 2026-11-16 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while design.md §5 says their width is the target's pointer width (32 on wasm32) | — |
 
 ### Relocated
 
@@ -1492,6 +1507,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-307 | typecheck | low | `a, b = (1, 2, 3)` adds a spurious E0222 'refutable pattern in `let` binding' next to the arity error | b31d77e15a |
 | B-2026-11-16-308 | parser | low | A float range pattern `0.0..=1.0` is a parse error at `..=`, not the spec's 'float ranges are not supported' | b31d77e15a |
 | B-2026-11-16-309 | typecheck | low | A default naming an earlier parameter gets a duplicate 'not a known const' error, or only 'undefined name' once the function is called | b31d77e15a |
+| B-2026-11-16-325 | other | low | [doc-only] core-types.md § Parsing does not say which spellings of the special float values `f64.parse` accepts; every lane accepts `inf`, `-inf`, `i… | ada66fb83f |
 
 </details>
 
