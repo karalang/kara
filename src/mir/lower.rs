@@ -30847,6 +30847,8 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
     let in_program = |at: Option<(usize, usize)>| at.is_some_and(|(l, _)| l > 0 && l <= user_lines);
     let borrowck = std::env::var("KARAC_MIR_BORROWCK").as_deref() != Ok("0");
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
+    let sigs = closure_sigs(&lowered);
+    let closure_sig = |d: crate::ids::DefId| sigs.get(&d).cloned().flatten();
     let mut out: Vec<SourceBorrowError> = Vec::new();
     let mut push = |e: SourceBorrowError| {
         if !out
@@ -30880,7 +30882,8 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
                 i,
             )
         };
-        for mut e in crate::mir::borrow_errors(body, &lowered.tys, &has_receiver) {
+        for mut e in crate::mir::borrow_errors_with(body, &lowered.tys, &has_receiver, &closure_sig)
+        {
             if !in_program(e.at) {
                 continue;
             }
@@ -30891,6 +30894,28 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
         }
     }
     out.sort_by_key(|e| e.error.at);
+    out
+}
+
+/// Each closure's signature (by `DefId`), for the borrow check's §5.3 rule
+/// that a function argument contributes only where its type can go
+/// (`borrowck::ClosureSig`; B-2026-11-16-42). A `DefId` whose instances
+/// disagree is left out, and so is any body that is not a closure's, which
+/// no closure type names.
+fn closure_sigs(
+    lowered: &Lowered,
+) -> FxHashMap<crate::ids::DefId, Option<(Vec<crate::mir::ty::Ty>, crate::mir::ty::Ty)>> {
+    let mut out: FxHashMap<_, Option<_>> = FxHashMap::default();
+    for b in lowered.program.bodies.values() {
+        let sig = crate::mir::closure_signature(b);
+        out.entry(b.instance.def)
+            .and_modify(|known| {
+                if known.as_ref() != Some(&sig) {
+                    *known = None;
+                }
+            })
+            .or_insert(Some(sig));
+    }
     out
 }
 
@@ -31652,6 +31677,8 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // The `shared enum` payloads a body writes, which alone take flags.
     let written_payloads =
         crate::mir::flags::written_payloads(lowered.program.bodies.values(), &lowered.tys);
+    let sigs = closure_sigs(&lowered);
+    let closure_sig = |d: crate::ids::DefId| sigs.get(&d).cloned().flatten();
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
@@ -31676,8 +31703,16 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             )
         };
         if borrowck {
-            crate::mir::check_borrows(body, &lowered.tys, &has_receiver)
-                .map_err(|e| format!("borrow check {}: {}", body.instance.name, e.join("; ")))?;
+            let errs =
+                crate::mir::borrow_errors_with(body, &lowered.tys, &has_receiver, &closure_sig);
+            if !errs.is_empty() {
+                let e: Vec<String> = errs.into_iter().map(|e| e.text).collect();
+                return Err(format!(
+                    "borrow check {}: {}",
+                    body.instance.name,
+                    e.join("; ")
+                ));
+            }
         }
         crate::mir::elaborate_drops(body, &mut lowered.tys)
             .map_err(|e| format!("elaborate {}: {e}", body.instance.name))?;

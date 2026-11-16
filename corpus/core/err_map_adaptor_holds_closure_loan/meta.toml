@@ -1,0 +1,10 @@
+source = "B-2026-11-16-42"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "closures"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "B-2026-11-16-42: core semantics §5.3, the other direction. A lazy adaptor's result holds its closure (map's IterMap has a slot of the closure's type), so it holds the closure's loan of t, and writing t while m is still used is an error. The expected.out wording of an error pin is guidance, not a byte oracle."

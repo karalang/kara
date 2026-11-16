@@ -1,0 +1,8 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut t = 2;
+    let m = v.iter().map(|x| x + t);
+    t = 5;
+    let s: i64 = m.sum();
+    println(f"{s} {t}");
+}

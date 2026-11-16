@@ -1,0 +1,10 @@
+source = "B-2026-11-16-42"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "closures"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "B-2026-11-16-42: core semantics §5.3, an argument contributes only where its type can go. find's result, an Option of the receiver's items, has no place for the predicate's closure type, so it borrows only what the iterator's items borrow and t may be written while it is live. Before the fix the write of t was E0516. Expected output worked by hand."

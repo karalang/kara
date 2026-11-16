@@ -1,0 +1,10 @@
+source = "B-2026-11-16-42"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "closures"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "B-2026-11-16-42: core semantics §5.3, an argument contributes only where its type can go. next_if takes mut ref self, but the Peekable over a map adaptor has no place for the predicate's closure type (its own slot holds the map closure's type), so x's loan is not stored in p and x is rebound each turn of the loop. Before the fix this was E0516. Expected output worked by hand: runs of items within 2 of a run's first item."

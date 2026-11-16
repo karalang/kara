@@ -1,0 +1,8 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut t = 2;
+    let f = v.iter().find(|z| *z == t);
+    t = 3;
+    let g = v.iter().position(|z| *z == t);
+    println(f"{f ?? 0} {t} {g.is_some()} {v.iter().filter(|z| *z >= t).map(|z| *z).sum()}");
+}

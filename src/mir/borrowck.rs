@@ -52,6 +52,7 @@ use super::place_ty::{place_ty, PlaceTy};
 use super::pretty::place as show_place;
 use super::syntax::*;
 use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
+use crate::ids::DefId;
 use crate::ty::TyKind as SharedKind;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -307,6 +308,24 @@ pub fn borrow_errors(
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> Vec<BorrowError> {
+    borrow_errors_with(body, tys, has_receiver, &|_| None)
+}
+
+/// A closure's parameter types (its environment left out) and result
+/// type, by the closure's `DefId`: `None` when the program has no single
+/// signature for it, which the check reads as a closure that may hand
+/// back anything and fit any function slot.
+pub type ClosureSig<'a> = dyn Fn(DefId) -> Option<(Vec<Ty>, Ty)> + 'a;
+
+/// [`borrow_errors`], told each closure's signature ([`closure_sig`]),
+/// which the §5.3 rule for function arguments reads. To [`borrow_errors`]
+/// no signature is known.
+pub fn borrow_errors_with(
+    body: &Body,
+    tys: &TyInterner,
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
+    closure_sig: &ClosureSig<'_>,
+) -> Vec<BorrowError> {
     let mut errs = read_only_errors(body, tys);
     errs.extend(view_into_shared_errors(body, tys));
     let loans = collect_loans(body, tys);
@@ -319,6 +338,7 @@ pub fn borrow_errors(
         tys,
         loans: &loans,
         has_receiver,
+        closure_sig,
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
     };
@@ -519,6 +539,7 @@ pub(super) fn loan_liveness(
         tys,
         loans: &loans,
         has_receiver,
+        closure_sig: &|_| None,
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
     };
@@ -993,6 +1014,9 @@ struct Cx<'a> {
     tys: &'a TyInterner,
     loans: &'a [Loan],
     has_receiver: &'a dyn Fn(&InstanceId) -> ResultBorrows,
+    /// The parameter and result types of the closure with this `DefId`,
+    /// when one signature is known for it ([`ClosureSig`]).
+    closure_sig: &'a ClosureSig<'a>,
     /// Whether the body borrows any `Slice` place mutably. A MIR slice
     /// type does not say whether it is a `mut Slice`, so in a body that
     /// writes through some slice no slice counts as read-only.
@@ -1409,23 +1433,52 @@ impl Cx<'_> {
     /// holds, not a loan of the closure local, unless the result's type has
     /// a place for a closure: the callee calls the closure and drops the
     /// borrow, as a call through a reference does (B-2026-11-09-98).
+    ///
+    /// A function argument, a closure lent or moved or an erased function
+    /// value, adds what it holds only where the result's type can hold a
+    /// value of its type: a generic `F` the result mentions (`Map[I, F]`)
+    /// or a function type inside it (core semantics §5.3, "An argument
+    /// contributes only where its type can go"). So `it.find(|z| *z == t)`
+    /// borrows only what `it` holds. A closure that may hand back a borrow
+    /// of what it captures ([`fn_type_hands_back`]) still gives what it
+    /// holds, since the callee can put that in the result.
     fn arg_origins(&self, o: &Origins, a: &Operand, dest: &Place, into: &mut LoanSet) {
-        let lent_closure = a.place().is_some_and(|p| {
-            place_ty(self.body, self.tys, p).is_ok_and(|pt| match self.tys.kind(pt.ty) {
-                TyKind::Ref(t) | TyKind::MutRef(t) => {
-                    matches!(self.tys.kind(t), TyKind::Closure(..))
-                }
-                _ => false,
-            })
-        });
-        // `may_hold_closure`, as for a pointee given one (B-2026-11-10-24).
-        let kept = lent_closure
-            && place_ty(self.body, self.tys, dest)
-                .map_or(true, |d| may_hold_closure(self.tys, d.ty));
-        if lent_closure && !kept {
+        let Some((f, lent, sig)) = self.fn_arg(a) else {
+            self.operand_origins(o, a, into);
+            return;
+        };
+        let hands_back = sig
+            .as_ref()
+            .is_none_or(|(ps, r)| fn_type_hands_back(self.tys, ps, *r));
+        let fits = place_ty(self.body, self.tys, dest)
+            .map_or(true, |d| can_hold_fn(self.tys, d.ty, f, sig.as_ref()));
+        if fits {
+            self.operand_origins(o, a, into);
+        } else if !hands_back {
+            // Nothing the function holds can reach the result.
+        } else if lent {
             self.held_behind(o, a, into);
         } else {
             self.operand_origins(o, a, into);
+        }
+    }
+
+    /// A function argument's function type (the closure's, for a closure
+    /// lent through a reference), whether it is lent, and its signature
+    /// when known: a closure's from [`ClosureSig`], an erased function's
+    /// from its type.
+    #[allow(clippy::type_complexity)]
+    fn fn_arg(&self, a: &Operand) -> Option<(Ty, bool, Option<(Vec<Ty>, Ty)>)> {
+        let p = a.place()?;
+        let t = place_ty(self.body, self.tys, p).ok()?.ty;
+        let (f, lent) = match self.tys.kind(t) {
+            TyKind::Ref(f) | TyKind::MutRef(f) => (f, true),
+            _ => (t, false),
+        };
+        match self.tys.kind(f) {
+            TyKind::Closure(def, _) => Some((f, lent, (self.closure_sig)(def))),
+            TyKind::Fn { params, ret, .. } => Some((f, lent, Some((params.to_vec(), ret)))),
+            _ => None,
         }
     }
 
@@ -1498,7 +1551,26 @@ impl Cx<'_> {
             };
             let mut others = LoanSet::default();
             let rest = args.iter().enumerate().filter(|(j, _)| *j != i);
-            for a in std::iter::once(func).chain(rest.map(|(_, a)| a)) {
+            for (k, a) in std::iter::once(func)
+                .chain(rest.map(|(_, a)| a))
+                .enumerate()
+            {
+                // A function argument the pointee's type has no place for
+                // stores nothing there unless it can hand back a borrow of
+                // what it holds (core semantics §5.3, "An argument
+                // contributes only where its type can go"): `p.next_if(f)`
+                // on a `Peekable` of another closure's adaptor. The callee
+                // itself (`k == 0`) runs here, so what it holds may be
+                // stored.
+                if k > 0 {
+                    if let (Some((f, _, Some(sig))), Some(t)) = (self.fn_arg(a), pointee) {
+                        if !fn_type_hands_back(self.tys, &sig.0, sig.1)
+                            && !can_hold_fn(self.tys, t, f, Some(&sig))
+                        {
+                            continue;
+                        }
+                    }
+                }
                 let behind_ref = a.place().is_some_and(|q| {
                     place_ty(self.body, self.tys, q).is_ok_and(|qt| match self.tys.kind(qt.ty) {
                         // A reference argument the pointee has no slot for,
@@ -1724,6 +1796,103 @@ pub(crate) fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
         }
     }
     go(tys, ty, false, &mut Vec::new())
+}
+
+/// A closure body's signature for [`ClosureSig`]: its parameter types,
+/// the environment `_1` left out, and its result type.
+pub fn closure_signature(body: &Body) -> (Vec<Ty>, Ty) {
+    let params: Vec<Ty> = body
+        .locals
+        .iter()
+        .skip(2)
+        .take(body.arg_count.saturating_sub(1))
+        .map(|l| l.ty)
+        .collect();
+    (params, body.locals[0].ty)
+}
+
+/// Whether a function of these parameter and result types may hand a
+/// borrow what it holds back to its caller: through its result, or by
+/// storing into a `mut ref` parameter whose pointee can hold a borrow. One
+/// that cannot, a predicate returning `bool` or a key function returning
+/// an `i64`, keeps its captures' loans to itself (core semantics §5.3).
+fn fn_type_hands_back(tys: &TyInterner, params: &[Ty], ret: Ty) -> bool {
+    holds_borrow(tys, ret)
+        || params
+            .iter()
+            .any(|p| matches!(tys.kind(*p), TyKind::MutRef(t) if holds_borrow(tys, t)))
+}
+
+/// Can a value of type `holder` keep a value of the function type `f` (a
+/// closure type or an erased function type, of signature `sig` when known),
+/// or a reference to one: `f` itself anywhere in it, an erased function
+/// slot of `f`'s signature, or a slot that takes anything (a `dyn` value, a
+/// type MIR cannot see into, a `shared` handle or a `TaskGroup`). Another
+/// closure's type cannot, nor an erased slot of another signature, as
+/// `IterMap`'s `Fn(ref i64) -> i64` cannot take a `next_if` predicate
+/// (core semantics §5.3).
+fn can_hold_fn(tys: &TyInterner, holder: Ty, f: Ty, sig: Option<&(Vec<Ty>, Ty)>) -> bool {
+    fn go(
+        tys: &TyInterner,
+        ty: Ty,
+        f: Ty,
+        sig: Option<&(Vec<Ty>, Ty)>,
+        seen: &mut Vec<Ty>,
+    ) -> bool {
+        if ty == f {
+            return true;
+        }
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        match tys.kind(ty) {
+            TyKind::Fn { params, ret, .. } => {
+                sig.is_none_or(|(ps, r)| params.as_slice() == ps.as_slice() && ret == *r)
+            }
+            TyKind::Dyn { .. } | TyKind::Other | TyKind::Shared(_) | TyKind::Weak(_) => true,
+            TyKind::Closure(..) => false,
+            TyKind::Ref(t)
+            | TyKind::MutRef(t)
+            | TyKind::Array(t, _)
+            | TyKind::Slice(t)
+            | TyKind::RawPtr { pointee: t, .. } => go(tys, t, f, sig, seen),
+            TyKind::Tuple(ts) => ts.iter().any(|t| go(tys, *t, f, sig, seen)),
+            TyKind::Intrinsic(
+                IntrinsicTy::Vec(e)
+                | IntrinsicTy::Set(e)
+                | IntrinsicTy::VecDeque(e)
+                | IntrinsicTy::SortedSet(e),
+            ) => go(tys, e, f, sig, seen),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                go(tys, k, f, sig, seen) || go(tys, v, f, sig, seen)
+            }
+            TyKind::Intrinsic(_) => false,
+            TyKind::Adt(a) => {
+                if is_task_group(tys, ty) {
+                    return true;
+                }
+                let adt = tys.adt(a);
+                let is_enum = adt.is_enum;
+                let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
+                counts.iter().enumerate().any(|(v, n)| {
+                    (0..*n as u32).any(|i| {
+                        tys.field_ty(ty, is_enum.then_some(v as u32), i)
+                            .is_none_or(|t| go(tys, t, f, sig, seen))
+                    })
+                })
+            }
+            TyKind::Bool
+            | TyKind::Char
+            | TyKind::Int(_)
+            | TyKind::Float(_)
+            | TyKind::Unit
+            | TyKind::Never
+            | TyKind::Str
+            | TyKind::FnDef(_) => false,
+        }
+    }
+    go(tys, holder, f, sig, &mut Vec::new())
 }
 
 /// Can a value of type `ty` keep a closure, or a reference to one: a
