@@ -110,8 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap | — |
-| B-2026-11-16-45 | 2026-11-16 | cli | low | `karac test` emits `test_fail` without the required `location` field when a test fails before its body runs: `provider_construction_failed` (a `#[with_provider]` constructor returned `Err` or panicked), `requires_and_with_provider_conflict`, and `unsatisfied_requires` under `--all` | — |
-| B-2026-11-16-46 | 2026-11-16 | cli | medium | A successful `karac build --output=jsonl` prints one untyped `{"status":"ok","output":...}` line instead of the event stream (no `build_start`, phase events, warnings as `diagnostic` events or `build_complete`), and `karac build --output=json`'s success object has no `program_effects` | — |
 
 ### Relocated
 
@@ -1368,6 +1366,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-43 | interp+mir-llvm | low | `u8.parse("-0")` (any unsigned type, and `from_str_radix`) was `Err(InvalidDigit)`; review ruled minus zero is zero, so it is `Ok(0)`, as `i64.parse(… | 331a01c410 |
 | B-2026-11-16-44 | interp+mir-llvm | low | `char.from_digit`'s panic for a radix outside 2..=36 said "the radix is not in 2..=36" without the radix, where `to_digit` and `is_digit` print it ("… | 331a01c410 |
 | B-2026-11-16-185 | parser | medium | `karac fix` carries Rust's `BinaryHeap<Reverse<usize>>`, read through `while let Some(&Reverse(i)) = heap.peek()`, to a smallest-first `PriorityQueue… | 3091098c58 |
+| B-2026-11-16-45 | cli | low | `karac test` emits `test_fail` without the required `location` field when a test fails before its body runs: `provider_construction_failed` (a `#[wit… | 3b3777c885 |
+| B-2026-11-16-46 | cli | medium | A successful `karac build --output=jsonl` prints one untyped `{"status":"ok","output":...}` line instead of the event stream (no `build_start`, phase… | 70c9592fce |
 
 </details>
 
