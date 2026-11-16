@@ -572,7 +572,7 @@ Pins: `ok_closure_kinds`, `err_once_called_twice`, `err_fn_kind_mismatch`.
 
 **10.1 What panics:**
 - `panic(...)`;
-- a failed bounds check;
+- a failed bounds check, including an index read `m[k]` of a key a `Map` does not hold (kind `index_out_of_bounds`);
 - integer overflow in checked arithmetic, which is the default;
 - division by zero;
 - `unwrap` / `expect` on `None` or `Err`;
@@ -580,6 +580,8 @@ Pins: `ok_closure_kinds`, `err_once_called_twice`, `err_fn_kind_mismatch`.
 - a failed assertion;
 - allocation failure;
 - a channel `recv` that can never complete because no other task can run (deadlock, on a single-threaded target).
+
+Stack exhaustion is not a panic: it aborts the process with no panic record and no panic handler. Whether a given recursion exhausts the stack is not specified, since an optimizer may remove frames (review-thread ruling 2026-11-16, B-2026-11-16-319).
 
 **10.2 What a panic does:**
 1. It writes the message, the source location and the error-return trace to stderr.
