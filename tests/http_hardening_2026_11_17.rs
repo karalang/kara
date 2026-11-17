@@ -63,20 +63,7 @@ fn serve(mode: &str, tag: &str, src: &str, files: Option<u64>) -> Served {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(n) = files {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: setrlimit is async-signal-safe and touches only the child.
-        unsafe {
-            cmd.pre_exec(move || {
-                let lim = libc::rlimit {
-                    rlim_cur: n,
-                    rlim_max: n,
-                };
-                if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        limit_files(&mut cmd, n);
     }
     let mut child = cmd.spawn().unwrap();
     let mut err = BufReader::new(child.stderr.take().unwrap());
@@ -101,6 +88,32 @@ fn serve(mode: &str, tag: &str, src: &str, files: Option<u64>) -> Served {
         let _ = err.read_to_end(&mut sink);
     });
     Served { child, port, dir }
+}
+
+/// Caps the child's open descriptors at `n` (`RLIMIT_NOFILE`), so its
+/// `accept` fails with EMFILE: a Unix limit, so the tests that need it
+/// are Unix-only.
+#[cfg(unix)]
+fn limit_files(cmd: &mut Command, n: u64) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: setrlimit is async-signal-safe and touches only the child.
+    unsafe {
+        cmd.pre_exec(move || {
+            let lim = libc::rlimit {
+                rlim_cur: n,
+                rlim_max: n,
+            };
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn limit_files(_: &mut Command, _: u64) {
+    unreachable!("a descriptor limit is a Unix test's");
 }
 
 /// Sends `request` on a fresh connection and reads until the server
@@ -382,6 +395,7 @@ fn compiled_slow_connections_time_out() {
 
 /// With 128 descriptors and 200 connections held open, `accept` fails
 /// with EMFILE; once they close, the server answers again (-49).
+#[cfg(unix)]
 fn accept_failures_are_retried(mode: &str) {
     let s = serve(mode, "emfile", ECHO, Some(128));
     let mut held = Vec::new();
@@ -414,12 +428,13 @@ fn accept_failures_are_retried(mode: &str) {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn interp_accept_failures_are_retried() {
     accept_failures_are_retried("__mir-run");
 }
 
-#[cfg(feature = "llvm")]
+#[cfg(all(unix, feature = "llvm"))]
 #[test]
 fn compiled_accept_failures_are_retried() {
     accept_failures_are_retried("__mir-llvm-run");

@@ -142,9 +142,23 @@ const REFUSED_OUT: &str = if cfg!(windows) {
     "err connection refused\n"
 };
 
+/// macOS does not reset a connection closed with its peer's bytes unread
+/// as Linux does: whether the client reads the reset or an end depends on
+/// whether those bytes reached the server before its close, so on macOS
+/// either is the platform's answer (CI run 44047125241 read an end where
+/// the two runs before it read the reset). Linux resets every time (40 of
+/// 40 runs), and the refused datagram below covers the peek's error path
+/// on every platform.
+fn assert_reset(out: &str) {
+    if cfg!(target_os = "macos") && out == "got 4\neof\n" {
+        return;
+    }
+    assert_eq!(out, RESET_OUT);
+}
+
 #[test]
 fn interp_reads_a_reset_the_readiness_peek_took() {
-    assert_eq!(any_errno(&run(RESET)), RESET_OUT);
+    assert_reset(&any_errno(&run(RESET)));
 }
 
 #[test]
@@ -156,7 +170,7 @@ fn interp_recv_reports_a_refusal_the_readiness_peek_took() {
 #[test]
 fn compiled_reads_a_reset_as_the_interp_does() {
     if let Some(out) = compiled(RESET) {
-        assert_eq!(any_errno(&out), RESET_OUT);
+        assert_reset(&any_errno(&out));
     }
 }
 
