@@ -2782,6 +2782,35 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether every value `g` returns (its tail and each `return e`) is a
+    /// struct literal whose type may cross tasks. Anything else is not known
+    /// here, and reads as `false`.
+    fn returned_values_cross_task(&self, g: &Function) -> bool {
+        let crosses = |v: &Expr| match &v.kind {
+            ExprKind::StructLiteral { path, .. } => path.last().is_some_and(|name| {
+                crate::cross_task_safe::is_cross_task_safe_with(
+                    &Type::Named {
+                        name: name.clone(),
+                        args: Vec::new(),
+                    },
+                    &self.env.structs,
+                    &self.env.enums,
+                )
+                .is_ok()
+            }),
+            _ => false,
+        };
+        let mut seen = g.body.final_expr.is_some();
+        let mut all = g.body.final_expr.as_deref().is_none_or(crosses);
+        crate::span_visitor::for_each_expr_in_block(&g.body, &mut |e| {
+            if let ExprKind::Return(Some(v)) = &e.kind {
+                seen = true;
+                all &= crosses(v);
+            }
+        });
+        seen && all
+    }
+
     fn check_function(
         &mut self,
         f: &Function,
@@ -12106,9 +12135,16 @@ impl<'a> super::TypeChecker<'a> {
                         (None, ExprKind::Call { callee, .. }) => match &callee.kind {
                             ExprKind::Identifier(n) => {
                                 self.program.items.iter().find_map(|it| match it {
-                                    Item::Function(g) if &g.name == n => {
-                                        g.return_type.as_ref().and_then(|r| self.fn_marker_point(r))
-                                    }
+                                    // Marking the callee's return type checks
+                                    // what it returns: a value that cannot
+                                    // cross tasks makes the fix a new error
+                                    // (B-2026-11-16-292), so offer it only
+                                    // when every returned value can.
+                                    Item::Function(g) if &g.name == n => g
+                                        .return_type
+                                        .as_ref()
+                                        .and_then(|r| self.fn_marker_point(r))
+                                        .filter(|_| self.returned_values_cross_task(g)),
                                     _ => None,
                                 })
                             }

@@ -167,3 +167,44 @@ fn stronger_receiver_only_read_is_still_fixed() {
         "fn look(self) -> i64",
     );
 }
+
+const DYN_SPAWN: &str = "trait Bump {\n\
+     fn bump(ref self) -> i64;\n\
+ }\n\
+ struct D { s: S }\n\
+ impl Bump for D {\n\
+     fn bump(ref self) -> i64 { self.s.n }\n\
+ }\n\
+ fn mkd(s: own S) -> dyn Bump {\n\
+     D { s: s }\n\
+ }\n\
+ fn main() {\n\
+     let d = mkd(S { n: 0 });\n\
+     let g = TaskGroup.new();\n\
+     let a = g.spawn(|| d.bump());\n\
+     let b = g.spawn(|| d.bump());\n\
+     println(a.join() + b.join());\n\
+ }\n";
+
+/// B-2026-11-16-292: `+ CrossTask` on `mkd`'s return type would check the
+/// `D` it returns, which holds a `shared` handle, so the fix is withheld.
+#[test]
+fn cross_task_mark_on_a_return_holding_a_shared_handle_gets_no_fix() {
+    refused_and_left_alone(
+        "cross-task-dyn-shared",
+        &format!("shared struct S {{ mut n: i64 }}\n{DYN_SPAWN}"),
+        "cannot cross a TaskGroup.spawn task boundary",
+    );
+}
+
+/// B-2026-11-16-292 control: a returned value that may cross tasks keeps
+/// the `+ CrossTask` fix.
+#[test]
+fn cross_task_mark_on_a_plain_return_is_still_fixed() {
+    refused_then_fixed(
+        "cross-task-dyn-plain",
+        &format!("struct S {{ n: i64 }}\n{DYN_SPAWN}"),
+        "cannot cross a TaskGroup.spawn task boundary",
+        "-> dyn Bump + CrossTask",
+    );
+}
