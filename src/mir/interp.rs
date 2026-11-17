@@ -917,6 +917,7 @@ fn run_with(
         contract_depth: 0,
         error_trace: Vec::new(),
         error_trace_truncated: false,
+        error_trace_next: 0,
         abort_reported: false,
         user_call_span: crate::token::Span::default(),
         root_wait_at: None,
@@ -1500,9 +1501,13 @@ struct Interp<'a> {
     /// The error return trace: the `file:line:col` of each `?` that
     /// returned an error since the last one that succeeded, oldest first,
     /// at most [`ERROR_TRACE_DEPTH`] (design.md § Error return traces).
-    error_trace: Vec<(String, usize)>,
+    /// Each frame keeps its task and its number in push order, which a
+    /// held `Err`'s range clear reads (B-2026-11-17-21).
+    error_trace: Vec<(String, usize, u64)>,
     /// Whether the trace dropped its oldest frames to stay that deep.
     error_trace_truncated: bool,
+    /// The number the next frame takes.
+    error_trace_next: u64,
     /// Whether an abort has been reported on stderr: the innermost frame
     /// reports it, where it happened.
     abort_reported: bool,
@@ -1819,9 +1824,27 @@ impl<'a> Interp<'a> {
             }
             return Ok(Value::Unit);
         }
+        // The number the next frame takes, and a held `Err`'s own frames
+        // going on an exit that carries another error out
+        // (B-2026-11-17-21).
+        if name == "error_trace_mark" {
+            return Ok(Value::Int(self.error_trace_next as i128));
+        }
+        if name == "error_trace_clear_range" {
+            let [Value::Int(lo), Value::Int(hi)] = args.as_slice() else {
+                return err("error_trace_clear_range takes two marks");
+            };
+            let (lo, hi, task) = (*lo as u64, *hi as u64, self.cur_task);
+            self.error_trace
+                .retain(|f| f.1 != task || f.2 < lo || f.2 >= hi);
+            if self.error_trace.is_empty() {
+                self.error_trace_truncated = false;
+            }
+            return Ok(Value::Unit);
+        }
         // A `Result` local's end that `trace_drops` did not resolve (a body
         // elaborated outside the pipeline): it ends nothing.
-        if name == crate::mir::trace_drops::MARKER {
+        if name == crate::mir::trace_drops::MARKER || name == crate::mir::trace_drops::EXIT_MARKER {
             return Ok(Value::Unit);
         }
         let program: &'a Program = self.program;
@@ -14054,7 +14077,9 @@ impl<'a> Interp<'a> {
             self.error_trace.remove(0);
             self.error_trace_truncated = true;
         }
-        self.error_trace.push((frame, self.cur_task));
+        let n = self.error_trace_next;
+        self.error_trace_next += 1;
+        self.error_trace.push((frame, self.cur_task, n));
     }
 
     /// The error return trace as the diagnostic it goes with prints it,

@@ -1108,7 +1108,7 @@ fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 14] = [
+const BUILDER_NATIVES: [&str; 17] = [
     "format",
     "format_spec",
     "panic_message",
@@ -1119,6 +1119,10 @@ const BUILDER_NATIVES: [&str; 14] = [
     "error_trace_push",
     "error_trace_clear",
     crate::mir::trace_drops::MARKER,
+    crate::mir::trace_drops::EXIT_MARKER,
+    // A held `Err`'s range clear (`trace_drops`, B-2026-11-17-21).
+    "error_trace_mark",
+    "error_trace_clear_range",
     "table_unkeyed",
     "dbg",
     "debug_string",
@@ -5657,7 +5661,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.b.push(bb, StatementKind::StorageDead(*l));
             }
             ScopeEntry::Unreverse(v, mt, native) => self.reverse_vec(*v, *mt, native),
-            ScopeEntry::TraceDrop(_) if self.in_error_exit => {}
             ScopeEntry::TraceDrop(l) => {
                 let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
                 let n = Operand::Const(Const {
@@ -5666,7 +5669,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 });
                 let t = self.unit();
                 let u = self.temp(t);
-                self.call_native(crate::mir::trace_drops::MARKER, vec![n], Place::local(u));
+                // On an exit that carries an error out, only the held
+                // value's own frames may go (B-2026-11-17-21).
+                let marker = if self.in_error_exit {
+                    crate::mir::trace_drops::EXIT_MARKER
+                } else {
+                    crate::mir::trace_drops::MARKER
+                };
+                self.call_native(marker, vec![n], Place::local(u));
             }
             ScopeEntry::FsExit(id, r) => {
                 let t = self.unit();

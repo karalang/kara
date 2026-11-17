@@ -3497,9 +3497,10 @@ const ERROR_TRACE_DEPTH: usize = 64;
 /// What the trace reads when its `?` chain ran across tasks.
 const ERROR_TRACE_SPLIT: &str = "unavailable (the ? chain was split across parallel tasks)";
 
-/// A trace frame: its place's address and length, its task, and its
-/// `.context()` message.
-type TraceFrame = (usize, usize, Option<u64>, Option<Box<str>>);
+/// A trace frame: its place's address and length, its task, its
+/// `.context()` message, and its number in the order frames were pushed
+/// (B-2026-11-17-21).
+type TraceFrame = (usize, usize, Option<u64>, Option<Box<str>>, u64);
 
 /// The thread's error return trace (the program's under the pool, whose
 /// tasks move between workers): the place (`file:line:col`, a string
@@ -3511,12 +3512,15 @@ type TraceFrame = (usize, usize, Option<u64>, Option<Box<str>>);
 struct ErrorTrace {
     frames: Vec<TraceFrame>,
     truncated: bool,
+    /// The number the next frame pushed takes.
+    next: u64,
 }
 
 crate::mir_task::program_state! {
     static ERROR_TRACE: ErrorTrace = ErrorTrace {
         frames: Vec::new(),
         truncated: false,
+        next: 0,
     };
 }
 
@@ -3577,7 +3581,10 @@ unsafe fn error_trace_push(
             t.frames.remove(0);
             t.truncated = true;
         }
-        t.frames.push((at as usize, at_len as usize, task, context));
+        let n = t.next;
+        t.next += 1;
+        t.frames
+            .push((at as usize, at_len as usize, task, context, n));
     });
 }
 
@@ -3603,6 +3610,41 @@ pub unsafe extern "C" fn karac_mir_error_trace_clear(live: *const std::sync::ato
     });
 }
 
+/// The number the next trace frame takes: a `Result` local's producing
+/// call is bracketed by two marks, and the frames numbered between them
+/// are that value's (B-2026-11-17-21).
+#[no_mangle]
+pub extern "C" fn karac_mir_error_trace_mark() -> i64 {
+    ERROR_TRACE.with(|t| t.next as i64)
+}
+
+/// A held `Err` whose frames were numbered from `lo` up to `hi` went away
+/// on an exit that carries another error out: only its own frames go, of
+/// the running task (B-2026-11-17-21).
+///
+/// # Safety
+/// `live` is as for [`karac_mir_error_trace_push`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_error_trace_clear_range(
+    lo: i64,
+    hi: i64,
+    live: *const std::sync::atomic::AtomicU64,
+) {
+    let task = crate::mir_task::current_task();
+    let (lo, hi) = (lo as u64, hi as u64);
+    ERROR_TRACE.with(|t| {
+        if t.frames.is_empty() {
+            return;
+        }
+        t.frames.retain(|f| f.2 != task || f.4 < lo || f.4 >= hi);
+        if t.frames.is_empty() {
+            t.truncated = false;
+            // SAFETY: the caller's contract.
+            unsafe { &*live }.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+}
+
 /// The error return trace as the diagnostic it goes with prints it, ending
 /// at a panic's own place `last` when there is one, or nothing when no `?`
 /// propagated an error (design.md § Error return traces, § Panic record).
@@ -3621,7 +3663,7 @@ fn error_trace_text(last: Option<&str>) -> String {
         let mut frames: Vec<std::borrow::Cow<'_, str>> = t
             .frames
             .iter()
-            .map(|(p, n, _, context)| {
+            .map(|(p, n, _, context, _)| {
                 // SAFETY: `karac_mir_error_trace_push`'s contract.
                 let at = String::from_utf8_lossy(unsafe { bytes(*p as *const u8, *n) });
                 match context {

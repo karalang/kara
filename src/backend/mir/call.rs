@@ -1193,7 +1193,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // A `Result` local's end that `trace_drops` did not resolve
             // (B-2026-11-16-223): it ends nothing.
-            (crate::mir::trace_drops::MARKER, "") => Ok(()),
+            (crate::mir::trace_drops::MARKER | crate::mir::trace_drops::EXIT_MARKER, "") => Ok(()),
             // The bracket around a `requires` / `ensures` predicate, which
             // an abort inside it reads (B-2026-10-25-23).
             ("contract_enter" | "contract_exit", "") => {
@@ -1279,6 +1279,23 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_int_compare(IntPredicate::NE, n, self.i64(0), "")
                     .map_err(e)?;
                 self.if_then(any, |cx| cx.rt("error_trace_clear", &[live.into()]))
+            }
+            // A held `Err`'s range: the number the next frame takes, and
+            // the clear of the frames between two of them on an exit that
+            // carries another error out (B-2026-11-17-21).
+            ("error_trace_mark", "") if args.is_empty() => {
+                let n = self.mrt_i64("error_trace_mark", &[])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, n.into())
+            }
+            ("error_trace_clear_range", "") if args.len() == 2 => {
+                let lo = self.int_arg(&args[0])?;
+                let hi = self.int_arg(&args[1])?;
+                let live = self.error_trace_live();
+                self.rt(
+                    "error_trace_clear_range",
+                    &[lo.into(), hi.into(), live.into()],
+                )
             }
             ("panic_message", "") => {
                 self.rt("fmt_begin", &[])?;

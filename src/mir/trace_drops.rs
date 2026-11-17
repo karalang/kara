@@ -14,23 +14,36 @@
 //! argument) or was mutably borrowed may have handed the error on, and its
 //! frames with it.
 //!
-//! Lowering emits no marker on an exit that carries an error out (a `?`,
-//! or a `return` whose value is `Err`), so a held `Err` dropped on the way
-//! out never clears the frames of the error being returned.
+//! On an exit that carries an error out (a `?`, or a `return` whose value
+//! is `Err`), lowering emits [`EXIT_MARKER`] instead, since a clear of the
+//! whole trace there would also wipe the frames of the error being
+//! returned. Each frame carries its number in push order, and this pass
+//! brackets the call that gave such a local its value with two
+//! `error_trace_mark()`s, so the exit's marker clears only the frames
+//! numbered between them: the held error's own (B-2026-11-17-21). It does
+//! so only where that range is surely the value's alone: the local is
+//! assigned once, by a call that is given no `mut ref`, and still owns
+//! its value (neither moved, copied nor mutably borrowed), so no other
+//! value can have taken its error. A shared borrow can only copy what
+//! the error holds into a new value, whose frames start where it is made. Elsewhere the
+//! exit's marker is removed and the frames stay, as they did before.
 
 use super::syntax::*;
-use super::ty::TyInterner;
+use super::ty::{Ty, TyInterner};
 
 /// The native lowering emits at the end of a `Result` local's scope.
 pub const MARKER: &str = "error_trace_dropped";
 
+/// [`MARKER`] on an exit that carries an error out (B-2026-11-17-21).
+pub const EXIT_MARKER: &str = "error_trace_dropped_on_error_exit";
+
 /// Resolves every marker in `body`.
 pub fn resolve(body: &mut Body, tys: &TyInterner) {
-    let markers: Vec<(usize, Local)> = body
+    let markers: Vec<(usize, Local, bool)> = body
         .blocks
         .iter()
         .enumerate()
-        .filter_map(|(bi, b)| marker_local(&b.terminator.kind).map(|l| (bi, l)))
+        .filter_map(|(bi, b)| marker_local(&b.terminator.kind).map(|(l, exit)| (bi, l, exit)))
         .collect();
     if markers.is_empty() {
         return;
@@ -40,7 +53,10 @@ pub fn resolve(body: &mut Body, tys: &TyInterner) {
     tracked.dedup();
     let slot = |l: Local| tracked.binary_search(&l).ok();
     let owned = must_own(body, &tracked, &slot);
-    for (bi, l) in markers {
+    // The marks bracketing each exit-marked local's producing call, made
+    // once per local; `None` where its range is not surely its own.
+    let mut ranges: Vec<(Local, Option<(Local, Local)>)> = Vec::new();
+    for (bi, l, exit) in markers {
         let TerminatorKind::Call {
             func,
             args,
@@ -63,6 +79,36 @@ pub fn resolve(body: &mut Body, tys: &TyInterner) {
             body.blocks[bi].terminator.kind = TerminatorKind::Goto { target };
             continue;
         };
+        let renamed = |name: &str| match &func {
+            Operand::Const(Const {
+                ty,
+                kind: ConstKind::FnDef(id),
+            }) => Operand::Const(Const {
+                ty: *ty,
+                kind: ConstKind::FnDef(InstanceId {
+                    name: name.to_string(),
+                    ..id.clone()
+                }),
+            }),
+            other => other.clone(),
+        };
+        let range = if exit {
+            let made = match ranges.iter().find(|r| r.0 == l) {
+                Some(r) => r.1,
+                None => {
+                    let r = bracket(body, tys, l, c.ty, &renamed("error_trace_mark"));
+                    ranges.push((l, r));
+                    r
+                }
+            };
+            let Some(made) = made else {
+                body.blocks[bi].terminator.kind = TerminatorKind::Goto { target };
+                continue;
+            };
+            Some(made)
+        } else {
+            None
+        };
         // `d = discriminant(l); if d == Err { error_trace_clear() }`.
         let d = Local(body.locals.len() as u32);
         body.locals.push(LocalDecl {
@@ -72,18 +118,15 @@ pub fn resolve(body: &mut Body, tys: &TyInterner) {
             source_info: body.blocks[bi].terminator.source_info,
         });
         let info = body.blocks[bi].terminator.source_info;
-        let clear_func = match func {
-            Operand::Const(Const {
-                ty,
-                kind: ConstKind::FnDef(id),
-            }) => Operand::Const(Const {
-                ty,
-                kind: ConstKind::FnDef(InstanceId {
-                    name: "error_trace_clear".to_string(),
-                    ..id
-                }),
-            }),
-            other => other,
+        let (clear_func, clear_args) = match range {
+            Some((lo, hi)) => (
+                renamed("error_trace_clear_range"),
+                vec![
+                    Operand::Copy(Place::local(lo)),
+                    Operand::Copy(Place::local(hi)),
+                ],
+            ),
+            None => (renamed("error_trace_clear"), Vec::new()),
         };
         let clear = BasicBlock(body.blocks.len() as u32);
         body.blocks.push(BasicBlockData {
@@ -92,7 +135,7 @@ pub fn resolve(body: &mut Body, tys: &TyInterner) {
                 source_info: info,
                 kind: TerminatorKind::Call {
                     func: clear_func,
-                    args: Vec::new(),
+                    args: clear_args,
                     destination,
                     target: Some(target),
                     unwind,
@@ -114,8 +157,100 @@ pub fn resolve(body: &mut Body, tys: &TyInterner) {
     }
 }
 
-/// The local a marker names.
-fn marker_local(t: &TerminatorKind) -> Option<Local> {
+/// Brackets the call that gives `l` its value with `lo = mark()` before it
+/// and `hi = mark()` after it, and returns `(lo, hi)`: the numbers of the
+/// frames pushed while the call ran, which are the value's own. `None`,
+/// and nothing changed, unless that is sure: `l` is assigned once, whole,
+/// by a call given no `mut ref` (B-2026-11-17-21).
+fn bracket(
+    body: &mut Body,
+    tys: &TyInterner,
+    l: Local,
+    int: Ty,
+    mark: &Operand,
+) -> Option<(Local, Local)> {
+    let mut site = None;
+    for (bi, b) in body.blocks.iter().enumerate() {
+        for s in &b.statements {
+            if let StatementKind::Assign(dest, _) = &s.kind {
+                if dest.local == l {
+                    return None;
+                }
+            }
+        }
+        if let TerminatorKind::Call {
+            args, destination, ..
+        } = &b.terminator.kind
+        {
+            if destination.local != l {
+                continue;
+            }
+            if site.is_some() || !destination.projection.is_empty() {
+                return None;
+            }
+            let lends = args.iter().any(|a| match a {
+                Operand::Copy(p) | Operand::Move(p) => body
+                    .locals
+                    .get(p.local.index())
+                    .is_some_and(|d| matches!(tys.tcx().kind(d.ty), crate::ty::TyKind::MutRef(_))),
+                Operand::Const(_) => false,
+            });
+            if lends {
+                return None;
+            }
+            site = Some(bi);
+        }
+    }
+    let bi = site?;
+    let TerminatorKind::Call {
+        target: Some(target),
+        unwind,
+        ..
+    } = body.blocks[bi].terminator.kind.clone()
+    else {
+        return None;
+    };
+    let info = body.blocks[bi].terminator.source_info;
+    let local = |body: &mut Body| {
+        body.locals.push(LocalDecl {
+            ty: int,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Temp,
+            source_info: info,
+        });
+        Local(body.locals.len() as u32 - 1)
+    };
+    let (lo, hi) = (local(body), local(body));
+    let call_bb = BasicBlock(body.blocks.len() as u32);
+    let after_bb = BasicBlock(call_bb.0 + 1);
+    let mut call = body.blocks[bi].terminator.clone();
+    if let TerminatorKind::Call { target, .. } = &mut call.kind {
+        *target = Some(after_bb);
+    }
+    let mark_call = |dest: Local, next: BasicBlock| Terminator {
+        source_info: info,
+        kind: TerminatorKind::Call {
+            func: mark.clone(),
+            args: Vec::new(),
+            destination: Place::local(dest),
+            target: Some(next),
+            unwind,
+        },
+    };
+    body.blocks.push(BasicBlockData {
+        statements: Vec::new(),
+        terminator: call,
+    });
+    body.blocks.push(BasicBlockData {
+        statements: Vec::new(),
+        terminator: mark_call(hi, target),
+    });
+    body.blocks[bi].terminator = mark_call(lo, call_bb);
+    Some((lo, hi))
+}
+
+/// The local a marker names, and whether it is [`EXIT_MARKER`].
+fn marker_local(t: &TerminatorKind) -> Option<(Local, bool)> {
     let TerminatorKind::Call {
         func:
             Operand::Const(Const {
@@ -130,12 +265,12 @@ fn marker_local(t: &TerminatorKind) -> Option<Local> {
     };
     match (id.name.as_str(), args.as_slice()) {
         (
-            MARKER,
+            name @ (MARKER | EXIT_MARKER),
             [Operand::Const(Const {
                 kind: ConstKind::Scalar(n),
                 ..
             })],
-        ) => Some(Local(*n as u32)),
+        ) => Some((Local(*n as u32), name == EXIT_MARKER)),
         _ => None,
     }
 }

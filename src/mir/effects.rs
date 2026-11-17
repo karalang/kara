@@ -1642,10 +1642,16 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("contract_enter" | "contract_exit", "") => vec![],
         // A `?` site's record in the error return trace, a debug aid that
         // only a diagnostic prints (design.md § Error return traces).
-        ("error_trace_push" | "error_trace_clear", "") => vec![],
+        (
+            "error_trace_push"
+            | "error_trace_clear"
+            | "error_trace_mark"
+            | "error_trace_clear_range",
+            "",
+        ) => vec![],
         // The end of a `Result` local, resolved before code generation
         // (`trace_drops`, B-2026-11-16-223).
-        (crate::mir::trace_drops::MARKER, "") => vec![],
+        (crate::mir::trace_drops::MARKER | crate::mir::trace_drops::EXIT_MARKER, "") => vec![],
         // Fixing a new table's walk order where its type names a hasher.
         ("table_unkeyed", "") => vec![HEAP],
         // A `providers { FileSystem => p }` block registering `p` for its

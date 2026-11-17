@@ -456,6 +456,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_error_trace_push,
         mir::karac_mir_error_trace_push_context,
         mir::karac_mir_error_trace_clear,
+        mir::karac_mir_error_trace_mark,
+        mir::karac_mir_error_trace_clear_range,
         mir::karac_mir_error_trace_print,
         mir::karac_mir_set_panic_handler,
         mir::karac_mir_panic_info,
