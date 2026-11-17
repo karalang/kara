@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 458 |
+| diagnostics | 459 |
 | false-positive | 247 |
 | missing-feature | 191 |
 | perf | 184 |
@@ -84,8 +84,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 101 |
 | interp | 87 |
 | runtime | 87 |
+| effect | 41 |
 | resolver | 40 |
-| effect | 40 |
 | other | 33 |
 | codegen | 22 |
 | autopar | 7 |
@@ -116,9 +116,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-261 | 2026-11-16 | typecheck | low | `#[noblock]` and `@noblock` on an extern fn are accepted, though neither is in design.md's attribute table (an unknown bare attribute is E_UNKNOWN_ATTRIBUTE and `@` is not attribute syntax), and the attribute no longer does what appendix D says since an extern with no `with` clause has every effect | — |
 | B-2026-11-16-262 | 2026-11-16 | typecheck | low | `#[derive(Display(...))]` accepts any argument silently: `Display(bogus_arg)` and appendix C's `Display(all_fields)` check and change nothing, while design.md names only the casing argument (`Display(snake_case)`, enums) | — |
 | B-2026-11-16-275 | 2026-11-16 | runtime | low | The HTTP server labels every response `content-type: application/json` whatever the body: the README's own `Server.serve` example answers `/hello` as JSON, and the shortener's 302 and plain-text usage page carry it too; library/io.md does not say so | — |
-| B-2026-11-16-282 | 2026-11-16 | cli | medium | `karac run --example <NAME>` compiles a project example's src/main.kara as a lone file, so 6 of the 9 project examples fail (E0207, E0200, E0516 'a type that failed to check is not lowered yet') although `karac run` inside each package works | — |
 | B-2026-11-16-283 | 2026-11-16 | cli | medium | `karac run --output=json` on a program whose `main` returns `Err` prints two separate JSON objects on stdout (`{"error":"boom"}` then `{"error_return_trace":[...]}`), so the output is not one JSON document, and neither matches design.md §17's error-return-trace shape | — |
-| B-2026-11-16-284 | 2026-11-16 | typecheck+cli | low | `#[test(requires: [UserDB])]` on a resource that is not program-rooted is reported as E0419 'no provider for UserDB' at `<generated>:47:30` inside the test harness, not as core-semantics §14.13's error naming R at the attribute; a `#[with_provider]` case then also warns `unused_mut` on the harness's own `let mut __karac_p0` at `<generated>:23` | — |
 | B-2026-11-16-285 | 2026-11-16 | cli | medium | `karac migrate shared-to-par` writes code that does not parse: it wraps uses in `lock self.n { ... }` blocks (`lock` is not a v1 keyword, design.md line 279) and renames a free function's parameter `c` to `self` | — |
 | B-2026-11-16-286 | 2026-11-16 | cli | low | `karac build --output=jsonl` on a failing build never emits `phase_skipped` for `codegen`, and a program whose effect phase reported an error gets `program_effects: []`, which is neither its effect set nor the `null` design.md §17 reserves for an unreached effect phase | — |
 | B-2026-11-16-287 | 2026-11-16 | cli | low | `karac help` and flags drift from behaviour: `--sequential` is listed as 'Disable parallel execution in par blocks' but `run` refuses it and `build` calls it unknown; `install` documents `path = ...` but only `path=...` parses; `cache key --pkg x` is refused (only `--pkg=x`); `fix` exits 0 on a file that still has an error; `debug` renders crash files nothing writes | — |
@@ -148,7 +146,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-8 | 2026-11-17 | runtime | low | wasm_wasi: an empty path "" names the preopened directory: fs.exists("") is true, read_to_string("") fails EBADF and fs.write("", ..) fails EISDIR, where native and interp say not found / false | — |
 | B-2026-11-17-9 | 2026-11-17 | other | low | [doc-only] io.md is silent on wasm_wasi file behaviour: set_permissions and symlink return Unsupported, metadata.mode is 0o444 for a file the program just wrote, and Other messages carry WASI errno numbers | — |
 | B-2026-11-17-11 | 2026-11-17 | interp+mir-llvm | low | stdin.lines() goes on past an invalid-UTF-8 line (yields Err, then the next line) while BufReader.lines() ends at its first error by the 11-16 ruling; io.md gives stdin.lines no rule | — |
-| B-2026-11-17-15 | 2026-11-17 | cli | low | #[test(requires: [R])] does not validate R: a provider-rooted resource fails with E0419 at `<generated>:25:30` quoting the harness's `__karac_case_0()`, an undeclared name is skipped as unsatisfied_requires, and on a plain fn the attribute passes check silently | — |
 | B-2026-11-17-16 | 2026-11-17 | typecheck | low | E0600 calls Env "provider-rooted" though Env is program-rooted (14.7), and `karac query effects` derivations name the internal `__builtin_index` | — |
 | B-2026-11-17-21 | 2026-11-17 | mir | low | A second `Err` held in the scope a `?` leaves keeps its frames ahead of the error going out: `let r1 = work(false); step(false)?` prints r1's `step(b)?` frame first in the trace of `step(false)?` | — |
 | B-2026-11-17-22 | 2026-11-17 | mir-llvm | low | A `Map`/`Set` insert or removal probes the index twice: compiled code finds the key, then `karac_mir_map_insert_hv` / `remove_entry` probe again for the cell (kata 220 still 1.51x Rust's wall time, 391 1.87x) | — |
@@ -165,6 +162,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-99 | 2026-11-17 | typecheck | low | A sum over literals gets no reason and no fix: `let days: i32 = (1971..year).map(|y| if leap(y) { 366 } else { 365 }).sum() + [31, 28, ..].iter().take(..).sum() + day`, once `karac fix` drops Rust's `sum::<i32>()` turbofishes, is refused with only "would narrow or change sign" | — |
 | B-2026-11-17-100 | 2026-11-17 | effect | low | A match / if let / while let arm binding taken by value from an owned scrutinee is not charged its Drop body's effects when the arm only reads it: the typechecker records no node type for the binding, so the drop walk sees no owned value | — |
 | B-2026-11-17-101 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a `shared` value's last handle, a Map, Set, VecDeque or sorted collection, a library cell (Mutex, OnceLock, ...), a `dyn` or an erased function value, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: -35 lowers only the drops MIR reaches part by part (structs, enums, tuples, closures, arrays, Vec) | — |
+| B-2026-11-17-102 | 2026-11-17 | effect | low | A test body that uses a provider-rooted resource with no provider is E0419 at `<generated>`, on the harness's `__karac_case_k()` call, not at the use in the test file; core-semantics §14.6 makes a test body a root that supplies nothing, as `main` is | — |
 
 ### Relocated
 
@@ -1515,6 +1513,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-279 | other | medium | [doc-only] The parallelism examples' READMEs promise speedups that do not reproduce: phase0's bench.sh times two hand-written Rust files yet prints '… | 614211f7ff |
 | B-2026-11-16-280 | other | low | [doc-only] Smaller example README drift: tangle says `Editor.set`'s `cell` reports `mut_ref` (it reports `own`); interop-zlib says `./zpipe` (the bin… | 614211f7ff |
 | B-2026-11-16-281 | other | low | [doc-only] First-run docs gaps: the book has no install section (ch00/ch01 never say how to get karac), the release tarball README lists `--target=wa… | 614211f7ff |
+| B-2026-11-16-282 | cli | medium | `karac run --example <NAME>` compiles a project example's src/main.kara as a lone file, so 6 of the 9 project examples fail (E0207, E0200, E0516 'a t… | 68b46298df |
+| B-2026-11-16-284 | typecheck+cli | low | `#[test(requires: [UserDB])]` on a resource that is not program-rooted is reported as E0419 'no provider for UserDB' at `<generated>:47:30` inside th… | 4ce2e4fb86 |
 | B-2026-11-16-296 | cli | medium | 275 of the 491 codes `karac explain` knows have no prose of their own: their entry prints only phase/kind and either the class's generic paragraph or… | 1a718ba8ca |
 | B-2026-11-16-297 | cli | medium | Class-level prose mis-describes the code: deferred-feature, archived and lint codes inherit the paragraph of an unrelated class (E_TAIT_NOT_IMPLEMENT… | 1a718ba8ca |
 | B-2026-11-16-302 | other | low | [doc-only] design.md's streaming-phase-events example shows code E0099, which the compiler never emits (parse errors are E0001/E0002) and explain doe… | 1a718ba8ca |
@@ -1564,6 +1564,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-10 | other | low | [doc-only] io.md says read_lines "drops a trailing \r from each line", but a final line "a\r" (and a lone "\r") keeps it on all three lanes, as Rust'… | bf357e8030 |
 | B-2026-11-17-13 | effect | medium | A Drop body's effects are left out of every function effect set: a pub fn whose local's Drop prints needs no `with writes(Stdout)`, #[no_effect(write… | 97dd727a6c |
 | B-2026-11-17-14 | effect | medium | with_provider[R] does not take R out of the enclosing function's effects (core-semantics 14.4): a pub fn that binds its own provider must declare rea… | 97dd727a6c |
+| B-2026-11-17-15 | cli | low | #[test(requires: [R])] does not validate R: a provider-rooted resource fails with E0419 at `<generated>:25:30` quoting the harness's `__karac_case_0(… | 4ce2e4fb86 |
 | B-2026-11-17-17 | typecheck | medium | Coherence: a blanket `impl[T: Display] Tr for T` and `impl Tr for i64` are both accepted, and `5.t()` runs the concrete impl, which is the specializa… | 9fde67f8a9 |
 | B-2026-11-17-18 | typecheck | medium | A `where T: Display` on an inherent method is not checked at the call: `W { v: N {} }.show()` compiles for an N without Display and prints `[N]` thro… | 9fde67f8a9 |
 | B-2026-11-17-19 | typecheck | medium | `fn mk() -> impl Iterator[Item = i64] { 0..2 }` is refused E_IMPL_TRAIT_ASSOC_MISMATCH "body type Range[i64] declares Item = i64": an unsuffixed inte… | a8c99e46a9 |
