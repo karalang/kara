@@ -581,7 +581,7 @@ Pins: `ok_closure_kinds`, `err_once_called_twice`, `err_fn_kind_mismatch`.
 - allocation failure;
 - a channel `recv` that can never complete because no other task can run (deadlock, on a single-threaded target).
 
-Stack exhaustion is not a panic: it aborts the process with no panic record and no panic handler. Whether a given recursion exhausts the stack is not specified, since an optimizer may remove frames (review-thread ruling 2026-11-16, B-2026-11-16-319).
+Stack exhaustion is not a panic: it aborts the process with no panic record and no panic handler. Whether a given recursion exhausts the stack is not specified, since an optimizer may remove frames (review-thread ruling 2026-11-16, B-2026-11-16-319). Because the process aborts, output still buffered in `stdout` is lost; a program that must keep its output flushes before deep recursion (B-2026-11-17-12).
 
 **10.2 What a panic does:**
 1. It writes the message, the source location and the error-return trace to stderr.

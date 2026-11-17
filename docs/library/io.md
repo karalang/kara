@@ -104,7 +104,7 @@ fn fs.set_modified(path: Str, ms: i64) -> Result[(), IoError] with writes(FileSy
 
 `read_bytes` and `write_bytes` are the byte forms of `read_to_string` and `write`: the whole file as bytes, with no UTF-8 check.
 
-`read_lines` splits on `\n` and drops a trailing `\r` from each line.
+`read_lines` splits on `\n` and drops the `\r` of a `\r\n` ending. A last line that ends in a lone `\r`, with no `\n` after it, keeps that `\r`, as Rust's `str::lines` does (B-2026-11-17-10).
 
 **`exists` returns `false` on any error**, a permission error included, so it cannot tell "absent" from "cannot look". A tool that must know the difference calls `metadata` and matches `NotFound`.
 
