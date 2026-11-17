@@ -1935,6 +1935,15 @@ fn fn_def(tys: &TyInterner, def: DefId, args: Vec<Ty>, name: String) -> Operand 
     })
 }
 
+/// The name of a hidden provider parameter, before its resource's name.
+pub const PROVIDER_PARAM: &str = "provider of ";
+
+/// Is `d` a hidden provider parameter, the one [`Fx::add_params`] adds for
+/// a resource?
+pub fn is_provider_param(d: &LocalDecl) -> bool {
+    matches!(&d.kind, LocalKind::Arg { name, .. } if name.starts_with(PROVIDER_PARAM))
+}
+
 impl Fx<'_> {
     /// Adds `params` after the body's own parameters, moving its other
     /// locals up.
@@ -1952,7 +1961,7 @@ impl Fx<'_> {
                     ty: *t,
                     mutability: Mutability::Not,
                     kind: LocalKind::Arg {
-                        name: format!("provider of {r}"),
+                        name: format!("{PROVIDER_PARAM}{r}"),
                         node: NodeId::DUMMY,
                     },
                     source_info: info,

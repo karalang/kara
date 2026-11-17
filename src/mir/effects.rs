@@ -1249,9 +1249,21 @@ impl Origins {
                 preds[src].push(dst as u32);
             }
         };
+        // A hidden provider parameter comes from a caller of its own: each
+        // resource's provider is a value its own `with_provider` moved in,
+        // so two of them never hold one value, and a provider bound to two
+        // resources must be `sync` to cross a task (core semantics §14.4,
+        // §14.9). Every origin from `n` up is a caller (B-2026-11-16-274).
+        let mut hidden = n as u32;
         for a in body.args() {
             if carries[a.index()] {
-                preds[a.index()].push(n as u32);
+                let from = if crate::mir::providers::is_provider_param(body.local(a)) {
+                    hidden += 1;
+                    hidden
+                } else {
+                    n as u32
+                };
+                preds[a.index()].push(from);
             }
         }
         let root = |o: &Operand| o.place().map(|p| p.local.index());
@@ -1386,7 +1398,7 @@ impl Origins {
     /// made inside the call.
     fn widen(&self, k: Key) -> Key {
         match k {
-            Key::Local(r, _) if self.origins(r).contains(&self.caller()) => Key::Any,
+            Key::Local(r, _) if self.origins(r).iter().any(|&o| o >= self.caller()) => Key::Any,
             Key::Local(..) => Key::Fresh,
             k => k,
         }

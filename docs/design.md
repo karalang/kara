@@ -5988,7 +5988,7 @@ fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError],
 
 **`TaskGroup` tasks.** A task that returns `Err` does not affect its siblings. The error reaches whoever joins the task's handle.
 
-**From the services track (M4a):** cancellation, deadlines, `select` and isolating groups, specified in [core-semantics.md §11.8–§11.12](core-semantics.md#11-concurrency-c9). A cancelled task stops at its next suspension point, as an error exit; pure computation is never interrupted.
+**From the services track (M4a):** cancellation, deadlines, `select` and isolating groups, specified in [core-semantics.md §11.8–§11.12](core-semantics.md#11-concurrency-c9). A cancelled task stops at its next suspension point, as an error exit; pure computation is never interrupted. Work still pending when its group is cancelled never starts: a `par for` whose body has `?` or `return` runs its iterations in order, so after a failing iteration the later ones never run, and their effects never happen. "Never interrupted" covers only an iteration or branch that has already started.
 
 ### Determinism contract
 
