@@ -140,9 +140,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-313 | 2026-11-16 | cli | low | `karac build --target=wasm32-wasip1` (or -threads) is taken as a native triple and fails at link with `wasm-ld: cannot open crt1.o`, `unable to find library -lpthread`, instead of mapping to wasm_wasi or pointing at it | — |
 | B-2026-11-16-314 | 2026-11-16 | cli | low | `karac build --help` describes `--target=wasm_browser` as emitting `.wasm` + `.js` glue + `.d.ts` with no 'Not in 0.8' mark, but the build refuses it ('builds the browser wasm bindings, which is not in 0.8') | — |
 | B-2026-11-16-315 | 2026-11-16 | other | low | [doc-only] design.md's resource table marks `Env` on wasm_wasi as '(limited)' without saying what is limited, and §16 names `libkarac_runtime_wasm_threads_{unicode,regex}.a` although no 0.8 build can link a threaded wasm module | — |
-| B-2026-11-16-318 | 2026-11-16 | mir-llvm | medium | The compiled lanes drop the panic's `at file:line:col` when the panic is raised inside a `#[track_caller]` function: a user `#[track_caller] fn at(v, i) { v[i] }` and `Str.split_at` inside a char print the message with no location on llvm and wasm, while the interpreter prints the caller's location | — |
-| B-2026-11-16-319 | 2026-11-16 | mir-llvm+interp | medium | Stack overflow is not a specified outcome and differs per lane: the interpreter exits 134 with 'fatal runtime error: stack overflow', the -O2 native build turns the recursion into a loop and exits 0 with the answer, and wasm traps with exit 1; the corpus pins 134 | — |
-| B-2026-11-16-322 | 2026-11-16 | mir-llvm | medium | A shift whose amount is an i128 at or above 2^64 does not trap on llvm or wasm: `x << a` with `a: i128 = 1 << 64` returns x unchanged (the amount is cut to its low 64 bits, 0), while the interpreter panics 'shift amount out of range' | — |
 | B-2026-11-16-273 | 2026-11-16 | runtime+mir-llvm | medium | A `TaskGroup.new(limit: 2)` group ran up to four of its tasks at once on the ASan lane, where `spawn` blocks while `n` of its tasks are running (design.md §13 `TaskGroup`) | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
 | B-2026-11-16-340 | 2026-11-16 | typecheck | low | An unsuffixed float literal that a context types as `f32`/`f16`/`bf16` is not range-checked there: `let a: f32 = 1e39;` is accepted as an f32 infinity | — |
@@ -176,7 +173,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-92 | 2026-11-17 | mir | high | A closure a factory call returns, holding a view of a local, passes check when it goes straight into an `escaping` parameter, a `shared` value or a `dyn`, and is then called after the local is freed (interp 'use of a0 after it was freed', ASan heap-use-after-free); the -24 call rule follows only closures made in the same body | — |
 | B-2026-11-17-93 | 2026-11-17 | runtime | low | The HTTP/1 server re-parses a chunked request from its first byte at each chunk: a body of k chunks costs O(k x request size) | — |
 | B-2026-11-17-95 | 2026-11-17 | ownership | low | The ownership-cycle diagnostic names a cycle from a different start on each run (`B → A → B` or `A → B → A`), so tests/fmt_round_trip.rs fails at random on corpus/diagnostics/e0501 | — |
-| B-2026-11-17-96 | 2026-11-17 | ownership | low | An ownership cycle's message names the cycle from a random type: `struct A { b: B } struct B { a: A }` reports `A → B → A` (line 2) or `B → A → B` (line 1) run to run, so the e0501 pin and fmt_round_trip flake | — |
 
 ### Relocated
 
@@ -1539,8 +1535,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-310 | runtime+mir-llvm | high | On wasm_wasi a capacity argument is truncated to 32 bits instead of reporting CapacityOverflow: `w.try_reserve(4294967297)` returns Ok with capacity… | 268f63b699 |
 | B-2026-11-16-316 | runtime+mir-llvm | high | `v.reserve(n)` with n*8 past 2^64 (e.g | 268f63b699 |
 | B-2026-11-16-317 | runtime+mir-llvm+interp | medium | Allocation failure is not a panic: natively it prints `panic: out of memory` / `panic: capacity overflow` and aborts with SIGABRT (exit 134, no `runt… | 268f63b699 |
+| B-2026-11-16-318 | mir-llvm | medium | The compiled lanes drop the panic's `at file:line:col` when the panic is raised inside a `#[track_caller]` function: a user `#[track_caller] fn at(v,… | b6a798f443 |
+| B-2026-11-16-319 | mir-llvm+interp | medium | The stack-overflow pin printed its sum on the native lane: a compiled main runs on a 1 GiB stack, which held the pin's 50M frames (not, as first read… | 1101fecb96 |
 | B-2026-11-16-320 | runtime+mir | low | The string-slicing panic text carries a diagnostic-style code (`runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..2 does not fall on… | 1a718ba8ca |
 | B-2026-11-16-321 | other | medium | [doc-only] The library docs give the panic text for only windows, chunks, step_by and the provider-default methods; every other panic message the lan… | 1a718ba8ca |
+| B-2026-11-16-322 | mir-llvm | medium | A shift whose amount is an i128 at or above 2^64 does not trap on llvm or wasm: `x << a` with `a: i128 = 1 << 64` returns x unchanged (the amount is… | 29be1a0f44 |
 | B-2026-11-16-323 | typecheck+mir | medium | A constant shift whose amount is at least the width (`let y: i8 = 1 << 8;`, `let y: i32 = 1 << 32;`, `let y: u8 = 255 >> 8;`) passes `karac check` an… | c8c6938bcb |
 | B-2026-11-16-324 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while… | 2d8e3c77c1 |
 | B-2026-11-16-325 | other | low | [doc-only] core-types.md § Parsing does not say which spellings of the special float values `f64.parse` accepts; every lane accepts `inf`, `-inf`, `i… | ada66fb83f |
@@ -1618,6 +1617,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-90 | typecheck | medium | A method's argument does not widen into its parameter's type: `best.max(a)` with `best: i64` and `a: i32` is refused ("`max` expects an argument of t… | 06cb75e7f0 |
 | B-2026-11-17-91 | typecheck | low | A fold seed's literal gets no reason and no suffix fix: in `fold((arr[0], 0, arr[0]), \|(keep, del, best), x\| ..)` over `i32`s, `best.max(keep).max(de… | 06cb75e7f0 |
 | B-2026-11-17-94 | runtime | medium | corpus apps/service/http_cache and object_store fail since B-2026-11-15-134: a 304 is now an Err, and the apps print it as an error; HttpError had no… | e9f69ac3ae |
+| B-2026-11-17-96 | ownership | low | An ownership cycle's message names the cycle from a random type: `struct A { b: B } struct B { a: A }` reports `A → B → A` (line 2) or `B → A → B` (l… | f4399b28d2 |
 
 </details>
 
