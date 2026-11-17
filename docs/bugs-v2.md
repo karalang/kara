@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 432 |
-| false-positive | 236 |
+| diagnostics | 435 |
+| false-positive | 239 |
 | missing-feature | 182 |
-| perf | 180 |
+| perf | 181 |
 | other | 91 |
+| soundness | 79 |
 | miscompile | 76 |
-| soundness | 76 |
 | run-vs-build | 53 |
 | crash | 39 |
 | codegen-gap | 33 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 555 |
-| mir-llvm | 277 |
-| mir | 231 |
-| cli | 184 |
+| typecheck | 560 |
+| mir-llvm | 278 |
+| mir | 232 |
+| cli | 185 |
 | parser | 96 |
 | ownership | 91 |
 | interp | 86 |
 | runtime | 59 |
 | resolver | 38 |
-| effect | 36 |
+| effect | 38 |
 | other | 33 |
 | codegen | 22 |
 | autopar | 6 |
@@ -173,6 +173,16 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-8 | 2026-11-17 | runtime | low | wasm_wasi: an empty path "" names the preopened directory: fs.exists("") is true, read_to_string("") fails EBADF and fs.write("", ..) fails EISDIR, where native and interp say not found / false | — |
 | B-2026-11-17-9 | 2026-11-17 | other | low | [doc-only] io.md is silent on wasm_wasi file behaviour: set_permissions and symlink return Unsupported, metadata.mode is 0o444 for a file the program just wrote, and Other messages carry WASI errno numbers | — |
 | B-2026-11-17-11 | 2026-11-17 | interp+mir-llvm | low | stdin.lines() goes on past an invalid-UTF-8 line (yields Err, then the next line) while BufReader.lines() ends at its first error by the 11-16 ruling; io.md gives stdin.lines no rule | — |
+| B-2026-11-17-13 | 2026-11-17 | effect | medium | A Drop body's effects are left out of every function effect set: a pub fn whose local's Drop prints needs no `with writes(Stdout)`, #[no_effect(writes(Stdout))] passes, and `karac query effects` shows [] (par conflict checking does see them) | — |
+| B-2026-11-17-14 | 2026-11-17 | effect | medium | with_provider[R] does not take R out of the enclosing function's effects (core-semantics 14.4): a pub fn that binds its own provider must declare reads(Db)/writes(RandomSource), and two such calls in par are refused as a conflict | — |
+| B-2026-11-17-15 | 2026-11-17 | cli | low | #[test(requires: [R])] does not validate R: a provider-rooted resource fails with E0419 at `<generated>:25:30` quoting the harness's `__karac_case_0()`, an undeclared name is skipped as unsatisfied_requires, and on a plain fn the attribute passes check silently | — |
+| B-2026-11-17-16 | 2026-11-17 | typecheck | low | E0600 calls Env "provider-rooted" though Env is program-rooted (14.7), and `karac query effects` derivations name the internal `__builtin_index` | — |
+| B-2026-11-17-17 | 2026-11-17 | typecheck | medium | Coherence: a blanket `impl[T: Display] Tr for T` and `impl Tr for i64` are both accepted, and `5.t()` runs the concrete impl, which is the specialization design.md rules out | — |
+| B-2026-11-17-18 | 2026-11-17 | typecheck | medium | A `where T: Display` on an inherent method is not checked at the call: `W { v: N {} }.show()` compiles for an N without Display and prints `[N]` through a Display nobody wrote | — |
+| B-2026-11-17-19 | 2026-11-17 | typecheck | medium | `fn mk() -> impl Iterator[Item = i64] { 0..2 }` is refused E_IMPL_TRAIT_ASSOC_MISMATCH "body type Range[i64] declares Item = i64": an unsuffixed integer literal's Item is not unified with the promised i64, and the fix (`0i64..2i64`) warns redundant_suffix | — |
+| B-2026-11-17-20 | 2026-11-17 | typecheck | low | `impl PartialEq[i64] for M { fn eq(self, other: i64) -> bool }` is refused E0288 ("takes other by value, but PartialEq.eq takes it as ref") for a Copy Rhs; PartialEq[String] and PartialEq[N] are accepted; the interpreter, which skips check, evaluates `m == 3` as false | — |
+| B-2026-11-17-21 | 2026-11-17 | mir | low | A second `Err` held in the scope a `?` leaves keeps its frames ahead of the error going out: `let r1 = work(false); step(false)?` prints r1's `step(b)?` frame first in the trace of `step(false)?` | — |
+| B-2026-11-17-22 | 2026-11-17 | mir-llvm | low | A `Map`/`Set` insert or removal probes the index twice: compiled code finds the key, then `karac_mir_map_insert_hv` / `remove_entry` probe again for the cell (kata 220 still 1.51x Rust's wall time, 391 1.87x) | — |
 
 ### Relocated
 
