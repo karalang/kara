@@ -59,7 +59,7 @@ impl<'ctx> Cx<'ctx, '_> {
         })
     }
 
-    fn val_off(&self, t: Table) -> R<u64> {
+    pub(super) fn val_off(&self, t: Table) -> R<u64> {
         match t.val {
             Some(_) => self.field_offset(t.entry, None, 1),
             None => Ok(0),
@@ -170,7 +170,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The number of entries in the table `h` (null for none yet).
-    fn table_len(&self, h: PointerValue<'ctx>) -> R<IntValue<'ctx>> {
+    pub(super) fn table_len(&self, h: PointerValue<'ctx>) -> R<IntValue<'ctx>> {
         let i64t = self.llcx.i64_type();
         let f = self.cur_fn()?;
         let here = self.builder.get_insert_block().ok_or("no block")?;

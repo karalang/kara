@@ -33,6 +33,7 @@ use inkwell::module::Linkage;
 use inkwell::values::{BasicValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{AtomicOrdering, IntPredicate};
 
+use super::table::Table;
 use super::{Cx, R};
 use crate::mir::coroutine;
 use crate::mir::layout;
@@ -120,6 +121,45 @@ pub(super) struct Glue<'ctx> {
 /// The abort of a drop that reaches a suspending `Drop` body where it
 /// cannot wait (B-2026-11-17-35).
 const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a drop that cannot wait (inside a function value, a OnceCell, OnceLock or LazyLock, or a channel's queue; B-2026-11-17-127)";
+
+/// How the release of a `shared` struct reaches the handles of its own type
+/// held in its body ([`Cx::drain_plan`]): each part at its offset in the
+/// struct that holds it.
+#[derive(Clone)]
+enum Part {
+    /// A handle of the type itself (or an `Option` of one, a bare pointer).
+    Handle(u64),
+    /// A field whose drop runs no `Drop` body (`weak`, `String`, a `Vec`
+    /// of plain data).
+    Quiet(u64, Ty),
+    /// A `Vec` whose elements are each `Elem`, `size` bytes apart.
+    Vec(u64, Box<Elem>, u64),
+    /// A `Map` whose values are each `Elem`; its keys drop quietly or not
+    /// at all.
+    Map(u64, Table, Box<Elem>),
+    /// A plain struct (no `Drop` body) whose fields are these parts.
+    Struct(u64, Vec<Part>),
+}
+
+/// An element of a `Vec` or a value of a `Map` in a [`Part`].
+#[derive(Clone)]
+enum Elem {
+    Handle,
+    Struct(Vec<Part>),
+}
+
+/// Whether the parts hold a handle anywhere.
+fn holds_handle(parts: &[Part]) -> bool {
+    parts.iter().any(|p| match p {
+        Part::Handle(_) => true,
+        Part::Quiet(..) => false,
+        Part::Vec(_, e, _) | Part::Map(_, _, e) => match &**e {
+            Elem::Handle => true,
+            Elem::Struct(ps) => holds_handle(ps),
+        },
+        Part::Struct(_, ps) => holds_handle(ps),
+    })
+}
 
 /// The quiet fields of a body ([`Cx::own_handle_fields`]): offset and type.
 type QuietFields = Vec<(u64, Ty)>;
@@ -774,6 +814,11 @@ impl<'ctx> Cx<'ctx, '_> {
         if let Some((offs, quiet)) = self.own_handle_fields(ty)?.filter(|(o, _)| o.len() > 1) {
             return self.release_tree(b0, ty, a, &offs, &quiet);
         }
+        if self.own_handle_fields(ty)?.is_none() {
+            if let Some(parts) = self.drain_plan(ty, ty, 0)?.filter(|p| holds_handle(p)) {
+                return self.release_drained(b0, ty, a, &parts);
+            }
+        }
         let chain = self.chain_field(ty)?;
         let cur = self.entry_slot(8, "box")?;
         self.store(cur, b0.into())?;
@@ -1046,6 +1091,402 @@ impl<'ctx> Cx<'ctx, '_> {
             quiet.push((self.field_offset(ty, None, f)?, ft));
         }
         Ok((!found.is_empty()).then_some((found, quiet)))
+    }
+
+    /// Whether `ft` is a handle of the `shared` type `owner` (as `owner`
+    /// or as an `Option[owner]` held as a bare pointer).
+    fn is_own_handle(&self, ft: Ty, owner: Ty) -> bool {
+        ft == owner
+            || (layout::null_niche(self.tys, ft).is_some()
+                && self
+                    .tys
+                    .tcx()
+                    .adt_of(ft)
+                    .and_then(|(_, a)| a.first().copied())
+                    == Some(owner))
+    }
+
+    /// Whether dropping `ft` runs no `Drop` body.
+    fn is_quiet(&self, ft: Ty) -> bool {
+        match self.tys.kind(ft) {
+            TyKind::Weak(_) | TyKind::Intrinsic(IntrinsicTy::String) => true,
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => !self.tys.needs_drop(e),
+            _ => false,
+        }
+    }
+
+    /// The parts of the struct `ty` (the body of the `shared` type
+    /// `owner`, or a plain struct inside it) through which the release of
+    /// `owner` reaches its own handles, in field order: each field needing
+    /// a drop is such a handle, a quiet field, a `Vec` or a `Map` of
+    /// handles or of such structs, or such a struct. `None` when another
+    /// field needs a drop (B-2026-11-17-138).
+    fn drain_plan(&self, ty: Ty, owner: Ty, depth: u32) -> R<Option<Vec<Part>>> {
+        if depth > 8 {
+            return Ok(None);
+        }
+        let Some((adt, _)) = self.tys.tcx().adt_of(ty) else {
+            return Ok(None);
+        };
+        if adt.is_enum {
+            return Ok(None);
+        }
+        let mut parts = Vec::new();
+        for f in 0..adt.variants[0].fields.len() as u32 {
+            let Some(ft) = self.tys.field_ty(ty, None, f) else {
+                return Ok(None);
+            };
+            if !self.tys.needs_drop(ft) {
+                continue;
+            }
+            if layout::boxed_field(self.tys, ty, None, f) {
+                return Ok(None);
+            }
+            let off = self.field_offset(ty, None, f)?;
+            let part = if self.is_own_handle(ft, owner) {
+                Part::Handle(off)
+            } else if self.is_quiet(ft) {
+                Part::Quiet(off, ft)
+            } else if let TyKind::Intrinsic(IntrinsicTy::Vec(e)) = self.tys.kind(ft) {
+                let Some(elem) = self.drain_elem(e, owner, depth)? else {
+                    return Ok(None);
+                };
+                Part::Vec(off, Box::new(elem), self.layout(e)?.size)
+            } else if let Some(t) = self
+                .table_of(ft)
+                .filter(|_| matches!(self.tys.kind(ft), TyKind::Intrinsic(IntrinsicTy::Map(..))))
+            {
+                let (Some(v), true) = (t.val, !self.tys.needs_drop(t.key) || self.is_quiet(t.key))
+                else {
+                    return Ok(None);
+                };
+                let Some(elem) = self.drain_elem(v, owner, depth)? else {
+                    return Ok(None);
+                };
+                Part::Map(off, t, Box::new(elem))
+            } else if let Some(sub) = self.plain_struct_plan(ft, owner, depth)? {
+                Part::Struct(off, sub)
+            } else {
+                return Ok(None);
+            };
+            parts.push(part);
+        }
+        Ok(Some(parts))
+    }
+
+    /// A `Vec` element or `Map` value of type `e` in a drain plan.
+    fn drain_elem(&self, e: Ty, owner: Ty, depth: u32) -> R<Option<Elem>> {
+        if self.is_own_handle(e, owner) {
+            return Ok(Some(Elem::Handle));
+        }
+        Ok(self.plain_struct_plan(e, owner, depth)?.map(Elem::Struct))
+    }
+
+    /// The drain plan of `ft` when it is a plain struct: no `Drop` body, not
+    /// a library type, not `shared`.
+    fn plain_struct_plan(&self, ft: Ty, owner: Ty, depth: u32) -> R<Option<Vec<Part>>> {
+        let TyKind::Adt(a) = self.tys.kind(ft) else {
+            return Ok(None);
+        };
+        let adt = self.tys.adt(a);
+        if adt.has_drop_impl
+            || adt.library_name().is_some()
+            || coroutine::frame_owner(&adt.name).is_some()
+        {
+            return Ok(None);
+        }
+        self.drain_plan(ft, owner, depth + 1)
+    }
+
+    /// [`Cx::release_last`] for a `shared` struct whose own handles sit in
+    /// `Vec`s, `Map`s or plain structs in its body (an n-ary tree's
+    /// `children`, a trie's map of nodes): a box's handles are pushed on
+    /// one growable stack, last to be released first, its containers and
+    /// quiet fields freed, and the box freed; then handles are popped and
+    /// released, a box whose last handle that was going the same way. Each
+    /// box's handles are released in the order its drop glue releases
+    /// them, each subtree whole before the next, so `Drop` bodies run in
+    /// the recursive release's order (B-2026-11-17-138).
+    fn release_drained(
+        &mut self,
+        b0: PointerValue<'ctx>,
+        ty: Ty,
+        a: AdtId,
+        parts: &[Part],
+    ) -> R<()> {
+        let atomic = self.atomic_counts(ty);
+        let off = self
+            .shared_body_off(ty)
+            .ok_or_else(|| format!("`{}` has no layout", self.tys.display(ty)))?;
+        let null = self.ptr_ty().const_null();
+        let cur = self.entry_slot(8, "box")?;
+        // The stack of handles still to release, a `Vec` the runtime grows.
+        let stack = self.entry_slot(24, "pending")?;
+        self.store(cur, b0.into())?;
+        self.store(stack, null.into())?;
+        self.store(self.offset(stack, 8)?, self.i64(0).into())?;
+        self.store(self.offset(stack, 16)?, self.i64(0).into())?;
+        let f = self.cur_fn()?;
+        let top = self.llcx.append_basic_block(f, "release");
+        let pop = self.llcx.append_basic_block(f, "pending");
+        let take = self.llcx.append_basic_block(f, "pending.take");
+        let done = self.llcx.append_basic_block(f, "released");
+        self.builder
+            .build_unconditional_branch(top)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(top);
+        let b = self.load_ptr(cur)?;
+        if self.adt_has_drop_body(a)? {
+            let h = self.entry_slot(8, "handle")?;
+            self.store(h, b.into())?;
+            let slot = self.entry_slot(8, "self")?;
+            self.store(slot, h.into())?;
+            self.call_drop_body(a, ty, slot)?;
+        }
+        let body = self.offset(b, off)?;
+        self.push_parts(body, parts, stack)?;
+        self.finish_parts(body, parts)?;
+        self.free_dropped_box(b, ty)?;
+        self.builder
+            .build_unconditional_branch(pop)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(pop);
+        let len = self.load_i64(self.offset(stack, 8)?)?;
+        let empty = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, len, self.i64(0), "")
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_conditional_branch(empty, done, take)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(take);
+        let last = self
+            .builder
+            .build_int_sub(len, self.i64(1), "")
+            .map_err(|e| e.to_string())?;
+        self.store(self.offset(stack, 8)?, last.into())?;
+        let buf = self.load_ptr(stack)?;
+        let at = self
+            .builder
+            .build_int_mul(last, self.i64(8), "")
+            .map_err(|e| e.to_string())?;
+        // SAFETY: `last < len`, the stack's length.
+        let slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(self.llcx.i8_type(), buf, &[at], "")
+                .map_err(|e| e.to_string())?
+        };
+        let h = self.load_ptr(slot)?;
+        self.release_into(h, cur, top, pop, atomic)?;
+        self.builder.position_at_end(done);
+        self.free_buffer(stack)
+    }
+
+    /// Pushes the handles of `parts` (the struct at `base`) on `stack`,
+    /// the one to release last first: fields first to last, each field's
+    /// handles in the reverse of their release order.
+    fn push_parts(
+        &mut self,
+        base: PointerValue<'ctx>,
+        parts: &[Part],
+        stack: PointerValue<'ctx>,
+    ) -> R<()> {
+        for part in parts {
+            match part {
+                Part::Handle(off) => {
+                    let h = self.load_ptr(self.offset(base, *off)?)?;
+                    self.push_handle(h, stack)?;
+                }
+                Part::Quiet(..) => {}
+                Part::Vec(off, elem, size) => {
+                    let v = self.offset(base, *off)?;
+                    let buf = self.load_ptr(v)?;
+                    let n = self.load_i64(self.offset(v, 8)?)?;
+                    let size = *size;
+                    let elem = (**elem).clone();
+                    self.count_loop(n, |cx, i| {
+                        let back = cx
+                            .builder
+                            .build_int_sub(n, cx.i64(1), "")
+                            .map_err(|e| e.to_string())?;
+                        let j = cx
+                            .builder
+                            .build_int_sub(back, i, "")
+                            .map_err(|e| e.to_string())?;
+                        let at = cx
+                            .builder
+                            .build_int_mul(j, cx.i64(size), "")
+                            .map_err(|e| e.to_string())?;
+                        // SAFETY: element `j < n` of a buffer of `n` elements.
+                        let q = unsafe {
+                            cx.builder
+                                .build_in_bounds_gep(cx.llcx.i8_type(), buf, &[at], "")
+                                .map_err(|e| e.to_string())?
+                        };
+                        cx.push_elem(q, &elem, stack)
+                    })?;
+                }
+                Part::Map(off, t, elem) => {
+                    let h = self.load_ptr(self.offset(base, *off)?)?;
+                    let t = *t;
+                    let elem = (**elem).clone();
+                    let live = self
+                        .builder
+                        .build_is_not_null(h, "")
+                        .map_err(|e| e.to_string())?;
+                    self.if_then(live, |cx| {
+                        let voff = cx.val_off(t)?;
+                        let n = cx.table_len(h)?;
+                        cx.count_loop(n, |cx, i| {
+                            let back = cx
+                                .builder
+                                .build_int_sub(n, cx.i64(1), "")
+                                .map_err(|e| e.to_string())?;
+                            let j = cx
+                                .builder
+                                .build_int_sub(back, i, "")
+                                .map_err(|e| e.to_string())?;
+                            let at = cx.walk_at(h, j, t)?;
+                            let q = cx.offset(at, voff)?;
+                            cx.push_elem(q, &elem, stack)
+                        })
+                    })?;
+                }
+                Part::Struct(off, sub) => {
+                    let q = self.offset(base, *off)?;
+                    self.push_parts(q, sub, stack)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn push_elem(
+        &mut self,
+        q: PointerValue<'ctx>,
+        elem: &Elem,
+        stack: PointerValue<'ctx>,
+    ) -> R<()> {
+        match elem {
+            Elem::Handle => {
+                let h = self.load_ptr(q)?;
+                self.push_handle(h, stack)
+            }
+            Elem::Struct(sub) => self.push_parts(q, sub, stack),
+        }
+    }
+
+    /// Pushes the handle `h` on `stack` unless it is null (`None`).
+    fn push_handle(&mut self, h: PointerValue<'ctx>, stack: PointerValue<'ctx>) -> R<()> {
+        let some = self
+            .builder
+            .build_is_not_null(h, "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(some, |cx| {
+            let len = cx.load_i64(cx.offset(stack, 8)?)?;
+            let cap = cx.load_i64(cx.offset(stack, 16)?)?;
+            let full = cx
+                .builder
+                .build_int_compare(IntPredicate::EQ, len, cap, "")
+                .map_err(|e| e.to_string())?;
+            cx.if_then(full, |cx| {
+                cx.rt(
+                    "vec_reserve",
+                    &[stack.into(), cx.i64(1).into(), cx.i64(8).into()],
+                )
+            })?;
+            let buf = cx.load_ptr(stack)?;
+            let at = cx
+                .builder
+                .build_int_mul(len, cx.i64(8), "")
+                .map_err(|e| e.to_string())?;
+            // SAFETY: `len < cap` once reserved.
+            let slot = unsafe {
+                cx.builder
+                    .build_in_bounds_gep(cx.llcx.i8_type(), buf, &[at], "")
+                    .map_err(|e| e.to_string())?
+            };
+            cx.store(slot, h.into())?;
+            let more = cx
+                .builder
+                .build_int_add(len, cx.i64(1), "")
+                .map_err(|e| e.to_string())?;
+            cx.store(cx.offset(stack, 8)?, more.into())
+        })
+    }
+
+    /// Drops what `parts` leave once their handles are taken: the quiet
+    /// fields, a map's keys, and the containers' own buffers.
+    fn finish_parts(&mut self, base: PointerValue<'ctx>, parts: &[Part]) -> R<()> {
+        for part in parts.iter().rev() {
+            match part {
+                Part::Handle(_) => {}
+                Part::Quiet(off, ft) => {
+                    let q = self.offset(base, *off)?;
+                    self.call_glue(q, *ft)?;
+                }
+                Part::Vec(off, elem, size) => {
+                    let v = self.offset(base, *off)?;
+                    if let Elem::Struct(sub) = &**elem {
+                        let buf = self.load_ptr(v)?;
+                        let n = self.load_i64(self.offset(v, 8)?)?;
+                        let size = *size;
+                        let sub = sub.clone();
+                        self.count_loop(n, |cx, i| {
+                            let at = cx
+                                .builder
+                                .build_int_mul(i, cx.i64(size), "")
+                                .map_err(|e| e.to_string())?;
+                            // SAFETY: element `i < n` of a buffer of `n` elements.
+                            let q = unsafe {
+                                cx.builder
+                                    .build_in_bounds_gep(cx.llcx.i8_type(), buf, &[at], "")
+                                    .map_err(|e| e.to_string())?
+                            };
+                            cx.finish_parts(q, &sub)
+                        })?;
+                    }
+                    self.free_buffer(v)?;
+                }
+                Part::Map(off, t, elem) => {
+                    let h = self.load_ptr(self.offset(base, *off)?)?;
+                    let t = *t;
+                    let elem = (**elem).clone();
+                    let live = self
+                        .builder
+                        .build_is_not_null(h, "")
+                        .map_err(|e| e.to_string())?;
+                    self.if_then(live, |cx| {
+                        let kd = cx.tys.needs_drop(t.key);
+                        let sub = match &elem {
+                            Elem::Struct(sub) => Some(sub.clone()),
+                            Elem::Handle => None,
+                        };
+                        if kd || sub.is_some() {
+                            let voff = cx.val_off(t)?;
+                            let n = cx.table_len(h)?;
+                            cx.count_loop(n, |cx, i| {
+                                let at = cx.walk_at(h, i, t)?;
+                                if kd {
+                                    cx.call_glue(at, t.key)?;
+                                }
+                                if let Some(sub) = &sub {
+                                    let q = cx.offset(at, voff)?;
+                                    cx.finish_parts(q, sub)?;
+                                }
+                                Ok(())
+                            })?;
+                        }
+                        cx.rt("map_free", &[h.into()])
+                    })?;
+                }
+                Part::Struct(off, sub) => {
+                    let q = self.offset(base, *off)?;
+                    self.finish_parts(q, sub)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Drops the quiet fields ([`Cx::own_handle_fields`]) of the body at

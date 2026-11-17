@@ -228,3 +228,144 @@ fn deep_chains_with_weak_back_links_drop_in_order() {
         assert_eq!(out, WEAK_OUT, "wasm");
     }
 }
+
+/// B-2026-11-17-138, the next remainder: a node whose handles sit in a
+/// `Vec` (an n-ary tree), a `Map` (a trie) or a plain struct (a `Vec` of
+/// pairs holding an `Option` handle) still released recursively. Drop bodies
+/// over each shape, then each shape 200000 deep. Every map node holds one
+/// key, so the order does not depend on the hash seed.
+const CONTAINERS: &str = r#"shared struct N { name: String, mut kids: Vec[N] }
+
+impl Drop for N {
+    fn drop(mut ref self) {
+        println(f"drop N {self.name}");
+    }
+}
+
+shared struct T { name: String, mut kids: Map[i64, T] }
+
+impl Drop for T {
+    fn drop(mut ref self) {
+        println(f"drop T {self.name}");
+    }
+}
+
+struct Pair { a: Option[S], w: i64, b: Option[S] }
+
+shared struct S { name: String, mut items: Vec[Pair], mut one: Pair }
+
+impl Drop for S {
+    fn drop(mut ref self) {
+        println(f"drop S {self.name}");
+    }
+}
+
+fn n(s: own String) -> N { N { name: s, kids: Vec.new() } }
+fn t(s: own String) -> T { T { name: s, kids: Map.new() } }
+fn s(x: own String) -> S { S { name: x, items: Vec.new(), one: Pair { a: None, w: 0, b: None } } }
+
+shared struct Deep { v: i64, mut kids: Vec[Deep] }
+shared struct Trie { end: bool, mut kids: Map[i64, Trie] }
+struct Hop { a: Option[Link], w: i64 }
+shared struct Link { v: i64, mut items: Vec[Hop] }
+
+fn main() {
+    let kept = n("kept");
+    {
+        let root = n("root");
+        let a = n("a");
+        a.kids.push(n("a0"));
+        a.kids.push(kept);
+        a.kids.push(n("a2"));
+        root.kids.push(a);
+        root.kids.push(n("b"));
+        let c = n("c");
+        c.kids.push(n("c0"));
+        root.kids.push(c);
+        println("dropping N root");
+    }
+    println(f"kept {kept.name}");
+    {
+        let root = t("root");
+        let x = t("x");
+        x.kids[1] = t("x1");
+        root.kids[7] = x;
+        println("dropping T root");
+    }
+    {
+        let root = s("root");
+        let p = s("p");
+        p.one = Pair { a: Some(s("p.one.a")), w: 1, b: Some(s("p.one.b")) };
+        root.items.push(Pair { a: Some(p), w: 2, b: None });
+        root.items.push(Pair { a: None, w: 3, b: Some(s("q")) });
+        root.one = Pair { a: Some(s("r")), w: 4, b: None };
+        println("dropping S root");
+    }
+    println("done");
+    let top = Deep { v: 0, kids: Vec.new() };
+    let mut cur = top;
+    for i in 1..200000 {
+        let k = Deep { v: i, kids: Vec.new() };
+        cur.kids.push(Deep { v: -i, kids: Vec.new() });
+        cur.kids.push(k);
+        cur = k;
+    }
+    println(f"nary {top.v}");
+    let trie = Trie { end: false, kids: Map.new() };
+    let mut c = trie;
+    for i in 1..200000 {
+        let k = Trie { end: i == 199999, kids: Map.new() };
+        c.kids[i % 26] = k;
+        c = k;
+    }
+    println(f"trie {trie.end}");
+    let s0 = Link { v: 0, items: Vec.new() };
+    let mut sc = s0;
+    for i in 1..200000 {
+        let k = Link { v: i, items: Vec.new() };
+        sc.items.push(Hop { a: Some(k), w: i });
+        sc = k;
+    }
+    println(f"struct {s0.v}");
+}
+"#;
+
+const CONTAINERS_OUT: &str = "dropping N root\n\
+drop N root\n\
+drop N a\n\
+drop N a0\n\
+drop N a2\n\
+drop N b\n\
+drop N c\n\
+drop N c0\n\
+kept kept\n\
+dropping T root\n\
+drop T root\n\
+drop T x\n\
+drop T x1\n\
+dropping S root\n\
+drop S root\n\
+drop S r\n\
+drop S p\n\
+drop S p.one.b\n\
+drop S p.one.a\n\
+drop S q\n\
+done\n\
+nary 0\n\
+trie false\n\
+struct 0\n\
+drop N kept\n\
+";
+
+#[test]
+fn handles_in_vec_map_and_struct_fields_drain_in_order() {
+    let dir = scratch("containers");
+    let file = dir.join("main.kara");
+    std::fs::write(&file, CONTAINERS).unwrap();
+    assert_eq!(karac(&["__mir-run"], &file), CONTAINERS_OUT, "interp");
+    assert_eq!(karac(&["__mir-llvm-run"], &file), CONTAINERS_OUT, "llvm");
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(out) = on_wasm("containers", CONTAINERS) {
+        assert_eq!(out, CONTAINERS_OUT, "wasm");
+    }
+}
