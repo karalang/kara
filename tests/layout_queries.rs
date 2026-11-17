@@ -53,12 +53,21 @@ fn sum_x(entities: Vec[Entity]) -> f64 {
     assert_eq!(q.default, 0);
     let labels: Vec<&str> = q.options.iter().map(|o| o.label.as_str()).collect();
     assert_eq!(labels, vec!["keep_aos", "group_hot_fields"]);
-    // Resolution is the `layout` block syntax, not an attribute.
+    // Resolution is a rewrite, not an attribute.
     assert!(q.resolution_surface.attributes.is_empty());
     let note = q.options[0].note.as_deref().unwrap_or_default();
     assert!(
         note.contains("1 of 3 fields") && note.contains('x'),
         "keep_aos note must report the subset; got {note:?}",
+    );
+    // The advice is one the compiler accepts: a struct of arrays by hand,
+    // not the `layout` block it refuses as deferred (B-2026-11-17-113).
+    let advice = q.options[1].note.as_deref().unwrap_or_default();
+    assert!(
+        advice.starts_with("split `Vec[Entity]` into a struct of arrays written by hand")
+            && advice.contains("(x)")
+            && !advice.contains("write a `layout` block"),
+        "group_hot_fields must advise a hand-written struct of arrays; got {advice:?}",
     );
 }
 

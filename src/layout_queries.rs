@@ -7,8 +7,9 @@
 //! struct's fields is a candidate for a struct-of-arrays (`layout`
 //! block) — grouping the loop-hot fields packs them contiguously so each
 //! cache line carries only data the loop touches. The query surfaces the
-//! opportunity; the author resolves it by writing the existing `layout`
-//! block syntax (no attribute).
+//! opportunity; until `layout` blocks land (the compiler refuses them as
+//! deferred, B-2026-11-16-257) the author resolves it with a struct of
+//! arrays written by hand, as the book's ch15 shows (B-2026-11-17-113).
 //!
 //! ### This implements the "`karac explain` suggests a layout" analysis
 //!
@@ -40,7 +41,8 @@
 //!   `Map`/`Set` collections are out of v1 scope (under-report).
 //! - **Suppressed once a `layout` block names the struct.** A struct
 //!   already referenced by any `layout` block's collection type is
-//!   treated as resolved.
+//!   treated as resolved. (Such a program is refused today; the rule is
+//!   for when layout blocks land.)
 
 use crate::ast::*;
 use crate::def_path::{DefPath, QueryId, SubItemHash};
@@ -340,9 +342,16 @@ fn build_layout_query(
             },
             QueryOption {
                 label: "group_hot_fields".to_string(),
+                // Layout blocks are refused until they land
+                // (E_DEFERRED_LAYOUT_BLOCK, B-2026-11-16-257), so the
+                // advice is the struct of arrays the book's ch15 shows,
+                // written by hand: advice the compiler accepts
+                // (B-2026-11-17-113).
                 note: Some(format!(
-                    "write a `layout` block for `Vec[{}]` grouping the loop-hot fields ({}) so each \
-                     cache line carries only data this loop touches (struct-of-arrays)",
+                    "split `Vec[{}]` into a struct of arrays written by hand, one `Vec` per field, \
+                     so the loop-hot fields ({}) are each contiguous and each cache line carries \
+                     only data this loop touches (docs/book ch15; a `layout` block will do this \
+                     once layout blocks land)",
                     struct_name, hot_list,
                 )),
             },
@@ -352,9 +361,10 @@ fn build_layout_query(
         // `Low`: this is an access-pattern heuristic with no backing
         // SoA-vs-AoS cost model, so it is genuinely worth confirming.
         default_confidence: Confidence::Low,
-        // The resolution is the `layout` block *syntax*, not an
-        // attribute, so the attribute surface is empty — the query
-        // self-resolves once a layout block names the struct.
+        // The resolution is a rewrite (a struct of arrays), not an
+        // attribute, so the attribute surface is empty: the query
+        // resolves itself once the loop no longer walks a collection of
+        // the struct.
         resolution_surface: ResolutionSurface {
             attributes: Vec::new(),
         },
