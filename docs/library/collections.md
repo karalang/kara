@@ -451,7 +451,7 @@ trait BuildHasher {
 The split lets the hash algorithm be a property of the table, not of the key: `Map[K, V, FxBuildHasher]` and `Map[K, V, SipHash13BuildHasher]` use the same `Hash` impls for `K`. A `BuildHasher` makes a fresh `Hasher` for each hash, so per-hash state (the `Hasher`) stays separate from per-table configuration (the builder).
 
 **Hashers the library provides.**
-- `SipHash13BuildHasher` is the default for `Map[K, V]` and `Set[T]`. It is resistant to hash flooding and keyed from a random value chosen once per process: the operating system's random source (`getentropy` on Unix, `random_get` on `wasm_wasi`). An embedded build, which has none, uses a fixed key. The default may change in a future Kāra version if a better algorithm of the same kind becomes standard.
+- `SipHash13BuildHasher` is the default for `Map[K, V]` and `Set[T]`. It is resistant to hash flooding and keyed from a random value chosen once per process: the operating system's random source (`/dev/urandom` on Unix, `random_get` on `wasm_wasi`). An embedded build, which has none, uses a fixed key. The default may change in a future Kāra version if a better algorithm of the same kind becomes standard.
 - `FxBuildHasher` is fast and unkeyed. A table that names it gives up the protection against hash flooding.
 
 Both are ordinary `BuildHasher` types: `build()` makes a `SipHash13Hasher` or an `FxHasher` (`std.hash`), whose `finish` digests the bytes written with the same function a table of that hasher uses, and either meets a `B: BuildHasher` bound. A `Map` or `Set` that names one still hashes through a native fast path inside the table rather than through these types; the digests are the same either way (B-2026-10-25-31, B-2026-11-17-66).

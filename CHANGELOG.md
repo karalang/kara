@@ -726,7 +726,7 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - On `wasm_wasi` the default hasher's key is random per process (WASI
   `random_get`) and `KARAC_HASH_SEED` pins it, giving the order the same pin
   gives natively; every wasm run used one fixed key and ignored the pin.
-  Natively the key now comes from `getentropy` (B-2026-11-17-64).
+  Natively the key now comes from `/dev/urandom` on Unix (B-2026-11-17-64).
 - `karac run --example NAME` runs a project example (`examples/NAME/` with
   its own `kara.toml`) as its package, the way `karac run` does in that
   directory; it compiled `src/main.kara` alone, so 6 of the repository's 9
