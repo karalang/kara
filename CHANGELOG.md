@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `karac build --target=wasm32-wasip1` builds the `wasm_wasi` module, which
+  is that triple; it was linked as a native triple and failed in `wasm-ld`
+  on `crt1.o` and `-lpthread`. Any other wasm triple, `wasm32-wasip1-threads`
+  included, is refused naming `--target=wasm_wasi` and saying threaded wasm
+  is not in 0.8. `karac build --help` marks `wasm_browser` Not in 0.8, as
+  `build` and `check` refuse it (B-2026-11-16-313, B-2026-11-16-314).
 - Each `R` of `#[test(requires: [R])]` must be a program-rooted resource
   (core-semantics §14.13), and the error is `E_TEST_REQUIRES` at `R` in the
   test file. A provider-rooted `R` failed with E0419 at `<generated>` inside
@@ -697,6 +703,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `Json.deserialize`'s errors for a sequence of the wrong length (`{"Tup":[1]}`
+  into a two-field tuple variant, `[1,2,3]` into a pair) say where:
+  `too few values in a variant's payload at line 1 column 10`, at the `]`
+  that ended it early, as serde_json places it, or at the first value past
+  the end (B-2026-11-17-74).
 - On `wasm_wasi` the default hasher's key is random per process (WASI
   `random_get`) and `KARAC_HASH_SEED` pins it, giving the order the same pin
   gives natively; every wasm run used one fixed key and ignored the pin.
