@@ -41,6 +41,30 @@ pub fn link_executable_exports(
     link_executable_impl(obj_path, exe_path, &[])
 }
 
+/// Merges the codegen units' wasm objects `parts` into the one object
+/// `obj` the link takes (`wasm-ld -r`), as `cc -r` does natively
+/// (`mir_aot/split.rs`).
+pub(crate) fn wasm_partial_link(
+    obj: &std::path::Path,
+    parts: &[std::path::PathBuf],
+) -> Result<(), String> {
+    let (_, lld) = resolve_wasi_self_contained_dir("wasm32-wasip1")?;
+    let (linker, flavor_args) = resolve_wasm_linker(lld)?;
+    let out = std::process::Command::new(&linker)
+        .args(&flavor_args)
+        .arg("-r")
+        .arg("-o")
+        .arg(obj)
+        .args(parts)
+        .output()
+        .map_err(|e| format!("{} -r: {e}", linker.display()))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format_wasm_link_error("wasm-ld -r failed", &out.stderr))
+    }
+}
+
 /// Link a wasm32 object into a WASI command module (phase-10 WASM build
 /// path, `--target=wasm_wasi` and `--target=wasm_browser` — browser
 /// modules are wasip1 modules whose WASI surface the generated JS glue

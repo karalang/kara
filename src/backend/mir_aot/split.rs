@@ -141,7 +141,7 @@ pub(super) fn plan(m: LLVMModuleRef) -> Option<Plan> {
     let requested = requested_units();
     if requested == Some(1)
         || !cfg!(unix)
-        || crate::target::active_target() != "native"
+        || !matches!(crate::target::active_target(), "native" | "wasm_wasi")
         || crate::target::cross_triple().is_some()
         || std::env::var("KARAC_DEBUG_INFO").as_deref() == Ok("1")
     {
@@ -603,6 +603,12 @@ impl Drop for Core {
 
 /// Merge the objects `parts` into the one object `obj` (`cc -r`).
 pub(super) fn partial_link(obj: &Path, parts: &[PathBuf]) -> Result<(), String> {
+    if crate::target::active_target_is_wasm() {
+        // wasm-ld's own relocatable link: a wasm build is cut as a native
+        // one is, so it no longer optimises and emits a large program on
+        // one thread (B-2026-11-16-312).
+        return crate::backend::driver::wasm_partial_link(obj, parts);
+    }
     let out = std::process::Command::new("cc")
         .args(["-r", "-nostdlib", "-o"])
         .arg(obj)
