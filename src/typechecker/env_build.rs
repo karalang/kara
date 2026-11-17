@@ -3466,13 +3466,18 @@ impl<'a> super::TypeChecker<'a> {
         // On the MIR pipeline a library source re-states a baked stdlib
         // trait impl in Kāra (`impl Display for AllocError`); it replaces the
         // baked entry rather than making every call ambiguous. A program's
-        // own impl of the same pair is not baked and is left alone.
+        // own impl of the same pair is not baked and is left alone. The
+        // trait's arguments are part of the pair: `impl From[NetError] for
+        // IoError` sits beside the baked `From` from `VarError`, it does not
+        // replace it (B-2026-11-17-7).
         if self.library_methods_from_source && info.trait_name.is_some() {
+            let source = trait_instance_source(&info);
             if let Some(i) = self.env.impls.iter().enumerate().position(|(i, e)| {
                 self.baked_impls.contains(&i)
                     && e.trait_name == info.trait_name
                     && e.target_type == info.target_type
                     && e.target_args == info.target_args
+                    && trait_instance_source(e) == source
             }) {
                 self.env.impls[i] = info;
                 self.env.impl_own_assoc_types.insert(i, own_assoc);
@@ -4430,4 +4435,22 @@ fn headers_unify(existing: &ImplInfo, written: &[Type], params: &[String]) -> bo
     mine.iter()
         .zip(written)
         .all(|(a, b)| unify(a, b, &theirs, &ours))
+}
+
+/// Which instance of its trait an impl is, beyond the trait and target
+/// names: the trait's arguments, or for `From` / `TryFrom` the source type,
+/// read from the method because the baked form leaves the trait bare
+/// (`impl From for IoError { fn from(e: own VarError) }`). The method's
+/// parameter is the same type under either spelling, so it is compared
+/// even when the trait argument is written.
+fn trait_instance_source(info: &ImplInfo) -> Vec<Type> {
+    let method = match info.trait_name.as_deref() {
+        Some("From") => "from",
+        Some("TryFrom") => "try_from",
+        _ => return info.trait_args.clone(),
+    };
+    match info.methods.get(method).and_then(|f| f.params.first()) {
+        Some(p) => vec![p.clone()],
+        None => info.trait_args.clone(),
+    }
 }
