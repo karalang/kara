@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 582 |
+| typecheck | 583 |
 | mir-llvm | 281 |
 | mir | 244 |
 | cli | 191 |
@@ -186,8 +186,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
 | B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
-| B-2026-11-17-80 | 2026-11-17 | typecheck+mir | medium | Iterators have no `cycle` (`backends.iter().cycle()`, `(0..n).cycle().take(k)`): it is refused as "no method 'cycle' on type 'VecIter'", and 11 legacy corpus fixtures that cycle stay class e | — |
-| B-2026-11-17-85 | 2026-11-17 | typecheck+mir | medium | core-semantics §3-§7 refusals that do not name both places or carry the fix the doc implies: E0516 live-borrow conflicts give no borrow or use position, moves out of a borrowed place name neither the place nor its root, a `mut ref` scrutinee binding moved out is a bare type mismatch, E0288's fix writes `own ref String`, a Drop receiver is refused at the impl with no fix, a returned view of a local reads as a drop conflict | — |
 
 ### Relocated
 
@@ -1610,6 +1608,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-70 | parser | low | `karac fix` opens `from_iter(` inside a parenthesized receiver: `(0..n).flat_map(..).collect::<BTreeSet<_>>().into_iter()` becomes `(SortedSet.from_i… | cf35bf7d49 |
 | B-2026-11-17-73 | typecheck | low | E0252 on assigning a module-level binding suggests declaring it `let mut`, which E_MODULE_LET refuses: the fix it names is itself an error | 1a718ba8ca |
 | B-2026-11-17-77 | typecheck | medium | `Point.make()` where two traits `Point` implements each declare `make` (no self) is accepted and silently runs the first impl; design.md § Associated… | ba28831243 |
+| B-2026-11-17-80 | typecheck+mir | medium | Iterators have no `cycle` (`backends.iter().cycle()`, `(0..n).cycle().take(k)`): it is refused as "no method 'cycle' on type 'VecIter'", and 11 legac… | 050b42435e |
+| B-2026-11-17-85 | typecheck+mir | medium | core-semantics §3-§7 refusals that do not name both places or carry the fix the doc implies: E0516 live-borrow conflicts give no borrow or use positi… | 6610db8471 |
 
 </details>
 
