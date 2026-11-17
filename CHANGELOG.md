@@ -31,6 +31,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `1e39f32` an `f32` infinity (design.md §3; B-2026-11-16-339). Write
   `f64.INFINITY`. An unsuffixed literal that only its context makes `f32`
   is not checked yet (B-2026-11-16-340).
+- A format spec's width or precision over 65535 (Rust's limit) is a
+  compile error at the hole; `{n:4294967296}` compiled and the program
+  ended with "out of memory" (B-2026-11-17-1).
 - `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
   as `"0.1.0"`), as design.md § 4 says; any string was accepted
   (B-2026-11-16-220).
@@ -1473,6 +1476,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (B-2026-11-16-331).
 - A marker trait's body item, a `dyn` parameter's unbound associated type
   and a derive beside a hand impl are each reported once (B-2026-11-16-332).
+- `{n:#x}` names Rust's alternate form `#` as not supported in v1 and
+  suggests writing the prefix in the text (`0x{n:x}`); it said
+  "unsupported type `#`" (B-2026-11-17-2).
 - A text diagnostic's bracket is its catalogue code, the one
   `--output=json` reports: `error[E0221]`, `error[E0400]`, `error[E0500]`,
   where it named the phase (`error[typecheck]`, `error[effect]`,

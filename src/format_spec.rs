@@ -66,6 +66,11 @@ pub struct FormatSpec {
     pub radix: Radix,
 }
 
+/// The largest width or precision a spec may give, Rust's (`u16::MAX`): a
+/// larger one asked the formatter to pad to gigabytes, which ended a compiled
+/// program with "out of memory" (B-2026-11-17-1).
+pub const MAX_WIDTH: usize = 65535;
+
 /// Why a spec does not parse; byte offsets into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpecError {
@@ -78,6 +83,8 @@ pub enum SpecError {
     Type(usize),
     Trailing(usize),
     PrecisionOnInt,
+    /// The alternate-form flag `#` (Rust's `{n:#x}`), at this offset.
+    Alternate(usize),
 }
 
 impl SpecError {
@@ -95,15 +102,19 @@ impl SpecError {
                 "format spec `{raw}`: sign flag `{}` is not supported (only `+` is)",
                 char_at(i)
             ),
-            SpecError::Width(a, b) => {
-                format!("format spec width `{}` is out of range", span(a, b))
-            }
+            SpecError::Width(a, b) => format!(
+                "format spec width `{}` is out of range: a width is at most {MAX_WIDTH}, as \
+                 in Rust (design.md §3 Format specifiers)",
+                span(a, b)
+            ),
             SpecError::MissingPrecision => {
                 format!("format spec `{raw}`: `.` must be followed by a precision (e.g. `.2`)")
             }
-            SpecError::Precision(a, b) => {
-                format!("format spec precision `{}` is out of range", span(a, b))
-            }
+            SpecError::Precision(a, b) => format!(
+                "format spec precision `{}` is out of range: a precision is at most \
+                 {MAX_WIDTH}, as in Rust (design.md §3 Format specifiers)",
+                span(a, b)
+            ),
             SpecError::Type(i) => format!(
                 "format spec `{raw}`: unsupported type `{}` \
                  (expected one of x, X, o, b, d)",
@@ -115,6 +126,18 @@ impl SpecError {
             ),
             SpecError::PrecisionOnInt => {
                 format!("format spec `{raw}`: precision is not valid with an integer type")
+            }
+            SpecError::Alternate(i) => {
+                let prefixed = match span(i + 1, raw.len()).chars().last() {
+                    Some(t @ ('x' | 'X')) => format!(" (`0x{{n:{t}}}` for a prefixed hex)"),
+                    Some('o') => " (`0o{n:o}` for a prefixed octal)".to_string(),
+                    Some('b') => " (`0b{n:b}` for a prefixed binary)".to_string(),
+                    _ => String::new(),
+                };
+                format!(
+                    "format spec `{raw}`: the alternate form `#` is not supported in v1; \
+                     write the prefix in the text{prefixed}"
+                )
             }
         }
     }
@@ -178,11 +201,14 @@ impl FormatSpec {
             }
             i
         };
-        // A run of digits as a `usize`, None when it overflows.
+        // A run of digits as a `usize`, None when it is over `MAX_WIDTH`.
         let number = |a: usize, b: usize| {
-            raw.get(a..b)?.iter().try_fold(0usize, |n, c| {
-                n.checked_mul(10)?.checked_add(usize::from(c - b'0'))
-            })
+            raw.get(a..b)?
+                .iter()
+                .try_fold(0usize, |n, c| {
+                    n.checked_mul(10)?.checked_add(usize::from(c - b'0'))
+                })
+                .filter(|&n| n <= MAX_WIDTH)
         };
 
         // ['+'] sign flag. Rust also accepts `-` (and ignores it) and Python
@@ -196,6 +222,13 @@ impl FormatSpec {
             }
             Some(b'-' | b' ') => return Err(SpecError::Sign(i)),
             _ => {}
+        }
+
+        // Rust's ['#'] alternate-form flag, which v1 does not have: named
+        // here, where Rust's grammar puts it, rather than reported as an
+        // unknown type `#` (B-2026-11-17-2).
+        if at(i) == Some(b'#') {
+            return Err(SpecError::Alternate(i));
         }
 
         // ['0'] zero-pad flag.
@@ -1226,8 +1259,26 @@ mod tests {
                     .collect(),
             );
         }
+        // Two deliberate departures from the previous parser: a width or
+        // precision over `MAX_WIDTH` is refused (B-2026-11-17-1), and `#`
+        // where Rust's alternate flag sits is named as such (B-2026-11-17-2).
         for raw in raws {
-            assert_eq!(FormatSpec::parse(&raw), oracle::parse(&raw), "{raw:?}");
+            match (FormatSpec::parse(&raw), oracle::parse(&raw)) {
+                (Err(new), old) if new.contains("as in Rust") => {
+                    let over = |n: Option<usize>| n.is_some_and(|n| n > MAX_WIDTH);
+                    assert!(
+                        old.as_ref().is_err_and(|o| new.starts_with(o.as_str()))
+                            || old
+                                .as_ref()
+                                .is_ok_and(|s| over(s.width) || over(s.precision)),
+                        "{raw:?}: {new} / {old:?}"
+                    );
+                }
+                (Err(new), Err(old)) if new.contains("alternate form") => {
+                    assert!(old.contains("unsupported type `#`"), "{raw:?}: {old}");
+                }
+                (new, old) => assert_eq!(new, old, "{raw:?}"),
+            }
         }
     }
 
