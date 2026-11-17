@@ -1,0 +1,11 @@
+source = "core-semantics §12 default 3; design.md §12 Inference and declarations"
+dedup_of = []
+expect = "error:E0400"
+exit = 1
+tags = ["effects", "declarations", "drops"]
+class = "a"
+expected_from = "pin"
+rules = ["12"]
+backends = []
+env = {}
+note = "A match or if-let arm on an owned Option[L] binds l by value; the arm only reads it, so L's printing drop runs at the arm's end and each public function must declare writes(Stdout) (B-2026-11-17-100). The expected.out wording of an error pin is guidance, not a byte oracle."

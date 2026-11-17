@@ -765,6 +765,17 @@ pub fn node_type_facts(
     use crate::typechecker::Type;
     let mut facts = effectchecker::NodeTypeFacts::default();
     let mut drops = DropReach::new(typed);
+    // A pattern binding that takes its part by value has its type here,
+    // not in `node_types` (B-2026-11-17-100).
+    for (&node, ty) in &typed.by_value_bindings {
+        if typed.node_types.contains_key(&node) {
+            continue;
+        }
+        let owned = drops.of(ty);
+        if !owned.is_empty() {
+            facts.drops.insert(node, owned);
+        }
+    }
     for (&node, (ty, _)) in &typed.node_types {
         let owned = drops.of(ty);
         if !owned.is_empty() {

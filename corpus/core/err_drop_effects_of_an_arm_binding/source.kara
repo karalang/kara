@@ -1,0 +1,25 @@
+// A pattern binding that takes its part of an owned scrutinee by value owns
+// it, and drops it where the arm ends unless the arm moves it: the drop's
+// effects are the function's (core semantics §12 default 3,
+// B-2026-11-17-100).
+pub struct L { n: i64 }
+
+impl Drop for L {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+
+pub fn first(o: own Option[L]) -> i64 {
+    match o {
+        Some(l) => l.n,
+        None => 0,
+    }
+}
+
+pub fn first_if(o: own Option[L]) -> i64 {
+    if let Some(l) = o { l.n } else { 0 }
+}
+
+fn main() with writes(Stdout) {
+    println(f"{first(Some(L { n: 1 }))}");
+    println(f"{first_if(Some(L { n: 2 }))}");
+}

@@ -1,0 +1,2 @@
+ERROR at line 11: public function 'first' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature
+ERROR at line 18: public function 'first_if' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature

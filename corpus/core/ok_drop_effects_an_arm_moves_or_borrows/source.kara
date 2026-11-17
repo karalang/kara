@@ -1,0 +1,28 @@
+// An arm binding the arm moves out runs no drop in the function, and a
+// pattern on a borrowed value binds a view, which drops nothing: neither
+// function declares an effect for L's drop (core semantics §12 default 3,
+// B-2026-11-17-100).
+pub struct L { n: i64 }
+
+impl Drop for L {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+
+pub fn pass(o: own Option[L]) -> Option[L] {
+    match o {
+        Some(l) => Some(l),
+        None => None,
+    }
+}
+
+pub fn peek(o: Option[L]) -> i64 {
+    match o {
+        Some(l) => l.n,
+        None => 0,
+    }
+}
+
+fn main() with writes(Stdout) {
+    let a = pass(Some(L { n: 1 }));
+    println(f"{peek(a)}");
+}

@@ -2683,6 +2683,11 @@ pub struct TypeCheckResult {
     /// parameters (impl's, then the function's) in scope where the node was
     /// typed, so a `TypeParam` in its type can be placed by position.
     pub node_types: FxHashMap<crate::ids::NodeId, (Type, u32)>,
+    /// The type a `match` / `if let` / `while let` binding holds when it
+    /// binds its part by value, which [`Self::node_types`] does not record
+    /// for it: the effect checker charges the part's drop where the arm
+    /// leaves it (core semantics §12 default 3, B-2026-11-17-100).
+    pub by_value_bindings: FxHashMap<crate::ids::NodeId, Type>,
     /// [`crate::ast::Program::default_copy_spans`]: where [`Self::expr_types`]
     /// holds only one of several copies' types. See [`Self::expr_type`].
     pub default_copy_spans: FxHashSet<SpanKey>,
@@ -4072,6 +4077,8 @@ pub struct TypeChecker<'a> {
     pub(super) call_type_subs: FxHashMap<SpanKey, FxHashMap<String, String>>,
     /// See the public copies on `TypeCheckResult`.
     pub(super) node_types: FxHashMap<crate::ids::NodeId, (Type, u32)>,
+    /// See [`TypeCheckResult::by_value_bindings`].
+    pub(super) by_value_bindings: FxHashMap<crate::ids::NodeId, Type>,
     pub(super) node_generic_frames: Vec<Vec<String>>,
     pub(super) node_generic_frame_proj_traits: Vec<ProjTraits>,
     pub(super) current_generic_frame: u32,
@@ -4819,6 +4826,7 @@ impl<'a> TypeChecker<'a> {
             path_call_method_dispatch: FxHashSet::default(),
             call_type_subs: FxHashMap::default(),
             node_types: FxHashMap::default(),
+            by_value_bindings: FxHashMap::default(),
             node_generic_frames: vec![Vec::new()],
             node_generic_frame_proj_traits: vec![ProjTraits::default()],
             current_generic_frame: 0,
@@ -5444,6 +5452,7 @@ impl<'a> TypeChecker<'a> {
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
             node_types,
+            by_value_bindings: std::mem::take(&mut self.by_value_bindings),
             default_copy_spans: self.program.default_copy_spans.clone(),
             node_generic_frames: std::mem::take(&mut self.node_generic_frames),
             node_generic_frame_proj_traits: std::mem::take(

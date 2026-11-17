@@ -1541,6 +1541,14 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_node_type(pattern.id, &wrapped);
                 }
                 let binding_ty = self.lib_view_binding_ty(mode, wrapped.clone());
+                if !copies
+                    && !part_ref
+                    && !matches!(binding_ty, Type::Ref(_) | Type::MutRef(_))
+                    && !pattern.id.is_dummy()
+                {
+                    self.by_value_bindings
+                        .insert(pattern.id, binding_ty.clone());
+                }
                 if self.library_methods_from_source
                     && matches!(binding_ty, Type::Ref(_) | Type::MutRef(_))
                     && !matches!(expected, Type::Ref(_) | Type::MutRef(_))

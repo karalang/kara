@@ -1,0 +1,11 @@
+source = "core-semantics §12 default 3; design.md §12 Inference and declarations"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "declarations", "drops"]
+class = "a"
+expected_from = "pin"
+rules = ["12"]
+backends = []
+env = {}
+note = "pass moves its arm binding out and peek matches a borrowed Option[L], so neither runs L's drop and neither declares writes(Stdout); main drops a at its end (B-2026-11-17-100)."
