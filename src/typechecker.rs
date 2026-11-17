@@ -7754,6 +7754,13 @@ impl<'a> TypeChecker<'a> {
         if *arg_ty == Type::Error || arg_ty == receiver {
             return false;
         }
+        // An argument widens losslessly into its parameter's type, as at any
+        // other argument (design.md § Mixed-width operands: "At a binding or
+        // an argument, the whole table applies"), so `best.max(a)` with
+        // `best: i64` and `a: i32` reads `a` as an `i64` (B-2026-11-17-90).
+        if types::numeric_widens_into(&self.resolved_now(arg_ty), receiver) {
+            return false;
+        }
         if self.library_methods_from_source {
             if let Type::Ref(inner) | Type::MutRef(inner) = arg_ty {
                 if **inner == *receiver && self.reads_as_value(inner) {

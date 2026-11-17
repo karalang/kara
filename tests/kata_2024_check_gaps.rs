@@ -135,10 +135,14 @@ fn kata_2024_vec_filled_literal_under_max_gets_its_suffix() {
 
 #[test]
 fn kata_2024_a_literal_that_does_not_fit_gets_no_suffix() {
-    let src = "fn f(y: i8) -> i8 {\n    let mut (a, b) = (300, 0);\n    a = a.max(y);\n    a as i8\n}\n\nfn main() {\n    println(f(1));\n}";
+    // `c.max(a)` with `c: i8` meets the `i64` that `a`'s literal took; `300`
+    // does not fit an `i8`, so no suffix is offered. (This pin read
+    // `a.max(y)`, which is accepted since a method's argument widens,
+    // B-2026-11-17-90.)
+    let src = "fn f(y: i8) -> i8 {\n    let mut (a, b) = (300, 0);\n    let mut c = y;\n    c = c.max(a);\n    c\n}\n\nfn main() {\n    println(f(1));\n}";
     let (first, text, _, _) = mend(&scratch("no_fit"), src);
     assert!(
-        first.contains("`max` expects an argument of type `i64`, got `i8`"),
+        first.contains("`max` expects an argument of type `i8`, got `i64`"),
         "{first}"
     );
     assert!(!first.contains("write that literal"), "{first}");

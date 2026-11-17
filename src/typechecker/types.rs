@@ -1339,6 +1339,29 @@ pub(super) fn int_coercion_is_widening(from: &Type, to: &Type) -> bool {
     }
 }
 
+/// Does a value of numeric type `from` widen implicitly into `to`, by
+/// design.md's table (§ Mixed-width operands): integer into integer as
+/// [`int_coercion_is_widening`] says, a float into a wider float, and an
+/// integer of at most 32 bits into `f64`.
+pub(super) fn numeric_widens_into(from: &Type, to: &Type) -> bool {
+    match (from, to) {
+        (Type::Int(_) | Type::UInt(_), Type::Int(_) | Type::UInt(_)) => {
+            int_coercion_is_widening(from, to)
+        }
+        (Type::Float(_), Type::Float(_)) => {
+            matches!((float_width_rank(from), float_width_rank(to)), (Some(f), Some(t)) if f < t)
+        }
+        (Type::Int(_) | Type::UInt(_), Type::Float(FloatSize::F64)) => {
+            matches!(int_signed_width(from), Some((w, _)) if w <= 32)
+                && !matches!(
+                    from,
+                    Type::Int(IntSize::Isize) | Type::UInt(UIntSize::Usize)
+                )
+        }
+        _ => false,
+    }
+}
+
 /// B-2026-08-14-12 — precision rank of a concrete float type, or `None` for
 /// anything that is not one. A STRICTLY smaller rank widens losslessly into a
 /// larger one, which is design.md's implicit-widening table for floats

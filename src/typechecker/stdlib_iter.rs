@@ -291,6 +291,15 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Error;
                 }
                 let acc_ty = self.infer_expr(&args[0].value);
+                // `fold((v[0], 0), |(a, b), x| ..)`: the closure's tuple
+                // parameter binds the seed's literals as `let (a, b) = (..)`
+                // would, so a refusal at a use offers the literal's suffix
+                // (kata 1182's Rust arm).
+                if let ExprKind::Closure { params, .. } = &args[1].value.kind {
+                    if let Some(p) = params.first() {
+                        self.note_literal_tuple_let(&p.pattern, &args[0].value, &acc_ty);
+                    }
+                }
                 let f_ty = Type::Function {
                     cross_task: Default::default(),
                     params: vec![acc_ty.clone(), item.clone()],

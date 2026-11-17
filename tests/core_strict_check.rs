@@ -9787,8 +9787,10 @@ fn overflow_family_operands_are_checked() {
         ),
         (
             "div-peer",
-            "let y: i32 = 2; let _ = x.checked_div(y);",
-            "checked_div expects an argument of type `i64`, got `i32`",
+            // An `i32` divisor widens into `Self` as any argument does
+            // (B-2026-11-17-90); a `u64` does not.
+            "let y: u64 = 2; let _ = x.checked_div(y);",
+            "checked_div expects an argument of type `i64`, got `u64`",
         ),
         (
             "neg-arity",

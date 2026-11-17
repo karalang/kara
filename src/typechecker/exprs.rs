@@ -6773,6 +6773,21 @@ impl<'a> super::TypeChecker<'a> {
                     // set defensively so any synthesised cell-rewrap
                     // path that lowers into a non-closure here still
                     // routes through slice 2b correctly.
+                    // `fold((v[0], 0), |(a, b), x| ..)`: the closure's tuple
+                    // parameter binds the seed's literals as `let (a, b) =
+                    // (..)` would, so a refusal at a use offers the literal's
+                    // suffix (kata 1182's Rust arm, B-2026-11-17-91).
+                    if let ExprKind::Closure { params: cps, .. } = &arg.value.kind {
+                        let seed = args
+                            .iter()
+                            .zip(arg_tys.iter())
+                            .take(i)
+                            .find(|(a, _)| matches!(a.value.kind, ExprKind::Tuple(_)));
+                        if let (Some(p), Some((seed, Some(seed_ty)))) = (cps.first(), seed) {
+                            let seed_ty = seed_ty.clone();
+                            self.note_literal_tuple_let(&p.pattern, &seed.value, &seed_ty);
+                        }
+                    }
                     let saved_borrow_ctx = self.borrow_context;
                     let saved_mut_through = self.mut_through_param_arg;
                     // The closure is checked against the bound's signature;
@@ -13292,7 +13307,10 @@ impl<'a> super::TypeChecker<'a> {
     /// entry is the first one's: its fix types it, and a later round fixes
     /// the next, which the value is then an `i64` because of.
     fn literal_operator_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
-        if !matches!(value.kind, ExprKind::Binary { .. } | ExprKind::Unary { .. }) {
+        if !matches!(
+            value.kind,
+            ExprKind::Binary { .. } | ExprKind::Unary { .. } | ExprKind::MethodCall { .. }
+        ) {
             return None;
         }
         let let_var = match self.unbound_literal_var(ty) {
@@ -13326,6 +13344,17 @@ impl<'a> super::TypeChecker<'a> {
                     BinOp::Shl | BinOp::Shr => leaves(left, out),
                     _ => out.push(e),
                 },
+                // `(del + x).max(keep)` keeps its operands' widest type, as
+                // an operator does (kata 1182's Rust arm, B-2026-11-17-91).
+                ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                } if matches!(method.as_str(), "min" | "max") && args.len() == 1 => {
+                    leaves(object, out);
+                    leaves(&args[0].value, out);
+                }
                 _ => out.push(e),
             }
         }
@@ -13348,7 +13377,11 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 _ => {
                     let t = self.expr_types.get(&SpanKey::from_span(&leaf.span))?;
-                    match self.resolved_now(t) {
+                    let t = match self.resolved_now(t) {
+                        Type::Ref(inner) => *inner,
+                        t => t,
+                    };
+                    match t {
                         Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32)
                         | Type::UInt(UIntSize::U8 | UIntSize::U16 | UIntSize::U32) => {}
                         _ => return None,
