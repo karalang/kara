@@ -3053,7 +3053,7 @@ enum Val {
 // A _tables_map entry: a key (None for whitespace and comments) and
 // the tables it was found in.
 #[derive(Clone)]
-struct TMEnt {
+struct TmEnt {
     key: Option[Key],
     idx: Vec[i64],
 }
@@ -3062,7 +3062,7 @@ struct Proxy {
     container: i64,
     internal: i64,
     tables: Vec[i64],
-    tmap: Vec[TMEnt],
+    tmap: Vec[TmEnt],
     dkeys: Vec[String],
 }
 
@@ -3908,7 +3908,7 @@ fn proxy_new(w: mut ref World, c: i64, indices: ref Vec[i64]) -> Result[i64, Exc
                 if m >= 0 {
                     p.tmap[m].idx.push(ti);
                 } else {
-                    p.tmap.push(TMEnt { key: e.key.clone(), idx: vec![ti] });
+                    p.tmap.push(TmEnt { key: e.key.clone(), idx: vec![ti] });
                 }
                 if let Some(k) = e.key {
                     dkeys_add(mut p.dkeys, key_str(k));

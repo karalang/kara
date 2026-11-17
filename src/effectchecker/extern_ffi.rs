@@ -5,7 +5,7 @@
 //!
 //! - `register_extern_function_effects` — per-`extern` declaration
 //!   handler: seeds `declared_effects` from the ABI's trust-not-verify
-//!   default, honors `@noblock` opt-outs, and runs the FFI linter.
+//!   `with` clause (every effect without one), and runs the FFI linter.
 //! - `check_ffi_linter_hints` — advisory `FfiLintHint` diagnostics
 //!   for extern symbols whose names suggest commonly-omitted effects
 //!   (`blocks`, `allocates(Heap)`).
@@ -27,109 +27,60 @@ impl<'a> super::EffectChecker<'a> {
     /// `block_attrs = &[]`) and the per-item arm inside an
     /// `Item::ExternBlock` (with `block_attrs = &b.attributes`).
     /// Block-level attributes are NOT pre-merged into per-item
-    /// `attributes` — they're passed through here so the `@noblock`
-    /// check sees the union of block + per-item attrs.
+    /// `attributes`; they're passed through here.
     pub(crate) fn register_extern_function_effects(
         &mut self,
         e: &ExternFunction,
-        block_attrs: &[Attribute],
+        _block_attrs: &[Attribute],
     ) {
-        // ABI-keyed default effect set (trust-not-verify: extern has no body).
-        // `extern "C"` → {blocks}; `extern "C-unwind"` → {blocks, panics}.
-        // `@noblock` removes blocks from the default (e.g. a pure-CPU C++ fn).
+        // design.md §15: an `extern` function's effects are exactly its
+        // `with` clause; with no clause it has every effect, and `pure`
+        // none. The ABI's defaults (`blocks`, and `panics` for C-unwind)
+        // were added to an explicit clause, which the `noblock` attribute
+        // existed to take back; both are gone (B-2026-11-16-261).
         let builtin_span = Span {
             line: 0,
             column: 0,
             offset: 0,
             length: 0,
         };
-        let has_noblock = e.attributes.iter().any(|a| a.is_bare("noblock"))
-            || block_attrs.iter().any(|a| a.is_bare("noblock"));
+        let blocks = |set: &mut EffectSet, verb: EffectVerbKind| {
+            set.add(
+                Effect {
+                    verb,
+                    resource: String::new(),
+                },
+                EffectOrigin::Direct(builtin_span),
+            )
+        };
+        // What a declaration with no clause is read as stating for the
+        // profile check and the linter's hints: what its ABI always does,
+        // so the hints name the rest.
         let mut abi_defaults = EffectSet::new();
-        match e.abi.as_str() {
-            // `pure fn`: no effects at all, whatever the ABI.
-            _ if e.is_pure => {}
-            "C" if !has_noblock => {
-                abi_defaults.add(
-                    Effect {
-                        verb: EffectVerbKind::Blocks,
-                        resource: String::new(),
-                    },
-                    EffectOrigin::Direct(builtin_span),
-                );
-            }
-            "C" => {}
-            "C-unwind" => {
-                if !has_noblock {
-                    abi_defaults.add(
-                        Effect {
-                            verb: EffectVerbKind::Blocks,
-                            resource: String::new(),
-                        },
-                        EffectOrigin::Direct(builtin_span),
-                    );
+        if !e.is_pure {
+            match e.abi.as_str() {
+                "C" => blocks(&mut abi_defaults, EffectVerbKind::Blocks),
+                "C-unwind" => {
+                    blocks(&mut abi_defaults, EffectVerbKind::Blocks);
+                    blocks(&mut abi_defaults, EffectVerbKind::Panics);
                 }
-                // panics is always included for C-unwind (throws across FFI boundary).
-                // @noblock cannot suppress panics.
-                abi_defaults.add(
-                    Effect {
-                        verb: EffectVerbKind::Panics,
-                        resource: String::new(),
-                    },
-                    EffectOrigin::Direct(builtin_span),
-                );
+                _ => {}
             }
-            _ => {} // other ABIs: no defaults until implemented
         }
-
-        let abi_defaults_kept = abi_defaults.clone();
-        // Parse programmer-supplied annotations, then union with ABI defaults.
         let programmer_decl = self.parse_signature_effects(&e.effects, &e.params, None);
         let final_decl = match &programmer_decl {
-            DeclaredEffects::Polymorphic | DeclaredEffects::PolymorphicWithFixed(_) => {
-                // Polymorphic extern: unusual but accepted; ABI defaults dropped.
-                programmer_decl.clone()
-            }
-            DeclaredEffects::Explicit(prog_set) => {
-                let mut merged = abi_defaults;
-                for te in &prog_set.effects {
-                    merged.add(te.effect.clone(), te.origin.clone());
-                }
-                DeclaredEffects::Explicit(merged)
-            }
-            // No `with` clause and not `pure`: the foreign body is invisible,
-            // so it has every effect (design.md § 15, "An `extern` function
-            // with neither has every effect"; core-semantics.md § 12). Before
-            // B-2026-11-14-33 it had only the ABI defaults, `blocks`, so
-            // `getpid()` passed in a `with reads(Env)` body and in a
-            // `#[no_effect(allocates(Heap))]` one. `@noblock` still takes
-            // `blocks` away, as it does from the defaults.
-            DeclaredEffects::None if !e.is_pure => {
-                let mut every = super::every_effect_set(EffectOrigin::Direct(builtin_span));
-                if has_noblock {
-                    every
-                        .effects
-                        .retain(|te| te.effect.verb != EffectVerbKind::Blocks);
-                }
-                for te in abi_defaults.effects {
-                    every.add(te.effect, te.origin);
-                }
-                DeclaredEffects::Explicit(every)
-            }
-            DeclaredEffects::None => {
-                if abi_defaults.is_empty() {
-                    DeclaredEffects::None
-                } else {
-                    DeclaredEffects::Explicit(abi_defaults)
-                }
-            }
+            // No `with` clause and not `pure`: the foreign body is
+            // invisible, so it has every effect (design.md § 15;
+            // core-semantics.md § 12, B-2026-11-14-33).
+            DeclaredEffects::None if !e.is_pure => DeclaredEffects::Explicit(
+                super::every_effect_set(EffectOrigin::Direct(builtin_span)),
+            ),
+            // A clause, or `pure`: exactly what it says.
+            _ => programmer_decl.clone(),
         };
 
-        // What the declaration itself states, ABI defaults included: what
-        // the profile check and the linter hints read. With no clause that
-        // is only the defaults, so the hints still say what to declare.
-        let stated_decl = if e.effects.is_none() && !e.is_pure && !abi_defaults_kept.is_empty() {
-            DeclaredEffects::Explicit(abi_defaults_kept)
+        let stated_decl = if e.effects.is_none() && !e.is_pure && !abi_defaults.is_empty() {
+            DeclaredEffects::Explicit(abi_defaults)
         } else if e.effects.is_none() && !e.is_pure {
             DeclaredEffects::None
         } else {
@@ -165,8 +116,8 @@ impl<'a> super::EffectChecker<'a> {
         self.declared_effects.insert(sym, final_decl);
         self.function_visibility.insert(sym, true);
         self.function_spans.insert(sym, e.span);
-        // Seed inferred_effects from the merged set so callers accumulate
-        // the correct leaf effects (ABI defaults + programmer annotations).
+        // Seed inferred_effects from the declared set so callers accumulate
+        // its leaf effects.
         if let Some(DeclaredEffects::Explicit(ref set)) = self.declared_effects.get(&sym) {
             self.inferred_effects.insert(sym, set.clone());
         } else {
@@ -239,7 +190,7 @@ impl<'a> super::EffectChecker<'a> {
             self.errors.push(EffectError {
                 message: format!(
                     "FFI lint: '{}' is commonly blocking; consider adding `blocks` to its \
-                     effect list (or `@noblock` to confirm it is non-blocking in this context)",
+                     effect list",
                     symbol
                 ),
                 span: *span,

@@ -1,6 +1,6 @@
 // mini_pyjwt: PyJWT 2.10.1 (jwt.encode / decode / decode_complete,
-// get_unverified_header, PyJWS for raw and detached payloads, PyJWK and
-// PyJWKSet, HMACAlgorithm's JWK conversion) as it runs without the
+// get_unverified_header, PyJws for raw and detached payloads, PyJwk and
+// PyJwkSet, HMACAlgorithm's JWK conversion) as it runs without the
 // cryptography package, so with HMAC (HS256/384/512) and "none":
 // - the token shape and its errors: the three segments, base64url as
 //   binascii's lenient decoder reads it, the header and payload loaded by
@@ -1481,7 +1481,7 @@ fn requires_cryptography(name: ref J) -> bool {
 enum Key {
     Text(String),
     Bytes(Vec[u8]),
-    Jwk(PyJWK),
+    Jwk(PyJwk),
     Other(J),
 }
 
@@ -1682,14 +1682,14 @@ fn no_get(v: ref J) -> Exc {
 // ------------------------------------------------------------ JWK
 
 #[derive(Clone)]
-struct PyJWK {
+struct PyJwk {
     data: J,
     algorithm_name: String,
     alg: Alg,
     key: Vec[u8],
 }
 
-impl PyJWK {
+impl PyJwk {
     fn key_type(ref self) -> J {
         j_get_or_null(self.data, "kty")
     }
@@ -1707,9 +1707,9 @@ fn eq_str(v: ref J, text: Str) -> bool {
     py_eq(v, jstr(text))
 }
 
-// PyJWK(jwk_data, algorithm): the algorithm is the one given, else the
+// PyJwk(jwk_data, algorithm): the algorithm is the one given, else the
 // key's "alg", else one picked from its kty and crv.
-fn new_jwk(data: ref J, algorithm: ref J) -> Result[PyJWK, Exc] {
+fn new_jwk(data: ref J, algorithm: ref J) -> Result[PyJwk, Exc] {
     if not is_dict(data) {
         return Err(no_get(data));
     }
@@ -1768,10 +1768,10 @@ fn new_jwk(data: ref J, algorithm: ref J) -> Result[PyJWK, Exc] {
         Alg.NoneAlg => return Err(exc("NotImplementedError", String.new())),
         Alg.Hmac(_) => hmac_from_jwk(data)?,
     };
-    Ok(PyJWK { data: data.clone(), algorithm_name: name, alg: a, key: key })
+    Ok(PyJwk { data: data.clone(), algorithm_name: name, alg: a, key: key })
 }
 
-fn jwk_from_json(text: ref String, algorithm: ref J) -> Result[PyJWK, Exc] {
+fn jwk_from_json(text: ref String, algorithm: ref J) -> Result[PyJwk, Exc] {
     let obj = loads_str(text)?;
     new_jwk(obj, algorithm)
 }
@@ -1791,13 +1791,13 @@ fn is_pyjwt_error(e: ref Exc) -> bool {
 }
 
 #[derive(Clone)]
-struct PyJWKSet {
-    keys: Vec[PyJWK],
+struct PyJwkSet {
+    keys: Vec[PyJwk],
 }
 
-// PyJWKSet(keys): keys PyJWK cannot use are skipped, except that a key
+// PyJwkSet(keys): keys PyJwk cannot use are skipped, except that a key
 // needing the cryptography package fails the whole set.
-fn new_jwk_set(keys: ref J) -> Result[PyJWKSet, Exc] {
+fn new_jwk_set(keys: ref J) -> Result[PyJwkSet, Exc] {
     if not truthy(keys) {
         return Err(exc("PyJWKSetError", "The JWK Set did not contain any keys".to_string()));
     }
@@ -1805,7 +1805,7 @@ fn new_jwk_set(keys: ref J) -> Result[PyJWKSet, Exc] {
         J.Arr(items) => items.clone(),
         _ => return Err(exc("PyJWKSetError", "Invalid JWK Set value".to_string())),
     };
-    let mut out: Vec[PyJWK] = Vec.new();
+    let mut out: Vec[PyJwk] = Vec.new();
     for k in items.iter() {
         match new_jwk(k, J.Null) {
             Ok(j) => out.push(j),
@@ -1819,10 +1819,10 @@ fn new_jwk_set(keys: ref J) -> Result[PyJWKSet, Exc] {
     if out.len() == 0 {
         return Err(exc("PyJWKSetError", "The JWK Set did not contain any usable keys. Perhaps 'cryptography' is not installed?".to_string()));
     }
-    Ok(PyJWKSet { keys: out })
+    Ok(PyJwkSet { keys: out })
 }
 
-fn jwk_set_from_dict(obj: ref J) -> Result[PyJWKSet, Exc] {
+fn jwk_set_from_dict(obj: ref J) -> Result[PyJwkSet, Exc] {
     if not is_dict(obj) {
         return Err(no_get(obj));
     }
@@ -1833,13 +1833,13 @@ fn jwk_set_from_dict(obj: ref J) -> Result[PyJWKSet, Exc] {
     new_jwk_set(keys)
 }
 
-fn jwk_set_from_json(text: ref String) -> Result[PyJWKSet, Exc] {
+fn jwk_set_from_json(text: ref String) -> Result[PyJwkSet, Exc] {
     let obj = loads_str(text)?;
     jwk_set_from_dict(obj)
 }
 
-impl PyJWKSet {
-    fn find(ref self, kid: ref J) -> Result[PyJWK, Exc] {
+impl PyJwkSet {
+    fn find(ref self, kid: ref J) -> Result[PyJwk, Exc] {
         for k in self.keys.iter() {
             if py_eq(k.key_id(), kid) {
                 return Ok(k.clone());
@@ -1852,19 +1852,19 @@ impl PyJWKSet {
 // ------------------------------------------------------------ JWS
 
 #[derive(Clone)]
-struct PyJWS {
+struct PyJws {
     valid: Vec[String],
 }
 
-fn default_jws() -> PyJWS {
+fn default_jws() -> PyJws {
     let mut v: Vec[String] = Vec.new();
     for n in ["none", "HS256", "HS384", "HS512"] {
         v.push(n.to_string());
     }
-    PyJWS { valid: v }
+    PyJws { valid: v }
 }
 
-impl PyJWS {
+impl PyJws {
     // get_algorithm_by_name: the algorithm has to be one PyJWT has and one
     // this instance allows.
     fn algorithm_by_name(ref self, name: ref J) -> Result[Alg, Exc] {
@@ -1903,8 +1903,8 @@ fn is_false(v: ref J) -> bool {
     }
 }
 
-// PyJWS.encode
-fn jws_encode(jws: ref PyJWS, payload: ref Vec[u8], key: ref Key, algorithm: ref J, headers: ref J,
+// PyJws.encode
+fn jws_encode(jws: ref PyJws, payload: ref Vec[u8], key: ref Key, algorithm: ref J, headers: ref J,
               detached_arg: bool, sort_headers: bool) -> Result[String, Exc] {
     let mut detached = detached_arg;
     let mut alg = if is_null(algorithm) {
@@ -2011,7 +2011,7 @@ fn find_dot(b: ref Vec[u8]) -> i64 {
     -1
 }
 
-// PyJWS._load: three base64url segments, the first a JSON object.
+// PyJws._load: three base64url segments, the first a JSON object.
 fn jws_load(token: ref Token) -> Result[Loaded, Exc] {
     let jwt = match token {
         Token.Text(t) => str_bytes(t),
@@ -2062,8 +2062,8 @@ fn invalid_alg(msg: Str) -> Exc {
     exc("InvalidAlgorithmError", msg.to_string())
 }
 
-// PyJWS._verify_signature
-fn verify_signature(jws: ref PyJWS, signing_input: ref Vec[u8], header: ref J, signature: ref Vec[u8], key: ref Key,
+// PyJws._verify_signature
+fn verify_signature(jws: ref PyJws, signing_input: ref Vec[u8], header: ref J, signature: ref Vec[u8], key: ref Key,
                     algorithms_arg: ref J) -> Result[(), Exc] {
     let mut algorithms = algorithms_arg.clone();
     if is_null(algorithms) {
@@ -2113,8 +2113,8 @@ struct Decoded {
     signature: Vec[u8],
 }
 
-// PyJWS.decode_complete
-fn jws_decode_complete(jws: ref PyJWS, token: ref Token, key: ref Key, algorithms: ref J, options: ref J,
+// PyJws.decode_complete
+fn jws_decode_complete(jws: ref PyJws, token: ref Token, key: ref Key, algorithms: ref J, options: ref J,
                        detached: ref Option[Vec[u8]]) -> Result[Decoded, Exc] {
     let mut verify_sig = true;
     if let Some(v) = j_get(options, "verify_signature") {
@@ -2212,7 +2212,7 @@ fn new_decoder(options: ref J) -> Decoder {
 }
 
 impl Decoder {
-    // PyJWT.decode_complete: the header and signature as PyJWS gives them,
+    // PyJWT.decode_complete: the header and signature as PyJws gives them,
     // and the payload loaded and its claims checked.
     fn decode_complete(ref self, token: ref Token, key: ref Key, a: ref DecodeArgs, now: f64) -> Result[(J, J, Vec[u8]), Exc] {
         let mut options = if is_dict(a.options) { a.options.clone() } else { J.Obj(Vec.new()) };
@@ -2652,7 +2652,7 @@ fn join(parts: ref Vec[String], sep: Str) -> String {
     out
 }
 
-fn jws_of(op: ref J) -> PyJWS {
+fn jws_of(op: ref J) -> PyJws {
     if let Some(J.Arr(items)) = j_get(op, "allowed") {
         let mut valid: Vec[String] = Vec.new();
         for it in items.iter() {
@@ -2661,7 +2661,7 @@ fn jws_of(op: ref J) -> PyJWS {
                 valid.push(n);
             }
         }
-        return PyJWS { valid: valid };
+        return PyJws { valid: valid };
     }
     default_jws()
 }
@@ -2960,7 +2960,7 @@ struct Route {
 }
 
 struct Gateway {
-    keyset: Option[PyJWKSet],
+    keyset: Option[PyJwkSet],
     routes: Vec[Route],
     issuer: J,
     leeway: f64,

@@ -1,5 +1,5 @@
 fn main() {
-let mut v = Vec[1, 2, 3];
+let mut v = [1, 2, 3];
 let mut push5 = || { v.push(5); };
 push5();
 push5();

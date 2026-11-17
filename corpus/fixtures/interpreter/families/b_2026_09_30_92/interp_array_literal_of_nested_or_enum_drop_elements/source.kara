@@ -2,7 +2,7 @@ struct W1 { v: i64, s: String }
 impl Drop for W1 { fn drop(mut ref self) { println(f"dW{self.v}") } }
 enum E { A(W1), B }
 fn mk(n: i64) -> W1 { return W1 { v: n, s: f"heap-string-longer-than-sso-{n}" } }
-fn mka() -> Array[E, 2] { return Array[E.A(mk(7)), E.B] }
+fn mka() -> Array[E, 2] { return [E.A(mk(7)), E.B] }
 fn nested_bound() { let a = Array[Array[mk(1)], Array[mk(2)]]; println(f"a{a[1][0].v}") }
 fn nested_discard() { let _ = Array[Array[mk(3)], Array[mk(4)]]; println("b") }
 fn nested_stmt() { Array[Array[mk(5)], Array[mk(6)]]; println("c") }

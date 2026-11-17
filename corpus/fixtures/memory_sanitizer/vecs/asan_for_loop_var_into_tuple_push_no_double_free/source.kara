@@ -7,7 +7,7 @@ fn wrap_param(s: own String, k: i64) -> Vec[(i64, String)] {
 fn main() {
     let mut round: i64 = 0;
     while round < 40 {
-        let w: Vec[String] = Vec[
+        let w: Vec[String] = [
             "alpha-loop-element-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
             "bravo-loop-element-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
             "charlie-loop-element-payload-cccccccccccccccccc".to_string()
@@ -19,7 +19,7 @@ fn main() {
         let mut b: Vec[(String, i64)] = Vec.new();
         for y in w.iter() { b.push((y.clone(), 9)); }
         let pb = b[0].clone();
-        let owned: Vec[String] = Vec[
+        let owned: Vec[String] = [
             "delta-owned-element-payload-dddddddddddddddddddd".to_string(),
             "echo-owned-element-payload-eeeeeeeeeeeeeeeeeeeee".to_string()
         ];

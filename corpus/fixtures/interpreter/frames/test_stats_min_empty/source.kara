@@ -1,5 +1,5 @@
 fn main() {
-let xs: Vec[f64] = Vec[0.0_f64];
+let xs: Vec[f64] = [0.0_f64];
 let ys = xs[1..];
 match Stats.min(ys) {
 Some(v) => println(v),

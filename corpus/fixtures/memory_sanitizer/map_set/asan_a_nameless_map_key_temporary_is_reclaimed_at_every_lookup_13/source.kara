@@ -1,4 +1,4 @@
-fn mki20(n: i64) -> Array[i64, 2] { return Array[n, n + 1]; }
+fn mki20(n: i64) -> Array[i64, 2] { return [n, n + 1]; }
 fn main() {
     let mut m: Map[Array[i64, 2], i64] = Map.new();
     m.insert(mki20(0), 7);

@@ -1,9 +1,5 @@
 
 struct Body { x: f64, y: f64, hp: i64 }
-layout bodies: Vec[Body] {
-    group physics { x, y }
-    group combat { hp }
-}
 fn main() {
     let mut sum = 0;
     let mut k = 0;

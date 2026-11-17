@@ -1,6 +1,5 @@
 
 struct E { x: f64, y: f64 }
-layout grid: Vec[E] { group g1 { x } group g2 { y } }
 fn main() with panics {
     let mut grid: Vec[E] = Vec.new();
     grid.push(E { x: 0.0, y: 0.0 });

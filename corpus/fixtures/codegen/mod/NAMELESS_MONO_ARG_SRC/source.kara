@@ -7,14 +7,14 @@ impl H {
 fn ident[T](x: own T) -> T { return x }
 
 fn main() {
-    let a2: Array[i64, 2] = Array[3, 4];
-    let a3: Array[i64, 3] = Array[7, 8, 9];
+    let a2: Array[i64, 2] = [3, 4];
+    let a3: Array[i64, 3] = [7, 8, 9];
     let r2: Array[i64, 2] = ident(a2);
     let r3: Array[i64, 3] = ident(a3);
     println(f"len {r2[1]} {r3[2]}");
 
-    let ai: Array[i64, 2] = Array[1, 2];
-    let asx: Array[String, 2] = Array["a", "b"];
+    let ai: Array[i64, 2] = [1, 2];
+    let asx: Array[String, 2] = ["a", "b"];
     let ri: Array[i64, 2] = ident(ai);
     let rs: Array[String, 2] = ident(asx);
     println(f"elem {ri[0]} {rs[1]}");

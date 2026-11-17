@@ -1,9 +1,9 @@
 
 fn mk() -> Vec[String] {
-    return Vec["redxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string(), "grnyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy".to_string()];
+    return ["redxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string(), "grnyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy".to_string()];
 }
 fn nums() -> Vec[i64] {
-    return Vec[10i64, 20i64, 30i64];
+    return [10i64, 20i64, 30i64];
 }
 fn main() {
     let he: Vec[(i64, String)] = mk().iter().enumerate().collect();

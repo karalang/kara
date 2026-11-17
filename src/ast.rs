@@ -807,6 +807,29 @@ pub const OPEN_RANGE_MIN: &str = "\u{1}MIN\u{1}";
 /// type's `MAX` (kata 1099).
 pub const OPEN_RANGE_MAX: &str = "\u{1}MAX\u{1}";
 
+/// One entry of [`Program::acronym_type_names`].
+#[derive(Debug, Clone)]
+pub struct AcronymName {
+    pub span: crate::token::Span,
+    pub name: String,
+    pub words: String,
+    pub rename: Option<Vec<crate::resolver::TextEdit>>,
+}
+
+/// The rewrite of one prefix collection literal
+/// ([`Program::prefix_collection_literals`]).
+#[derive(Debug, Clone)]
+pub struct PrefixLiteralFix {
+    /// `Vec`, `Array`, `Set`, `Map`, `VecDeque` or `SortedMap`.
+    pub type_name: String,
+    /// The rewrite that means the same in any context: `[a, b]` for
+    /// `Vec[a, b]`, `Set.from([a, b])`, `Vec.filled(n, v)`, `Map.new()`.
+    pub fix: Option<crate::resolver::TextEdit>,
+    /// The bare literal (`[a, b]`, `[k: v]`), which builds this type only
+    /// where it is the expected type: used when the checker sees one.
+    pub typed_fix: Option<crate::resolver::TextEdit>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
@@ -895,6 +918,20 @@ pub struct Program {
     /// the PARSER, which desugars the literal to an ordinary `Vec` one.
     pub vec_macro_literals:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
+    /// Prefix collection literals (`Vec[a, b]`, `Set[a]`, `Map[k: v]`,
+    /// `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), keyed by the
+    /// literal's span: design.md § Collection literals has no prefix form,
+    /// so they are deprecated in 0.8.x (B-2026-11-16-255) and the type
+    /// checker warns on each with the parser's rewrite. Set by the PARSER.
+    pub prefix_collection_literals:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, PrefixLiteralFix>,
+    /// Type-class names declared with an acronym in capitals (design.md §3
+    /// CN-4, `HTTPClient`), each with its name's span, the CN-4 spelling
+    /// (`HttpClient`) and the rename at every use of the name in the file,
+    /// `None` where an f-string's hole names it (its text is out of the
+    /// token edits' reach). Set by the PARSER; the type checker reports each
+    /// as `acronym_case` (B-2026-11-16-260).
+    pub acronym_type_names: Vec<AcronymName>,
     /// `///` runs that document nothing (design.md §3 Doc comments: a run
     /// attaches to the item directly after it, "otherwise the run is
     /// discarded with a warning"), each with why: a statement, an `impl`

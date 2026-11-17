@@ -1,7 +1,7 @@
 fn mk_rows() -> Vec[Vec[i64]] {
     let mut v: Vec[Vec[i64]] = Vec.new();
-    v.push(Vec[1, 2, 3]);
-    v.push(Vec[4, 5]);
+    v.push([1, 2, 3]);
+    v.push([4, 5]);
     v
 }
 fn main() {

@@ -2034,11 +2034,11 @@ fn pystr(t: Str) -> Val {
 }
 
 fn pychar(c: i64) -> Val {
-    Val.Str(Vec[c])
+    Val.Str([c])
 }
 
 fn tuple2(a: Val, b: Val) -> Val {
-    Val.Tuple(Vec[a, b])
+    Val.Tuple([a, b])
 }
 
 fn text_of(v: ref Val) -> Vec[i64] {
@@ -2517,7 +2517,7 @@ impl Res {
     }
 
     fn failure(index: i64, expected: own String) -> Res {
-        Res { status: false, index: -1, value: Val.Nil, furthest: index, expected: Vec[expected] }
+        Res { status: false, index: -1, value: Val.Nil, furthest: index, expected: [expected] }
     }
 
     // the furthest failure of self and other
@@ -2544,7 +2544,7 @@ impl Res {
     // the Result object itself as a value, as should_fail produces it
     fn as_val(self) -> Val {
         let set: Vec[Val] = self.expected.iter().map(|e| pystr(e)).collect();
-        Val.Record("Result".to_string(), Vec[
+        Val.Record("Result".to_string(), [
             ("status".to_string(), Val.Bool(self.status)),
             ("index".to_string(), Val.Int(self.index)),
             ("value".to_string(), self.value),
@@ -2711,11 +2711,11 @@ impl Parser {
     }
 
     fn then(self, other: Parser) -> Parser {
-        seq(Vec[self, other]).combine(|r| r[1])
+        seq([self, other]).combine(|r| r[1])
     }
 
     fn skip(self, other: Parser) -> Parser {
-        seq(Vec[self, other]).combine(|r| r[0])
+        seq([self, other]).combine(|r| r[0])
     }
 
     fn result(self, value: Val) -> Parser {
@@ -2847,7 +2847,7 @@ impl Parser {
             let start = g.take(line_info())?;
             let body = g.take(me)?;
             let end = g.take(line_info())?;
-            Some(Out.Value(Val.Tuple(Vec[start, body, end])))
+            Some(Out.Value(Val.Tuple([start, body, end])))
         })
     }
 
@@ -2872,7 +2872,7 @@ impl Parser {
 impl Add for Parser {
     type Output = Parser;
     fn add(self, other: Parser) -> Parser {
-        seq(Vec[self, other]).combine(|r| py_add(r[0], r[1]))
+        seq([self, other]).combine(|r| py_add(r[0], r[1]))
     }
 }
 
@@ -2893,7 +2893,7 @@ impl Mul[Range[i64]] for Parser {
 impl BitOr for Parser {
     type Output = Parser;
     fn bitor(self, other: Parser) -> Parser {
-        alt(Vec[self, other])
+        alt([self, other])
     }
 }
 
@@ -3346,7 +3346,7 @@ fn record(name: Str, fields: ref Vec[Str], kwargs: ref Vec[(String, Val)]) -> Va
 }
 
 fn record1(name: Str, field: Str, v: Val) -> Val {
-    Val.Record(name.to_string(), Vec[(field.to_string(), v)])
+    Val.Record(name.to_string(), [(field.to_string(), v)])
 }
 
 fn enum_class(name: Str, members: ref Vec[(Str, Val)]) -> EnumClass {
@@ -3354,15 +3354,15 @@ fn enum_class(name: Str, members: ref Vec[(Str, Val)]) -> EnumClass {
 }
 
 fn pet() -> EnumClass {
-    enum_class("Pet", Vec[("CAT", pystr("cat")), ("DOG", pystr("dog")), ("CATERPILLAR", pystr("caterpillar"))])
+    enum_class("Pet", [("CAT", pystr("cat")), ("DOG", pystr("dog")), ("CATERPILLAR", pystr("caterpillar"))])
 }
 
 fn position() -> EnumClass {
-    enum_class("Position", Vec[("FIRST", Val.Int(1)), ("SECOND", Val.Int(2)), ("TWELFTH", Val.Int(12))])
+    enum_class("Position", [("FIRST", Val.Int(1)), ("SECOND", Val.Int(2)), ("TWELFTH", Val.Int(12))])
 }
 
 fn operator_enum() -> EnumClass {
-    enum_class("Operator", Vec[("EQ", pystr("=")), ("LT", pystr("<")), ("GT", pystr(">")), ("LTE", pystr("<=")), ("GTE", pystr(">="))])
+    enum_class("Operator", [("EQ", pystr("=")), ("LT", pystr("<")), ("GT", pystr(">")), ("LTE", pystr("<=")), ("GTE", pystr(">="))])
 }
 
 fn month_enum() -> EnumClass {
@@ -3376,7 +3376,7 @@ fn month_enum() -> EnumClass {
 }
 
 fn op_enum() -> EnumClass {
-    enum_class("Op", Vec[("GE", pystr(">=")), ("LE", pystr("<=")), ("GT", pystr(">")), ("LT", pystr("<")), ("EQ", pystr("=")), ("CARET", pystr("^")), ("TILDE", pystr("~"))])
+    enum_class("Op", [("GE", pystr(">=")), ("LE", pystr("<=")), ("GT", pystr(">")), ("LT", pystr("<")), ("EQ", pystr("=")), ("CARET", pystr("^")), ("TILDE", pystr("~"))])
 }
 
 fn start() -> Val {
@@ -3426,11 +3426,11 @@ fn json_grammar() -> Grammar {
             }));
     let quoted = (string("\"") >> (string_part | string_esc).many().concat() << string("\"")) << ws;
     let json_value = forward_declaration();
-    let object_pair = seq(Vec[quoted << colon, json_value]).map(|v| to_tuple(v));
+    let object_pair = seq([quoted << colon, json_value]).map(|v| to_tuple(v));
     let json_object = lbrace >> object_pair.sep_by(comma).map(|v| to_dict(v)) << rbrace;
     let array = lbrack >> json_value.sep_by(comma) << rbrack;
     become_or_panic(json_value, quoted | number | json_object | array | truth | falsity | null);
-    recursive(ws >> json_value, Vec[json_value])
+    recursive(ws >> json_value, [json_value])
 }
 
 // tests/test_sexpr.py. `expr` is a forward declaration here, since a
@@ -3456,10 +3456,10 @@ fn sexpr_grammar() -> Grammar {
     let quote = generate(|g| {
         g.take(string("'"))?;
         let e = g.take(expr)?;
-        Some(Out.Value(Val.List(Vec[pystr("quote"), e])))
+        Some(Out.Value(Val.List([pystr("quote"), e])))
     });
     become_or_panic(expr, form | quote | atom);
-    recursive(ignore >> expr.many(), Vec[expr])
+    recursive(ignore >> expr.many(), [expr])
 }
 
 // examples/sql_select.py
@@ -3476,31 +3476,31 @@ fn select_grammar() -> Grammar {
     let padding = regex("\\s*");
     let column_expr = field | string_literal | number_literal;
     let operator = from_enum(operator_enum(), noop());
-    let comparison = seq_kw(Vec[
+    let comparison = seq_kw([
         ("left", column_expr << padding),
         ("operator", operator),
         ("right", padding >> column_expr),
-    ]).combine_dict(|kw| record("Comparison", Vec["left", "operator", "right"], kw));
+    ]).combine_dict(|kw| record("Comparison", ["left", "operator", "right"], kw));
     let select = string("SELECT");
     let from = string("FROM");
     let where_ = string("WHERE");
-    plain(seq_kw(Vec[
+    plain(seq_kw([
         ("_select", select + space),
         ("columns", column_expr.sep_by_range(padding + string(",") + padding, 1, INF)),
         ("_from", space + from + space),
         ("table", table),
         ("where", (space >> where_ >> space >> comparison).optional()),
         ("_end", padding + string(";")),
-    ]).combine_dict(|kw| record("Select", Vec["columns", "table", "where"], kw)))
+    ]).combine_dict(|kw| record("Select", ["columns", "table", "where"], kw)))
 }
 
 // examples/simple_logo_lexer.py
 fn logo_lexer() -> Grammar {
-    let command = string_from(Vec["fd", "bk", "rt", "lt"], noop());
+    let command = string_from(["fd", "bk", "rt", "lt"], noop());
     let number = regex("[0-9]+").map(|v| int_of(v));
     let optional_whitespace = regex("\\s*");
     let eol = string("\n");
-    let line = seq(Vec[
+    let line = seq([
         optional_whitespace >> command,
         whitespace() >> number,
         (eof() | eol | (whitespace() >> eol)).result(pystr("\n")),
@@ -3520,7 +3520,7 @@ fn logo_lexer() -> Grammar {
 // examples/simple_logo_parser.py
 fn logo_program() -> Grammar {
     let statement = generate(|g| {
-        let cmd_name = g.take(test_item(|i| py_in(i, Vec[pystr("fd"), pystr("bk"), pystr("rt"), pystr("lt")]), "command"))?;
+        let cmd_name = g.take(test_item(|i| py_in(i, [pystr("fd"), pystr("bk"), pystr("rt"), pystr("lt")]), "command"))?;
         let parameter = g.take(test_item(|i| match i {
             Val.Int(_) => true,
             _ => false,
@@ -3528,7 +3528,7 @@ fn logo_program() -> Grammar {
         g.take(match_item(pystr("\n")))?;
         let name = to_string(text_of(cmd_name));
         let class = if name == "fd" { "Forward" } else if name == "bk" { "Backward" } else if name == "rt" { "Right" } else { "Left" };
-        Some(Out.Value(Val.Call(class.to_string(), Vec[parameter])))
+        Some(Out.Value(Val.Call(class.to_string(), [parameter])))
     });
     plain(statement.many())
 }
@@ -3537,7 +3537,7 @@ fn logo_program() -> Grammar {
 fn eval_lexer() -> Grammar {
     let ws = regex("\\s*");
     let integer = digit().at_least(1).concat().map(|v| int_of(v));
-    let float_ = (digit().many() + string(".").result(Val.List(Vec[pystr(".")])) + digit().many()).concat().map(|v| float_of(v));
+    let float_ = (digit().many() + string(".").result(Val.List([pystr(".")])) + digit().many()).concat().map(|v| float_of(v));
     plain(ws >> ((float_ | integer | regex("[()*/+-]")) << ws).many())
 }
 
@@ -3595,7 +3595,7 @@ fn eval_tokens() -> Grammar {
         Some(Out.Value(res))
     });
     become_or_panic(expr, additive);
-    recursive(expr, Vec[expr])
+    recursive(expr, [expr])
 }
 
 // ------------------------------------------------------------ real-world parsers
@@ -3614,17 +3614,17 @@ fn ini_grammar() -> Grammar {
     let quoted = string("\"") >> regex("[^\"\\r\\n]*") << string("\"");
     let bare = regex("[^\\r\\n#;]*").map(|s| Val.Str(rstrip(text_of(s), "")));
     let tail = regex("[ \\t]*([#;][^\\n]*)?") << eol;
-    let setting = seq(Vec[hspace >> name << hspace << char_from("=:") << hspace, (quoted | bare) << tail])
+    let setting = seq([hspace >> name << hspace << char_from("=:") << hspace, (quoted | bare) << tail])
         .mark()
         .map(|m| {
             let start = at(m, 0);
             let kv = at(m, 1);
-            Val.Tuple(Vec[arith("+", at(start, 0), Val.Int(1)), at(kv, 0), at(kv, 1)])
+            Val.Tuple([arith("+", at(start, 0), Val.Int(1)), at(kv, 0), at(kv, 1)])
         });
     let body = (setting << skip).many();
-    let sect = seq(Vec[section << skip, body]);
-    plain(seq(Vec[skip >> body, sect.many()]).combine(|r| {
-        let mut pairs: Vec[Val] = Vec[tuple2(pystr(""), r[0])];
+    let sect = seq([section << skip, body]);
+    plain(seq([skip >> body, sect.many()]).combine(|r| {
+        let mut pairs: Vec[Val] = [tuple2(pystr(""), r[0])];
         for s in elems(r[1]) {
             pairs.push(s);
         }
@@ -3638,20 +3638,20 @@ fn access_log_grammar() -> Grammar {
     let field = regex("[^ ]+");
     let quoted = string("\"") >> regex("([^\"\\\\]|\\\\.)*") << string("\"");
     let month = from_enum(month_enum(), noop());
-    let when = seq(Vec[
+    let when = seq([
         string("[") >> regex("[0-9]{2}").map(|v| int_of(v)),
         string("/") >> month,
         string("/") >> regex("[0-9]{4}").map(|v| int_of(v)),
         string(":") >> regex("[0-9]{2}:[0-9]{2}:[0-9]{2}"),
         sp >> regex("[+-][0-9]{4}") << string("]"),
     ]).map(|v| to_tuple(v));
-    let request = seq_kw(Vec[
+    let request = seq_kw([
         ("method", regex("[A-Z]+") << sp),
         ("target", regex("[^ ]+") << sp),
         ("version", string("HTTP/") >> regex("[0-9]\\.[0-9]")),
-    ]) | regex("[^\"]*").map(|s| Val.Dict(Vec[(pystr("raw"), s)]));
+    ]) | regex("[^\"]*").map(|s| Val.Dict([(pystr("raw"), s)]));
     let size = string("-").result(Val.Int(0)) | regex("[0-9]+").map(|v| int_of(v));
-    plain(seq_kw(Vec[
+    plain(seq_kw([
         ("addr", field << sp),
         ("ident", field << sp),
         ("user", (string("-").result(Val.Nil) | field) << sp),
@@ -3676,7 +3676,7 @@ fn csv_grammar() -> Grammar {
     // a final line break would read as one more record holding one empty field
     plain((record.sep_by(newline) << eof()).map(|rows| {
         let rs = elems(rows);
-        if rs.len() > 1 and py_eq(rs[rs.len() - 1], Val.List(Vec[pystr("")])) {
+        if rs.len() > 1 and py_eq(rs[rs.len() - 1], Val.List([pystr("")])) {
             Val.List(rs[0..rs.len() - 1].to_vec())
         } else {
             rows
@@ -3692,17 +3692,17 @@ fn http_request_grammar() -> Grammar {
     let token = regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+");
     let method = token.desc("a method");
     let target = regex("[^ \\r\\n]+").desc("a request target");
-    let version = string("HTTP/") >> seq(Vec[regex("[0-9]").map(|v| int_of(v)) << string("."), regex("[0-9]").map(|v| int_of(v))]).map(|v| to_tuple(v));
+    let version = string("HTTP/") >> seq([regex("[0-9]").map(|v| int_of(v)) << string("."), regex("[0-9]").map(|v| int_of(v))]).map(|v| to_tuple(v));
     let ows = regex("[ \\t]*");
     let value = regex("[^\\r\\n]*").map(|s| Val.Str(rstrip(text_of(s), " \t")));
-    let header = seq(Vec[token.map(|s| Val.Str(lower_text(text_of(s)))) << string(":") << ows, value << crlf]).map(|v| to_tuple(v));
-    plain(seq_kw(Vec[
+    let header = seq([token.map(|s| Val.Str(lower_text(text_of(s)))) << string(":") << ows, value << crlf]).map(|v| to_tuple(v));
+    plain(seq_kw([
         ("method", method << string(" ")),
         ("target", target << string(" ")),
         ("version", version << crlf),
         ("headers", header.many()),
         ("_end", crlf),
-    ]).combine_dict(|kw| record("Request", Vec["method", "target", "version", "headers"], kw)))
+    ]).combine_dict(|kw| record("Request", ["method", "target", "version", "headers"], kw)))
 }
 
 // npm-style version ranges: comparators joined by spaces, sets joined by
@@ -3711,18 +3711,18 @@ fn semver_range_grammar() -> Grammar {
     let num = regex("0|[1-9][0-9]*").map(|v| int_of(v));
     let part = num | char_from("xX*").result(pystr("x"));
     let pre = (string("-") >> regex("[0-9A-Za-z.-]+")).optional();
-    let version = seq(Vec[
+    let version = seq([
         part,
         (string(".") >> part).optional_or(pystr("x")),
         (string(".") >> part).optional_or(pystr("x")),
     ]).map(|v| to_tuple(v));
-    let full = seq(Vec[version, pre]).combine(|r| {
-        if truthy(r[1]) { py_add(r[0], Val.Tuple(Vec[r[1]])) } else { py_add(r[0], Val.Tuple(Vec.new())) }
+    let full = seq([version, pre]).combine(|r| {
+        if truthy(r[1]) { py_add(r[0], Val.Tuple([r[1]])) } else { py_add(r[0], Val.Tuple(Vec.new())) }
     });
     let ops = op_enum();
     let op = from_enum(ops, noop());
-    let comparator = seq(Vec[op.optional_or(member(ops, "EQ")) << regex("\\s*"), full]).map(|v| to_tuple(v));
-    let hyphen = seq(Vec[full << regex("\\s+-\\s+"), full]).combine(|r| Val.Tuple(Vec[pystr("range"), r[0], r[1]]));
+    let comparator = seq([op.optional_or(member(ops, "EQ")) << regex("\\s*"), full]).map(|v| to_tuple(v));
+    let hyphen = seq([full << regex("\\s+-\\s+"), full]).combine(|r| Val.Tuple([pystr("range"), r[0], r[1]]));
     let clause = hyphen | comparator.sep_by_range(regex("\\s+"), 1, INF);
     plain(regex("\\s*") >> clause.sep_by_range(regex("\\s*\\|\\|\\s*"), 1, INF) << regex("\\s*"))
 }
@@ -3732,15 +3732,15 @@ fn query_lexer() -> Grammar {
     let ws = regex("\\s*");
     let word = regex("[A-Za-z_][A-Za-z0-9_.-]*").map(|w| {
         let up = Val.Str(upper_text(text_of(w)));
-        if py_in(up, Vec[pystr("AND"), pystr("OR"), pystr("NOT")]) {
-            Val.Tuple(Vec[up])
+        if py_in(up, [pystr("AND"), pystr("OR"), pystr("NOT")]) {
+            Val.Tuple([up])
         } else {
             tuple2(pystr("WORD"), w)
         }
     });
     let numb = regex("-?[0-9]+").map(|s| tuple2(pystr("NUM"), int_of(s)));
     let phrase = (string("\"") >> regex("[^\"]*") << string("\"")).map(|s| tuple2(pystr("PHRASE"), s));
-    let punct = string_from(Vec["(", ")", ":", ">=", "<=", ">", "<", "-"], noop()).map(|s| Val.Tuple(Vec[s]));
+    let punct = string_from(["(", ")", ":", ">=", "<=", ">", "<", "-"], noop()).map(|s| Val.Tuple([s]));
     let token = (word | numb | phrase | punct).desc("a token");
     plain(ws >> (token << ws).many() << eof())
 }
@@ -3755,11 +3755,11 @@ fn tok(kind: Str) -> Parser {
 fn query_parser() -> Grammar {
     let expr = forward_declaration();
     let value = (tok("WORD") | tok("PHRASE") | tok("NUM")).map(|t| at(t, 1));
-    let compare = seq(Vec[
+    let compare = seq([
         tok("WORD").map(|t| at(t, 1)),
         (tok(":") | tok(">=") | tok("<=") | tok(">") | tok("<")).map(|t| at(t, 0)),
         value,
-    ]).combine(|r| Val.Tuple(Vec[pystr("field"), r[0], r[1], r[2]]));
+    ]).combine(|r| Val.Tuple([pystr("field"), r[0], r[1], r[2]]));
     let term = compare | value.map(|v| tuple2(pystr("term"), v));
     let group = tok("(") >> expr << tok(")");
     let unary = generate(|g| {
@@ -3776,7 +3776,7 @@ fn query_parser() -> Grammar {
         if not truthy(rest) {
             return Some(Out.Value(first));
         }
-        Some(Out.Value(tuple2(pystr("and"), py_add(Val.List(Vec[first]), rest))))
+        Some(Out.Value(tuple2(pystr("and"), py_add(Val.List([first]), rest))))
     });
     let disj = generate(|g| {
         let first = g.take(conj)?;
@@ -3784,10 +3784,10 @@ fn query_parser() -> Grammar {
         if not truthy(rest) {
             return Some(Out.Value(first));
         }
-        Some(Out.Value(tuple2(pystr("or"), py_add(Val.List(Vec[first]), rest))))
+        Some(Out.Value(tuple2(pystr("or"), py_add(Val.List([first]), rest))))
     });
     become_or_panic(expr, disj);
-    recursive(expr, Vec[expr])
+    recursive(expr, [expr])
 }
 
 // ------------------------------------------------------------ the registry
@@ -3815,9 +3815,9 @@ fn build(name: ref String) -> Grammar {
     } else if n == "regex_name" {
         plain(regex_g("a(?P<name>[0-9])b", 0, Group.Name("name".to_string())))
     } else if n == "regex_tuple" {
-        plain(regex_g("a([0-9])b([0-9])c", 0, Group.Several(Vec[1, 2])))
+        plain(regex_g("a([0-9])b([0-9])c", 0, Group.Several([1, 2])))
     } else if n == "regex_optional_group" {
-        plain(regex_g("(\\d+)(?:\\.(\\d+))?", 0, Group.Several(Vec[1, 2])))
+        plain(regex_g("(\\d+)(?:\\.(\\d+))?", 0, Group.Several([1, 2])))
     } else if n == "regex_flags" {
         plain(regex_g("select\\s+(\\w+)", RE_I, Group.Num(1)))
     } else if n == "then" {
@@ -3830,30 +3830,30 @@ fn build(name: ref String) -> Grammar {
     } else if n == "map" {
         plain(digit().map(|v| int_of(v)))
     } else if n == "combine" {
-        plain(seq(Vec[digit(), letter()]).combine(|r| tuple2(r[0], r[1])))
+        plain(seq([digit(), letter()]).combine(|r| tuple2(r[0], r[1])))
     } else if n == "combine_dict_date" {
-        plain(seq(Vec[
+        plain(seq([
             regex("[0-9]{2}").map(|v| int_of(v)).tag(pystr("day")),
             regex("[0-9]{2}").map(|v| int_of(v)).tag(pystr("month")),
             regex("[0-9]{4}").map(|v| int_of(v)).tag(pystr("year")),
-        ]).map(|v| to_dict(v)).combine_dict(|kw| Val.Call("datetime.date".to_string(), Vec[kwarg(kw, "year"), kwarg(kw, "month"), kwarg(kw, "day")])))
+        ]).map(|v| to_dict(v)).combine_dict(|kw| Val.Call("datetime.date".to_string(), [kwarg(kw, "year"), kwarg(kw, "month"), kwarg(kw, "day")])))
     } else if n == "combine_dict_pair" {
-        plain(seq(Vec[
+        plain(seq([
             regex("[A-Z]+").tag(pystr("word")),
             regex("[0-9]+").map(|v| int_of(v)).tag(pystr("number")),
-        ]).combine_dict(|kw| record("Pair", Vec["word", "number"], kw)))
+        ]).combine_dict(|kw| record("Pair", ["word", "number"], kw)))
     } else if n == "combine_dict_none" {
-        plain(seq(Vec[
+        plain(seq([
             regex("[A-Z]+").tag(pystr("word")),
             whitespace().tag(Val.Nil),
             regex("[0-9]+").map(|v| int_of(v)).tag(pystr("number")),
-        ]).combine_dict(|kw| record("Pair", Vec["word", "number"], kw)))
+        ]).combine_dict(|kw| record("Pair", ["word", "number"], kw)))
     } else if n == "combine_dict_underscore" {
-        plain(seq(Vec[
+        plain(seq([
             regex("[A-Z]+").tag(pystr("word")),
             whitespace().tag(pystr("_whitespace")),
             regex("[0-9]+").map(|v| int_of(v)).tag(pystr("number")),
-        ]).combine_dict(|kw| record("Pair", Vec["word", "number"], kw)))
+        ]).combine_dict(|kw| record("Pair", ["word", "number"], kw)))
     } else if n == "concat" {
         plain(letter().many().concat())
     } else if n == "generate" {
@@ -3868,7 +3868,7 @@ fn build(name: ref String) -> Grammar {
     } else if n == "tag" {
         plain(letter().many().concat().tag(pystr("word")).sep_by(string(",")))
     } else if n == "tag_dict" {
-        plain(seq(Vec[letter().tag(pystr("first_letter")), letter().many().concat().tag(pystr("remainder"))]).map(|v| to_dict(v)))
+        plain(seq([letter().tag(pystr("first_letter")), letter().many().concat().tag(pystr("remainder"))]).map(|v| to_dict(v)))
     } else if n == "generate_desc" {
         plain(generate_desc("a thing", |g| {
             g.take(string("t"))?;
@@ -3909,7 +3909,7 @@ fn build(name: ref String) -> Grammar {
     } else if n == "until" {
         plain(string("s").until(string("x"), 0, INF, false))
     } else if n == "until_seq" {
-        plain(seq(Vec[string("s").until(string("x"), 0, INF, false), string("x")]))
+        plain(seq([string("s").until(string("x"), 0, INF, false), string("x")]))
     } else if n == "until_then" {
         plain(string("s").until(string("x"), 0, INF, false).then(string("x")))
     } else if n == "until_any" {
@@ -3943,27 +3943,27 @@ fn build(name: ref String) -> Grammar {
     } else if n == "alt_empty" {
         plain(alt(Vec.new()))
     } else if n == "alt" {
-        plain(alt(Vec[letter(), digit()]))
+        plain(alt([letter(), digit()]))
     } else if n == "seq_empty" {
         plain(seq(Vec.new()))
     } else if n == "seq1" {
-        plain(seq(Vec[letter()]))
+        plain(seq([letter()]))
     } else if n == "seq2" {
-        plain(seq(Vec[letter(), digit()]))
+        plain(seq([letter(), digit()]))
     } else if n == "seq_kw" {
-        plain(seq_kw(Vec[("first_name", regex("\\S+") << whitespace()), ("last_name", regex("\\S+"))]))
+        plain(seq_kw([("first_name", regex("\\S+") << whitespace()), ("last_name", regex("\\S+"))]))
     } else if n == "seq_kw_a" {
-        plain(seq_kw(Vec[("a", string("a"))]))
+        plain(seq_kw([("a", string("a"))]))
     } else if n == "ascii" {
         plain(test_char(|c| text_of(c)[0] < 128, "ascii character"))
     } else if n == "char_from" {
         plain(char_from("ab"))
     } else if n == "titles" {
-        plain(string_from(Vec["Mr", "Mr.", "Mrs", "Mrs."], noop()))
+        plain(string_from(["Mr", "Mr.", "Mrs", "Mrs."], noop()))
     } else if n == "titles_hyde" {
-        plain(string_from(Vec["Mr", "Mr.", "Mrs", "Mrs."], noop()) + string(" Hyde"))
+        plain(string_from(["Mr", "Mr.", "Mrs", "Mrs."], noop()) + string(" Hyde"))
     } else if n == "titles_lower" {
-        plain(string_from(Vec["Mr", "Mr.", "Mrs", "Mrs."], lowercase()))
+        plain(string_from(["Mr", "Mr.", "Mrs", "Mrs."], lowercase()))
     } else if n == "peek_any" {
         plain(peek(any_char()))
     } else if n == "peek_digit" {
@@ -4003,24 +4003,24 @@ fn build(name: ref String) -> Grammar {
     } else if n == "eof" {
         plain(string("a") << eof())
     } else if n == "start_stop" {
-        plain(test_item(|i| py_in(i, Vec[start(), stop()]), "START/STOP").many())
+        plain(test_item(|i| py_in(i, [start(), stop()]), "START/STOP").many())
     } else if n == "match_start" {
         plain(match_item_desc(start(), "START"))
     } else if n == "match_start_default" {
         plain(match_item(pystr("x")))
     } else if n == "bracketed" {
-        let other = test_item(|i| not py_in(i, Vec[start(), stop()]), "not START/STOP");
+        let other = test_item(|i| not py_in(i, [start(), stop()]), "not START/STOP");
         plain(match_item(start()) >> other.many() << match_item(stop()))
     } else if n == "forward" {
         let expr = forward_declaration();
         let simple = regex("[0-9]+").map(|v| int_of(v));
         let group = string("(") >> expr.sep_by(string(" ")) << string(")");
         become_or_panic(expr, simple | group);
-        recursive(expr, Vec[expr])
+        recursive(expr, [expr])
     } else if n == "forward_az" {
         let expr = forward_declaration();
         become_or_panic(expr, string("A") + expr | string("Z"));
-        recursive(expr, Vec[expr])
+        recursive(expr, [expr])
     } else if n == "forward_unset" {
         plain(forward_declaration())
     } else if n == "json" {

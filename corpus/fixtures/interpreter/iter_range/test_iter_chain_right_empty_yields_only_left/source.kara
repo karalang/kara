@@ -1,7 +1,7 @@
 
 fn main() {
     let v = [3, 4];
-    let w: Vec[i64] = Vec[];
+    let w: Vec[i64] = Vec.new();
     for x in v.iter().chain(w.iter()) {
         println(x);
     }

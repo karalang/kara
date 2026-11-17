@@ -3,7 +3,7 @@ struct Pair { x: String, y: String }
 fn main() {
     let mut round: i64 = 0;
     while round < 40 {
-        let mut v: Vec[String] = Vec[
+        let mut v: Vec[String] = [
             "index-sink-element-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
             "index-sink-element-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
             "index-sink-element-charlie-cccccccccccccccccc".to_string()

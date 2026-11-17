@@ -1,0 +1,1 @@
+ERROR at line 3: `layout particles` is not available: layout blocks are deferred (deferred.md § Layout) and not in 0.8; remove the block, which does not change what the program does

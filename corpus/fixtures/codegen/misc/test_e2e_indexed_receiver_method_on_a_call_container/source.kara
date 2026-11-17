@@ -6,7 +6,7 @@ impl Hold {
 struct Mk {}
 impl Mk {
     fn arr(ref self, n: i64) -> Array[String, 2] {
-        return Array[f"marr-{n}", f"mbrr-{n}"];
+        return [f"marr-{n}", f"mbrr-{n}"];
     }
 }
 fn pav(h: ref Hold) -> ref Vec[String] { return ref h.v; }

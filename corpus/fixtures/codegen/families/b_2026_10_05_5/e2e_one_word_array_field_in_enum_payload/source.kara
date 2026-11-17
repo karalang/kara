@@ -14,8 +14,8 @@ fn main() {
     match mk() { Some(t) => { let a = t.0; println(f"c:{a[0]} {a.len()}") }, None => {} }
     let n = Some((1, (Array[P { n: 11 }], 2.5)));
     match n { Some(t) => println(f"d:{t.1.0[0].n} {t.1.1} {t.0}"), None => {} }
-    match Some(S { a: Array[12], b: 13 }) { Some(s) => println(f"e:{s.a[0]} {s.b}"), None => {} }
-    match Some(S2 { i: I { a: Array[14] }, b: 15 }) { Some(s) => { let i = s.i; println(f"f:{i.a[0]} {s.b}") }, None => {} }
+    match Some(S { a: [12], b: 13 }) { Some(s) => println(f"e:{s.a[0]} {s.b}"), None => {} }
+    match Some(S2 { i: I { a: [14] }, b: 15 }) { Some(s) => { let i = s.i; println(f"f:{i.a[0]} {s.b}") }, None => {} }
     match E.A((Array[16], 17)) { E.A(t) => println(f"g:{t.0[0]} {t.1}"), E.B => {} }
     let mut v: Vec[Option[(Array[bool, 1], i64)]] = Vec.new();
     v.push(Some((Array[true], 18)));

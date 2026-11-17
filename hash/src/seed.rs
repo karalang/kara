@@ -111,11 +111,20 @@ fn init_once() {
 /// unparseable — an unparseable value falls back to a random seed rather than
 /// failing the process, because a mistyped env var should not make a program
 /// refuse to run, and the security posture of the fallback is the STRONGER
-/// one.
+/// one. It says so on stderr, once (the seed is read once per process): a
+/// mistyped pin used to lose the reproduction without a word
+/// (B-2026-11-16-288).
 #[cfg(all(feature = "std", not(unix)))]
 pub fn seed_override_from_env() -> Option<u64> {
-    let raw = std::env::var("KARAC_HASH_SEED").ok()?;
-    parse_seed(&raw)
+    let raw = std::env::var_os("KARAC_HASH_SEED")?;
+    let raw = raw.to_string_lossy();
+    let seed = parse_seed(&raw);
+    if seed.is_none() && !raw.trim().is_empty() {
+        let mut msg = [0u8; MALFORMED_SEED_MAX];
+        let n = malformed_seed_warning(raw.as_bytes(), &mut msg);
+        eprint!("{}", String::from_utf8_lossy(&msg[..n]));
+    }
+    seed
 }
 
 /// The override through libc's `getenv`: `std::env::var` reaches a panic,
@@ -124,7 +133,52 @@ pub fn seed_override_from_env() -> Option<u64> {
 #[cfg(all(feature = "std", unix))]
 pub fn seed_override_from_env() -> Option<u64> {
     let raw = lean::getenv(c"KARAC_HASH_SEED")?;
-    parse_seed(core::str::from_utf8(raw).ok()?)
+    let seed = core::str::from_utf8(raw).ok().and_then(parse_seed);
+    if seed.is_none() && !raw.trim_ascii().is_empty() {
+        let mut msg = [0u8; MALFORMED_SEED_MAX];
+        let n = malformed_seed_warning(raw, &mut msg);
+        lean::write_stderr(msg.get(..n).unwrap_or_default());
+    }
+    seed
+}
+
+/// The longest malformed value quoted in the warning, and the buffer the
+/// warning is built in.
+#[cfg(any(feature = "std", target_os = "wasi"))]
+const MALFORMED_SEED_QUOTE: usize = 40;
+#[cfg(any(feature = "std", target_os = "wasi"))]
+const MALFORMED_SEED_MAX: usize = 160;
+
+/// The warning for a `KARAC_HASH_SEED` value that is not a seed, written
+/// into `out` without allocating (a compiled program builds it before
+/// anything else runs); its length.
+#[cfg(any(feature = "std", target_os = "wasi"))]
+fn malformed_seed_warning(raw: &[u8], out: &mut [u8; MALFORMED_SEED_MAX]) -> usize {
+    let quoted = raw
+        .get(..raw.len().min(MALFORMED_SEED_QUOTE))
+        .unwrap_or_default();
+    let more: &[u8] = if raw.len() > MALFORMED_SEED_QUOTE {
+        b"..."
+    } else {
+        b""
+    };
+    let parts: [&[u8]; 4] = [
+        b"warning: KARAC_HASH_SEED=`",
+        quoted,
+        more,
+        b"` is not a seed (a decimal or 0x-hexadecimal u64), so this run's hash seed is \
+          random\n",
+    ];
+    // Byte by byte through `get_mut`, so no slice bound can reach a panic
+    // (a panic path links std's panic hook into every program).
+    let mut n = 0;
+    for &b in parts.iter().flat_map(|p| p.iter()) {
+        if let Some(slot) = out.get_mut(n) {
+            *slot = b;
+            n += 1;
+        }
+    }
+    n
 }
 
 /// The wasm archives build this crate without `std`, but WASI has an
@@ -133,7 +187,13 @@ pub fn seed_override_from_env() -> Option<u64> {
 #[cfg(all(not(feature = "std"), target_os = "wasi"))]
 pub fn seed_override_from_env() -> Option<u64> {
     let raw = wasi::env_var(b"KARAC_HASH_SEED")?;
-    parse_seed(core::str::from_utf8(&raw).ok()?)
+    let seed = core::str::from_utf8(&raw).ok().and_then(parse_seed);
+    if seed.is_none() && !raw.trim_ascii().is_empty() {
+        let mut msg = [0u8; MALFORMED_SEED_MAX];
+        let n = malformed_seed_warning(&raw, &mut msg);
+        wasi::write_stderr(msg.get(..n).unwrap_or_default());
+    }
+    seed
 }
 
 /// An embedded `no_std` build has no environment to read, so the override is
@@ -259,6 +319,15 @@ mod lean {
         }
     }
 
+    /// `bytes` to stderr, as far as one `write` takes them.
+    pub(super) fn write_stderr(bytes: &[u8]) {
+        extern "C" {
+            fn write(fd: i32, buf: *const u8, n: usize) -> isize;
+        }
+        // SAFETY: `bytes` is a live buffer of `bytes.len()` bytes.
+        let _ = unsafe { write(2, bytes.as_ptr(), bytes.len()) };
+    }
+
     /// The address of a fresh heap allocation, freed again.
     pub(super) fn heap_address() -> u64 {
         // SAFETY: a one-byte allocation, freed at once; only its address is
@@ -357,6 +426,25 @@ mod wasi {
         fn random_get(buf: *mut u8, len: usize) -> i32;
         fn environ_sizes_get(count: *mut usize, size: *mut usize) -> i32;
         fn environ_get(environ: *mut *mut u8, buf: *mut u8) -> i32;
+        fn fd_write(fd: i32, iovs: *const Ciovec, iovs_len: usize, nwritten: *mut usize) -> i32;
+    }
+
+    /// WASI's `ciovec`: one buffer for `fd_write`.
+    #[repr(C)]
+    struct Ciovec {
+        buf: *const u8,
+        len: usize,
+    }
+
+    /// `bytes` to stderr, as far as one `fd_write` takes them.
+    pub(super) fn write_stderr(bytes: &[u8]) {
+        let iov = Ciovec {
+            buf: bytes.as_ptr(),
+            len: bytes.len(),
+        };
+        let mut written = 0usize;
+        // SAFETY: one `ciovec` over the live `bytes`, and a writable count.
+        let _ = unsafe { fd_write(2, &iov, 1, &mut written) };
     }
 
     /// Fill `b` from `random_get`; `false` when it failed.
@@ -403,6 +491,23 @@ mod tests {
         assert_eq!(parse_seed("  7  "), Some(7));
         assert_eq!(parse_seed(""), None);
         assert_eq!(parse_seed("banana"), None);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_malformed_seed_warning_quotes_the_value() {
+        let mut out = [0u8; MALFORMED_SEED_MAX];
+        let n = malformed_seed_warning(b"abc", &mut out);
+        assert_eq!(
+            core::str::from_utf8(&out[..n]).unwrap(),
+            "warning: KARAC_HASH_SEED=`abc` is not a seed (a decimal or 0x-hexadecimal u64), \
+             so this run's hash seed is random\n"
+        );
+        let long = [b'9'; 100];
+        let n = malformed_seed_warning(&long, &mut out);
+        let text = core::str::from_utf8(&out[..n]).unwrap();
+        assert!(text.contains(&format!("`{}...`", "9".repeat(40))), "{text}");
+        assert!(text.ends_with("random\n"), "{text}");
     }
 
     /// Zero is a legal pin, not a synonym for "unset" — a harness that wants

@@ -154,3 +154,28 @@ fn wasm_hash_seed_pins_the_order_native_pins() {
     assert_eq!(run(&dir, Some("2")), native("2"));
     assert_ne!(one, run(&dir, Some("2")), "two pins, two orders");
 }
+
+/// B-2026-11-16-288 on `wasm_wasi`: a `KARAC_HASH_SEED` that is not a seed
+/// warns on stderr, as it does natively, and the run goes on with a random
+/// key.
+#[test]
+fn wasm_malformed_hash_seed_warns() {
+    let Some(dir) = built("malformed") else {
+        return;
+    };
+    let out = Command::new("node")
+        .arg("--no-warnings")
+        .arg("--no-turbo-fast-api-calls")
+        .arg(dir.0.join("run.mjs"))
+        .arg(dir.0.join("main.wasm"))
+        .env("KARAC_HASH_SEED", "abc")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "wasm run failed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: KARAC_HASH_SEED=`abc` is not a seed"),
+        "{stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).split(' ').count(), 17);
+}

@@ -337,6 +337,17 @@ pub unsafe extern "C" fn karac_mir_command(
         let e = unsafe { &*env.add(i) };
         // SAFETY: an `EnvVar`'s fields are live `String`s.
         let (k, v) = unsafe { (text(&e.key), text(&e.value)) };
+        // A name or value no environment can hold starts nothing (io.md §
+        // Running programs, B-2026-11-17-61): Rust's `Command` passed `A=B`
+        // and an empty name on, corrupted.
+        if e.op == 0 && (k.is_empty() || k.contains(['=', '\0']) || v.contains('\0')) {
+            let e = std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "an environment name is empty or holds `=` or NUL, or a value holds NUL",
+            );
+            // SAFETY: the caller's contract.
+            return unsafe { io_error_code(&e, msg) };
+        }
         match e.op {
             0 => cmd.env(k, v),
             1 => cmd.env_remove(k),
@@ -380,7 +391,7 @@ pub unsafe extern "C" fn karac_mir_command(
     if stdin_piped {
         ignore_sigpipe();
     }
-    let res = cmd.spawn().and_then(|child| {
+    let res = cmd.spawn().map_err(spawn_error).and_then(|child| {
         if output == 0 {
             #[cfg(all(feature = "net", unix))]
             nonblocking_pipes(&child)?;
@@ -400,6 +411,20 @@ pub unsafe extern "C" fn karac_mir_command(
     });
     // SAFETY: the caller's contract.
     unsafe { report(res, value, msg) }
+}
+
+/// A failed `spawn` as io.md § Running programs names it: a program the
+/// system cannot run (`ENOEXEC`) is `PermissionDenied`, and a working
+/// directory that is not a directory (`ENOTDIR`) is `NotFound`, where both
+/// were `Other` (B-2026-11-17-61).
+fn spawn_error(e: std::io::Error) -> std::io::Error {
+    // ENOEXEC and ENOTDIR are 8 and 20 on Linux and macOS alike; Windows
+    // numbers its errors otherwise.
+    match e.raw_os_error() {
+        Some(8) if cfg!(unix) => std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        Some(20) if cfg!(unix) => std::io::Error::from(std::io::ErrorKind::NotFound),
+        _ => e,
+    }
 }
 
 /// A `Child`'s methods on the child at `handle`: `wait` (op 0) and

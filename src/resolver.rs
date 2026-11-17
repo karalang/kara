@@ -754,45 +754,6 @@ pub const USER_OPERATOR_TRAITS: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolveErrorKind {
-    /// `layout_unassigned_fields` (B-2026-08-21-2 follow-up) — a `layout`
-    /// block leaves some of the struct's fields out of every `group` / `cold`
-    /// section. design.md § Layout blocks > Unassigned fields: those fields
-    /// "are collected into an implicit trailing hot group … The compiler
-    /// emits a WARNING once per layout block listing the unassigned fields —
-    /// suppress with `#[allow(layout_unassigned_fields)]` when the omission
-    /// is intentional."
-    ///
-    /// NOTE severity, never fatal: the spec documents the implicit trailing
-    /// group as the DEFINED behaviour, so a layout block that uses it is a
-    /// legal program. Emitting this as a hard `ResolveError` made every such
-    /// program fail to compile, and the attached suggestion told the user to
-    /// suppress it with an attribute that was never read.
-    LayoutUnassignedFields,
-    /// `repr_c_layout_ignored` (B-2026-08-21-2) — a `layout` block names a
-    /// struct carrying `#[repr(C)]`. design.md § Interaction with layout
-    /// blocks: "`#[repr(C)]` disables SoA transformation. A layout block on a
-    /// `#[repr(C)]` struct becomes documentation-only … The ABI layout takes
-    /// precedence." Severity is split by VISIBILITY, and only the private half
-    /// is this kind:
-    ///
-    ///   * private struct — "the compiler emits a WARNING listing which groups
-    ///     are being ignored … Suppress with `#[allow(repr_c_layout_ignored)]`
-    ///     when the layout block is intentionally kept as documentation."
-    ///   * `pub` struct — a COMPILE ERROR, because "a `pub` type may be
-    ///     consumed by FFI code that depends on the exact field order". That
-    ///     half is `ReprCLayoutOnPubStruct`, not a lint, and takes no
-    ///     suppression.
-    ///
-    /// NOTE severity for the private case, for the reason the sibling above
-    /// records: the spec calls it redundant-but-not-harmful, so the program is
-    /// legal and must still compile.
-    LayoutReprCIgnored,
-    /// The `pub` half of the rule documented on `LayoutReprCIgnored` — a
-    /// `layout` block on a `#[repr(C)]` **`pub`** struct. A hard error by
-    /// spec, and deliberately NOT the lint: `#[allow(repr_c_layout_ignored)]`
-    /// must not silence it, or the FFI contract it protects becomes
-    /// suppressible.
-    LayoutReprCOnPubStruct,
     /// `W_OPAQUE_TYPE_REDECLARED` — a second `type Foo;` in an `unsafe
     /// extern { }` block, where `Foo` is already an opaque foreign type in
     /// the same scope. design.md §15 makes it a warning, not the duplicate
@@ -1024,10 +985,7 @@ pub enum ResolveErrorKind {
 pub fn resolve_kind_is_note(kind: &ResolveErrorKind) -> bool {
     matches!(
         kind,
-        ResolveErrorKind::LayoutUnassignedFields
-            | ResolveErrorKind::LayoutReprCIgnored
-            | ResolveErrorKind::FloatInSerializedType
-            | ResolveErrorKind::OpaqueTypeRedeclared
+        ResolveErrorKind::FloatInSerializedType | ResolveErrorKind::OpaqueTypeRedeclared
     )
 }
 
@@ -1037,8 +995,7 @@ pub fn resolve_kind_is_note(kind: &ResolveErrorKind) -> bool {
 /// B-2026-08-25-24. Every kind here is lint-backed and suppressible, but both
 /// renderers labelled them by PHASE (`warning[resolve]`), and the message text
 /// does not repeat the lint name, so the warning carried no way back to the
-/// attribute that silences it — for `layout_unassigned_fields`, an attribute
-/// design.md § Layout Rules prescribes by name. The typecheck renderers had
+/// attribute that silences it. The typecheck renderers had
 /// already settled the rule: "the bracket is the actionable label", because
 /// that is what `-A <name>` takes.
 ///
@@ -1048,8 +1005,6 @@ pub fn resolve_kind_is_note(kind: &ResolveErrorKind) -> bool {
 /// phase label.
 pub fn resolve_kind_lint_name(kind: &ResolveErrorKind) -> Option<&'static str> {
     match kind {
-        ResolveErrorKind::LayoutUnassignedFields => Some("layout_unassigned_fields"),
-        ResolveErrorKind::LayoutReprCIgnored => Some("repr_c_layout_ignored"),
         ResolveErrorKind::FloatInSerializedType => Some("float_in_serialized_type"),
         _ => None,
     }
@@ -1725,8 +1680,6 @@ impl<'a> Resolver<'a> {
     pub fn resolve(mut self) -> ResolveResult {
         // Pass 1: collect all top-level declarations
         self.collect_top_level_items();
-        // Pass 1.5: validate layout blocks against collected struct definitions
-        self.validate_layouts();
         // Pass 1.6: attribute-name validation. Unknown bare-name
         // attributes (`#[no_such_thing]`) emit `E_UNKNOWN_ATTRIBUTE`;
         // multi-segment paths (`#[diagnostic::*]`, tool namespaces)

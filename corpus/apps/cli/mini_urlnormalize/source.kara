@@ -16,7 +16,7 @@
 // re-encodes to uppercase correctly.
 
 #[derive(Clone)]
-struct URLParts {
+struct UrlParts {
     scheme: String,
     userinfo: String,
     host: String,
@@ -343,7 +343,7 @@ fn scheme_colon(sp: String) -> i64 {
     c
 }
 
-fn split_url(url: String) -> URLParts {
+fn split_url(url: String) -> UrlParts {
     let hashi = index_of(url, 35);
     let mut frag = String.new();
     let mut rest = url.clone();
@@ -388,7 +388,7 @@ fn split_url(url: String) -> URLParts {
         host = hostport.substring(0, coli);
         port = hostport.substring(coli + 1, blen(hostport));
     }
-    URLParts {
+    UrlParts {
         scheme: scheme,
         userinfo: userinfo,
         host: host,
@@ -486,7 +486,7 @@ fn norm_path(path: String, scheme: String) -> String {
     pq
 }
 
-fn rebuild(p: URLParts) -> String {
+fn rebuild(p: UrlParts) -> String {
     let mut auth = p.userinfo.clone() + p.host.clone();
     if blen(p.port) > 0 { auth = auth + ":" + p.port.clone(); }
     let mut url = p.path.clone();
@@ -512,7 +512,7 @@ fn normalize(url_in: String) -> String {
     let fragment = quote_str(p.fragment.clone(), "~");
     let port = norm_port(p.port.clone(), scheme.clone());
     let path = norm_path(p.path.clone(), scheme.clone());
-    let np = URLParts {
+    let np = UrlParts {
         scheme: scheme,
         userinfo: userinfo,
         host: host,

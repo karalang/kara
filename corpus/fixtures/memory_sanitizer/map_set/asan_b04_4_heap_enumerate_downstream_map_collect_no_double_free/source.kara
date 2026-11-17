@@ -2,7 +2,7 @@
 fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let w: Vec[String] = Vec[
+        let w: Vec[String] = [
             "alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
             "bravo-b044-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
             "charlie-b044-payload-cccccccccccccccc".to_string(),

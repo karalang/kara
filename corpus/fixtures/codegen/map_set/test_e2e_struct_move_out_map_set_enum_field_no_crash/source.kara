@@ -3,8 +3,8 @@ struct MHolder { m: Map[i64, i64] }
 struct SHolder { s: Set[i64] }
 struct MInner { m: Map[i64, i64] }
 struct MOuter { inner: MInner }
-struct GMInner[K: Hash + Eq, V] { m: Map[K, V] }
-struct GMOuter[K: Hash + Eq, V] { inner: GMInner[K, V] }
+struct GmInner[K: Hash + Eq, V] { m: Map[K, V] }
+struct GmOuter[K: Hash + Eq, V] { inner: GmInner[K, V] }
 struct VecMap { v: Vec[i64], m: Map[i64, i64] }
 struct VecMapOuter { inner: VecMap }
 struct EInner { t: Tok }
@@ -27,8 +27,8 @@ let sg: SHolder = sf;
 println(sg.s.len());
 let mut gm: Map[i64, i64] = Map.new();
 gm.insert(5, 50); gm.insert(6, 60); gm.insert(7, 70); gm.insert(8, 80);
-let go: GMOuter[i64, i64] = GMOuter { inner: GMInner { m: gm } };
-let gb: GMInner[i64, i64] = go.inner;
+let go: GmOuter[i64, i64] = GmOuter { inner: GmInner { m: gm } };
+let gb: GmInner[i64, i64] = go.inner;
 println(gb.m.len());
 let mut vv: Vec[i64] = Vec.new();
 vv.push(1); vv.push(2); vv.push(3);

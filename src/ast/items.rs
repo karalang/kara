@@ -144,7 +144,7 @@ pub enum Item {
     /// foreign-import declarations. The bare standalone `extern "C" fn
     /// name(...);` shape is rejected at module scope; foreign imports
     /// must live inside one of these blocks. Block-level attributes
-    /// (`@noblock`, `#[noblock]`) are pre-merged into each contained
+    /// are pre-merged into each contained
     /// item's `attributes` at parse time, so downstream phases process
     /// the inner `ExternFunction`s identically to today's standalone
     /// form. The block itself carries the abi/doc/attributes for
@@ -1345,7 +1345,7 @@ pub struct ExternFunction {
 #[derive(Debug, Clone)]
 pub struct ExternBlock {
     pub span: Span,
-    /// Block-level attributes (e.g. block-scoped `@noblock`). Held
+    /// Block-level attributes, held
     /// here at the block level and NOT pre-merged into per-item
     /// `attributes` — formatter round-trip needs to preserve which
     /// attributes were authored block-level vs. per-item. Downstream

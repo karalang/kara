@@ -9,11 +9,11 @@ fn size(p: ref Prog) -> i64 {
 }
 
 fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] {
-    Vec[f]
+    [f]
 }
 
 fn main() {
-    let prog = Prog { ops: Vec[1, 2, 3] };
+    let prog = Prog { ops: [1, 2, 3] };
     for _ in 0..2 {
         let fs = keep(|x| x + size(prog));
         println((fs[0])(1));

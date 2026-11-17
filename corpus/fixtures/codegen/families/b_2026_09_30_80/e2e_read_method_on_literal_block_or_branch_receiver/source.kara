@@ -13,7 +13,7 @@ fn main() {
         match d { Some(x) => println(f"a:{a} {b} {x} {e}"), None => println("none") }
         let f = { ms(k) }.get(1);
         match f { Some(x) => println(f"f:{x}"), None => println("none") }
-        let g = Vec[f"x{k}", f"y{k}"].last();
+        let g = [f"x{k}", f"y{k}"].last();
         match g { Some(x) => println(f"g:{x}"), None => println("none") }
         match { mp(k) }.first() { Some(p) => println(f"p:{p.n} {p.s}"), None => println("none") }
         let v = [[1, 2], [3, k]].last();

@@ -7,14 +7,14 @@
 // past by the next call, so the encoding is read once over all the
 // calls. O(length + calls).
 
-struct RLEIterator {
+struct RleIterator {
     encoding: Vec[i64],
     i: i64,
 }
 
-impl RLEIterator {
-    fn new(encoding: own Vec[i64]) -> RLEIterator {
-        RLEIterator { encoding: encoding, i: 0 }
+impl RleIterator {
+    fn new(encoding: own Vec[i64]) -> RleIterator {
+        RleIterator { encoding: encoding, i: 0 }
     }
 
     fn next(mut ref self, n: i64) -> i64 {
@@ -46,7 +46,7 @@ fn random_below(seed: mut ref i64, limit: i64) -> i64 {
 }
 
 fn answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
-    let mut it = RLEIterator.new(encoding);
+    let mut it = RleIterator.new(encoding);
     let mut out: Vec[i64] = Vec.new();
     for n in calls.iter() {
         out.push(it.next(*n));

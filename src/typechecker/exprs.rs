@@ -1903,7 +1903,7 @@ impl<'a> super::TypeChecker<'a> {
     fn check_expr_unexplained(&mut self, expr: &Expr, expected: &Type) -> Type {
         self.note_call_args(expr);
         self.note_tuple_literal(expr);
-        self.warn_vec_macro(expr);
+        self.warn_vec_macro(expr, Some(expected));
         self.note_loose_expr(expr);
         if matches!(expr.kind, ExprKind::Cast { .. }) {
             self.pending_cast_expected
@@ -11904,16 +11904,27 @@ impl<'a> super::TypeChecker<'a> {
     /// `deprecated` on a `vec![..]` literal (design.md § Collection
     /// literals; Gowtham 2026-11-04), with the parser's rewrite as the fix.
     /// A warning, never an error: the spelling still means what it did.
-    fn warn_vec_macro(&mut self, expr: &Expr) {
+    fn warn_vec_macro(&mut self, expr: &Expr, expected: Option<&Type>) {
         if matches!(expr.kind, ExprKind::InterpolatedStringLit(_)) {
             self.warn_nested_fstring(expr);
             return;
         }
         if !matches!(
             expr.kind,
-            ExprKind::PrefixCollectionLiteral { .. } | ExprKind::RepeatLiteral { .. }
+            ExprKind::PrefixCollectionLiteral { .. }
+                | ExprKind::RepeatLiteral { .. }
+                | ExprKind::MapLiteral { .. }
         ) || self.compiling_stdlib
         {
+            return;
+        }
+        if let Some(prefix) = self
+            .program
+            .prefix_collection_literals
+            .get(&SpanKey::from_span(&expr.span))
+            .cloned()
+        {
+            self.warn_prefix_literal(expr, prefix, expected);
             return;
         }
         let Some(edit) = self
@@ -11942,6 +11953,65 @@ impl<'a> super::TypeChecker<'a> {
             "use of deprecated `vec![..]`: the list literal is `[a, b]` (and `Vec.filled(n, v)` \
              for `vec![v; n]`) — suppress with `#[allow(deprecated)]` on the enclosing item"
                 .to_string(),
+            expr.span,
+            TypeErrorKind::Deprecated,
+            "deprecated",
+            fix_it,
+        );
+    }
+
+    /// `deprecated` on a prefix collection literal (`Vec[a, b]`, `Set[a]`,
+    /// `Map[k: v]`, `Array[v; n]`, ...): design.md § Collection literals
+    /// has none, and 0.8.x warns since the book taught them
+    /// (B-2026-11-16-255); the next minor release refuses them. The fix is
+    /// the parser's rewrite, or the bare literal where the expected type is
+    /// the literal's own collection, which the bare literal then builds.
+    fn warn_prefix_literal(
+        &mut self,
+        expr: &Expr,
+        prefix: crate::ast::PrefixLiteralFix,
+        expected: Option<&Type>,
+    ) {
+        if !self
+            .vec_macro_reported
+            .insert((expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        let name = prefix.type_name.as_str();
+        let expected_is_own = match expected {
+            Some(Type::Array { .. }) => name == "Array",
+            Some(Type::Named { name: n, .. }) => n == name,
+            _ => false,
+        };
+        let edit = match (expected_is_own, prefix.typed_fix) {
+            (true, Some(typed)) => Some(typed),
+            (_, _) => prefix.fix,
+        };
+        let spelling = match name {
+            "Set" => "`Set.from([a, b])`, or `[a, b]` where a `Set` is expected",
+            "Map" => "`[k: v]` (`Map.new()` when empty)",
+            "SortedMap" => {
+                "`SortedMap.from([(k, v)])`, or `[k: v]` where a `SortedMap` is expected"
+            }
+            "Array" => "`[v; n]`, or `[a, b]` where an `Array[T, N]` is expected",
+            "VecDeque" => "`[a, b]` where a `VecDeque` is expected (`VecDeque.new()` when empty)",
+            _ => "`[a, b]` (`Vec.filled(n, v)` for `Vec[v; n]`, `Vec.new()` when empty)",
+        };
+        let fix_it = edit.map(|e| crate::typechecker::FixIt {
+            span: Span {
+                offset: e.offset,
+                length: e.length,
+                ..expr.span
+            },
+            replacement: e.replacement,
+        });
+        self.type_lint_warning_with_fix(
+            format!(
+                "use of deprecated prefix literal `{name}[..]`: design.md § Collection literals \
+                 writes it {spelling}, and the next minor release refuses the prefix form \
+                 — suppress with `#[allow(deprecated)]` on the enclosing item"
+            ),
             expr.span,
             TypeErrorKind::Deprecated,
             "deprecated",
@@ -12289,7 +12359,7 @@ impl<'a> super::TypeChecker<'a> {
     fn infer_expr_unexplained(&mut self, expr: &Expr) -> Type {
         self.note_tuple_literal(expr);
         self.note_loose_expr(expr);
-        self.warn_vec_macro(expr);
+        self.warn_vec_macro(expr, None);
         // B-2026-09-14-3: hand `infer_call`'s callee-position marker on to a
         // `Path` node and to nothing else. The marker says "a tuple-shaped
         // enum variant here is the construction form `Col.A(3)`", and only the
@@ -18090,13 +18160,12 @@ impl<'a> super::TypeChecker<'a> {
                 // overall type is the error sentinel.
                 self.infer_block(block);
                 self.type_error(
-                    "error[E_TRY_BLOCK_NOT_IMPLEMENTED_YET]: try block syntax \
-                     is recognized but the typechecker pipeline lands in P1 \
-                     — extract the body into a helper function returning \
-                     Result for now"
+                    "a `try` block is not available: try blocks are deferred \
+                     (deferred.md § Try Blocks) and not in 0.8; move the body into \
+                     a function returning `Result` and call it"
                         .to_string(),
                     expr.span,
-                    TypeErrorKind::TypeMismatch,
+                    TypeErrorKind::DeferredTryBlock,
                 );
                 Type::Error
             }

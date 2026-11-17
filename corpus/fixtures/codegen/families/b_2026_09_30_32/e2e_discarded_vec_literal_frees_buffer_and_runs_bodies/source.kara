@@ -5,16 +5,16 @@ impl Drop for P { fn drop(mut ref self) { println(f"dP{self.v}") } }
 fn main() {
     let _ = [1, 2];
     [1, 2];
-    let _ = Vec[1, 2];
-    Vec[1, 2];
+    let _ = [1, 2];
+    [1, 2];
     let _ = [f"a{1}", f"b{2}"];
     println("a");
     let _ = [W1 { v: 1, s: f"a{1}" }];
     println("b");
     [W1 { v: 2, s: f"a{2}" }, W1 { v: 3, s: f"b{3}" }];
     println("c");
-    let _ = Vec[P { v: 4 }];
-    Vec[P { v: 5 }];
+    let _ = [P { v: 4 }];
+    [P { v: 5 }];
     println("d");
     let _ = [[1, 2], [3]];
     let mut i = 0;

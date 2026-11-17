@@ -40,6 +40,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`src/Db.kara`, `src/Net/`) is refused, as design.md CN-2 says; the error
   names the path to rename it to (`src/db.kara`), keeping a platform or
   test suffix (B-2026-11-16-258).
+- A `layout` block is refused under its own code, `E_DEFERRED_LAYOUT_BLOCK`:
+  layout blocks are deferred (deferred.md § Layout), and no backend read one,
+  so a program with one ran exactly as it does without it. Remove the block.
+  The `layout_unassigned_fields` and `repr_c_layout_ignored` lints, and the
+  layout checks behind W0150, W0151 and E0151, went with it
+  (B-2026-11-16-257).
+- `#[noblock]` / `@noblock` is an unknown attribute (E_UNKNOWN_ATTRIBUTE).
+  An `extern` function's effects are now exactly its `with` clause: the
+  ABI's `blocks` (and `panics` for `C-unwind`) is no longer added to an
+  explicit clause, so a foreign function that does not block leaves
+  `blocks` out, and one that does lists it (B-2026-11-16-261).
 - A return-position `impl Iterator[Item = u8]` (or any inline associated-type
   binding) is no longer met by a witness of another integer width: an `i64`
   iterator let callers read `u8`s (B-2026-11-16-329).
@@ -95,6 +106,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   was called after what it viewed was freed (B-2026-11-17-92). A function
   whose returned closures capture no view (`op(name) -> Fn(..)` choosing
   among closures) is unaffected.
+- Features docs/deferred.md holds are refused at their declaration, each
+  under its own code in the JSON `code` field (`karac explain` reaches it):
+  an `effect group` (`E_DEFERRED_EFFECT_GROUP`, B-2026-11-16-256), a trait
+  alias (`E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET`, once, not again at each use),
+  and a type alias `impl Trait` (`E_TAIT_NOT_IMPLEMENTED_YET`), which ran
+  with nothing checking that its functions return one type. A `try` block
+  keeps its refusal under `E_TRY_BLOCK_NOT_IMPLEMENTED_YET`; these all
+  shipped as `E0200` before (B-2026-11-16-298).
+- A derive argument other than `snake_case` on an enum's `Display`
+  (`#[derive(Display(all_fields))]`, `Display(bogus)`, `Eq(x)`, or
+  `Display(snake_case)` on a struct) is refused; it was accepted and did
+  nothing. A derived struct `Display` renders every field already
+  (B-2026-11-16-262).
 - `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
   as `"0.1.0"`), as design.md § 4 says; any string was accepted
   (B-2026-11-16-220).
@@ -258,6 +282,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   its shape; it is now a `deprecated` warning naming the field. A `Secret`
   field still renders as `<redacted>` (B-2026-11-16-330;
   tracker B-2026-11-16-335).
+- A prefix collection literal (`Vec[a, b]`, `Set[a, b]`, `Map[k: v]`,
+  `Array[v; n]`, `VecDeque[a]`, `SortedMap[k: v]`) warns `deprecated`:
+  design.md § Collection literals has no prefix form, though the book
+  taught it. `karac fix` writes the literal (`[a, b]`, `[k: v]`, `[v; n]`),
+  `Vec.filled(n, v)`, `Set.from([..])` or `SortedMap.from([..])` where no
+  expected type picks the collection, and `X.new()` for an empty one; an
+  `Array[a, b]` or `VecDeque[a]` with nothing expecting that type keeps
+  the warning without a fix. `#[allow(deprecated)]` on the enclosing item
+  silences it. The next minor release refuses the prefix form
+  (B-2026-11-16-255, tracker TRACKER-255).
 - An argument at a method's `mut ref` parameter takes the call-site `mut`
   marker, as a free function's already does (design.md § Call-site `mut`
   markers): `r.fill(s)` with `fn fill(ref self, buf: mut ref String)` warns
@@ -1578,6 +1612,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (B-2026-11-16-331).
 - A marker trait's body item, a `dyn` parameter's unbound associated type
   and a derive beside a hand impl are each reported once (B-2026-11-16-332).
+- A `KARAC_HASH_SEED` that is not a seed, or a `KARAC_THREADS` that is not
+  a count of 1 or more, warns once on stderr and the default is used, in
+  compiled programs and the interpreter; both were ignored without a word,
+  so a mistyped pin lost the reproduction, and `KARAC_THREADS=0` now takes
+  the default rather than one worker. design.md no longer promises a
+  `KARA_BACKTRACE` variable, which nothing read (B-2026-11-16-288).
 - `{n:#x}` names Rust's alternate form `#` as not supported in v1 and
   suggests writing the prefix in the text (`0x{n:x}`); it said
   "unsupported type `#`" (B-2026-11-17-2).

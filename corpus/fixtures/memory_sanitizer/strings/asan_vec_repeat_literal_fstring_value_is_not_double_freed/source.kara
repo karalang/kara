@@ -1,6 +1,6 @@
 
 fn main() {
-    let v: Vec[String] = Vec[f"r{2}"; 3];
+    let v: Vec[String] = Vec.filled(3, f"r{2}");
     println(v[0]);
     println(v[2]);
 }

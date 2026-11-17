@@ -166,7 +166,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
             let n: i64 = s.todos.len();
             while i < n {
                 let t: ref Todo = ref s.todos[i];
-                items.push(Json.Object(Vec[
+                items.push(Json.Object([
                     ("id", Json.Number(t.id as f64)),
                     ("title", Json.String(t.title.clone())),
                     ("completed", Json.Bool(t.completed)),
@@ -185,7 +185,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
                     match find_index_by_id(s, id) {
                         Some(idx) => {
                             let t: ref Todo = ref s.todos[idx];
-                            let obj: Json = Json.Object(Vec[
+                            let obj: Json = Json.Object([
                                 ("id", Json.Number(t.id as f64)),
                                 ("title", Json.String(t.title.clone())),
                                 ("completed", Json.Bool(t.completed)),
@@ -230,7 +230,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
                     // values (the Todo we just pushed is now owned by
                     // s.todos — easier to render from the scalars than
                     // re-index).
-                    let obj: Json = Json.Object(Vec[
+                    let obj: Json = Json.Object([
                         ("id", Json.Number(id as f64)),
                         ("title", Json.String(title_for_response)),
                         ("completed", Json.Bool(completed)),
@@ -265,7 +265,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
                                     };
                                     let title_for_response: String = title.clone();
                                     s.todos[idx] = Todo { id: id, title: title, completed: completed };
-                                    let obj: Json = Json.Object(Vec[
+                                    let obj: Json = Json.Object([
                                         ("id", Json.Number(id as f64)),
                                         ("title", Json.String(title_for_response)),
                                         ("completed", Json.Bool(completed)),

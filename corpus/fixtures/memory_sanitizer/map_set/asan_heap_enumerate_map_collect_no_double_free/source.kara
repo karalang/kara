@@ -2,7 +2,7 @@
 fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let w: Vec[String] = Vec[
+        let w: Vec[String] = [
             "alpha-enum-map-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
             "bravo-enum-map-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
             "charlie-enum-map-payload-cccccccccccccccccc".to_string()

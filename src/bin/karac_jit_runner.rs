@@ -374,11 +374,9 @@ fn run_loaded(engine: &LLJITEngine) -> ExitCode {
     let _ = std::io::stdout().lock().flush();
     let _ = std::io::stderr().lock().flush();
 
-    let code: u8 = if (0..=255).contains(&rc) {
-        rc as u8
-    } else {
-        255
-    };
+    // A code outside one byte is a failure, 1, as a built binary's
+    // (io.md § Exit, B-2026-11-17-63).
+    let code: u8 = if (0..=255).contains(&rc) { rc as u8 } else { 1 };
     ExitCode::from(code)
 }
 

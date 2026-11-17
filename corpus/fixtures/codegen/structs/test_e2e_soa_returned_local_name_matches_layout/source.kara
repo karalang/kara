@@ -1,6 +1,5 @@
 
 struct E { x: f64, y: f64 }
-layout grid: Vec[E] { group g1 { x } group g2 { y } }
 fn make() -> Vec[E] {
     let mut grid: Vec[E] = Vec.new();
     grid.push(E { x: 1.0, y: 2.0 });

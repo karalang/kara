@@ -91,7 +91,7 @@ fn main() {
     s.hash(mut h);
     show("String", h);
 
-    let v: Vec[i32] = Vec[1, 2];
+    let v: Vec[i32] = [1, 2];
     let mut h = new_log();
     v.hash(mut h);
     show("Vec", h);
@@ -123,12 +123,12 @@ fn main() {
     o.hash(mut h);
     show("Some", h);
 
-    let ids = Vec[Id { n: 1, junk: 9 }, Id { n: 2, junk: 9 }];
+    let ids = [Id { n: 1, junk: 9 }, Id { n: 2, junk: 9 }];
     let mut h = new_log();
     ids.hash(mut h);
     show("own impl", h);
 
-    let t = Tree.Node(Vec[Tree.Leaf, Tree.Node(Vec.new())]);
+    let t = Tree.Node([Tree.Leaf, Tree.Node(Vec.new())]);
     let mut h = new_log();
     t.hash(mut h);
     show("recursive", h);

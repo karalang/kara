@@ -14,7 +14,7 @@ shared struct TreeNode {
     mut right: Option[TreeNode],
 }
 
-struct CBTInserter {
+struct CbtInserter {
     root: TreeNode,
     count: i64,
 }
@@ -26,9 +26,9 @@ fn size(node: Option[TreeNode]) -> i64 {
     }
 }
 
-impl CBTInserter {
-    fn new(root: TreeNode) -> CBTInserter {
-        CBTInserter { root: root, count: size(Some(root)) }
+impl CbtInserter {
+    fn new(root: TreeNode) -> CbtInserter {
+        CbtInserter { root: root, count: size(Some(root)) }
     }
 
     fn insert(mut ref self, val: i64) -> i64 {
@@ -127,7 +127,7 @@ fn show(vals: Vec[i64]) -> String {
 // Build from `start`, insert each of `inserts`, print what insert returns
 // and the final tree.
 fn run(start: Vec[i64], inserts: Vec[i64]) {
-    let mut c = CBTInserter.new(complete_tree(start));
+    let mut c = CbtInserter.new(complete_tree(start));
     let mut parents: Vec[i64] = Vec.new();
     for v in inserts.iter() {
         parents.push(c.insert(*v));
@@ -162,7 +162,7 @@ fn main() {
         for _ in 0..n {
             start.push(next_random(mut seed) % 5001);
         }
-        let mut c = CBTInserter.new(complete_tree(start));
+        let mut c = CbtInserter.new(complete_tree(start));
         let k = next_random(mut seed) % 1001;
         for _ in 0..k {
             let p = c.insert(next_random(mut seed) % 5001);
@@ -179,7 +179,7 @@ fn main() {
     for i in 0..1000 {
         start.push(i % 5001);
     }
-    let mut c = CBTInserter.new(complete_tree(start));
+    let mut c = CbtInserter.new(complete_tree(start));
     let mut sum = 0;
     for i in 0..10000 {
         sum += c.insert((7 * i) % 5001);

@@ -62,12 +62,8 @@ impl Attribute {
 
     /// True iff this attribute is `#[repr(C)]`.
     ///
-    /// Hoisted onto `Attribute` (B-2026-08-21-2) so the C-header emitter and
-    /// the resolver's `repr_c_layout_ignored` check answer one question one
-    /// way. They disagree about `#[repr(C)]` at their peril: the header
-    /// emitter decides a struct crosses the C ABI, and the resolver decides
-    /// that the same struct's layout block is therefore ignored — a copy that
-    /// drifted would let one of them act on a repr the other did not see.
+    /// Hoisted onto `Attribute` (B-2026-08-21-2) so every reader of
+    /// `#[repr(C)]` answers the question one way.
     pub fn is_repr_c(&self) -> bool {
         use super::ExprKind;
         self.is_bare("repr")

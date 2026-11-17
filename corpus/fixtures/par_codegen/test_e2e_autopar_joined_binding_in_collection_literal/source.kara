@@ -10,13 +10,13 @@ fn bare_lit() -> i64 {
 fn prefix_lit() -> i64 {
     let a: Vec[i64] = mk(3i64);
     let b: Vec[i64] = mk(4i64);
-    let c: Vec[Vec[i64]] = Vec[a, b];
+    let c: Vec[Vec[i64]] = [a, b];
     return c.len();
 }
 fn map_lit() -> i64 {
     let a: Vec[i64] = mk(5i64);
     let b: Vec[i64] = mk(6i64);
-    let m: Map[String, Vec[i64]] = Map["a": a, "b": b];
+    let m: Map[String, Vec[i64]] = ["a": a, "b": b];
     return m.len();
 }
 fn repeat_lit() -> i64 {

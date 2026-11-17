@@ -2,7 +2,7 @@
 fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let w: Vec[String] = Vec[
+        let w: Vec[String] = [
             "into-iter-collect-alpha-aaaaaaaaaaaaaaaaaaaaaa".to_string(),
             "into-iter-collect-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()
         ];

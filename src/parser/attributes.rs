@@ -68,7 +68,7 @@ impl super::Parser {
         attrs
     }
 
-    /// Parse `@name` shorthand attribute (e.g. `@no_rc`, `@noblock`). The
+    /// Parse `@name` shorthand attribute (e.g. `@no_rc`). The
     /// `@`-form is a Kāra compiler shorthand for bare-name attributes; it
     /// never carries a namespace path, so the resulting `path` is always a
     /// single segment.
@@ -561,7 +561,7 @@ impl super::Parser {
                     "unknown attribute inside `#[unsafe(...)]`: `{inner_name}`. The \
                      `#[unsafe(...)]` wrap is reserved for soundness-affecting linker \
                      attributes — `no_mangle` and `link_section(\"...\")`. Plain \
-                     attributes (e.g. `#[used]`, `#[noblock]`, `#[kara_name(\"...\")]`) \
+                     attributes (e.g. `#[used]`, `#[kara_name(\"...\")]`) \
                      are written without the wrap. \
                      See design.md § Linker Control Attributes."
                 ));

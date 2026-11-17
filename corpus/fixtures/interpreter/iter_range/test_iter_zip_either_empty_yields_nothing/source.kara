@@ -1,6 +1,6 @@
 
 fn main() {
-    let v: Vec[i64] = Vec[];
+    let v: Vec[i64] = Vec.new();
     let w = ["a", "b"];
     let mut it = v.iter().zip(w.iter());
     match it.next() {

@@ -4,7 +4,7 @@ fn work(seed: i64) -> Array[i64, 2] {
     for j in 0i64..64i64 {
         a = a + (seed + j) * (seed - j);
     }
-    Array[a, a + seed]
+    [a, a + seed]
 }
 fn main() {
     let mut sum: i64 = 0i64;

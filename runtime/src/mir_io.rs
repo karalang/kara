@@ -165,8 +165,15 @@ pub unsafe extern "C" fn karac_mir_file(
                 std::slice::from_raw_parts(ptr, usize::try_from(len).unwrap_or(0))
             })
             .into_owned();
+            // "" names no file on any target (B-2026-11-17-8).
             open_options(n)
-                .and_then(|o| o.open(path))
+                .and_then(|o| {
+                    if path.is_empty() {
+                        Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                    } else {
+                        o.open(path)
+                    }
+                })
                 .map(|f| Box::into_raw(Box::new(KaracFile::new(f))) as i64)
         };
         return match res {
@@ -576,6 +583,9 @@ pub unsafe extern "C" fn karac_mir_std_stream(op: i32, value: *mut i64, msg: *mu
         }
         _ => std::io::stderr().flush().map(|()| 0),
     };
+    if op == 2 && STDIN_LINES_ENDED.load(std::sync::atomic::Ordering::Relaxed) {
+        return -2;
+    }
     let res = got.and_then(|n| {
         if op == 2 {
             if n == 0 {
@@ -604,9 +614,25 @@ pub unsafe extern "C" fn karac_mir_std_stream(op: i32, value: *mut i64, msg: *mu
             }
             -1
         }
-        // SAFETY: the caller's contract.
-        Err(e) => unsafe { io_error_code(&e, msg) },
+        Err(e) => {
+            if op == 2 {
+                STDIN_LINES_ENDED.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            // SAFETY: the caller's contract.
+            unsafe { io_error_code(&e, msg) }
+        }
     }
+}
+
+/// Set when `stdin.lines()`'s `next` yields an error: it ends there, as a
+/// `LinesIter`'s does, until the next `stdin.lines()` (B-2026-11-17-11).
+static STDIN_LINES_ENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `stdin.lines()`: a new iterator, which reads on past an earlier one's
+/// error.
+#[no_mangle]
+pub extern "C" fn karac_mir_stdin_lines_start() {
+    STDIN_LINES_ENDED.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// `Env.var(name)`: 0 with the variable's value as a fresh `String` at

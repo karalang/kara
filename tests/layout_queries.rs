@@ -105,30 +105,6 @@ fn f(items: Vec[One]) -> i64 {
 }
 
 #[test]
-fn layout_query_suppressed_by_existing_layout_block() {
-    // `Entity` already has a `layout` block — the decision is resolved.
-    let src = r#"
-struct Entity { x: f64, y: f64, hp: i64 }
-layout entities: Vec[Entity] {
-    group physics { x, y }
-    group combat { hp }
-}
-fn sum_x(es: Vec[Entity]) -> f64 {
-    let mut total: f64 = 0.0;
-    for e in es {
-        total = total + e.x;
-    }
-    total
-}
-"#;
-    let queries = analyze_src(src);
-    assert!(
-        !queries.iter().any(|q| q.kind == QueryKind::LayoutChoice),
-        "a struct with a layout block emits no query; got {queries:?}",
-    );
-}
-
-#[test]
 fn layout_query_does_not_fire_for_non_struct_collection() {
     // `Vec[i64]` has no fields to group.
     let src = r#"

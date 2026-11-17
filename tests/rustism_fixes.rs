@@ -117,7 +117,7 @@ fn question_in_a_unit_main_declares_the_error_it_passes_up() {
 
 #[test]
 fn question_in_a_unit_main_unwraps_what_cannot_pass_up() {
-    let src = "fn first(v: Vec[i64]) -> Option[i64] { v.first().cloned() }\nfn parse(s: String) -> Result[i64, String] { if s == \"1\" { Ok(1) } else { Err(\"bad\") } }\nfn main() {\n    let a = first(Vec[3, 4])?;\n    let n = parse(\"1\")?;\n    let m = i64.parse(\"7\")?;\n    println(f\"{a} {n} {m}\");\n}\n";
+    let src = "fn first(v: Vec[i64]) -> Option[i64] { v.first().cloned() }\nfn parse(s: String) -> Result[i64, String] { if s == \"1\" { Ok(1) } else { Err(\"bad\") } }\nfn main() {\n    let a = first([3, 4])?;\n    let n = parse(\"1\")?;\n    let m = i64.parse(\"7\")?;\n    println(f\"{a} {n} {m}\");\n}\n";
     let (before, fixed) = fixes_to("question_mixed.kara", src, "3 1 7\n");
     assert!(
         before.contains("`main` returns `()` and cannot return an `Option`"),
@@ -125,7 +125,7 @@ fn question_in_a_unit_main_unwraps_what_cannot_pass_up() {
     );
     assert_eq!(
         fixed,
-        "fn first(v: Vec[i64]) -> Option[i64] { v.first().cloned() }\nfn parse(s: String) -> Result[i64, String] { if s == \"1\" { Ok(1) } else { Err(\"bad\") } }\nfn main() -> Result[(), AnyError] {\n    let a = first(Vec[3, 4]).unwrap();\n    let n = parse(\"1\").unwrap();\n    let m = i64.parse(\"7\")?;\n    println(f\"{a} {n} {m}\");\n    Ok(())\n}\n"
+        "fn first(v: Vec[i64]) -> Option[i64] { v.first().cloned() }\nfn parse(s: String) -> Result[i64, String] { if s == \"1\" { Ok(1) } else { Err(\"bad\") } }\nfn main() -> Result[(), AnyError] {\n    let a = first([3, 4]).unwrap();\n    let n = parse(\"1\").unwrap();\n    let m = i64.parse(\"7\")?;\n    println(f\"{a} {n} {m}\");\n    Ok(())\n}\n"
     );
 }
 
@@ -156,17 +156,17 @@ fn a_distinct_types_dot_zero_is_its_raw_value() {
 
 #[test]
 fn collect_into_a_vec_hole_is_annotated_on_its_binding() {
-    let src = "fn main() {\n    let v = Vec[1, 2, 3];\n    let d = v.iter().map(|x| x * 2).collect::<Vec<_>>();\n    let cs = \"ab\".chars().collect::<Vec<_>>();\n    println(f\"{d.len()} {cs.len()}\");\n}\n";
+    let src = "fn main() {\n    let v = [1, 2, 3];\n    let d = v.iter().map(|x| x * 2).collect::<Vec<_>>();\n    let cs = \"ab\".chars().collect::<Vec<_>>();\n    println(f\"{d.len()} {cs.len()}\");\n}\n";
     let (_, fixed) = fixes_to("collect_hole.kara", src, "3 2\n");
     assert_eq!(
         fixed,
-        "fn main() {\n    let v = Vec[1, 2, 3];\n    let d: Vec[i64] = v.iter().map(|x| x * 2).collect();\n    let cs: Vec[char] = \"ab\".chars().collect();\n    println(f\"{d.len()} {cs.len()}\");\n}\n"
+        "fn main() {\n    let v = [1, 2, 3];\n    let d: Vec[i64] = v.iter().map(|x| x * 2).collect();\n    let cs: Vec[char] = \"ab\".chars().collect();\n    println(f\"{d.len()} {cs.len()}\");\n}\n"
     );
 }
 
 #[test]
 fn angle_generics_with_an_associated_binding_inside_are_fixed() {
-    let src = "struct F[T] { v: Vec[T] }\nimpl<T: Copy + Add<Output = T>> F<T> {\n    fn first(self) -> T { self.v[0] }\n}\nfn main() { let f = F { v: Vec[4, 5] }; println(f.first()); }\n";
+    let src = "struct F[T] { v: Vec[T] }\nimpl<T: Copy + Add<Output = T>> F<T> {\n    fn first(self) -> T { self.v[0] }\n}\nfn main() { let f = F { v: [4, 5] }; println(f.first()); }\n";
     let (_, fixed) = fixes_to("impl_angle_assoc.kara", src, "4\n");
     assert!(
         fixed.contains("impl[T: Copy + Add[Output = T]] F[T] {"),
@@ -176,7 +176,7 @@ fn angle_generics_with_an_associated_binding_inside_are_fixed() {
 
 #[test]
 fn library_errors_display_and_pass_into_anyerror() {
-    let src = "fn decode(b: Vec[u8]) -> Result[String, AnyError] {\n    let s = String.from_utf8(b)?;\n    Ok(s)\n}\nfn main() {\n    match decode(Vec[255u8]) {\n        Ok(s) => println(s),\n        Err(e) => println(f\"err: {e}\"),\n    }\n    let d: DiscriminantError[i64] = DiscriminantError.OutOfRange { value: 9 };\n    println(f\"{NulError.InteriorNul} | {ChannelError.Full} | {SemaphoreError.Timeout} | {d}\");\n    println(f\"{NetError.Tls(TlsFailure.Handshake)} | {NetError.Other(5)} | {TlsError.Protocol(2)}\");\n}\n";
+    let src = "fn decode(b: Vec[u8]) -> Result[String, AnyError] {\n    let s = String.from_utf8(b)?;\n    Ok(s)\n}\nfn main() {\n    match decode([255u8]) {\n        Ok(s) => println(s),\n        Err(e) => println(f\"err: {e}\"),\n    }\n    let d: DiscriminantError[i64] = DiscriminantError.OutOfRange { value: 9 };\n    println(f\"{NulError.InteriorNul} | {ChannelError.Full} | {SemaphoreError.Timeout} | {d}\");\n    println(f\"{NetError.Tls(TlsFailure.Handshake)} | {NetError.Other(5)} | {TlsError.Protocol(2)}\");\n}\n";
     let path = scratch("library_errors.kara", src);
     let check = karac(&["check"], &path);
     assert!(check.status.success(), "{}", text(&check));

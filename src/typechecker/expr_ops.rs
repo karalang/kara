@@ -6920,48 +6920,15 @@ impl<'a> super::TypeChecker<'a> {
 
     // ── Pipe Desugaring ──────────────────────────────────────────
 
-    pub(super) fn infer_pipe(&mut self, left: &Expr, right: &Expr, span: &Span) -> Type {
-        // More than one `_` per stage has no defined meaning — the piped value
-        // can only land in one place. Diagnosed before desugaring, because the
-        // shared rewrite would substitute into every placeholder and silently
-        // duplicate the left-hand expression.
-        if let ExprKind::Call { callee, args } = &right.kind {
-            let placeholder_count = args
-                .iter()
-                .filter(|arg| matches!(arg.value.kind, ExprKind::PipePlaceholder))
-                .count();
-            if placeholder_count > 1 {
-                self.type_error(
-                    "at most one '_' placeholder allowed per pipe stage".to_string(),
-                    right.span,
-                    TypeErrorKind::InvalidPipePlaceholder,
-                );
-                self.infer_expr(callee);
-                for arg in args {
-                    if !matches!(arg.value.kind, ExprKind::PipePlaceholder) {
-                        self.infer_expr(&arg.value);
-                    }
-                }
-                return Type::Error;
-            }
-        }
-
-        // The rewrite itself is shared with the interpreter and codegen so the
-        // three phases cannot disagree about what a pipe means (B-2026-08-17-25).
-        let Some(desugared) = desugar_pipe(left, right, *span) else {
-            self.type_error(
-                "right-hand side of pipe must be a function name or function call".to_string(),
-                right.span,
-                TypeErrorKind::NotCallable,
-            );
+    /// `left |> right`: there is no pipe operator (design.md §3), and the
+    /// parser refused this one, so nothing reaches here from a program that
+    /// gets this far; both sides are still visited for the side tables.
+    pub(super) fn infer_pipe(&mut self, left: &Expr, right: &Expr, _span: &Span) -> Type {
+        self.infer_expr(left);
+        if !matches!(right.kind, ExprKind::PipePlaceholder) {
             self.infer_expr(right);
-            return Type::Error;
-        };
-
-        let ExprKind::Call { callee, args } = &desugared.kind else {
-            unreachable!("desugar_pipe always yields a Call")
-        };
-        self.infer_call(callee, args, span)
+        }
+        Type::Error
     }
 
     // ── ?? operator ─────────────────────────────────────────────

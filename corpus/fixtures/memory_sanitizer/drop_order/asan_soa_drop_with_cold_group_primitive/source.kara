@@ -1,10 +1,5 @@
 
 struct Entity { x: f64, y: f64, hp: i64, label: i64 }
-layout entities: Vec[Entity] {
-    group physics { x, y }
-    group combat { hp }
-    cold { label }
-}
 fn main() {
     let mut entities: Vec[Entity] = Vec.new();
     entities.push(Entity { x: 1.0, y: 2.0, hp: 100, label: 11 });

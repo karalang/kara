@@ -7,7 +7,7 @@ fn main() {
     while i < 5 {
         take_s({ f"arg{i}-{i}" });
         take_s({ let p = "x" + "y"; p });
-        take_v({ Vec[i, i, i] });
+        take_v({ [i, i, i] });
         two({ f"p{i}" }, { f"q{i}" });
         take_s(f"direct{i}");
         i = i + 1;

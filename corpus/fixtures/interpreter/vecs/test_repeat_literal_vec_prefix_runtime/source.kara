@@ -1,5 +1,5 @@
 fn main() {
-                 let v = Vec[7; 4];
+                 let v = Vec.filled(4, 7);
                  println(v.len());
                  println(v[3]);
              }

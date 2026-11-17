@@ -7,10 +7,10 @@ fn build() -> Vec[String] {
     v
 }
 fn main() {
-    let a: Vec[i64] = Vec[1, 2, 3, 4];
+    let a: Vec[i64] = [1, 2, 3, 4];
     let b: Vec[i64] = a.iter().collect();
     println(f"{b.len()} {a.len()} {b[0]} {b[3]}");
-    let s: Vec[String] = Vec["one".to_string(), "two".to_string()];
+    let s: Vec[String] = ["one".to_string(), "two".to_string()];
     let t: Vec[String] = s.iter().cloned().collect();
     println(f"{t.len()} {s.len()} {t[0]}{t[1]}");
     let ft: Vec[String] = build().iter().cloned().collect();

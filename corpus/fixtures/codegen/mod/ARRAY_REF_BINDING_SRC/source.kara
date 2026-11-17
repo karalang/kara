@@ -1,20 +1,20 @@
 struct P { a: i64, b: i64 }
 
 fn main() {
-    let sa: Array[i64, 3] = Array[10, 20, 30];
+    let sa: Array[i64, 3] = [10, 20, 30];
     let g = ref sa[2];
     println(f"scalar {g}");
 
     let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
-    let va: Array[Vector[i64, 4], 3] = Array[v, v, v];
+    let va: Array[Vector[i64, 4], 3] = [v, v, v];
     let gv = ref va[2];
     println(f"vector {gv.reduce_sum()}");
 
-    let pa: Array[P, 2] = Array[P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    let pa: Array[P, 2] = [P { a: 1, b: 2 }, P { a: 3, b: 4 }];
     let gp = ref pa[1];
     println(f"struct {gp.a} {gp.b}");
 
-    let mut ma: Array[i64, 3] = Array[1, 2, 3];
+    let mut ma: Array[i64, 3] = [1, 2, 3];
     let gm = ref ma[0];
     ma[0] = 99;
     println(f"alias {gm}");

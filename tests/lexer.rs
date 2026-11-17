@@ -1464,9 +1464,14 @@ fn test_float_exponent_with_f64_suffix() {
 
 #[test]
 fn test_float_dot_then_exponent() {
-    // `1.e10` → float `1.0e10` per design.md spec
+    // `1.e10` is refused: design.md §3 has a point followed by a digit, and
+    // the fix writes `1.0e10`.
     let tokens = tokens_only("1.e10");
-    assert_eq!(tokens[0], Token::Float(1.0e10, None));
+    assert!(
+        matches!(&tokens[0], Token::ErrorWithFix { fixed, .. } if fixed == "1.0e10"),
+        "{:?}",
+        tokens[0]
+    );
 }
 
 #[test]

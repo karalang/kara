@@ -1,10 +1,5 @@
 
 struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
-layout world: Vec[Entity] {
-    group pos { x, y }
-    group vel { vx }
-    cold { vy }
-}
 fn main() {
     let world: Vec[Entity] = [
         Entity { x: 0, y: 1, vx: 2, vy: 3 },

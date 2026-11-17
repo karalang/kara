@@ -1,6 +1,5 @@
 
 struct Row { tag: i64, data: Vec[i64] }
-layout rows: Vec[Row] { group tags { tag } group bulk { data } }
 fn make(n: i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
     let mut i = 0;

@@ -5,7 +5,7 @@ fn mk(n: i64) -> Option[Array[String, 2]] {
 }
 fn mk1(n: i64) -> Option[Array[String, 1]] {
     if n < 0 { return None; }
-    return Some(Array[f"one-aaaaaaaaaaaaaaaa-{n}"]);
+    return Some([f"one-aaaaaaaaaaaaaaaa-{n}"]);
 }
 fn mkstr(n: i64) -> Option[String] {
     if n < 0 { return None; }

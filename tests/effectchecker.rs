@@ -404,39 +404,41 @@ fn test_saturating_to_int_is_effect_free() {
     );
 }
 
+/// design.md §15: an `extern` function's effects are exactly its `with`
+/// clause, and with no clause it has every effect. The ABI's `blocks`
+/// (and C-unwind's `panics`) were added to an explicit clause, and
+/// `@noblock` took `blocks` back; the clause is now exact and `@noblock`
+/// is gone (B-2026-11-16-261).
 #[test]
-fn test_noblock_removes_blocks_from_extern_c() {
-    // @noblock on extern "C" removes the blocks default
-    let result = effectcheck_ok("unsafe extern \"C\" { @noblock fn cpu_work() -> i32; }");
-    let inferred = result.inferred_effects.get("cpu_work").unwrap();
-    assert!(
-        !inferred
+fn test_extern_with_clause_is_exactly_its_effects() {
+    let has = |r: &EffectCheckResult, f: &str, v: EffectVerbKind| {
+        r.inferred_effects
+            .get(f)
+            .unwrap()
             .effects
             .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-        "@noblock extern \"C\" should NOT have blocks effect"
-    );
-}
-
-#[test]
-fn test_noblock_removes_blocks_from_c_unwind_but_keeps_panics() {
-    // @noblock on extern "C-unwind": blocks removed, panics stays. Under an
-    // explicit unwind profile (abort-only rejects C-unwind — E0415, slice 5).
-    let result = effectcheck_ok_unwind("unsafe extern \"C-unwind\" { @noblock fn throwing(); }");
-    let inferred = result.inferred_effects.get("throwing").unwrap();
-    assert!(
-        !inferred
-            .effects
-            .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-        "@noblock extern \"C-unwind\" should NOT have blocks"
+            .any(|e| e.effect.verb == v)
+    };
+    let r = effectcheck_ok(
+        "unsafe extern \"C\" {\n\
+             fn cpu_work() -> i32 with allocates(Heap);\n\
+             fn slow_io() -> i32;\n\
+         }",
     );
     assert!(
-        inferred
-            .effects
-            .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Panics),
-        "@noblock extern \"C-unwind\" should still have panics"
+        !has(&r, "cpu_work", EffectVerbKind::Blocks),
+        "a clause without blocks"
+    );
+    assert!(has(&r, "cpu_work", EffectVerbKind::Allocates));
+    assert!(
+        has(&r, "slow_io", EffectVerbKind::Blocks),
+        "no clause: every effect"
+    );
+    let r = effectcheck_ok_unwind("unsafe extern \"C-unwind\" { fn throwing() with panics; }");
+    assert!(has(&r, "throwing", EffectVerbKind::Panics));
+    assert!(
+        !has(&r, "throwing", EffectVerbKind::Blocks),
+        "C-unwind adds nothing"
     );
 }
 
@@ -512,110 +514,25 @@ fn test_process_child_wait_declares_blocks_others_do_not() {
 }
 
 #[test]
-fn test_block_level_noblock_propagates_to_every_child_extern_c() {
-    // Block-level `@noblock` lives on `ExternBlock.attributes` (not
-    // pre-merged into per-item attributes). The effectchecker must
-    // union block-level and per-item attrs when computing the ABI
-    // default suppression so every child sees the noblock effect.
-    let result = effectcheck_ok(
-        "@noblock\n\
-         unsafe extern \"C\" {\n\
-             fn cpu_work_a() -> i32;\n\
-             fn cpu_work_b() -> i32;\n\
-         }",
-    );
-    for name in ["cpu_work_a", "cpu_work_b"] {
-        let inferred = result.inferred_effects.get(name).unwrap();
-        assert!(
-            !inferred
-                .effects
-                .iter()
-                .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-            "block-level @noblock should suppress blocks on child `{name}`"
-        );
-    }
-}
-
-#[test]
-fn test_per_item_noblock_does_not_leak_to_sibling() {
-    // Symmetric negative: per-item `@noblock` on one sibling must NOT
-    // bubble to the block, and must NOT suppress the ABI default on
-    // any other sibling. Pins that the union is one-way (block → item),
-    // not bidirectional.
-    let result = effectcheck_ok(
-        "unsafe extern \"C\" {\n\
-             @noblock fn pure_cpu() -> i32;\n\
-             fn slow_io() -> i32;\n\
-         }",
-    );
-    let pure = result.inferred_effects.get("pure_cpu").unwrap();
-    assert!(
-        !pure
-            .effects
-            .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-        "per-item @noblock should suppress blocks on its own item"
-    );
-    let slow = result.inferred_effects.get("slow_io").unwrap();
-    assert!(
-        slow.effects
-            .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-        "sibling without @noblock should retain the extern \"C\" blocks default"
-    );
-}
-
-#[test]
-fn test_block_level_noblock_on_c_unwind_keeps_panics_on_every_child() {
-    // C-unwind ABI defaults to {blocks, panics}; `@noblock` suppresses
-    // blocks but cannot suppress panics. Block-level `@noblock` must
-    // apply that rule uniformly to every child.
-    // Under an explicit unwind profile (abort-only rejects C-unwind — E0415).
-    let result = effectcheck_ok_unwind(
-        "@noblock\n\
-         unsafe extern \"C-unwind\" {\n\
-             fn throwing_a();\n\
-             fn throwing_b();\n\
-         }",
-    );
-    for name in ["throwing_a", "throwing_b"] {
-        let inferred = result.inferred_effects.get(name).unwrap();
-        assert!(
-            !inferred
-                .effects
-                .iter()
-                .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-            "block-level @noblock should suppress blocks on C-unwind child `{name}`"
-        );
-        assert!(
-            inferred
-                .effects
-                .iter()
-                .any(|e| e.effect.verb == EffectVerbKind::Panics),
-            "C-unwind child `{name}` should retain panics even with @noblock"
-        );
-    }
-}
-
-#[test]
-fn test_extern_c_merges_programmer_annotations() {
-    // Programmer-supplied effects are merged with the ABI defaults.
-    // extern "C" fn read_db() reads(Db) → final = {blocks, reads(Db)}
+fn test_extern_c_clause_is_exactly_the_programmer_annotations() {
+    // design.md §15: the clause is exact, so `extern "C" fn read_db()
+    // reads(Db)` is `{reads(Db)}`. The ABI's `blocks` was merged in before
+    // B-2026-11-16-261.
     let result = effectcheck_ok(
         "effect resource Db;\n\
          unsafe extern \"C\" { fn read_db() reads(Db); }",
     );
     let inferred = result.inferred_effects.get("read_db").unwrap();
     assert!(
-        inferred
+        !inferred
             .effects
             .iter()
             .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-        "merged set should include ABI default blocks"
+        "an explicit clause takes no ABI default blocks"
     );
     assert!(
         inferred.effects.iter().any(|e| e.effect.resource == "Db"),
-        "merged set should include programmer-declared reads(Db)"
+        "the set holds the programmer-declared reads(Db)"
     );
 }
 
@@ -4457,9 +4374,9 @@ fn test_profile_kernel_forbids_suspends() {
 #[test]
 fn test_profile_kernel_allows_reads_writes_sends_receives() {
     // Kernel profile allows resource-verb effects (reads, writes, sends, receives).
-    // @noblock suppresses the extern "C" auto-blocks default so it doesn't mask the signal.
+    // The clause is exact, so no ABI `blocks` masks the signal.
     profile_ok(
-        "unsafe extern \"C\" { @noblock fn io_op() reads(FileSystem) writes(FileSystem) sends(Channel) receives(Channel); }",
+        "unsafe extern \"C\" { fn io_op() reads(FileSystem) writes(FileSystem) sends(Channel) receives(Channel); }",
         CompileProfile::Kernel,
     );
 }
@@ -4624,12 +4541,12 @@ fn test_ffi_hint_sleep_missing_blocks() {
 }
 
 #[test]
-fn test_ffi_hint_sleep_noblock_suggests_blocks() {
-    // @noblock removes the ABI default → blocks is now missing → hint fires
-    let hints = ffi_hints("unsafe extern \"C\" { @noblock fn sleep(secs: i32); }");
+fn test_ffi_hint_sleep_clause_without_blocks_suggests_blocks() {
+    // An explicit clause is exact: one without `blocks` gets the hint.
+    let hints = ffi_hints("unsafe extern \"C\" { fn sleep(secs: i32) reads(FileSystem); }");
     assert!(
         hints.iter().any(|h| h.message.contains("blocks")),
-        "Expected blocks hint for @noblock sleep, got: {:?}",
+        "Expected blocks hint for a clause without blocks, got: {:?}",
         hints
     );
 }
@@ -9956,7 +9873,7 @@ fn extern_c_unwind_permitted_under_unwind_profile() {
     // Under an explicit `panic = "unwind"`, the E0415 gate does not fire — the
     // ABI is honorable there (the slice-9 unwind codegen is what actually lands
     // the backing; this test pins the effect-checker gate's strategy-awareness).
-    let errors = effectcheck_errors_unwind("unsafe extern \"C-unwind\" { @noblock fn risky(); }");
+    let errors = effectcheck_errors_unwind("unsafe extern \"C-unwind\" { fn risky(); }");
     assert!(
         !errors
             .iter()

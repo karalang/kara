@@ -114,7 +114,6 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     "link_section",
     "link_name",
     "kara_name",
-    "noblock",
     // Testing.
     "test",
     "with_provider",
@@ -816,11 +815,66 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
     }
 }
 
+/// A derive's argument list (`#[derive(Display(snake_case))]`): the one
+/// argument design.md §9 defines is `snake_case` on an enum's `Display`
+/// ("Casing"). Any other was accepted and did nothing (B-2026-11-16-262):
+/// `Display(all_fields)`, which appendix C described, changed nothing,
+/// since a derived struct `Display` already renders every field.
+fn check_derive_arguments(attrs: &[Attribute], is_enum: bool, errors: &mut Vec<ResolveError>) {
+    for attr in attrs.iter().filter(|a| a.is_bare("derive")) {
+        for arg in &attr.args {
+            let Some(Expr {
+                kind: ExprKind::Call { callee, args },
+                span,
+                ..
+            }) = &arg.value
+            else {
+                continue;
+            };
+            let ExprKind::Identifier(trait_name) = &callee.kind else {
+                continue;
+            };
+            let snake_case = matches!(
+                args.as_slice(),
+                [one] if one.label.is_none()
+                    && matches!(&one.value.kind, ExprKind::Identifier(f) if f == "snake_case")
+            );
+            let message = match (trait_name.as_str(), snake_case, is_enum) {
+                ("Display", true, true) => continue,
+                ("Display", true, false) => {
+                    "`Display(snake_case)` writes an enum's variant names in snake_case, and a \
+                     struct has no variants; write `Display` (design.md §9 Derived `Display`)"
+                        .to_string()
+                }
+                ("Display", false, _) => {
+                    "`Display` takes one argument in a derive, `snake_case`, on an enum \
+                     (design.md §9 Derived `Display`); a derived struct `Display` renders every \
+                     field already, so remove the argument"
+                        .to_string()
+                }
+                (other, _, _) => format!(
+                    "`{other}` takes no arguments in a derive: write `{other}` (design.md §9 \
+                     Derive)"
+                ),
+            };
+            errors.push(ResolveError {
+                message: format!("error[E_UNKNOWN_ATTRIBUTE]: {message}"),
+                span: *span,
+                kind: ResolveErrorKind::UnknownAttribute,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+        }
+    }
+}
+
 fn visit_item(item: &Item, errors: &mut Vec<ResolveError>) {
     match item {
         Item::Function(f) => visit_attrs(&f.attributes, errors),
         Item::StructDef(s) => {
             visit_attrs(&s.attributes, errors);
+            check_derive_arguments(&s.attributes, false, errors);
             for field in &s.fields {
                 visit_attrs(&field.attributes, errors);
             }
@@ -833,6 +887,7 @@ fn visit_item(item: &Item, errors: &mut Vec<ResolveError>) {
         }
         Item::EnumDef(e) => {
             visit_attrs(&e.attributes, errors);
+            check_derive_arguments(&e.attributes, true, errors);
             for variant in &e.variants {
                 visit_attrs(&variant.attributes, errors);
             }

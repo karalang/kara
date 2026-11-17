@@ -1,1 +1,0 @@
-ERROR at line 4: layout 'qs' applies to `pub struct Q`, which is `#[repr(C)]`: the ABI layout takes precedence and these groups are ignored: hot, cold. A `pub` `#[repr(C)]` type may be consumed by FFI code that depends on the exact field order, so this is an error rather than a warning.

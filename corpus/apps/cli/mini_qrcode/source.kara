@@ -862,10 +862,10 @@ fn lost_point(m: ref Vec[i64], n: i64) -> i64 {
     lost_point_level1(m, n) + lost_point_level2(m, n) + lost_point_level3(m, n) + lost_point_level4(m, n)
 }
 
-// ---------------------------------------------------------------- QRCode
+// ---------------------------------------------------------------- QrCode
 
 // The modules are one vec, row by row: -1 for None, 0 light, 1 dark.
-struct QRCode {
+struct QrCode {
     version: i64, // 0 until best_fit sets it
     ec: i64,
     box_size: i64,
@@ -896,8 +896,8 @@ fn new_env() -> Env {
     Env { gf: new_gf(), table: table, positions: pattern_position_table(), limits: limits }
 }
 
-// QRCode.__init__ with its checks, in its order
-fn new_qr(version: i64, ec: i64, box_size: i64, border: i64, mask: i64) -> Result[QRCode, PyErr] {
+// QrCode.__init__ with its checks, in its order
+fn new_qr(version: i64, ec: i64, box_size: i64, border: i64, mask: i64) -> Result[QrCode, PyErr] {
     if box_size <= 0 {
         return Err(py_err("ValueError", f"Invalid box size (was {box_size}, expected larger than 0)"));
     }
@@ -910,7 +910,7 @@ fn new_qr(version: i64, ec: i64, box_size: i64, border: i64, mask: i64) -> Resul
     if mask != -1 and (mask < 0 or mask > 7) {
         return Err(py_err("ValueError", f"Mask pattern should be in range(8) (got {mask})"));
     }
-    Ok(QRCode {
+    Ok(QrCode {
         version: version,
         ec: ec,
         box_size: box_size,
@@ -924,7 +924,7 @@ fn new_qr(version: i64, ec: i64, box_size: i64, border: i64, mask: i64) -> Resul
     })
 }
 
-impl QRCode {
+impl QrCode {
     fn add_data(mut ref self, data: ref Vec[i64], optimize: i64) {
         if optimize != 0 {
             for c in optimal_data_chunks(data, optimize).into_iter() {
@@ -1205,7 +1205,7 @@ fn ec_name(ec: i64) -> String {
     }
 }
 
-fn show_info(qr: ref QRCode, chosen: i64) {
+fn show_info(qr: ref QrCode, chosen: i64) {
     let mut parts: Vec[String] = Vec.new();
     for c in qr.chunks.iter() {
         parts.push(f"{mode_name(c.mode)} {c.data.len()}");
@@ -1245,7 +1245,7 @@ fn show_info(qr: ref QRCode, chosen: i64) {
 }
 
 // print_ascii: two rows per line in cp437's half blocks
-fn ascii_module(qr: ref QRCode, invert: bool, x: i64, y: i64) -> i64 {
+fn ascii_module(qr: ref QrCode, invert: bool, x: i64, y: i64) -> i64 {
     let n = qr.n;
     let hi = if x > y { x } else { y };
     let lo = if x < y { x } else { y };
@@ -1258,7 +1258,7 @@ fn ascii_module(qr: ref QRCode, invert: bool, x: i64, y: i64) -> i64 {
     qr.get(x, y)
 }
 
-fn show_ascii(qr: ref QRCode, invert: bool, label: Str) {
+fn show_ascii(qr: ref QrCode, invert: bool, label: Str) {
     let mut codes: Vec[char] = vec!['\u{a0}', '\u{2580}', '\u{2584}', '\u{2588}'];
     if invert {
         codes.reverse();
@@ -1280,7 +1280,7 @@ fn show_ascii(qr: ref QRCode, invert: bool, label: Str) {
     }
 }
 
-fn show_matrix(qr: ref QRCode) {
+fn show_matrix(qr: ref QrCode) {
     println("  -- matrix");
     let n = qr.n;
     let b = qr.border;
@@ -1317,7 +1317,7 @@ const SVG_NS: Str = "http://www.w3.org/2000/svg";
 
 // The SVG images, as ElementTree writes them. units() is pixels / 10 in
 // millimetres, so a pixel is ten hundredths.
-fn make_svg(qr: ref QRCode, kind: ref String) -> String {
+fn make_svg(qr: ref QrCode, kind: ref String) -> String {
     let path = kind.starts_with("svg-path");
     let fragment = kind == "svg-fragment";
     let fill = kind.ends_with("-fill");
@@ -1452,7 +1452,7 @@ fn ec_of(name: ref String) -> i64 {
     }
 }
 
-fn build(env: ref Env, data: ref Vec[i64], opts: ref Vec[(String, String)]) -> Result[(QRCode, i64), PyErr] {
+fn build(env: ref Env, data: ref Vec[i64], opts: ref Vec[(String, String)]) -> Result[(QrCode, i64), PyErr] {
     let ec = match opt(opts, "ec") {
         Some(e) => ec_of(e),
         None => EC_M,

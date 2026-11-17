@@ -9,15 +9,17 @@ let names = ["Alice", "Bob", "Charlie"];   // Vec[String]
 let numbers = [1, 2, 3];                   // Vec[i64]
 ```
 
-When you want a different collection, write its name as a prefix:
+When you want a different collection, say so with the type the literal is expected to have; the same brackets build it. A `[k: v]` literal is a `Map`:
 
 ```kara
-let xs = Array[1, 2, 3];         // Array[i64, 3] — fixed-size, stack-allocated
-let s  = Set[1, 2, 3];           // Set[i64]
-let m  = Map["a": 1, "b": 2];    // Map[String, i64]
+let xs: Array[i64, 3] = [1, 2, 3];  // Array[i64, 3] — fixed-size, stack-allocated
+let s: Set[i64] = [1, 2, 3];        // Set[i64]
+let m = ["a": 1, "b": 2];           // Map[String, i64]
 ```
 
-This form works anywhere a value is expected — function arguments, return values — where a binding's type annotation can't reach.
+An argument or a return value is expected to have its parameter's or the function's type, so the bare literal builds that collection there too. Where nothing says which collection, use a `from` constructor: `Set.from([1, 2, 3])`.
+
+Older code writes the collection's name as a prefix (`Set[1, 2, 3]`, `Map["a": 1]`, `Array[0; 4]`). That spelling is deprecated: `karac check` warns on it and `karac fix` rewrites it to the forms above.
 
 ## Vec
 
@@ -93,10 +95,9 @@ loops and for `collect`, write the natural code — it's already fast.
 Fixed-size, stack-allocated. Size is part of the type — `Array[i64, 4]` and `Array[i64, 5]` are different types.
 
 ```kara
-let xs = Array[10, 40, 20, 30];          // Array[i64, 4] — size and type inferred
-let scores = Array[0; 4];                // Array[i64, 4] — four zeros via repeat form
+let scores = [0; 4];                     // Array[i64, 4] — four zeros via the repeat form
 
-// Or declare with an annotation:
+// A list literal builds an array where one is expected:
 let data: Array[i64, 4] = [10, 40, 20, 30];
 
 let mut buf: Array[u8, 256] = [0; 256];  // annotation propagates u8 into elements
@@ -114,7 +115,7 @@ ages.insert("Alice", 30);
 ages.insert("Bob", 25);
 
 // Or initialize with values:
-let scores = Map["Alice": 10, "Bob": 7];
+let scores = ["Alice": 10, "Bob": 7];
 
 match ages.get("Alice") {
     Some(age) => println(f"Alice is {age}"),
@@ -133,7 +134,7 @@ seen.insert("world");
 seen.insert("hello");    // no effect, already present
 
 // Or initialize with values:
-let colors = Set["red", "green", "blue"];
+let colors = Set.from(["red", "green", "blue"]);
 
 println(seen.len());     // 2
 ```

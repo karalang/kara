@@ -627,7 +627,10 @@ impl<'ctx> Cx<'ctx, '_> {
         dest: &Place,
     ) -> R<Option<()>> {
         let op: u64 = match (base, method) {
-            ("Stdin", "lines") => return self.drop_moved(args).map(Some),
+            ("Stdin", "lines") => {
+                self.rt("stdin_lines_start", &[])?;
+                return self.drop_moved(args).map(Some);
+            }
             ("Stdin", "read_line") => 0,
             ("Stdin", "read_to_string") => 1,
             ("StdinLines", "next") => 2,

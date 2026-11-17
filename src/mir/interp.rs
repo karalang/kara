@@ -885,6 +885,7 @@ fn run_with(
         bufs: Vec::new(),
         lines_ended: Vec::new(),
         lines_failed_now: false,
+        stdin_lines_ended: false,
         buf_windows: Default::default(),
         procs: Procs::default(),
         sockets: Sockets::default(),
@@ -978,7 +979,7 @@ fn run_with(
                 None => done,
             },
             Err(Stop::Abort(r)) => Outcome::Aborted(r),
-            Err(Stop::Exit(code)) => Outcome::Exited(code),
+            Err(Stop::Exit(code)) => Outcome::Exited(exit_status(code)),
             Err(Stop::Error(e)) => Outcome::Error(e),
         }
     };
@@ -1127,6 +1128,39 @@ const ENV_SET_INVALID: &str = "env.set: invalid variable name or value";
 /// the name, or a NUL in either: Rust's `set_var` panics on each.
 fn env_settable(name: &str, value: &str) -> bool {
     !name.is_empty() && !name.contains(['=', '\0']) && !value.contains('\0')
+}
+
+/// The error for a `Command` environment entry no environment can hold.
+fn invalid_env_entry() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "an environment name is empty or holds `=` or NUL, or a value holds NUL",
+    )
+}
+
+/// A failed `spawn` as io.md § Running programs names it: a program the
+/// system cannot run (`ENOEXEC`, not a binary or a script) is
+/// `PermissionDenied`, and a working directory that is not a directory
+/// (`ENOTDIR`) is `NotFound`, where both were `Other` (B-2026-11-17-61).
+fn spawn_error(e: std::io::Error) -> std::io::Error {
+    // ENOEXEC and ENOTDIR are 8 and 20 on Linux and macOS alike; Windows
+    // numbers its errors otherwise.
+    match e.raw_os_error() {
+        Some(8) if cfg!(unix) => std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        Some(20) if cfg!(unix) => std::io::Error::from(std::io::ErrorKind::NotFound),
+        _ => e,
+    }
+}
+
+/// The process status for exit code `code`, as the compiled runtime's
+/// `exit_status`: on Unix a code outside `0..=255` ends the process with 1,
+/// never wrapping to 0 (io.md § Exit, B-2026-11-17-63).
+fn exit_status(code: i32) -> i32 {
+    if cfg!(unix) && !(0..=255).contains(&code) {
+        1
+    } else {
+        code
+    }
 }
 
 fn err<T>(msg: impl Into<String>) -> R<T> {
@@ -1372,6 +1406,10 @@ struct Interp<'a> {
     /// Set by a `LinesIter`'s `next` that yields an error, for
     /// [`Self::buf_method`] to record in `lines_ended`.
     lines_failed_now: bool,
+    /// Set when `stdin.lines()`'s `next` yields an error: it is `None` from
+    /// then on, as a `LinesIter`'s, until the next `stdin.lines()`
+    /// (B-2026-11-17-11).
+    stdin_lines_ended: bool,
     /// A `BufReader`'s window, by its id: the box of bytes the last
     /// `fill_buf` returned a view of, refilled in place by the next one
     /// (the view borrows the reader, so none is alive then) and freed with
@@ -2127,7 +2165,11 @@ impl<'a> Interp<'a> {
             }
             // `stdin.lines()` is an empty marker; its `next` reads a line
             // from the shared stdin buffer, as `read_line` does.
-            ("Stdin", "lines") => Ok(Value::Agg(Vec::new())),
+            ("Stdin", "lines") => {
+                self.stdin_lines_ended = false;
+                Ok(Value::Agg(Vec::new()))
+            }
+            ("StdinLines", "next") if self.stdin_lines_ended => self.option(ret, None),
             ("StdinLines", "next") => {
                 let inner = self
                     .tys
@@ -2149,7 +2191,10 @@ impl<'a> Interp<'a> {
                         let line = self.alloc_box("String", Value::Str(s));
                         self.variant_named(inner, None, "Ok", vec![line])?
                     }
-                    Err(e) => self.io_err(inner, e)?,
+                    Err(e) => {
+                        self.stdin_lines_ended = true;
+                        self.io_err(inner, e)?
+                    }
                 };
                 self.option(ret, Some(item))
             }
@@ -7431,7 +7476,7 @@ impl<'a> Interp<'a> {
             }
             let res = self
                 .command(name, recv, arg_tys.first().copied(), output)?
-                .and_then(|mut cmd| cmd.spawn());
+                .and_then(|mut cmd| cmd.spawn().map_err(spawn_error));
             let res = match res {
                 Ok(child) if output => child.wait_with_output().map(Err),
                 Ok(child) => Ok(Ok(child)),
@@ -7660,6 +7705,11 @@ impl<'a> Interp<'a> {
                 return err(format!("{name}: an EnvVar holding {kv:?}"));
             };
             let (key, value) = (self.string_at(&kv[0])?, self.string_at(&kv[1])?);
+            // A name or value no environment can hold starts nothing
+            // (io.md § Running programs, B-2026-11-17-61).
+            if kv[2] == Value::Int(0) && !env_settable(&key, &value) {
+                return Ok(Err(invalid_env_entry()));
+            }
             match kv[2] {
                 Value::Int(0) => cmd.env(key, value),
                 Value::Int(1) => cmd.env_remove(key),
@@ -16489,7 +16539,7 @@ impl<'a> Interp<'a> {
         if adt.name == "ExitCode" {
             if let Value::Agg(fs) = &v {
                 if let [Value::Int(n)] = fs.as_slice() {
-                    return Ok(Outcome::Exited(*n as i32));
+                    return Ok(Outcome::Exited(exit_status(*n as i32)));
                 }
             }
         }
@@ -20737,9 +20787,25 @@ fn log_native(name: &str) -> Option<&str> {
 pub fn pool_has_workers() -> bool {
     static POOLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *POOLED.get_or_init(|| {
-        std::env::var("KARAC_THREADS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
+        std::env::var_os("KARAC_THREADS")
+            .and_then(|v| {
+                // As the compiled runtime reads it (runtime/src/mir_task.rs
+                // `threads_from_env`, B-2026-11-16-288): a value that is not
+                // a count of 1 or more warns once and takes the default.
+                let v = v.to_string_lossy();
+                match v.trim().parse::<usize>() {
+                    Ok(n) if n >= 1 => Some(n),
+                    _ if v.trim().is_empty() => None,
+                    _ => {
+                        eprintln!(
+                            "warning: KARAC_THREADS=`{}` is not a worker count (a whole \
+                             number, 1 or more), so the default count is used",
+                            v.trim()
+                        );
+                        None
+                    }
+                }
+            })
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
             > 1
     })

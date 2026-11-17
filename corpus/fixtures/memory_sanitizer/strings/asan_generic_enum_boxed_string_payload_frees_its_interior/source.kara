@@ -43,9 +43,9 @@ fn main() {
         println(f"c5:{match c5 { Filled(x) => x.contains("row"), Blank => false, }}");
         let c6: StrSlot = StrSlot.FilledS(f"row-ffffffffffff-{i}-{n}");
         println(f"c6:{mono(c6)}");
-        let c7: Slot[Vec[String]] = Slot.Filled(Vec[f"row-gggggggggggg-{i}-{n}", f"row-hhhhhhhhhhhh-{i}-{n}"]);
+        let c7: Slot[Vec[String]] = Slot.Filled([f"row-gggggggggggg-{i}-{n}", f"row-hhhhhhhhhhhh-{i}-{n}"]);
         println(f"c7:{vpeek(c7)}");
-        let c8: Slot[Vec[String]] = Slot.Filled(Vec[f"row-iiiiiiiiiiii-{i}-{n}", f"row-jjjjjjjjjjjj-{i}-{n}"]);
+        let c8: Slot[Vec[String]] = Slot.Filled([f"row-iiiiiiiiiiii-{i}-{n}", f"row-jjjjjjjjjjjj-{i}-{n}"]);
         println(f"c8:{vtake(c8)}");
         i = i + 1i64;
     }

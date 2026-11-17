@@ -1,6 +1,6 @@
 
 fn main() {
-    let v = Vec[10, 20, 30];
+    let v = [10, 20, 30];
     let s: Slice[i64] = v.as_slice();
     let mut sum = 0;
     for x in s {

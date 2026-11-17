@@ -12,7 +12,7 @@ fn d4(w: own W1) { (w, mk(40)); println("d4") }
 fn d5(w: own W1) { let _ = S2 { r: w, k: 1 }; println("d5") }
 fn d6(w: own W1) { let _ = E.A(w); println("d6") }
 fn d7(w: own W1) { D.A(w); println("d7") }
-fn d8(w: own W1) { let _ = Vec[w]; println("d8") }
+fn d8(w: own W1) { let _ = [w]; println("d8") }
 fn p1(o: own Option[W1]) { match o { Some(w) => { let _ = w; println("p1") }, None => {} } }
 fn p2(o: own Option[W1]) { match o { Some(w) => { let _ = [w]; println("p2") }, None => {} } }
 fn p3(o: own Option[W1]) { match o { Some(w) => { [w]; println("p3") }, None => {} } }

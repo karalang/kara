@@ -15,7 +15,7 @@ struct Node {
     next: i64,
 }
 
-struct LFUCache {
+struct LfuCache {
     capacity: i64,
     nodes: Vec[Node],
     index: Map[i64, i64],
@@ -24,9 +24,9 @@ struct LFUCache {
     free: i64,
 }
 
-impl LFUCache {
-    fn new(capacity: i64) -> LFUCache {
-        LFUCache { capacity: capacity, nodes: Vec.new(), index: Map.new(), sentinels: Map.new(), least: 0, free: -1 }
+impl LfuCache {
+    fn new(capacity: i64) -> LfuCache {
+        LfuCache { capacity: capacity, nodes: Vec.new(), index: Map.new(), sentinels: Map.new(), least: 0, free: -1 }
     }
 
     fn unlink(mut ref self, i: i64) {
@@ -119,7 +119,7 @@ fn main() {
     let capacity = 4096;
     let calls = 10000000;
     let mut seed: i64 = 460;
-    let mut cache = LFUCache.new(capacity);
+    let mut cache = LfuCache.new(capacity);
     let mut hits = 0;
     let mut checksum: i64 = 0;
     for _ in 0..calls {

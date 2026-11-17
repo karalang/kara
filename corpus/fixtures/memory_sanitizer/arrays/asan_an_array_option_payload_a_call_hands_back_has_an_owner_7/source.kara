@@ -1,6 +1,6 @@
 fn mk(n: i64) -> Option[Array[String, 2]] {
     if n < 0 { return None; }
-    return Some(Array[f"raaaaaaaaaaaa{n}", f"cbbbbbbbbbbbb{n}"]);
+    return Some([f"raaaaaaaaaaaa{n}", f"cbbbbbbbbbbbb{n}"]);
 }
 fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
 fn main() {

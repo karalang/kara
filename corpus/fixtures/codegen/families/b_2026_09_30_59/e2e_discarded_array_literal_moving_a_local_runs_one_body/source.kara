@@ -21,7 +21,7 @@ fn run() {
     [e, f];
     println("s5");
     let g = mk(8);
-    let _ = Vec[g];
+    let _ = [g];
     println("s6");
     let h = mh(9);
     let _ = [h];

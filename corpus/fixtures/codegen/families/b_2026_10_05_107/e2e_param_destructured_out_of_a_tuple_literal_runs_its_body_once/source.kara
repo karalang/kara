@@ -38,7 +38,7 @@ fn main() {
     let x15 = cret(mk(150), false); println(f"_{x15.id}");
     let x16 = gw(mk(160), mk(161)); println(f"_{x16.id}");
     let p = mk(170); let q = mk(171); let x17 = both(p, q); println(f"_{x17.id}");
-    let x18 = vecs(Vec[mk(180)], Vec[mk(181)]); println(f"_{x18.len()}");
+    let x18 = vecs([mk(180)], [mk(181)]); println(f"_{x18.len()}");
     let x19 = enums(E.A(mk(190)), E.A(mk(191))); match x19 { E.A(r) => println(f"_{r.id}"), E.B => println("b") }
     let k = K { z: 0 }; let x20 = k.m(mk(200), mk(201)); println(f"_{x20.id}");
     println("end")

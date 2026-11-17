@@ -6,7 +6,7 @@ impl Pick for Column[String] {
 fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let v: Vec[String] = Vec[
+        let v: Vec[String] = [
             "col-string-index-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
             "col-string-index-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
             "col-string-index-charlie-cccccccccccccccccc".to_string()

@@ -3,7 +3,7 @@ fn mk_rows(n: i64) -> Vec[Vec[i64]] {
     let mut v: Vec[Vec[i64]] = Vec.new();
     let mut i = 0i64;
     while i < n {
-        v.push(Vec[i, i + 1i64, i + 2i64]);
+        v.push([i, i + 1i64, i + 2i64]);
         i = i + 1;
     }
     v

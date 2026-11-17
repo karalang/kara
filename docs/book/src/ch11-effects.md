@@ -116,19 +116,13 @@ The three fetches read from different resources. The compiler can prove they don
 
 The `with` clause is a machine-checked description of what a function does. It can't go stale like a comment. It can't be wrong like a docstring. If the declaration says `reads(Database)`, the function reads from the database and does nothing else that isn't declared.
 
-## Effect groups
+## Effect groups (a later track)
 
-For common combinations, define groups:
-
-```kara
-effect group io = reads(FileSystem) + writes(FileSystem) + reads(Env);
-```
-
-Effect group names are Value-class (snake_case) — the same naming class as effect verbs and `let` bindings. Then use the group in declarations:
+Naming a common combination, as in `effect group io = reads(FileSystem) + writes(FileSystem);`, is planned but not in 0.8: the compiler refuses the declaration (`E_DEFERRED_EFFECT_GROUP`). For now, write the effects out in each `with` clause:
 
 ```kara,ignore
-pub fn process(path: String) -> Result[Data, Error] with io {
-    // can read and write files, read environment variables
+pub fn process(path: String) -> Result[Data, Error] with reads(FileSystem) writes(FileSystem) {
+    // can read and write files
 }
 ```
 

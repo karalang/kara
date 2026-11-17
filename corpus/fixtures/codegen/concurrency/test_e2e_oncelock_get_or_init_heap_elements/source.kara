@@ -7,7 +7,7 @@ let b = c.get_or_init(|| "second".to_string());
 println(b);
 println(a.len());
 let v: OnceCell[Vec[i64]] = OnceCell.new();
-let xs = v.get_or_init(|| Vec[10, 20, 30]);
+let xs = v.get_or_init(|| [10, 20, 30]);
 println(xs.len());
 match xs.get(1) { Some(n) => println(n), None => println(-1) }
 let k: OnceLock[Config] = OnceLock.new();

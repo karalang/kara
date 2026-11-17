@@ -12,7 +12,7 @@ struct Entry {
     time: i64,
 }
 
-struct LFUCache {
+struct LfuCache {
     capacity: i64,
     entries: Map[i64, Entry],
     buckets: Map[i64, SortedMap[i64, i64]],
@@ -20,9 +20,9 @@ struct LFUCache {
     clock: i64,
 }
 
-impl LFUCache {
-    fn new(capacity: i64) -> LFUCache {
-        LFUCache { capacity: capacity, entries: Map.new(), buckets: Map.new(), least: 0, clock: 0 }
+impl LfuCache {
+    fn new(capacity: i64) -> LfuCache {
+        LfuCache { capacity: capacity, entries: Map.new(), buckets: Map.new(), least: 0, clock: 0 }
     }
 
     // Moves `key` from its bucket to the next one up, as its newest key.
@@ -82,7 +82,7 @@ impl LFUCache {
 // Runs `ops` on a cache of `capacity`: (0, key, value) is a put and
 // (1, key, _) a get. Returns every get's answer.
 fn run(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
-    let mut cache = LFUCache.new(capacity);
+    let mut cache = LfuCache.new(capacity);
     let mut answers: Vec[i64] = Vec.new();
     for (kind, key, value) in ops {
         if kind == 0 {

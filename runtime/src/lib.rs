@@ -381,6 +381,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_buf,
         mir_io::karac_mir_buf_free,
         mir_io::karac_mir_std_stream,
+        mir_io::karac_mir_stdin_lines_start,
         mir_io::karac_mir_env_var,
         mir_process::karac_mir_stdio,
         mir_process::karac_mir_stdio_free,
@@ -1523,7 +1524,9 @@ pub unsafe extern "C" fn karac_runtime_env_args_into(out: *mut KaracVec) {
         // program. Unit-separator encoded; see the writer in `cli.rs`.
         let args: Vec<String> = match std::env::var("KARAC_PROGRAM_ARGS") {
             Ok(packed) => packed.split('\u{1F}').map(|s| s.to_string()).collect(),
-            Err(_) => std::env::args().collect(),
+            Err(_) => std::env::args_os()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect(),
         };
         let count = args.len();
         if count == 0 {

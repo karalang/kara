@@ -25,7 +25,7 @@ fn main() {
     println(f"g:{n}");
     let mut z = 0;
     for x in [4; 3] { z = z + x; }
-    for x in Vec[0; 3] { z = z + x; }
+    for x in Vec.filled(3, 0) { z = z + x; }
     for row in [vec![1, 2]; 2] { z = z + row.len(); }
     for s in [f"w{1}"; 2] { z = z + s.len(); }
     println(f"h:{z}");

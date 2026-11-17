@@ -47,7 +47,7 @@ fn main() {
     }
 
     // ---- punch ----------------------------------------------------------
-    let mut tails: Array[i64, 512] = Array[0; 512];
+    let mut tails: Array[i64, 512] = [0; 512];
     let mut checksum = 0;
 
     let mut pass = 0;

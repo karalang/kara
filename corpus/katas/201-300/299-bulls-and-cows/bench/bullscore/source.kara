@@ -59,8 +59,8 @@ fn main() {
             // where C's `long s_left[4] = {0}` and Rust's `[0i64; 4]` are a
             // stack slot and a couple of stores. Benching the Vec against
             // those would be a mirror asymmetry, not a language result.
-            let mut s_left: Array[i64, 4] = Array[0, 0, 0, 0];
-            let mut g_left: Array[i64, 4] = Array[0, 0, 0, 0];
+            let mut s_left: Array[i64, 4] = [0, 0, 0, 0];
+            let mut g_left: Array[i64, 4] = [0, 0, 0, 0];
             let mut bulls = 0;
             let mut cows = 0;
 

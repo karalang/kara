@@ -1,6 +1,5 @@
 
 struct P { x: f64, y: f64, m: f64 }
-layout ps: Vec[P] { group pos { x, y } group mass { m } }
 fn scatter(ps: mut ref Vec[P]) {
     let mut i = 0;
     while i < ps.len() {

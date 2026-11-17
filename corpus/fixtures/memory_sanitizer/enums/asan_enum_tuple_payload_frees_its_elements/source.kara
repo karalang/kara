@@ -29,7 +29,7 @@ fn main() {
         println(f"c4:{peek2(c4)}");
         let c5: T2 = T2.P((f"row-eeeeeeeeeeee-{i}-{n}", 1i64));
         println(f"c5:{match c5 { P(x) => x.0.contains("row"), Q => false, }}");
-        let c6: Tvec = Tvec.Pvec((Vec[f"row-ffffffffffff-{i}-{n}", f"row-gggggggggggg-{i}-{n}"], 1i64));
+        let c6: Tvec = Tvec.Pvec(([f"row-ffffffffffff-{i}-{n}", f"row-gggggggggggg-{i}-{n}"], 1i64));
         println(f"c6:{takev(c6)}");
         let c7: Tnest = Tnest.Pnest(((f"row-hhhhhhhhhhhh-{i}-{n}", 1i64), 2i64));
         println("c7");

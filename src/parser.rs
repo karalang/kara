@@ -391,6 +391,11 @@ pub struct Parser {
     /// See [`crate::ast::Program::vec_macro_literals`].
     pub(crate) vec_macro_literals:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
+    /// See [`crate::ast::Program::prefix_collection_literals`].
+    pub(crate) prefix_collection_literals:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::ast::PrefixLiteralFix>,
+    /// See [`crate::ast::Program::acronym_type_names`].
+    pub(crate) acronym_type_names: Vec<crate::ast::AcronymName>,
     /// See [`crate::ast::Program::rust_box_new`].
     pub(crate) rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::foreign_calls`].
@@ -750,6 +755,8 @@ impl Parser {
             escaping_ok: false,
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             vec_macro_literals: rustc_hash::FxHashMap::default(),
+            prefix_collection_literals: rustc_hash::FxHashMap::default(),
+            acronym_type_names: Vec::new(),
             rust_box_new: rustc_hash::FxHashMap::default(),
             foreign_calls: rustc_hash::FxHashMap::default(),
             expr_stmt_semis: rustc_hash::FxHashMap::default(),
@@ -1211,6 +1218,8 @@ impl Parser {
             ref_binding_keywords: std::mem::take(&mut self.ref_binding_keywords),
             escaping_fn_types: std::mem::take(&mut self.escaping_fn_types),
             vec_macro_literals: std::mem::take(&mut self.vec_macro_literals),
+            prefix_collection_literals: std::mem::take(&mut self.prefix_collection_literals),
+            acronym_type_names: std::mem::take(&mut self.acronym_type_names),
             discarded_doc_comments: std::mem::take(&mut self.discarded_doc_comments),
             nested_fstrings: std::mem::take(&mut self.nested_fstrings),
             rust_box_new: self.rust_box_new_and_types(),
@@ -3016,6 +3025,14 @@ impl Parser {
                     msg.push_str(&format!(
                         "; write `r#{kw}` to use it as an ordinary identifier"
                     ));
+                } else if matches!(tok, Token::ReservedFuture(_)) {
+                    // `priv`, reserved and a structural marker at once:
+                    // design.md §3 says no escape names it, so the message
+                    // says so rather than leaving the writer to try `r#`.
+                    msg.push_str(&format!(
+                        "; '{kw}' is also a structural marker, which no raw-identifier escape \
+                         names (design.md §3): choose another name"
+                    ));
                 }
                 msg
             }
@@ -4065,6 +4082,9 @@ impl Parser {
             return;
         }
         if actual == expected {
+            if expected == IdentClass::Type {
+                self.note_acronym_name(name, span);
+            }
             return;
         }
         let expected_desc = match expected {
@@ -4115,6 +4135,45 @@ impl Parser {
         let Some(new_name) = crate::lexer::suggest_name_for_class(name, IdentClass::Type) else {
             return;
         };
+        if let Some(edits) = self.rename_edits(name, &new_name) {
+            self.fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&error_span), edits);
+        }
+    }
+
+    /// A Type-class name declared with an acronym in capitals (`HTTPClient`,
+    /// design.md §3 CN-4), kept for the type checker's `acronym_case`
+    /// warning with the rename to `HttpClient` (B-2026-11-16-260).
+    fn note_acronym_name(&mut self, name: &str, span: Span) {
+        let Some(words) = crate::lexer::acronyms_as_words(name) else {
+            return;
+        };
+        if classify_ident(&words) != IdentClass::Type || words == "Self" {
+            return;
+        }
+        let rename = self.rename_edits(name, &words);
+        // The warning points at the name, not at the declaration's keyword.
+        let span = self
+            .tokens
+            .iter()
+            .find(|t| {
+                t.span.offset >= span.offset
+                    && matches!(&t.token, Token::Identifier { name: n, .. } if n == name)
+            })
+            .map_or(span, |t| t.span);
+        self.acronym_type_names.push(crate::ast::AcronymName {
+            span,
+            name: name.to_string(),
+            words,
+            rename,
+        });
+    }
+
+    /// Edits renaming `name` to `new_name` at every token that spells it,
+    /// which for a type name of this file is every use; `None` when an
+    /// f-string's hole names it, whose text the token edits cannot reach,
+    /// or when no token does.
+    fn rename_edits(&self, name: &str, new_name: &str) -> Option<Vec<crate::resolver::TextEdit>> {
         let mut edits = Vec::new();
         for t in &self.tokens {
             match &t.token {
@@ -4125,7 +4184,7 @@ impl Parser {
                     edits.push(crate::resolver::TextEdit {
                         offset: t.span.offset,
                         length: t.span.length,
-                        replacement: new_name.clone(),
+                        replacement: new_name.to_string(),
                     });
                 }
                 Token::InterpolatedStringLiteral(parts)
@@ -4134,15 +4193,12 @@ impl Parser {
                             if raw.contains(name))
                     }) =>
                 {
-                    return;
+                    return None;
                 }
                 _ => {}
             }
         }
-        if !edits.is_empty() {
-            self.fix_diffs
-                .insert(crate::resolver::SpanKey::from_span(&error_span), edits);
-        }
+        (!edits.is_empty()).then_some(edits)
     }
 
     fn synchronize_to_item(&mut self) {

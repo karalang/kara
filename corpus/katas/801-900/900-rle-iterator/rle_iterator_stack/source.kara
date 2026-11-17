@@ -11,12 +11,12 @@ struct Run {
     value: i64,
 }
 
-struct RLEIterator {
+struct RleIterator {
     runs: Vec[Run],
 }
 
-impl RLEIterator {
-    fn new(encoding: own Vec[i64]) -> RLEIterator {
+impl RleIterator {
+    fn new(encoding: own Vec[i64]) -> RleIterator {
         let mut runs: Vec[Run] = Vec.new();
         let mut j = encoding.len() - 2;
         while j >= 0 {
@@ -25,7 +25,7 @@ impl RLEIterator {
             }
             j -= 2;
         }
-        RLEIterator { runs: runs }
+        RleIterator { runs: runs }
     }
 
     fn next(mut ref self, n: i64) -> i64 {
@@ -61,7 +61,7 @@ fn random_below(seed: mut ref i64, limit: i64) -> i64 {
 }
 
 fn answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
-    let mut it = RLEIterator.new(encoding);
+    let mut it = RleIterator.new(encoding);
     let mut out: Vec[i64] = Vec.new();
     for n in calls.iter() {
         out.push(it.next(*n));

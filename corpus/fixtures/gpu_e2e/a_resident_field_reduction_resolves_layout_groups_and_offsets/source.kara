@@ -1,8 +1,4 @@
 struct Body { x: f32, y: f32, vx: f32, vy: f32 }
-layout bodies: Vec[Body] {
-    group pos { x, y }
-    group vel { vx, vy }
-}
 fn main() {
     let mut bodies: Vec[Body] = Vec.new();
     bodies.push(Body { x: 1.0, y: 2.0, vx: 3.0, vy: 4.0 });

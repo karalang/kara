@@ -2,11 +2,11 @@
 fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let mut a: Vec[String] = Vec[
+        let mut a: Vec[String] = [
             "zip-heap-collect-left-alpha-aaaaaaaaaaaaaaaa".to_string(),
             "zip-heap-collect-left-bravo-bbbbbbbbbbbbbbbb".to_string()
         ];
-        let mut b: Vec[String] = Vec[
+        let mut b: Vec[String] = [
             "zip-heap-collect-right-charlie-cccccccccccc".to_string(),
             "zip-heap-collect-right-delta-dddddddddddddd".to_string()
         ];

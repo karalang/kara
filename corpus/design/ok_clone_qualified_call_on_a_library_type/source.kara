@@ -7,7 +7,7 @@ struct P { x: i64 }
 fn main() {
     let s = "ab";
     let t: String = Clone.clone(s);
-    let v = Vec[1, 2];
+    let v = [1, 2];
     let mut w: Vec[i64] = Clone.clone(v);
     w.push(3);
     let p = P { x: 4 };

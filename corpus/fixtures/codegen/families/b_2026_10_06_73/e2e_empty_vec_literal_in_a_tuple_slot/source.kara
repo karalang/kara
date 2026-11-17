@@ -15,7 +15,7 @@ fn main() {
         total += xs.len() + k;
     }
     println(f"{total}");
-    let p = P { t: (Vec[], 9) };
+    let p = P { t: (Vec.new(), 9) };
     println(f"{p.t.0.len()} {p.t.1}");
     let (a, b) = mk();
     println(f"{a.len()} {b}");

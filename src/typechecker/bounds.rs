@@ -633,20 +633,24 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// Emit the v1 trait-alias stub diagnostic at a use site.
+    /// The trait-alias diagnostic at a use site. The declaration is
+    /// refused already (`refuse_deferred_item`, B-2026-11-16-298), so a
+    /// use is reported only for an alias that declaration did not refuse.
     fn report_trait_alias_use(&mut self, trait_name: &str, span: &Span) {
+        if self.refused_deferred.contains(trait_name) {
+            return;
+        }
         let bound_list = self
             .trait_alias_bound_list(trait_name)
             .unwrap_or_else(|| "<bounds>".to_string());
         self.type_error(
             format!(
-                "error[E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET]: trait alias \
-                 '{trait_name}' is recognized but not yet expanded; the \
-                 implementation lands in P1 — write the bound list \
-                 explicitly for now: `{bound_list}`"
+                "trait alias '{trait_name}' is not available: trait aliases are deferred \
+                 (deferred.md § Trait Aliases) and not in 0.8; write the bound list \
+                 instead: `{bound_list}`"
             ),
             *span,
-            TypeErrorKind::TypeMismatch,
+            TypeErrorKind::DeferredTraitAlias,
         );
     }
 

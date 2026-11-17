@@ -13,7 +13,7 @@ fn main() {
     let o3 = Some(mk(3));
     match o3 { Some(x) => { let z = passv([x]); println(f"z:{z[0].v}") }, None => {} };
     let o4 = Some(mk(4));
-    match o4 { Some(x) => { let z = passv(Vec[x]); println(f"z:{z[0].v}") }, None => {} };
+    match o4 { Some(x) => { let z = passv([x]); println(f"z:{z[0].v}") }, None => {} };
     let o5 = Some(mk(5));
     match o5 { Some(x) => { let z = pg([x]); println(f"z:{z[0].v}") }, None => {} };
     let r6: Result[W1, i64] = Ok(mk(6));
@@ -25,8 +25,8 @@ fn main() {
     let o9 = Some(mk(9));
     match o9 { Some(x) => { let z = [x]; println(f"z:{z[0].v}") }, None => {} };
     let o10 = Some(mk(10));
-    match o10 { Some(x) => { let z: Array[W1, 1] = Array[x]; let y = z; println(f"y:{y[0].v}") }, None => {} };
+    match o10 { Some(x) => { let z: Array[W1, 1] = [x]; let y = z; println(f"y:{y[0].v}") }, None => {} };
     let o11 = Some(mk(11));
-    match o11 { Some(x) => { let z = Vec[x]; println(f"n:{z.len()}") }, None => {} };
+    match o11 { Some(x) => { let z = [x]; println(f"n:{z.len()}") }, None => {} };
     println("end")
 }

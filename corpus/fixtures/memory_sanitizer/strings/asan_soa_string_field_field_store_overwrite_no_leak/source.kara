@@ -1,6 +1,5 @@
 
 struct Cell { id: i64, name: String }
-layout cells: Vec[Cell] { group ids { id } group names { name } }
 fn main() with panics {
     let mut total = 0;
     let mut k = 0;

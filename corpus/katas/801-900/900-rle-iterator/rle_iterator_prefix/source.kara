@@ -6,14 +6,14 @@
 // by a binary search over the totals. A place past the last term stays
 // past it. O(length) to build, O(log length) a call.
 
-struct RLEIterator {
+struct RleIterator {
     ends: Vec[i64],
     values: Vec[i64],
     place: i64,
 }
 
-impl RLEIterator {
-    fn new(encoding: own Vec[i64]) -> RLEIterator {
+impl RleIterator {
+    fn new(encoding: own Vec[i64]) -> RleIterator {
         let mut ends: Vec[i64] = Vec.new();
         let mut values: Vec[i64] = Vec.new();
         let mut total = 0;
@@ -24,7 +24,7 @@ impl RLEIterator {
             values.push(encoding[j + 1]);
             j += 2;
         }
-        RLEIterator { ends: ends, values: values, place: 0 }
+        RleIterator { ends: ends, values: values, place: 0 }
     }
 
     fn next(mut ref self, n: i64) -> i64 {
@@ -64,7 +64,7 @@ fn random_below(seed: mut ref i64, limit: i64) -> i64 {
 }
 
 fn answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
-    let mut it = RLEIterator.new(encoding);
+    let mut it = RleIterator.new(encoding);
     let mut out: Vec[i64] = Vec.new();
     for n in calls.iter() {
         out.push(it.next(*n));

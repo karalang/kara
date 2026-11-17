@@ -1,4 +1,4 @@
-fn mk() -> Array[String, 2] { return Array[f"aaaaaaaa0", f"bbbbbbbb0"]; }
+fn mk() -> Array[String, 2] { return [f"aaaaaaaa0", f"bbbbbbbb0"]; }
 fn main() {
     let mut m: Map[Array[String, 2], i64] = Map.new();
     let k1 = mk();

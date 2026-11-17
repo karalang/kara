@@ -1,4 +1,4 @@
 fn main() {
-let v = Vec[10_i64];
+let v = [10_i64];
 println(f"v={v}");
 }

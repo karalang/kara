@@ -1,6 +1,6 @@
 
-fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
-fn mknum(n: i64) -> Array[i64, 2] { return Array[n, n + 1]; }
+fn mk(n: i64) -> Array[String, 2] { return [f"item{n}", f"item{n + 1}"]; }
+fn mknum(n: i64) -> Array[i64, 2] { return [n, n + 1]; }
 
 fn main() {
     println(mk(4)[0]);

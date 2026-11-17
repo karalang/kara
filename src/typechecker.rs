@@ -1130,6 +1130,19 @@ pub enum TypeErrorKind {
     /// that the checker parses and the v2 backends do not run: a struct
     /// `invariant` / `impl invariant` (the verification track's contracts).
     DeferredToLaterTrack,
+    /// B-2026-11-16-298 — a feature docs/deferred.md holds, which the parser
+    /// reads and the checker refuses, each under its own code so `karac
+    /// explain` reaches it from the JSON record: a `try` block
+    /// (`E_TRY_BLOCK_NOT_IMPLEMENTED_YET`), a trait alias
+    /// (`E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET`), a type alias `impl Trait`
+    /// (`E_TAIT_NOT_IMPLEMENTED_YET`) and an `effect group`
+    /// (`E_DEFERRED_EFFECT_GROUP`), and a `layout` block
+    /// (`E_DEFERRED_LAYOUT_BLOCK`, B-2026-11-16-257).
+    DeferredTryBlock,
+    DeferredTraitAlias,
+    DeferredTait,
+    DeferredEffectGroup,
+    DeferredLayoutBlock,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
     /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
@@ -1477,6 +1490,9 @@ pub enum TypeErrorKind {
     /// documents nothing, which design.md §3 Doc comments discards with a
     /// warning. The parser records each (`Program::discarded_doc_comments`).
     UnusedDocComment,
+    /// `acronym_case` lint (design.md §3 CN-4, B-2026-11-16-260): a Type
+    /// name with an acronym in capitals (`HTTPClient` for `HttpClient`).
+    AcronymCase,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1823,7 +1839,12 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::RemovedInCore
         | TypeErrorKind::DeferredToM4a
         | TypeErrorKind::ArchivedWithLegacy
-        | TypeErrorKind::DeferredToLaterTrack => Some(DC::TypeMismatch),
+        | TypeErrorKind::DeferredToLaterTrack
+        | TypeErrorKind::DeferredTryBlock
+        | TypeErrorKind::DeferredTraitAlias
+        | TypeErrorKind::DeferredTait
+        | TypeErrorKind::DeferredEffectGroup
+        | TypeErrorKind::DeferredLayoutBlock => Some(DC::TypeMismatch),
 
         // E0516 / E0517 are borrow rules (core-semantics §5.6, §5.9), not
         // type mismatches: `karac explain` describes them by this class
@@ -1873,7 +1894,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ReturnClauseOnFn
         | TypeErrorKind::LaterTrack
         | TypeErrorKind::StyleLint
-        | TypeErrorKind::UnusedDocComment => Some(DC::LintWarning),
+        | TypeErrorKind::UnusedDocComment
+        | TypeErrorKind::AcronymCase => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON
         // emit site. Backfill is incremental; each one is a small
@@ -3633,6 +3655,9 @@ pub struct TypeChecker<'a> {
     pub(super) binding_class_reported: rustc_hash::FxHashSet<usize>,
     /// `vec![..]` literals already warned on, by `(offset, length)`.
     pub(super) vec_macro_reported: rustc_hash::FxHashSet<(usize, usize)>,
+    /// The trait aliases and type alias `impl Trait`s refused at their
+    /// declaration (B-2026-11-16-298), whose uses are not reported again.
+    pub(super) refused_deferred: rustc_hash::FxHashSet<String>,
     /// The `opt.is_ok()` / `opt.is_err()` calls already warned about, by the
     /// call's closing `)`, which a re-inference visits again
     /// (B-2026-11-09-21).
@@ -4688,6 +4713,7 @@ impl<'a> TypeChecker<'a> {
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             binding_class_reported: rustc_hash::FxHashSet::default(),
             vec_macro_reported: rustc_hash::FxHashSet::default(),
+            refused_deferred: rustc_hash::FxHashSet::default(),
             option_result_predicates_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
             clone_lints_reported: FxHashSet::default(),

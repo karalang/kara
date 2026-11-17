@@ -648,6 +648,11 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        let refused_alias_bound = bounds.iter().any(|b| {
+            b.path
+                .last()
+                .is_some_and(|n| self.refused_deferred.contains(n))
+        });
         let candidates: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
             .iter()
             .filter_map(|b| {
@@ -736,6 +741,12 @@ impl<'a> super::TypeChecker<'a> {
             0 => {
                 for arg in args {
                     self.infer_expr(&arg.value);
+                }
+                // A bound naming a refused trait alias was reported once at
+                // the alias (B-2026-11-16-298); its methods are not known
+                // here, so a call through it says nothing more.
+                if refused_alias_bound {
+                    return Type::Error;
                 }
                 self.type_error(
                     format!(
@@ -1024,17 +1035,18 @@ impl<'a> super::TypeChecker<'a> {
             self.infer_expr(&arg.value);
         }
         match tait_alias {
+            // The declaration is refused already (B-2026-11-16-298).
+            Some(alias) if self.refused_deferred.contains(alias) => {}
             Some(alias) => {
                 self.type_error(
                     format!(
-                        "error[E_TAIT_NOT_IMPLEMENTED_YET]: TAIT '{alias}' is recognized \
-                         but the witness-inference pipeline lands in P1; method '{method}' \
-                         is not declared on trait '{trait_name}', and dispatching against \
-                         the alias's concrete witness requires the deferred TAIT machinery \
-                         — cast through the trait surface for now"
+                        "type alias `impl Trait` '{alias}' is not available: TAIT is deferred \
+                         (deferred.md § Type Alias `impl Trait`) and not in 0.8; method \
+                         '{method}' is not declared on trait '{trait_name}', and reaching the \
+                         alias's concrete type needs the deferred witness inference"
                     ),
                     *span,
-                    TypeErrorKind::NoMethodFound,
+                    TypeErrorKind::DeferredTait,
                 );
             }
             None => {

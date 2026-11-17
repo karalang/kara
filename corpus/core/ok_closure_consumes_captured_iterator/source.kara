@@ -14,7 +14,7 @@ fn main() {
     count();
     println(f"{total}");
 
-    let words = Vec["x", "yy"];
+    let words = ["x", "yy"];
     let mut seen = 0;
     let mut tally = || {
         for w in words {

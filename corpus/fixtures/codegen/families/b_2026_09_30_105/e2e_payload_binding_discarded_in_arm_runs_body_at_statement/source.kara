@@ -21,7 +21,7 @@ fn main() {
     let o4 = Some(mk(4));
     match o4 { Some(w) => { let _ = [w, mk(49)]; println("arm4") }, None => {} };
     let o5 = Some(mk(5));
-    match o5 { Some(w) => { let _ = Vec[w]; println("arm5") }, None => {} };
+    match o5 { Some(w) => { let _ = [w]; println("arm5") }, None => {} };
     let r6: Result[W1, i64] = Ok(mk(6));
     match r6 { Ok(w) => { let _ = Array[w]; println("arm6") }, Err(e) => { println(f"{e}") } };
     branch(false, 10);

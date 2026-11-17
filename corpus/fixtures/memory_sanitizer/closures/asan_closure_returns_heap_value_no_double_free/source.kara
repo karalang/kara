@@ -1,11 +1,11 @@
 
 fn mk() -> String { f"made" }
-fn compute() -> Vec[i64] { Vec[9, 8] }
+fn compute() -> Vec[i64] { [9, 8] }
 fn main() {
     let f2: Fn() -> String = || { let s = f"hi"; s };
     let f4: Fn() -> String = || { let s: String = mk(); s };
     let f5: Fn() -> String = || f"direct";
-    let f1: Fn() -> Vec[i64] = || { let v: Vec[i64] = Vec[1, 2, 3]; v };
+    let f1: Fn() -> Vec[i64] = || { let v: Vec[i64] = [1, 2, 3]; v };
     let f3: Fn() -> Vec[i64] = || { let w = compute(); w };
     let r2: String = f2();
     let r4: String = f4();

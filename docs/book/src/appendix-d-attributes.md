@@ -48,26 +48,7 @@ Promote a lint to a hard error within the annotated item.
 | `redundant_suffix` | warning | Literal suffix that matches the default type (e.g., `42i64`) |
 | `mutual_recursion_note` | note | Note when the SCC pass detects a mutual-recursion group |
 | `module_mut_binding` | warning (`lib` profile) | `let mut` at module scope |
-| `layout_unassigned_fields` | warning | Fields not assigned to a `group` in a `layout` block |
-| `repr_c_layout_ignored` | warning | `layout` block on a private struct (has no FFI effect) |
 | `rc_fallback` | note | Compiler chose RC tier to satisfy ownership analysis |
-
----
-
-## Safety
-
-### `#[noblock]`  /  `@noblock`
-
-On an `extern "C"` or `extern "C-unwind"` function: removes `blocks` from the default effect set. Use this for pure-CPU foreign functions (math routines, `strlen`, etc.) that are known not to block.
-
-```kara
-/// # Safety
-/// `sqrt` reads only its argument and has no side effects.
-unsafe extern "C" {
-    @noblock
-    fn sqrt(x: f64) -> f64;
-}
-```
 
 ---
 

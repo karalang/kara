@@ -19,7 +19,7 @@ fn main() {
     println(n.tag());
     let s = Holder { v: ("a", 1) };
     println(s.tag());
-    let a: Holder[Array[i64, 2]] = Holder { v: Array[1, 2] };
+    let a: Holder[Array[i64, 2]] = Holder { v: [1, 2] };
     println(a.tag());
     let u: Holder[()] = Holder { v: () };
     println(u.tag());

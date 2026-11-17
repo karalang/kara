@@ -1304,16 +1304,24 @@ fn test_one_tuple_pattern_keeps_trailing_comma_form() {
     }
 }
 
+/// design.md §3 has no `|>`: the parser refuses each pipe chain once, at its
+/// first operator, whatever stands on either side (B-2026-11-16-341).
 #[test]
-fn test_pipe_operator() {
-    let prog = parse_ok("fn main() { let x = data |> transform |> output; }");
-    if let Item::Function(f) = &prog.items[0] {
-        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
-            // Should be: (data |> transform) |> output (left-associative)
-            assert!(matches!(&value.kind, ExprKind::Pipe { .. }));
-        } else {
-            panic!("Expected let with pipe");
-        }
+fn test_pipe_operator_is_refused_once_per_chain() {
+    for src in [
+        "fn main() { let x = data |> transform |> output; }",
+        "fn main() { let x = data |> filter(_, pred); }",
+        "fn main() { let x = data |> filter(_, pred) |> map(_, transform); }",
+        "fn main() { let r = x + 1 |> f; }",
+        "fn main() { let x = data |> normalize; }",
+    ] {
+        let errs = parse(src).errors;
+        assert_eq!(errs.len(), 1, "{src}: {errs:?}");
+        assert!(
+            errs[0].message.contains("there is no pipe operator `|>`"),
+            "{src}: {errs:?}"
+        );
+        assert_eq!(errs[0].span.offset, src.find("|>").unwrap(), "{src}");
     }
 }
 
@@ -7351,76 +7359,6 @@ fn test_labeled_arg_method_call() {
         }
     } else {
         panic!("Expected Function");
-    }
-}
-
-// ── Pipe Operator ──────────────────────────────────────────────
-
-#[test]
-fn test_pipe_placeholder_in_call() {
-    let prog = parse_ok("fn main() { let x = data |> filter(_, pred); }");
-    if let Item::Function(f) = &prog.items[0] {
-        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
-            if let ExprKind::Pipe { right, .. } = &value.kind {
-                if let ExprKind::Call { args, .. } = &right.kind {
-                    assert_eq!(args.len(), 2);
-                    assert!(matches!(&args[0].value.kind, ExprKind::PipePlaceholder));
-                } else {
-                    panic!("Expected Call on RHS of pipe");
-                }
-            } else {
-                panic!("Expected Pipe");
-            }
-        } else {
-            panic!("Expected let");
-        }
-    }
-}
-
-#[test]
-fn test_pipe_chained_with_placeholder() {
-    let prog = parse_ok("fn main() { let x = data |> filter(_, pred) |> map(_, transform); }");
-    if let Item::Function(f) = &prog.items[0] {
-        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
-            // Should be: (data |> filter(_, pred)) |> map(_, transform)
-            if let ExprKind::Pipe { left, right } = &value.kind {
-                assert!(matches!(&left.kind, ExprKind::Pipe { .. }));
-                assert!(matches!(&right.kind, ExprKind::Call { .. }));
-            } else {
-                panic!("Expected Pipe");
-            }
-        }
-    }
-}
-
-#[test]
-fn test_pipe_precedence_over_binary() {
-    // x + 1 |> f should parse as (x + 1) |> f
-    let prog = parse_ok("fn main() { let r = x + 1 |> f; }");
-    if let Item::Function(f) = &prog.items[0] {
-        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
-            if let ExprKind::Pipe { left, right } = &value.kind {
-                assert!(matches!(&left.kind, ExprKind::Binary { .. }));
-                assert!(matches!(&right.kind, ExprKind::Identifier(_)));
-            } else {
-                panic!("Expected Pipe, got {:?}", value.kind);
-            }
-        }
-    }
-}
-
-#[test]
-fn test_pipe_bare_function_name() {
-    let prog = parse_ok("fn main() { let x = data |> normalize; }");
-    if let Item::Function(f) = &prog.items[0] {
-        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
-            if let ExprKind::Pipe { left, right } = &value.kind {
-                assert!(matches!(&left.kind, ExprKind::Identifier(_)));
-                assert!(matches!(&right.kind, ExprKind::Identifier(_)));
-            } else {
-                panic!("Expected Pipe");
-            }
-        }
     }
 }
 

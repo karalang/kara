@@ -44,21 +44,6 @@ pub struct LbmNode {
     f5: f64, f6: f64, f7: f64, f8: f64,
 }
 
-// SoA memory layout for the grid. The nine distribution functions split into two
-// cache groups — the rest + cardinal directions (read together in collide) and
-// the diagonals — so each buffer is two parallel arrays instead of an array of
-// 72-byte cells. The carried `grid` plus the per-substep `coll`/`next` buffers
-// each ride this layout; the per-band chunks returned by the workers stay AoS,
-// since they cross the `TaskHandle[Vec[LbmNode]]` join boundary (a generic type,
-// no layout flow). Adding these blocks changes the *physical* memory layout
-// only — the layout flows through every `substep`/`render_fb` boundary by
-// per-layout monomorphization, and the native oracle's milestone checksums are
-// byte-identical to the array-of-structs build. (per-layout-monomorphization
-// spike, slice 6: Slipstream earns its "SoA layout" roster billing.)
-layout grid: Vec[LbmNode] { group lo { f0, f1, f2, f3, f4 } group hi { f5, f6, f7, f8 } }
-layout coll: Vec[LbmNode] { group lo { f0, f1, f2, f3, f4 } group hi { f5, f6, f7, f8 } }
-layout next: Vec[LbmNode] { group lo { f0, f1, f2, f3, f4 } group hi { f5, f6, f7, f8 } }
-
 // Macroscopic velocity at a cell, for visualization.
 struct Vel { x: f64, y: f64 }
 

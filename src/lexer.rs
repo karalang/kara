@@ -560,12 +560,32 @@ impl<'a> Lexer<'a> {
         // exponent float parts in this position; the number lexes as an integer.
         let tuple_index_ctx = self.start > 0 && self.source[self.start - 1] == b'.';
 
-        // Consume decimal part if present.
-        // Accept `N.DIGITS` and also `N.eEXP` (i.e., `1.e10` → `1.0e10`).
+        // Consume decimal part if present: `N.DIGITS`, and `N.eEXP`, which
+        // design.md §3 refuses with the fix `N.0eEXP` (below).
         if !tuple_index_ctx && self.peek() == b'.' {
             let after_dot = self.peek_next();
             let is_exp_after_dot =
                 (after_dot == b'e' || after_dot == b'E') && is_exp_start(self.peek_at(2));
+            // `1.` with nothing a member could start with after the point:
+            // a float literal missing its fractional digit. `1..2` is a
+            // range and `1.max(2)` a method call.
+            let bare_point = !is_digit(after_dot)
+                && !is_exp_after_dot
+                && after_dot != b'.'
+                && !is_alpha(after_dot)
+                && after_dot < 0x80;
+            if bare_point {
+                self.advance(); // consume '.'
+                let lit = self.token_text().to_string();
+                let fixed = format!("{}0", lit.replace('_', ""));
+                return self.make_spanned(Token::ErrorWithFix {
+                    message: format!(
+                        "float literal `{lit}`: a point is followed by a digit (design.md §3), \
+                         so write `{fixed}`"
+                    ),
+                    fixed,
+                });
+            }
             if is_digit(after_dot) || is_exp_after_dot {
                 is_float = true;
                 self.advance(); // consume '.'
@@ -590,6 +610,14 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        let body_end = self.current;
+        let tok = self.decimal_token(is_float);
+        self.check_digits(tok, 0, body_end, is_digit)
+    }
+
+    /// The decimal literal from `self.start` to here, the suffix still to
+    /// read: [`Lexer::number`]'s token before its digits are checked.
+    fn decimal_token(&mut self, is_float: bool) -> SpannedToken {
         if is_float {
             let text: String = self.token_text().chars().filter(|&c| c != '_').collect();
             let suffix = self.try_float_suffix();
@@ -634,6 +662,36 @@ impl<'a> Lexer<'a> {
                     },
                 },
             }
+        }
+    }
+
+    /// `tok`, or the error design.md §3's digit rules make of it, with the
+    /// fix that keeps them ([`digits_fixed`]): `1__0`, `1_`, `0x_FF` and
+    /// `1_000_.5` misplace a `_`, and `1.e5` has no digit after its point.
+    fn check_digits(
+        &self,
+        tok: SpannedToken,
+        prefix: usize,
+        body_end: usize,
+        digit: fn(u8) -> bool,
+    ) -> SpannedToken {
+        if matches!(tok.token, Token::Error(_) | Token::ErrorWithFix { .. }) {
+            return tok;
+        }
+        let lit = self.token_text();
+        let Some(fixed) = digits_fixed(lit, prefix, body_end - self.start, digit) else {
+            return tok;
+        };
+        let underscores = |t: &str| t.bytes().filter(|&c| c == b'_').count();
+        let why = if underscores(&fixed) < underscores(lit) {
+            "a `_` stands only between two digits"
+        } else {
+            "a point is followed by a digit"
+        };
+        let message = format!("number literal `{lit}`: {why} (design.md §3), so write `{fixed}`");
+        SpannedToken {
+            token: Token::ErrorWithFix { message, fixed },
+            span: tok.span,
         }
     }
 
@@ -684,8 +742,9 @@ impl<'a> Lexer<'a> {
             .chars()
             .filter(|&c| c != '_')
             .collect();
+        let body_end = self.current;
         let suffix = self.try_int_suffix();
-        match i64::from_str_radix(&text, 16) {
+        let tok = match i64::from_str_radix(&text, 16) {
             Ok(v) => self.make_spanned(Token::Integer(v.into(), suffix)),
             // See the decimal arm — the parser folds a unary-minus magnitude.
             Err(_) => match u64::from_str_radix(&text, 16) {
@@ -695,7 +754,8 @@ impl<'a> Lexer<'a> {
                     None => self.make_spanned(Token::Error("Invalid hex literal".to_string())),
                 },
             },
-        }
+        };
+        self.check_digits(tok, 2, body_end, is_hex_digit)
     }
 
     fn binary_number(&mut self) -> SpannedToken {
@@ -707,8 +767,9 @@ impl<'a> Lexer<'a> {
             .chars()
             .filter(|&c| c != '_')
             .collect();
+        let body_end = self.current;
         let suffix = self.try_int_suffix();
-        match i64::from_str_radix(&text, 2) {
+        let tok = match i64::from_str_radix(&text, 2) {
             Ok(v) => self.make_spanned(Token::Integer(v.into(), suffix)),
             // See the decimal arm — the parser folds a unary-minus magnitude.
             Err(_) => match u64::from_str_radix(&text, 2) {
@@ -718,7 +779,8 @@ impl<'a> Lexer<'a> {
                     None => self.make_spanned(Token::Error("Invalid binary literal".to_string())),
                 },
             },
-        }
+        };
+        self.check_digits(tok, 2, body_end, is_bin_digit)
     }
 
     fn octal_number(&mut self) -> SpannedToken {
@@ -730,8 +792,9 @@ impl<'a> Lexer<'a> {
             .chars()
             .filter(|&c| c != '_')
             .collect();
+        let body_end = self.current;
         let suffix = self.try_int_suffix();
-        match i64::from_str_radix(&text, 8) {
+        let tok = match i64::from_str_radix(&text, 8) {
             Ok(v) => self.make_spanned(Token::Integer(v.into(), suffix)),
             // See the decimal arm — the parser folds a unary-minus magnitude.
             Err(_) => match u64::from_str_radix(&text, 8) {
@@ -741,7 +804,8 @@ impl<'a> Lexer<'a> {
                     None => self.make_spanned(Token::Error("Invalid octal literal".to_string())),
                 },
             },
-        }
+        };
+        self.check_digits(tok, 2, body_end, is_oct_digit)
     }
 
     /// Reserved `#`-guarded string syntax (v60 item 11). The opening `#`
@@ -2275,6 +2339,48 @@ fn is_digit(c: u8) -> bool {
     c.is_ascii_digit()
 }
 
+fn is_bin_digit(c: u8) -> bool {
+    c == b'0' || c == b'1'
+}
+
+fn is_oct_digit(c: u8) -> bool {
+    (b'0'..=b'7').contains(&c)
+}
+
+/// A number's text with design.md §3's digit rules applied: a `_` stands
+/// only between two digits (or between the last digit and a type suffix,
+/// `1_i64`), and a point is followed by a digit (`1.e5` is `1.0e5`).
+/// `prefix` bytes (`0x`) open `text`, its digits end at `body_end`, and a
+/// suffix may follow. `None` when the text already keeps both rules.
+fn digits_fixed(
+    text: &str,
+    prefix: usize,
+    body_end: usize,
+    digit: fn(u8) -> bool,
+) -> Option<String> {
+    let b = text.as_bytes();
+    let suffixed = body_end < b.len();
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..prefix]);
+    for i in prefix..body_end {
+        let c = b[i];
+        if c == b'_' {
+            let before = i > prefix && digit(b[i - 1]);
+            let after = i + 1 < body_end && digit(b[i + 1]);
+            let at_suffix = i + 1 == body_end && suffixed;
+            if !(before && (after || at_suffix)) {
+                continue;
+            }
+        }
+        out.push(c as char);
+        if c == b'.' && i + 1 < body_end && !digit(b[i + 1]) {
+            out.push('0');
+        }
+    }
+    out.push_str(&text[body_end..]);
+    (out != text).then_some(out)
+}
+
 fn is_hex_digit(c: u8) -> bool {
     c.is_ascii_hexdigit()
 }
@@ -2426,6 +2532,43 @@ pub fn suggest_const_name(name: &str) -> String {
 /// what makes this general: it also rejects a suggestion that changes the name
 /// but still violates the rule (`_M` -> `M` is a different string and still
 /// Type-class, which would have stalled one step later).
+/// `name` with each acronym written as a word (design.md §3 CN-4):
+/// `HTTPClient` is `HttpClient`, `IOError` is `IoError`, `PyJWS` is `PyJws`.
+/// An acronym is a run of three or more capitals, less its last when a
+/// lowercase letter follows (that capital begins the next word); two
+/// capitals (`AVal`, `JValue`) read as a one-letter word and a word. `None`
+/// when `name` has no such run.
+pub fn acronyms_as_words(name: &str) -> Option<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let (mut out, mut i, mut changed) = (String::with_capacity(name.len()), 0, false);
+    while i < chars.len() {
+        if !chars[i].is_ascii_uppercase() {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && chars[j].is_ascii_uppercase() {
+            j += 1;
+        }
+        if j - i >= 3 {
+            let end = if chars.get(j).is_some_and(|c| c.is_ascii_lowercase()) {
+                j - 1
+            } else {
+                j
+            };
+            out.push(chars[i]);
+            out.extend(chars[i + 1..end].iter().map(|c| c.to_ascii_lowercase()));
+            out.extend(&chars[end..j]);
+            changed = true;
+        } else {
+            out.extend(&chars[i..j]);
+        }
+        i = j;
+    }
+    changed.then_some(out)
+}
+
 pub fn suggest_name_for_class(name: &str, target: IdentClass) -> Option<String> {
     let suggestion = match target {
         IdentClass::Type => suggest_type_name(name),

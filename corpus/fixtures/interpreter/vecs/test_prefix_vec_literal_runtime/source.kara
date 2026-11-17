@@ -1,1 +1,1 @@
-fn main() { let v = Vec[7, 8, 9]; println(v[2]); }
+fn main() { let v = [7, 8, 9]; println(v[2]); }

@@ -21,7 +21,7 @@ Complete grammar reference for the Kāra programming language — a systems lang
 2. [Program Structure](#2-program-structure) — top-level item kinds
 3. [Items](#3-items) — functions, structs, enums, traits, impls, effects, layouts, modules, types, providers
 4. [Statements](#4-statements) — let, assignment, defer/errdefer
-5. [Expressions](#5-expressions) — operators, control flow, closures, calls, pipes, error handling
+5. [Expressions](#5-expressions) — operators, control flow, closures, calls, error handling
 6. [Types](#6-types) — primitives, generics, function types, references
 7. [Effect Annotations](#7-effect-annotations) — effect lists, placement rules, equivalence
 8. [Attributes](#8-attributes) — `#[...]` metadata on items
@@ -36,133 +36,73 @@ Complete grammar reference for the Kāra programming language — a systems lang
 
 ### 1.1 Keywords
 
-```
-// Declarations
-fn  struct  enum  trait  impl  type  distinct
-
-// Visibility
-pub  private
-
-// Control flow
-if  else  match  while  for  in  loop  return  break  continue
-
-// Bindings
-let  mut
-
-// Logical
-and  or  not   // word forms; `&&` / `||` / `!` are not accepted
-
-// Ownership
-ref  shared  own
-            // `own` is the explicit capture-by-value prefix on closure
-            // expressions: `own |x| body` forces every captured path to be
-            // moved into the closure (see design.md § Rule 2½). The bare
-            // closure form `|x| body` runs per-capture-path inference
-            // instead. The receiver form `own self` was considered and
-            // rejected; the parser emits a targeted diagnostic pointing
-            // writers at bare `self` (the unified "bare = owned, borrows
-            // are written" rule for parameter modes still holds).
-
-// Closure capture (reserved against Rust idiom)
-move          // Reserved but not active. Rust uses `move` for the
-              // capture-by-value mode that Kāra spells `own` (see § Ownership
-              // above). The parser emits a focused diagnostic redirecting
-              // users to `own |...|` rather than accepting `move`.
-
-// Cleanup
-defer  errdefer
-
-// Effects
-effect  with
-
-// Type system
-as  where   // where is used for refinement types and contracts
-const       // used in pointer types (*const T) and const generic parameters
-
-// Safety
-unsafe
-
-// Foreign / host bindings
-extern  host
-
-// Reserved for future use (not yet meaningful to the parser beyond being reserved)
-dyn            // trait objects / dynamic dispatch
-yield          // generator / coroutine syntax
-asm            // inline assembly expression
-global_asm     // module-level assembly block
-gen            // generator function form (companion to `yield`)
-become         // tail-call return form
-do             // reserved for block-expression sugar / try-block-like form
-final          // reserved against subclass-style "final" markers
-override       // reserved against subclass-style "override" markers
-priv           // reserved against `private` rename or alternative spelling
-try            // try-block form (`try { ... }` returning a Result-shaped value)
-typeof         // reserved against runtime/static type-of-expression queries
-virtual        // reserved against subclass-style "virtual" markers
-async          // reserved — Kāra uses `suspends` for the same role; keeping `async` reserved blocks accidental syntactic borrowing
-await          // reserved — companion to `async`
-comptime       // compile-time evaluation expression / block (Zig-style)
-pure           // reserved against an explicit "this fn is effect-pure" marker; today purity is implicit (empty `with` clause)
-box            // reserved against an owned-heap-pointer primitive (Kāra uses `Rc` / `Arc` / `shared`)
-
-// Contracts
-requires  ensures  invariant
-
-// Literals
-true  false
-
-// Providers
-providers
-
-// Other
-self  Self
-```
-
-**Contextual keywords** (design review 2026-10-07 § 3). These words are
-keywords only where they start their construct; everywhere else they are
-ordinary identifiers, so a struct can have fields named `reads` and `writes`,
-and a function can be called `union` or `lock`:
+Generated from design.md §3 [Keywords](design.md#keywords), which is normative.
 
 ```
-union        // `union NAME { ... }` — the FFI-only untagged union (design.md § FFI Unions)
-marker       // `marker trait NAME;` (design.md § Marker Traits)
-mod          // `mod NAME` is rejected with a pointer to the directory-based module system
-weak         // `weak T` — before a type
-lock         // `lock m { ... }` / `lock m as x { ... }` — before a name
-resource  verb  group  stable  transparent   // effect declarations
-reads  writes  sends  receives  allocates  panics  blocks  suspends
-             // effect verbs — inside a `with` clause or effect declaration
-seq  par     // `seq { ... }` / `par { ... }` — before `{`; `par for` / `par(limit: n) for`
-sync         // `sync struct` / `sync enum` (`par struct` / `par enum` before Amendment 6, now an error with a fix to `sync`)
-layout       // `layout NAME ...`; `group` inside a layout block
-alias  independent   // resource-aliasing declarations, followed by a name
+// Hard keywords: never identifiers, except through `r#`
+fn  struct  enum  trait  impl  type  const  import  extern  unsafe  pub  private   // items
+let  mut  if  else  match  while  for  in  loop  return  break  continue
+defer  errdefer                                                                  // statements
+ref  as  and  or  not  true  false  self  Self                                   // expressions
+dyn                                                                              // types
+
+// Reserved for future use: an identifier only through `r#`, except `priv`
+async  await  become  box  comptime  do  final  override  virtual  gen  yield
+asm  global_asm  move  priv  pure  try  typeof
 ```
 
-The lexer emits each as an identifier and the parser recognises it by name in
-those positions. `r#` on one of them is redundant but still accepted.
+`pure` has one use in v1, before `fn` in an `extern` block. `move` is reported
+with `error[E_MOVE_NOT_USED]`. A reserved word used as an identifier is
+`error[E_RESERVED_KEYWORD]` (`E0003`) with the fix `r#name`; `priv` is also a
+structural marker, so no escape names it and the error says to choose another
+name.
 
-`use` is no longer syntax: `use a.b.C;` is an error whose machine-applicable fix
-rewrites it to `import a.b.C;` (§ Module System). `use` is an ordinary name.
+**Contextual keywords** are keywords only in one position and ordinary
+identifiers everywhere else:
 
-**Member names are the exception.** Any keyword, hard or reserved, is a member name without `r#` directly after `.` (`opt.or(x)`, `ptr.const(p)`, `obj.type`) and as the name of a method or associated function declared in an `impl` or `trait` (`fn not(own self)`, `fn match(ref self)`). Free functions, locals, fields and types still need `r#`, and the formatter writes member names bare.
+| Word | A keyword only when it |
+|---|---|
+| `par` | comes directly before `{`, `for` or `(` |
+| `union` | starts an item |
+| `distinct` | comes directly before `type` |
+| `marker` | comes directly before `trait` |
+| `shared`, `sync` | come directly before `struct` or `enum` |
+| `weak`, `frozen` | prefix a type or a receiver |
+| `freeze` | prefixes an expression |
+| `escaping` | prefixes a function type or a `dyn` type |
+| `own` | comes directly before a parameter's type, before `self`, or before an argument type in a function type |
+| `host` | comes directly before `fn` at item position |
+| `test` | comes directly before a string literal at module scope |
+| `where` | follows a signature or a type head |
+| `with` | starts an effect clause |
+| `effect`, `resource` | start an effect resource declaration |
+| `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks` | appear inside an effect clause or an effect attribute |
 
-All keywords are reserved — they cannot be used as identifiers without the `r#` raw-identifier escape (§1.3 IDENTIFIER, design.md § Raw Identifiers). `r#NAME` parses as the identifier `NAME` even when `NAME` is a reserved keyword (`r#async`, `r#try`, `r#move`, `r#comptime`, etc.). Structural markers — `self`, `Self`, `_`, `super`, `crate`, `pub`, `priv`, `private`, `mut`, `ref`, `own` — cannot be raw-escaped (`error[E_RAW_IDENT_NOT_ALLOWED]`, emitted as `E0004`; the canonical list is `token::UNESCAPABLE_MARKERS`, which the lexer's rejection and the parser's decision to suggest `r#` at all both read).
+`use` and `mod` are not keywords. The words of deferred features (`lock`,
+`seq`, `layout`, `group`, `stable`, `alias`, `independent`, `providers`,
+`requires`, `ensures`, `invariant`, `suspends`) are not keywords in v1.
 
-**Reserved identifiers** (not keywords, but cannot be used as user-defined identifiers):
+The logical operators are the words `and`, `or` and `not`; `&&`, `||` and
+prefix `!` are rejected with a fix that rewrites them.
 
-```
-Fn                // closure/function type constructor (see §6.3)
-split_by_variant  // contextual keyword in layout blocks (§3.7)
-```
+**Member names.** Any keyword, hard or reserved, is a member name without `r#`
+directly after `.` (`opt.or(x)`, `handle.await`) and as the name of a method or
+associated function declared in an `impl` or `trait`.
+
+**Structural markers** cannot be raw-escaped: `self`, `Self`, `_`, `super`,
+`crate`, `pub`, `priv`, `private`, `mut`, `ref`. Escaping one is
+`error[E_RAW_IDENT_NOT_ALLOWED]` (`E0004`).
 
 ### 1.2 Symbols
+
+Generated from design.md §3 [Symbols](design.md#symbols).
 
 ```
 // Delimiters
 (  )  {  }  [  ]
 
 // Punctuation
-:  ,  ;  .  ?.  ..  ..=  ->  =>  ?  ??  #  _  |>
+:  ,  ;  .  ..  ..=  ->  =>  ?  ??  #  _  '
 
 // Arithmetic
 +  -  *  /  %
@@ -170,38 +110,42 @@ split_by_variant  // contextual keyword in layout blocks (§3.7)
 // Comparison
 ==  !=  <  <=  >  >=
 
-// Logical operators are spelled as keywords: `and`, `or`, `not` (see §1.1).
-// The symbol forms `&&`, `||`, `!` are not accepted; the parser emits a
-// migration error pointing at the keyword form. (Note: `!` still appears
-// inside `!=`, which is the not-equal comparison operator above.)
-
 // Bitwise
 &  |  ^  ~  <<  >>
 
 // Assignment
-=  +=  -=  *=  /=  %=
-&=  |=  ^=  <<=  >>=
+=  +=  -=  *=  /=  %=  &=  |=  ^=  <<=  >>=
 ```
+
+`#[` starts an attribute. `'` followed by an identifier and no closing `'` is a
+label (`'outer`); with a closing quote it is a character literal. There is no
+`?.` and no `|>`: the parser refuses `|>` with a pointer to `f(x)`.
 
 ### 1.3 Literals
 
 ```
-INTEGER     = (DECIMAL | HEX | BINARY | OCTAL) [ INT_SUFFIX ]
-DECIMAL     = DIGIT { DIGIT | "_" }
-HEX         = "0" ("x" | "X") HEX_DIGIT { HEX_DIGIT | "_" }
-BINARY      = "0" ("b" | "B") ("0" | "1") { "0" | "1" | "_" }
-OCTAL       = "0" ("o" | "O") OCTAL_DIGIT { OCTAL_DIGIT | "_" }
-INT_SUFFIX  = "i8" | "i16" | "i32" | "i64" | "i128"
-            | "u8" | "u16" | "u32" | "u64" | "u128"
+INTEGER     = (DECIMAL | HEX | BINARY | OCTAL) [ [ "_" ] INT_SUFFIX ]
+DECIMAL     = DIGIT { [ "_" ] DIGIT }
+HEX         = "0" ("x" | "X") HEX_DIGIT { [ "_" ] HEX_DIGIT }
+BINARY      = "0" ("b" | "B") BIN_DIGIT { [ "_" ] BIN_DIGIT }
+OCTAL       = "0" ("o" | "O") OCTAL_DIGIT { [ "_" ] OCTAL_DIGIT }
+INT_SUFFIX  = "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+            | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+              // `_` stands only between two digits, or between the last digit
+              // and a suffix (`1_000`, `255_u8`): `1__0`, `1_`, `0x_FF` are
+              // errors, each with a fix that removes the stray `_`.
 
-FLOAT       = FLOAT_MANTISSA [ FLOAT_EXP ] [ FLOAT_SUFFIX ]
-            | DIGIT { DIGIT | "_" } FLOAT_EXP [ FLOAT_SUFFIX ]
-FLOAT_MANTISSA = DIGIT { DIGIT | "_" } "." DIGIT { DIGIT | "_" }
-FLOAT_EXP   = ("e" | "E") [ "+" | "-" ] DIGIT { DIGIT | "_" }
+FLOAT       = DECIMAL "." DECIMAL [ FLOAT_EXP ] [ [ "_" ] FLOAT_SUFFIX ]
+            | DECIMAL FLOAT_EXP [ [ "_" ] FLOAT_SUFFIX ]
+FLOAT_EXP   = ("e" | "E") [ "+" | "-" ] DECIMAL
 FLOAT_SUFFIX = "f32" | "f64"
+             | "f16" | "bf16"    // the data track's (library/data.md)
               // Examples: 3.14, 1.5e-3, 6.022e23, 1e10, 2.5E+6_f32.
-              // A FLOAT must have either a decimal point, an exponent, or both;
-              // otherwise it lexes as INTEGER.
+              // A point is followed by a digit: `1.` and `1.e5` are errors,
+              // with the fixes `1.0` and `1.0e5`; `1_000_.5` misplaces a `_`.
+              // A literal with neither a point nor an exponent is an INTEGER,
+              // so `1f32` is not a float. A float literal that rounds to
+              // infinity in its type is an error.
 
 STRING      = [ STRING_PREFIX ] '"' { CHAR | ESCAPE_SEQ_FOR_PREFIX } '"'
 MULTI_STR   = '"""' NEWLINE { LINE NEWLINE } INDENT '"""'
@@ -281,6 +225,7 @@ ALPHA       = "a".."z" | "A".."Z"
 UPPER_ALPHA = "A".."Z"
 LOWER_ALPHA = "a".."z"
 DIGIT       = "0".."9"
+BIN_DIGIT   = "0" | "1"
 HEX_DIGIT   = DIGIT | "a".."f" | "A".."F"
 OCTAL_DIGIT = "0".."7"
 ```
@@ -1235,12 +1180,12 @@ let Ok(config) = load_config(path) else {
 
 ### 5.1 Operator Precedence (lowest to highest)
 
-Lower number = lower precedence (binds looser).
+Generated from design.md §6 [Operators and precedence](design.md#operators-and-precedence).
 
-| Precedence | Operators | Associativity |
+| Level | Operators | Associativity |
 |---|---|---|
-| 1 (loosest) | pipe `\|>` | Left |
-| 2 | nil-coalesce `??` | Left |
+| 1 (loosest) | default `??` | Left |
+| 2 | range `..` `..=` | None |
 | 3 | logical `or` | Left |
 | 4 | logical `and` | Left |
 | 5 | comparison `==` `!=` `<` `<=` `>` `>=` | Left (no chaining) |
@@ -1250,9 +1195,14 @@ Lower number = lower precedence (binds looser).
 | 9 | shift `<<` `>>` | Left |
 | 10 | additive `+` `-` | Left |
 | 11 | multiplicative `*` `/` `%` | Left |
-| 12 | unary `not` `-` `~` `*` | Prefix |
-| 13 | error propagation `?` | Postfix |
-| 14 (tightest) | access `.` `?.` `()` `[]` | Left |
+| 12 | cast `as` | Left |
+| 13 | unary `not` `-` `~` `*` | Prefix |
+| 14 | error propagation `?` | Postfix |
+| 15 (tightest) | field access, call and index: `.` `()` `[]` | Left |
+
+So `a + b as f64` is `a + (b as f64)`, `-x as u8` is `(-x) as u8`, and
+`x as u32 as u8` casts twice. Ranges and comparisons do not chain: `a..b..c`
+and `a < b < c` are errors.
 
 `not` binds tighter than the comparison operators, so `not x == y` parses as
 `(not x) == y` — the same precedence relationship C-family languages use for
@@ -1942,34 +1892,8 @@ let v: Vec[i64] = Vec[];            // empty — annotation required
 
 ### 5.18 Pipe Expressions
 
-```
-PIPE_EXPR = EXPR "|>" EXPR
-```
-
-`|>` chains function calls left-to-right, passing the left-hand value as the first argument to the right-hand function. Use `_` as a placeholder when the piped value is not the first argument:
-
-```
-// Without pipe — inside-out reading order
-let result = save(validate(parse(normalize(raw_input))));
-
-// With pipe — left-to-right reading order
-let result = raw_input |> normalize |> parse |> validate |> save;
-
-// Placeholder for non-first argument position
-let result = data
-    |> filter(_, is_valid)      // filter(data, is_valid)
-    |> map(_, transform)        // map(filtered, transform)
-    |> Vec.sort;               // first arg — no placeholder needed
-
-// ? applies to the output of each pipe stage
-raw |> parse? |> validate? |> save
-```
-
-Rules:
-- Left-associative: `a |> f |> g` parses as `(a |> f) |> g`.
-- `_` is the pipe-hole placeholder — at most one per stage, only valid inside a function argument list in a pipe stage.
-- **Postfix `?` in pipe chains:** `?` after a pipe stage applies to the entire stage result, not the preceding primary expression. `raw |> parse?` means `(raw |> parse)?`. This is a pipe-specific rule — in the general precedence table (§5.1), `?` binds tighter than `|>`, but within a pipe chain each `?` attaches to its stage.
-- No conflict with `|` or `||` — the lexer produces three distinct tokens.
+There is no pipe operator (design.md §3 [Symbols](design.md#symbols)). The
+parser refuses `x |> f` once per chain and points at `f(x)` or a method chain.
 
 ### 5.19 Cast Expressions
 
@@ -2044,29 +1968,21 @@ fn get_city(user: User) -> Option[String] {
 }
 ```
 
-### 5.22 Optional Chaining (`?.` and `??`)
+### 5.22 The `??` Operator
 
 ```
-OPTIONAL_CHAIN = EXPR "?." IDENT
-               | EXPR "?." IDENT "(" [ ARG_LIST ] ")"
-
-NIL_COALESCE = EXPR "??" EXPR
+DEFAULT_EXPR = EXPR "??" EXPR
 ```
 
-`?.` short-circuits to `None` if the expression is `None`. `??` provides a default value:
+`a ?? b` gives the success value inside `a` when `a` is `Some` or `Ok`, and `b`
+otherwise; `b` is evaluated only then. `??` has the loosest precedence of all
+operators (§5.1). There is no `?.`: design.md
+[Results and propagation](design.md#results-and-propagation) says how `f()?.x`
+parses. Full rules: design.md § [`?` and `??`](design.md#-and-).
 
 ```
-// Optional chaining — short-circuits on None
-let name = user.address?.city?.name;           // Option[String]
-
-// With default value
-let name = user.address?.city?.name ?? "unknown";  // String
-
-// Method calls
-let len = user.name?.len();                    // Option[i64]
+let port = config.port ?? 8080;     // config.port: Option[i64]
 ```
-
-`??` has the second-lowest operator precedence (above `|>`, below `||`). See §5.1 for the full table.
 
 ### 5.23 Unsafe Blocks
 

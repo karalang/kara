@@ -11,16 +11,16 @@ struct Entry {
     time: i64,
 }
 
-struct LFUCache {
+struct LfuCache {
     capacity: i64,
     entries: Map[i64, Entry],
     order: SortedSet[(i64, i64, i64)],
     clock: i64,
 }
 
-impl LFUCache {
-    fn new(capacity: i64) -> LFUCache {
-        LFUCache { capacity: capacity, entries: Map.new(), order: SortedSet.new(), clock: 0 }
+impl LfuCache {
+    fn new(capacity: i64) -> LfuCache {
+        LfuCache { capacity: capacity, entries: Map.new(), order: SortedSet.new(), clock: 0 }
     }
 
     fn touch(mut ref self, key: i64) {
@@ -67,7 +67,7 @@ impl LFUCache {
 // Runs `ops` on a cache of `capacity`: (0, key, value) is a put and
 // (1, key, _) a get. Returns every get's answer.
 fn run(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
-    let mut cache = LFUCache.new(capacity);
+    let mut cache = LfuCache.new(capacity);
     let mut answers: Vec[i64] = Vec.new();
     for (kind, key, value) in ops {
         if kind == 0 {

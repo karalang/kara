@@ -1,6 +1,6 @@
 
 fn mk() -> Vec[String] {
-    return Vec[
+    return [
         "fresh-temp-enum-payload-alpha-aaaaaaaaaaaaaaaa".to_string(),
         "fresh-temp-enum-payload-bravo-bbbbbbbbbbbbbbbb".to_string()
     ];

@@ -6,7 +6,7 @@ fn main() {
     let a: i64 = 1;
     let b: i64 = -2;
     let c: i64 = 3;
-    let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| fetch(a), || fetch(b), || fetch(c)];
+    let fs: Vec[Fn() -> Result[i64, String]] = [|| fetch(a), || fetch(b), || fetch(c)];
     let results: Vec[Result[i64, String]] = collect_all_vec(fs);
     for r in results {
         match r {

@@ -1,6 +1,5 @@
 
 struct E { x: f64, y: f64 }
-layout grid: Vec[E] { group g1 { x } group g2 { y } }
 fn pick(flag: bool) -> Vec[E] {
     if flag {
         let mut a: Vec[E] = Vec.new();

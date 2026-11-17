@@ -67,6 +67,9 @@ fn diagnostics_corpus_later_track_codes_get_the_scope_paragraph() {
         "E_DEFERRED_M4A",
         "E_TRY_BLOCK_NOT_IMPLEMENTED_YET",
         "E_TAIT_NOT_IMPLEMENTED_YET",
+        "E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET",
+        "E_DEFERRED_EFFECT_GROUP",
+        "E_DEFERRED_LAYOUT_BLOCK",
         "E0520",
     ] {
         let out = karac(dir, &["explain", code]);
@@ -161,6 +164,8 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
     }
     for (code, pointer) in [
         ("E0217", "no `|>`"),
+        ("E0106", "E_DEFERRED_LAYOUT_BLOCK"),
+        ("E0151", "E_DEFERRED_LAYOUT_BLOCK"),
         ("E0260", "m.lock()"),
         ("E0402", "Effect Groups and Composition"),
         ("E0405", "Project Profiles"),

@@ -13,7 +13,7 @@ fn vn(a: own R) -> Vec[P] { let v: Vec[P] = [P { r: a, n: 1 }]; return v; }
 fn vf(a: own R) -> Vec[R] { let v = [a, mk(30)]; return v; }
 fn vt(a: own R, b: own R) -> Vec[R] { let v = [a, b]; v }
 fn cvl(a: own R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(90)]; }
-fn vp(a: own R) -> Vec[R] { let v = Vec[a]; v }
+fn vp(a: own R) -> Vec[R] { let v = [a]; v }
 fn gl[T](a: own T, b: own T) -> Vec[T] { let v = [a, b]; return v; }
 fn main() {
   println("-c1"); let v1 = vl(mk(1), mk(2)); println(f"r{v1.len()}");

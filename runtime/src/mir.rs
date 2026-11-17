@@ -1662,6 +1662,22 @@ pub unsafe extern "C" fn karac_mir_str_replacen(
 /// B-2026-11-07-25).
 #[no_mangle]
 pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
+    exit_status(run_main(body))
+}
+
+/// The process status for exit code `code`: on Unix a status is one byte,
+/// so a code outside `0..=255` ends the process with 1, where it wrapped
+/// (`256` to 0, success) (io.md § Exit, B-2026-11-17-63).
+pub(crate) fn exit_status(code: i32) -> i32 {
+    if cfg!(unix) && !(0..=255).contains(&code) {
+        1
+    } else {
+        code
+    }
+}
+
+/// [`karac_mir_run_main`]'s run of `body`, its code as `main` gave it.
+fn run_main(body: extern "C" fn() -> i32) -> i32 {
     crate::fatal::ignore_sigpipe();
     #[cfg(unix)]
     {
@@ -2502,6 +2518,13 @@ pub unsafe extern "C" fn karac_mir_fs(
             }
         }
     };
+    // "" names no file on any target: WASI resolved it against the
+    // preopened directory, so `exists("")` was true there alone
+    // (B-2026-11-17-8).
+    if path.is_empty() || (matches!(op, 11 | 12 | 15) && text.is_empty()) {
+        // `exists` is false; every other op fails with `NotFound`, code 0.
+        return 0;
+    }
     let res: std::io::Result<()> = match op {
         0 => std::fs::write(&path, text),
         1 | 2 => std::fs::read_to_string(&path).map(|t| {
@@ -3326,6 +3349,7 @@ pub extern "C" fn karac_mir_panic_set() {
 /// Ends the process with `code`, after writing what is buffered.
 #[no_mangle]
 pub extern "C" fn karac_mir_exit(code: i32) -> ! {
+    let code = exit_status(code);
     out_flush();
     #[cfg(all(unix, feature = "net"))]
     if code == 101 && linked_with_asan() {

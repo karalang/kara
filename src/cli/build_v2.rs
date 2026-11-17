@@ -267,7 +267,7 @@ fn build_each_target(targets: &[String]) -> ! {
     });
     for t in targets {
         let status = process::Command::new(&exe)
-            .args(std::env::args().skip(1))
+            .args(std::env::args_os().skip(1))
             .arg(format!("--target={t}"))
             .status();
         match status {

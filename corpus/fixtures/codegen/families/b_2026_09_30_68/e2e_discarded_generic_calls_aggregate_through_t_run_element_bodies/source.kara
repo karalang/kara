@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 enum E { A(R), B }
 fn pg[T](x: own T) -> T { return x; }
-fn gv[T](x: own T) -> Vec[T] { return Vec[x] }
+fn gv[T](x: own T) -> Vec[T] { return [x] }
 fn gfa[T](x: own Vec[T]) -> Vec[T] { return x; }
 fn gfa2[T](x: own T) -> Array[T, 1] { return [x]; }
 fn main() {
@@ -16,7 +16,7 @@ fn main() {
   println("b1"); let n = 1; match n { 1 => gv(mk(51)), _ => gv(mk(52)) }; println("r");
   println("ga"); let w = [mk(60)]; gfa(w); println("r");
   println("gb"); gfa2(mk(61)); println("r");
-  println("ve"); pg(Vec[E.A(mk(62)), E.B]); println("r");
+  println("ve"); pg([E.A(mk(62)), E.B]); println("r");
   println("k1"); let k = gv(mk(53)); println(f"k{k.len()}");
   println("s1"); pg(mk(54)); println("r");
   println("end")

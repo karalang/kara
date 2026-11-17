@@ -1257,9 +1257,10 @@ fn test_must_use_reaches_check_and_json() {
 /// output lanes.
 ///
 /// `warning[resolve]` names the PHASE, and the message text does not repeat the
-/// lint name, so a reader had nothing to pass to `#[allow(...)]` — for
-/// `layout_unassigned_fields` an attribute design.md § Layout Rules prescribes
-/// by name, which DID work and was simply undiscoverable from its own warning.
+/// lint name, so a reader had nothing to pass to `#[allow(...)]`, which DID work
+/// and was simply undiscoverable from its own warning. The lint here is
+/// `float_in_serialized_type`; the layout lints this test first used went with
+/// layout blocks (B-2026-11-16-257).
 ///
 /// The JSON lane carried a worse form of the same gap: it hardcoded
 /// `"severity": "error"` for a diagnostic the text lane prints as a warning and
@@ -1267,7 +1268,7 @@ fn test_must_use_reaches_check_and_json() {
 /// Mend path, where the JSON is the interface.
 ///
 /// The hard-error control is what keeps this honest: an ordinary resolve error
-/// must KEEP `error[resolve]`, `"severity": "error"` and a nonzero exit, so the
+/// must KEEP its code, `"severity": "error"` and a nonzero exit, so the
 /// fix cannot have relabelled everything indiscriminately.
 #[test]
 fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
@@ -1281,33 +1282,37 @@ fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
     ));
     std::fs::create_dir_all(&tmp).unwrap();
 
-    // (a) layout_unassigned_fields — `z` is in no group.
-    let unassigned = tmp.join("unassigned.kara");
+    // (a) float_in_serialized_type — `v` is a float in a serialized type.
+    let warned = tmp.join("warned.kara");
     std::fs::write(
-        &unassigned,
-        "struct Entity { x: i64, y: i64, z: i64 }\n         layout entities: Vec[Entity] {\n             group pos { x, y }\n         }\n         fn main() {\n             let mut entities: Vec[Entity] = Vec.new();\n             entities.push(Entity { x: 1, y: 2, z: 3 });\n             println(entities[0].x);\n         }\n",
+        &warned,
+        "#[derive(Serialize)]\nstruct One { v: f32 }\nfn main() {}\n",
     )
     .unwrap();
 
     let out = karac_bin()
-        .args(["check", unassigned.to_str().unwrap()])
+        .args(["check", warned.to_str().unwrap()])
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        err.contains("warning[layout_unassigned_fields]"),
+        err.contains("warning[float_in_serialized_type]"),
         "the bracket must name the lint the reader passes to #[allow(...)], got: {err}"
     );
     assert!(
         !err.contains("warning[resolve]"),
         "the phase-tagged label must be gone: {err}"
     );
+    assert!(
+        out.status.success(),
+        "a warning must not fail the check: {err}"
+    );
 
     // The lint name in the bracket must be the one that actually suppresses it.
     let suppressed = tmp.join("suppressed.kara");
     std::fs::write(
         &suppressed,
-        "struct Entity { x: i64, y: i64, z: i64 }\n         #[allow(layout_unassigned_fields)]\n         layout entities: Vec[Entity] {\n             group pos { x, y }\n         }\n         fn main() {\n             let mut entities: Vec[Entity] = Vec.new();\n             entities.push(Entity { x: 1, y: 2, z: 3 });\n             println(entities[0].x);\n         }\n",
+        "#[derive(Serialize)]\nstruct One { #[allow(float_in_serialized_type)] v: f32 }\nfn main() {}\n",
     )
     .unwrap();
     let out = karac_bin()
@@ -1316,30 +1321,13 @@ fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
         .unwrap();
     let serr = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        !serr.contains("layout_unassigned_fields"),
+        !serr.contains("float_in_serialized_type"),
         "the name printed in the bracket must be the one that silences it: {serr}"
     );
 
-    // (b) a SIBLING kind, so this is a class fix rather than one string.
-    let reprc = tmp.join("reprc.kara");
-    std::fs::write(
-        &reprc,
-        "#[repr(C)]\n         struct E { x: i64, y: i64 }\n         layout es: Vec[E] {\n             group pos { x, y }\n         }\n         fn main() {\n             let mut v: Vec[E] = Vec.new();\n             v.push(E { x: 1, y: 2 });\n             println(v[0].x);\n         }\n",
-    )
-    .unwrap();
+    // (b) JSON lane: a note is a WARNING and carries its lint name.
     let out = karac_bin()
-        .args(["check", reprc.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let rerr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        rerr.contains("warning[repr_c_layout_ignored]"),
-        "the sibling note kind must name its lint too, got: {rerr}"
-    );
-
-    // (c) JSON lane: a note is a WARNING and carries its lint name.
-    let out = karac_bin()
-        .args(["check", "--output=json", unassigned.to_str().unwrap()])
+        .args(["check", "--output=json", warned.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1355,11 +1343,11 @@ fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
          Mend lane — it exits 0 and its own code is W-prefixed: {stdout}"
     );
     assert_eq!(
-        d["lint_name"], "layout_unassigned_fields",
+        d["lint_name"], "float_in_serialized_type",
         "the JSON must carry the lint name too: {stdout}"
     );
 
-    // (d) CONTROL — an ordinary resolve ERROR is untouched on both lanes.
+    // (c) CONTROL — an ordinary resolve ERROR is untouched on both lanes.
     let hard = tmp.join("hard.kara");
     std::fs::write(&hard, "fn main() { println(undefined_thing); }\n").unwrap();
     let out = karac_bin()

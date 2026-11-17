@@ -1,8 +1,5 @@
 
 struct Entity { x: i64, y: i64 }
-layout entities: Vec[Entity] {
-    group physics { x, y }
-}
 fn main() {
     let mut entities: Vec[Entity] = Vec.new();
     match entities.pop() {

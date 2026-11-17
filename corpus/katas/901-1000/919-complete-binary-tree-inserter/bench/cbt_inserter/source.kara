@@ -14,13 +14,13 @@ shared struct TreeNode {
     mut right: Option[TreeNode],
 }
 
-struct CBTInserter {
+struct CbtInserter {
     root: TreeNode,
     open: VecDeque[TreeNode],
 }
 
-impl CBTInserter {
-    fn new(root: TreeNode) -> CBTInserter {
+impl CbtInserter {
+    fn new(root: TreeNode) -> CbtInserter {
         let mut open: VecDeque[TreeNode] = VecDeque.new();
         let mut walk: VecDeque[TreeNode] = VecDeque.new();
         walk.push_back(root);
@@ -35,7 +35,7 @@ impl CBTInserter {
                 open.push_back(node);
             }
         }
-        CBTInserter { root: root, open: open }
+        CbtInserter { root: root, open: open }
     }
 
     fn insert(mut ref self, val: i64) -> i64 {
@@ -91,7 +91,7 @@ fn main() {
         for _ in 0..n {
             vals.push(next_random(mut seed) % 100000);
         }
-        let mut inserter = CBTInserter.new(complete_tree(vals));
+        let mut inserter = CbtInserter.new(complete_tree(vals));
         let mut parents = 0;
         for _ in 0..m {
             parents += inserter.insert(next_random(mut seed) % 100000);

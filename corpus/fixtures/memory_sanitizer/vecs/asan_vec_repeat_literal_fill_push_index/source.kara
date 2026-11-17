@@ -1,6 +1,6 @@
 
 fn main() {
-    let mut g: Vec[i64] = Vec[5; 8];
+    let mut g: Vec[i64] = Vec.filled(8, 5);
     g.push(1);
     g.push(2);
     let mut total = 0;

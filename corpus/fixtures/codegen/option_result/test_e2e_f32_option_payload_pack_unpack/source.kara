@@ -20,7 +20,7 @@ fn main() {
 match pick(true) { Some(v) => println(v), None => println(-1.0f32) }
 match wrap(true) { Some(p) => { println(p.x); println(p.y) }, None => println(-1.0f32) }
 match halve(5.0f32) { Ok(v) => println(v), Err(e) => println(e) }
-let vs: Vec[f32] = Vec[0.5f32, 1.5f32, 2.5f32];
+let vs: Vec[f32] = [0.5f32, 1.5f32, 2.5f32];
 match vs.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1.0f32) }
 let c: Tensor[f32, [2, 2]] = Tensor.from([[1.0f32, 2.0f32], [3.0f32, 4.0f32]]);
 let r = scan(c);

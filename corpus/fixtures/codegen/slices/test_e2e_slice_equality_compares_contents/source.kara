@@ -37,7 +37,7 @@ fn main() {
     let qs1: Slice[String] = q[0..1];
     println(f"{ps == qs}");
     println(f"{ps1 == qs1}");
-    let arr: Array[i64, 3] = Array[1, 2, 3];
+    let arr: Array[i64, 3] = [1, 2, 3];
     let as1: Slice[i64] = arr[0..2];
     println(f"{as1 == s1}");
     let e1: Vec[i64] = Vec.new();

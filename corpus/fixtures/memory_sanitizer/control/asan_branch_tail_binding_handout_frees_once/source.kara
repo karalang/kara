@@ -102,7 +102,7 @@ fn main() {
     let o4: Option[String] = Option.Some(mkB(n));
     let i4 = match o4 { Option.Some(x) => x, Option.None => mkA(n) };
     println(f"i4={i4}");
-    let vv: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let vv: Vec[i64] = [1i64, 2i64, 3i64];
     let i5: Vec[Vec[i64]] = vv.iter().chunks(2i64).collect();
     println(f"i5={i5.len()}");
 }

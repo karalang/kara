@@ -12,7 +12,7 @@ Json.Object(kv) => "obj",
 }
 }
 fn main() {
-let o: Json = Json.Object(Vec[("id", Json.Int(1))]);
+let o: Json = Json.Object([("id", Json.Int(1))]);
 println(o.stringify());
 match Json.parse("{\"n\":9007199254740993}") {
 Ok(j) => println(j.stringify()),

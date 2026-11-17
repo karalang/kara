@@ -8,7 +8,7 @@ fn main() {
     let mut v: Vec[Array[String, 2]] = Vec.new();
     let mut i: i64 = 0;
     while i < 4 {
-        v.push(Array[f"row-aaaaaaaaaaaaaaaa-{i}", f"col-bbbbbbbbbbbbbbbb-{i}"]);
+        v.push([f"row-aaaaaaaaaaaaaaaa-{i}", f"col-bbbbbbbbbbbbbbbb-{i}"]);
         i = i + 1;
     }
     match v.first() { Some(a) => { println(f"first:{a[0]}"); } None => {} }
@@ -37,12 +37,12 @@ fn main() {
     match no { Some(w) => { println(f"vec:{w[0]}"); } None => {} }
 
     let mut iv: Vec[Array[i64, 3]] = Vec.new();
-    iv.push(Array[7, 8, 9]);
+    iv.push([7, 8, 9]);
     let io = iv.pop();
     match io { Some(a) => { println(f"scalar:{a[0]}"); } None => {} }
 
     let mut m: Map[i64, Array[String, 2]] = Map.new();
-    m.insert(1, Array[f"map-gggggggggggggggg-0", f"map-hhhhhhhhhhhhhhhh-1"]);
+    m.insert(1, [f"map-gggggggggggggggg-0", f"map-hhhhhhhhhhhhhhhh-1"]);
     let mo = m.remove(1);
     match mo { Some(a) => { println(f"maprm:{a[0]}"); } None => {} }
 

@@ -3537,10 +3537,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // lint, not the phase, exactly as the typecheck renderers below
             // already do. `warning[resolve]` left the reader with nothing to
             // pass to `#[allow(...)]`: the bracket said "resolve", which is not
-            // a lint, and the message text does not repeat the name. For
-            // `layout_unassigned_fields` that attribute is prescribed by
-            // design.md § Layout Rules and works — it was just undiscoverable
-            // from its own warning.
+            // a lint, and the message text does not repeat the name.
             // Otherwise the bracket is the catalogue code, the one JSON
             // reports (review-thread ruling 2026-11-16): `error[resolve]`
             // named the phase, which no index or `--explain` takes.

@@ -8,7 +8,7 @@ fn mk() -> Vec[String] {
 fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let w: Vec[String] = Vec[
+        let w: Vec[String] = [
             "identity-collect-local-alpha-aaaaaaaaaaaaaaaa".to_string(),
             "identity-collect-local-bravo-bbbbbbbbbbbbbbbb".to_string(),
             "identity-collect-local-charlie-cccccccccccccc".to_string()

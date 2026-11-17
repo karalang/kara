@@ -1,7 +1,7 @@
 struct Particle { x: f64, y: f64, mass: f64 }
 
 layout particles: Vec[Particle] {
-    group position { x, y, z }
+    group position { x, y }
     group cold { mass }
 }
 

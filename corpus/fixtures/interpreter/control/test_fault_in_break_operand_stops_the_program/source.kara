@@ -1,5 +1,5 @@
 fn boom() -> i64 {
-let v = Vec[1, 2];
+let v = [1, 2];
 let r = loop { break v[99] };
 r
 }

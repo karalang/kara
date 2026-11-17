@@ -6,15 +6,15 @@
 // terms at a time until the iterator answers -1, folds the answers into a
 // checksum, takes the encoding back and changes one run's count.
 
-struct RLEIterator {
+struct RleIterator {
     encoding: Vec[i64],
     i: i64,
     used: i64,
 }
 
-impl RLEIterator {
-    fn new(encoding: own Vec[i64]) -> RLEIterator {
-        RLEIterator { encoding: encoding, i: 0, used: 0 }
+impl RleIterator {
+    fn new(encoding: own Vec[i64]) -> RleIterator {
+        RleIterator { encoding: encoding, i: 0, used: 0 }
     }
 
     fn next(mut ref self, n: i64) -> i64 {
@@ -50,7 +50,7 @@ fn main() {
     let mut check = 0;
     let mut calls = 0;
     for round in 0..rounds {
-        let mut it = RLEIterator.new(encoding);
+        let mut it = RleIterator.new(encoding);
         loop {
             let got = it.next(1 + next_random(mut seed) % 1000);
             calls += 1;

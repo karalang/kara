@@ -6,7 +6,7 @@ fn main() {
             Err(e) => println(f"err {e.line}:{e.column} {e.message}"),
         }
     }
-    let dup = Json.Object(Vec[("x", Json.Int(1)), ("y", Json.Null), ("x", Json.Array(Vec.new())), ("z", Json.String("\u{7f}\u{8}\u{c}"))]);
+    let dup = Json.Object([("x", Json.Int(1)), ("y", Json.Null), ("x", Json.Array(Vec.new())), ("z", Json.String("\u{7f}\u{8}\u{c}"))]);
     println(dup.stringify());
-    println(Json.Array(Vec[Json.Number(0.0 / 0.0), Json.Number(1.0 / 0.0), Json.Number(-1.0 / 0.0), Json.Number(-1.5), Json.Number(1e-5), Json.Number(123e-20)]).stringify());
+    println(Json.Array([Json.Number(0.0 / 0.0), Json.Number(1.0 / 0.0), Json.Number(-1.0 / 0.0), Json.Number(-1.5), Json.Number(1e-5), Json.Number(123e-20)]).stringify());
 }

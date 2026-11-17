@@ -7,7 +7,7 @@ fn main() {
     let f = |x: Vec[i64]| x.len();
     let s = |t: String| t.len();
     let a = f([1, 2]);
-    let b = f(Vec[8]);
+    let b = f([8]);
     let q = f(Vec.filled(4, 0));
     let e = f({ [4] });
     let cnd = true;
@@ -31,6 +31,6 @@ fn main() {
     let w = id([4, 5]);
     println(f"{n1} {n2} {n3} {w.len()}");
     let mut i = 0;
-    while i < 3 { let m = f([i, i]); let m2 = fs(Vec[f"x{i}"]); println(f"{m} {m2}"); i = i + 1; }
+    while i < 3 { let m = f([i, i]); let m2 = fs([f"x{i}"]); println(f"{m} {m2}"); i = i + 1; }
     println("end");
 }

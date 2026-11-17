@@ -18,7 +18,7 @@ fn braced(o: own Option[W1]) {
     println(f"al{t[0].v}")
 }
 fn vec(o: own Option[W1]) {
-    let t = match o { Some(w) => Vec[w], None => Vec[mk(0)] };
+    let t = match o { Some(w) => [w], None => [mk(0)] };
     println(f"ve{t[0].v}")
 }
 fn iflet(o: own Option[W1]) {

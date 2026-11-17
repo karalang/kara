@@ -1,6 +1,6 @@
 
 fn build(i: i64) -> Vec[String] {
-    return Vec[f"result-payload-element-number-{i}-aaaaaaaaaaaaaaaaaaaa"];
+    return [f"result-payload-element-number-{i}-aaaaaaaaaaaaaaaaaaaa"];
 }
 fn main() {
     let mut i: i64 = 0i64;

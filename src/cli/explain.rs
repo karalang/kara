@@ -253,23 +253,6 @@ struct CodeEntry {
 const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // ── resolve ─────────────────────────────────────────────────
     (
-        "W0150",
-        res("LayoutUnassignedFields", Some(DiagnosticClass::LintWarning)),
-    ),
-    // B-2026-08-21-2 — the `#[repr(C)]` + layout rule, split by visibility:
-    // the private half is the `repr_c_layout_ignored` lint, the `pub` half is
-    // the hard FFI-contract error the spec mandates, which takes no
-    // suppression.
-    (
-        "W0151",
-        res("LayoutReprCIgnored", Some(DiagnosticClass::LintWarning)),
-    ),
-    // Class `None`, not `LintWarning`: this is the ERROR half. Classing it as
-    // a lint would advertise `LINT_WARNING` for a diagnostic that takes no
-    // suppression and is fatal — the same false promise the row it comes from
-    // is about.
-    ("E0151", res("LayoutReprCOnPubStruct", None)),
-    (
         "W0152",
         res("FloatInSerializedType", Some(DiagnosticClass::LintWarning)),
     ),
@@ -286,6 +269,9 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     ("E0102", res("ReservedIdentifier", None)),
     ("E0127", res("BindingNameClass", None)),
+    // No kind reports this any more: layout blocks are refused as deferred
+    // (B-2026-11-16-257); the entry keeps `karac explain E0151` answering.
+    ("E0151", res("LayoutReprCOnPubStruct", None)),
     ("E0103", res("PrivateAccess", None)),
     (
         "E0104",
@@ -656,6 +642,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("UnusedDocComment", Some(DiagnosticClass::LintWarning)),
     ),
     (
+        "W0298",
+        ty("AcronymCase", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "W0292",
         ty("LaterTrack", Some(DiagnosticClass::LintWarning)),
     ),
@@ -687,6 +677,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     (
         "E0296",
         ty("UnusedDocComment", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0298",
+        ty("AcronymCase", Some(DiagnosticClass::LintWarning)),
     ),
     (
         "E0297",
@@ -991,6 +985,16 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     (
         "E_DEFERRED_TRACK",
         ty("DeferredToLaterTrack", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    // B-2026-11-16-298: deferred.md's effect groups.
+    (
+        "E_DEFERRED_EFFECT_GROUP",
+        ty("DeferredEffectGroup", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    // B-2026-11-16-257: deferred.md's layout blocks.
+    (
+        "E_DEFERRED_LAYOUT_BLOCK",
+        ty("DeferredLayoutBlock", Some(DiagnosticClass::TypeMismatch)),
     ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
@@ -1645,7 +1649,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     (
         "E_TAIT_NOT_IMPLEMENTED_YET",
-        ty("NoMethodFound", Some(DiagnosticClass::NoMethodFound)),
+        ty("DeferredTait", Some(DiagnosticClass::TypeMismatch)),
     ),
     ("E_TARGET_FEATURE_EMPTY", parse("Syntax")),
     ("E_TARGET_FEATURE_REQUIRES_UNSAFE", parse("Syntax")),
@@ -1656,11 +1660,11 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     (
         "E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET",
-        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+        ty("DeferredTraitAlias", Some(DiagnosticClass::TypeMismatch)),
     ),
     (
         "E_TRY_BLOCK_NOT_IMPLEMENTED_YET",
-        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+        ty("DeferredTryBlock", Some(DiagnosticClass::TypeMismatch)),
     ),
     (
         "E_TYPE_VALUE_AT_RUNTIME",
@@ -2498,9 +2502,11 @@ const CODE_PROSE: &[(&str, &str)] = &[
     (
         "E0106",
         "A layout block names a field that the struct does not have \
-         (deferred.md § Layout Blocks). Each `group` lists fields of the \
-         element type, and every field must be one the struct declares. Fix \
-         the spelling, or add the field to the struct.",
+         (deferred.md § Layout Blocks). Layout blocks are deferred, so this \
+         compiler refuses every one as E_DEFERRED_LAYOUT_BLOCK and no longer \
+         produces this code (B-2026-11-16-257). When layout blocks land, each \
+         `group` lists fields of the element type, and every field must be \
+         one the struct declares.",
     ),
     (
         "E0108",
@@ -2602,10 +2608,12 @@ const CODE_PROSE: &[(&str, &str)] = &[
     (
         "E0151",
         "A layout block regroups the fields of a `pub` `#[repr(C)]` struct \
-         (deferred.md § Layout Blocks and `#[repr]`). `#[repr(C)]` fixes \
-         the field order for code across the FFI boundary, so the groups \
-         could not take effect. Remove the layout block, or drop \
-         `#[repr(C)]` if no foreign code reads the type.",
+         (deferred.md § Layout Blocks and `#[repr]`). Layout blocks are \
+         deferred, so this compiler refuses every one as \
+         E_DEFERRED_LAYOUT_BLOCK and no longer produces this code \
+         (B-2026-11-16-257). When layout blocks land, `#[repr(C)]` fixes the \
+         field order for code across the FFI boundary, so a block could not \
+         regroup such a struct.",
     ),
     // B-2026-11-16-303, batch 3: typecheck codes no corpus program produced.
     (
@@ -3151,8 +3159,18 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
     (
         "E0217",
         "The pipe operator is not in the language (design.md § Symbols: \
-         punctuation: \"There is no `?.` and no `|>`\"); B-2026-11-16-341 tracks the \
-         parser still accepting `|>`.",
+         punctuation: \"There is no `?.` and no `|>`\"); the parser refuses `|>` \
+         as E0001 (B-2026-11-16-341), so this code is no longer produced.",
+    ),
+    (
+        "E0106",
+        "Layout blocks are deferred (docs/deferred.md § Layout Blocks); every one is \
+         refused as E_DEFERRED_LAYOUT_BLOCK (B-2026-11-16-257).",
+    ),
+    (
+        "E0151",
+        "Layout blocks are deferred (docs/deferred.md § Layout Blocks); every one is \
+         refused as E_DEFERRED_LAYOUT_BLOCK (B-2026-11-16-257).",
     ),
     (
         "E0260",
@@ -4540,9 +4558,8 @@ pub fn concept_for(
 fn concept_for_kind(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "Syntax" | "UnexpectedToken" | "ReservedKeyword" | "RawIdentNotAllowed"
-        | "ReservedSyntax" | "ReservedIdentifier" | "BindingNameClass" | "UnusedDocComment" => {
-            "syntax/lexical-structure"
-        }
+        | "ReservedSyntax" | "ReservedIdentifier" | "BindingNameClass" | "UnusedDocComment"
+        | "AcronymCase" => "syntax/lexical-structure",
         "DuplicateLintLevel"
         | "UnknownLint"
         | "ForbiddenLintAllow"
@@ -4647,10 +4664,7 @@ fn concept_for_kind(kind: &str) -> Option<&'static str> {
         | "TargetGateViolation"
         | "ProfileViolation"
         | "ProfileIncompatibleEffect" => "targets/effect-gating",
-        "LayoutUnassignedFields"
-        | "LayoutReprCIgnored"
-        | "LayoutReprCOnPubStruct"
-        | "OpaqueTypeRedeclared"
+        "OpaqueTypeRedeclared"
         | "ReprTransparentInvalid"
         | "DiscriminantInvalid"
         | "ExternSignatureInvalid"
@@ -4660,7 +4674,12 @@ fn concept_for_kind(kind: &str) -> Option<&'static str> {
         | "DeferredToM4a"
         | "ArchivedWithLegacy"
         | "DeferredToLaterTrack"
-        | "LaterTrack" => "scope/later-tracks",
+        | "LaterTrack"
+        | "DeferredTryBlock"
+        | "DeferredTraitAlias"
+        | "DeferredTait"
+        | "DeferredEffectGroup"
+        | "DeferredLayoutBlock" => "scope/later-tracks",
         _ => return None,
     })
 }
@@ -4887,9 +4906,7 @@ mod tests {
                 // `W01xx` is the resolver's WARNING half of the same 01xx
                 // numeric band (B-2026-08-21-2 follow-up): the band exists to
                 // stop numeric collisions with the typechecker's E02xx, and
-                // the prefix carries severity, not ownership. Before
-                // `layout_unassigned_fields` the resolver minted only errors,
-                // so this check could assume an `E` prefix.
+                // the prefix carries severity, not ownership.
                 *phase == "resolve"
                     && !code.starts_with("E01")
                     && !code.starts_with("E08")

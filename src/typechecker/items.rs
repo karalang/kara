@@ -145,6 +145,127 @@ impl<'a> super::TypeChecker<'a> {
     /// ordinary code today, so the author is told what the feature does now
     /// instead of nothing. A derive backer (`comptime fn derive_x`) and the
     /// `comptime fn`s it calls are the core's `#[derive]` and stay silent.
+    /// `acronym_case` (design.md §3 CN-4, B-2026-11-16-260): each Type name
+    /// the parser saw declared with an acronym in capitals, under the lint
+    /// levels of the item it is declared in, with the rename at every use
+    /// in the file as the fix.
+    fn warn_acronym_names(&mut self) {
+        if self.compiling_stdlib {
+            return;
+        }
+        let names = self.program.acronym_type_names.clone();
+        for a in names {
+            let within =
+                |s: &Span| s.offset <= a.span.offset && a.span.offset < s.offset + s.length;
+            let overrides = self
+                .program
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Function(f) if within(&f.span) => Some(f.lint_overrides.clone()),
+                    Item::StructDef(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::UnionDef(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::EnumDef(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::TraitDef(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::TraitAlias(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::MarkerTrait(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::ImplBlock(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::TypeAlias(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    Item::DistinctType(d) if within(&d.span) => Some(d.lint_overrides.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            self.lint_override_stack.push(overrides);
+            // The rename rides only a warning that is reported: an allowed
+            // one must not be applied by `karac fix` either.
+            if self.effective_lint_level("acronym_case") != crate::lints::LintLevel::Allow {
+                if let Some(edits) = &a.rename {
+                    self.error_fix_diffs
+                        .insert(SpanKey::from_span(&a.span), edits.clone());
+                }
+            }
+            self.type_lint_warning(
+                format!(
+                    "`{}` writes an acronym in capitals: a Type name treats an acronym as a \
+                     word (design.md §3 CN-4), so write `{}`",
+                    a.name, a.words
+                ),
+                a.span,
+                TypeErrorKind::AcronymCase,
+                "acronym_case",
+            );
+            self.lint_override_stack.pop();
+        }
+    }
+
+    /// A declaration of a feature docs/deferred.md holds, refused under
+    /// the feature's own code (B-2026-11-16-298): the parser reads it, and
+    /// before this it was accepted and did what the deferred design does not
+    /// yet promise (`effect group`, B-2026-11-16-256; a type alias `impl
+    /// Trait`, whose witnesses nothing checks agree), or was reported only
+    /// where it was used (a trait alias).
+    fn refuse_deferred_item(&mut self, item: &Item) {
+        if self.compiling_stdlib {
+            return;
+        }
+        let (message, span, kind) = match item {
+            Item::EffectGroup(g) => (
+                format!(
+                    "`effect group {}` is not available: effect groups are deferred \
+                     (deferred.md § Effect Groups and Composition) and not in 0.8; write \
+                     the effects out in each `with` clause",
+                    g.name
+                ),
+                g.span,
+                TypeErrorKind::DeferredEffectGroup,
+            ),
+            Item::TraitAlias(t) => {
+                self.refused_deferred.insert(t.name.clone());
+                let bound_list = self
+                    .trait_alias_bound_list(&t.name)
+                    .unwrap_or_else(|| "<bounds>".to_string());
+                (
+                    format!(
+                        "trait alias `{}` is not available: trait aliases are deferred \
+                         (deferred.md § Trait Aliases) and not in 0.8; write the bound \
+                         list where the alias would be used: `{bound_list}`",
+                        t.name
+                    ),
+                    t.span,
+                    TypeErrorKind::DeferredTraitAlias,
+                )
+            }
+            Item::TypeAlias(t) if matches!(t.ty.kind, TypeKind::ImplTrait { .. }) => {
+                self.refused_deferred.insert(t.name.clone());
+                (
+                    format!(
+                        "type alias `impl Trait` `{}` is not available: TAIT is deferred \
+                         (deferred.md § Type Alias `impl Trait`) and not in 0.8, since \
+                         nothing yet checks that every function returning it returns one \
+                         type; return `impl Trait` from each function, or name the type",
+                        t.name
+                    ),
+                    t.span,
+                    TypeErrorKind::DeferredTait,
+                )
+            }
+            // B-2026-11-16-257: MIR never read a layout block, so a program
+            // that has one runs exactly as it does without it.
+            Item::LayoutDef(l) => (
+                format!(
+                    "`layout {}` is not available: layout blocks are deferred \
+                     (deferred.md § Layout) and not in 0.8; remove the block, which \
+                     does not change what the program does",
+                    l.name
+                ),
+                l.span,
+                TypeErrorKind::DeferredLayoutBlock,
+            ),
+            _ => return,
+        };
+        self.type_error(message, span, kind);
+    }
+
     fn warn_later_track(&mut self, f: &Function, derive_backers: &HashSet<String>) {
         if f.stdlib_origin || self.compiling_stdlib {
             return;
@@ -343,6 +464,10 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn check_items(&mut self) {
         self.preregister_impl_assoc_types();
         let items: &[Item] = &self.program.items;
+        for item in items {
+            self.refuse_deferred_item(item);
+        }
+        self.warn_acronym_names();
         let derive_backers = derive_backers(items);
         for item in items {
             match item {

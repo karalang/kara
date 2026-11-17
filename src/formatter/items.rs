@@ -949,12 +949,15 @@ impl super::Formatter {
         if e.is_stable {
             self.write_str("stable ");
         }
-        self.write_str("effect ");
+        // The parser reads `effect group <name> = a + b;`: printing `effect
+        // <name> = a b;` lost the keyword and the `+`, so the output did not
+        // parse.
+        self.write_str("effect group ");
         self.write_ident(&e.name);
         self.write_str(" = ");
         for (i, term) in e.body.iter().enumerate() {
             if i > 0 {
-                self.write_str(" ");
+                self.write_str(" + ");
             }
             match term {
                 EffectGroupTerm::Verb(v) => self.format_effect_verb(v),
@@ -1106,7 +1109,7 @@ impl super::Formatter {
         // Block-level attributes are stored on the block (not pre-merged
         // into per-item attributes) so the formatter renders them at the
         // block-header position, preserving round-trip idempotence:
-        // `@noblock unsafe extern "C" { fn a; }` formats back to itself.
+        // `#[used] unsafe extern "C" { fn a; }` formats back to itself.
         self.format_attributes(&b.attributes);
         self.write_indent();
         writeln!(self.output, "unsafe extern \"{}\" {{", b.abi).unwrap();

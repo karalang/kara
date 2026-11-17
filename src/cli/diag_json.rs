@@ -2944,7 +2944,10 @@ pub(super) fn run_pipeline_jsonl_remapped(
 /// inside the parser, whose errors are its errors. Returns the build id.
 fn open_jsonl_stream(files: &[String]) -> String {
     let build_id = json_string(&new_build_id());
-    let args: Vec<String> = std::env::args().skip(1).map(|a| json_string(&a)).collect();
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| json_string(&a.to_string_lossy()))
+        .collect();
     let files: Vec<String> = files.iter().map(|f| json_string(f)).collect();
     emit_jsonl_event(
         "build_start",
@@ -3151,9 +3154,6 @@ pub(super) fn lint_entries_for_compile_path(
 /// 2026-11-16).
 pub(crate) fn resolve_error_code(kind: &crate::resolver::ResolveErrorKind) -> &'static str {
     match kind {
-        crate::resolver::ResolveErrorKind::LayoutUnassignedFields => "W0150",
-        crate::resolver::ResolveErrorKind::LayoutReprCIgnored => "W0151",
-        crate::resolver::ResolveErrorKind::LayoutReprCOnPubStruct => "E0151",
         crate::resolver::ResolveErrorKind::FloatInSerializedType => "W0152",
         crate::resolver::ResolveErrorKind::OpaqueTypeRedeclared => "W_OPAQUE_TYPE_REDECLARED",
         crate::resolver::ResolveErrorKind::UndefinedName => "E0100",
@@ -3260,6 +3260,7 @@ pub(crate) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
         // A style lint escalated by `-D`/`#[deny]`; `W0295` below.
         crate::typechecker::TypeErrorKind::StyleLint => "E0295",
         crate::typechecker::TypeErrorKind::UnusedDocComment => "E0296",
+        crate::typechecker::TypeErrorKind::AcronymCase => "E0298",
         crate::typechecker::TypeErrorKind::RedundantAliasBound => "E0293",
         crate::typechecker::TypeErrorKind::WeakReadUnwrap => "E0294",
         crate::typechecker::TypeErrorKind::PreludeShadow => "E0282",
@@ -3401,6 +3402,14 @@ pub(crate) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
         crate::typechecker::TypeErrorKind::DeferredToM4a => "E_DEFERRED_M4A",
         crate::typechecker::TypeErrorKind::ArchivedWithLegacy => "E_ARCHIVED",
         crate::typechecker::TypeErrorKind::DeferredToLaterTrack => "E_DEFERRED_TRACK",
+        // docs/deferred.md's features, each under its own code (B-2026-11-16-298).
+        crate::typechecker::TypeErrorKind::DeferredTryBlock => "E_TRY_BLOCK_NOT_IMPLEMENTED_YET",
+        crate::typechecker::TypeErrorKind::DeferredTraitAlias => {
+            "E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET"
+        }
+        crate::typechecker::TypeErrorKind::DeferredTait => "E_TAIT_NOT_IMPLEMENTED_YET",
+        crate::typechecker::TypeErrorKind::DeferredEffectGroup => "E_DEFERRED_EFFECT_GROUP",
+        crate::typechecker::TypeErrorKind::DeferredLayoutBlock => "E_DEFERRED_LAYOUT_BLOCK",
         crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
         // core-semantics.md §3.7 names this one (B-2026-10-19-61).
         crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E_INDEX_MOVE_NON_COPY",
@@ -3507,6 +3516,7 @@ pub(crate) fn type_warning_code(kind: &crate::typechecker::TypeErrorKind) -> &'s
         crate::typechecker::TypeErrorKind::LaterTrack => "W0292",
         crate::typechecker::TypeErrorKind::StyleLint => "W0295",
         crate::typechecker::TypeErrorKind::UnusedDocComment => "W0296",
+        crate::typechecker::TypeErrorKind::AcronymCase => "W0298",
         // Other kinds aren't expected to appear as warnings today.
         _ => "W0299",
     }

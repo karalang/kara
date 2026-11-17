@@ -56,8 +56,8 @@ fn bulls_and_cows(secret: ref String, guess: ref String) -> String {
     // `Vec.filled` tallies for two `Array`s there took the scoring pass from
     // 453 ms to 166 ms — 2.7x — because a Vec is a heap allocation and this is
     // a stack slot. Nothing about the algorithm changed.
-    let mut s_left: Array[i64, 10] = Array[0; 10];
-    let mut g_left: Array[i64, 10] = Array[0; 10];
+    let mut s_left: Array[i64, 10] = [0; 10];
+    let mut g_left: Array[i64, 10] = [0; 10];
     let mut d = 0;
 
     let mut i = 0;

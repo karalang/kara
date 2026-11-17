@@ -2,7 +2,7 @@
 fn main() {
     let mut round: i64 = 0;
     while round < 40 {
-        let v: Vec[String] = Vec[
+        let v: Vec[String] = [
             "cycle-take-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaa",
             "cycle-take-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbb"
         ];

@@ -38,9 +38,9 @@ fn main() {
     b += 1;
     let mut p = P { x: 1 };
     p.x = 5;
-    let mut v = Vec[1, 2];
+    let mut v = [1, 2];
     v.push(3);
-    let mut w = Vec[1];
+    let mut w = [1];
     bump(mut w);
     let mut count = 0;
     let mut inc = || { count += 1; };

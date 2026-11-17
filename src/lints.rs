@@ -161,6 +161,12 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A user type declaration takes a prelude type's name; built-in paths keyed on that name no longer apply to it.",
     },
     LintInfo {
+        name: "acronym_case",
+        default_level: LintLevel::Warn,
+        description: "A Type name writes an acronym in capitals (design.md §3 CN-4): \
+             `HTTPClient` for `HttpClient`, `IOError` for `IoError`.",
+    },
+    LintInfo {
         name: "unused_doc_comment",
         default_level: LintLevel::Warn,
         description: "A `///` doc comment that documents nothing (design.md §3 Doc comments): \
@@ -227,16 +233,6 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         name: "undocumented_unsafe",
         default_level: LintLevel::Warn,
         description: "An `unsafe { }` block or `unsafe fn` declaration is missing a SAFETY: doc comment.",
-    },
-    LintInfo {
-        name: "repr_c_layout_ignored",
-        default_level: LintLevel::Warn,
-        description: "A `layout { }` block on a `#[repr(C)]` struct is silently ignored — `#[repr(C)]` fixes the layout.",
-    },
-    LintInfo {
-        name: "layout_unassigned_fields",
-        default_level: LintLevel::Warn,
-        description: "A `layout { }` block does not assign every struct field to a group.",
     },
     LintInfo {
         name: "malformed_diagnostic_attribute",
@@ -839,8 +835,6 @@ mod tests {
             "f16_software_emulated",
             "pure_loop_in_par",
             "undocumented_unsafe",
-            "repr_c_layout_ignored",
-            "layout_unassigned_fields",
             "malformed_diagnostic_attribute",
             "unfulfilled_lint_expectation",
             "unknown_lint",

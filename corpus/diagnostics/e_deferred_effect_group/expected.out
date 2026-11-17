@@ -1,0 +1,1 @@
+ERROR at line 1: `effect group io` is not available: effect groups are deferred (deferred.md § Effect Groups and Composition) and not in 0.8; write the effects out in each `with` clause

@@ -1,6 +1,6 @@
 
 fn nums() -> Vec[i64] {
-    return Vec[10, 20, 30];
+    return [10, 20, 30];
 }
 fn main() {
     let pf: Vec[(i64, i64)] = nums().iter().enumerate().collect();

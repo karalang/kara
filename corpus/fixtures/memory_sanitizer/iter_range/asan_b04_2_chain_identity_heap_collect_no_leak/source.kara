@@ -2,11 +2,11 @@
 fn main() {
     let mut round: i64 = 0;
     while round < 40 {
-        let a: Vec[String] = Vec[
+        let a: Vec[String] = [
             "chain-collect-payload-alpha-aaaaaaaaaaaaaaaaaa".to_string(),
             "chain-collect-payload-bravo-bbbbbbbbbbbbbbbbbb".to_string()
         ];
-        let b: Vec[String] = Vec[
+        let b: Vec[String] = [
             "chain-collect-payload-charlie-cccccccccccccccc".to_string()
         ];
         let r: Vec[String] = a.iter().chain(b.iter()).cloned().collect();

@@ -707,13 +707,41 @@ pub(crate) fn pooled() -> bool {
 #[inline(never)]
 fn pooled_first(mode: &AtomicU8) -> bool {
     let n = crate::fatal::env(c"KARAC_THREADS")
-        .and_then(|v| std::str::from_utf8(v).ok())
-        .and_then(|v| v.trim().parse::<usize>().ok())
+        .and_then(threads_from_env)
         .unwrap_or_else(default_threads);
     let pooled = n > 1;
     THREADS.store(n.max(1), Ordering::Relaxed);
     mode.store(if pooled { 2 } else { 1 }, Ordering::Relaxed);
     pooled
+}
+
+/// A `KARAC_THREADS` value as a worker count. One that is not a whole number
+/// of 1 or more (`0`, `abc`, `-1`) says so on stderr, once (the count is
+/// decided once per process), and the default count is used: it was
+/// ignored without a word, and `0` ran one worker (B-2026-11-16-288). An
+/// empty value is unset.
+fn threads_from_env(raw: &[u8]) -> Option<usize> {
+    let text = std::str::from_utf8(raw).ok().map(str::trim);
+    match text.map(|t| (t, t.parse::<usize>())) {
+        Some((_, Ok(n))) if n >= 1 => Some(n),
+        Some(("", _)) => None,
+        _ => {
+            // Written as bytes, not through `fmt`: `str`'s Display pads, and
+            // its padding reaches a panic path that would link std's panic
+            // hook into every program (tests/mir_panic_free_floor.rs).
+            let shown: &[u8] = match text {
+                Some(t) => t.as_bytes().get(..t.len().min(64)).unwrap_or_default(),
+                None => b"<not UTF-8>",
+            };
+            crate::fatal::write_stderr(b"warning: KARAC_THREADS=`");
+            crate::fatal::write_stderr(shown);
+            crate::fatal::write_stderr(
+                b"` is not a worker count (a whole number, 1 or more), so the default \
+                  count is used\n",
+            );
+            None
+        }
+    }
 }
 
 /// `__pooled()`: whether the pool runs more than one worker, which a

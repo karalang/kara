@@ -18,7 +18,7 @@ fn main() {
     let r3 = takev([c, W1 { v: 7, s: s(7) }]);
     println(f"r3:{r3}");
     let d = W1 { v: 8, s: s(8) };
-    let r4 = takev(Vec[W1 { v: 9, s: s(9) }, d]);
+    let r4 = takev([W1 { v: 9, s: s(9) }, d]);
     println(f"r4:{r4}");
     let k = K { n: 0 };
     let e = W1 { v: 10, s: s(10) };

@@ -1,6 +1,5 @@
 
 struct Cell { id: i64, name: String }
-layout cells: Vec[Cell] { group ids { id } group names { name } }
 fn rebuild(src: Vec[Cell]) -> Vec[Cell] {
     let mut dst: Vec[Cell] = Vec.new();
     let mut i = 0;

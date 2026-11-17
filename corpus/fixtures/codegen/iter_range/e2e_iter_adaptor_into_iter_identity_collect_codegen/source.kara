@@ -1,9 +1,9 @@
 
 fn main() {
-    let v: Vec[i64] = Vec[1, 2, 3];
+    let v: Vec[i64] = [1, 2, 3];
     let r: Vec[i64] = v.clone().into_iter().collect();
     println(f"{r.len()} {r[0]} {r[2]} {v.len()}");
-    let s: Vec[String] = Vec["aa".to_string(), "bb".to_string()];
+    let s: Vec[String] = ["aa".to_string(), "bb".to_string()];
     let t: Vec[String] = s.clone().into_iter().collect();
     println(f"{t.len()} {t[0]}{t[1]} {s.len()}");
 }

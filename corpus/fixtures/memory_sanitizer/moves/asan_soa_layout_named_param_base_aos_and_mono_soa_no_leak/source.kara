@@ -1,9 +1,5 @@
 
 struct Entity { x: f64, y: f64, hp: i64 }
-layout entities: Vec[Entity] {
-    group physics { x, y }
-    group combat { hp }
-}
 fn total(entities: Vec[Entity]) -> i64 {
     let mut t = 0;
     let mut i = 0;

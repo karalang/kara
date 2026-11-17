@@ -1264,12 +1264,12 @@ fn new_venue() -> Venue {
         qhead: 0,
         log: Vec.new(),
         orders: Vec.new(),
-        books: Vec[Vec.new(), Vec.new()],
+        books: [Vec.new(), Vec.new()],
         next_order: 1,
         next_exec: 1,
         arrivals: 0,
-        views: Vec[Vec.new(), Vec.new()],
-        placed: Vec[Vec.new(), Vec.new()],
+        views: [Vec.new(), Vec.new()],
+        placed: [Vec.new(), Vec.new()],
     }
 }
 

@@ -1,6 +1,5 @@
 
 struct Cell { a: f64, b: f64, c: f64, d: f64, e: f64 }
-layout grid: Vec[Cell] { group lo { a, b } group hi { c, d, e } }
 fn build(v: f64) -> Vec[Cell] {
     let mut g: Vec[Cell] = Vec.new();
     let mut i = 0;

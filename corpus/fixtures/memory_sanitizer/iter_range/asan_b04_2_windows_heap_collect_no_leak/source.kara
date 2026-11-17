@@ -2,7 +2,7 @@
 fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let mut v: Vec[String] = Vec[
+        let mut v: Vec[String] = [
             "windows-heap-collect-alpha-aaaaaaaaaaaaaaaa".to_string(),
             "windows-heap-collect-bravo-bbbbbbbbbbbbbbbb".to_string(),
             "windows-heap-collect-charlie-cccccccccccccc".to_string(),

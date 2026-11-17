@@ -16,7 +16,12 @@ fn main() {
     let handle = std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
-            let args: Vec<String> = std::env::args().collect();
+            // An argument that is not UTF-8 reaches the program with each
+            // invalid sequence as U+FFFD, as in a built binary, where
+            // `args()` panicked (B-2026-11-17-60).
+            let args: Vec<String> = std::env::args_os()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
             let cmd = karac::cli::parse_args(&args);
             karac::cli::execute(cmd);
         })

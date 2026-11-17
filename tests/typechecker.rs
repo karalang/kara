@@ -7449,126 +7449,6 @@ fn test_labeled_args_destructuring_param_cannot_be_labeled() {
 
 // ── Category: Pipe Operator ────────────────────────────────────
 
-#[test]
-fn test_pipe_bare_function() {
-    // a |> f desugars to f(a)
-    typecheck_ok(
-        "
-        fn double(x: i64) -> i64 { x * 2 }
-        fn main() { let r: i64 = 5 |> double; }
-    ",
-    );
-}
-
-#[test]
-fn test_pipe_chained() {
-    // a |> f |> g desugars to g(f(a))
-    typecheck_ok(
-        "
-        fn double(x: i64) -> i64 { x * 2 }
-        fn add_one(x: i64) -> i64 { x + 1 }
-        fn main() { let r: i64 = 5 |> double |> add_one; }
-    ",
-    );
-}
-
-#[test]
-fn test_pipe_with_extra_args() {
-    // a |> f(b) desugars to f(a, b)
-    typecheck_ok(
-        "
-        fn add(x: i64, y: i64) -> i64 { x + y }
-        fn main() { let r: i64 = 5 |> add(10); }
-    ",
-    );
-}
-
-#[test]
-fn test_pipe_with_placeholder() {
-    // a |> f(_, b) desugars to f(a, b)
-    typecheck_ok(
-        "
-        fn add(x: i64, y: i64) -> i64 { x + y }
-        fn main() { let r: i64 = 5 |> add(_, 10); }
-    ",
-    );
-}
-
-#[test]
-fn test_pipe_placeholder_non_first_position() {
-    // a |> f(b, _) desugars to f(b, a)
-    typecheck_ok(
-        "
-        fn sub(x: i64, y: i64) -> i64 { x - y }
-        fn main() { let r: i64 = 5 |> sub(10, _); }
-    ",
-    );
-}
-
-#[test]
-fn test_pipe_type_mismatch() {
-    let errors = typecheck_errors(
-        "
-        fn double(x: i64) -> i64 { x * 2 }
-        fn main() { let r = true |> double; }
-    ",
-    );
-    assert!(errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch));
-}
-
-/// B-2026-08-17-26 — a closure literal as the pipe's right-hand side was
-/// rejected outright ("right-hand side of pipe must be a function name or
-/// function call"), even though design.md § Pipe Operator prescribes exactly
-/// that form as the escape hatch from its own `_` restrictions:
-///
-///   "The correct form is `let d = data |> g; d |> |d| f(d, extra)` or
-///    `data |> |d| f(g(d), extra)`"
-///   "Workaround for multi-use: wrap in a closure — `data |> |d| f(d, d)`"
-///
-/// All three are transcribed here VERBATIM, because a spec whose documented
-/// workaround does not compile leaves its restrictions with no way out — and
-/// a paraphrase of the workaround would not have caught that.
-#[test]
-fn pipe_accepts_the_closure_rhs_design_md_prescribes() {
-    typecheck_ok(
-        "
-        fn f(a: i64, b: i64) -> i64 { return a + b; }
-        fn g(x: i64) -> i64 { return x * 2; }
-        fn main() {
-            let data = 5;
-            let extra = 1;
-            let d = data |> g;
-            let r1 = d |> |d| f(d, extra);
-            let r2 = data |> |d| f(g(d), extra);
-            let r3 = data |> |d| f(d, d);
-        }
-    ",
-    );
-    // A heap param, and a closure that captures — neither is special-cased.
-    typecheck_ok(
-        "
-        fn tag(s: String) -> String { return \"[\" + s + \"]\"; }
-        fn f(a: i64, b: i64) -> i64 { return a + b; }
-        fn main() {
-            let r = \"x\" |> |s| tag(s);
-            let k = 3;
-            let n = 5 |> |d| f(d, k);
-        }
-    ",
-    );
-}
-
-/// The gate is a SHAPE gate, and widening it must not turn it off: an operand
-/// that is not callable at all still has to be rejected.
-#[test]
-fn pipe_still_rejects_a_non_callable_rhs() {
-    let errors = typecheck_errors("fn main() { let r = 5 |> 7; }");
-    assert!(
-        errors.iter().any(|e| e.kind == TypeErrorKind::NotCallable),
-        "an integer literal is still not a pipe stage; got: {errors:?}"
-    );
-}
-
 /// The second half of the same row, and NOT the "cascade that disappears with
 /// the first" the row predicted — it is an independent defect that survives
 /// the gate fix, and it is pipe-INDEPENDENT: the plain immediately-invoked
@@ -7598,7 +7478,7 @@ fn an_immediately_invoked_closure_takes_its_param_types_from_the_call() {
     typecheck_ok(
         "
         fn f(a: i64, b: i64) -> i64 { return a + b; }
-        fn main() { let r = (|d: i64| f(d, 1))(5); let q = 5 |> |d: i64| f(d, 1); }
+        fn main() { let r = (|d: i64| f(d, 1))(5); }
     ",
     );
 }
@@ -8039,32 +7919,6 @@ fn nil_coalesce_accepts_inferred_and_generic_operands() {
 }
 
 #[test]
-fn test_pipe_wrong_arity() {
-    let errors = typecheck_errors(
-        "
-        fn add(x: i64, y: i64) -> i64 { x + y }
-        fn main() { let r = 5 |> add; }
-    ",
-    );
-    assert!(errors
-        .iter()
-        .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs));
-}
-
-#[test]
-fn test_pipe_multiple_placeholders_error() {
-    let errors = typecheck_errors(
-        "
-        fn add3(x: i64, y: i64, z: i64) -> i64 { x + y + z }
-        fn main() { let r = 5 |> add3(_, 10, _); }
-    ",
-    );
-    assert!(errors
-        .iter()
-        .any(|e| e.kind == TypeErrorKind::InvalidPipePlaceholder));
-}
-
-#[test]
 fn test_pipe_placeholder_outside_pipe_error() {
     let errors = typecheck_errors(
         "
@@ -8075,28 +7929,6 @@ fn test_pipe_placeholder_outside_pipe_error() {
     assert!(errors
         .iter()
         .any(|e| e.kind == TypeErrorKind::InvalidPipePlaceholder));
-}
-
-#[test]
-fn test_pipe_return_type_propagation() {
-    // Pipe result type should be the return type of the last stage
-    typecheck_ok(
-        "
-        fn to_bool(x: i64) -> bool { x > 0 }
-        fn negate(b: bool) -> bool { not b }
-        fn main() { let r: bool = 42 |> to_bool |> negate; }
-    ",
-    );
-}
-
-#[test]
-fn test_pipe_not_callable_rhs() {
-    let errors = typecheck_errors(
-        "
-        fn main() { let r = 5 |> 42; }
-    ",
-    );
-    assert!(errors.iter().any(|e| e.kind == TypeErrorKind::NotCallable));
 }
 
 // ── Generic Type Inference ─────────────────────────────────────
@@ -11354,33 +11186,31 @@ fn empty_set_literal_in_typed_struct_field_keeps_passing() {
 // future dyn position) emits `E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET` at v1.
 
 #[test]
-fn trait_alias_in_inline_bound_emits_v1_stub() {
+fn trait_alias_in_inline_bound_is_refused_at_the_alias() {
     let errors = typecheck_errors(
         "trait Numeric = Copy + Clone; \
          fn need_copy[T: Numeric](x: T) -> T { x }",
     );
     assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET")
-                && e.message.contains("Numeric")
-                && e.message.contains("Copy + Clone")),
-        "expected v1 stub diagnostic with bound list, got: {errors:?}"
+        errors.len() == 1
+            && errors[0].kind == TypeErrorKind::DeferredTraitAlias
+            && errors[0].message.contains("Numeric")
+            && errors[0].message.contains("Copy + Clone"),
+        "expected one refusal, at the alias, with its bound list; got: {errors:?}"
     );
 }
 
 #[test]
-fn trait_alias_in_where_clause_emits_v1_stub() {
+fn trait_alias_in_where_clause_is_refused_at_the_alias() {
     let errors = typecheck_errors(
         "trait Numeric = Copy + Clone; \
          fn need_copy[T](x: T) -> T where T: Numeric { x }",
     );
     assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET")
-                && e.message.contains("Numeric")),
-        "expected v1 stub diagnostic, got: {errors:?}"
+        errors.len() == 1
+            && errors[0].kind == TypeErrorKind::DeferredTraitAlias
+            && errors[0].message.contains("Numeric"),
+        "expected one refusal, at the alias; got: {errors:?}"
     );
 }
 
@@ -11402,10 +11232,14 @@ fn impl_trait_alias_rejected() {
 }
 
 #[test]
-fn trait_alias_declaration_alone_typechecks() {
-    // A declared but unused trait alias must not emit the v1 stub
-    // diagnostic — only use sites do.
-    typecheck_ok("trait Numeric = Copy + Clone;");
+fn trait_alias_declaration_alone_is_refused() {
+    // The declaration itself is refused (B-2026-11-16-298), not only its
+    // uses, so an unused alias is reported too.
+    let errors = typecheck_errors("trait Numeric = Copy + Clone;");
+    assert!(
+        errors.len() == 1 && errors[0].kind == TypeErrorKind::DeferredTraitAlias,
+        "{errors:?}"
+    );
 }
 
 // ── Try block v1 stub diagnostic ────────────────────────────────────
@@ -12100,9 +11934,9 @@ fn try_block_emits_v1_stub_diagnostic() {
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("E_TRY_BLOCK_NOT_IMPLEMENTED_YET")
-                && e.message.contains("extract the body into a helper")),
-        "expected v1 stub, got: {errors:?}"
+            .any(|e| e.kind == TypeErrorKind::DeferredTryBlock
+                && e.message.contains("move the body into a function")),
+        "expected the try-block refusal, got: {errors:?}"
     );
 }
 
@@ -12156,8 +11990,8 @@ fn try_block_still_walks_body_for_inner_errors() {
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("E_TRY_BLOCK_NOT_IMPLEMENTED_YET")),
-        "expected v1 stub diagnostic, got: {errors:?}"
+            .any(|e| e.kind == TypeErrorKind::DeferredTryBlock),
+        "expected the try-block refusal, got: {errors:?}"
     );
     // The inner `1 + true` is also a type error.
     assert!(
@@ -26831,29 +26665,11 @@ fn non_exhaustive_slice4_pattern_stdlib_internal_use_accepted() {
 // ── `impl Trait` slice 6: TAIT declaration + v1 stub ────────────
 
 #[test]
-fn impl_trait_slice6_tait_declaration_typechecks_cleanly() {
-    // Pin: `type X = impl Trait;` registers cleanly through parse →
-    // desugar → resolve → typecheck without firing any of the
-    // slice-1 / slice-3 stub diagnostics. After slice 6 the
-    // TAIT-RHS lowering routes through `env_add_type_alias` which
-    // tags the resulting `Type::Existential` with `tait_alias =
-    // Some("X")`, so downstream consumers know it's TAIT-sourced.
-    typecheck_desugared_ok(
-        "trait Display { fn show(ref self) -> String; }\n\
-         type Shown = impl Display;",
-    );
-}
-
-#[test]
-fn impl_trait_slice6_tait_use_through_trait_surface_method_works() {
-    // Spec test: a TAIT use site that calls a method declared on
-    // the trait surface succeeds. The slice-6 dispatcher routes the
-    // call through the trait's method declaration via
-    // `dispatch_existential_receiver_method`, lowering it
-    // identically to a `Type::TypeParam` receiver with the trait as
-    // its only bound (the trait-surface path slice 3 already
-    // established for return-position existentials).
-    typecheck_desugared_ok(
+fn impl_trait_slice6_tait_is_refused_once_at_its_declaration() {
+    // deferred.md § Type Alias `impl Trait`: nothing yet checks that every
+    // function returning the alias returns one type, so the declaration is
+    // refused (B-2026-11-16-298), once, and its uses say nothing more.
+    let result = typecheck_desugared_result(
         "trait Tagged { fn tag(ref self) -> i64; }\n\
          struct Concrete { n: i64 }\n\
          impl Tagged for Concrete { fn tag(ref self) -> i64 { 1 } }\n\
@@ -26864,43 +26680,18 @@ fn impl_trait_slice6_tait_use_through_trait_surface_method_works() {
              s.tag()\n\
          }",
     );
-}
-
-#[test]
-fn impl_trait_slice6_tait_use_with_non_trait_method_emits_stub_diagnostic() {
-    // Spec test: a TAIT use site that calls a method NOT declared
-    // on the trait (but defined on the witness type) fires
-    // `E_TAIT_NOT_IMPLEMENTED_YET` naming the alias and the
-    // missing-from-trait-surface method. The witness might define
-    // the method (here `Concrete::extra`) but resolving against the
-    // witness requires the P1 witness-inference pipeline, so v1
-    // routes through the trait surface only and surfaces the focused
-    // stub.
-    let result = typecheck_desugared_result(
-        "trait Tagged { fn tag(ref self) -> i64; }\n\
-         struct Concrete { n: i64 }\n\
-         impl Tagged for Concrete { fn tag(ref self) -> i64 { 1 } }\n\
-         impl Concrete { fn extra(ref self) -> i64 { 42 } }\n\
-         type Shown = impl Tagged;\n\
-         fn make() -> Shown { Concrete { n: 0 } }\n\
-         fn use_shown() -> i64 {\n\
-             let s = make();\n\
-             s.extra()\n\
-         }",
-    );
-    let found = result.errors.iter().any(|e| {
-        e.message.contains("E_TAIT_NOT_IMPLEMENTED_YET")
-            && e.message.contains("Shown")
-            && e.message.contains("extra")
-            && e.message.contains("Tagged")
-    });
+    let msgs: Vec<_> = result
+        .errors
+        .iter()
+        .map(|e| (&e.kind, &e.message))
+        .collect();
+    assert_eq!(result.errors.len(), 1, "{msgs:?}");
     assert!(
-        found,
-        "expected E_TAIT_NOT_IMPLEMENTED_YET naming alias `Shown`, method `extra`, and trait `Tagged`; got: {:?}",
-        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        result.errors[0].kind == TypeErrorKind::DeferredTait
+            && result.errors[0].message.contains("Shown"),
+        "{msgs:?}"
     );
 }
-
 // ── `#[deprecated]` slice 4 — use-site warning emission ─────────
 //
 // At every reference site that resolves to a `Deprecation`-bearing
@@ -30044,17 +29835,6 @@ fn test_module_binding_if_expr_init_rejected() {
     let errs = typecheck_errors(
         "let FLAG: bool = true;
          let CHOICE: i64 = if FLAG { 1 } else { 2 };",
-    );
-    assert!(errs
-        .iter()
-        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
-}
-
-#[test]
-fn test_module_binding_pipe_init_rejected() {
-    let errs = typecheck_errors(
-        "fn double(n: i64) -> i64 { n * 2 }
-         let DOUBLED: i64 = 21 |> double(_);",
     );
     assert!(errs
         .iter()

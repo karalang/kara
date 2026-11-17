@@ -1001,6 +1001,18 @@ impl super::Parser {
                 if pipe_bp < min_bp {
                     break;
                 }
+                // design.md §3 has no `|>`: refused here, once, at the
+                // operator, and the stage parsed on so the rest of the
+                // program is read as written (B-2026-11-16-341). The node is
+                // still built for the passes that walk a refused program.
+                // One refusal per chain: `a |> f |> g` holds the first
+                // pipe in its left operand (B-2026-11-17-34).
+                if !matches!(lhs.kind, ExprKind::Pipe { .. }) {
+                    self.error(
+                        "there is no pipe operator `|>` (design.md § Function values): \
+                     write `f(x)` for `x |> f`, or a method chain",
+                    );
+                }
                 self.advance();
                 let rhs = self.parse_expr_bp(pipe_bp + 1)?;
                 // B-2026-08-18-33 — span the whole pipe (lhs start -> past the
@@ -2000,6 +2012,41 @@ impl super::Parser {
                             }
                             for k in &result.program.unsuffixed_u128_literals {
                                 self.unsuffixed_u128_literals.insert(shift_key(*k));
+                            }
+                            // A `vec![..]` in a hole warns and is fixed as
+                            // one outside it, and `karac fmt` prints it back
+                            // as written, not as `Vec[..]`.
+                            for (k, edit) in &result.program.vec_macro_literals {
+                                let moved = edit.as_ref().map(|e| {
+                                    let m = shift_key(crate::resolver::SpanKey(e.offset, e.length));
+                                    crate::resolver::TextEdit {
+                                        offset: m.0,
+                                        length: m.1,
+                                        replacement: e.replacement.clone(),
+                                    }
+                                });
+                                self.vec_macro_literals.insert(shift_key(*k), moved);
+                            }
+                            // A prefix collection literal in a hole warns
+                            // and is fixed as one outside it (B-2026-11-16-255).
+                            for (k, fix) in &result.program.prefix_collection_literals {
+                                let shift_edit = |e: &crate::resolver::TextEdit| {
+                                    let moved =
+                                        shift_key(crate::resolver::SpanKey(e.offset, e.length));
+                                    crate::resolver::TextEdit {
+                                        offset: moved.0,
+                                        length: moved.1,
+                                        replacement: e.replacement.clone(),
+                                    }
+                                };
+                                self.prefix_collection_literals.insert(
+                                    shift_key(*k),
+                                    crate::ast::PrefixLiteralFix {
+                                        type_name: fix.type_name.clone(),
+                                        fix: fix.fix.as_ref().map(shift_edit),
+                                        typed_fix: fix.typed_fix.as_ref().map(shift_edit),
+                                    },
+                                );
                             }
                             // `Box.new(e)` in a hole is fixed to `e` as it is
                             // outside one (B-2026-11-14-8).
@@ -3733,13 +3780,22 @@ impl super::Parser {
         // the two spec-sanctioned spellings failed as an unrelated typecheck
         // error (`'VecDeque' is a type, not a function`) and a raw parse error
         // on the map body's `:`.
+        //
+        // design.md § Collection literals has no prefix form ("There is no
+        // `Vec[...]` or `Set[...]` prefix literal"), so each is recorded with
+        // its rewrite and the type checker warns `deprecated` on it
+        // (B-2026-11-16-255); it still builds what it always did.
         if self.check(&Token::LeftBracket)
             && matches!(
                 name.as_str(),
                 "Vec" | "Array" | "Set" | "Map" | "VecDeque" | "SortedMap"
             )
         {
-            return self.parse_prefix_collection_literal(name, &start);
+            let lit = self.parse_prefix_collection_literal(name.clone(), &start)?;
+            let fix = self.prefix_literal_fix(name, &start, &lit);
+            self.prefix_collection_literals
+                .insert(crate::resolver::SpanKey::from_span(&lit.span), fix);
+            return Some(lit);
         }
 
         Some(Expr {
@@ -3937,38 +3993,107 @@ impl super::Parser {
             }),
             ExprKind::RepeatLiteral {
                 count: count_expr, ..
-            } => {
-                // The two operands are cut from the text between the
-                // brackets, at its `;`, and not from their own spans: an
-                // operand that ends or starts with a parenthesized operand
-                // (`1 << (m * n)`, `(n)`) has a span that stops short of
-                // its parentheses (kata 2174).
-                let (source, base) = self.source.as_ref()?;
-                let at = |offset: usize| offset.checked_sub(*base);
-                let open = at(bang.offset + bang.length)?;
-                let close = at(lit.span.offset + lit.span.length)?;
-                let inner = source.get(open..close)?.trim();
-                let inner = inner.strip_prefix('[')?.strip_suffix(']')?;
-                let semi = top_level_semicolon(inner)?;
-                let (value, count) = (inner[..semi].trim(), inner[semi + 1..].trim());
-                // A count cast to `usize` (Rust's spelling, carried in by
-                // LeetCode's templates) is cast to `i64` as it moves:
-                // `Vec.filled` takes an `i64` length, and a `usize` one is
-                // refused, so the rewrite of a checking program would not
-                // check (B-2026-11-14-13). The cast's type is the count's
-                // last word.
-                let count = match &count_expr.kind {
-                    ExprKind::Cast { ty, .. } if ty.is_pointer_int() => {
-                        let head = count
-                            .strip_suffix("usize")
-                            .or_else(|| count.strip_suffix("isize"))?;
-                        format!("{head}i64")
-                    }
-                    _ => count.to_string(),
-                };
-                Some(whole(format!("Vec.filled({count}, {value})")))
-            }
+            } => Some(whole(self.vec_filled_rewrite(
+                bang.offset + bang.length,
+                lit,
+                count_expr,
+            )?)),
             _ => None,
+        }
+    }
+
+    /// The text between the brackets of the literal `lit`, whose `[` is
+    /// the first non-blank character at or after `open`.
+    fn bracket_inner(&self, open: usize, lit: &Expr) -> Option<&str> {
+        let (source, base) = self.source.as_ref()?;
+        let at = |offset: usize| offset.checked_sub(*base);
+        let inner = source
+            .get(at(open)?..at(lit.span.offset + lit.span.length)?)?
+            .trim();
+        inner.strip_prefix('[')?.strip_suffix(']')
+    }
+
+    /// `Vec.filled(n, v)` for the repeat literal `lit` (`vec![v; n]`,
+    /// `Vec[v; n]`), whose `[` follows `open`.
+    fn vec_filled_rewrite(&self, open: usize, lit: &Expr, count_expr: &Expr) -> Option<String> {
+        // The two operands are cut from the text between the
+        // brackets, at its `;`, and not from their own spans: an
+        // operand that ends or starts with a parenthesized operand
+        // (`1 << (m * n)`, `(n)`) has a span that stops short of
+        // its parentheses (kata 2174).
+        let inner = self.bracket_inner(open, lit)?;
+        let semi = top_level_semicolon(inner)?;
+        let (value, count) = (inner[..semi].trim(), inner[semi + 1..].trim());
+        // A count cast to `usize` (Rust's spelling, carried in by
+        // LeetCode's templates) is cast to `i64` as it moves:
+        // `Vec.filled` takes an `i64` length, and a `usize` one is
+        // refused, so the rewrite of a checking program would not
+        // check (B-2026-11-14-13). The cast's type is the count's
+        // last word.
+        let count = match &count_expr.kind {
+            ExprKind::Cast { ty, .. } if ty.is_pointer_int() => {
+                let head = count
+                    .strip_suffix("usize")
+                    .or_else(|| count.strip_suffix("isize"))?;
+                format!("{head}i64")
+            }
+            _ => count.to_string(),
+        };
+        Some(format!("Vec.filled({count}, {value})"))
+    }
+
+    /// The rewrite of the prefix collection literal `lit` (`name` at
+    /// `start`) in the spelling design.md § Collection literals keeps
+    /// ([`crate::ast::PrefixLiteralFix`]).
+    fn prefix_literal_fix(
+        &self,
+        name: String,
+        start: &Span,
+        lit: &Expr,
+    ) -> crate::ast::PrefixLiteralFix {
+        let open = start.offset + start.length;
+        let whole = |replacement: String| crate::resolver::TextEdit {
+            offset: lit.span.offset,
+            length: lit.span.length,
+            replacement,
+        };
+        // Deleting the name leaves the bare literal.
+        let bare = crate::resolver::TextEdit {
+            offset: start.offset,
+            length: start.length,
+            replacement: String::new(),
+        };
+        let (fix, typed_fix) = match (&lit.kind, name.as_str()) {
+            (ExprKind::PrefixCollectionLiteral { items, .. }, "Array") if items.is_empty() => {
+                (None, Some(bare))
+            }
+            (ExprKind::PrefixCollectionLiteral { items, .. }, _) if items.is_empty() => {
+                (Some(whole(format!("{name}.new()"))), None)
+            }
+            (ExprKind::PrefixCollectionLiteral { .. }, "Vec") => (Some(bare), None),
+            (ExprKind::PrefixCollectionLiteral { .. }, "Set") => (
+                self.bracket_inner(open, lit)
+                    .map(|inner| whole(format!("Set.from([{inner}])"))),
+                Some(bare),
+            ),
+            (ExprKind::PrefixCollectionLiteral { .. }, "Array" | "VecDeque") => (None, Some(bare)),
+            (ExprKind::RepeatLiteral { count, .. }, "Vec") => {
+                (self.vec_filled_rewrite(open, lit, count).map(whole), None)
+            }
+            (ExprKind::RepeatLiteral { .. }, "Array") => (Some(bare), None),
+            (ExprKind::MapLiteral { .. }, "Map") => (Some(bare), None),
+            (ExprKind::MapLiteral { .. }, "SortedMap") => (
+                self.bracket_inner(open, lit)
+                    .and_then(map_entries_as_pairs)
+                    .map(|pairs| whole(format!("SortedMap.from([{pairs}])"))),
+                Some(bare),
+            ),
+            _ => (None, None),
+        };
+        crate::ast::PrefixLiteralFix {
+            type_name: name,
+            fix,
+            typed_fix,
         }
     }
 
@@ -5486,6 +5611,57 @@ fn collect_target_type(ty: &str) -> Option<String> {
 
 /// The byte offset of the first `;` in `text` outside brackets and string
 /// or char literals: the one between a `[v; n]` literal's operands.
+/// `k1: v1, k2: v2` (a map literal's text between its brackets) as
+/// `(k1, v1), (k2, v2)`, cut at the top-level `,` and `:`; `None` when an
+/// entry does not split in two.
+fn map_entries_as_pairs(text: &str) -> Option<String> {
+    let mut pairs = Vec::new();
+    for entry in split_top_level(text, ',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let parts = split_top_level(entry, ':');
+        let [k, v] = parts.as_slice() else {
+            return None;
+        };
+        pairs.push(format!("({}, {})", k.trim(), v.trim()));
+    }
+    Some(pairs.join(", "))
+}
+
+/// `text` cut at each `sep` outside brackets and quotes.
+fn split_top_level(text: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut from) = (0i64, 0);
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (i, c) in text.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            c if c == sep && depth == 0 => {
+                parts.push(&text[from..i]);
+                from = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[from..]);
+    parts
+}
+
 fn top_level_semicolon(text: &str) -> Option<usize> {
     let mut depth = 0i64;
     let mut quote: Option<char> = None;

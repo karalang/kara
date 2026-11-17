@@ -315,6 +315,11 @@ pub unsafe extern "C" fn karac_runtime_file_open(
             ));
             return;
         };
+        // "" names no file on any target (B-2026-11-17-8).
+        if path.is_empty() {
+            *out = err(&std::io::Error::from(std::io::ErrorKind::NotFound));
+            return;
+        }
         *out = match std::fs::OpenOptions::new().read(true).open(&path) {
             Ok(f) => {
                 let handle = Box::into_raw(Box::new(KaracFile {
@@ -347,6 +352,11 @@ pub unsafe extern "C" fn karac_runtime_file_create(
             ));
             return;
         };
+        // "" names no file on any target (B-2026-11-17-8).
+        if path.is_empty() {
+            *out = err(&std::io::Error::from(std::io::ErrorKind::NotFound));
+            return;
+        }
         *out = match std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -384,6 +394,11 @@ pub unsafe extern "C" fn karac_runtime_file_append(
             ));
             return;
         };
+        // "" names no file on any target (B-2026-11-17-8).
+        if path.is_empty() {
+            *out = err(&std::io::Error::from(std::io::ErrorKind::NotFound));
+            return;
+        }
         *out = match std::fs::OpenOptions::new()
             .append(true)
             .create(true)
