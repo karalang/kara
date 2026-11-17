@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 468 |
 | false-positive | 250 |
 | missing-feature | 193 |
-| perf | 184 |
+| perf | 185 |
 | other | 113 |
 | soundness | 84 |
 | miscompile | 81 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 595 |
-| mir-llvm | 281 |
+| mir-llvm | 282 |
 | mir | 246 |
 | cli | 192 |
 | parser | 105 |
@@ -128,19 +128,18 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-6 | 2026-11-17 | typecheck | low | rev on a chain, flat_map or open range says only "no method 'rev' on type 'IterChain'" (or IterFlatMap, RangeFrom); skip-over-range rev explains the missing bound | — |
 | B-2026-11-17-16 | 2026-11-17 | typecheck | low | E0600 calls Env "provider-rooted" though Env is program-rooted (14.7), and `karac query effects` derivations name the internal `__builtin_index` | — |
 | B-2026-11-17-21 | 2026-11-17 | mir | low | A second `Err` held in the scope a `?` leaves keeps its frames ahead of the error going out: `let r1 = work(false); step(false)?` prints r1's `step(b)?` frame first in the trace of `step(false)?` | — |
-| B-2026-11-17-22 | 2026-11-17 | mir-llvm | low | A `Map`/`Set` insert or removal probes the index twice: compiled code finds the key, then `karac_mir_map_insert_hv` / `remove_entry` probe again for the cell (kata 220 still 1.51x Rust's wall time, 391 1.87x) | — |
 | B-2026-11-17-30 | 2026-11-17 | ownership | medium | Slice and array patterns do not follow design.md's binding rules: a plain element binding over a `Vec[String]` moves the vector (`match v { [s, ..] => .. }` then `v.len()` is E0500); destructuring an owned `Array[D, N]` is refused E0516 'move out of a borrowed place' in `let` and `match`; a named rest over non-Copy elements is 'not lowered yet'; `..mut ref rest` does not parse | — |
 | B-2026-11-17-31 | 2026-11-17 | typecheck | low | `match x { }` on a `Never` scrutinee is refused E0205 "pattern `_` not covered", though design.md calls it the one well-formed empty match; also E0514's partial-move message still cites the removed "RC fallback" | — |
 | B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
-| B-2026-11-17-100 | 2026-11-17 | effect | low | A match / if let / while let arm binding taken by value from an owned scrutinee is not charged its Drop body's effects when the arm only reads it: the typechecker records no node type for the binding, so the drop walk sees no owned value | — |
 | B-2026-11-17-101 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a `shared` value's last handle, a Map, Set, VecDeque or sorted collection, a library cell (Mutex, OnceLock, ...), a `dyn` or an erased function value, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: -35 lowers only the drops MIR reaches part by part (structs, enums, tuples, closures, arrays, Vec) | — |
 | B-2026-11-17-109 | 2026-11-17 | ownership | low | A `scan` state seeded with `[None; 4]` reads as not `Copy`: `Some((last, last))` is refused as a use after a move and `karac fix` writes `Some((last.clone(), last))` | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-17-113 | 2026-11-17 | other | low | `karac query`'s layout_choice query proposes a `layout` block, which the compiler now refuses as deferred (E_DEFERRED_LAYOUT_BLOCK, B-2026-11-16-257) | — |
 | B-2026-11-17-97 | 2026-11-17 | typecheck | low | A library trait's default method cannot carry its own `where Self: Clone` bound, so `Iterator.cycle` is an inherent method on each Clone-able adaptor instead of one default method on `Iterator` | — |
 | B-2026-11-17-115 | 2026-11-17 | typecheck | medium | A constructor seed's numbers are fixed at the call: `it.fold(SortedMap.from([(-1, 0)]), |dp, a| ..)` over `i32` items is refused (expected 'SortedMap[i64, i64]', found 'SortedMap[i32, i32]') with no fix, where `fold(0, ..)` and `fold([0], ..)` take the closure's type | — |
+| B-2026-11-17-116 | 2026-11-17 | mir-llvm | low | Hashing a `Map`/`Set` key costs about 135 Ir per word (SipHash13 over a byte stream): `karac.hash.word` is 38% of kata 220's instructions | — |
 
 ### Relocated
 
@@ -1626,6 +1625,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-96 | ownership | low | An ownership cycle's message names the cycle from a random type: `struct A { b: B } struct B { a: A }` reports `A → B → A` (line 2) or `B → A → B` (l… | f4399b28d2 |
 | B-2026-11-17-98 | typecheck | low | A name bound from a fold's result gets no reason and no suffix fix: `let (inside, outside) = distance.iter().enumerate().fold((0, 0), ..)` over `i32`… | cb02eff265 |
 | B-2026-11-17-99 | typecheck | low | A sum over literals gets no reason and no fix: `let days: i32 = (1971..year).map(\|y\| if leap(y) { 366 } else { 365 }).sum() + [31, 28, ..].iter().tak… | cb02eff265 |
+| B-2026-11-17-100 | effect | low | A match / if let / while let arm binding taken by value from an owned scrutinee is not charged its Drop body's effects when the arm only reads it: th… | 9fb2640a30 |
 | B-2026-11-17-102 | effect | low | A test body that uses a provider-rooted resource with no provider is E0419 at `<generated>`, on the harness's `__karac_case_k()` call, not at the use… | a0d439adf7 |
 | B-2026-11-17-103 | ownership | low | A part of a tuple `let` over a collection element gets a `.clone()` fix, not the `ref` borrow: `let (i, spots) = (q[0], at[q[1] - 1]);` with `spots`… | 71e40ab8ed |
 | B-2026-11-17-104 | parser | medium | `karac fix` corrupts `Vec<[Option<usize>; 4]>`: the `;` inside Rust's array type ends the angle-bracket scan, the `Vec[..]` fix is dropped, and recov… | 71e40ab8ed |
