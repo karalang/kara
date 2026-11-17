@@ -63,8 +63,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 189 |
 | perf | 183 |
 | other | 112 |
+| soundness | 82 |
 | miscompile | 81 |
-| soundness | 81 |
 | run-vs-build | 55 |
 | crash | 47 |
 | codegen-gap | 33 |
@@ -85,7 +85,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 87 |
 | runtime | 84 |
 | resolver | 40 |
-| effect | 38 |
+| effect | 39 |
 | other | 33 |
 | codegen | 22 |
 | autopar | 7 |
@@ -155,8 +155,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-8 | 2026-11-17 | runtime | low | wasm_wasi: an empty path "" names the preopened directory: fs.exists("") is true, read_to_string("") fails EBADF and fs.write("", ..) fails EISDIR, where native and interp say not found / false | — |
 | B-2026-11-17-9 | 2026-11-17 | other | low | [doc-only] io.md is silent on wasm_wasi file behaviour: set_permissions and symlink return Unsupported, metadata.mode is 0o444 for a file the program just wrote, and Other messages carry WASI errno numbers | — |
 | B-2026-11-17-11 | 2026-11-17 | interp+mir-llvm | low | stdin.lines() goes on past an invalid-UTF-8 line (yields Err, then the next line) while BufReader.lines() ends at its first error by the 11-16 ruling; io.md gives stdin.lines no rule | — |
-| B-2026-11-17-13 | 2026-11-17 | effect | medium | A Drop body's effects are left out of every function effect set: a pub fn whose local's Drop prints needs no `with writes(Stdout)`, #[no_effect(writes(Stdout))] passes, and `karac query effects` shows [] (par conflict checking does see them) | — |
-| B-2026-11-17-14 | 2026-11-17 | effect | medium | with_provider[R] does not take R out of the enclosing function's effects (core-semantics 14.4): a pub fn that binds its own provider must declare reads(Db)/writes(RandomSource), and two such calls in par are refused as a conflict | — |
 | B-2026-11-17-15 | 2026-11-17 | cli | low | #[test(requires: [R])] does not validate R: a provider-rooted resource fails with E0419 at `<generated>:25:30` quoting the harness's `__karac_case_0()`, an undeclared name is skipped as unsatisfied_requires, and on a plain fn the attribute passes check silently | — |
 | B-2026-11-17-16 | 2026-11-17 | typecheck | low | E0600 calls Env "provider-rooted" though Env is program-rooted (14.7), and `karac query effects` derivations name the internal `__builtin_index` | — |
 | B-2026-11-17-17 | 2026-11-17 | typecheck | medium | Coherence: a blanket `impl[T: Display] Tr for T` and `impl Tr for i64` are both accepted, and `5.t()` runs the concrete impl, which is the specialization design.md rules out | — |
@@ -202,6 +200,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
+| B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
 
 ### Relocated
 
@@ -1591,6 +1590,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-5 | other | low | [doc-only] collections.md and iterators.md leave negative counts unspecified: Vec/VecDeque.truncate(-1) clears, take(-1) is empty, skip(-1) yields al… | 038ed5c65d |
 | B-2026-11-17-7 | typecheck | medium | impl From[VarError] for IoError disappears from a program that also uses From[NetError] for IoError: `?` on env.var inside a function that also `?`s… | 3864993f72 |
 | B-2026-11-17-10 | other | low | [doc-only] io.md says read_lines "drops a trailing \r from each line", but a final line "a\r" (and a lone "\r") keeps it on all three lanes, as Rust'… | bf357e8030 |
+| B-2026-11-17-13 | effect | medium | A Drop body's effects are left out of every function effect set: a pub fn whose local's Drop prints needs no `with writes(Stdout)`, #[no_effect(write… | 97dd727a6c |
+| B-2026-11-17-14 | effect | medium | with_provider[R] does not take R out of the enclosing function's effects (core-semantics 14.4): a pub fn that binds its own provider must declare rea… | 97dd727a6c |
 | B-2026-11-17-26 | ownership | high | A borrow projected through a handle-typed `mut` field of a shared value (`ref a.child.items`, `child: C` with C shared) held no count on the child, s… | 97dd0fc8e9 |
 | B-2026-11-17-27 | ownership | low | `freeze` refuses a value that is plainly unique with E0512 "has mutable state, so it cannot be frozen yet": `freeze mkroot()` on a call result, and `… | 2930852159 |
 | B-2026-11-17-28 | ownership | high | Matching a shared value's handle-typed field (`match a.s { S.One(v) => . | 97dd0fc8e9 |
