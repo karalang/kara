@@ -296,200 +296,354 @@ fn short(eof: bool, pending: Pending, what: &'static str) -> Parse {
 /// coding other than `chunked`; `431` for a head over [`HEAD_LIMIT`];
 /// `413` for a body over [`BODY_LIMIT`].
 pub fn parse_request(buf: &[u8], eof: bool) -> Parse {
-    let more = Pending {
-        need: buf.len() + 1,
-        started: !buf.iter().all(u8::is_ascii_whitespace),
-        ..Pending::default()
-    };
-    let head_short = |eof: bool, what: &'static str| {
-        if !eof && buf.len() > HEAD_LIMIT {
-            Parse::Bad(431, "the request head is too large")
-        } else {
-            short(eof, more, what)
-        }
-    };
-    let mut p = Lines { buf, pos: 0 };
-    // Blank lines before a request line are skipped (RFC 9112 §2.2).
-    let first = loop {
-        match p.line() {
-            None if eof && p.rest_is_blank() => return Parse::Closed,
-            None => return head_short(eof, "the request line ends early"),
-            Some(Err(e)) => return Parse::Bad(400, e),
-            Some(Ok(l)) if l.trim().is_empty() => continue,
-            Some(Ok(l)) => break l,
-        }
-    };
-    // `method SP target SP HTTP/x.y` (RFC 9112 §3); anything else is
-    // answered 400 without reaching the handler (docs/library/io.md).
-    let mut words = first.split(' ');
-    let (Some(method), Some(target), Some(version), None) =
-        (words.next(), words.next(), words.next(), words.next())
-    else {
-        return Parse::Bad(400, "a malformed request line");
-    };
-    if !is_token(method) || target.is_empty() || target.bytes().any(|b| b <= b' ' || b == 0x7f) {
-        return Parse::Bad(400, "a malformed request line");
-    }
-    let http10 = match version {
-        "HTTP/1.1" => false,
-        "HTTP/1.0" => true,
-        _ => return Parse::Bad(400, "an HTTP version other than 1.0 and 1.1"),
-    };
-    let mut req = Request {
-        method: method.to_string(),
-        target: origin_target(target),
-        ..Request::default()
-    };
-    loop {
-        let h = match p.line() {
-            None => return head_short(eof, "the headers end early"),
-            Some(Err(e)) => return Parse::Bad(400, e),
-            Some(Ok(h)) => h,
+    Parser::default().advance(buf, eof)
+}
+
+/// Where a [`Parser`] is in the request it is reading.
+#[derive(Default)]
+enum Stage {
+    /// Before the request line: blank lines are skipped.
+    #[default]
+    Start,
+    /// Reading header lines.
+    Headers,
+    /// The head is whole; a `Content-Length` body of this many bytes.
+    Length(usize),
+    /// The next line is a chunk's size.
+    ChunkSize,
+    /// A chunk of this many bytes is next.
+    ChunkData(usize),
+    /// The line end after a chunk's data is next.
+    ChunkEnd,
+    /// The trailers after the last chunk, and how many bytes they took.
+    Trailers(usize),
+}
+
+/// [`parse_request`] across reads (B-2026-11-17-93): it keeps what it has
+/// parsed of a request that is not whole yet, so a connection's bytes are
+/// read once however many reads bring them, instead of the whole request
+/// being parsed again at each one (a chunked body of many small chunks
+/// was quadratic in its size). `advance` must be given the same bytes
+/// again each time, with more after them; its answers are
+/// [`parse_request`]'s.
+#[derive(Default)]
+pub struct Parser {
+    stage: Stage,
+    /// Where the next line or body byte starts.
+    pos: usize,
+    /// How far past `pos` the buffer is known to hold no line end.
+    scanned: usize,
+    /// How far the buffer is known to be whitespace, before the request
+    /// line, and whether a byte that is not has come.
+    blank_upto: usize,
+    started: bool,
+    req: Request,
+    head_end: usize,
+    expect_continue: bool,
+}
+
+impl Parser {
+    /// What `buf`, the bytes read so far, holds of the request: the same
+    /// answer as `parse_request(buf, eof)`, reading only the bytes that
+    /// came since the last call.
+    pub fn advance(&mut self, buf: &[u8], eof: bool) -> Parse {
+        let mut p = Lines {
+            buf,
+            pos: self.pos,
+            scanned: self.scanned.max(self.pos),
         };
-        if h.is_empty() {
-            break;
+        let answer = self.step(&mut p, eof);
+        self.pos = p.pos;
+        self.scanned = p.scanned;
+        answer
+    }
+
+    fn body_more(&self, need: usize) -> Pending {
+        Pending {
+            need,
+            started: true,
+            in_body: true,
+            expect_continue: self.expect_continue,
         }
-        let Some((k, v)) = h.split_once(':') else {
-            return Parse::Bad(400, "a malformed header");
-        };
-        // No whitespace before the colon (RFC 9112 §5.1), which is also
-        // how an obs-fold continuation line is refused; a value is
-        // trimmed of the spaces and tabs around it (OWS), and may hold
-        // neither CR nor NUL (RFC 9110 §5.5).
-        let v = v.trim_matches([' ', '\t']);
-        if !is_token(k) || breaks_line(v) {
-            return Parse::Bad(400, "a malformed header");
-        }
-        // Names lowercased, as hyper gives them to legacy's handlers; a
-        // lookup by `header` ignores case either way.
-        req.headers.push((k.to_ascii_lowercase(), v.to_string()));
     }
-    let head_end = p.pos;
-    if head_end > HEAD_LIMIT {
-        return Parse::Bad(431, "the request head is too large");
-    }
-    fn all<'a>(h: &'a Headers, name: &'a str) -> impl Iterator<Item = &'a (String, String)> {
-        h.iter().filter(move |(k, _)| k == name)
-    }
-    if !http10 && all(&req.headers, "host").count() != 1 {
-        return Parse::Bad(400, "an HTTP/1.1 request without exactly one Host");
-    }
-    let connection = all(&req.headers, "connection")
-        .map(|(_, v)| v.as_str())
-        .collect::<Vec<_>>();
-    req.http10 = http10;
-    req.keep_alive = match http10 {
-        true => connection.iter().any(|v| lists(v, "keep-alive")),
-        false => !connection.iter().any(|v| lists(v, "close")),
-    };
-    // Framing (RFC 9112 §6): the codings of every Transfer-Encoding
-    // header in order, and every Content-Length.
-    let codings: Vec<String> = all(&req.headers, "transfer-encoding")
-        .flat_map(|(_, v)| v.split(','))
-        .map(|c| c.trim().to_ascii_lowercase())
-        .collect();
-    let lengths: Vec<&str> = all(&req.headers, "content-length")
-        .map(|(_, v)| v.as_str())
-        .collect();
-    if !codings.is_empty() && !lengths.is_empty() {
-        return Parse::Bad(400, "both Content-Length and Transfer-Encoding");
-    }
-    if lengths.len() > 1 {
-        return Parse::Bad(400, "two Content-Length headers");
-    }
-    let expect_continue = !http10
-        && req
-            .header("expect")
-            .is_some_and(|e| e.eq_ignore_ascii_case("100-continue"));
-    let body_more = |need: usize| Pending {
-        need,
-        started: true,
-        in_body: true,
-        expect_continue,
-    };
-    if !codings.is_empty() {
-        if codings.last().map(String::as_str) != Some("chunked") {
-            return Parse::Bad(400, "a Transfer-Encoding whose last coding is not chunked");
-        }
-        if codings[..codings.len() - 1].iter().any(|c| c == "chunked") {
-            return Parse::Bad(400, "chunked applied twice");
-        }
-        if codings.len() > 1 {
-            return Parse::Bad(501, "a transfer coding other than chunked");
-        }
-        let mut trailers = 0usize;
-        loop {
-            let size = match p.line() {
-                None => return short(eof, body_more(buf.len() + 1), "a malformed chunk size"),
-                Some(Err(e)) => return Parse::Bad(400, e),
-                Some(Ok(l)) => l,
-            };
-            let size = size
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim_matches([' ', '\t']);
-            if size.is_empty() || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Parse::Bad(400, "a malformed chunk size");
+
+    fn step(&mut self, p: &mut Lines<'_>, eof: bool) -> Parse {
+        let buf = p.buf;
+        if matches!(self.stage, Stage::Start) {
+            // Blank lines before a request line are skipped (RFC 9112 §2.2).
+            loop {
+                match p.line() {
+                    None if eof && p.rest_is_blank() => return Parse::Closed,
+                    None => {
+                        let from = self.blank_upto.max(p.pos);
+                        if buf[from..].iter().any(|b| !b.is_ascii_whitespace()) {
+                            self.started = true;
+                        }
+                        self.blank_upto = buf.len();
+                        return self.head_short(buf, eof, "the request line ends early");
+                    }
+                    Some(Err(e)) => return Parse::Bad(400, e),
+                    Some(Ok(l)) if l.trim().is_empty() => {
+                        if l.bytes().any(|b| !b.is_ascii_whitespace()) {
+                            self.started = true;
+                        }
+                    }
+                    Some(Ok(l)) => {
+                        self.started = true;
+                        if let Err(bad) = self.request_line(l) {
+                            return bad;
+                        }
+                        self.stage = Stage::Headers;
+                        break;
+                    }
+                }
             }
-            let n = match usize::from_str_radix(size, 16) {
-                Ok(n) if req.body.len().saturating_add(n) <= BODY_LIMIT => n,
-                _ => return Parse::Bad(413, "the body is too large"),
-            };
-            if n == 0 {
-                // Trailers, up to the blank line or the end.
-                loop {
+        }
+        if matches!(self.stage, Stage::Headers) {
+            loop {
+                let h = match p.line() {
+                    None => return self.head_short(buf, eof, "the headers end early"),
+                    Some(Err(e)) => return Parse::Bad(400, e),
+                    Some(Ok(h)) => h,
+                };
+                if h.is_empty() {
+                    break;
+                }
+                let Some((k, v)) = h.split_once(':') else {
+                    return Parse::Bad(400, "a malformed header");
+                };
+                // No whitespace before the colon (RFC 9112 §5.1), which is
+                // also how an obs-fold continuation line is refused; a
+                // value is trimmed of the spaces and tabs around it (OWS),
+                // and may hold neither CR nor NUL (RFC 9110 §5.5).
+                let v = v.trim_matches([' ', '\t']);
+                if !is_token(k) || breaks_line(v) {
+                    return Parse::Bad(400, "a malformed header");
+                }
+                // Names lowercased, as hyper gives them to legacy's
+                // handlers; a lookup by `header` ignores case either way.
+                self.req
+                    .headers
+                    .push((k.to_ascii_lowercase(), v.to_string()));
+            }
+            self.head_end = p.pos;
+            if let Err(bad) = self.framing() {
+                return bad;
+            }
+        }
+        loop {
+            match self.stage {
+                Stage::Start | Stage::Headers => unreachable!("the head is whole"),
+                Stage::Length(n) => {
+                    let Some(data) = p.take(n) else {
+                        return short(
+                            eof,
+                            self.body_more(self.head_end + n),
+                            "the body ends early",
+                        );
+                    };
+                    self.req.body = data.to_vec();
+                    break;
+                }
+                Stage::ChunkSize => {
+                    let size = match p.line() {
+                        None => {
+                            return short(
+                                eof,
+                                self.body_more(buf.len() + 1),
+                                "a malformed chunk size",
+                            )
+                        }
+                        Some(Err(e)) => return Parse::Bad(400, e),
+                        Some(Ok(l)) => l,
+                    };
+                    let size = size
+                        .split(';')
+                        .next()
+                        .unwrap_or_default()
+                        .trim_matches([' ', '\t']);
+                    if size.is_empty() || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Parse::Bad(400, "a malformed chunk size");
+                    }
+                    let n = match usize::from_str_radix(size, 16) {
+                        Ok(n) if self.req.body.len().saturating_add(n) <= BODY_LIMIT => n,
+                        _ => return Parse::Bad(413, "the body is too large"),
+                    };
+                    self.stage = if n == 0 {
+                        Stage::Trailers(0)
+                    } else {
+                        Stage::ChunkData(n)
+                    };
+                }
+                Stage::ChunkData(n) => {
+                    let at = p.pos;
+                    let Some(data) = p.take(n) else {
+                        return short(eof, self.body_more(at + n + 2), "a chunk ends early");
+                    };
+                    self.req.body.extend_from_slice(data);
+                    self.stage = Stage::ChunkEnd;
+                }
+                Stage::ChunkEnd => {
+                    // The chunk's line end, and nothing before it; the end
+                    // of the input stands for it.
                     let at = p.pos;
                     match p.line() {
-                        None if eof => {
-                            p.pos = buf.len();
-                            break;
-                        }
-                        None if buf.len() - at > HEAD_LIMIT => {
-                            return Parse::Bad(431, "the trailers are too large")
-                        }
-                        None => return Parse::More(body_more(buf.len() + 1)),
-                        Some(Err(e)) => return Parse::Bad(400, e),
-                        Some(Ok(l)) if l.trim().is_empty() => break,
-                        Some(Ok(_)) => {
-                            trailers += p.pos - at;
-                            if trailers > HEAD_LIMIT {
-                                return Parse::Bad(431, "the trailers are too large");
+                        None if eof => p.pos = buf.len(),
+                        None => return Parse::More(self.body_more(at + 2)),
+                        Some(Ok("")) => {}
+                        Some(_) => return Parse::Bad(400, "a chunk longer than its size"),
+                    }
+                    self.stage = Stage::ChunkSize;
+                }
+                Stage::Trailers(mut trailers) => {
+                    // Up to the blank line or the end.
+                    loop {
+                        let at = p.pos;
+                        match p.line() {
+                            None if eof => {
+                                p.pos = buf.len();
+                                break;
+                            }
+                            None if buf.len() - at > HEAD_LIMIT => {
+                                return Parse::Bad(431, "the trailers are too large")
+                            }
+                            None => {
+                                self.stage = Stage::Trailers(trailers);
+                                return Parse::More(self.body_more(buf.len() + 1));
+                            }
+                            Some(Err(e)) => return Parse::Bad(400, e),
+                            Some(Ok(l)) if l.trim().is_empty() => break,
+                            Some(Ok(_)) => {
+                                trailers += p.pos - at;
+                                if trailers > HEAD_LIMIT {
+                                    return Parse::Bad(431, "the trailers are too large");
+                                }
                             }
                         }
                     }
+                    break;
                 }
-                break;
-            }
-            let at = p.pos;
-            let Some(data) = p.take(n) else {
-                return short(eof, body_more(at + n + 2), "a chunk ends early");
-            };
-            req.body.extend_from_slice(data);
-            // The chunk's line end, and nothing before it; the end of the
-            // input stands for it.
-            match p.line() {
-                None if eof => p.pos = buf.len(),
-                None => return Parse::More(body_more(at + n + 2)),
-                Some(Ok("")) => {}
-                Some(_) => return Parse::Bad(400, "a chunk longer than its size"),
             }
         }
-    } else if let Some(n) = lengths.first() {
-        // `1*DIGIT` (RFC 9110 §8.6): no sign, no list, no space.
-        if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
-            return Parse::Bad(400, "a malformed content-length");
-        }
-        let n = match n.parse::<usize>() {
-            Ok(n) if n <= BODY_LIMIT => n,
-            _ => return Parse::Bad(413, "the body is too large"),
-        };
-        let Some(data) = p.take(n) else {
-            return short(eof, body_more(head_end + n), "the body ends early");
-        };
-        req.body = data.to_vec();
+        let req = std::mem::take(&mut self.req);
+        let used = p.pos;
+        *self = Parser::default();
+        Parse::Done(req, used)
     }
-    Parse::Done(req, p.pos)
+
+    /// The answer for a head that needs more than `buf` holds.
+    fn head_short(&self, buf: &[u8], eof: bool, what: &'static str) -> Parse {
+        if !eof && buf.len() > HEAD_LIMIT {
+            Parse::Bad(431, "the request head is too large")
+        } else {
+            let more = Pending {
+                need: buf.len() + 1,
+                started: self.started,
+                ..Pending::default()
+            };
+            short(eof, more, what)
+        }
+    }
+
+    /// `method SP target SP HTTP/x.y` (RFC 9112 §3); anything else is
+    /// answered 400 without reaching the handler (docs/library/io.md).
+    fn request_line(&mut self, first: &str) -> Result<(), Parse> {
+        let mut words = first.split(' ');
+        let (Some(method), Some(target), Some(version), None) =
+            (words.next(), words.next(), words.next(), words.next())
+        else {
+            return Err(Parse::Bad(400, "a malformed request line"));
+        };
+        if !is_token(method) || target.is_empty() || target.bytes().any(|b| b <= b' ' || b == 0x7f)
+        {
+            return Err(Parse::Bad(400, "a malformed request line"));
+        }
+        let http10 = match version {
+            "HTTP/1.1" => false,
+            "HTTP/1.0" => true,
+            _ => return Err(Parse::Bad(400, "an HTTP version other than 1.0 and 1.1")),
+        };
+        self.req = Request {
+            method: method.to_string(),
+            target: origin_target(target),
+            http10,
+            ..Request::default()
+        };
+        Ok(())
+    }
+
+    /// The checks on a whole head, and the stage its framing reads the
+    /// body in.
+    fn framing(&mut self) -> Result<(), Parse> {
+        if self.head_end > HEAD_LIMIT {
+            return Err(Parse::Bad(431, "the request head is too large"));
+        }
+        fn all<'a>(h: &'a Headers, name: &'a str) -> impl Iterator<Item = &'a (String, String)> {
+            h.iter().filter(move |(k, _)| k == name)
+        }
+        let req = &mut self.req;
+        let http10 = req.http10;
+        if !http10 && all(&req.headers, "host").count() != 1 {
+            return Err(Parse::Bad(
+                400,
+                "an HTTP/1.1 request without exactly one Host",
+            ));
+        }
+        let keep_alive = {
+            let mut connection = all(&req.headers, "connection").map(|(_, v)| v.as_str());
+            match http10 {
+                true => connection.any(|v| lists(v, "keep-alive")),
+                false => !connection.any(|v| lists(v, "close")),
+            }
+        };
+        req.keep_alive = keep_alive;
+        // Framing (RFC 9112 §6): the codings of every Transfer-Encoding
+        // header in order, and every Content-Length.
+        let codings: Vec<String> = all(&req.headers, "transfer-encoding")
+            .flat_map(|(_, v)| v.split(','))
+            .map(|c| c.trim().to_ascii_lowercase())
+            .collect();
+        let lengths: Vec<&str> = all(&req.headers, "content-length")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        if !codings.is_empty() && !lengths.is_empty() {
+            return Err(Parse::Bad(400, "both Content-Length and Transfer-Encoding"));
+        }
+        if lengths.len() > 1 {
+            return Err(Parse::Bad(400, "two Content-Length headers"));
+        }
+        self.expect_continue = !http10
+            && req
+                .header("expect")
+                .is_some_and(|e| e.eq_ignore_ascii_case("100-continue"));
+        self.stage = if !codings.is_empty() {
+            if codings.last().map(String::as_str) != Some("chunked") {
+                return Err(Parse::Bad(
+                    400,
+                    "a Transfer-Encoding whose last coding is not chunked",
+                ));
+            }
+            if codings[..codings.len() - 1].iter().any(|c| c == "chunked") {
+                return Err(Parse::Bad(400, "chunked applied twice"));
+            }
+            if codings.len() > 1 {
+                return Err(Parse::Bad(501, "a transfer coding other than chunked"));
+            }
+            Stage::ChunkSize
+        } else if let Some(n) = lengths.first() {
+            // `1*DIGIT` (RFC 9110 §8.6): no sign, no list, no space.
+            if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(Parse::Bad(400, "a malformed content-length"));
+            }
+            match n.parse::<usize>() {
+                Ok(n) if n <= BODY_LIMIT => Stage::Length(n),
+                _ => return Err(Parse::Bad(413, "the body is too large")),
+            }
+        } else {
+            Stage::Length(0)
+        };
+        Ok(())
+    }
 }
 
 /// A connection's progress toward its next request, between the reads of
@@ -501,6 +655,10 @@ pub struct Progress {
     /// When the first byte of the request came.
     started: Option<std::time::Instant>,
     pending: Pending,
+    /// The request read so far, kept across reads (B-2026-11-17-93).
+    parser: Parser,
+    /// How many bytes the buffer held at the last `install`.
+    seen: usize,
 }
 
 impl Progress {
@@ -510,7 +668,13 @@ impl Progress {
     /// Continue` before sending it, -1 when the connection holds no
     /// request, or minus the status a refused one is answered with.
     pub fn install(&mut self, buf: &[u8], eof: bool) -> (i64, Option<Request>) {
-        match parse_request(buf, eof) {
+        // The server asks again with the same bytes and more after them;
+        // a buffer that shrank is a new one, read from its start.
+        if buf.len() < self.seen {
+            *self = Progress::default();
+        }
+        self.seen = buf.len();
+        match self.parser.advance(buf, eof) {
             Parse::Done(req, used) => {
                 *self = Progress::default();
                 (used as i64, Some(req))
@@ -560,6 +724,9 @@ impl Progress {
 struct Lines<'a> {
     buf: &'a [u8],
     pos: usize,
+    /// How far the buffer is known to hold no line end after `pos`, so a
+    /// line that comes over many reads is searched once.
+    scanned: usize,
 }
 
 impl<'a> Lines<'a> {
@@ -567,7 +734,15 @@ impl<'a> Lines<'a> {
     /// is left; text that is not UTF-8 is an error.
     fn line(&mut self) -> Option<Result<&'a str, &'static str>> {
         let rest = &self.buf[self.pos..];
-        let i = rest.iter().position(|&b| b == b'\n')?;
+        let from = self.scanned.max(self.pos) - self.pos;
+        let Some(i) = rest[from..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|i| i + from)
+        else {
+            self.scanned = self.buf.len();
+            return None;
+        };
         self.pos += i + 1;
         let l = rest[..i].strip_suffix(b"\r").unwrap_or(&rest[..i]);
         Some(std::str::from_utf8(l).map_err(|_| "a line that is not UTF-8"))
@@ -875,10 +1050,103 @@ mod tests {
         // A head in progress waits what is left of 30 s; nothing yet, 60.
         assert_eq!(progress.install(b"\r\n", false).0, 0);
         assert_eq!(progress.wait_ms(), IDLE_TIMEOUT_MS);
-        assert_eq!(progress.install(b"GET / HT", false).0, 0);
+        assert_eq!(progress.install(b"\r\nGET / HT", false).0, 0);
         let w = progress.wait_ms();
         assert!((-HEAD_TIMEOUT_MS..0).contains(&w), "{w}");
-        assert_eq!(progress.install(b"GET / HTTP/1.1\r\n\r\n", false).0, -400);
+        assert_eq!(
+            progress.install(b"\r\nGET / HTTP/1.1\r\n\r\n", false).0,
+            -400
+        );
+    }
+
+    /// What a parse answered, to compare two parses.
+    fn answer(p: Parse) -> String {
+        match p {
+            Parse::Done(r, used) => format!(
+                "done {used} {} {} {:?} {:?} {} {}",
+                r.method,
+                r.target,
+                r.headers,
+                String::from_utf8_lossy(&r.body),
+                r.keep_alive,
+                r.http10
+            ),
+            Parse::More(p) => format!("more {p:?}"),
+            Parse::Closed => "closed".to_string(),
+            Parse::Bad(status, why) => format!("bad {status} {why}"),
+        }
+    }
+
+    /// A parser kept across reads answers what a fresh parse of the same
+    /// bytes does, after every read, whatever the reads' sizes
+    /// (B-2026-11-17-93).
+    #[test]
+    fn a_kept_parser_answers_as_a_fresh_parse() {
+        let requests: &[&str] = &[
+            "GET /a?x=1 HTTP/1.1\r\nHost: h\r\n\r\n",
+            "\r\n\r\nGET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\nNEXT",
+            "POST /p HTTP/1.1\r\nHost: h\r\nContent-Length: 11\r\n\r\nhello world",
+            "PUT / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;x=1\r\nde\r\n0\r\nT: v\r\n\r\n",
+            "PUT / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcX\r\n",
+            "PUT / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n",
+            "POST / HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\nok",
+            "GET / HTTP/1.1\r\nHost: h\r\nBad Name: v\r\n\r\n",
+            "GET / HTTP/2.0\r\n\r\n",
+            "GET / HTTP/1.1\r\n\r\n",
+            "\r\n \r\n",
+        ];
+        for raw in requests {
+            let raw = raw.as_bytes();
+            for step in [1, 2, 3, 7, raw.len()] {
+                for eof_at_end in [false, true] {
+                    let mut kept = Parser::default();
+                    let mut end = 0;
+                    loop {
+                        end = (end + step).min(raw.len());
+                        let eof = eof_at_end && end == raw.len();
+                        let fresh = answer(parse_request(&raw[..end], eof));
+                        let got = answer(kept.advance(&raw[..end], eof));
+                        assert_eq!(
+                            got,
+                            fresh,
+                            "{:?} by {step} at {end}",
+                            String::from_utf8_lossy(raw)
+                        );
+                        if !fresh.starts_with("more") || end == raw.len() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A chunked body that comes one small chunk per read is read once:
+    /// 200 000 one-byte chunks, about 1.2 MB, were about 10^11 byte reads
+    /// when each read parsed the request again (B-2026-11-17-93).
+    #[test]
+    fn a_body_of_many_small_chunks_is_read_once() {
+        let mut raw = b"PUT / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        let mut cuts = vec![raw.len()];
+        for _ in 0..200_000 {
+            raw.extend_from_slice(b"1\r\nx\r\n");
+            cuts.push(raw.len());
+        }
+        raw.extend_from_slice(b"0\r\n\r\n");
+        cuts.push(raw.len());
+        let started = std::time::Instant::now();
+        let mut progress = Progress::default();
+        let mut last = (0, None);
+        for &end in &cuts {
+            if end >= progress.need() as usize {
+                last = progress.install(&raw[..end], false);
+            }
+        }
+        let (used, req) = last;
+        assert_eq!(used as usize, raw.len());
+        assert_eq!(req.unwrap().body.len(), 200_000);
+        let spent = started.elapsed();
+        assert!(spent < std::time::Duration::from_secs(10), "{spent:?}");
     }
 
     /// `Connection` is a token list (B-2026-11-17-52).
