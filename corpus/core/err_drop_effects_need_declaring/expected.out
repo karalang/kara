@@ -1,0 +1,5 @@
+ERROR at line 17: public function 'takes' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature
+ERROR at line 20: public function 'holds' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature
+ERROR at line 24: public function 'calls' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature
+ERROR at line 28: public function 'replaces' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature
+ERROR at line 32: public function 'discards' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature

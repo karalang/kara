@@ -764,7 +764,12 @@ pub fn node_type_facts(
 ) -> effectchecker::NodeTypeFacts {
     use crate::typechecker::Type;
     let mut facts = effectchecker::NodeTypeFacts::default();
+    let mut drops = DropReach::new(typed);
     for (&node, (ty, _)) in &typed.node_types {
+        let owned = drops.of(ty);
+        if !owned.is_empty() {
+            facts.drops.insert(node, owned);
+        }
         let mut ty = ty;
         while let Type::Ref(inner) | Type::MutRef(inner) = ty {
             ty = inner;
@@ -793,7 +798,123 @@ pub fn node_type_facts(
             _ => {}
         }
     }
+    let names: Vec<String> = typed
+        .struct_info
+        .keys()
+        .chain(typed.enum_info.keys())
+        .cloned()
+        .collect();
+    for name in names {
+        let owned = drops.of_name(&name);
+        if !owned.is_empty() {
+            facts.drops_by_type.insert(name, owned);
+        }
+    }
     facts
+}
+
+/// The types with a `Drop` impl whose `drop` runs when a value of a given
+/// type drops: its own, its fields' and variants' and its type arguments',
+/// never through a reference, a function or a type parameter
+/// (B-2026-11-17-13).
+struct DropReach<'t> {
+    typed: &'t crate::typechecker::TypeCheckResult,
+    with_drop: rustc_hash::FxHashSet<&'t str>,
+    by_name: FxHashMap<String, Vec<String>>,
+    in_progress: rustc_hash::FxHashSet<String>,
+}
+
+impl<'t> DropReach<'t> {
+    fn new(typed: &'t crate::typechecker::TypeCheckResult) -> Self {
+        let with_drop = typed
+            .trait_impls
+            .iter()
+            .filter(|(t, _)| t == "Drop")
+            .map(|(_, target)| target.as_str())
+            .collect();
+        DropReach {
+            typed,
+            with_drop,
+            by_name: FxHashMap::default(),
+            in_progress: rustc_hash::FxHashSet::default(),
+        }
+    }
+
+    fn of(&mut self, ty: &crate::typechecker::Type) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.with_drop.is_empty() {
+            self.collect(ty, &mut out);
+            out.sort();
+            out.dedup();
+        }
+        out
+    }
+
+    fn of_name(&mut self, name: &str) -> Vec<String> {
+        if self.with_drop.is_empty() {
+            return Vec::new();
+        }
+        if let Some(done) = self.by_name.get(name) {
+            return done.clone();
+        }
+        if !self.in_progress.insert(name.to_string()) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if self.with_drop.contains(name) {
+            out.push(name.to_string());
+        }
+        let typed = self.typed;
+        if let Some(info) = typed.struct_info.get(name) {
+            for (_, t, _) in &info.fields {
+                self.collect(t, &mut out);
+            }
+        }
+        if let Some(info) = typed.enum_info.get(name) {
+            for (_, v) in &info.variants {
+                match v {
+                    crate::typechecker::VariantTypeInfo::Unit => {}
+                    crate::typechecker::VariantTypeInfo::Tuple(ts) => {
+                        for t in ts {
+                            self.collect(t, &mut out);
+                        }
+                    }
+                    crate::typechecker::VariantTypeInfo::Struct(fs) => {
+                        for (_, t) in fs {
+                            self.collect(t, &mut out);
+                        }
+                    }
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        self.in_progress.remove(name);
+        self.by_name.insert(name.to_string(), out.clone());
+        out
+    }
+
+    fn collect(&mut self, ty: &crate::typechecker::Type, out: &mut Vec<String>) {
+        use crate::typechecker::Type;
+        match ty {
+            Type::Named { name, args } => {
+                out.extend(self.of_name(name));
+                for a in args {
+                    self.collect(a, out);
+                }
+            }
+            Type::Shared(name) => out.extend(self.of_name(name)),
+            Type::Tuple(ts) => {
+                for t in ts {
+                    self.collect(t, out);
+                }
+            }
+            Type::Array { element, .. } | Type::Rc(element) | Type::Arc(element) => {
+                self.collect(element, out)
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Analyze concurrency opportunities in a parsed program.

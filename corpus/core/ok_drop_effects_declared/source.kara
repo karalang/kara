@@ -1,0 +1,49 @@
+// A public function declares what its own drops do, and a function that
+// hands its value on drops nothing, so it declares nothing (core semantics
+// §12 default 3, B-2026-11-17-13).
+pub struct L { n: i64 }
+
+impl Drop for L {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+
+impl L {
+    pub fn new(n: i64) -> L { L { n } }
+    pub fn get(self) -> i64 { self.n }
+}
+
+pub fn make(n: i64) -> L {
+    let l = L.new(n);
+    l
+}
+
+pub fn wrapped(n: i64) -> Option[L] {
+    let l = make(n);
+    Some(l)
+}
+
+pub fn stored(v: mut ref Vec[L], n: i64) {
+    let l = make(n);
+    v.push(l);
+}
+
+pub fn passed_on(l: own L) -> L {
+    l
+}
+
+pub fn finished(l: own L) -> i64 with writes(Stdout) {
+    l.get() * 10
+}
+
+pub fn scoped(n: i64) -> i64 with writes(Stdout) {
+    let l = make(n);
+    l.get() + 1
+}
+
+fn main() {
+    let mut v: Vec[L] = Vec.new();
+    stored(mut v, 1);
+    let w = wrapped(2);
+    let k = passed_on(make(3));
+    println(f"{finished(make(4))} {scoped(5)} {k.get()} {v.len()} {w.is_some()}");
+}

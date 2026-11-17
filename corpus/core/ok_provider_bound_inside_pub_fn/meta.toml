@@ -1,0 +1,11 @@
+source = "corpus/core/ok_provider_bound_inside_pub_fn"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["providers", "effects", "declarations", "post-m1:par", "post-m1:provider"]
+class = "e"
+expected_from = "spec"
+rules = ["14.4", "14.8", "11.2"]
+backends = []
+env = {}
+note = "core-semantics §14.4: inside with_provider[R](p, f) the call supplies R, so R is not among the enclosing function's effects; §14.8 nests providers sugar the same way. Public functions that bind their own Db, RandomSource and Clock need no clause, and two par branches that each bind a fresh RandomSource fake share nothing (B-2026-11-17-14)."

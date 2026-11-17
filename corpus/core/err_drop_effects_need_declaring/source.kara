@@ -1,0 +1,43 @@
+// A drop's effects are its type's drop glue's, charged where the drop runs
+// (core semantics §12 default 3), so a public function whose own drops
+// print must declare `writes(Stdout)`, as it would for a `println` it wrote
+// (B-2026-11-17-13).
+pub struct L { n: i64 }
+
+impl Drop for L {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+
+pub struct Pair { a: L, b: i64 }
+
+fn scratch() {
+    let _l = L { n: 5 };
+}
+
+pub fn takes(l: own L) {
+}
+
+pub fn holds() {
+    let v: Vec[L] = [L { n: 3 }];
+}
+
+pub fn calls() {
+    scratch();
+}
+
+pub fn replaces(p: mut ref Pair) {
+    p.a = L { n: 7 };
+}
+
+pub fn discards() {
+    L { n: 9 };
+}
+
+fn main() {
+    let mut p = Pair { a: L { n: 6 }, b: 0 };
+    takes(L { n: 1 });
+    holds();
+    calls();
+    replaces(mut p);
+    discards();
+}

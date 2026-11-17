@@ -3206,6 +3206,10 @@ fn main() -> () {
             "err_no_effect_panics_arithmetic",
             "err_no_effect_heap_allocations",
             "err_effect_clause_checked_everywhere",
+            // A function's own drops charge its `Drop` bodies' effects
+            // (core semantics §12 default 3, B-2026-11-17-13).
+            "err_drop_effects_need_declaring",
+            "err_no_effect_counts_drops",
             "err_dyn_view_unmarked_spawned",
             "err_dyn_view_unmarked_par",
             "err_fn_vec_call_result_marked",
@@ -3280,6 +3284,9 @@ fn main() -> () {
             "log_transparent",
             // `std.net`'s sockets are the library's.
             "par_real_clients",
+            // `RandomProvider`, `ClockProvider` and their resources are the
+            // library's (B-2026-11-17-14).
+            "ok_provider_bound_inside_pub_fn",
             // `Vec.rotate_left` and `Map.get` are the library's.
             "ok_ref_number_as_native_argument",
             // `Option.get_or_insert_with` is option.kara's (B-2026-11-08-69).

@@ -515,6 +515,7 @@ impl<'a> super::EffectChecker<'a> {
                         .flatten()
                         .copied(),
                 )
+                .chain(self.drop_calls.get(&name).into_iter().flatten().copied())
                 .collect::<Vec<_>>();
             if kinds == EdgeKinds::CallsAndValueRefs {
                 for &(callee, span) in self.fn_value_ref_calls.get(&name).into_iter().flatten() {
@@ -537,6 +538,7 @@ impl<'a> super::EffectChecker<'a> {
                         .flatten()
                         .copied(),
                 )
+                .chain(self.drop_calls.get(&name).into_iter().flatten().copied())
                 .collect::<Vec<_>>();
             if kinds == EdgeKinds::CallsAndValueRefs {
                 for &(callee, span) in self.fn_value_ref_calls.get(&name).into_iter().flatten() {
@@ -570,6 +572,24 @@ impl<'a> super::EffectChecker<'a> {
     /// site: its calls, its reads and writes of module-level bindings, and
     /// the functions it names as values (B-2026-08-23-7).
     pub(crate) fn body_calls(&self, fn_name: Symbol, body: &Block) -> Vec<(Symbol, Span)> {
+        let mut seen_callees: FxHashSet<Symbol> = FxHashSet::default();
+        self.body_calls_discharged(fn_name, body)
+            .into_iter()
+            .filter(|(callee, _, _)| seen_callees.insert(*callee))
+            .map(|(callee, span, _)| (callee, span))
+            .collect()
+    }
+
+    /// [`Self::body_calls`], each call with the resources a provider bound
+    /// around it supplies (core semantics §14.4, B-2026-11-17-14): those are
+    /// not among `fn_name`'s effects through that call. A callee reached
+    /// both inside and outside such an extent is kept once per extent set.
+    pub(crate) fn body_calls_discharged(
+        &self,
+        fn_name: Symbol,
+        body: &Block,
+    ) -> Vec<(Symbol, Span, Vec<String>)> {
+        let outer_regions = self.provider_regions.take();
         let mut calls = {
             // Borrow the bounds map instead of cloning it per call — the
             // collection walk only needs `&self` (the old clone predates
@@ -607,12 +627,32 @@ impl<'a> super::EffectChecker<'a> {
         for &(callee, span) in self.fn_value_ref_calls.get(&fn_name).into_iter().flatten() {
             self.charge_bound_calls_unresolved(callee, span, &mut calls);
         }
+        // The `drop` bodies its own drops run (B-2026-11-17-13).
+        calls.extend(self.drop_calls.get(&fn_name).into_iter().flatten().copied());
+
+        let regions = self.provider_regions.replace(outer_regions);
+        let supplied = |span: Span| -> Vec<String> {
+            let mut out: Vec<String> = regions
+                .iter()
+                .filter(|(r, _)| {
+                    span.offset >= r.offset && span.offset + span.length <= r.offset + r.length
+                })
+                .map(|(_, resource)| resource.clone())
+                .collect();
+            out.sort();
+            out.dedup();
+            out
+        };
 
         // Dedupe callees in place (first call site wins — matching
-        // `EffectSet::add`'s first-origin-wins semantics).
-        let mut seen_callees: FxHashSet<Symbol> = FxHashSet::default();
-        calls.retain(|&(callee, _)| seen_callees.insert(callee));
+        // `EffectSet::add`'s first-origin-wins semantics), per set of
+        // supplied resources.
+        let mut seen_callees: FxHashSet<(Symbol, Vec<String>)> = FxHashSet::default();
         calls
+            .into_iter()
+            .map(|(callee, span)| (callee, span, supplied(span)))
+            .filter(|(callee, _, sup)| seen_callees.insert((*callee, sup.clone())))
+            .collect()
     }
 
     /// Walk a function body, find all calls, and add callee effects.
@@ -628,7 +668,7 @@ impl<'a> super::EffectChecker<'a> {
     /// set, which is equivalent: everything the pre-pass set contains is
     /// already in `current`, so those adds were no-ops either way.
     pub(crate) fn infer_function_effects(&mut self, fn_name: Symbol, body: &Block) -> bool {
-        let calls = self.body_calls(fn_name, body);
+        let calls = self.body_calls_discharged(fn_name, body);
 
         // Propagate the polymorphic marker only for callees that use
         // `with _` (anonymous polymorphism). A callee that declares
@@ -639,7 +679,7 @@ impl<'a> super::EffectChecker<'a> {
         // (equivalent: the marker only ever inserts `fn_name` itself,
         // which could only influence a self-recursive callee check
         // that was already poly-or-not identically).
-        let any_poly = calls.iter().any(|&(callee, _)| {
+        let any_poly = calls.iter().any(|&(callee, _, _)| {
             self.fn_uses_with_underscore.contains(&callee)
                 || self.calls_polymorphic.contains(&callee)
         });
@@ -649,10 +689,14 @@ impl<'a> super::EffectChecker<'a> {
 
         let mut changed = false;
         let mut current = self.inferred_effects.remove(&fn_name).unwrap_or_default();
-        for &(callee_name, call_span) in &calls {
+        for (callee_name, call_span, supplied) in &calls {
+            let (callee_name, call_span) = (*callee_name, *call_span);
             // Iterate the callee's effects by reference — clone an
             // `Effect` only when it is genuinely new to `current`.
             for effect in self.callee_effect_sets(callee_name).iter() {
+                if supplied.contains(&effect.resource) {
+                    continue;
+                }
                 if !current.contains(effect) {
                     current.add(
                         effect.clone(),
@@ -1182,6 +1226,9 @@ impl<'a> super::EffectChecker<'a> {
         self.charge_var_clause_coercion(expr, calls);
         match &expr.kind {
             ExprKind::Call { callee, args } => {
+                if let Some((resource, extent)) = super::with_provider_extent(callee, args) {
+                    self.provider_regions.borrow_mut().push((extent, resource));
+                }
                 // Trait-assoc-fn redirect: when the callee dispatches through
                 // a typeparam-bound trait, push the resolved `Trait.method`
                 // key(s) so the trait's declared ceiling propagates to the
@@ -1899,6 +1946,9 @@ impl<'a> super::EffectChecker<'a> {
             }
             ExprKind::Providers { bindings, body } => {
                 for b in bindings {
+                    self.provider_regions
+                        .borrow_mut()
+                        .push((body.span, b.resource.clone()));
                     // Phase-10 target gate: record the binding as a
                     // synthetic pseudo-call (same trick as the
                     // `__modbind_*` keys) so the gate pass can recover

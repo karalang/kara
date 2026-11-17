@@ -1,0 +1,53 @@
+// A function that binds a resource's provider itself supplies it, so the
+// resource is not among its effects (core semantics §14.4, §14.8): a public
+// function needs no clause for it, and two calls that each bind their own
+// provider do not conflict in `par` (B-2026-11-17-14).
+import std.random;
+
+trait DbT {
+    fn get(self, k: i64) -> i64;
+}
+
+effect resource Db: DbT;
+
+struct Mem { n: i64 }
+
+impl DbT for Mem {
+    fn get(self, k: i64) -> i64 { self.n + k }
+}
+
+struct Seq { n: u64 }
+
+impl RandomProvider for Seq {
+    fn next_u64(mut ref self) -> u64 {
+        self.n += 1;
+        self.n
+    }
+}
+
+struct Fixed { t: i64 }
+
+impl ClockProvider for Fixed {
+    fn now(ref self) -> i64 { self.t }
+}
+
+fn lookup(k: i64) -> i64 {
+    Db.get(k)
+}
+
+pub fn read_db() -> i64 {
+    with_provider[Db](Mem { n: 10 }, || lookup(1) + Db.get(2))
+}
+
+pub fn two_draws() -> u64 {
+    with_provider[RandomSource](Seq { n: 0 }, || random.next_u64() * 10 + random.next_u64())
+}
+
+pub fn at_noon() -> i64 {
+    providers { Clock => Fixed { t: 43200 } } in { Clock.now() / 3600 }
+}
+
+fn main() {
+    let (a, b) = par { two_draws(), two_draws() };
+    println(f"{read_db()} {a} {b} {at_noon()}");
+}

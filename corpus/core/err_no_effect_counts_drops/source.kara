@@ -1,0 +1,18 @@
+// `#[no_effect(V)]` holds over the transitive effect set, and a drop's
+// effects are in it (core semantics §12 default 3): a function whose local
+// prints when it drops writes `Stdout` (B-2026-11-17-13).
+struct L { n: i64 }
+
+impl Drop for L {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+
+#[no_effect(writes(Stdout))]
+fn quiet() -> i64 {
+    let l = L { n: 4 };
+    l.n * 2
+}
+
+fn main() {
+    println(f"{quiet()}");
+}

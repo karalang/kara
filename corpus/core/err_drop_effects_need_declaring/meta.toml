@@ -1,0 +1,11 @@
+source = "core-semantics §12 default 3; design.md §12 Inference and declarations"
+dedup_of = []
+expect = "error:E0400"
+exit = 1
+tags = ["effects", "declarations", "drops"]
+class = "a"
+expected_from = "pin"
+rules = ["12"]
+backends = []
+env = {}
+note = "A drop's effects are its type's drop glue's, charged to the scope where the drop runs: an own parameter, a local, a callee's local, a replaced field and a discarded temporary each run L's printing drop, so each public function must declare writes(Stdout) (B-2026-11-17-13). The expected.out wording of an error pin is guidance, not a byte oracle."

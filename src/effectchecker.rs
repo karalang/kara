@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 mod bounds;
+mod drop_edges;
 mod dyn_effects;
 mod effect_vars;
 mod extern_ffi;
@@ -967,6 +968,12 @@ pub struct NodeTypeFacts {
     /// (or over a `TlsStream`, B-2026-11-10-28): a call on one has the
     /// connection's effects (B-2026-11-10-14).
     pub net_buffers: FxHashSet<crate::ids::NodeId>,
+    /// Expressions and patterns whose type owns a value of a type with a
+    /// `Drop` impl, each with those types' names: dropping one runs their
+    /// `drop` bodies (core semantics §12 default 3, B-2026-11-17-13).
+    pub drops: FxHashMap<crate::ids::NodeId, Vec<String>>,
+    /// The same, per struct or enum name, for a receiver `own self`.
+    pub drops_by_type: FxHashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1301,6 +1308,21 @@ pub struct EffectChecker<'a> {
     /// needs a visited set that plain structural descent does not. `RefCell`
     /// because `collect_calls_in_expr` takes `&self`.
     pub(crate) lazy_lock_in_progress: std::cell::RefCell<rustc_hash::FxHashSet<Symbol>>,
+    /// The extents a walk of a body meets where a provider is bound: each
+    /// `with_provider[R](p, f)`'s `f`, and each `providers { R => p } in`
+    /// body, with `R`. The call supplies `R` there, so `R` is not among the
+    /// enclosing function's effects (core semantics §14.4, B-2026-11-17-14).
+    /// `RefCell` because `collect_calls_in_expr` takes `&self`; filled while
+    /// [`Self::body_calls`] walks one body.
+    pub(crate) provider_regions: std::cell::RefCell<Vec<(Span, String)>>,
+    /// See [`NodeTypeFacts::drops`].
+    pub(crate) drop_nodes: FxHashMap<crate::ids::NodeId, Vec<String>>,
+    /// See [`NodeTypeFacts::drops_by_type`].
+    pub(crate) drops_by_type: FxHashMap<String, Vec<String>>,
+    /// Per function, the `T.drop` bodies its own drops may run, each with
+    /// the site: charged as calls (core semantics §12 default 3,
+    /// B-2026-11-17-13). Built by `drop_edges` once the bodies are final.
+    pub(crate) drop_calls: FxHashMap<Symbol, Vec<(Symbol, Span)>>,
     /// Names of refinement type aliases (`type Name = Base where <pred>`).
     /// Derived directly from the AST. Consulted by the `Cast` arm of
     /// `collect_calls_in_expr`: an `x as Refined` cast is a runtime
@@ -1459,6 +1481,10 @@ impl<'a> EffectChecker<'a> {
             modbind_let_mut: FxHashMap::default(),
             lazy_lock_inits: FxHashMap::default(),
             lazy_lock_in_progress: std::cell::RefCell::new(rustc_hash::FxHashSet::default()),
+            provider_regions: std::cell::RefCell::new(Vec::new()),
+            drop_nodes: FxHashMap::default(),
+            drops_by_type: FxHashMap::default(),
+            drop_calls: FxHashMap::default(),
             refinement_type_names,
             errors: Vec::new(),
         }
@@ -1526,6 +1552,8 @@ impl<'a> EffectChecker<'a> {
         self.int_nodes = facts.ints;
         self.heap_nodes = facts.heap;
         self.net_buffer_nodes = facts.net_buffers;
+        self.drop_nodes = facts.drops;
+        self.drops_by_type = facts.drops_by_type;
         self
     }
 
@@ -3110,6 +3138,7 @@ impl<'a> EffectChecker<'a> {
                 }
             }
         }
+        self.build_drop_calls();
     }
 
     fn is_transparent_verb(&self, verb: &EffectVerbKind) -> bool {
@@ -3964,4 +3993,26 @@ pub(crate) fn effects_conflict(a: &EffectVerbKind, b: &EffectVerbKind) -> bool {
         // cross-category like reads+sends are independent concerns)
         _ => false,
     }
+}
+
+/// The resource a `with_provider[R](p, f)` call binds, with the extent of
+/// `f`, where the call supplies `R` (core semantics §14.4).
+pub(crate) fn with_provider_extent(callee: &Expr, args: &[CallArg]) -> Option<(String, Span)> {
+    let ExprKind::Index { object, index } = &callee.kind else {
+        return None;
+    };
+    let named = match &object.kind {
+        ExprKind::Identifier(n) => n == "with_provider",
+        ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
+        _ => false,
+    };
+    if !named || args.len() != 2 {
+        return None;
+    }
+    let resource = match &index.kind {
+        ExprKind::Identifier(n) => n.clone(),
+        ExprKind::Path { segments, .. } => segments.last()?.clone(),
+        _ => return None,
+    };
+    Some((resource, args[1].value.span))
 }

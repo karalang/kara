@@ -1,0 +1,1 @@
+ERROR at line 11: fn `quiet` declares `#[no_effect(writes(Stdout))]` but its effect set includes `writes(Stdout)`

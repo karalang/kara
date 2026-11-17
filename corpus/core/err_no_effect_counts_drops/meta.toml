@@ -1,0 +1,11 @@
+source = "core-semantics §12 default 3; design.md §12 Default-permitted effects (#[no_effect])"
+dedup_of = []
+expect = "error:E0416"
+exit = 1
+tags = ["effects", "no-effect", "drops"]
+class = "a"
+expected_from = "pin"
+rules = ["12"]
+backends = []
+env = {}
+note = "#[no_effect(writes(Stdout))] is checked against the transitive effect set, which holds the effects of the drops the function runs: the local's drop prints (B-2026-11-17-13). The expected.out wording of an error pin is guidance, not a byte oracle."

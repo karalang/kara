@@ -1,0 +1,11 @@
+source = "corpus/core/ok_drop_effects_declared"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "declarations", "drops"]
+class = "e"
+expected_from = "spec"
+rules = ["12", "7"]
+backends = []
+env = {}
+note = "core-semantics §12 default 3: a public function declares the effects of the drops it runs (finished, scoped), and one that returns, wraps, stores or passes on its value runs no drop and declares nothing. Drops print in the §7 order: each callee's at its return, then main's locals in reverse (B-2026-11-17-13)."
