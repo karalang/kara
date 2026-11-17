@@ -1,0 +1,9 @@
+source = "B-2026-11-16-322"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["design", "numeric", "shift", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md 'Division, remainder and shifts': the amount may have any integer type, and one that is negative or at least the value's bit width traps. B-2026-11-16-322: llvm and wasm cut the amount to the value's width before the range check, so 2^64 became 0 and x came back unchanged."

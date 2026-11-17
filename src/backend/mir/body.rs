@@ -1585,15 +1585,23 @@ impl<'ctx> Cx<'ctx, '_> {
             BinOp::Sub => intrinsic(&format!("llvm.{s}sub.with.overflow")),
             BinOp::Mul => intrinsic(&format!("llvm.{s}mul.with.overflow")),
             BinOp::Shl | BinOp::Shr => {
-                let y = b.build_int_cast_sign_flag(y, it, false, "").map_err(e)?;
+                // The amount is range-checked in the wider of its own width
+                // and the value's, before it is cut to the value's: an
+                // `i128` amount of 2^64 shifting an `i8` must trap, not
+                // shift by its low bits (B-2026-11-16-322). Unsigned, a
+                // negative amount reads as at least the bit width.
+                let yt = y.get_type();
+                let wide = if yt.get_bit_width() > bits { yt } else { it };
+                let yw = b.build_int_cast_sign_flag(y, wide, false, "").map_err(e)?;
                 let o = b
                     .build_int_compare(
                         IntPredicate::UGE,
-                        y,
-                        it.const_int(u64::from(bits), false),
+                        yw,
+                        wide.const_int(u64::from(bits), false),
                         "",
                     )
                     .map_err(e)?;
+                let y = b.build_int_cast_sign_flag(yw, it, false, "").map_err(e)?;
                 let masked = b
                     .build_and(y, it.const_int(u64::from(bits - 1), false), "")
                     .map_err(e)?;

@@ -1,0 +1,7 @@
+fn main() {
+    let x: i32 = 1;
+    let a: i128 = 1 << 64;
+    println("before");
+    let y = x << a;
+    println(y);
+}

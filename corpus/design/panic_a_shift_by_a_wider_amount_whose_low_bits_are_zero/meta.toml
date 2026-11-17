@@ -1,0 +1,9 @@
+source = "B-2026-11-16-322"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["design", "numeric", "shift", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md 'Division, remainder and shifts': the amount may have any integer type, and one that is negative or at least the value's bit width traps. B-2026-11-16-322: an i32 amount of 256 shifting a u8 has low byte 0; llvm and wasm shifted by 0 before the fix."
