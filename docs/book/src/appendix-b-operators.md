@@ -79,18 +79,19 @@ Kāra spells these as words. The symbolic forms `&&` / `\|\|` / `!` are rejected
 
 | Symbol | Meaning |
 |--------|---------|
-| `?` | Propagate an `Err` result early (error shorthand) |
-| `a \|> f` | Pipe `a` as the first argument to `f` |
+| `?` | Propagate an `Err` or `None` early out of the enclosing function |
 | `a ?? b` | Nil-coalesce: return `a` if it is `Some`, else `b` |
-| `a?.b` | Optional chaining: access `.b` only if `a` is `Some` |
 | `a as T` | Cast `a` to type `T` |
 | `_` | Wildcard pattern or unnamed placeholder |
 | `..` | Struct-update spread in struct literals |
 | `->` | Return-type annotation in function signatures |
 | `=>` | Pattern arm separator in `match` |
-| `::` | Path separator in qualified names |
-| `@` | Attribute prefix |
+| `.` | Path separator in qualified names (`std.fs.read_to_string`, `Color.Red`) |
+| `@` | Binds a name to a whole matched value in a pattern (`n @ 1..=9`) |
 | `#[...]` | Attribute on a declaration |
+
+There is no pipe operator `|>`, no optional chaining `?.`, and no `::`; the
+compiler rejects each with a note saying what to write instead.
 
 ## Numeric literal suffixes
 

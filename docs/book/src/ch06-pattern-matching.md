@@ -64,7 +64,7 @@ fn describe(p: Point) -> String {
 Patterns compose. Match on the shape of nested data:
 
 ```kara,ignore
-fn get_name(user: Option[User]) -> String {
+fn get_name(user: own Option[User]) -> String {
     match user {
         Some(User { name, .. }) => name,
         None => "anonymous",
@@ -72,7 +72,7 @@ fn get_name(user: Option[User]) -> String {
 }
 ```
 
-`..` ignores the remaining fields you don't care about.
+`..` ignores the remaining fields you don't care about. The parameter is `own` because the match moves `name` out of the user and returns it; a bare parameter only borrows, and a borrowed value's parts can't be given away (bind them by `ref`, or `.clone()` them, to keep the parameter borrowed).
 
 ## Guards
 

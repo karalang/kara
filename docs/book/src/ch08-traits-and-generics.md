@@ -6,7 +6,7 @@ A trait defines shared behavior — a set of methods that different types can im
 
 ```kara
 trait Area {
-    fn area(ref self) -> f64;
+    fn area(self) -> f64;
 }
 ```
 
@@ -23,13 +23,13 @@ struct Rectangle {
 }
 
 impl Area for Circle {
-    fn area(ref self) -> f64 {
+    fn area(self) -> f64 {
         3.14159 * self.radius * self.radius
     }
 }
 
 impl Area for Rectangle {
-    fn area(ref self) -> f64 {
+    fn area(self) -> f64 {
         self.width * self.height
     }
 }
@@ -41,9 +41,9 @@ Traits can provide default implementations:
 
 ```kara
 trait Describable {
-    fn name(ref self) -> String;
+    fn name(self) -> String;
 
-    fn description(ref self) -> String {
+    fn description(self) -> String {
         f"A thing called {self.name()}"
     }
 }
@@ -56,7 +56,7 @@ Types that implement `Describable` must provide `name`, but get `description` fo
 Generics let you write code that works with any type. Kāra uses `[T]` syntax — not `<T>`:
 
 ```kara
-fn first[T](items: ref Vec[T]) -> Option[ref T] {
+fn first[T](items: Vec[T]) -> Option[ref T] {
     items.get(0)
 }
 ```
@@ -111,7 +111,7 @@ fn print_sorted[T: Ord + Display](items: own Vec[T]) {
 No ambiguity with comparison operators. `Vec[i32]` can't be misread as "is Vec less than i32." No turbofish needed. The tradeoff is that `[` does double duty for generics and indexing, but the parser disambiguates by context:
 
 - **Type positions** (annotations, return types): `Vec[i64]` is always generic.
-- **Expression positions**: `arr[0]` is always an index. A generic call is recognized by `(` after `]`: `sort[i32](data)`.
+- **Expression positions**: `arr[0]` is always an index. A function never takes type arguments where it is called: `sort(data)` infers `T` from `data`, and where nothing can, an annotation pins it (`let v: Vec[i32] = Vec.new();`). Writing `sort[i32](data)` is an error that says so.
 
 ## Putting it together
 

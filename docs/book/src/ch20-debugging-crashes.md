@@ -1,220 +1,190 @@
 # The 3am Runbook: Debugging Crashes
 
-You have been paged. A Kāra service crashed, and there is a JSON file waiting
-for you. This chapter is the short version of what to do next — enough to
-triage the common cases without reading the whole book at 3am.
+You have been paged. A Kāra service crashed. This chapter is the short version
+of what to do next: enough to triage the common cases without reading the whole
+book at 3am.
 
-When a Kāra program panics, its `std.panic` handler writes a **structured crash
-report** — a single JSON file — and prints a short summary plus the file's path
-to stderr. The default location is `/tmp/kara-crash-{pid}-{timestamp}.json`
-(configurable via `KARA_CRASH_DIR`). The JSON is the load-bearing artifact: it
-is a stable, versioned wire format that tools can dedupe and group across
-compiler versions.
+## What a panic leaves behind
 
-## First move: render it
+A panic is for a bug or an unrecoverable condition. When one happens, Kāra:
 
-When you have a crash file, run:
+1. writes a **panic record** to stderr,
+2. runs the program's custom panic handler, if it has one,
+3. ends the process with exit code **101**.
+
+No `Drop` body, `defer` or `errdefer` runs, in the panicking task or anywhere
+else. Nothing is written to disk: there is no crash file. So the first thing to
+find is the process's **stderr**, in your service manager's log, the container
+log, or wherever the supervisor sends it. Exit code 101 tells you it was a
+panic; an ordinary error exit from `main` is code 1.
+
+## First move: read the record
+
+Here is a small program that indexes past the end of a vector:
+
+```kara
+fn dashboard(ids: Vec[i64], k: i64) -> i64 {
+    ids[k]
+}
+
+fn main() {
+    let ids: Vec[i64] = [10, 20, 30];
+    println(f"{dashboard(ids, 99)}");
+}
+```
+
+Its stderr is:
+
+```text
+runtime error: index out of bounds
+  at main.kara:2:5
+```
+
+and its exit code is 101. The record has three parts worth reading in order:
+
+- **The kind**: `index out of bounds`. An index past the end is a logic bug (a
+  length assumption that failed), not an outage. The kinds are `explicit`
+  (`panic(...)`), `index_out_of_bounds`, `overflow`, `div_by_zero`, `unwrap`,
+  `borrow_conflict`, `assertion`, `alloc_failure`, `unreachable` and `deadlock`.
+- **The location**: `main.kara:2:5`. Go straight there. For a panic raised
+  inside a standard-library function such as `unwrap()`, the location is *your*
+  call, not a line in the library.
+- **The error-return trace**, when there is one (next section).
+
+**Verdict:** logic bug at `main.kara:2`. File a bug, fix the index.
+
+## Worked example: an `unwrap` at the end of a `?` chain
+
+The most common production panic is an `unwrap()` on an error that travelled up
+through several `?`s. The record shows the path it took:
+
+```kara
+fn parse_port(s: Str) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"bad port: {s}"),
+    }
+}
+
+fn load(s: Str) -> Result[i64, String] {
+    let p = parse_port(s)?;
+    Ok(p + 1)
+}
+
+fn main() {
+    let port = load("80x").unwrap();
+    println(f"{port}");
+}
+```
+
+```text
+runtime error: called unwrap() on Err
+  at trace.kara:14:16
+Error return trace:
+  trace.kara:9:13  parse_port(s)?
+  trace.kara:14:16
+```
+
+**How to read it:**
+
+- **`called unwrap() on Err` at line 14**: the panic itself. `main` assumed the
+  configuration would load.
+- **`Error return trace`**: every `?` the error passed through, innermost first.
+  The error was made in `parse_port`, left it through the `?` at line 9, and
+  reached the `unwrap()` at line 14. Debug builds record it; a panic with no `?`
+  behind it, like the first example, prints none.
+
+**Verdict:** bad input (`"80x"`), and a `main` that panics on it. Fix the
+configuration now; then make `main` report the error and exit 1 instead of
+unwrapping (`fn main() -> Result[(), String]`).
+
+## Worked example: a panic in a parallel branch
+
+```kara
+fn fetch(ids: Vec[i64], k: i64) -> i64 { ids[k] }
+
+fn main() {
+    let ids: Vec[i64] = [1, 2, 3];
+    let (a, b) = par { fetch(ids, 0), fetch(ids, 7) };
+    println(f"{a} {b}");
+}
+```
+
+```text
+runtime error: index out of bounds
+  at par.kara:1:42
+```
+
+A panic in any branch of a `par` block, or in any task, ends the whole process.
+The sibling branches don't get to finish, and nothing they hold is dropped.
+That has two consequences for triage:
+
+- **The location is the whole story.** There is no "cancelled sibling" to chase:
+  the record names the one place that panicked.
+- **Check for half-done work outside the process.** No cleanup ran, so a
+  sibling that was in the middle of writing a file or a database row may have
+  left it partial. Design writes so a restart can repair them (write to a
+  temporary name and rename, or use a transaction).
+
+An *error* in a branch is different: `?` ends that branch normally, its
+`defer`s run, and the function returns the source-earliest error once every
+branch is done ([Chapter 14](./ch14-concurrency.md#parallel-failure)).
+
+## Getting the record as JSON
+
+Under `karac run` and `karac test` with `--output=jsonl` (or `--output=json`),
+the panic record arrives as structured events instead of text, so a tool can
+group panics without parsing:
 
 ```bash
-karac debug /tmp/kara-crash-48213-20260723T024117.json
+karac run --output=jsonl trace.kara
 ```
-
-`karac debug` turns the JSON into a human-readable report. (Pass `-` to read
-from stdin, e.g. `curl … | karac debug -`.) Everything below is read off that
-rendered report. The single most useful habit: **read the effect set first** —
-it usually tells you *which subsystem* to look at before you read a single line
-of application code.
-
-## Worked example 1 — a panic that names its blast radius
 
 ```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Kāra crash report
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  panic: index out of bounds
-  at src/handlers.kara:42:18  (fetch_user_dashboard)
-  index out of bounds: the len is 3 but the index is 99
-
-  effects: reads(UserDB) + sends(Network)
-
-  logical stack:
-    ▸ fetch_user_dashboard
-        src/handlers.kara:42:18  reads(UserDB) + sends(Network)
-    ▸ handle_request
-        src/server.kara:88:5  reads(UserDB)
-    ▸ main
-        src/main.kara:12:3  pure
-
-  parallel context:
-    panicked branch: par@spawn_site_42 (worker 3)
-    still running: render_sidebar, load_notifications
-    cancelled: fetch_activity at sends boundary
-
-  provider stack:
-    Db ← PostgresPool   bound at src/main.kara:8:3
-
-  RC fallback:
-    `session` became RC at src/handlers.kara:40:9
-        reason: captured by closure with subsequent outer use
-
-  ────────────────────────────────────────────────────────────
-  kara 0.1.0 (abc1234) · x86_64-unknown-linux-gnu · release · 2026
+{"type":"runtime_error","message":"called unwrap() on Err","location":{"file":"trace.kara","line":14,"col":16},"kind":"unwrap"}
+{"type":"error_return_trace","frames":[{"file":"trace.kara","line":9,"column":13,"expr":"parse_port(s)?","context":null},{"file":"trace.kara","line":14,"column":16,"expr":null,"context":null}],"truncated":false}
 ```
 
-**How to read it, top to bottom:**
+The fields are part of the language contract and stable within a major
+version. Tools deduplicate on the `kind` and the `location`: two panics with
+the same pair are the same bug, even across builds. A built binary run directly
+writes only the text form.
 
-- **`panic: index out of bounds`** — the *kind*. An index-out-of-bounds is a
-  logic bug (a bad index), not an outage. You are looking for a length
-  assumption that failed, not a down dependency.
-- **`at src/handlers.kara:42:18`** — go straight here. Line 42 indexed a
-  3-element collection with `99`.
-- **`effects: reads(UserDB) + sends(Network)`** — the blast radius. This code
-  path touches the user database and the network. If the bad index came from
-  data, `UserDB` is the place that data came from.
-- **`logical stack`** — the call chain, each frame with its own effect summary.
-  Note `main` is `pure`: the effects are introduced deeper in.
-- **`parallel context`** — this ran inside a `par` block. Two siblings were
-  still running and one (`fetch_activity`) was cancelled by fail-fast. That is
-  expected: one branch panicking cancels the rest.
-- **`provider stack`** — the `Db` resource was bound to a `PostgresPool` at
-  `main.kara:8`. If this were a connectivity problem, this is the provider you
-  would check.
+## Running code on a panic
 
-**Verdict:** logic bug at `handlers.kara:42`. Not a paging-worthy outage — file
-a bug, patch the index.
+A program can define one panic handler. It runs after the record is written and
+before the process exits; it can't resume execution. Use it to feed a watchdog,
+release a hardware handle, or send one last line of telemetry:
 
-## Worked example 2 — a crash *inside cleanup*
+```kara
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    eprintln(f"PANIC: {info.message} at {info.location}");
+}
 
-The famously-hard case: a panic that happens while the program is already
-unwinding from another panic, during a destructor. C++ aborts here; Kāra
-captures it.
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    println(f"{v[3]}");
+}
+```
 
 ```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Kāra crash report
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  panic: panic while unwinding (drop)
-  at src/cache.kara:71:5  (Session::drop)
-  channel closed: send on a disconnected receiver
-
-  effects: sends(Metrics)
-
-  logical stack:
-    ▸ Session::drop
-        src/cache.kara:71:5  sends(Metrics)
-    ▸ handle_checkout
-        src/checkout.kara:118:9  reads(OrderDB) + writes(OrderDB)
-
-  RC fallback:
-    `session` became RC at src/checkout.kara:96:13
-        reason: captured by a spawned closure with subsequent outer use — RC keeps it alive across the task boundary
-
-  caused by:
-  panic: index out of bounds
-  at src/checkout.kara:122:20  (handle_checkout)
-  index out of bounds: the len is 0 but the index is 0
-
-  effects: reads(OrderDB)
-
-  logical stack:
-    ▸ handle_checkout
-        src/checkout.kara:122:20  reads(OrderDB)
-
-  ────────────────────────────────────────────────────────────
-  kara 0.1.0 (abc1234) · aarch64-apple-darwin · release · 2026
+runtime error: index out of bounds
+  at hand.kara:8:16
+PANIC: index out of bounds at hand.kara:8:16
 ```
 
-**How to read it:**
+A panic inside the handler ends the process at once, still with code 101.
 
-- **`panic: panic while unwinding (drop)`** — the *second* panic. This one fired
-  in `Session::drop` while the stack was already unwinding.
-- **`caused by:`** at the bottom — the **original** panic. Read this first: the
-  root cause is the index-out-of-bounds at `checkout.kara:122`, not the channel
-  error. The drop-time panic is a symptom of the cleanup running during an
-  already-failing request.
-- **`RC fallback`** — the report tells you *why* the `Session` was still alive to
-  be dropped here: the compiler chose an RC representation for `session` at
-  `checkout.kara:96` because a spawned closure captured it. When a panic crosses
-  an implicit `Drop` of an RC value, this annotation is how you find it without
-  guessing. The fix for the *secondary* crash is usually making `Session::drop`
-  tolerate a closed channel; the fix for the *incident* is the `caused_by` bug.
+## Common patterns
 
-## Worked example 3 — one branch takes down a parallel batch
-
-```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Kāra crash report
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  panic: parallel fail-fast cancellation
-  at src/ingest.kara:54:12  (parse_shard)
-  unwrap on Err value: ParseError { line: 3, msg: "unexpected end of input" }
-
-  effects: reads(Blob) + panics
-
-  logical stack:
-    ▸ parse_shard
-        src/ingest.kara:54:12  reads(Blob) + panics
-    ▸ ingest_batch
-        src/ingest.kara:40:3  reads(Blob) + writes(WarehouseDB)
-
-  parallel context:
-    panicked branch: par@spawn_site_17 (worker 2)
-    still running: parse_shard[0], parse_shard[1], parse_shard[3]
-    cancelled: parse_shard[0] at writes boundary
-    cancelled: parse_shard[1] at writes boundary
-    cancelled: parse_shard[3] at reads boundary
-
-  ────────────────────────────────────────────────────────────
-  kara 0.1.0 (abc1234) · x86_64-unknown-linux-gnu · release · 2026
-```
-
-**How to read it:**
-
-- **`panic: parallel fail-fast cancellation`** — a branch of a `par` block
-  panicked, and Kāra cancelled its siblings (fail-fast). The panic itself is the
-  `unwrap on Err value` at `ingest.kara:54`.
-- **`parallel context`** is the important part here. Worker 2 hit a
-  `ParseError` on its shard. Three sibling shards were mid-flight and were
-  cancelled — note *where*: two were cancelled at a `writes` boundary (they had
-  not yet committed to `WarehouseDB`) and one at a `reads` boundary. That tells
-  you the batch did **not** partially write: cancellation caught the writers
-  before their effect boundary. No cleanup of half-written warehouse rows is
-  needed.
-- **Verdict:** a single malformed shard (line 3, unexpected EOF) failed the whole
-  batch. Fix the input or make `parse_shard` return a `Result` the batch can
-  skip, rather than `unwrap`.
-
-## Common patterns — what the effect set is telling you
-
-The effect line is a triage shortcut. Some patterns worth memorizing:
-
-| Effect set on the panic frame | Where to look first |
+| What the record shows | Where to look first |
 |---|---|
-| `panics + reads(SomeDB)` | Data from that database — a bad value, an empty result indexed, a failed `unwrap` on a query. |
-| `sends(Network)` / `receives(Network)` on the frame | A downstream dependency — timeouts, closed connections, a service that is down. Check the **provider stack** for which endpoint. |
-| `writes(SomeDB)` present but the panic is `par_fail_fast_cancel` | Check the **parallel context** cancellation boundaries — did any sibling get past its `writes` boundary? If not, no partial write happened. |
-| `drop_during_unwind` | Read **`caused_by`** first — the root cause is the original panic, not the drop. |
-| `rc_fallback_borrow`, or an **RC fallback** annotation on the crash | A shared value's lifetime crossed a task or closure boundary; the annotation names where the compiler chose RC. |
+| `unwrap` with an error-return trace | The innermost frame of the trace: that is where the error was made. The `unwrap` is only where it was ignored. |
+| `index out of bounds`, no trace | A length assumption at the location: an empty result indexed, an off-by-one. |
+| `overflow` or `div_by_zero` | Arithmetic on a value from input; check its range where it enters the program. |
+| `borrow_conflict` | Two live borrows of a `shared` value at once; the location is the second one. |
+| `deadlock` | Every task is waiting on a channel no running task can serve: a missing `send`, or a `Sender` kept alive by mistake. |
 
-## Escalation
-
-If the rendered report is not enough — you want to attach it to a bug, feed it
-to an AI agent, or diff two crashes — re-emit the structured form:
-
-```bash
-karac debug crash.json --output=json
-```
-
-This prints the parsed report as pretty JSON. Because the wire format is stable,
-it is safe to store, diff (`karac debug a.json --output=json | diff - <(karac
-debug b.json --output=json)`), or hand to tooling that keys on `panic_kind` and
-`panic_site` for grouping. Tools dedupe on the `(panic_kind, panic_site)` pair,
-so two reports with the same kind and site are "the same bug" even across
-builds.
-
-For the full field-by-field contract — every field, the panic-kind vocabulary,
-the edge cases (concurrent panics, WASM, GPU) — see the language reference's
-*Crash Report Format* section. This runbook is deliberately the short version.
+For the field-by-field contract, see design.md § Panic record. This runbook is
+deliberately the short version.

@@ -91,13 +91,15 @@ items.take(n)                      // first n elements
 items.skip(n)                      // skip first n elements
 ```
 
-### The pipe operator with iterators
+### Reading a chain left to right
 
-The pipe operator `|>` chains transformations naturally:
+Iterator adapters are methods, so a pipeline reads in the order it runs. There
+is no `|>` operator; the method chain is the pipeline:
 
 ```kara,ignore
-let result = data
-    |> parse
-    |> validate
-    |> transform;
+let result: Vec[i64] = lines.iter()
+    .map(|l| l.trim())
+    .filter(|l| not l.is_empty())
+    .map(|l| l.len())
+    .collect();
 ```

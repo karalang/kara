@@ -9,7 +9,7 @@
       "first_diagnostic": "value 'log' moved here, used again here (moved at line 7:21)"
     },
     "ab90428d83ba": {
-      "where": "docs/book/src/appendix-d-attributes.md:130",
+      "where": "docs/book/src/appendix-d-attributes.md:135",
       "heading": "Module-level bindings > `#[thread_local]`",
       "outcome": "REJECTED",
       "reason": "deferred: module-level `let` is past v1 (deferred.md § systems); the block shows the planned form",
@@ -57,12 +57,40 @@
       "reason": "as written: the chapter shows this refusal on purpose, and the ```text block after it gives the message",
       "first_diagnostic": "type 'Secret[String]' does not implement PartialEq, so == and != do not apply to it"
     },
-    "5f5bdf92ee54": {
+    "4c16216a3b49": {
       "where": "docs/book/src/ch19-secrets.md:61",
       "heading": "Handling Secrets > The accidents that no longer compile",
       "outcome": "REJECTED",
       "reason": "as written: the chapter shows this refusal on purpose, and the ```text block after it gives the message",
       "first_diagnostic": "cannot implement `Display` for `Secret[T]` — the wrapper deliberately withholds this trait so a secret cannot be printed, serialized, or structurally compared by accident (see design.md § Secret Type). Read the value with `.expose()` where you genuinely need it; for equality use the constant-time `.ct_eq(...)`, and rely on the built-in `Zeroize`/`Drop` for wiping"
+    },
+    "a819ecefd7cb": {
+      "where": "docs/book/src/ch20-debugging-crashes.md:104",
+      "heading": "The 3am Runbook: Debugging Crashes > Worked example: a panic in a parallel branch",
+      "outcome": "OUTPUT-DIFFERS",
+      "reason": "deliberate: the runbook's example panics on purpose (exit 101); the ```text block after it is its stderr, checked by hand on __mir-run at the rewrite (B-2026-11-16-268), not stdout",
+      "first_diagnostic": null
+    },
+    "b9c0de76c5e8": {
+      "where": "docs/book/src/ch20-debugging-crashes.md:160",
+      "heading": "The 3am Runbook: Debugging Crashes > Running code on a panic",
+      "outcome": "OUTPUT-DIFFERS",
+      "reason": "deliberate: the runbook's example panics on purpose (exit 101); the ```text block after it is its stderr, checked by hand on __mir-run at the rewrite (B-2026-11-16-268), not stdout",
+      "first_diagnostic": null
+    },
+    "fe9a5400eece": {
+      "where": "docs/book/src/ch20-debugging-crashes.md:26",
+      "heading": "The 3am Runbook: Debugging Crashes > First move: read the record",
+      "outcome": "RUN-FAILED",
+      "reason": "deliberate: the runbook's example panics on purpose (exit 101); the ```text block after it is its stderr, checked by hand on __mir-run at the rewrite (B-2026-11-16-268), not stdout",
+      "first_diagnostic": null
+    },
+    "61506dc56349": {
+      "where": "docs/book/src/ch20-debugging-crashes.md:62",
+      "heading": "The 3am Runbook: Debugging Crashes > Worked example: an `unwrap` at the end of a `?` chain",
+      "outcome": "OUTPUT-DIFFERS",
+      "reason": "deliberate: the runbook's example panics on purpose (exit 101); the ```text block after it is its stderr, checked by hand on __mir-run at the rewrite (B-2026-11-16-268), not stdout",
+      "first_diagnostic": null
     },
     "6e3b84b61afa": {
       "where": "docs/library/collections.md:166",

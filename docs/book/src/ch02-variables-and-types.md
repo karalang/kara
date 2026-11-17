@@ -79,19 +79,20 @@ default — pin its type with a suffix:
 ```kara
 let mask = 0xFFu8;         // u8, not i64
 let ratio = 1.0f32;        // f32, not f64
-let zero = 0i64;           // explicit i64
+let big = 1u64 << 40;      // u64: the shift happens in u64, not i64
 ```
 
-You'll see the suffix form (`0i64`, `1u8`) throughout numeric code. Most of the
-time the default or a binding annotation is enough; reach for a suffix when
-inference has nothing to anchor to.
+You'll see the suffix form (`0xFFu8`, `1u64`) in numeric code. A suffix that
+only repeats the default, such as `0i64`, is redundant and the compiler says so
+(`redundant_suffix`). Most of the time the default or a binding annotation is
+enough; reach for a suffix when inference has nothing to anchor to.
 
 ## Strings
 
 Kāra has two string types:
 
 - `String` — an owned, heap-allocated UTF-8 string.
-- `StringSlice` — a borrowed view into a string (like Rust's `&str`).
+- `Str` — a borrowed view into a string (like Rust's `&str`).
 
 ```kara
 let greeting = "Hello";              // String
@@ -116,19 +117,22 @@ println(f"{x} + {y} = {x + y}");  // "10 + 20 = 30"
 
 ## Type conversions
 
-Kāra does not implicitly convert *values* of one numeric type to another — only
-*literals* coerce to context (above). To convert a typed value, use `as`:
+A conversion that can't lose information happens on its own: a smaller integer
+widens to a larger one wherever the destination type is known, and so does an
+integer of up to 32 bits into `f64`. Anything that *can* lose information needs
+`as`:
 
 ```kara
+let small: u8 = 7;
+let wide: i64 = small;     // widening: implicit, value preserved (7)
+
 let x: i64 = 1000;
-let y: i32 = x as i32;     // widening — always safe
+let y: i32 = x as i32;     // narrowing: needs `as`, keeps the low 32 bits
 ```
 
 `as` covers every numeric pair, with semantics worth knowing:
 
 ```kara,ignore
-let small: u8 = 7;
-let wide = small as i64;   // widening — value preserved (7)
 
 let big: i64 = 300;
 let trunc = big as u8;     // narrowing — wraps modulo 2^8 (300 -> 44)
@@ -141,8 +145,10 @@ Narrowing can change the value (it keeps the low bits), so cast down only when
 you know it fits. Going `int -> float -> int` is the usual way to do real
 division: cast to `f64` *first*, or integer division truncates the result.
 
-One conversion `as` won't do is `u8 -> char` — not every integer is a valid
-Unicode scalar. Use `char.try_from`, which returns a `Result`; see
+`b as char` turns a `u8` into the character with that code point, since every
+byte value is a Unicode scalar. From any wider integer, `as char` is refused,
+because not every integer is a valid Unicode scalar: use `char.try_from`, which
+returns a `Result`; see
 [Strings and Bytes](./ch09b-strings-and-bytes.md#building-strings).
 
 ## Shadowing
@@ -163,7 +169,7 @@ Kāra enforces identifier naming at the compiler level — it's a grammar rule, 
 
 - **Type class** — PascalCase. Structs, enums, enum variants, traits, generic type parameters: `String`, `UserAccount`, `IoError`, `T`.
 - **Value class** — snake_case, or a leading `_` for intentionally-unused bindings. Functions, parameters, fields, modules, and `let` bindings inside function bodies: `read_to_string`, `user_count`, `_tmp`.
-- **Const class** — ALL_UPPER with underscores. Module-level `let` and `let mut` bindings: `MAX_RETRIES`, `TIMEOUT_MS`.
+- **Const class** — ALL_UPPER with underscores. Constants, the `const` items at module scope: `MAX_RETRIES`, `TIMEOUT_MS`. (A module-level `let` is an error; a value outside any function is a `const`.)
 
 ```kara,ignore
 struct UserAccount { ... }                // Type class
@@ -171,9 +177,9 @@ fn read_to_string(path: String) { ... }   // Value class
 let count = 0;                            // Value class (function body)
 ```
 
-`fn ReadFile()`, `struct user_account`, and `let pi = 3.14` at module scope are all compile errors. One quirk worth knowing: multi-word types treat acronyms as words — `HttpClient`, not `HTTPClient`; `IoError`, not `IOError`. That keeps the classification unambiguous at a glance.
+`fn ReadFile()`, `struct user_account`, and `const pi: f64 = 3.14` are all compile errors. One quirk worth knowing: multi-word types treat acronyms as words — `HttpClient`, not `HTTPClient`; `IoError`, not `IOError`. That keeps the classification unambiguous at a glance.
 
-Note: `_` on its own isn't a name — it's a wildcard used in patterns, `let _ = expr`, pipes, and `with _` effects. Only *leading* `_` (like `_tmp`) is a valid identifier you can read later.
+Note: `_` on its own isn't a name — it's a wildcard used in patterns, `let _ = expr` and `with _` effects. Only *leading* `_` (like `_tmp`) is a valid identifier you can read later.
 
 The point of enforcing this is that every Kāra codebase reads the same way — no per-project casing debates, no PR bikeshedding, no re-tuning when you move between libraries.
 

@@ -77,7 +77,7 @@ Reorganize your internals without breaking users.
 
 These are available everywhere without imports:
 
-- **Types:** `Option`, `Result`, `Vec`, `String`, `StringSlice`, `Map`, `Set`, and all primitives.
+- **Types:** `Option`, `Result`, `Vec`, `String`, `Str`, `Map`, `Set`, and all primitives.
 - **Variants:** `Some`, `None`, `Ok`, `Err`.
 - **Functions:** `print`, `println`, `eprintln`.
 - **Builtins:** `todo`, `unreachable`, `dbg`, `assert`, `assert_eq`.

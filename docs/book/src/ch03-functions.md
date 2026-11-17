@@ -53,7 +53,7 @@ fn describe(n: i64) -> String {
 
 This means you rarely need temporary variables — you can use control flow inline wherever a value is expected.
 
-## Parameter modes: the compiler helps
+## Parameter modes: borrowed by default
 
 Here's a function that reads a string but doesn't consume it:
 
@@ -63,17 +63,30 @@ fn char_count(text: String) -> i64 {
 }
 ```
 
-You wrote `text: String`, but the compiler notices that `text` is only read, never moved or mutated. It automatically infers that `text` should be passed by reference. The caller doesn't make a copy; `char_count` borrows the string.
+A bare parameter *borrows*. `text: String` means `char_count` reads the caller's
+string for the length of the call; nothing is copied, and the caller still owns
+its string afterwards. That is the common case, so it takes no annotation.
 
-You can also be explicit:
+The other two modes are written out, because they change what the caller can do:
 
 ```kara
-fn char_count(text: ref String) -> i64 {
-    text.len()
+fn keep(text: own String) -> Vec[String] {
+    [text]                      // takes ownership: the caller's string moves in
+}
+
+fn shout(text: mut ref String) {
+    text.push_str("!");         // changes the caller's string in place
 }
 ```
 
-Both versions behave identically. The inference just saves you the annotation. We'll cover ownership in depth in [Chapter 12](./ch12-ownership.md).
+- `own T` takes ownership. The argument moves into the function, and the
+  caller can't use it afterwards (a `Copy` type such as `i64` is copied).
+- `mut ref T` borrows exclusively and may write. The caller marks the argument
+  too: `shout(mut s)`.
+
+Writing `text: ref String` is accepted and means the same as `text: String`;
+`karac fix` removes the redundant `ref`. We'll cover ownership in depth in
+[Chapter 12](./ch12-ownership.md).
 
 To take a *sequence* without copying it — and without locking the caller into
 one container type — declare the parameter as `Slice[T]`. A `Vec[T]` or an
@@ -82,7 +95,7 @@ caller:
 
 ```kara
 fn sum(xs: Slice[i64]) -> i64 {
-    let mut acc = 0i64;
+    let mut acc = 0;
     for x in xs { acc = acc + x; }
     acc
 }
@@ -107,7 +120,7 @@ struct Circle {
 }
 
 impl Circle {
-    fn area(ref self) -> f64 {
+    fn area(self) -> f64 {
         3.14159 * self.radius * self.radius
     }
 
@@ -121,7 +134,7 @@ impl Circle {
 }
 ```
 
-- `ref self` — the method borrows the value (reads only).
+- `self` — the method borrows the value (reads only), as a bare parameter does.
 - `mut ref self` — the method borrows mutably (can modify fields).
 - No `self` parameter — it's an associated function (like a static method). Call it as `Circle.new(5.0)`.
 

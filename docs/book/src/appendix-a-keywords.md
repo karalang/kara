@@ -1,8 +1,13 @@
 # Appendix A: Keywords
 
-The following words are reserved by the Kāra language. You cannot use them as identifiers.
+Kāra keeps its hard keywords few, so that common words stay usable as names.
+This appendix follows design.md § Keywords, which is the authority.
 
-## Declaration keywords
+## Hard keywords
+
+A hard keyword starts an item, a statement or an expression, or is an operator
+spelled as a word. It can't be used as an identifier, except as a raw
+identifier (`r#match`) or as a member name (below).
 
 | Keyword | Purpose |
 |---------|---------|
@@ -12,134 +17,107 @@ The following words are reserved by the Kāra language. You cannot use them as i
 | `trait` | Declare a trait |
 | `impl` | Implement a trait or add methods to a type |
 | `type` | Declare a type alias |
-| `distinct` | Declare a distinct (newtype) alias |
 | `const` | Declare a compile-time constant |
-| `mod` | Reserved — modules come from the directory tree; a `mod` declaration is a compile error |
-| `use` | Bring a name into scope |
-| `import` | Import an external package |
-| `extern` | Declare a foreign function or type |
-| `shared` | Mark a struct or enum as reference-semantics (RC) |
-| `layout` | Declare a physical memory layout for a struct |
-| `group` | Group fields within a layout block |
-| `effect` | Declare an effect system definition |
-| `resource` | Declare an effect resource |
-| `verb` | Declare an effect verb |
-| `alias` | Declare that two resource names refer to the same underlying resource |
-
-## Visibility keywords
-
-| Keyword | Purpose |
-|---------|---------|
-| `pub` | Public — visible to external consumers |
-| `private` | Private — visible only within the current directory |
-
-*(Default visibility — no keyword — is project-internal: visible to all files in the project.)*
-
-## Control flow keywords
-
-| Keyword | Purpose |
-|---------|---------|
-| `if` | Conditional branch |
-| `else` | Fallthrough branch for `if` |
+| `import` | Import a module or a name from one |
+| `extern` | Declare foreign functions or types |
+| `unsafe` | Mark a block or function as bypassing safety checks |
+| `pub` | Public: visible outside the package |
+| `private` | Private: visible only within the current directory |
+| `let` | Declare a local binding |
+| `mut` | Mark a binding as mutable, or a parameter or argument as written through |
+| `if`, `else` | Conditional branch |
 | `match` | Pattern-matching switch |
 | `while` | Condition-driven loop |
-| `for` | Iterator-driven loop |
-| `in` | Separator between pattern and iterable in `for` |
+| `for`, `in` | Iterator-driven loop |
 | `loop` | Infinite loop |
 | `return` | Early return from a function |
 | `break` | Exit from a loop |
 | `continue` | Skip to the next loop iteration |
-| `defer` | Run a block when the enclosing scope exits (success path) |
-| `errdefer` | Run a block when the enclosing scope exits via `?`-propagated error |
-| `asm` | Inline assembly block |
-| `global_asm` | Module-level assembly block |
-
-## Binding keywords
-
-| Keyword | Purpose |
-|---------|---------|
-| `let` | Declare a local binding |
-| `mut` | Mark a binding or parameter as mutable |
-
-## Ownership and borrowing keywords
-
-| Keyword | Purpose |
-|---------|---------|
-| `own` | Explicit owned parameter mode (rarely needed — owned is the default) |
+| `defer` | Run a block when the enclosing scope exits, on every exit (normal, `return`, `break` or `?`) |
+| `errdefer` | Run a block when the enclosing scope exits with an error (`?` or returning `Err` / `None`) |
 | `ref` | Borrow a value (read-only reference) |
-| `weak` | Weak reference into an RC type |
-| `lock` | Lock resource |
-
-## Effect keywords
-
-| Keyword | Purpose |
-|---------|---------|
-| `reads` | Effect: reads from a resource |
-| `writes` | Effect: writes to a resource |
-| `sends` | Effect: sends to a resource |
-| `receives` | Effect: receives from a resource |
-| `allocates` | Effect: allocates from a resource |
-| `panics` | Effect: may panic |
-| `blocks` | Effect: may block the calling thread |
-| `suspends` | Effect: may yield to the scheduler |
-| `with` | Introduce an effect annotation or effect variable |
-| `transparent` | Mark an effect as transparent (not attributed to callers) |
-| `stable` | Mark an effect annotation as part of the public API contract |
-| `seq` | Sequential block |
-| `par` | Parallel block (branches may execute concurrently) |
-| `yield` | Yield a value from a generator |
-
-## Type system keywords
-
-| Keyword | Purpose |
-|---------|---------|
-| `as` | Type cast or trait disambiguation |
-| `where` | Introduce generic bounds or refinement-type predicates |
-| `dyn` | Dynamic dispatch through a trait object (reserved; not yet implemented in v1) |
-| `Self` | The type of the current `impl` block or trait |
+| `as` | Type cast |
+| `and`, `or`, `not` | Logical operators |
+| `true`, `false` | Boolean literals |
 | `self` | The receiver value within a method |
+| `Self` | The type of the current `impl` block or trait |
+| `dyn` | Dynamic dispatch through a trait object: `dyn Trait` |
 
-## Contract keywords
+*(Default visibility, with no keyword, is project-internal: visible to every
+file in the project.)*
 
-| Keyword | Purpose |
-|---------|---------|
-| `requires` | Precondition contract on a function |
-| `ensures` | Postcondition contract on a function |
-| `invariant` | Invariant check at the end of every method in an `impl` block |
+`use` and `mod` are not keywords. Modules come from the directory tree, and
+imports use `import`.
 
-*These contract keywords are reserved and parsed, but contract checking is not yet enforced in v1 — runtime/compile-time verification is planned.*
+## Contextual keywords
 
-## Safety keywords
+A contextual keyword is a keyword only in one position, and an ordinary
+identifier everywhere else. A field called `reads` or a variable called `test`
+is fine.
 
-| Keyword | Purpose |
-|---------|---------|
-| `unsafe` | Mark a block or function as bypassing safety checks |
+| Word | A keyword only when it |
+|------|------------------------|
+| `par` | comes directly before `{`, `for` or `(` |
+| `union` | starts an item |
+| `distinct` | comes directly before `type` |
+| `marker` | comes directly before `trait` |
+| `shared`, `sync` | come directly before `struct` or `enum` |
+| `weak`, `frozen` | prefix a type or a receiver |
+| `freeze` | prefixes an expression |
+| `escaping` | prefixes a function type or a `dyn` type |
+| `own` | comes directly before a parameter's type, before `self`, or before an argument type in a function type (`Fn(own T) -> R`); it marks an owned parameter |
+| `host` | comes directly before `fn` at item position |
+| `test` | comes directly before a string literal at module scope |
+| `where` | follows a signature or a type head |
+| `with` | starts an effect clause |
+| `effect`, `resource` | start an effect resource declaration |
+| `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks` | appear inside an effect clause or an effect attribute such as `#[no_effect(...)]` |
 
-## Concurrency and context keywords
+So these are legal:
 
-| Keyword | Purpose |
-|---------|---------|
-| `providers` | Introduce a provider scope |
-| `independent` | Declare that two resources are independent for conflict analysis |
+```kara,ignore
+struct IoStats { reads: i64, writes: i64, blocks: i64 }
+fn union(mut ref self, a: i64, b: i64) { ... }
+fn create_server(host: String, port: u16) { ... }
+```
 
-## Literal keywords
+Words that belong to deferred features (`lock`, `seq`, `layout`, `group`,
+`stable`, `alias`, `independent`, `providers`, `requires`, `ensures`,
+`invariant`, `suspends`) are not keywords in v1. They come back as contextual
+keywords with their features.
 
-| Keyword | Purpose |
-|---------|---------|
-| `true` | Boolean true |
-| `false` | Boolean false |
+## Keywords as member names
+
+A member name may be any keyword without `r#` in two positions where no keyword
+can start anything: directly after `.` (`opt.or(fallback)`, `handle.await`),
+and as the name of a method or associated function declared in an `impl` or
+`trait`. A free function, a local, a field or a type with a keyword's name
+needs `r#`.
 
 ## Reserved for future use
 
-These words are reserved now; using them as identifiers is a compile error.
+These words are reserved now, so a later feature can use them without breaking
+code. Using one as an identifier is `error[E_RESERVED_KEYWORD]`, and the fix is
+`r#name`.
 
-| Keyword | Planned use |
-|---------|-------------|
-| `f16` | Half-precision float (Phase 7+) |
-| `bf16` | Brain-float (Phase 7+) |
+| Keyword | Why reserved |
+|---------|--------------|
+| `async`, `await` | Kāra marks suspension with the `suspends` effect rather than function colouring |
+| `become` | Guaranteed tail calls |
+| `box` | An owned heap-pointer primitive |
+| `comptime` | Compile-time evaluation |
+| `do` | Block-expression sugar |
+| `final`, `override`, `virtual` | Subclass-style markers, common in code ported from OOP languages |
+| `gen`, `yield` | Generators |
+| `asm`, `global_asm` | Inline and module-level assembly |
+| `move` | Rust's capture-by-value keyword; Kāra infers capture modes |
+| `priv` | Too easily confused with `private` |
+| `pure` | Its one use in v1: before `fn` in an `extern` block, it declares that the foreign function has no effects |
+| `try` | `try { ... }` blocks |
+| `typeof` | Type-of queries |
 
 ## Primitive type names
 
-These are lexer-level keywords, not identifiers. They are always in scope and require no import.
-
-`i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `bool`, `char`, `!` (the never type)
+`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`, `f32`,
+`f64`, `bool`, `char` and `!` (the never type) are always in scope and need no
+import.

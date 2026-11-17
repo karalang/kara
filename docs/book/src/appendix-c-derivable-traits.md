@@ -60,7 +60,7 @@ Generates a `hash` method that feeds each field into a `Hasher`. Used by `Map` a
 
 Generates a human-readable string representation.
 
-- **Structs:** emits `TypeName { field: value, ... }` for `pub` fields. Use `#[derive(Display(all_fields))]` to include private fields.
+- **Structs:** emits `TypeName { field: value, ... }` with all its fields, `pub` or not, in declaration order, each through its own `Display`.
 - **Enums:** emits the variant name. Use `#[derive(Display(snake_case))]` to emit in `snake_case` instead of the declared `PascalCase`. For variants with data, appends the fields in parentheses.
 
 Use `Display` for values shown to end users. Implement it manually to override the generated representation.

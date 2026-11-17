@@ -61,6 +61,8 @@ Promote a lint to a hard error within the annotated item.
 On an `extern "C"` or `extern "C-unwind"` function: removes `blocks` from the default effect set. Use this for pure-CPU foreign functions (math routines, `strlen`, etc.) that are known not to block.
 
 ```kara
+/// # Safety
+/// `sqrt` reads only its argument and has no side effects.
 unsafe extern "C" {
     @noblock
     fn sqrt(x: f64) -> f64;
@@ -112,6 +114,9 @@ const LOOKUP: Array[u8, 1024] = [0; 1024];
 On an `extern` item: rebinds a non-conforming foreign name to a valid Kāra identifier. The Kāra-visible name must follow the identifier case-class rules; the foreign name may be arbitrary ASCII.
 
 ```kara
+/// # Safety
+/// `GLXFBConfig` is an opaque handle owned by the X server; it is only passed
+/// back to the GLX functions that produced it.
 unsafe extern "C" {
     #[kara_name("GlxFbConfig")]
     type GLXFBConfig;
@@ -215,7 +220,7 @@ Multi-segment attribute paths of the form `#[TOOL::NAME(...)]` are reserved for 
 fn manually_aligned_table() { 0 }
 
 #[karalint::allow(complexity)]
-fn complicated_inner_loop(data: ref Slice[Frame]) -> Frame {
+fn complicated_inner_loop(data: Slice[Frame]) -> Frame {
     // ...
 }
 

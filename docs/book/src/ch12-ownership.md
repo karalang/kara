@@ -109,7 +109,7 @@ You don't write `Rc[Node]` or `Arc[Node]`. The source code always says `Node`. T
 
 A slice is a borrowed view into contiguous memory — a pointer and a length, nothing more. Kāra has two:
 
-- `StringSlice` — a view into a `String`.
+- `Str` — a view into a `String`.
 - `Slice[T]` — a view into any sequence of `T` (usually a `Vec[T]` or `Array[T, N]`).
 
 Slices let one function work over many container types:

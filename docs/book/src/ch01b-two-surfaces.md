@@ -9,7 +9,7 @@ This chapter walks one example — a binary search over a sorted vector — thro
 Save this to `search.kara`:
 
 ```kara,run
-fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[i64] {
+fn binary_search(haystack: Vec[i32], needle: i32) -> Option[i64] {
     let mut lo: i64 = 0;
     let mut hi: i64 = haystack.len();
     while lo < hi {
@@ -44,7 +44,7 @@ found at index 3
 
 A few things worth pointing at:
 
-- **`ref Vec[i32]`** says "I want to read this vector, not take ownership of it." The caller keeps `nums` and can use it again afterward.
+- **`haystack: Vec[i32]`** borrows: a bare parameter reads the caller's value without taking ownership of it. The caller keeps `nums` and can use it again afterward. A function that takes ownership writes `own Vec[i32]`.
 - **`Option[i64]`** is the standard "maybe an index" return. Pattern-match on it; the compiler will warn you if you forget a case.
 - **No allocator imports, no module declarations.** A `.kara` file with `fn main()` is a complete program.
 
@@ -61,7 +61,7 @@ Kāra REPL  (type :help for commands, :quit to exit)
 We'll build the same example cell by cell. Each line you submit is a *cell* — its own unit of evaluation, kept around so later cells can see it.
 
 ```text
-> fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[i64] {
+> fn binary_search(haystack: Vec[i32], needle: i32) -> Option[i64] {
 ..     let mut lo: i64 = 0;
 ..     let mut hi: i64 = haystack.len();
 ..     while lo < hi {
@@ -122,7 +122,7 @@ sum=6, owned still here: 3
 > let s: String = "hello".to_string();
 > let taken = s;
 > println(s);
-error[ownership]: cell 13:1:9: value 's' moved here, used again here (moved at cell 12:1:13)
+error[E0500]: cell 13:1:9: value 's' moved here, used again here (moved at cell 12:1:13)
    |
  1 | println(s);
    |         ^

@@ -31,11 +31,11 @@ struct Rectangle {
 }
 
 impl Rectangle {
-    fn area(ref self) -> f64 {
+    fn area(self) -> f64 {
         self.width * self.height
     }
 
-    fn is_square(ref self) -> bool {
+    fn is_square(self) -> bool {
         self.width == self.height
     }
 
@@ -109,9 +109,9 @@ fn area(shape: Shape) -> f64 {
 
 ### Option and Result
 
-Two enums are so fundamental they're in the prelude — available everywhere without import:
+Two enums are so fundamental they're in the prelude — available everywhere without import. The prelude declares them like this (you never write these yourself; a program that declares its own `Option` shadows the prelude's, and the compiler warns):
 
-```kara
+```text
 enum Option[T] {
     Some(T),
     None,

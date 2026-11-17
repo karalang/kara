@@ -111,15 +111,16 @@ let name = match day {
 
 But `match` goes far beyond this — it works with enums, structs, nested data, and guards. We'll cover it fully in [Chapter 6](./ch06-pattern-matching.md).
 
-## The pipe operator
+## Chaining calls
 
-Kāra has a pipe operator `|>` for chaining function calls left-to-right:
+Kāra has no pipe operator: `|>` is rejected with a note saying so. To read a
+chain of steps in the order they happen, name the intermediate values, or use
+method calls, which already read left to right:
 
 ```kara,ignore
-let result = data
-    |> transform
-    |> validate
-    |> save;
-```
+let parsed = transform(data);
+let checked = validate(parsed);
+let result = save(checked);
 
-This is equivalent to `save(validate(transform(data)))` but reads in the order things happen. It's especially useful for data processing pipelines.
+let total = line.trim().split(",").count();
+```

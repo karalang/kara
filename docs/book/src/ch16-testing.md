@@ -24,8 +24,8 @@ test "addition is commutative" {
 ```
 
 A `<module>_test.kara` file is part of that module, so it sees the module's
-functions with no `import` — in fact importing your own module back into its
-test file is a cycle error. The case name is a string, not an identifier, so it
+functions, `private` ones included, with no `import`. An `import` of its own
+module is unnecessary (it is accepted and changes nothing). The case name is a string, not an identifier, so it
 can read like a sentence.
 
 ## Assertions

@@ -1,7 +1,7 @@
 # Strings and Bytes
 
 Kāra strings are UTF-8. A `String` owns a growable, heap-allocated buffer of
-UTF-8 bytes; a `StringSlice` is a borrowed view into one (see
+UTF-8 bytes; a `Str` is a borrowed view into one (see
 [Variables and Types](./ch02-variables-and-types.md#strings)). Because the
 encoding is UTF-8, a character can be one to four bytes wide — and that single
 fact shapes the whole API.
@@ -29,7 +29,7 @@ respect non-ASCII characters wants the character view.
 Scalar indexing is out, but a **range** index is in — and it means something
 different from range-indexing a `Vec`. `s[a..b]` returns a **fresh, owned
 `String`** holding a copy of the bytes in that range (not a borrowed `Slice`,
-and not a `StringSlice` view):
+and not a `Str` view):
 
 ```kara
 let s = "HelloWorld";
@@ -58,7 +58,7 @@ Two things to keep in mind:
 
 Because the result is an owned `String`, it outlives the source and can be
 pushed, returned, or stored freely. When you only need to *read* a borrowed
-window without copying, reach for a `StringSlice` via `s.slice(a, b)` instead
+window without copying, reach for a `Str` via `s.slice(a, b)` instead
 (see [Variables and Types](./ch02-variables-and-types.md#strings)).
 
 ## The character view
@@ -134,7 +134,7 @@ fn value(b: u8) -> i64 {
     0
 }
 
-fn roman_to_int(s: ref String) -> i64 {
+fn roman_to_int(s: String) -> i64 {
     let bytes = s.bytes();
     let n = bytes.len();
     let mut total = 0;
@@ -152,10 +152,9 @@ fn roman_to_int(s: ref String) -> i64 {
 }
 ```
 
-Note the parameter is `ref String` — the function borrows the string to read it,
-it doesn't take ownership (see [Ownership](./ch12-ownership.md)). A string
-literal passes straight to a `ref String` parameter, so `roman_to_int("MCMXCIV")`
-just works.
+Note the parameter is a bare `String`, which borrows: the function reads the
+string without taking ownership (see [Ownership](./ch12-ownership.md)). A string
+literal passes straight to it, so `roman_to_int("MCMXCIV")` just works.
 
 ## Matching on bytes
 
@@ -188,7 +187,7 @@ out.push_str("ello");     // append a string
 pulled out with `.chars()`:
 
 ```kara
-fn reverse(s: ref String) -> String {
+fn reverse(s: String) -> String {
     let chars: Vec[char] = s.chars().collect();
     let n = chars.len();
     let mut out = String.new();
@@ -201,9 +200,12 @@ fn reverse(s: ref String) -> String {
 }
 ```
 
-A `u8` is **not** a `char` — `b as char` is rejected, because not every integer
-is a valid Unicode scalar. When you need a character computed from a number, go
-through `char.try_from`, which returns a `Result[char, _]`:
+A byte converts to a character with `as`: `b as char` is allowed for a `u8`,
+because every value `0..=255` is a Unicode scalar, so the cast cannot fail. Wider
+integers are a different matter. `n as char` is rejected for any other integer
+type, because not every integer is a valid Unicode scalar. When you need a
+character computed from a wider number, go through `char.try_from`, which
+returns a `Result[char, _]`:
 
 ```kara
 fn digit_char(d: i64) -> char {
@@ -223,7 +225,7 @@ fn digit_char(d: i64) -> char {
 | Random access by character index | `s.chars().collect()` → `Vec[char]` | O(n) once, O(1) after | `char` |
 | One-off i-th character | `s.char_at(i)` | O(n) | `Option[char]` |
 | A copied substring (byte range) | `s[a..b]` / `s.substring(a, b)` | O(k) copy | `String` |
-| A borrowed substring view | `s.slice(a, b)` | O(1) | `StringSlice` |
+| A borrowed substring view | `s.slice(a, b)` | O(1) | `Str` |
 | Build up output | `String.new()` + `push` / `push_str` | amortized O(1) per push | — |
 
 The rule of thumb: **read as bytes, build with chars.** Byte scanning keeps the

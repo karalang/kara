@@ -192,7 +192,7 @@ mean moving a row out of `g`, which a container has no way to represent.
 Borrowing costs nothing and reads the row in place:
 
 ```kara
-fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {
+fn cell_sum(g: Vec[Vec[i64]]) -> i64 {
     let rows = g.len();
     let mut total = 0;
     let mut i = 0;

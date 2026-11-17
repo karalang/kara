@@ -28,7 +28,7 @@ fn main() {
 }
 ```
 
-This works identically under `karac run` and `karac build`: the JIT resolves the symbols in-process, and the AOT build links them from libc. In 0.8 an imported function's parameters and result must be integers, `bool`, `f32`, `f64` or raw pointers, so libm's `fn sqrt(x: f64) -> f64` imports as written; `#[repr(C)]` structs do not cross an import yet.
+This works identically under `karac run` and `karac build`: the JIT resolves the symbols in-process, and the AOT build links them from libc. An imported function's parameters and result may be integers, `bool`, `f32`, `f64`, raw pointers or `#[repr(C)]` structs by value, so libm's `fn sqrt(x: f64) -> f64` imports as written, and so does libc's `div`, which returns a `#[repr(C)] struct DivT { quot: i32, rem: i32 }`.
 
 Three rules carry most of the weight:
 

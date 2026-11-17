@@ -30,7 +30,7 @@ A `par` block runs each of its branches concurrently and waits for all of them b
 ```kara,run
 sync struct Counter { count: Atomic[i64] }
 
-fn bump(counter: ref Counter) {
+fn bump(counter: Counter) {
     let _ = counter.count.fetch_add(1);
 }
 
@@ -55,7 +55,7 @@ fn main() {
 fn square(n: i64) -> i64 { n * n }
 
 fn main() {
-    let mut pool: TaskGroup = TaskGroup.new();
+    let pool: TaskGroup = TaskGroup.new();
     let mut handles: Vec[TaskHandle[i64]] = Vec.new();
     let mut k = 1;
     while k <= 4 {
@@ -76,13 +76,23 @@ fn main() {
 
 ## Parallel failure
 
-When one branch of a `par` block fails:
+What happens when a `par` branch fails depends on how it fails.
 
-1. Sibling branches are cancelled cooperatively.
-2. Each branch's cleanup (`defer`/`errdefer`) runs.
-3. The first error is returned.
+- **An error (`?`) ends that branch.** Its drops, `defer`s and `errdefer`s run.
+  The branches written before it run to completion. The ones after it are
+  cancelled at their next suspension point; a branch that never suspends runs
+  to completion too.
+- **When every branch is done,** the enclosing function returns the
+  *source-earliest* error, whichever branch failed first in time. The result is
+  the same on every run.
+- **A panic ends the process** with exit code 101, in any branch or task. No
+  drops, `defer`s or `errdefer`s run. Chapter 20 shows what the panic prints.
 
-No orphaned tasks. No silent failures. Structured concurrency means the scope waits for everything to finish before proceeding.
+A block whose branches produce `Result` values without `?` returns all of them,
+in source order, so you can report every failed field rather than only the
+first.
+
+No orphaned tasks: the scope waits for every branch before it goes on.
 
 ## The runtime
 

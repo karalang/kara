@@ -46,8 +46,8 @@ A few things to notice:
 
 Even in this tiny program, the Kāra compiler is doing work behind the scenes:
 
-- **Effect inference**: `greet` writes to stdout via `println`. The compiler knows this — it infers a `writes(Stdout)` effect. You didn't have to declare it because `greet` isn't a public API function.
-- **Ownership feedback**: `name` is declared `String` (owned by default). Since the body only reads it, `karac explain greet` will suggest tightening the signature to `ref String` — the compiler doesn't change your signature, but it tells you when a tighter mode would also work.
+- **Effect inference**: `greet` writes to stdout via `println`. The compiler knows this — it infers a `writes(Stdout)` effect. You didn't have to declare it because `greet` isn't a public API function. Save the program as `main.kara` and `karac explain main.kara.greet` prints the effect and where it comes from.
+- **Borrowing by default**: `name` is declared `String`, and a bare parameter *borrows*. `greet` reads the caller's string without taking it, so a caller can go on using its own string after the call. A function that keeps what it is given says so in its signature, `name: own String`; one that changes it writes `name: mut ref String`. Chapter 12 covers the three modes.
 
 You don't need to understand effects or ownership yet. The point is that the compiler is your partner from the very first line of code — quietly making good decisions so you can focus on what your program does.
 

@@ -38,15 +38,30 @@ fn first_letter(text: own Option[String]) -> Option[String] {
 }
 ```
 
-### Optional chaining
+### Navigating nested optional values
 
-For navigating nested optional values:
+There is no optional-chaining operator `?.`. Inside a function that returns an
+`Option`, `?` already does the job, one step at a time: `user.address?.city?.name`
+reads as `((user.address?).city?).name`, and the first `None` returns `None` from
+the function.
 
-```kara,ignore
-let city = user.address?.city?.name;
+```kara
+struct City { name: String }
+struct Address { city: Option[City] }
+struct User { address: Option[Address] }
+
+fn city_name(user: own User) -> Option[String] {
+    Some(user.address?.city?.name)
+}
 ```
 
-If any step is `None`, the whole expression short-circuits to `None`.
+`?` leaves the function; it never produces a `None` value in the middle of an
+expression. When you want the value right there, chain the `Option` methods and
+give a fallback:
+
+```kara,ignore
+let name = user.address.and_then(|a| a.city).map(|c| c.name) ?? "unknown";
+```
 
 ### Default values with ??
 
@@ -65,7 +80,7 @@ let port = parse_port(input) ?? 8080;
 let value = some_option.unwrap();   // panics if None
 ```
 
-This produces the `panics` effect — the compiler tracks it through your call chain. Public functions that can panic must declare it. For production code, prefer `?`, `??`, `unwrap_or(default)`, or `match`.
+This produces the `panics` effect. The compiler infers it and tracks it through your call chain, and `karac explain` shows where it comes from. A public function need not declare `panics`: like `allocates(Heap)`, it is permitted by default and stays out of signatures (`#[no_effect(panics)]` opts a function back into the constraint). For production code, prefer `?`, `??`, `unwrap_or(default)`, or `match`.
 
 `unwrap()` is useful in tests, prototypes, and cases where you've already validated the value can't be `None`/`Err`.
 

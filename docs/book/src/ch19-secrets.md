@@ -61,7 +61,7 @@ Writing the missing trait yourself is a dead end *on purpose*: the wrapper refus
 import std.secret.{Secret};
 
 impl Display for Secret[String] {
-    fn to_string(ref self) -> String { "leak" }
+    fn to_string(self) -> String { "leak" }
 }
 ```
 

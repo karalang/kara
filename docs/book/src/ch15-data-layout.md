@@ -29,7 +29,7 @@ each `name`. The logical API is unchanged — you still write `swarm[i].x` — a
 loop that reads only `x` and `y` streams through dense memory:
 
 ```kara,ignore
-fn drift(swarm: ref Vec[Particle]) -> f64 {
+fn drift(swarm: Vec[Particle]) -> f64 {
     let mut sum = 0.0;
     let mut i = 0i64;
     while i < swarm.len() {
