@@ -12864,6 +12864,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.literal_array_entry(name, value, true)
                         .map(|e| super::LiteralLet { depth: 1, ..e })
                 })
+                // `let total = it.fold(0, ..)`: bound to the seed's literal,
+                // which the suffix types (B-2026-11-17-98).
+                .or_else(|| {
+                    let seed = Self::fold_seed(value)?;
+                    self.literal_entry(seed, ty, end(seed.span), true, false, name)
+                })
         };
         match entry {
             Some(e) => {
@@ -13199,6 +13205,169 @@ impl<'a> super::TypeChecker<'a> {
         Some(entry)
     }
 
+    /// The seed of `<receiver>.fold(seed, f)`, whose type the call's result
+    /// has.
+    fn fold_seed(value: &Expr) -> Option<&Expr> {
+        match &value.kind {
+            ExprKind::MethodCall { method, args, .. } if method == "fold" && args.len() == 2 => {
+                Some(&args[0].value)
+            }
+            _ => None,
+        }
+    }
+
+    /// B-2026-11-17-99: `let days: i32 = (1971..year).map(|y| if leap(y) {
+    /// 366 } else { 365 }).sum() + [31, 28, ..].iter().take(m).sum() + day`
+    /// (kata 1185's Rust arm, once `karac fix` drops its `sum::<i32>()`
+    /// turbofishes). A `sum` or `product` over a closure's literal result,
+    /// or over an array of literals, is an `i64` because those literals
+    /// took the default beside the `i32` (design.md §8 Literals), and a
+    /// narrowing refused at it is fixed by a literal's suffix: the first
+    /// branch's, which types the closure's join, or the array's first,
+    /// which types them all.
+    pub(super) fn literal_reduction_source(
+        &self,
+        expr: &Expr,
+        source: &Type,
+        target: &Type,
+    ) -> Option<(FixIt, String)> {
+        if *source != Type::Int(IntSize::I64) || !matches!(target, Type::Int(_) | Type::UInt(_)) {
+            return None;
+        }
+        let (lo, hi) = Self::int_literal_range(target)?;
+        let (method, lit, values, closure) = Self::reduction_literal(expr)?;
+        let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?;
+        if self.resolved_now(ty) != Type::Int(IntSize::I64)
+            || values.iter().any(|v| *v < lo || *v > hi)
+        {
+            return None;
+        }
+        let t = type_display(target);
+        let why = if closure {
+            let lit = match (values.len(), values.first()) {
+                (1, Some(v)) => format!("that literal `{v}{t}`"),
+                (_, Some(v)) => format!("`{v}{t}`, which types the closure's other literals too"),
+                _ => return None,
+            };
+            format!(
+                "the `{method}` is an 'i64' because the literals its closure returns took the default (design.md §8 Literals); write {lit}"
+            )
+        } else {
+            format!(
+                "the `{method}` is an 'i64' because the literals of the array it walks took the default (design.md §8 Literals); write the first of them with the suffix `{t}`, which types them all"
+            )
+        };
+        let at = Span {
+            offset: lit.span.offset + lit.span.length,
+            length: 0,
+            ..lit.span
+        };
+        Some((
+            FixIt {
+                span: at,
+                replacement: t,
+            },
+            why,
+        ))
+    }
+
+    /// The literal a `sum` / `product` in `expr` is an `i64` because of
+    /// (see [`Self::literal_reduction_source`]): the reduction's name, the
+    /// literal to suffix, every literal the suffix types, and whether they
+    /// are a closure's result rather than an array's elements.
+    fn reduction_literal(expr: &Expr) -> Option<(&str, &Expr, Vec<i128>, bool)> {
+        fn tail(e: &Expr) -> Option<&Expr> {
+            match &e.kind {
+                ExprKind::Block(b) => b.final_expr.as_deref().and_then(tail),
+                _ => Some(e),
+            }
+        }
+        // The literals a closure body's value is a join of, first first.
+        fn join<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) -> bool {
+            let Some(e) = tail(e) else {
+                return false;
+            };
+            match &e.kind {
+                ExprKind::If {
+                    then_block,
+                    else_branch: Some(other),
+                    ..
+                } => {
+                    then_block
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(|t| join(t, out))
+                        && join(other, out)
+                }
+                _ if super::TypeChecker::is_int_literal_operator_tree(e) => {
+                    out.push(e);
+                    true
+                }
+                _ => false,
+            }
+        }
+        match &expr.kind {
+            ExprKind::Binary {
+                op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod,
+                left,
+                right,
+            } => Self::reduction_literal(left).or_else(|| Self::reduction_literal(right)),
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if matches!(method.as_str(), "sum" | "product") && args.is_empty() => {
+                let mut at = object.as_ref();
+                loop {
+                    match &at.kind {
+                        ExprKind::MethodCall {
+                            object: inner,
+                            method: m,
+                            args: a,
+                            ..
+                        } => match m.as_str() {
+                            "map" if a.len() == 1 => {
+                                let ExprKind::Closure { body, .. } = &a[0].value.kind else {
+                                    return None;
+                                };
+                                let mut lits = Vec::new();
+                                if !join(body, &mut lits) {
+                                    return None;
+                                }
+                                let values = lits
+                                    .iter()
+                                    .map(|l| super::TypeChecker::int_literal_operator_tree_value(l))
+                                    .collect::<Option<Vec<i128>>>()?;
+                                let first = *lits.first()?;
+                                if !matches!(first.kind, ExprKind::Integer(_, None)) {
+                                    return None;
+                                }
+                                return Some((method.as_str(), first, values, true));
+                            }
+                            "iter" | "into_iter" | "take" | "skip" | "rev" | "copied"
+                            | "cloned" | "step_by" | "filter" => at = inner,
+                            _ => return None,
+                        },
+                        ExprKind::ArrayLiteral(elems) => {
+                            let first = elems.first()?;
+                            if !matches!(first.kind, ExprKind::Integer(_, None)) {
+                                return None;
+                            }
+                            let values = elems
+                                .iter()
+                                .map(super::TypeChecker::int_literal_operator_tree_value)
+                                .collect::<Option<Vec<i128>>>()?;
+                            return Some((method.as_str(), first, values, false));
+                        }
+                        _ => return None,
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Note `let (a, b, ..) = (<literal>, <literal>, ..)` with no
     /// annotation: each name bound straight to a literal element, whose fix
     /// is that literal's suffix (see `TypeChecker::literal_lets`).
@@ -13206,6 +13375,10 @@ impl<'a> super::TypeChecker<'a> {
         let PatternKind::Tuple(pats) = &pattern.kind else {
             return;
         };
+        // `let (inside, outside) = it.fold((0, 0), ..)`: the result has the
+        // seed's type, so each name is bound to a seed literal as `let (a, b)
+        // = (0, 0)` would be (kata 1184's Rust arm, B-2026-11-17-98).
+        let value = Self::fold_seed(value).unwrap_or(value);
         let exprs = match &value.kind {
             ExprKind::Tuple(exprs) if exprs.len() == pats.len() => Some(exprs),
             _ => None,
@@ -14075,6 +14248,19 @@ impl<'a> super::TypeChecker<'a> {
         }
         if let Some((_, fix, why)) = self.literal_let_annotation(expr, &source, &target) {
             self.literal_chain_fix(&expr.span, &fix, &target);
+            self.type_error_with_fix_it(
+                format!(
+                    "implicit coercion from '{}' to '{}' would narrow or change sign: {why}",
+                    type_display(&source),
+                    type_display(&target),
+                ),
+                expr.span,
+                TypeErrorKind::TypeMismatch,
+                fix,
+            );
+            return;
+        }
+        if let Some((fix, why)) = self.literal_reduction_source(expr, &source, &target) {
             self.type_error_with_fix_it(
                 format!(
                     "implicit coercion from '{}' to '{}' would narrow or change sign: {why}",
