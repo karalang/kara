@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 459 |
-| false-positive | 247 |
+| diagnostics | 465 |
+| false-positive | 248 |
 | missing-feature | 191 |
 | perf | 184 |
 | other | 113 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 587 |
+| typecheck | 591 |
 | mir-llvm | 281 |
 | mir | 246 |
 | cli | 191 |
-| parser | 103 |
-| ownership | 101 |
+| parser | 104 |
+| ownership | 103 |
 | interp | 87 |
 | runtime | 87 |
 | effect | 41 |
@@ -159,6 +159,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-100 | 2026-11-17 | effect | low | A match / if let / while let arm binding taken by value from an owned scrutinee is not charged its Drop body's effects when the arm only reads it: the typechecker records no node type for the binding, so the drop walk sees no owned value | — |
 | B-2026-11-17-101 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a `shared` value's last handle, a Map, Set, VecDeque or sorted collection, a library cell (Mutex, OnceLock, ...), a `dyn` or an erased function value, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: -35 lowers only the drops MIR reaches part by part (structs, enums, tuples, closures, arrays, Vec) | — |
 | B-2026-11-17-102 | 2026-11-17 | effect | low | A test body that uses a provider-rooted resource with no provider is E0419 at `<generated>`, on the harness's `__karac_case_k()` call, not at the use in the test file; core-semantics §14.6 makes a test body a root that supplies nothing, as `main` is | — |
+| B-2026-11-17-103 | 2026-11-17 | ownership | low | A part of a tuple `let` over a collection element gets a `.clone()` fix, not the `ref` borrow: `let (i, spots) = (q[0], at[q[1] - 1]);` with `spots` only read | — |
+| B-2026-11-17-104 | 2026-11-17 | parser | medium | `karac fix` corrupts `Vec<[Option<usize>; 4]>`: the `;` inside Rust's array type ends the angle-bracket scan, the `Vec[..]` fix is dropped, and recovery's "expected `;` after this expression statement" fix writes `[i64; 4;]` | — |
+| B-2026-11-17-105 | 2026-11-17 | typecheck | low | Rust's `scan` closure that writes an array state through its index and hands it out with `*` (`|last, (i, c)| { last[c] = Some(i); Some(*last) }`) gets "drop the `*`", not the rewrite to Kāra's `scan` shape | — |
+| B-2026-11-17-106 | 2026-11-17 | typecheck | medium | A generic call whose closure returns `(state, item)` is refused when the state is seeded by `None`, `Vec.new()` or `[None; 4]` and only the closure decides the item: "expected 'Option[(?T0, _)]', found 'Option[(Option[i64], i64)]'" | — |
+| B-2026-11-17-107 | 2026-11-17 | typecheck | low | A `usize` inside an array type that meets `i64` gets no fix: `Vec[Array[Option[usize], 4]]` collecting arrays of `enumerate`'s `i64` indices is refused with only a `FromIterator` bound error | — |
+| B-2026-11-17-108 | 2026-11-17 | typecheck | low | The `binary_search` rewrite through `partition_point` indents its later lines to the `match`'s column, not the statement's: `let k = match p.binary_search(&i) { .. };` becomes a block 12 columns too deep | — |
+| B-2026-11-17-109 | 2026-11-17 | ownership | low | A `scan` state seeded with `[None; 4]` reads as not `Copy`: `Some((last, last))` is refused as a use after a move and `karac fix` writes `Some((last.clone(), last))` | — |
 
 ### Relocated
 
