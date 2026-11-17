@@ -1,0 +1,1 @@
+ERROR at line 1: `#[no_effect(...)]` is not valid on struct; the attribute asserts that a function's effect set excludes the named effects and only applies to `fn` declarations

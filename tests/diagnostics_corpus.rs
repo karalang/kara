@@ -172,12 +172,32 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E0407", "Project Profiles"),
         ("E0409", "Module-Level Mutable State"),
         ("E0800", "deferred.md § GPU"),
+        ("E_MULTIVERSION_EMPTY", "Multiversioning"),
         ("E_CODEGEN_HINT_ON_CLOSURE", "Codegen Hint Attributes"),
         ("E_COLD_INLINE_ALWAYS_CONFLICT", "not yet lowered"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(
             out.contains("not in the language this compiler implements") && out.contains(pointer),
+            "{code}: {out}"
+        );
+    }
+}
+
+/// Gowtham's decision 2026-11-17: contracts are an experimental
+/// implementation, so their codes say so and point at deferred.md, without
+/// the "not in the language" scope paragraph.
+#[test]
+fn diagnostics_corpus_contract_codes_are_experimental() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for code in ["E_CONTRACT_IMPURE", "E_OLD_OUTSIDE_ENSURES", "E_OLD_RESULT"] {
+        let out = karac(dir, &["explain", code]);
+        assert!(
+            out.contains("experimental") && out.contains("§ Contracts"),
+            "{code}: {out}"
+        );
+        assert!(
+            !out.contains("not in the language this compiler implements"),
             "{code}: {out}"
         );
     }

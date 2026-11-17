@@ -1,0 +1,5 @@
+fn base() -> i64 { 1 }
+
+enum Level { Low = base(), High = 2 }
+
+fn main() {}

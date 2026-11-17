@@ -1153,7 +1153,17 @@ impl super::Parser {
                 });
                 continue;
             }
-            if attr.effect_args.is_empty() {
+            // The parenthesised list was checked as it was parsed, and an
+            // empty or refused one already has its error there; report the
+            // attribute once (B-2026-11-16-303).
+            let start = attr.span.offset;
+            let end = start + attr.span.length;
+            let reported = self.errors.iter().any(|e| {
+                (e.message.starts_with("error[E_NO_EFFECT_EMPTY]")
+                    || e.message.starts_with("error[E_NO_EFFECT_BAD_VERB]"))
+                    && (start..end).contains(&e.span.offset)
+            });
+            if attr.effect_args.is_empty() && !reported {
                 // Bare `#[no_effect]` with no parens at all. The parenthesised
                 // empty list already reported at parse; this catches the other
                 // spelling, and for the same reason — an attribute that reads
@@ -1163,7 +1173,7 @@ impl super::Parser {
                     message: "error[E_NO_EFFECT_EMPTY]: \
                               `#[no_effect]` requires at least one effect verb — \
                               `#[no_effect(allocates(Heap))]`, `#[no_effect(panics)]`. \
-                              See design.md § No-Effect Attribute."
+                              See design.md § `#[no_effect]`."
                         .to_string(),
                     span: attr.span,
                 });

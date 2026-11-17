@@ -1,0 +1,4 @@
+fn main() {
+    let n = i64.size_of(1);
+    println(n);
+}

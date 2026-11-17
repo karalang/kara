@@ -1,0 +1,1 @@
+ERROR at line 3: cannot cast an integer to a pointer; use `ptr.with_addr(base, addr)` to reseat an existing pointer's address, or `ptr.from_exposed(addr)`, annotated with the pointer type, to round-trip a previously-exposed address (got `usize` to `*const u8`)

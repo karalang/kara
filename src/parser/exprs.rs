@@ -736,11 +736,13 @@ impl super::Parser {
                                 if method == "parse" && args.is_empty() && turbofish.is_none() {
                                     self.note_untargeted_parse(&lhs, span);
                                 }
-                                lhs = if args.is_empty()
-                                    && matches!(method.as_str(), "size_of" | "align_of")
+                                // Arguments stay on the query, so the checker
+                                // says it takes none (E_LAYOUT_QUERY_TAKES_NO_ARGS)
+                                // rather than that `T.size_of` does not exist.
+                                lhs = if matches!(method.as_str(), "size_of" | "align_of")
                                     && Self::is_type_receiver(&lhs)
                                 {
-                                    Self::layout_query(lhs, &method, span)
+                                    Self::layout_query(lhs, &method, span, args)
                                 } else {
                                     Expr {
                                         id: crate::ids::NodeId::DUMMY,
@@ -812,8 +814,7 @@ impl super::Parser {
                         generic_args: None,
                     } = &lhs.kind
                     {
-                        if args.is_empty()
-                            && segments.len() == 2
+                        if segments.len() == 2
                             && matches!(segments[1].as_str(), "size_of" | "align_of")
                         {
                             let ty = Expr {
@@ -823,7 +824,7 @@ impl super::Parser {
                             };
                             if Self::is_type_receiver(&ty) {
                                 let name = segments[1].clone();
-                                lhs = Self::layout_query(ty, &name, call_span);
+                                lhs = Self::layout_query(ty, &name, call_span, args.clone());
                                 continue;
                             }
                         }
@@ -3625,17 +3626,19 @@ impl super::Parser {
                 };
                 self.expect(&Token::RightParen)?;
                 // `P.size_of()`: see the postfix-call arm.
-                if args.is_empty()
-                    && path.len() == 2
-                    && matches!(path[1].as_str(), "size_of" | "align_of")
-                {
+                if path.len() == 2 && matches!(path[1].as_str(), "size_of" | "align_of") {
                     let ty = Expr {
                         id: crate::ids::NodeId::DUMMY,
                         span: start,
                         kind: ExprKind::Identifier(path[0].clone()),
                     };
                     if Self::is_type_receiver(&ty) {
-                        return Some(Self::layout_query(ty, &path[1], self.span_from(&start)));
+                        return Some(Self::layout_query(
+                            ty,
+                            &path[1],
+                            self.span_from(&start),
+                            args,
+                        ));
                     }
                 }
                 if path.len() == 2 && path[0] == "Box" && path[1] == "new" {
@@ -4245,7 +4248,7 @@ impl super::Parser {
     /// intrinsic call with `T` as its generic argument, cast to `i64`, so
     /// every phase after the parser handles it as before. `ty` is a
     /// receiver [`Self::is_type_receiver`] accepted.
-    fn layout_query(ty: Expr, name: &str, span: Span) -> Expr {
+    fn layout_query(ty: Expr, name: &str, span: Span, args: Vec<CallArg>) -> Expr {
         let dummy = crate::ids::NodeId::DUMMY;
         let path = |segments: Vec<String>, generic_args: Option<Vec<GenericArg>>| TypeExpr {
             kind: TypeKind::Path(PathExpr {
@@ -4276,7 +4279,7 @@ impl super::Parser {
                         generic_args: Some(vec![GenericArg::Type(arg)]),
                     },
                 }),
-                args: Vec::new(),
+                args,
             },
         };
         Expr {

@@ -1,0 +1,1 @@
+ERROR at line 5: impl of marker trait 'Audited' cannot contain methods or items; the body must be empty

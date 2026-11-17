@@ -517,8 +517,8 @@ impl<'a> super::TypeChecker<'a> {
         if !args.is_empty() {
             self.type_error(
                 format!(
-                    "error[E_LAYOUT_QUERY_TAKES_NO_ARGS]: `{name}` takes a type \
-                     argument only — call shape is `{name}[T]()`, no value arguments"
+                    "error[E_LAYOUT_QUERY_TAKES_NO_ARGS]: `{name}` takes no \
+                     arguments: the type it measures is its receiver, `T.{name}()`"
                 ),
                 *span,
                 TypeErrorKind::WrongNumberOfArgs,
@@ -2062,8 +2062,8 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     self.type_error(
                         format!(
-                            "error[E_LAYOUT_QUERY_TYPE_ARG_REQUIRED]: `{name}` requires \
-                             a type argument — call shape is `{name}[T]()`"
+                            "error[E_LAYOUT_QUERY_TYPE_ARG_REQUIRED]: `{name}` measures \
+                             a type, written as its receiver: `T.{name}()`"
                         ),
                         callee.span,
                         TypeErrorKind::WrongNumberOfArgs,

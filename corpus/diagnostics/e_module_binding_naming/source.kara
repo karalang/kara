@@ -1,0 +1,2 @@
+let mut my_count: i64 = 0;
+fn main() { println(my_count); }

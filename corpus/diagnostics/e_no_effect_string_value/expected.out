@@ -1,0 +1,1 @@
+ERROR at line 1: `#[no_effect = "..."]` is not a recognised shape; use `#[no_effect(VERB, ...)]` with effect verbs, e.g. `#[no_effect(allocates(Heap))]`

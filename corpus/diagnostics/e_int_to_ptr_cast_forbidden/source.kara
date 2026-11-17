@@ -1,0 +1,4 @@
+fn main() {
+    let addr: usize = 4096;
+    let p = addr as *const u8;
+}

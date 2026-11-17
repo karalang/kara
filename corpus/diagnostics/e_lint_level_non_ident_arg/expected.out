@@ -1,0 +1,1 @@
+ERROR at line 1: `#[allow(...)]` accepts bare lint-name identifiers only — drop the value expression

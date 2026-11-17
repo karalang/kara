@@ -1,0 +1,1 @@
+ERROR at line 2: marker traits cannot declare associated types or consts; remove the item or change `marker trait` to `trait`

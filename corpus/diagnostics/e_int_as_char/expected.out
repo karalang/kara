@@ -1,0 +1,1 @@
+ERROR at line 3: cannot cast `u32` to `char` directly because not every integer is a valid Unicode scalar (surrogate range, values above `0x10FFFF`); help: `char.try_from(n)` returns `Result[char, _]`

@@ -1,0 +1,1 @@
+ERROR at line 1: constant 'GREETING' is declared with type 'String', which is heap-allocated; a constant lives in the binary as data (design.md § Constants) — use 'Str' for constant text

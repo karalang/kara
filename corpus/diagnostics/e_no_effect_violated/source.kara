@@ -1,0 +1,4 @@
+#[no_effect(panics)]
+fn first(v: ref Vec[i64]) -> i64 { v[0] }
+
+fn main() { println(first(vec![1])); }

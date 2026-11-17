@@ -1,0 +1,1 @@
+ERROR at line 1: `#[allow]` requires at least one lint name — write `#[allow(lint_name)]`

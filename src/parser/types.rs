@@ -917,7 +917,7 @@ impl super::Parser {
                              introduce an explicit generic parameter on the enclosing \
                              function (e.g. `fn f[T: Trait](x: Vec[T])`) instead. \
                              Deep-position `impl Trait` is not in 0.8 — see design.md \
-                             § `impl Trait` (Existential Types)."
+                             § `impl Trait`."
                                 .to_string()
                         }
                         ImplTraitBlockReason::TraitMethodArg => {
@@ -926,7 +926,7 @@ impl super::Parser {
                              generic form `fn method[T: Trait](x: T)` on the trait method \
                              declaration instead. The compiler restricts argument-position \
                              `impl Trait` to free functions and impl-block methods — see \
-                             design.md § `impl Trait` (Existential Types)."
+                             design.md § `impl Trait`."
                                 .to_string()
                         }
                     };

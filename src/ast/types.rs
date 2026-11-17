@@ -512,7 +512,7 @@ pub enum TypeKind {
     MutSlice(Box<TypeExpr>),
     Weak(Box<TypeExpr>),
     /// `impl Trait[GenericArgs] [with EffectList]` — existential / sugar
-    /// type marker (see design.md § `impl Trait` (Existential Types) and
+    /// type marker (see design.md § `impl Trait` and
     /// the parent epic in phase-5-diagnostics.md line 391).
     ///
     /// Slice 1 lands the parser surface + AST node only. Downstream

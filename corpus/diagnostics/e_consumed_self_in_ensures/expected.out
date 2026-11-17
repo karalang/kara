@@ -1,1 +1,0 @@
-ERROR at line 4: cannot reference consumed parameter `self` in an `ensures` clause — an `own self` receiver is moved by the time the postcondition runs; capture its pre-state with `old(self)` or `old(self.field)`

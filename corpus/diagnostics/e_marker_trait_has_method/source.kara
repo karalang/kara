@@ -1,0 +1,5 @@
+marker trait Audited {
+    fn check(self);
+}
+
+fn main() {}

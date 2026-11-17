@@ -1,3 +1,0 @@
-fn check(x: i64) -> i64 requires { println("checking"); x > 0 } { x }
-
-fn main() { println(check(1)); }

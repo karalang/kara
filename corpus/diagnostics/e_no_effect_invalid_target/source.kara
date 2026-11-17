@@ -1,0 +1,4 @@
+#[no_effect(panics)]
+struct Point { x: i64 }
+
+fn main() {}

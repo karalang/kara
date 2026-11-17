@@ -4065,8 +4065,8 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 "error[E_NON_CONSTANT_DISCRIMINANT]: an enum discriminant must be a constant \
                  integer expression — an integer literal, arithmetic over such, or a reference to \
-                 an immutable module-level integer constant (`let`/`const`); a `let mut` binding, \
-                 a non-integer or unknown name, or a reference cycle is not a constant here"
+                 a module-level integer `const`; a function call, a non-integer or unknown \
+                 name, or a reference cycle is not a constant here"
                     .to_string(),
                 span,
                 TypeErrorKind::DiscriminantInvalid,

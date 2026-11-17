@@ -2895,29 +2895,11 @@ const CODE_PROSE: &[(&str, &str)] = &[
          from the other.",
     ),
     (
-        "E_CONSUMED_SELF_IN_ENSURES",
-        "An `ensures` clause runs after the body returns. A method that \
-         takes `own self` has moved or dropped its receiver by then, so the \
-         clause cannot read `self`. Capture what the postcondition needs on \
-         entry with `old(...)`: `ensures(result) result == \
-         old(self.balance)`. A method whose receiver only borrows (`self`, \
-         `mut ref self`) can name `self` in `ensures` as usual.",
-    ),
-    (
         "E_CONTINUE_LABEL_BLOCK",
         "`continue 'label` starts the next iteration of the labeled loop, \
          and a labeled block (`'outer: { ... }`) has no next iteration. Use \
          `break 'outer` to leave the block, or put the label on a loop if \
          the intent was to continue an outer loop.",
-    ),
-    (
-        "E_CONTRACT_IMPURE",
-        "A contract (`requires`, `ensures`, an invariant) is a check, not \
-         part of the computation: it can be compiled out and must not \
-         change what the program does. Its expression may therefore have no \
-         effect other than `panics` (indexing, division, `unwrap`). Move \
-         printing, I/O or mutation out of the clause; to log a failed \
-         precondition, check it in the body instead.",
     ),
     (
         "E_DEPRECATED_DUPLICATE",
@@ -3044,6 +3026,215 @@ const CODE_PROSE: &[(&str, &str)] = &[
          parameter the body does not use, or give it a meaningful name. \
          Only a function TYPE (`fn(i64, i64) -> i64`) lists parameter types \
          alone.",
+    ),
+    // B-2026-11-16-303: impl Trait positions, casts, lint levels, main, marker
+    // traits, module constants and #[no_effect], each pinned under
+    // corpus/diagnostics.
+    (
+        "E_IMPL_TRAIT_IN_NESTED_POSITION",
+        "Argument-position `impl Trait` stands for one hidden generic \
+         parameter, and in 0.8 it may only be a parameter's whole type (`x: \
+         impl Display`). Inside another type's arguments (`Vec[impl \
+         Display]`, `Option[impl Shape]`) it is refused. Name the parameter \
+         instead: `fn first[T: Display](items: Vec[T])` (design.md § `impl \
+         Trait`).",
+    ),
+    (
+        "E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG",
+        "A trait method's parameter cannot be `impl Trait`: each \
+         implementation would need to agree on a hidden generic parameter \
+         it never sees declared. Write the generic out on the trait method, \
+         `fn log[T: Display](self, msg: T);`, and implementations repeat \
+         it. Argument-position `impl Trait` remains fine on free functions \
+         and inherent methods (design.md § `impl Trait`).",
+    ),
+    (
+        "E_IMPL_TRAIT_MULTIPLE_WITNESSES",
+        "A return type `impl Trait` hides one concrete type that the \
+         compiler picks from the body, so every `return` and the tail must \
+         produce that same type. Here the branches return different types. \
+         Convert them to one type, or, when the type must differ at run \
+         time, return `dyn Trait` (design.md § `dyn Trait`), which \
+         dispatches through a method table.",
+    ),
+    (
+        "E_INT_AS_BOOL",
+        "`as` does not turn an integer into a `bool`: whether only 1, or \
+         any non-zero value, means true is a choice the code should state. \
+         Write the comparison you mean, usually `n != 0`.",
+    ),
+    (
+        "E_INT_AS_CHAR",
+        "Not every integer is a Unicode scalar value: the surrogates 0xD800 \
+         to 0xDFFF and anything above 0x10FFFF are not characters, so `as \
+         char` from an integer is refused. `char.try_from(n)` returns \
+         `Result[char, _]` and lets the program handle the invalid case. A \
+         `u8` byte literal (`b'a'`) already has its own type and needs no \
+         conversion.",
+    ),
+    (
+        "E_INT_TO_PTR_CAST_FORBIDDEN",
+        "A pointer is an address plus the right to access a particular \
+         allocation (its provenance), and an integer carries only the \
+         address, so `addr as *const T` is refused. To move an existing \
+         pointer to another address in the same allocation, use \
+         `ptr.with_addr(p, addr)`. To turn back into a pointer an address \
+         that was exposed earlier, use `unsafe { ptr.from_exposed(addr) }` \
+         with the pointer type annotated.",
+    ),
+    (
+        "E_LAYOUT_QUERY_TAKES_NO_ARGS",
+        "The layout queries `T.size_of()` and `T.align_of()` measure the \
+         type written as their receiver and take no arguments. Remove the \
+         arguments; to measure a value's type, write that type as the \
+         receiver (`Point.size_of()`).",
+    ),
+    (
+        "E_LINT_LEVEL_NO_ARGS",
+        "A lint-level attribute (`#[allow]`, `#[warn]`, `#[deny]`, \
+         `#[expect]`) needs the names of the lints it applies to; with none \
+         it would change nothing. Write `#[allow(unused_variables)]`, \
+         naming one or more lints.",
+    ),
+    (
+        "E_LINT_LEVEL_NON_IDENT_ARG",
+        "A lint-level attribute takes lint names as bare identifiers, \
+         `#[allow(deprecated, unused_variables)]`. A string, a number or a \
+         `key: value` argument is refused, so a typo cannot hide inside a \
+         value that is never checked against the lint list.",
+    ),
+    (
+        "E_MAIN_ERR_NOT_DISPLAY",
+        "When `main` returns `Result[(), E]` and the result is `Err(e)`, \
+         the program prints `Error: {e}` and exits with status 1, which \
+         needs `E: Display` (design.md § The `main` function and exit \
+         codes). Add `#[derive(Display)]` or `impl Display for E` to the \
+         error type, or map the error to one that has it (often `String`) \
+         before returning.",
+    ),
+    (
+        "E_MAIN_RETURN_TYPE",
+        "`main` returns one of three things: nothing (`()`), `Result[(), \
+         E]` with `E: Display`, or `ExitCode` for an explicit status \
+         (design.md § The `main` function and exit codes). An integer \
+         return is not a status code in Kāra; return `ExitCode.from(n)` for \
+         that.",
+    ),
+    (
+        "E_MAIN_SIGNATURE",
+        "`main` takes no parameters (design.md § The `main` function and \
+         exit codes). The command line is read with `env.args()` and the \
+         environment with `env.var(name)`, from anywhere in the program.",
+    ),
+    (
+        "E_MALFORMED_ATTRIBUTE_ARGS",
+        "This attribute's arguments do not have the shape it accepts: \
+         `#[cold]` and `#[default]` take none, and `#[inline]` takes none \
+         or exactly one of `always` and `never`. The message gives the \
+         accepted forms; remove or correct the arguments.",
+    ),
+    (
+        "E_MARKER_IMPL_HAS_METHOD",
+        "A marker trait (`marker trait Audited;`) has no methods or \
+         associated items: implementing it only records that the type has \
+         the property. Its `impl` must therefore have an empty body, `impl \
+         Audited for Token {}`. Move the methods to an inherent `impl Token \
+         { ... }` or to a trait that declares them (design.md § Marker \
+         traits).",
+    ),
+    (
+        "E_MARKER_TRAIT_HAS_ITEM",
+        "A marker trait carries no associated types or constants; it only \
+         marks types that have a property (design.md § Marker traits). \
+         Remove the item, or declare an ordinary `trait` if implementations \
+         need to supply it.",
+    ),
+    (
+        "E_MARKER_TRAIT_HAS_METHOD",
+        "A marker trait declares no methods; it only marks types that have \
+         a property (design.md § Marker traits). Remove the method, or \
+         declare an ordinary `trait` if implementations need to provide it.",
+    ),
+    (
+        "E_MODULE_BINDING_EFFECTFUL_INIT",
+        "A `const` is evaluated by the compiler and stored in the binary, \
+         so its initializer must be a constant expression: literals, \
+         arithmetic, comparisons and boolean operations over constants, \
+         enum variants, struct and tuple literals of constants, array \
+         literals, and other constants (design.md § Constants). A function \
+         call is evaluated at run time. Compute the value in `main` and \
+         pass it down (module-level cells such as `LazyLock` are deferred).",
+    ),
+    (
+        "E_MODULE_BINDING_HEAP_TYPE",
+        "A constant lives in the binary as data, so its type cannot own \
+         heap memory: `String`, `Vec` and `Map` allocate when they are \
+         built. Use the borrowed form for constant data, `Str` for text and \
+         an `Array` for a fixed list (design.md § Constants), and convert \
+         at the use site (`GREETING.to_string()`) when an owned value is \
+         needed.",
+    ),
+    (
+        "E_MODULE_BINDING_NAMING",
+        "A top-level binding in a file that has `fn main` is read as a \
+         module-level binding, and module-level names are Const-class \
+         (SCREAMING_SNAKE_CASE). Note that a module-level value is declared \
+         `const NAME: T = e;`; a module `let` is reported next as \
+         E_MODULE_LET, and there are no mutable globals. If the binding was \
+         meant to be local, move it into `main`.",
+    ),
+    (
+        "E_NO_EFFECT_BAD_VERB",
+        "`#[no_effect(...)]` lists effect verbs, written as in a `with` \
+         clause: `allocates(Heap)`, `panics`, `blocks`, `reads(Config)`, \
+         `writes(Db)` (design.md § `#[no_effect]`). A word that is not an \
+         effect verb is refused so that the guarantee cannot be silently \
+         weaker than it reads.",
+    ),
+    (
+        "E_NO_EFFECT_EMPTY",
+        "`#[no_effect]` forbids the effects it names, so with no verbs it \
+         would forbid nothing while reading like a guarantee. Name at least \
+         one: `#[no_effect(allocates(Heap))]`, `#[no_effect(panics)]` \
+         (design.md § `#[no_effect]`).",
+    ),
+    (
+        "E_NO_EFFECT_INVALID_TARGET",
+        "`#[no_effect(...)]` constrains a function's effect set, so it \
+         applies only to a `fn` (free function or method). On a struct, \
+         enum, trait or other item there is no effect set to constrain. Put \
+         it on the functions that must not have the effect.",
+    ),
+    (
+        "E_NO_EFFECT_STRING_VALUE",
+        "`#[no_effect = \"panics\"]` is not a form the attribute takes: its \
+         arguments are effect verbs in parentheses, `#[no_effect(panics)]`, \
+         so the compiler can check them (design.md § `#[no_effect]`).",
+    ),
+    (
+        "E_NO_EFFECT_VIOLATED",
+        "The function declares `#[no_effect(...)]` for an effect its body \
+         has, directly or through a function it calls; the message names \
+         the operation that brings it in. Remove that operation (for \
+         `panics`, use `get` instead of indexing, or handle the \
+         `None`/`Err` instead of `unwrap`), or drop the attribute if the \
+         guarantee is not meant to hold (design.md § `#[no_effect]`).",
+    ),
+    (
+        "E_NON_CONSTANT_DISCRIMINANT",
+        "An explicit enum discriminant is fixed at compile time, so it must \
+         be a constant integer expression: an integer literal, arithmetic \
+         over literals, or a module-level integer `const`. A function call, \
+         a value of another type, an unknown name or constants that refer \
+         to each other in a cycle are refused. Declare `const BASE: i64 = \
+         1;` and write `Low = BASE`.",
+    ),
+    (
+        "E_NON_EXHAUSTIVE_INVALID_TARGET",
+        "`#[non_exhaustive]` lets a public type gain variants or fields \
+         later without breaking other packages, so it applies only to a \
+         `pub struct` or `pub enum`. On a function, a trait or a private \
+         type it has nothing to protect (design.md § `#[non_exhaustive]`).",
     ),
 ];
 
@@ -3219,7 +3410,39 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
         "E_INLINE_HINT_CONFLICT",
         "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
     ),
+    (
+        "E_MULTIVERSION_EMPTY",
+        "`#[multiversion]` is deferred (docs/deferred.md § Multiversioning: `cpu-baseline` and `#[multiversion]`); the attribute is parsed and checked but no per-CPU variants are built.",
+    ),
+    (
+        "E_MULTIVERSION_ON_ASSOC",
+        "`#[multiversion]` is deferred (docs/deferred.md § Multiversioning: `cpu-baseline` and `#[multiversion]`); the attribute is parsed and checked but no per-CPU variants are built.",
+    ),
+    (
+        "E_IMPL_TRAIT_ALIAS",
+        "Trait aliases are deferred (docs/deferred.md § Trait Aliases, \"Implementing trait aliases\"); implement each component trait separately.",
+    ),
 ];
+
+/// Codes of contracts (`requires`, `ensures`, `old(...)`), which 0.8 ships as
+/// an experimental implementation outside the v1 language (Gowtham's
+/// decision 2026-11-17, docs/deferred.md § Contracts).
+const EXPERIMENTAL_CODES: &[&str] = &[
+    "E_CONTRACT_IMPURE",
+    "E_CONSUMED_SELF_IN_ENSURES",
+    "E_OLD_NOT_CLONE",
+    "E_OLD_OUTSIDE_ENSURES",
+    "E_OLD_RESULT",
+];
+
+const EXPERIMENTAL_PROSE: &str = "Contracts (`requires`, `ensures`, `old(...)`) are \
+     experimental: they are implemented and run in 0.8 (a violated contract \
+     aborts), but they are not part of the v1 language and may change until \
+     the contracts track lands (docs/deferred.md § Contracts (requires / \
+     ensures / invariant)). This code reports a contract the compiler cannot \
+     check or run as written; the message names the expression and the form \
+     that works, such as capturing a value with `old(...)` in an `ensures` \
+     clause, where a contract may have no effect other than `panics`.";
 
 fn deferred_section(code: &str) -> Option<&'static str> {
     DEFERRED_CODES
@@ -3262,6 +3485,9 @@ fn code_description(code: &str, entry: &CodeEntry, sep: &str) -> Option<String> 
             "This code is retired: no diagnostic emits it any more, and its number \
              stays reserved so it is never reused.{sep}{note}"
         ));
+    }
+    if EXPERIMENTAL_CODES.contains(&code) {
+        return Some(EXPERIMENTAL_PROSE.to_string());
     }
     let prose = code_prose(code);
     if is_scope_code(code, entry) {

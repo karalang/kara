@@ -1,0 +1,9 @@
+marker trait Audited;
+
+struct Token { id: i64 }
+
+impl Audited for Token {
+    fn check(self) {}
+}
+
+fn main() {}

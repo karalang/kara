@@ -1,0 +1,3 @@
+fn first(items: Vec[impl Display]) -> i64 { items.len() }
+
+fn main() {}

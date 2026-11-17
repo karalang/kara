@@ -805,11 +805,19 @@ impl super::Formatter {
             ExprKind::Cast { expr, .. } if layout_query_type(expr).is_some() => {
                 // `T.size_of()` reaches the tree as `size_of[T]() as i64`,
                 // whose one-argument brackets read back as an index.
-                let (name, t) = layout_query_type(expr).unwrap();
+                // Arguments, which the checker refuses, stay where they were
+                // written (`T.size_of(1)`).
+                let (name, t, args) = layout_query_type(expr).unwrap();
                 self.format_type_expr(t);
                 self.write_str(".");
                 self.write_str(name);
-                self.write_str("()");
+                if args.is_empty() {
+                    self.write_str("()");
+                } else {
+                    self.write_str("(");
+                    self.format_call_args(args, None);
+                    self.write_str(")");
+                }
             }
             ExprKind::Cast { expr, ty } => {
                 self.stmt_start = stmt_start;
@@ -984,7 +992,7 @@ impl super::Formatter {
 
 /// The type and query name of the call the parser builds for `T.size_of()` /
 /// `T.align_of()`.
-fn layout_query_type(e: &Expr) -> Option<(&str, &TypeExpr)> {
+fn layout_query_type(e: &Expr) -> Option<(&str, &TypeExpr, &[CallArg])> {
     let ExprKind::Call { callee, args } = &e.kind else {
         return None;
     };
@@ -996,10 +1004,8 @@ fn layout_query_type(e: &Expr) -> Option<(&str, &TypeExpr)> {
         return None;
     };
     match (segments.as_slice(), ga.as_slice()) {
-        ([name], [GenericArg::Type(t)])
-            if args.is_empty() && matches!(name.as_str(), "size_of" | "align_of") =>
-        {
-            Some((name.as_str(), t))
+        ([name], [GenericArg::Type(t)]) if matches!(name.as_str(), "size_of" | "align_of") => {
+            Some((name.as_str(), t, args.as_slice()))
         }
         _ => None,
     }

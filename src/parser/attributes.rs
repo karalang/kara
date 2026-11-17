@@ -168,38 +168,44 @@ impl super::Parser {
                             "("
                         };
                     let path_text = path.join("::");
-                    let err_span = Span {
-                        offset: eq_span.offset,
-                        length: lit_span.offset + lit_span.length - eq_span.offset,
-                        line: eq_span.line,
-                        column: eq_span.column,
-                    };
-                    self.error_at(
-                        &format!(
-                            "attribute arguments are written like a call's, not with `=`; \
-                             write `#[{path_text}{open}\"...\")]`"
-                        ),
-                        err_span,
-                    );
-                    // Replace from the end of the path through `=` and the
-                    // space after it, then close the call after the literal.
-                    let name_end = self.tokens[self.pos - 3].span.offset
-                        + self.tokens[self.pos - 3].span.length;
-                    self.fix_diffs.insert(
-                        crate::resolver::SpanKey::from_span(&err_span),
-                        vec![
-                            crate::resolver::TextEdit {
-                                offset: name_end,
-                                length: lit_span.offset - name_end,
-                                replacement: open.to_string(),
-                            },
-                            crate::resolver::TextEdit {
-                                offset: lit_span.offset + lit_span.length,
-                                length: 0,
-                                replacement: ")".to_string(),
-                            },
-                        ],
-                    );
+                    // `#[no_effect = "..."]` has its own error,
+                    // E_NO_EFFECT_STRING_VALUE: its arguments are effect verbs,
+                    // so the call form of a string would be refused in turn
+                    // (B-2026-11-16-303).
+                    if !(path.len() == 1 && name == "no_effect") {
+                        let err_span = Span {
+                            offset: eq_span.offset,
+                            length: lit_span.offset + lit_span.length - eq_span.offset,
+                            line: eq_span.line,
+                            column: eq_span.column,
+                        };
+                        self.error_at(
+                            &format!(
+                                "attribute arguments are written like a call's, not with `=`; \
+                                 write `#[{path_text}{open}\"...\")]`"
+                            ),
+                            err_span,
+                        );
+                        // Replace from the end of the path through `=` and the
+                        // space after it, then close the call after the literal.
+                        let name_end = self.tokens[self.pos - 3].span.offset
+                            + self.tokens[self.pos - 3].span.length;
+                        self.fix_diffs.insert(
+                            crate::resolver::SpanKey::from_span(&err_span),
+                            vec![
+                                crate::resolver::TextEdit {
+                                    offset: name_end,
+                                    length: lit_span.offset - name_end,
+                                    replacement: open.to_string(),
+                                },
+                                crate::resolver::TextEdit {
+                                    offset: lit_span.offset + lit_span.length,
+                                    length: 0,
+                                    replacement: ")".to_string(),
+                                },
+                            ],
+                        );
+                    }
                     (Vec::new(), Some(s))
                 }
                 _ => {
@@ -476,15 +482,17 @@ impl super::Parser {
     /// empty list blames the attribute rather than whatever followed it.
     fn parse_no_effect_args(&mut self, attr_span: &Span) -> Vec<EffectVerb> {
         let mut verbs = Vec::new();
+        let mut bad_verb = false;
         while !self.check(&Token::RightParen) && !self.is_at_end() {
             match self.try_parse_effect_verb() {
                 Some(v) => verbs.push(v),
                 None => {
                     let bad = self.current_span();
+                    bad_verb = true;
                     self.error_at(
                         "error[E_NO_EFFECT_BAD_VERB]: `#[no_effect(...)]` takes effect \
                          verbs — `allocates(Heap)`, `panics`, `blocks`, `reads(Config)`. \
-                         See design.md § No-Effect Attribute.",
+                         See design.md § `#[no_effect]`.",
                         bad,
                     );
                     while !self.check(&Token::Comma)
@@ -500,7 +508,9 @@ impl super::Parser {
             }
         }
         self.expect(&Token::RightParen);
-        if verbs.is_empty() {
+        // A list whose only verbs were refused already has its error; it
+        // is not also "empty" (B-2026-11-16-303).
+        if verbs.is_empty() && !bad_verb {
             self.error_at(
                 "error[E_NO_EFFECT_EMPTY]: `#[no_effect]` requires at least one effect \
                  verb — `#[no_effect(allocates(Heap))]`. An empty list forbids nothing, \

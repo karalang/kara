@@ -1,0 +1,1 @@
+ERROR at line 2: `size_of` takes no arguments: the type it measures is its receiver, `T.size_of()`

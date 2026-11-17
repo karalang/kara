@@ -3383,7 +3383,7 @@ pub struct TypeChecker<'a> {
     /// recorded into `return_impl_trait_witnesses` via `check_assignable`; at
     /// the end of the body `check_impl_trait_single_witness` rejects the
     /// function if two or more *distinct* concrete witnesses were seen. Per
-    /// design.md § `impl Trait` (Existential Types): a return-position
+    /// design.md § `impl Trait`: a return-position
     /// existential is "one concrete return per monomorphization" — a body that
     /// yields `Fast` on one branch and `Slow` on another is ill-typed (it
     /// would need `dyn Trait`, which is P1-deferred). Without this the
@@ -6989,8 +6989,9 @@ impl<'a> TypeChecker<'a> {
                     "error[E_INT_TO_PTR_CAST_FORBIDDEN]: cannot cast an \
                      integer to a pointer; use `ptr.with_addr(base, addr)` \
                      to reseat an existing pointer's address, or \
-                     `ptr.from_exposed[T](addr)` to round-trip a \
-                     previously-exposed address (got `{}` to `{}`)",
+                     `ptr.from_exposed(addr)`, annotated with the pointer \
+                     type, to round-trip a previously-exposed address \
+                     (got `{}` to `{}`)",
                     type_display(from_ty),
                     type_display(to_ty)
                 ),
@@ -7702,7 +7703,7 @@ impl<'a> TypeChecker<'a> {
 
     /// End-of-body check for a return-position `impl Trait`: reject the
     /// function if two or more *distinct* concrete witness types flowed into
-    /// its return. Per design.md § `impl Trait` (Existential Types), a
+    /// its return. Per design.md § `impl Trait`, a
     /// return-position existential is "one concrete return per
     /// monomorphization"; a body returning `Fast` on one branch and `Slow` on
     /// another needs `dyn Trait` (P1-deferred), not `impl Trait`. Points the
@@ -7794,8 +7795,8 @@ impl<'a> TypeChecker<'a> {
                 "error[E_IMPL_TRAIT_MULTIPLE_WITNESSES]: return-position `impl {trait_name}` \
                  must resolve to a single concrete type per monomorphization, but this function \
                  returns multiple: {}. An `impl Trait` return is an existential with one concrete \
-                 witness; a runtime-varying return type needs `dyn {trait_name}` (deferred to a \
-                 later release). Make every branch return the same concrete type.",
+                 witness. Make every branch return the same concrete type, or return \
+                 `dyn {trait_name}` when the type must vary at run time (design.md § `dyn Trait`).",
                 names.join(", "),
             ),
             second_span,

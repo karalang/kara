@@ -1,0 +1,1 @@
+ERROR at line 1: `#[no_effect(...)]` takes effect verbs — `allocates(Heap)`, `panics`, `blocks`, `reads(Config)`. See design.md § `#[no_effect]`.

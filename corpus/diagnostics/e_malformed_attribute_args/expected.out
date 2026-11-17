@@ -1,0 +1,1 @@
+ERROR at line 1: `#[cold]` accepts no arguments — write it as a bare `#[cold]`

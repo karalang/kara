@@ -1,0 +1,4 @@
+#[non_exhaustive]
+fn f() {}
+
+fn main() { f(); }

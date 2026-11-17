@@ -1,0 +1,1 @@
+ERROR at line 1: `impl Trait` is not permitted inside a nested generic-argument position in 0.8; introduce an explicit generic parameter on the enclosing function (e.g. `fn f[T: Trait](x: Vec[T])`) instead. Deep-position `impl Trait` is not in 0.8 — see design.md § `impl Trait`.

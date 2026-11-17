@@ -1,0 +1,1 @@
+ERROR at line 2: `impl Trait` is not permitted in trait-method argument position; use the explicit generic form `fn method[T: Trait](x: T)` on the trait method declaration instead. The compiler restricts argument-position `impl Trait` to free functions and impl-block methods — see design.md § `impl Trait`.

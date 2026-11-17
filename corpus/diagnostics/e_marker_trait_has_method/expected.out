@@ -1,0 +1,1 @@
+ERROR at line 2: marker traits cannot declare methods; remove the method or change `marker trait` to `trait`

@@ -1,0 +1,9 @@
+source = "B-2026-11-16-303"
+dedup_of = []
+expect = "error:E_IMPL_TRAIT_IN_NESTED_POSITION"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-303: the smallest program that produces E_IMPL_TRAIT_IN_NESTED_POSITION, the example behind `karac explain E_IMPL_TRAIT_IN_NESTED_POSITION`. tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

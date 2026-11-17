@@ -1,0 +1,1 @@
+ERROR at line 1: `#[no_effect]` requires at least one effect verb — `#[no_effect(allocates(Heap))]`. An empty list forbids nothing, so it is a silent no-op rather than the guarantee it looks like.

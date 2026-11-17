@@ -1,0 +1,5 @@
+struct Oops { code: i64 }
+
+fn main() -> Result[(), Oops] {
+    Err(Oops { code: 1 })
+}

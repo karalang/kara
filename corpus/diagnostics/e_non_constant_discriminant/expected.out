@@ -1,0 +1,1 @@
+ERROR at line 3: an enum discriminant must be a constant integer expression — an integer literal, arithmetic over such, or a reference to a module-level integer `const`; a function call, a non-integer or unknown name, or a reference cycle is not a constant here
