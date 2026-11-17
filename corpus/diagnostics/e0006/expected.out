@@ -1,0 +1,1 @@
+ERROR at line 1: lint name `unused_variables` appears more than once in `#[allow(...)]`

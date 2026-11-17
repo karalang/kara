@@ -1,0 +1,11 @@
+struct Name { s: String }
+
+fn main() {
+    let n = Name { s: String.from("a") };
+    match n {
+        whole @ Name { s } => {
+            let a = whole;
+            let b = s;
+        }
+    }
+}

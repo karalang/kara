@@ -1,0 +1,1 @@
+ERROR at line 3: Atomic.store takes (value) — 1 argument, found 0; every atomic operation is sequentially consistent

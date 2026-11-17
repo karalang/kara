@@ -2161,7 +2161,7 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(first) = f.params.first() {
             self.type_error(
                 "error[E_MAIN_SIGNATURE]: `main()` takes no parameters (design.md \
-                 § Entry Point). help: read command-line arguments with \
+                 § The `main` function and exit codes). help: read command-line arguments with \
                  `env.args()`"
                     .to_string(),
                 first.span,
@@ -2233,7 +2233,7 @@ impl<'a> super::TypeChecker<'a> {
         self.type_error(
             "error[E_MAIN_RETURN_TYPE]: `main()` must return `()`, \
              `Result[(), E]` (with `E: Display`), or `ExitCode` \
-             (design.md § Entry Point)"
+             (design.md § The `main` function and exit codes)"
                 .to_string(),
             span,
             TypeErrorKind::MainReturnType,
@@ -3483,13 +3483,18 @@ impl<'a> super::TypeChecker<'a> {
                         } else {
                             format!("`{name}`")
                         };
+                        let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                            "an"
+                        } else {
+                            "a"
+                        };
                         let ints = if kind == "enum" {
                             ", an integer type (`u8` .. `u64`, `i8` .. `i64`)"
                         } else {
                             ""
                         };
                         format!(
-                            "error[E_REPR_UNKNOWN]: {shown} is not a `#[repr]` form; a {kind} \
+                            "error[E_REPR_UNKNOWN]: {shown} is not a `#[repr]` form; {article} {kind} \
                              takes `C`{ints} or `transparent` (design.md § `#[repr]`: ABI \
                              layout)"
                         )

@@ -1,0 +1,1 @@
+ERROR at line 5: capture `o` declared `ref` but consumed in closure body at 5:34 — drop the `ref` prefix (use `own` or bare) or remove the consume

@@ -1,0 +1,6 @@
+sync struct Counter {
+    mut count: Atomic[i64],
+    mut state: i64,
+}
+
+fn main() {}

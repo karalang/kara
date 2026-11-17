@@ -1,0 +1,4 @@
+fn main() {
+    let pair = (1, 2);
+    println(pair.2);
+}

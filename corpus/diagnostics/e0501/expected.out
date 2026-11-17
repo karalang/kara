@@ -1,0 +1,1 @@
+ERROR at line 1: ownership cycle detected: B → A → B. A non-shared type cannot transitively contain itself.

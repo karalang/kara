@@ -1,0 +1,1 @@
+ERROR at line 3: continue label `blk` refers to a labeled block; continue is only valid for loops

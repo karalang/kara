@@ -1,1 +1,2 @@
 ERROR at line 1: module-level `let mut COUNTER` is mutable global state, and Kāra has no mutable globals (design.md § Constants, "No mutable globals")
+help: create the value in `main` and pass it down to the functions that use it, gathering several into a context struct

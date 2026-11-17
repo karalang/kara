@@ -1,0 +1,5 @@
+unsafe extern "stdcall" {
+    fn beep(freq: u32, ms: u32) -> i32;
+}
+
+fn main() {}

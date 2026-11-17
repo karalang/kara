@@ -1,0 +1,1 @@
+ERROR at line 1: `E` is an effect variable, not a type; it goes in a `with` clause (`Fn(T) with E`) or a type's effect argument (`S[with E]`)

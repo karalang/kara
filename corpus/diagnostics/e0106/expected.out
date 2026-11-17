@@ -1,0 +1,1 @@
+ERROR at line 4: field 'z' does not exist on struct 'Particle' (in group 'position')

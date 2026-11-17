@@ -1,0 +1,5 @@
+struct Secret { key: i64 }
+
+pub fn make_secret() -> Secret { Secret { key: 7 } }
+
+fn main() { let s = make_secret(); println(s.key); }

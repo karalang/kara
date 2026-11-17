@@ -1,0 +1,12 @@
+trait Origin { fn make() -> Self; }
+trait Unit { fn make() -> Self; }
+
+struct Point { x: i64 }
+
+impl Origin for Point { fn make() -> Point { Point { x: 0 } } }
+impl Unit for Point { fn make() -> Point { Point { x: 1 } } }
+
+fn main() {
+    let p = Point.make();
+    println(p.x);
+}

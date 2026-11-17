@@ -1,0 +1,6 @@
+fn pick(flag: bool) -> impl Display {
+    if flag { return 1; }
+    "one"
+}
+
+fn main() { println(pick(true)); }

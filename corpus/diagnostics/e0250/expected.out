@@ -1,1 +1,2 @@
 ERROR at line 1: constant 'START' initializer must be a compile-time constant; function call requires run-time evaluation (design.md § Constants). Permitted forms: literals, arithmetic / boolean / comparison operations over constants, enum variants, struct and tuple literals of constants, list and repeat literals at an 'Array' type, and other constants
+help: build the value in `main`, or a function it calls, and pass it down

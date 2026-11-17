@@ -1,0 +1,7 @@
+struct Owned { x: i64 }
+
+fn main() {
+    let o = Owned { x: 1 };
+    let f = ref || { let moved = o; };
+    f();
+}

@@ -1,0 +1,1 @@
+ERROR at line 6: 'Blob' does not satisfy 'T: Ord' required by alias 'Sorted'

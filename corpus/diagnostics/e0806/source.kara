@@ -1,0 +1,4 @@
+#[repr(i128x)]
+enum Level { Low, High }
+
+fn main() {}

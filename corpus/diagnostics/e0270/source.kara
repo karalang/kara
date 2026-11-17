@@ -1,0 +1,5 @@
+fn main() {
+    let hits = Atomic.new(0);
+    hits.store();
+    println(hits.load());
+}

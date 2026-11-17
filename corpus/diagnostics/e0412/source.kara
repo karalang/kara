@@ -1,0 +1,7 @@
+pub trait Config {
+    fn reload(mut ref self) with reads(Cfg);
+}
+
+pub effect resource Cfg: Config;
+
+fn main() {}

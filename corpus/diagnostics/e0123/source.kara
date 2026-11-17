@@ -1,0 +1,4 @@
+#[profile(turbo)]
+fn helper() {}
+
+fn main() { helper(); }

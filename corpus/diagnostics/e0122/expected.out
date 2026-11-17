@@ -1,0 +1,1 @@
+ERROR at line 1: `#[profile(...)]` is not valid on struct; the attribute asserts per-function profile compatibility and only applies to `fn` declarations

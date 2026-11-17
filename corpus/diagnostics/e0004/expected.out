@@ -1,0 +1,1 @@
+ERROR at line 2: 'r#self' is not legal; 'self' is a structural marker, not a reservable keyword

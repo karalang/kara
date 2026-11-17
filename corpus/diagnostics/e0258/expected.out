@@ -1,0 +1,1 @@
+ERROR at line 4: method `reset` of the sync type `Counter` cannot take a `mut ref self` receiver: methods of a sync type take a borrowed `self`, since a sync value may have many holders across tasks and exclusive access is never available. Write `self`, and change state through `Atomic[T]` methods or a `Mutex[T]` field's lock guard

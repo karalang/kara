@@ -2917,7 +2917,12 @@ impl<'a> EffectChecker<'a> {
                         }
                     } else {
                         self.errors.push(EffectError {
-                            message: format!("undefined effect group: '{}'", name),
+                            message: format!(
+                                "unknown effect '{}': a `with` clause names verbs on \
+                                 resources, such as `reads(Db)`, and effect groups are not \
+                                 in 0.8",
+                                name
+                            ),
                             span: effects.span,
                             kind: EffectErrorKind::UndefinedEffectGroup,
                             subtype_trace: None,

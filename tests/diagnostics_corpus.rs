@@ -47,7 +47,7 @@ fn diagnostics_corpus_programs_produce_their_code_and_are_explained() {
     }
     // A void run (the directory moved, nothing matched) must not pass.
     assert!(
-        dirs.len() >= 34,
+        dirs.len() >= 80,
         "only {} entries under {root:?}",
         dirs.len()
     );
@@ -97,4 +97,38 @@ fn diagnostics_corpus_symbolic_code_frames_its_class_paragraph() {
     let e0216 = karac(dir, &["explain", "E0216"]);
     assert!(e0216.contains("labeled arguments"), "{e0216}");
     assert!(!e0216.contains("Operand, argument"), "{e0216}");
+}
+
+/// B-2026-11-17-77: `Point.make()` where two traits `Point` implements each
+/// declare `make` is ambiguous (corpus/diagnostics/e0233), but an inherent
+/// `make` is found first, and a trait named with the expected type picks its
+/// own impl.
+#[test]
+fn diagnostics_corpus_inherent_assoc_fn_is_not_ambiguous() {
+    let dir = tempfile_dir("assoc_inherent");
+    std::fs::write(
+        dir.join("main.kara"),
+        "trait Origin { fn make() -> Self; }
+trait Unit { fn make() -> Self; }
+struct Point { x: i64 }
+impl Origin for Point { fn make() -> Point { Point { x: 0 } } }
+impl Unit for Point { fn make() -> Point { Point { x: 1 } } }
+impl Point { fn make() -> Point { Point { x: 2 } } }
+fn main() {
+    let a: Point = Unit.make();
+    let b = Point.make();
+    println(f\"{a.x} {b.x}\");
+}
+",
+    )
+    .unwrap();
+    let out = karac(&dir, &["check", "--output=json", "main.kara"]);
+    assert!(!out.contains("\"code\":\"E0233\""), "{out}");
+    assert!(!out.contains("\"severity\":\"error\""), "{out}");
+}
+
+fn tempfile_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("karac_diag_{name}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }

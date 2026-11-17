@@ -1,0 +1,1 @@
+ERROR at line 5: ambiguous variant name `Red`: declared by `Light`, `Signal` — write `Light.Red` or `Signal.Red` to say which one

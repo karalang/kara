@@ -428,7 +428,7 @@ impl<'a> super::EffectChecker<'a> {
                                         every.clone().unwrap_or_default()
                                     ),
                                     _ if &*name == "main" => "`main()` is never `pub` \
-                                         (design.md § Entry Point): remove `pub` and \
+                                         (design.md § The `main` function and exit codes): remove `pub` and \
                                          its effects are inferred like any other \
                                          private function's"
                                         .to_string(),

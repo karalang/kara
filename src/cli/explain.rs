@@ -2456,6 +2456,263 @@ const CODE_PROSE: &[(&str, &str)] = &[
          computes by widening to `f32` and rounding back. Compute in `f32` \
          and store in the narrow type.",
     ),
+    // B-2026-11-16-303, batch 2: the parse and resolve codes no corpus program
+    // produced. Each has a program in corpus/diagnostics/<code>/.
+    (
+        "E0004",
+        "`r#` escapes a reserved word so it can be used as a name, but \
+         `self`, `Self`, `super` and `crate` are structural markers rather \
+         than reservable keywords, and `r#` does not apply to them \
+         (design.md § Raw identifiers). Pick another name, such as `this` \
+         or `own_self`.",
+    ),
+    (
+        "E0005",
+        "The syntax is recognized and reserved for a later release rather \
+         than refused as wrong. Here it is an `extern` calling convention: \
+         0.8 implements `\"C\"` and `\"C-unwind\"`, and keeps \
+         `\"stdcall\"`, `\"fastcall\"`, `\"win64\"` and `\"sysv64\"` for \
+         later (deferred.md § Calling conventions). Use `extern \"C\"`, \
+         which is the platform's C convention.",
+    ),
+    (
+        "E0006",
+        "A lint attribute (`#[allow(...)]`, `#[warn(...)]`, `#[deny(...)]`) \
+         names the same lint twice (design.md § Lint levels). The second \
+         mention changes nothing and usually marks an editing slip. Name \
+         each lint once.",
+    ),
+    (
+        "E0102",
+        "A name the language uses for itself was declared as an item or \
+         binding: `Fn` names the function type constructor and \
+         `split_by_variant` is a keyword inside layout blocks (design.md § \
+         Function types and kinds). Rename the item.",
+    ),
+    (
+        "E0106",
+        "A layout block names a field that the struct does not have \
+         (deferred.md § Layout Blocks). Each `group` lists fields of the \
+         element type, and every field must be one the struct declares. Fix \
+         the spelling, or add the field to the struct.",
+    ),
+    (
+        "E0108",
+        "An `impl` of a trait that the compiler supplies itself was written \
+         by hand. `Copy` comes only from `#[derive(Copy, Clone)]`, which \
+         checks that every field is `Copy` (design.md § `Copy`), and \
+         `CrossTask` is computed from the type's fields. Remove the impl \
+         and use the derive, or for `CrossTask`, make the type's `shared` \
+         parts `sync` types.",
+    ),
+    (
+        "E0109",
+        "`impl Into[U] for T` was written by hand, but `Into` is derived \
+         from `From` by a blanket impl, so a second path would make \
+         `x.into()` ambiguous (design.md § Conversion traits). Write `impl \
+         From[T] for U` instead; `x.into()` then works through it.",
+    ),
+    (
+        "E0110",
+        "A trait declares an effect variable (`trait Sink[with E]`), which \
+         0.8 does not allow (design.md § Effect variables). A trait \
+         method's effects are a ceiling its implementations share, so a \
+         variable belongs on the method that uses it or on the impl block: \
+         `fn put[with E](self, f: Fn() with E) with E`.",
+    ),
+    (
+        "E0114",
+        "An effect resource takes a name reserved for the deferred comptime \
+         feature, `CompileTimeEnv` or `CompileTimeHeap` (deferred.md § \
+         Comptime). Reserving the names now lets that feature arrive \
+         without breaking programs. Rename the resource.",
+    ),
+    (
+        "E0116",
+        "`continue 'label` names a labeled block rather than a loop \
+         (design.md § Loops and labels). A block runs once, so there is no \
+         next iteration to continue to. Use `break 'label` to leave the \
+         block, or put the label on the enclosing loop.",
+    ),
+    (
+        "E0117",
+        "`#[non_exhaustive]` is on an item it does not apply to (design.md \
+         § `#[non_exhaustive]`). It marks a `pub struct` or `pub enum` that \
+         may gain fields or variants in a minor release, so it means \
+         nothing on a function or a private type. Remove the attribute, or \
+         move it to the public type.",
+    ),
+    (
+        "E0118",
+        "`#[track_caller]` is on something other than a function. The \
+         attribute makes a panic inside a function report its caller's \
+         location (design.md § 10, Errors and panics), so it applies only \
+         to `fn` declarations. Remove it, or move it to the function that \
+         panics.",
+    ),
+    (
+        "E0119",
+        "`#[deprecated]` is on an `impl` block (design.md § \
+         `#[deprecated]`). An impl is not a name callers write, so the \
+         warning would have nowhere to land. Mark each method that callers \
+         should stop using.",
+    ),
+    (
+        "E0120",
+        "`#[deprecated]` is on a struct field, which 0.8 does not support; \
+         deprecation is item-level (design.md § `#[deprecated]`). Deprecate \
+         the accessor or constructor that callers use, or the whole struct.",
+    ),
+    (
+        "E0122",
+        "`#[profile(...)]` is on something other than a function. The \
+         attribute asserts that a function's effect set fits a deployment \
+         profile (deferred.md § Project Profiles), so it applies only to \
+         `fn` declarations. Move it to the functions whose effects matter.",
+    ),
+    (
+        "E0123",
+        "`#[profile(...)]` names a profile that does not exist; the message \
+         lists the ones that do: `default`, `embedded` and `kernel` \
+         (deferred.md § Project Profiles). Fix the spelling.",
+    ),
+    (
+        "E0125",
+        "An effect variable is used where a type goes, or a type parameter \
+         where an effect set goes (design.md § Effect variables). `[with \
+         E]` declares an effect set, which belongs in a `with` clause \
+         (`Fn(T) with E`) or a type's effect argument (`S[with E]`); `[T]` \
+         declares a type. Declare the parameter with the kind its uses \
+         need.",
+    ),
+    (
+        "E0126",
+        "A public signature names a type that declares an effect variable \
+         (`Bus[with E]`) without spelling its effect set (design.md § \
+         Effect variables). Effects are inferred for private code, but a \
+         public signature is a contract, so it states them: `Bus[with \
+         writes(Log)]`, or `Bus[with E]` with `E` declared on the function.",
+    ),
+    (
+        "E0151",
+        "A layout block regroups the fields of a `pub` `#[repr(C)]` struct \
+         (deferred.md § Layout Blocks and `#[repr]`). `#[repr(C)]` fixes \
+         the field order for code across the FFI boundary, so the groups \
+         could not take effect. Remove the layout block, or drop \
+         `#[repr(C)]` if no foreign code reads the type.",
+    ),
+    // B-2026-11-16-303, batch 3: typecheck codes no corpus program produced.
+    (
+        "E0221",
+        "A `pub` function, field or type names a type that is not `pub` \
+         (design.md § Visibility). Users of the package could receive a \
+         value whose type they cannot name, import or match on. Mark the \
+         type `pub`, or keep the item that exposes it internal.",
+    ),
+    (
+        "E0257",
+        "A field of a `sync struct` or `sync enum` is declared `mut` \
+         (design.md § `sync` types). A `sync` value is shared across tasks \
+         and never written field by field through a handle; state that \
+         changes lives in `Atomic[T]` and `Mutex[T]` fields, whose methods \
+         take a borrowed `self`. Drop the `mut`, and hold changing state in \
+         one of those.",
+    ),
+    (
+        "E0258",
+        "A method of a `sync` type takes `mut ref self` (design.md § `sync` \
+         types). A `sync` value may have holders in many tasks, so \
+         exclusive access to it is never available. Take `self`, and change \
+         state through the type's `Atomic[T]` methods or a `Mutex[T]` \
+         field's lock guard.",
+    ),
+    (
+        "E0266",
+        "`main` returns a type the runtime cannot turn into an exit status \
+         (design.md § The `main` function and exit codes). It returns `()`, \
+         `Result[(), E]` with `E: Display`, or `ExitCode`. To end with a \
+         number, return `ExitCode.from(n)`; to report a failure, return \
+         `Err(e)`, which prints `Error: {e}` and exits 1.",
+    ),
+    (
+        "E0279",
+        "A bare variant name (`Red`) is declared by more than one enum in \
+         scope, so the compiler cannot tell which is meant (design.md § \
+         Enums). Qualify it with its enum, as the message suggests: \
+         `Light.Red`.",
+    ),
+    // B-2026-11-16-303, batch 4: effect, ownership and repr codes no corpus
+    // program produced.
+    (
+        "E0403",
+        "A `with` clause names something that is not an effect: here a bare \
+         name such as `with Nonexistent`, where a verb on a resource was \
+         meant (design.md § Effect verbs). Effects are written as a verb \
+         applied to a resource, `reads(Db)` or `writes(Log)`; effect groups \
+         that would let one name stand for several are not in 0.8. Write \
+         the verbs out, and declare any resource with `effect resource \
+         Name;`.",
+    ),
+    (
+        "E0406",
+        "One effect variable is bound to two different effect sets at one \
+         call (design.md § Effect variables): `pipe[with E](a: Fn() with E, \
+         b: Fn() with E)` called with a closure that writes `Log` and one \
+         that reads `Db`. Every slot that names `E` must agree, because `E` \
+         is one set. Give the function two variables, `[with E1, E2]`, or \
+         make the closures' effects match.",
+    ),
+    (
+        "E0412",
+        "A trait method's receiver and its effect clause disagree about a \
+         resource (design.md § Effect verbs). A `mut ref self` method on a \
+         resource's trait writes the provider, so every call infers \
+         `writes(R)`, while the clause promises only `reads(R)`. Take \
+         `self`, which borrows, if the method only reads, or declare \
+         `writes(R)`.",
+    ),
+    (
+        "E0501",
+        "A struct contains itself by value, directly or through other \
+         structs (`A` holds a `B`, which holds an `A`), so its size would \
+         be infinite. A value type has a fixed size, known at compile time. \
+         Break the cycle where it may end: an `Option[A]` field (`b: \
+         Option[B]`) or a `Vec[A]`, or make one of the types `shared` so it \
+         is held by a reference-counted handle (design.md § Enums, on \
+         recursive types).",
+    ),
+    (
+        "E0504",
+        "A closure's capture mode does not match what its body does \
+         (design.md § Captures): a capture declared `ref` (a `ref || ...` \
+         closure, or `ref name` in its capture list) is moved or consumed \
+         in the body. A borrowed capture cannot be given away. Drop the \
+         `ref` so the closure takes the value (`own`, or a bare capture), \
+         or borrow it in the body instead of consuming it.",
+    ),
+    (
+        "E0803",
+        "A `#[repr(transparent)]` struct has more than one field with data \
+         (design.md § `#[repr(transparent)]`). Transparent means the struct \
+         is laid out exactly as its one data field, so the ABI sees that \
+         field's type; the other fields must be zero-sized, such as \
+         `PhantomData[T]` or `()`. Keep one data field, or use `#[repr(C)]` \
+         for a struct with several.",
+    ),
+    (
+        "E0804",
+        "An enum's explicit discriminant does not fit the integer type its \
+         `#[repr]` names (design.md § 15, Unsafe, FFI and layout control): \
+         `High = 300` in a `#[repr(u8)]` enum, whose range is 0 to 255. \
+         Choose a wider repr (`#[repr(u16)]`), or a value in range.",
+    ),
+    (
+        "E0806",
+        "A `#[repr(...)]` argument is not a layout form (design.md § \
+         `#[repr]`: ABI layout). A struct takes `C` or `transparent`; an \
+         enum takes `C`, an integer type from `u8` to `u64` or `i8` to \
+         `i64`, or `transparent`. Fix the spelling, as the message lists.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the

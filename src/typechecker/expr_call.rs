@@ -1482,6 +1482,21 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `P.make()` where two traits `P` implements each declare `make` and
+        // `P` has no inherent `make`: ambiguous, as the method call `p.tag()`
+        // is (design.md § Associated functions: "The ambiguity rules are the
+        // same"). It used to take the first impl silently (B-2026-11-17-77).
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 {
+                if let Some(ty) =
+                    self.ambiguous_concrete_assoc_call(&segments[0], &segments[1], args, span)
+                {
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
+            }
+        }
+
         // Fallible-allocation constructor companions (phase-8-stdlib-floor
         // item 2). `Type.try_with_capacity(n)` / `Vec.try_from_slice(src)` type
         // identically to their panicking `Type.<base>(...)` constructor but
@@ -4438,6 +4453,63 @@ impl super::TypeChecker<'_> {
         self.assoc_conversion_dispatch
             .insert(SpanKey::from_span(span), seg);
         Some(ret.unwrap_or(Type::Error))
+    }
+}
+
+impl super::TypeChecker<'_> {
+    /// `T.f(args)` on a concrete type `T` with no inherent `f`, where two or
+    /// more different traits `T` implements declare `f` without `self`:
+    /// reports [`TypeErrorKind::AmbiguousAssocFn`] with one `Trait.f` form
+    /// per candidate and returns `Some(Type::Error)`. `None` otherwise, which
+    /// leaves the call to the ordinary path.
+    fn ambiguous_concrete_assoc_call(
+        &mut self,
+        type_name: &str,
+        member: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        if self.local_scope.lookup(type_name).is_some() || self.type_param_in_scope(type_name) {
+            return None;
+        }
+        let type_name = self.unaliased_type_name(type_name);
+        let mut traits: Vec<String> = Vec::new();
+        for imp in &self.env.impls {
+            if imp.target_type != type_name || !imp.methods.contains_key(member) {
+                continue;
+            }
+            // An inherent `f` is found first, so the call is not ambiguous.
+            let tr = imp.trait_name.as_deref()?;
+            if !traits.iter().any(|t| t == tr) {
+                traits.push(tr.to_string());
+            }
+        }
+        traits.retain(|t| {
+            self.find_trait_method(t, member)
+                .is_some_and(|m| m.self_param.is_none())
+        });
+        if traits.len() < 2 {
+            return None;
+        }
+        for arg in args {
+            self.infer_expr(&arg.value);
+        }
+        let forms = traits
+            .iter()
+            .map(|t| format!("`{t}.{member}(..)`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.type_error(
+            format!(
+                "ambiguous associated function '{member}' on type '{type_name}': declared by \
+                 {} traits it implements. Name the trait: {forms}, with the type taken from \
+                 the expected type (`let x: {type_name} = ...`).",
+                traits.len(),
+            ),
+            *span,
+            TypeErrorKind::AmbiguousAssocFn,
+        );
+        Some(Type::Error)
     }
 }
 

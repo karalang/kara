@@ -1,0 +1,5 @@
+enum Shape { Circle, Square }
+
+fn main() {
+    let s = Shape { radius: 1 };
+}

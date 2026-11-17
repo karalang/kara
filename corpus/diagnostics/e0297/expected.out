@@ -1,0 +1,1 @@
+ERROR at line 2: `BufReader` wraps a `File`, `ChildStdout`, `ChildStderr`, `TcpStream` or `TlsStream` (library/io.md § Buffered I/O), not a `i64`

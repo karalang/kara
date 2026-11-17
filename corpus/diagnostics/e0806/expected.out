@@ -1,0 +1,1 @@
+ERROR at line 1: `i128x` is not a `#[repr]` form; an enum takes `C`, an integer type (`u8` .. `u64`, `i8` .. `i64`) or `transparent` (design.md § `#[repr]`: ABI layout)

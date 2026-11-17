@@ -1,0 +1,8 @@
+struct Point { x: i64 }
+
+#[deprecated]
+impl Point {
+    fn origin() -> Point { Point { x: 0 } }
+}
+
+fn main() {}

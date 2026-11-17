@@ -1,0 +1,1 @@
+ERROR at line 2: trait method 'Config.reload' declares reads(Cfg) but its `mut ref self` receiver makes every 'Cfg.reload' call infer writes(Cfg); change the receiver to `self`, which borrows, or declare writes(Cfg)

@@ -1,0 +1,10 @@
+trait Shape { fn area(self) -> f64; }
+trait Solid: Shape { fn volume(self) -> f64; }
+
+struct Cube { side: f64 }
+
+impl Solid for Cube {
+    fn volume(self) -> f64 { self.side * self.side * self.side }
+}
+
+fn main() {}

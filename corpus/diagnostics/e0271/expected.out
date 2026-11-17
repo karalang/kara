@@ -1,0 +1,1 @@
+ERROR at line 3: return-position `impl Display` must resolve to a single concrete type per monomorphization, but this function returns multiple: i64, String. An `impl Trait` return is an existential with one concrete witness; a runtime-varying return type needs `dyn Display` (deferred to a later release). Make every branch return the same concrete type.

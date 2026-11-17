@@ -1,0 +1,9 @@
+#[repr(C)]
+pub struct Q { a: i64, b: f64, c: i64 }
+
+layout qs: Vec[Q] {
+    group hot { a, c }
+    group cold { b }
+}
+
+fn main() {}

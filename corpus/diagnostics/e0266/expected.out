@@ -1,0 +1,1 @@
+ERROR at line 1: `main()` must return `()`, `Result[(), E]` (with `E: Display`), or `ExitCode` (design.md § The `main` function and exit codes)

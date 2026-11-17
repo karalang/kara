@@ -1,0 +1,1 @@
+ERROR at line 4: user-defined `impl Into for T` is not allowed; `Into` is derived from `From` via a blanket impl

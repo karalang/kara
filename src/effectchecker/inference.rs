@@ -257,7 +257,7 @@ impl<'a> super::EffectChecker<'a> {
                             message: format!(
                                 "trait method '{}.{}' declares {}({}) but its `{}` \
                                  receiver makes every '{}.{}' call infer writes({}); \
-                                 change the receiver to `ref self` or declare writes({})",
+                                 change the receiver to `self`, which borrows, or declare writes({})",
                                 m.trait_name,
                                 m.name,
                                 declared,

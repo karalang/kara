@@ -1,0 +1,1 @@
+ERROR at line 6: cannot bind both 'whole' and 's' as owned — 'whole' would consume the whole value while 's' would consume a field; use 'ref whole' to borrow, or omit one of the two bindings

@@ -1,0 +1,6 @@
+#[allow(unused_variables, unused_variables)]
+fn helper() {
+    let x = 1;
+}
+
+fn main() { helper(); }

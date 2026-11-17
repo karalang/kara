@@ -1,0 +1,3 @@
+fn apply[with E](x: E) -> i64 { 1 }
+
+fn main() { println(1); }

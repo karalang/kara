@@ -1,0 +1,5 @@
+fn main() {
+    let o: Option[i64] = Some(1);
+    let Some(v) = o;
+    println(v);
+}

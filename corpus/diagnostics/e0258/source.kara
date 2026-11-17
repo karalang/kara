@@ -1,0 +1,7 @@
+sync struct Counter { count: Atomic[i64] }
+
+impl Counter {
+    fn reset(mut ref self) {}
+}
+
+fn main() {}

@@ -1,0 +1,5 @@
+pub struct Bus[with E] { pub handlers: Vec[Fn(i64) with E] }
+
+pub fn make() -> Bus { Bus { handlers: Vec.new() } }
+
+fn main() {}

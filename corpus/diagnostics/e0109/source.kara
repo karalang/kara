@@ -1,0 +1,8 @@
+struct Celsius { v: f64 }
+struct Fahrenheit { v: f64 }
+
+impl Into[Fahrenheit] for Celsius {
+    fn into(self) -> Fahrenheit { Fahrenheit { v: self.v * 1.8 + 32.0 } }
+}
+
+fn main() {}

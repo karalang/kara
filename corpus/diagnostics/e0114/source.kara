@@ -1,0 +1,5 @@
+trait Heap { fn alloc(self, n: i64) -> i64; }
+
+effect resource CompileTimeHeap: Heap;
+
+fn main() {}

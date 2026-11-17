@@ -1,0 +1,1 @@
+ERROR at line 3: unknown effect 'Nonexistent': a `with` clause names verbs on resources, such as `reads(Db)`, and effect groups are not in 0.8

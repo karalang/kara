@@ -1,0 +1,5 @@
+ERROR at line 3: String does not support indexing with []
+  s[i] would hide an O(n) scan — Strings are UTF-8 encoded and characters
+  are variable-width.
+  help: use s.char_at(i) for the i-th character (O(n)) — it returns Option[char], so match it or unwrap it,
+        or s.bytes()[i] for raw byte access (O(1))

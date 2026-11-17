@@ -1,0 +1,1 @@
+ERROR at line 3: refutable pattern in `let` binding; use `let ... else { ... }`, `if let`, or `match` for patterns that may not match

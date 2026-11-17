@@ -1,0 +1,1 @@
+ERROR at line 3: private type 'Secret' leaks through return type of 'make_secret'; mark the type `pub` or remove it from the public surface

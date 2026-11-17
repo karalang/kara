@@ -1,0 +1,1 @@
+ERROR at line 1: a trait takes no effect variable (`E`) in 0.8; declare it on the method that uses it, or on the impl block

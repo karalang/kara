@@ -1,0 +1,1 @@
+ERROR at line 1: `#[track_caller]` is not valid on struct; the attribute redirects the panic-site source location and only applies to `fn` declarations — see design.md § Error Handling > "Stdlib panic-emitters report the caller's source location"

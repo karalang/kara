@@ -1,0 +1,5 @@
+fn area(w: i64, h: i64) -> i64 { w * h }
+
+fn area(side: i64) -> i64 { side * side }
+
+fn main() { println(area(2)); }

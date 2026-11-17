@@ -1,0 +1,1 @@
+ERROR at line 6: impl Solid for Cube requires impl Shape for Cube

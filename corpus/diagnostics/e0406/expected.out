@@ -1,0 +1,1 @@
+ERROR at line 13: effect variable `E` is bound to {writes(Log)} at argument 0 but {reads(Db)} at argument 1; `with E` requires every slot to agree

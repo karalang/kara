@@ -1,0 +1,5 @@
+effect resource UserDb;
+
+pub fn load() with Nonexistent {}
+
+fn main() {}

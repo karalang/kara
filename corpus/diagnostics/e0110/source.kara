@@ -1,0 +1,5 @@
+trait Sink[with E] {
+    fn put(self, x: i64);
+}
+
+fn main() {}

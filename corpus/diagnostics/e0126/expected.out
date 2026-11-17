@@ -1,0 +1,1 @@
+ERROR at line 3: public function `make` writes `Bus` without its effect set; a public signature spells it, as `Bus[with ...]` (or `Bus[with E]` for a variable the function declares)

@@ -1,0 +1,1 @@
+ERROR at line 4: a manual `impl Copy for Point` is not allowed: `Copy` comes only from `#[derive(Copy, Clone)]` on the type, which checks that every field is `Copy`

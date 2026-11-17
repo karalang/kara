@@ -1,0 +1,7 @@
+type Sorted[T: Ord] = Vec[T];
+
+struct Blob { x: i64 }
+
+fn main() {
+    let v: Sorted[Blob] = Vec.new();
+}

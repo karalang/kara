@@ -1,0 +1,4 @@
+#[non_exhaustive]
+fn helper() {}
+
+fn main() { helper(); }

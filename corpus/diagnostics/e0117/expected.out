@@ -1,0 +1,1 @@
+ERROR at line 1: `#[non_exhaustive]` is not valid on function; the attribute applies only to `pub struct` and `pub enum` declarations — see design.md § `#[non_exhaustive]` for Evolvable Public Types

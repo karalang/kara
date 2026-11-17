@@ -1,0 +1,1 @@
+ERROR at line 10: ambiguous associated function 'make' on type 'Point': declared by 2 traits it implements. Name the trait: `Origin.make(..)`, `Unit.make(..)`, with the type taken from the expected type (`let x: Point = ...`).
