@@ -68,7 +68,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | run-vs-build | 55 |
 | crash | 47 |
 | codegen-gap | 33 |
-| use-after-free | 9 |
+| use-after-free | 10 |
 | leak | 4 |
 | double-free | 2 |
 
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 585 |
 | mir-llvm | 281 |
-| mir | 244 |
+| mir | 245 |
 | cli | 191 |
 | parser | 103 |
 | ownership | 99 |
@@ -180,6 +180,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
 | B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
 | B-2026-11-17-86 | 2026-11-17 | runtime | low | An allocation failure inside a task of an isolating TaskGroup is not contained: it ends the process with exit 101 like any top-level alloc_failure, where core-semantics §11.12 contains a task's panic to its group | — |
+| B-2026-11-17-92 | 2026-11-17 | mir | high | A closure a factory call returns, holding a view of a local, passes check when it goes straight into an `escaping` parameter, a `shared` value or a `dyn`, and is then called after the local is freed (interp 'use of a0 after it was freed', ASan heap-use-after-free); the -24 call rule follows only closures made in the same body | — |
 
 ### Relocated
 
