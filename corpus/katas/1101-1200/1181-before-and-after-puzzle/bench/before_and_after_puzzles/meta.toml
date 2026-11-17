@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1181-before-and-after-puzzle/bench/before_and_after_puzzles.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "lib:sortedset", "bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1181 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "a52e0abb4"
+extracted_src = "b6781d6e"

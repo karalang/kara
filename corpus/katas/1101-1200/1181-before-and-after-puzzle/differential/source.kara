@@ -1,0 +1,320 @@
+// LeetCode #1181: Before and After Puzzle -- the differential: the six
+// arms against the statement read literally, and six properties of what
+// they return.
+
+// ---- before_and_after_puzzles.kara ----
+
+fn a0_before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    let mut starting: Map[String, Vec[i64]] = Map.new();
+    for (i, p) in phrases.iter().enumerate() {
+        let first = match p.split_once(" ") {
+            Some((w, _)) => w,
+            None => p.as_str(),
+        };
+        starting.entry(first.to_string()).or_insert(Vec.new()).push(i);
+    }
+    let mut puzzles: SortedSet[String] = SortedSet.new();
+    for (i, p) in phrases.iter().enumerate() {
+        let last = match p.rsplit_once(" ") {
+            Some((_, w)) => w,
+            None => p.as_str(),
+        };
+        if let Some(js) = starting.get(last) {
+            for j in js.iter() {
+                if j != i {
+                    let rest = match phrases[j].split_once(" ") {
+                        Some((_, r)) => f" {r}",
+                        None => "",
+                    };
+                    puzzles.insert(f"{p}{rest}");
+                }
+            }
+        }
+    }
+    puzzles.into_iter().collect()
+}
+
+// ---- before_and_after_puzzles_pairs.kara ----
+
+fn a1_before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    let words: Vec[Vec[Str]] = phrases.iter().map(|p| p.split_whitespace().collect()).collect();
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..words.len() {
+        for j in 0..words.len() {
+            if i != j and words[i][words[i].len() - 1] == words[j][0] {
+                let mut joined = words[i].clone();
+                joined.extend(words[j][1..].iter());
+                out.push(joined.join(" "));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+// ---- before_and_after_puzzles_cuts.kara ----
+
+fn a2_before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    let mut seen: Set[String] = Set.new();
+    for (i, a) in phrases.iter().enumerate() {
+        let last_start = match a.rfind(" ") {
+            Some(k) => k + 1,
+            None => 0,
+        };
+        let last = a[last_start..];
+        for (j, b) in phrases.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            let first_end = match b.find(" ") {
+                Some(k) => k,
+                None => b.len(),
+            };
+            if b[..first_end] == last {
+                seen.insert(f"{a}{b[first_end..]}");
+            }
+        }
+    }
+    let mut out: Vec[String] = seen.into_iter().collect();
+    out.sort();
+    out
+}
+
+// ---- before_and_after_puzzles_search.kara ----
+
+fn a3_first_word(p: Str) -> Str {
+    p.split(" ").next().unwrap()
+}
+
+fn a3_last_word(p: Str) -> Str {
+    p.split(" ").last().unwrap()
+}
+
+fn a3_before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    let mut order: Vec[i64] = (0..phrases.len()).collect();
+    order.sort_by_key(|i| a3_first_word(phrases[i]).to_string());
+    let mut out: Vec[String] = Vec.new();
+    for (i, p) in phrases.iter().enumerate() {
+        let last = a3_last_word(p);
+        let mut k = order.partition_point(|j| a3_first_word(phrases[j]) < last);
+        while k < order.len() and a3_first_word(phrases[order[k]]) == last {
+            let j = order[k];
+            if j != i {
+                out.push(f"{p}{phrases[j][last.len()..]}");
+            }
+            k += 1;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+// ---- before_and_after_puzzles_solution.kara ----
+
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+        let mut starts: Map[Str, Vec[i64]] = Map.new();
+        for (i, p) in phrases.iter().enumerate() {
+            let first = p.split(" ").next().unwrap();
+            starts.entry(first).or_insert_with(Vec.new).push(i);
+        }
+        let mut set = SortedSet.new();
+        for (i, p) in phrases.iter().enumerate() {
+            let last = p.split(" ").last().unwrap();
+            if let Some(js) = starts.get(last) {
+                for j in js {
+                    if j != i {
+                        set.insert(f"{p}{phrases[j][last.len()..]}");
+                    }
+                }
+            }
+        }
+        set.into_iter().collect()
+    }
+}
+
+fn a4_before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    A4Solution.before_and_after_puzzles(phrases)
+}
+
+// ---- before_and_after_puzzles_chain.kara ----
+
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+        let n = phrases.len();
+        SortedSet.from_iter((0..n)
+            .flat_map(|i| (0..n).map(|j| (i, j)))
+            .filter(|(i, j)| i != j and phrases[i].split(" ").last() == phrases[j].split(" ").next())
+            .map(|(i, j)| {
+                let cut = phrases[j].find(" ").unwrap_or(phrases[j].len());
+                f"{phrases[i]}{phrases[j][cut..]}"
+            }))
+            .into_iter()
+            .collect()
+    }
+}
+
+fn a5_before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    A5Solution.before_and_after_puzzles(phrases)
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(w: i64, phrases: Vec[String]) -> Vec[String] {
+    match w {
+        0 => a0_before_and_after_puzzles(phrases),
+        1 => a1_before_and_after_puzzles(phrases),
+        2 => a2_before_and_after_puzzles(phrases),
+        3 => a3_before_and_after_puzzles(phrases),
+        4 => a4_before_and_after_puzzles(phrases),
+        _ => a5_before_and_after_puzzles(phrases),
+    }
+}
+
+fn words(p: Str) -> Vec[Str] {
+    p.split(" ").collect()
+}
+
+// The statement read literally: every ordered pair of different phrases,
+// each split into its words, joined when the last word of one is the first
+// of the other, that word written once; the puzzles gathered into a `Set`
+// and sorted.
+fn literal(phrases: Vec[String]) -> Vec[String] {
+    let mut found: Set[String] = Set.new();
+    for i in 0..phrases.len() {
+        for j in 0..phrases.len() {
+            let a = words(phrases[i]);
+            let b = words(phrases[j]);
+            if i != j and a[a.len() - 1] == b[0] {
+                let mut joined = a.clone();
+                for w in b[1..].iter() {
+                    joined.push(w);
+                }
+                found.insert(joined.join(" "));
+            }
+        }
+    }
+    let mut out: Vec[String] = found.into_iter().collect();
+    out.sort();
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: Vec[String], want: Vec[String]) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    let vocabulary: Vec[Str] = ["a", "be", "cat", "dog", "eel", "fig", "go", "hat"];
+    // 400 problems of 1 to 10 phrases of 1 to 4 words over the first 1 to
+    // 4 words of the list; the first five have one phrase and the first ten
+    // one word
+    let mut seed = 11810;
+    for plan in 0..400 {
+        let n = if plan < 5 { 1 } else { 1 + next_random(mut seed) % 10 };
+        let m = if plan < 10 { 1 } else { 1 + next_random(mut seed) % 4 };
+        let mut phrases: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let k = 1 + next_random(mut seed) % 4;
+            let ws: Vec[Str] = (0..k).map(|_| vocabulary[next_random(mut seed) % m]).collect();
+            phrases.push(ws.join(" "));
+        }
+        // the phrases in another order
+        let mut shuffled = phrases.clone();
+        for i in (1..n).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            shuffled.swap(i, j);
+        }
+        // the words renamed, each sent to another of the list
+        let mut perm: Vec[i64] = (0..8).collect();
+        for i in (1..8).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            perm.swap(i, j);
+        }
+        let rename = |p: Str| {
+            let old = words(p);
+            let ws: Vec[Str] = old.iter().map(|w| {
+                match vocabulary.iter().position(|v| v == w) {
+                    Some(at) => vocabulary[perm[at]],
+                    None => w,
+                }
+            }).collect();
+            ws.join(" ")
+        };
+        let renamed: Vec[String] = phrases.iter().map(|p| rename(p)).collect();
+        // every phrase twice: each copy now meets the other, so a phrase
+        // whose last word is its first joins itself
+        let mut twice = phrases.clone();
+        twice.extend(phrases.clone());
+        let want = literal(phrases);
+        let star = arm(0, phrases);
+        for w in 0..6 {
+            let a = arm(w, phrases);
+            for p in a.iter() {
+                for c in p.bytes().iter() {
+                    t.check = (t.check * 31 + c as i64) % 1000000007;
+                }
+            }
+            t.check = (t.check * 131 + a.len()) % 1000000007;
+            // P1: the statement read literally
+            expect(mut t, w, 1, plan, a, want);
+            // P2: the phrases in another order give the same puzzles
+            expect(mut t, w, 2, plan, arm(w, shuffled), a);
+            // P3: the puzzles come sorted, each once
+            let mut sorted = a.clone();
+            sorted.sort();
+            sorted.dedup();
+            expect(mut t, w, 3, plan, sorted, a);
+            // P4: the words renamed rename the puzzles
+            let mut moved: Vec[String] = a.iter().map(|p| rename(p)).collect();
+            moved.sort();
+            expect(mut t, w, 4, plan, arm(w, renamed), moved);
+            // P5: every phrase twice adds a phrase joined to itself when its
+            // last word is its first, and nothing else
+            let mut more: SortedSet[String] = a.iter().map(|p| p.to_string()).collect();
+            for p in phrases.iter() {
+                let ws = words(p);
+                if ws[0] == ws[ws.len() - 1] {
+                    let mut joined = ws.clone();
+                    for x in ws[1..].iter() {
+                        joined.push(x);
+                    }
+                    more.insert(joined.join(" "));
+                }
+            }
+            expect(mut t, w, 5, plan, arm(w, twice), more.into_iter().collect());
+            // P6: the ★ arm's answer
+            expect(mut t, w, 6, plan, a, star);
+        }
+    }
+    println(f"400 problems: checksum {t.check}, {t.checks} checks over 6 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

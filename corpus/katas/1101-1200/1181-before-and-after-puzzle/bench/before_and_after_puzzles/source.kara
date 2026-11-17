@@ -1,0 +1,73 @@
+// LeetCode #1181: Before and After Puzzle -- the ★ arm's bench: the
+// phrases' indices grouped by first word in a `Map`, each phrase's last
+// word looking up the phrases that start with it, the puzzles gathered in a
+// `SortedSet`.
+
+fn before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    let mut starting: Map[String, Vec[i64]] = Map.new();
+    for (i, p) in phrases.iter().enumerate() {
+        let first = match p.split_once(" ") {
+            Some((w, _)) => w,
+            None => p.as_str(),
+        };
+        starting.entry(first.to_string()).or_insert(Vec.new()).push(i);
+    }
+    let mut puzzles: SortedSet[String] = SortedSet.new();
+    for (i, p) in phrases.iter().enumerate() {
+        let last = match p.rsplit_once(" ") {
+            Some((_, w)) => w,
+            None => p.as_str(),
+        };
+        if let Some(js) = starting.get(last) {
+            for j in js.iter() {
+                if j != i {
+                    let rest = match phrases[j].split_once(" ") {
+                        Some((_, r)) => f" {r}",
+                        None => "",
+                    };
+                    puzzles.insert(f"{p}{rest}");
+                }
+            }
+        }
+    }
+    puzzles.into_iter().collect()
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 problems of 100 phrases, the constraints' most, each phrase 1 to
+    // 25 words from the first 2 to 8 of the list, built once; then 5
+    // rounds over all of them, each puzzle's length and the count folded
+    // into a checksum
+    let vocabulary: Vec[Str] = ["a", "be", "cat", "dog", "eel", "fig", "go", "hat"];
+    let mut seed = 1181;
+    let mut problems: Vec[Vec[String]] = Vec.new();
+    for _ in 0..100 {
+        let m = 2 + next_random(mut seed) % 7;
+        let mut phrases: Vec[String] = Vec.new();
+        for _ in 0..100 {
+            let n = 1 + next_random(mut seed) % 25;
+            let words: Vec[Str] = (0..n).map(|_| vocabulary[next_random(mut seed) % m]).collect();
+            phrases.push(words.join(" "));
+        }
+        problems.push(phrases);
+    }
+    let rounds = 5;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for phrases in problems.iter() {
+            let puzzles = before_and_after_puzzles(phrases);
+            check = (check * 131 + puzzles.len()) % 1000000007;
+            for p in puzzles.iter() {
+                check = (check * 31 + p.len()) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds of 100 problems: checksum {check}");
+}

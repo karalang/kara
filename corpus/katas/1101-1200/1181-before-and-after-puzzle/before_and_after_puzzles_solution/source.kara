@@ -1,0 +1,103 @@
+// LeetCode #1181: Before and After Puzzle -- a Rust solution as LeetCode's
+// Rust users write it (a `HashMap<&str, Vec<usize>>` from each first word to
+// the phrases it starts, `split(' ').next()` and `.last()` for the words,
+// the other phrase's tail taken as `&phrases[j][last.len()..]`, the puzzles
+// in a `BTreeSet`), carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+        let mut starts: Map[Str, Vec[i64]] = Map.new();
+        for (i, p) in phrases.iter().enumerate() {
+            let first = p.split(" ").next().unwrap();
+            starts.entry(first).or_insert_with(Vec.new).push(i);
+        }
+        let mut set = SortedSet.new();
+        for (i, p) in phrases.iter().enumerate() {
+            let last = p.split(" ").last().unwrap();
+            if let Some(js) = starts.get(last) {
+                for j in js {
+                    if j != i {
+                        set.insert(f"{p}{phrases[j][last.len()..]}");
+                    }
+                }
+            }
+        }
+        set.into_iter().collect()
+    }
+}
+
+fn before_and_after_puzzles(phrases: Vec[String]) -> Vec[String] {
+    Solution.before_and_after_puzzles(phrases)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(list: Vec[Str]) -> Vec[String] {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+fn show(puzzles: Vec[String]) -> String {
+    f"{puzzles.len()} [{puzzles.join(" / ")}]"
+}
+
+// A phrase of 1 to `most` words, each drawn from the first `m` of the list.
+fn phrase(seed: mut ref i64, m: i64, most: i64) -> String {
+    let vocabulary: Vec[Str] = ["a", "be", "cat", "dog", "eel", "fig", "go", "hat"];
+    let n = 1 + next_random(mut seed) % most;
+    let words: Vec[Str] = (0..n).map(|_| vocabulary[next_random(mut seed) % m]).collect();
+    words.join(" ")
+}
+
+// Every puzzle's letters, a space as 27, folded into one number.
+fn fold(check: i64, puzzles: Vec[String]) -> i64 {
+    let mut check = (check * 131 + puzzles.len()) % 1000000007;
+    for p in puzzles.iter() {
+        for c in p.bytes().iter() {
+            let v = if c == b' ' { 27 } else { (c - b'a') as i64 + 1 };
+            check = (check * 31 + v) % 1000000007;
+        }
+    }
+    check
+}
+
+fn main() {
+    // LeetCode's three examples
+    println(f"example 1: {show(before_and_after_puzzles(strings(["writing code", "code rocks"])))}");
+    let phrases = strings([
+        "mission statement", "a quick bite to eat", "a chip off the old block", "chocolate bar",
+        "mission impossible", "a man on a mission", "block party", "eat my words", "bar of soap",
+    ]);
+    println(f"example 2: {show(before_and_after_puzzles(phrases))}");
+    println(f"example 3: {show(before_and_after_puzzles(strings(["a", "b", "a"])))}");
+    // one phrase; a phrase that ends and starts with its own word, alone and
+    // twice; two one-word phrases that are the same word; a chain of three
+    println(f"small 1: {show(before_and_after_puzzles(strings(["go go"])))}");
+    println(f"small 2: {show(before_and_after_puzzles(strings(["go fig go", "go fig go"])))}");
+    println(f"small 3: {show(before_and_after_puzzles(strings(["eel", "eel", "eel cat"])))}");
+    println(f"small 4: {show(before_and_after_puzzles(strings(["a be", "be cat", "cat a"])))}");
+    // 300 random problems: 1 to 12 phrases of 1 to 4 words from the first
+    // 1 to 5 words of the list
+    let mut seed = 1181;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 5;
+        let phrases: Vec[String] = (0..1 + next_random(mut seed) % 12).map(|_| phrase(mut seed, m, 4)).collect();
+        let puzzles = before_and_after_puzzles(phrases);
+        total += puzzles.len();
+        check = fold(check, puzzles);
+    }
+    println(f"300 random problems: {total} puzzles, checksum {check}");
+    // 100 phrases of 1 to 25 words from the first 8 (at most 99 letters),
+    // the constraints' most
+    let phrases: Vec[String] = (0..100).map(|_| phrase(mut seed, 8, 25)).collect();
+    let puzzles = before_and_after_puzzles(phrases);
+    println(f"100 phrases: {puzzles.len()} puzzles, checksum {fold(0, puzzles)}");
+}
