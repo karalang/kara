@@ -60,10 +60,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 477 |
 | false-positive | 253 |
-| missing-feature | 193 |
+| missing-feature | 194 |
 | perf | 186 |
 | other | 113 |
-| soundness | 84 |
+| soundness | 85 |
 | miscompile | 81 |
 | run-vs-build | 55 |
 | crash | 48 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 600 |
+| typecheck | 601 |
 | mir-llvm | 284 |
-| mir | 248 |
+| mir | 249 |
 | cli | 193 |
 | parser | 109 |
 | ownership | 103 |
@@ -124,6 +124,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-129 | 2026-11-17 | typecheck | low | A `fold` seed settled to `i64` by a method on the accumulator (`v.iter().map(|x| 1).fold(0, |a, b| a.max(b))` returned as `i32`) is refused with advice to truncate by `as i32` and no fix, where the same literal in a `let` is named and given a `: i32` fix | — |
 | B-2026-11-17-130 | 2026-11-17 | typecheck | medium | A literal handed on as a `mut` argument is not fixed by the parameter: `let mut best = 0; bump(mut best); best` with `bump(x: mut ref i32)`, returned as `i32`, is refused as an `i64`, where `let best = 0; take(best)` into an `i32` checks | — |
 | B-2026-11-17-131 | 2026-11-17 | typecheck | medium | An impl's `CrossTask` bound refuses every type: `impl[T: CrossTask] BoundedBlockingQueue[T]` makes `q.enqueue(..)` on a `BoundedBlockingQueue[String]` an error, "`String` does not implement `CrossTask`" (and `i64`, `Vec[i64]` alike), where `fn f[T: CrossTask](x: T)` takes a `String` | — |
+| B-2026-11-17-132 | 2026-11-17 | mir | high | A view stored through a `Mutex` in a field is accepted, and later reads see whatever the place holds then: a `Holder[ref i64]` (or a generic `sync struct BoundedBlockingQueue[T: CrossTask]` whose `T` is inferred as `ref i64`) filled by `h.put(v)` over `mine.iter()` in an inner scope prints `3 3` for the first two values, not `1 0` | — |
+| B-2026-11-17-133 | 2026-11-17 | typecheck | medium | A struct's type parameter left open inside `Mutex.new(..)` is never fixed by a later call: `let h = Holder { values: Mutex.new(VecDeque.new()) }; h.put(5)` stops at lowering with "an expression whose type does not lower (Type(UnknownParam(\"T\"))) is not lowered yet" [E0516], where `Holder { values: VecDeque.new() }` takes `T = i64` from the same `put` | — |
 
 ### Relocated
 
