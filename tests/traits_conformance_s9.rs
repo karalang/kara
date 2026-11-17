@@ -252,7 +252,7 @@ fn each_finding_is_reported_once() {
 fn a_trait_associated_function_takes_self_from_the_expected_type() {
     // Review-thread ruling 2026-11-16: `Make.name()` takes `Self` from the
     // expected type through the return type, reaching P's trait impl even
-    // beside an inherent `P.name()` (B-2026-11-16-252).
+    // beside an inherent `P.name()` (B-2026-11-16-331).
     runs(
         "assoc-fn-expected",
         r#"trait Make { fn name() -> Self; fn tag() -> String; }
@@ -308,7 +308,7 @@ fn main() {
 
 #[test]
 fn a_type_parameter_no_call_can_decide_is_refused() {
-    // Review-thread ruling 2026-11-16 (B-2026-11-16-254): a call takes no
+    // Review-thread ruling 2026-11-16 (B-2026-11-16-333): a call takes no
     // type arguments, so a parameter named nowhere a call can see is refused
     // where it is declared; a trait impl's method is reported at the trait.
     refused_n(
@@ -344,7 +344,7 @@ fn main() {
 
 #[test]
 fn every_std_error_type_is_debug() {
-    // Review-thread ruling 2026-11-16 (B-2026-11-16-255): check took no
+    // Review-thread ruling 2026-11-16 (B-2026-11-16-334): check took no
     // `dbg(e)` of these while the backends rendered it.
     runs(
         "std-errors-debug",

@@ -4389,7 +4389,7 @@ struct Point { x: i64, y: i64 }
 - `Copy` needs `Clone`, and every field `Copy`;
 - `Hash` and `Default` need no other derive.
 
-**A field that lacks the trait.** The requirement column holds for every field, as the field's own impl is what the derived one calls. A field type without the trait is an error at the next minor release; in 0.8.x it is a `deprecated` warning naming the field and its type, and `Clone`, `Debug` and `Display` still copy or render such a field by its shape (review-thread ruling 2026-11-16, B-2026-11-16-251). A `Secret` field meets `Debug` and `Display`, which render it as `<redacted>` ([std.secret](library/secret.md)).
+**A field that lacks the trait.** The requirement column holds for every field, as the field's own impl is what the derived one calls. A field type without the trait is an error at the next minor release; in 0.8.x it is a `deprecated` warning naming the field and its type, and `Clone`, `Debug` and `Display` still copy or render such a field by its shape (review-thread ruling 2026-11-16, B-2026-11-16-330). A `Secret` field meets `Debug` and `Display`, which render it as `<redacted>` ([std.secret](library/secret.md)).
 
 **Bounds propagate.** On a generic type, each derived impl is bounded by what its fields need ([Conditional impls](#conditional-impls)).
 

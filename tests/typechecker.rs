@@ -22258,7 +22258,7 @@ fn test_ufcs_trait_associated_fn_with_nothing_to_fix_self_is_refused() {
     // `A.method()` names the trait but no type: `method` mentions no
     // `Self`, so nothing at the call says whose impl runs, and the call is
     // refused with the type-receiver form (review-thread ruling
-    // 2026-11-16, B-2026-11-16-252). It typed as an error with no
+    // 2026-11-16, B-2026-11-16-331). It typed as an error with no
     // diagnostic before, which this test read as success.
     let errors = typecheck_errors(
         "struct Foo[T] { x: i64 }\n\
