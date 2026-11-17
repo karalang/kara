@@ -573,6 +573,11 @@ pub unsafe extern "C" fn karac_mir_ready_buf(handle: *mut std::ffi::c_void, need
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_std_stream(op: i32, value: *mut i64, msg: *mut RawVec) -> i32 {
     use std::io::{BufRead, Read, Write};
+    // An ended `stdin.lines()` reads nothing more: the line stays for the
+    // next `stdin.lines()` (B-2026-11-17-11).
+    if op == 2 && STDIN_LINES_ENDED.load(std::sync::atomic::Ordering::Relaxed) {
+        return -2;
+    }
     let mut s = Vec::new();
     let got = match op {
         0 | 2 => std::io::stdin().lock().read_until(b'\n', &mut s),
@@ -583,9 +588,6 @@ pub unsafe extern "C" fn karac_mir_std_stream(op: i32, value: *mut i64, msg: *mu
         }
         _ => std::io::stderr().flush().map(|()| 0),
     };
-    if op == 2 && STDIN_LINES_ENDED.load(std::sync::atomic::Ordering::Relaxed) {
-        return -2;
-    }
     let res = got.and_then(|n| {
         if op == 2 {
             if n == 0 {
