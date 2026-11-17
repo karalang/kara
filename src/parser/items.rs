@@ -415,6 +415,7 @@ impl super::Parser {
             } if name == "use" && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) => {
                 if self.reject_rust_prelude_import()
                     || self.reject_rust_rc_import()
+                    || self.reject_rust_atomic_import()
                     || self.reject_rust_thread_import()
                     || self.reject_rust_fmt_import()
                     || self.reject_rust_io_trait_import()
@@ -439,6 +440,7 @@ impl super::Parser {
             Token::Import => {
                 if self.reject_rust_prelude_import()
                     || self.reject_rust_rc_import()
+                    || self.reject_rust_atomic_import()
                     || self.reject_rust_thread_import()
                     || self.reject_rust_fmt_import()
                     || self.reject_rust_io_trait_import()

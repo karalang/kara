@@ -1,0 +1,60 @@
+== sync
+laptop: v4 request -> v4 li 0 stratum 1 refid GPS poll 6 precision -20 dispersion 244.14µs
+laptop:   reference 2025-11-17 00:00:00.000000000
+laptop:   received  2025-11-17 00:00:00.000437500  sent 2025-11-17 00:00:00.000875000
+laptop:   offset -2.50096875s  delay 2.8125ms  corrected 2025-11-17 00:00:00.002281250
+meter: v3 request -> v3 li 0 stratum 1 refid GPS poll 6 precision -20 dispersion 244.14µs
+meter:   reference 2025-11-17 00:00:00.000000000
+meter:   received  2025-11-17 00:00:00.001312500  sent 2025-11-17 00:00:00.001750000
+meter:   offset 1.24990625s  delay 2.8125ms  corrected 2025-11-17 00:00:00.003156250
+laptop: again -> v4 li 0 stratum 1 refid GPS poll 6 precision -20 dispersion 244.14µs
+laptop:   reference 2025-11-17 00:00:00.000000000
+laptop:   received  2025-11-17 00:00:00.002187500  sent 2025-11-17 00:00:00.002625000
+laptop:   offset -2.50571875s  delay 2.8125ms  corrected 2025-11-17 00:00:00.004031250
+old: v1 request -> v1 li 0 stratum 1 refid GPS poll 6 precision -20 dispersion 244.14µs
+old:   reference 2025-11-17 00:00:00.000000000
+old:   received  2025-11-17 00:00:00.003062500  sent 2025-11-17 00:00:00.003500000
+old:   offset -1m0.99834375s  delay 2.8125ms  corrected 2025-11-17 00:00:00.004906250
+== greedy
+greedy: burst 1 -> v4 li 0 stratum 1 refid GPS poll 6 precision -20 dispersion 244.14µs
+greedy:   reference 2025-11-17 00:00:00.000000000
+greedy:   received  2025-11-17 00:00:00.003937500  sent 2025-11-17 00:00:00.004375000
+greedy:   offset -4.46875ms  delay 2.8125ms  corrected 2025-11-17 00:00:00.005781250
+greedy: burst 2 -> v4 li 3 kiss-o'-death RATE
+greedy: burst 3 -> v4 li 3 kiss-o'-death RATE
+old: with a 16-byte extension -> v4 li 0 stratum 1 refid GPS poll 6 precision -20 dispersion 244.14µs
+old:   reference 2025-11-17 00:00:00.000000000
+old:   received  2025-11-17 00:00:00.005687500  sent 2025-11-17 00:00:00.006125000
+old:   offset -1m1.00221875s  delay 2.8125ms  corrected 2025-11-17 00:00:00.007531250
+== broken
+broken: 47 bytes -> no reply
+broken: version 5 -> no reply
+broken: version 0 -> no reply
+broken: symmetric active -> no reply
+broken: broadcast -> no reply
+broken: zero transmit -> no reply
+broken: 6-byte extension -> no reply
+broken: 20-byte extension -> 48-byte reply
+== admin
+== server log
+laptop: v4 answered
+meter: v3 answered
+laptop: v4 answered
+old: v1 answered
+greedy: v4 answered
+greedy: v4 kiss-o'-death RATE
+greedy: v4 kiss-o'-death RATE
+old: v4 answered, ignored 16 extension bytes
+broken: dropped, short packet (47 bytes)
+broken: dropped, unsupported version 5
+broken: dropped, unsupported version 0
+broken: dropped, mode 1 is not a client request
+broken: dropped, mode 5 is not a client request
+broken: dropped, zero transmit timestamp
+broken: dropped, bad extension (6 bytes)
+broken: v4 answered, ignored 20 extension bytes
+admin: halt
+== counts
+answered: 7
+dropped: 7
+kod: 2

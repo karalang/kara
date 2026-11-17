@@ -1,0 +1,378 @@
+// ntp_server: an NTP server (RFC 5905, the SNTP subset of RFC 4330) on
+// loopback UDP, and the clients that set their clocks from it. Every clock
+// is a fake that moves a fixed step on each read, so the timestamps,
+// offsets and delays are the same on every run: the server's clock is the
+// reference, and each client's runs ahead of or behind it.
+
+use std::collections::HashMap;
+use std::net::UdpSocket;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+
+const NTP_UNIX: u64 = 2208988800;
+const BASE_NS: i64 = 1763337600 * 1_000_000_000;
+const SERVER_STEP: i64 = 437_500;
+const CLIENT_STEP: i64 = 3_250_000;
+const RATE_NS: i64 = 1_500_000;
+const QUIET_MS: u64 = 150;
+
+/// Wall time that starts at `start` and moves `step` ns on each read.
+struct FakeClock {
+    t: AtomicI64,
+    step: i64,
+}
+
+impl FakeClock {
+    fn new(start: i64, step: i64) -> FakeClock {
+        FakeClock { t: AtomicI64::new(start), step }
+    }
+}
+
+impl ClockProvider for FakeClock {
+    fn wall_ns(&self) -> i64 {
+        self.t.fetch_add(self.step, Ordering::SeqCst)
+    }
+}
+
+/// The clock's reading, in ns since the Unix epoch.
+fn now_ns() -> i64 {
+    SystemTime::now().since_epoch().as_ns()
+}
+
+fn to_ntp(ns: i64) -> u64 {
+    let secs = ns.div_euclid(1_000_000_000);
+    let sub = ns.rem_euclid(1_000_000_000) as u64;
+    let frac = (sub << 32) / 1_000_000_000;
+    ((secs as u64 + NTP_UNIX) << 32) | frac
+}
+
+fn from_ntp(ts: u64) -> i64 {
+    let secs = (ts >> 32) as i64 - NTP_UNIX as i64;
+    let frac = ts & 0xFFFF_FFFF;
+    secs * 1_000_000_000 + ((frac * 1_000_000_000 + (1 << 31)) >> 32) as i64
+}
+
+fn put64(b: &mut [u8], i: usize, v: u64) {
+    b[i..i + 8].copy_from_slice(&v.to_be_bytes());
+}
+
+fn put32(b: &mut [u8], i: usize, v: u32) {
+    b[i..i + 4].copy_from_slice(&v.to_be_bytes());
+}
+
+fn rd32(b: &[u8], i: usize) -> u32 {
+    u32::from_be_bytes(b[i..i + 4].try_into().unwrap())
+}
+
+fn rd64(b: &[u8], i: usize) -> u64 {
+    u64::from_be_bytes(b[i..i + 8].try_into().unwrap())
+}
+
+/// UTC date and time of `ns` since the Unix epoch, to the nanosecond.
+fn civil(ns: i64) -> String {
+    let secs = ns.div_euclid(1_000_000_000);
+    let sub = ns.rem_euclid(1_000_000_000);
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let mut y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    if m <= 2 {
+        y += 1;
+    }
+    let (hh, mm, ss) = (rem / 3600, rem % 3600 / 60, rem % 60);
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:09}", y, m, d, hh, mm, ss, sub)
+}
+
+struct Server {
+    sock: UdpSocket,
+    reference: u64,
+    peers: HashMap<String, String>,
+    last: HashMap<String, i64>,
+    log: Vec<String>,
+    counts: HashMap<String, i64>,
+}
+
+impl Server {
+    fn count(&mut self, k: &str) {
+        *self.counts.entry(k.to_string()).or_insert(0) += 1;
+    }
+
+    fn drop_packet(&mut self, peer: &str, why: String) {
+        self.log.push(format!("{}: dropped, {}", peer, why));
+        self.count("dropped");
+    }
+
+    fn serve(&mut self) {
+        let mut buf = [0u8; 1024];
+        loop {
+            let (n, addr) = self.sock.recv_from(&mut buf).unwrap();
+            let pkt = &buf[..n];
+            let peer = self.peers.get(&addr).cloned().unwrap_or("?".to_string());
+            if n < 48 {
+                self.drop_packet(&peer, format!("short packet ({} bytes)", n));
+                continue;
+            }
+            let vn = (pkt[0] >> 3) & 7;
+            let mode = pkt[0] & 7;
+            if mode == 7 && &pkt[4..8] == b"HALT" {
+                self.log.push(format!("{}: halt", peer));
+                return;
+            }
+            if vn < 1 || vn > 4 {
+                self.drop_packet(&peer, format!("unsupported version {}", vn));
+                continue;
+            }
+            if mode != 3 {
+                self.drop_packet(&peer, format!("mode {} is not a client request", mode));
+                continue;
+            }
+            let xmt = rd64(pkt, 40);
+            if xmt == 0 {
+                self.drop_packet(&peer, "zero transmit timestamp".to_string());
+                continue;
+            }
+            let extra = n - 48;
+            if extra > 0 && (extra < 16 || extra % 4 != 0) {
+                self.drop_packet(&peer, format!("bad extension ({} bytes)", extra));
+                continue;
+            }
+            let t2 = now_ns();
+            let prev = self.last.insert(addr.clone(), t2);
+            let mut out = [0u8; 48];
+            out[2] = pkt[2];
+            put64(&mut out, 24, xmt);
+            put64(&mut out, 32, to_ntp(t2));
+            if let Some(p) = prev {
+                if t2 - p < RATE_NS {
+                    out[0] = (3 << 6) | (vn << 3) | 4;
+                    out[1] = 0;
+                    out[12..16].copy_from_slice(b"RATE");
+                    put64(&mut out, 40, to_ntp(t2));
+                    self.sock.send_to(&out, &addr).unwrap();
+                    self.log.push(format!("{}: v{} kiss-o'-death RATE", peer, vn));
+                    self.count("kod");
+                    continue;
+                }
+            }
+            out[0] = (vn << 3) | 4;
+            out[1] = 1;
+            out[3] = 0xEC; // precision -20
+            put32(&mut out, 4, 0);
+            put32(&mut out, 8, 16);
+            out[12..16].copy_from_slice(b"GPS\0");
+            put64(&mut out, 16, self.reference);
+            let t3 = now_ns();
+            put64(&mut out, 40, to_ntp(t3));
+            self.sock.send_to(&out, &addr).unwrap();
+            let note = if extra > 0 {
+                format!(", ignored {} extension bytes", extra)
+            } else {
+                String::new()
+            };
+            self.log.push(format!("{}: v{} answered{}", peer, vn, note));
+            self.count("answered");
+        }
+    }
+}
+
+struct Client {
+    name: String,
+    server: String,
+    skew: i64,
+    sock: UdpSocket,
+}
+
+impl Client {
+    fn new(name: &str, server: &str, skew: i64, peers: &mut HashMap<String, String>) -> Client {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_read_timeout(Some(Duration::from_millis(QUIET_MS))).unwrap();
+        peers.insert(sock.local_addr().unwrap().to_string(), name.to_string());
+        Client { name: name.to_string(), server: server.to_string(), skew, sock }
+    }
+
+    fn request(vn: u8, mode: u8, xmt: u64) -> Vec<u8> {
+        let mut b = vec![0u8; 48];
+        b[0] = (vn << 3) | mode;
+        b[2] = 6;
+        put64(&mut b, 40, xmt);
+        b
+    }
+
+    fn recv(&self) -> Option<Vec<u8>> {
+        let mut buf = [0u8; 1024];
+        match self.sock.recv_from(&mut buf) {
+            Ok((n, _)) => Some(buf[..n].to_vec()),
+            Err(_) => None,
+        }
+    }
+
+    fn show(&self, what: &str, reply: Option<Vec<u8>>, t1: u64, t4: u64) {
+        let reply = match reply {
+            Some(r) => r,
+            None => {
+                println!("{}: {} -> no reply", self.name, what);
+                return;
+            }
+        };
+        let li = reply[0] >> 6;
+        let vn = (reply[0] >> 3) & 7;
+        let mode = reply[0] & 7;
+        let stratum = reply[1];
+        if mode != 4 {
+            println!("{}: {} -> mode {}, not a server reply", self.name, what, mode);
+            return;
+        }
+        if rd64(&reply, 24) != t1 {
+            println!("{}: {} -> origin does not match", self.name, what);
+            return;
+        }
+        if stratum == 0 {
+            let code = String::from_utf8_lossy(&reply[12..16]).to_string();
+            println!("{}: {} -> v{} li {} kiss-o'-death {}", self.name, what, vn, li, code);
+            return;
+        }
+        let refid: String = reply[12..16].iter().filter(|&&b| b != 0).map(|&b| b as char).collect();
+        let prec = reply[3] as i8;
+        let disp = Duration::from_nanos((rd32(&reply, 8) as u64 * 1_000_000_000) >> 16);
+        let reference = from_ntp(rd64(&reply, 16));
+        let t2 = from_ntp(rd64(&reply, 32));
+        let t3 = from_ntp(rd64(&reply, 40));
+        let (t1n, t4n) = (from_ntp(t1), from_ntp(t4));
+        let offset = ((t2 - t1n) + (t3 - t4n)) / 2;
+        let delay = (t4n - t1n) - (t3 - t2);
+        println!(
+            "{}: {} -> v{} li {} stratum {} refid {} poll {} precision {} dispersion {}",
+            self.name, what, vn, li, stratum, refid, reply[2], prec, disp
+        );
+        println!("{}:   reference {}", self.name, civil(reference));
+        println!("{}:   received  {}  sent {}", self.name, civil(t2), civil(t3));
+        println!(
+            "{}:   offset {}  delay {}  corrected {}",
+            self.name,
+            Duration::from_nanos(offset),
+            Duration::from_nanos(delay),
+            civil(t4n + offset)
+        );
+    }
+
+    fn exchange(&self, what: &str, vn: u8, extra: &[u8]) {
+        let t1 = to_ntp(now_ns());
+        let mut pkt = Client::request(vn, 3, t1);
+        pkt.extend_from_slice(extra);
+        self.sock.send_to(&pkt, &self.server).unwrap();
+        let reply = self.recv();
+        let t4 = to_ntp(now_ns());
+        self.show(what, reply, t1, t4);
+    }
+
+    fn send_raw(&self, what: &str, pkt: &[u8]) {
+        self.sock.send_to(pkt, &self.server).unwrap();
+        match self.recv() {
+            Some(r) => println!("{}: {} -> {}-byte reply", self.name, what, r.len()),
+            None => println!("{}: {} -> no reply", self.name, what),
+        }
+    }
+
+    /// One exchange with this client's clock, `skew` ns off the server's.
+    fn sync(&self, what: &str, vn: u8, extra: &[u8], reads: &AtomicI64) {
+        let start = BASE_NS + self.skew + reads.load(Ordering::SeqCst) * CLIENT_STEP;
+        with_provider::<Clock, _>(FakeClock::new(start, CLIENT_STEP), || {
+            self.exchange(what, vn, extra);
+        });
+        reads.fetch_add(2, Ordering::SeqCst);
+    }
+}
+
+fn main() {
+    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = sock.local_addr().unwrap().to_string();
+    let mut peers = HashMap::new();
+    let laptop = Client::new("laptop", &addr, 2_500_000_000, &mut peers);
+    let meter = Client::new("meter", &addr, -1_250_000_000, &mut peers);
+    let old = Client::new("old", &addr, 61_000_000_000, &mut peers);
+    let greedy = Client::new("greedy", &addr, 7_000_000, &mut peers);
+    let broken = Client::new("broken", &addr, 0, &mut peers);
+    let admin = Client::new("admin", &addr, 0, &mut peers);
+    let server = Arc::new(Mutex::new(Server {
+        sock,
+        reference: 0,
+        peers,
+        last: HashMap::new(),
+        log: Vec::new(),
+        counts: HashMap::new(),
+    }));
+
+    let group = TaskGroup::new();
+    let srv = server.clone();
+    group.spawn(move || {
+        with_provider::<Clock, _>(FakeClock::new(BASE_NS, SERVER_STEP), || {
+            let mut s = srv.lock().unwrap();
+            s.reference = to_ntp(now_ns());
+            s.serve();
+        });
+    });
+
+    let (lr, mr, or, gr) = (AtomicI64::new(0), AtomicI64::new(0), AtomicI64::new(0), AtomicI64::new(0));
+    println!("== sync");
+    laptop.sync("v4 request", 4, &[], &lr);
+    meter.sync("v3 request", 3, &[], &mr);
+    laptop.sync("again", 4, &[], &lr);
+    old.sync("v1 request", 1, &[], &or);
+
+    println!("== greedy");
+    for i in 0..3 {
+        greedy.sync(&format!("burst {}", i + 1), 4, &[], &gr);
+    }
+    let ext: Vec<u8> = (0..16).collect();
+    old.sync("with a 16-byte extension", 4, &ext, &or);
+
+    println!("== broken");
+    let base = Client::request(4, 3, to_ntp(BASE_NS));
+    broken.send_raw("47 bytes", &base[..47]);
+    let mut v5 = base.clone();
+    v5[0] = (5 << 3) | 3;
+    broken.send_raw("version 5", &v5);
+    let mut v0 = base.clone();
+    v0[0] = 3;
+    broken.send_raw("version 0", &v0);
+    let mut sym = base.clone();
+    sym[0] = (4 << 3) | 1;
+    broken.send_raw("symmetric active", &sym);
+    let mut bcast = base.clone();
+    bcast[0] = (4 << 3) | 5;
+    broken.send_raw("broadcast", &bcast);
+    broken.send_raw("zero transmit", &Client::request(4, 3, 0));
+    let mut six = base.clone();
+    six.extend_from_slice(&[0u8; 6]);
+    broken.send_raw("6-byte extension", &six);
+    let mut twenty = base.clone();
+    twenty.extend_from_slice(&[0u8; 20]);
+    broken.send_raw("20-byte extension", &twenty);
+
+    println!("== admin");
+    let mut halt = vec![0u8; 48];
+    halt[0] = (4 << 3) | 7;
+    halt[4..8].copy_from_slice(b"HALT");
+    admin.sock.send_to(&halt, &addr).unwrap();
+    drop(group);
+
+    let s = server.lock().unwrap();
+    println!("== server log");
+    for line in &s.log {
+        println!("{}", line);
+    }
+    println!("== counts");
+    let mut keys: Vec<&String> = s.counts.keys().collect();
+    keys.sort();
+    for k in keys {
+        println!("{}: {}", k, s.counts[k]);
+    }
+}

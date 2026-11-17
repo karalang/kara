@@ -3167,6 +3167,10 @@ pub struct TypeChecker<'a> {
     /// `i64`, which leaves each such cast redundant; a use whose root is not
     /// fixed keeps its error and gets the edit on the next pass.
     pub(super) usize_use_site_fixes: Vec<SpanKey>,
+    /// The arguments of `Duration.ns` / `us` / `ms` / `secs` calls, by span:
+    /// Rust's `Duration::from_nanos` and its siblings take a `u64`, Kāra's
+    /// an `i64`, so a `u64` there gets `as i64` as its fix.
+    pub(super) duration_unit_args: std::collections::HashSet<SpanKey>,
     /// Initializers `x as usize` of unannotated `let`s, whose binding is a
     /// `usize` that then meets `i64` (B-2026-11-06-3's remainder, kata 1058),
     /// and every other `as usize` the program writes: once the written
@@ -4625,6 +4629,7 @@ impl<'a> TypeChecker<'a> {
             written_pointer_int_suffixes: Default::default(),
             pointer_int_mixed: false,
             usize_use_site_fixes: Vec::new(),
+            duration_unit_args: std::collections::HashSet::new(),
             usize_cast_lets: Vec::new(),
             last_mut_writes: Default::default(),
             untargeted_parses: Vec::new(),

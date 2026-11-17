@@ -1558,6 +1558,8 @@ fn is_builtin_container_head(name: &str) -> bool {
             | "Channel"
             | "Option"
             | "Result"
+            | "Atomic"
+            | "Mutex"
     )
 }
 

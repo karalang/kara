@@ -14328,15 +14328,24 @@ impl<'a> super::TypeChecker<'a> {
                     return;
                 }
             }
+            // `Duration.ns(x)` with `x: u64`, as Rust's `Duration::from_nanos`
+            // takes it: a duration past `i64::MAX` nanoseconds (292 years) is
+            // none Kāra's `Duration` holds, so `as i64` keeps every value.
+            let duration_unit = matches!(source, Type::UInt(UIntSize::U64))
+                && self
+                    .duration_unit_args
+                    .contains(&SpanKey::from_span(&expr.span));
             // A `usize` / `isize` size expression where an `i64` is wanted
             // (`Vec.with_capacity(n * (n + 1) / 2)` after a Rust template's
             // `let n = n as usize;`): `as i64` keeps the meaning for any size
             // a collection can hold, so it is the machine fix, the operand
             // parenthesized unless it is a postfix form (B-2026-11-08-16).
-            if matches!(
-                source,
-                Type::UInt(UIntSize::Usize) | Type::Int(IntSize::Isize)
-            ) {
+            if duration_unit
+                || matches!(
+                    source,
+                    Type::UInt(UIntSize::Usize) | Type::Int(IntSize::Isize)
+                )
+            {
                 let postfix = matches!(
                     expr.kind,
                     ExprKind::Identifier(_)
@@ -14363,6 +14372,18 @@ impl<'a> super::TypeChecker<'a> {
                 });
                 self.error_fix_diffs
                     .insert(SpanKey::from_span(&expr.span), edits);
+                if duration_unit {
+                    self.type_error(
+                        "implicit coercion from 'u64' to 'i64' would change sign: Rust's \
+                         `Duration::from_nanos` and its siblings take a `u64`, Kāra's \
+                         `Duration.ns` / `us` / `ms` / `secs` an `i64`, and no `Duration` \
+                         holds more than `i64::MAX` nanoseconds, so write `as i64`"
+                            .to_string(),
+                        expr.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return;
+                }
                 self.usize_use_site_fixes
                     .push(SpanKey::from_span(&expr.span));
                 self.type_error(

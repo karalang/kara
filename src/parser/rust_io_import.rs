@@ -15,6 +15,7 @@ fn rust_only(module: &str, name: &str) -> bool {
     match module {
         "io" => matches!(name, "Read" | "Write" | "BufRead" | "Seek"),
         "net" => name == "Shutdown",
+        "sync" => name == "Arc",
         _ => false,
     }
 }
@@ -24,6 +25,10 @@ fn why(module: &str) -> &'static str {
     if module == "net" {
         "Kāra's `TcpStream` closes its write half with `shutdown_write()`, which takes no \
          argument"
+    } else if module == "sync" {
+        "Kāra has no `Arc`: a task borrows from the scope that made its `TaskGroup`, so the \
+         fix writes `Arc<T>` as `T`, `Arc::new(x)` as `x`, and `Arc::clone(&x)` or a clone of \
+         an `Arc` binding as `ref x`"
     } else {
         "Kāra's `read`, `write_all` and `read_line` are methods of the handle itself, with no \
          trait to import"
@@ -47,7 +52,7 @@ impl super::Parser {
         };
         let sep = |i: usize| matches!(token(i), Some(Token::ColonColon | Token::Dot));
         let module = match ident(at + 3) {
-            Some(m @ ("io" | "net")) => m.to_string(),
+            Some(m @ ("io" | "net" | "sync")) => m.to_string(),
             _ => return false,
         };
         if ident(at + 1) != Some("std") || !sep(at + 2) || !sep(at + 4) {
@@ -115,14 +120,16 @@ impl super::Parser {
             );
             self.error_at(&message, whole);
             let length = self.rust_use_line_length(whole);
-            self.fix_diffs.insert(
-                crate::resolver::SpanKey::from_span(&whole),
-                vec![TextEdit {
-                    offset: whole.offset,
-                    length,
-                    replacement: String::new(),
-                }],
-            );
+            let mut edits = vec![TextEdit {
+                offset: whole.offset,
+                length,
+                replacement: String::new(),
+            }];
+            if module == "sync" {
+                edits.extend(self.rust_arc_rewrite());
+            }
+            self.fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&whole), edits);
             self.pos = semi + 1;
             return true;
         }
@@ -160,14 +167,16 @@ impl super::Parser {
                 if k == j { "it" } else { "them" }
             );
             self.error_at(&message, at_names);
-            self.fix_diffs.insert(
-                crate::resolver::SpanKey::from_span(&at_names),
-                vec![TextEdit {
-                    offset: from,
-                    length: to - from,
-                    replacement: String::new(),
-                }],
-            );
+            let mut edits = vec![TextEdit {
+                offset: from,
+                length: to - from,
+                replacement: String::new(),
+            }];
+            if module == "sync" {
+                edits.extend(self.rust_arc_rewrite());
+            }
+            self.fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&at_names), edits);
             self.rust_only_import_leaves
                 .extend(spans_at[k..=j].iter().map(|s| s.offset));
             k = j + 1;

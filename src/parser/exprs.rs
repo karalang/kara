@@ -3493,6 +3493,7 @@ impl super::Parser {
         self.rewrite_rust_path();
         let start = self.current_span();
         let name = self.expect_identifier()?;
+        self.reject_function_turbofish(&name);
 
         // Contextual keyword: `providers { R => e, ... } in { body }`.
         // The lexer emits `providers` as a regular identifier (so module

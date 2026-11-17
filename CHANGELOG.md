@@ -318,6 +318,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   or a `Slice` reached through a mutable place, so writes through `rest` land
   in the vector; against a `let` without `mut` it is refused as any
   `mut ref` binding is (B-2026-11-17-30).
+- `Atomic[i64].new(0)` and `Mutex[T].new(x)`, the qualified constructors,
+  work as `Vec[i64].new()` does, with the pin checked; they had "no method
+  'new'" (B-2026-11-17-120).
 - `x.hash(mut h)` written in a program works for `F64`, `F32`, `()`,
   `i128`, `u128` and tuples, feeding the bytes a table feeds (the float's
   bits, nothing, 16 bytes, each part), so a hand-written `impl Hash` can
@@ -1681,6 +1684,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   or ignored, then dropped at the end of its statement or its binding's
   scope, no longer starts a later error's return trace. A `?` or `return`
   that carries the error on keeps its frames (B-2026-11-16-223).
+- Rust ports found by the ntp_server app: `with_provider::<Clock, _>(p, ||
+  ..)` becomes `with_provider[Clock](p, || ..)`, and a turbofish after any
+  other function name is deleted; it stopped the parse at the `::` with no
+  fix (B-2026-11-17-119). `use std::sync::atomic::{AtomicI64, Ordering};`
+  becomes `import std.sync.{Atomic};` with every `AtomicI64` in the file
+  `Atomic[i64]` (B-2026-11-17-121). `Arc` leaves a `std::sync` import, and
+  `Arc<T>` becomes `T`, `Arc::new(x)` becomes `x`, and `Arc::clone(&x)` or a
+  clone of an `Arc` binding becomes `ref x`, since a task borrows from the
+  scope that made its `TaskGroup` (B-2026-11-17-122). A `u64` handed to
+  `Duration.ns` / `us` / `ms` / `secs`, as Rust's `Duration::from_nanos`
+  takes it, gets `as i64` (B-2026-11-17-123).
 - Rust ports found by the modbus_server app: `use std::io::{Read, Write};`
   (and `BufRead`, `Seek`) is deleted, since Kāra's `read`, `write_all` and
   `read_line` are methods of the handle with no trait to import, and

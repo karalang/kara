@@ -290,6 +290,7 @@ impl[T] Atomic[T] {
 - `swap` stores `value` and returns the previous value.
 - `compare_exchange` stores `new` only if the value equals `current`. It returns `Ok(previous)` when it stored and `Err(actual)` when it did not.
 - `fetch_add` and `fetch_sub` add or subtract `n` and return the previous value. They wrap on overflow, and never panic.
+- `Atomic.new(v)` takes `T` from `v`, or from where the atomic goes; `Atomic[u64].new(5)` names it at the call, as `Mutex[T].new(x)` does for a mutex and `Vec[T].new()` for a vector.
 
 **Every operation is sequentially consistent**, as in Go: all tasks observe all atomic operations in one order, which agrees with each task's program order. There is no ordering argument. A trailing `MemoryOrdering` argument (`c.fetch_add(1, MemoryOrdering.SeqCst)`) is a deprecated form that is still accepted; `karac fix` deletes it, and deleting any ordering only strengthens it.
 

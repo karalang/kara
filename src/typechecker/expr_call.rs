@@ -1115,6 +1115,16 @@ impl<'a> super::TypeChecker<'a> {
                 .collect(),
         );
         self.method_call_ends.push(ends);
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Duration"
+                && matches!(segments[1].as_str(), "ns" | "us" | "ms" | "secs")
+                && self.local_scope.lookup("Duration").is_none()
+            {
+                self.duration_unit_args
+                    .extend(args.iter().map(|a| SpanKey::from_span(&a.value.span)));
+            }
+        }
         let ty = self.infer_call_inner(callee, args, span);
         self.method_call_ends.pop();
         self.refuse_borrowed_successors_seed(callee, args);
