@@ -1041,6 +1041,13 @@ fn builtin_construct(key: &str) -> Option<&'static str> {
         }
         crate::effectchecker::INT_OVERFLOW_KEY => Some("integer arithmetic that can overflow"),
         crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY => Some("a fallible allocation"),
+        // The `panics` atoms the checker keys by an internal name
+        // (B-2026-11-17-16).
+        "__builtin_index" => Some("an index that can be out of bounds"),
+        "__builtin_unwrap" => Some("an `unwrap`"),
+        "__builtin_expect" => Some("an `expect`"),
+        "__builtin_div_rem" => Some("an integer `/` or `%` that can divide by zero"),
+        "__builtin_refinement_assert" => Some("a refinement check"),
         _ => None,
     }
 }

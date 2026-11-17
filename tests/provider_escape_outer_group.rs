@@ -38,8 +38,15 @@ impl ClkP for F { fn now(ref self) -> i64 { self.t[0] } }
 fn refused(tag: &str, body: &str, resource: &str) {
     let (ok, out) = check(tag, body);
     assert!(!ok, "{tag}: check accepted it:\n{out}");
+    // A program-rooted resource (core-semantics §14.7) is named as overridden
+    // rather than provider-rooted (B-2026-11-17-16).
+    let named = if resource == "Stdout" {
+        format!("uses `{resource}`, overridden by the `with_provider` at")
+    } else {
+        format!("provider-rooted resource `{resource}`")
+    };
     assert!(
-        out.contains(&format!("provider-rooted resource `{resource}`"))
+        out.contains(&named)
             && out.contains("spawned on a task group made outside the `with_provider`"),
         "{tag}: not the §14.5 refusal:\n{out}"
     );

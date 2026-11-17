@@ -249,7 +249,7 @@ test \"a stored callback that uses the fake\" {
             "{lane:?}: {stdout}"
         );
         assert!(
-            stdout.contains("this test's `#[with_provider]` binds"),
+            stdout.contains("this test's `#[with_provider]` overrides"),
             "{lane:?}: {stdout}"
         );
         assert!(!stdout.contains("test_pass"), "{lane:?}: {stdout}");

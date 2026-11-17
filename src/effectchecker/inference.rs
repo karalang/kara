@@ -1844,7 +1844,11 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(index, calls, bounds);
                 // Indexing with [] calls Index::index which has panics effect
                 // (can panic on out-of-bounds). Use .get() for fallible access.
-                calls.push((self.syms.builtin_index, expr.span));
+                // `with_provider[R]` names a resource, and indexes nothing
+                // (B-2026-11-17-16).
+                if !matches!(&object.kind, ExprKind::Identifier(n) if n == "with_provider") {
+                    calls.push((self.syms.builtin_index, expr.span));
+                }
             }
             ExprKind::Tuple(exprs) => {
                 for e in exprs {

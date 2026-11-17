@@ -78,7 +78,7 @@ fn a_stored_callback_is_refused_under_a_callers_override_only() {
     let (ok, _, err) = karac_in(&dir, &["check", "over.kara"]);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!ok, "a callback that prints to the fake was stored");
-    assert!(err.contains("a caller of `audit` binds"), "{err}");
+    assert!(err.contains("a caller of `audit` overrides"), "{err}");
     assert!(err.contains("`Stdout`"), "{err}");
     assert_eq!(
         karac::mir::lower::run_source(PLAIN)
@@ -123,5 +123,5 @@ test "stored clock callback" {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!ok, "the test ran: {out}");
     assert!(out.contains("\"phase\":\"provider_escape\""), "{out}{err}");
-    assert!(out.contains("a caller of `audit` binds"), "{out}{err}");
+    assert!(out.contains("a caller of `audit` overrides"), "{out}{err}");
 }

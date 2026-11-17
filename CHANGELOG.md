@@ -1650,6 +1650,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- E0600 on a program-rooted resource (core-semantics §14.7: `Env`, `Clock`,
+  the std streams, any resource with a default provider) says the resource
+  is overridden by the `with_provider`, and no longer calls it
+  provider-rooted. `karac query effects` no longer charges
+  `with_provider[R](..)` with `panics` through an index the source does not
+  have, and its derivations name an index, `unwrap`, `expect`, `/` or `%`
+  and a refinement check in words rather than the internal
+  `__builtin_*` names (B-2026-11-17-16).
 - `rev` on an iterator that is not double-ended says `rev` needs a
   `DoubleEndedIterator`, and for an open range that it has no back; other
   iterators get the collect-then-reverse rewrite (B-2026-11-17-6).

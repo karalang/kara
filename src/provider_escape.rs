@@ -31,7 +31,7 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{Type, TypeCheckResult};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct EscapeError {
@@ -47,6 +47,32 @@ pub struct EscapeError {
     pub escape_span: Span,
     /// Category of escape path taken. Drives the diagnostic suffix.
     pub kind: EscapeKind,
+    /// The resource has a default provider (core-semantics §14.7): it is
+    /// program-rooted, and only the `with_provider` overriding it makes the
+    /// closure capture a provider (B-2026-11-17-16).
+    pub program_rooted: bool,
+}
+
+/// The resources `program` declares with a default provider: the
+/// program-rooted ones (core-semantics §14.7).
+fn program_rooted_resources(program: &Program) -> HashSet<String> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::EffectResource(r) if r.default.is_some() => Some(r.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Mark the errors on a program-rooted resource.
+fn mark_program_rooted(program: &Program, mut errors: Vec<EscapeError>) -> Vec<EscapeError> {
+    let rooted = program_rooted_resources(program);
+    for e in &mut errors {
+        e.program_rooted = rooted.contains(&e.resource);
+    }
+    errors
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,11 +158,33 @@ impl EscapeError {
                         self.resource
                     )
                 };
+                if self.program_rooted {
+                    let binder = binder.replace(" binds", " overrides");
+                    return format!(
+                        "{what} uses `{}`, which {binder}, so it cannot be {why}: under an \
+                         override the closure captures the overriding provider, which cannot \
+                         leave its scope (core-semantics §14.5, §14.7). Return plain data \
+                         computed from `{}` instead",
+                        self.resource, self.resource
+                    );
+                }
                 return format!(
                     "{what} uses provider-rooted resource `{}`, whose provider {binder}, so it \
                      cannot be {why}: a provider cannot leave its scope (core-semantics \
                      §14.5). Return plain data computed from `{}` instead",
                     self.resource, self.resource
+                );
+            }
+            EscapeKind::Core { what, why, .. } if self.program_rooted => {
+                return format!(
+                    "{what} uses `{}`, overridden by the `with_provider` at {}:{}, so it \
+                     cannot be {why}: under an override the closure captures the overriding \
+                     provider, which cannot leave its scope (core-semantics §14.5, §14.7). \
+                     Return plain data computed from `{}` instead",
+                    self.resource,
+                    self.provider_span.line,
+                    self.provider_span.column,
+                    self.resource
                 );
             }
             EscapeKind::Core { what, why, .. } => {
@@ -190,7 +238,7 @@ pub fn check_provider_escape(
             _ => {}
         }
     }
-    checker.errors
+    mark_program_rooted(program, checker.errors)
 }
 
 /// v2 core §14.5 (B-2026-10-20-8): a closure that uses `R` captures the
@@ -368,6 +416,7 @@ pub fn check_core_provider_escape(
                         .any(|e: &EscapeError| e.closure_span == arg.span)
                 {
                     errors.push(EscapeError {
+                        program_rooted: false,
                         resource: r,
                         provider_span: site,
                         closure_span: arg.span,
@@ -386,6 +435,7 @@ pub fn check_core_provider_escape(
             for (r, site, extent, via) in &scopes {
                 if used.contains(r) && within(&span, extent) {
                     errors.push(EscapeError {
+                        program_rooted: false,
                         resource: r.clone(),
                         provider_span: *site,
                         closure_span: span,
@@ -401,7 +451,7 @@ pub fn check_core_provider_escape(
             }
         }
     }
-    errors
+    mark_program_rooted(program, errors)
 }
 
 /// Each `g.spawn(task)` inside a `with_provider[R]` or `providers { }` body
@@ -1409,6 +1459,7 @@ impl<'a> EscapeChecker<'a> {
         for (resource, res_span) in self.all_rooted() {
             if used_resources.iter().any(|r| r == &resource) {
                 self.errors.push(EscapeError {
+                    program_rooted: false,
                     resource,
                     provider_span: res_span,
                     closure_span: expr.span,
@@ -1580,6 +1631,7 @@ impl<'a> EscapeChecker<'a> {
         for (resource, res_span) in self.all_rooted() {
             if used_resources.iter().any(|r| r == &resource) {
                 self.errors.push(EscapeError {
+                    program_rooted: false,
                     resource,
                     provider_span: res_span,
                     closure_span: value.span,
@@ -1652,6 +1704,7 @@ impl<'a> EscapeChecker<'a> {
         for (resource, res_span) in self.all_rooted() {
             if used_resources.iter().any(|r| r == &resource) {
                 self.errors.push(EscapeError {
+                    program_rooted: false,
                     resource,
                     provider_span: res_span,
                     closure_span: value.span,
