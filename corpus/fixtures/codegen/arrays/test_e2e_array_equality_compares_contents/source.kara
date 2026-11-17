@@ -16,8 +16,8 @@ fn main() {
     println(f"{p == q}");
     println(f"{p == r}");
 
-    println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "cd"] }}");
-    println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "zz"] }}");
+    println(f"{WrapS { a: ["ab", "cd"] } == WrapS { a: ["ab", "cd"] }}");
+    println(f"{WrapS { a: ["ab", "cd"] } == WrapS { a: ["ab", "zz"] }}");
 
     let n2: Array[Array[i64, 2], 2] = [[1, 2], [3, 4]];
     let m2: Array[Array[i64, 2], 2] = [[1, 2], [3, 5]];

@@ -1,1 +1,1 @@
-fn main() { let d = VecDeque[1, 2, 3]; print(d.len()); }
+fn main() { let d: VecDeque[i64] = [1, 2, 3]; print(d.len()); }

@@ -1,1 +1,1 @@
-fn main() { let s: Set[i64] = Set[1_i64, "not an int"]; }
+fn main() { let s: Set[i64] = [1_i64, "not an int"]; }

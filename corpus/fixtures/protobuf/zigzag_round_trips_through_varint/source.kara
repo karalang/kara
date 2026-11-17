@@ -1,6 +1,6 @@
 
 fn main() {
-    let vals = Array[0, -1, 1, -150, 150, -2147483648, 2147483647];
+    let vals: Array[i64, 7] = [0, -1, 1, -150, 150, -2147483648, 2147483647];
     let mut i = 0;
     while i < vals.len() {
         let enc = ProtoBuf.encode_varint(ProtoBuf.zigzag_encode(vals[i]));

@@ -12095,6 +12095,17 @@ impl<'a> super::TypeChecker<'a> {
                 if ty.is_none() && matches!(value.kind, ExprKind::Cast { .. }) {
                     self.usize_cast_lets.push(value.clone());
                 }
+                if ty.is_none()
+                    && matches!(
+                        value.kind,
+                        ExprKind::PrefixCollectionLiteral { .. } | ExprKind::RepeatLiteral { .. }
+                    )
+                {
+                    self.prefix_let_sites.insert(
+                        SpanKey::from_span(&value.span),
+                        pattern.span.offset + pattern.span.length,
+                    );
+                }
                 // `let (end, tip) = (r[1] as usize, r[2] as i64);`: each
                 // cast the tuple binds by name is one such `let` (kata 2008).
                 if let (None, ExprKind::Tuple(parts), PatternKind::Tuple(names)) =

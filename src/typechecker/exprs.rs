@@ -11972,18 +11972,49 @@ impl<'a> super::TypeChecker<'a> {
         prefix: crate::ast::PrefixLiteralFix,
         expected: Option<&Type>,
     ) {
-        if !self
-            .vec_macro_reported
-            .insert((expr.span.offset, expr.span.length))
-        {
-            return;
-        }
         let name = prefix.type_name.as_str();
-        let expected_is_own = match expected {
+        // An expectation still an inference variable here may already be
+        // solved (a call argument, a tuple or payload element).
+        let expected = expected.map(|t| {
+            super::inference::resolve_type_vars(
+                t,
+                &self.env.substitutions,
+                &std::collections::HashMap::new(),
+                &self.env.const_substitutions,
+                &std::collections::HashMap::new(),
+            )
+        });
+        let expected_is_own = match &expected {
             Some(Type::Array { .. }) => name == "Array",
             Some(Type::Named { name: n, .. }) => n == name,
             _ => false,
         };
+        if !self
+            .vec_macro_reported
+            .insert((expr.span.offset, expr.span.length))
+        {
+            // A later visit under bidirectional checking may bring the
+            // expectation the first one lacked: give the warning already
+            // reported the typed fix then (B-2026-11-17-112).
+            if let (true, Some(typed)) = (expected_is_own, prefix.typed_fix) {
+                if let Some(w) = self.warnings.iter_mut().find(|w| {
+                    w.fix_it.is_none()
+                        && w.lint_name.as_deref() == Some("deprecated")
+                        && w.span.offset == expr.span.offset
+                        && w.span.length == expr.span.length
+                }) {
+                    w.fix_it = Some(crate::typechecker::FixIt {
+                        span: Span {
+                            offset: typed.offset,
+                            length: typed.length,
+                            ..expr.span
+                        },
+                        replacement: typed.replacement,
+                    });
+                }
+            }
+            return;
+        }
         let edit = match (expected_is_own, prefix.typed_fix) {
             (true, Some(typed)) => Some(typed),
             (_, _) => prefix.fix,
@@ -12017,6 +12048,70 @@ impl<'a> super::TypeChecker<'a> {
             "deprecated",
             fix_it,
         );
+    }
+
+    /// The fix for a deprecated prefix `Array[..]` or `VecDeque[..]` that
+    /// nothing expects (B-2026-11-17-112): the bare literal would build a
+    /// `Vec`, and no `from` constructor names those two, so where the
+    /// literal is an unannotated `let`'s whole initializer the fix writes
+    /// the type it built on the `let` and drops the prefix:
+    /// `let a = Array[1, 2];` becomes `let a: Array[i64, 2] = [1, 2];`.
+    /// Runs once the body's types are settled, since the element type is
+    /// the literal's inference. A literal elsewhere keeps its fixless
+    /// warning.
+    pub(super) fn prefix_let_fixes(&mut self) {
+        if self.prefix_let_sites.is_empty() {
+            return;
+        }
+        let id_to_name = std::collections::HashMap::new();
+        let const_id_to_name = std::collections::HashMap::new();
+        let mut fixes = Vec::new();
+        for (i, w) in self.warnings.iter().enumerate() {
+            if w.fix_it.is_some() || w.lint_name.as_deref() != Some("deprecated") {
+                continue;
+            }
+            let key = SpanKey::from_span(&w.span);
+            let Some(&pattern_end) = self.prefix_let_sites.get(&key) else {
+                continue;
+            };
+            let Some(prefix) = self.program.prefix_collection_literals.get(&key) else {
+                continue;
+            };
+            if !matches!(prefix.type_name.as_str(), "Array" | "VecDeque") {
+                continue;
+            }
+            let Some(ty) = self.expr_types.get(&key) else {
+                continue;
+            };
+            let ty = super::inference::resolve_type_vars(
+                ty,
+                &self.env.substitutions,
+                &id_to_name,
+                &self.env.const_substitutions,
+                &const_id_to_name,
+            );
+            if !prefix_fix_type_is_spellable(&ty) {
+                continue;
+            }
+            let name_end = w.span.offset + prefix.type_name.len();
+            if name_end <= pattern_end {
+                continue;
+            }
+            fixes.push((
+                i,
+                crate::typechecker::FixIt {
+                    span: Span {
+                        offset: pattern_end,
+                        length: name_end - pattern_end,
+                        ..w.span
+                    },
+                    replacement: format!(": {} = ", type_display(&ty)),
+                },
+            ));
+        }
+        for (i, fix) in fixes {
+            self.warnings[i].fix_it = Some(fix);
+        }
     }
 
     /// `deprecated` on an f-string inside another's `{..}` (design.md §3
@@ -19119,4 +19214,24 @@ fn clone_place_text(e: &Expr) -> Option<String> {
 /// `Slice[u8]`, as a parameter or a `write` wants it.
 fn is_byte_slice(t: &Type) -> bool {
     matches!(t, Type::Slice { element, .. } if matches!(**element, Type::UInt(UIntSize::U8)))
+}
+
+/// Whether `ty` is a type a fix may write in source: settled (no inference
+/// variable, no error) and made only of named types, arrays, tuples and
+/// references (B-2026-11-17-112).
+fn prefix_fix_type_is_spellable(ty: &Type) -> bool {
+    match ty {
+        Type::Array { element, .. } => prefix_fix_type_is_spellable(element),
+        Type::Named { args, .. } => args.iter().all(prefix_fix_type_is_spellable),
+        Type::Tuple(parts) => parts.iter().all(prefix_fix_type_is_spellable),
+        Type::Ref(inner) | Type::MutRef(inner) => prefix_fix_type_is_spellable(inner),
+        Type::Int(_)
+        | Type::UInt(_)
+        | Type::Float(_)
+        | Type::Bool
+        | Type::Char
+        | Type::Str
+        | Type::Unit => true,
+        _ => false,
+    }
 }

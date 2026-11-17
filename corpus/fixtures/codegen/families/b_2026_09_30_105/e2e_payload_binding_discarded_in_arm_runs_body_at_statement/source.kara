@@ -23,7 +23,7 @@ fn main() {
     let o5 = Some(mk(5));
     match o5 { Some(w) => { let _ = [w]; println("arm5") }, None => {} };
     let r6: Result[W1, i64] = Ok(mk(6));
-    match r6 { Ok(w) => { let _ = Array[w]; println("arm6") }, Err(e) => { println(f"{e}") } };
+    match r6 { Ok(w) => { let _: Array[W1, 1] = [w]; println("arm6") }, Err(e) => { println(f"{e}") } };
     branch(false, 10);
     branch(true, 20);
     for i in 0..3 {

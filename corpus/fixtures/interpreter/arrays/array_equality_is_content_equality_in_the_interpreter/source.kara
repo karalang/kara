@@ -10,7 +10,7 @@
             let r: Array[String, 2] = ["ab", "zz"];
             println(f"{p == q}");
             println(f"{p == r}");
-            println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "cd"] }}");
+            println(f"{WrapS { a: ["ab", "cd"] } == WrapS { a: ["ab", "cd"] }}");
             let n3: Array[Array[i64, 3], 2] = [[1, 2, 3], [4, 5, 6]];
             let m3: Array[Array[i64, 3], 2] = [[1, 2, 3], [4, 5, 7]];
             println(f"{n3 == m3}");

@@ -4329,6 +4329,12 @@ pub struct TypeChecker<'a> {
     /// The spans of the `recv` calls typed `Option[T]` on the MIR pipeline
     /// (B-2026-10-15-11): an error at one of them gets a `.unwrap()` fix.
     pub(super) option_recv_spans: FxHashSet<SpanKey>,
+    /// An unannotated `let`'s initializer that is a prefix `Array[..]` or
+    /// `VecDeque[..]` literal, by the literal's span: where its pattern
+    /// ends. With nothing expecting the type, the bare literal would build
+    /// a `Vec`, so `karac fix` writes the type on the `let` instead
+    /// (`prefix_let_fixes`, B-2026-11-17-112).
+    pub(super) prefix_let_sites: FxHashMap<SpanKey, usize>,
     /// `let x = <library iterator>` with no annotation, by name: where
     /// `karac fix` writes `: Vec[T]` and `.collect()` when `x` is used as a
     /// `Vec` (B-2026-10-12-7).
@@ -4889,6 +4895,7 @@ impl<'a> TypeChecker<'a> {
             library_methods_from_source: false,
             pruned_library_methods: std::collections::HashMap::new(),
             option_recv_spans: FxHashSet::default(),
+            prefix_let_sites: FxHashMap::default(),
             iter_lets: FxHashMap::default(),
             untyped_let_names: FxHashMap::default(),
             collect_items: FxHashMap::default(),
@@ -5127,6 +5134,7 @@ impl<'a> TypeChecker<'a> {
         // the new warnings flow through the normal channel.
         self.emit_unfulfilled_lint_expectations();
         self.unwrap_recv_fixes();
+        self.prefix_let_fixes();
         let trait_impls: FxHashSet<(String, String)> = self
             .env
             .impls

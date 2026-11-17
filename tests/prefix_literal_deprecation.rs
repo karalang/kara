@@ -78,10 +78,18 @@ fn prefix_array_literals_fix_where_the_array_is_expected() {
         "fn main() {\n    let z = [7; 3];\n    let a: Array[i64, 2] = [1, 2];\n    \
          let d: VecDeque[i64] = [4, 5];\n    println(f\"{z[2]} {a[1]} {d.len()}\");\n}\n",
     );
-    // With nothing expecting an array, `[1, 2]` would be a `Vec`: the
-    // warning stands without a fix.
-    let ws =
-        prefix_warnings("fn main() {\n    let a = Array[1, 2];\n    println(f\"{a[0]}\");\n}\n");
+    // An unannotated `let` gets the annotation that keeps `[1, 2]` an
+    // array (B-2026-11-17-112: the 0.9 refusal must leave a fix behind).
+    fixes_to(
+        "fn main() {\n    let a = Array[1, 2];\n    let mut d = VecDeque[4, 5];\n    \
+         d.push_front(3);\n    println(f\"{a[0]} {a.len()} {d.len()}\");\n}\n",
+        2,
+        "fn main() {\n    let a: Array[i64, 2] = [1, 2];\n    let mut d: VecDeque[i64] = [4, 5];\n    \
+         d.push_front(3);\n    println(f\"{a[0]} {a.len()} {d.len()}\");\n}\n",
+    );
+    // Outside a `let`, with nothing expecting an array, `[1, 2]` would be
+    // a `Vec`: the warning stands without a fix.
+    let ws = prefix_warnings("fn main() {\n    println(f\"{Array[1, 2].len()}\");\n}\n");
     assert_eq!(ws.len(), 1, "{ws:#?}");
     assert!(ws[0].fixes.is_empty(), "{ws:#?}");
     assert!(ws[0].message.contains("Array[T, N]"), "{ws:#?}");

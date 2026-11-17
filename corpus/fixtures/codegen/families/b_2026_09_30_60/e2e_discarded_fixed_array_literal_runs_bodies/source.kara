@@ -3,7 +3,7 @@ impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
 struct P { s: String }
 fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
 fn run(c: bool) {
-    let _ = Array[W1 { v: 1, s: f"a{1}" }];
+    let _: Array[W1, 1] = [W1 { v: 1, s: f"a{1}" }];
     println("s1");
     Array[mk(2), mk(3)];
     println("s2");
@@ -13,15 +13,15 @@ fn run(c: bool) {
     println("s4");
     let _ = { Array[mk(8)] };
     println("s5");
-    let _ = Array[P { s: f"p{1}" }, P { s: f"p{2}" }];
-    let _ = Array[f"x{1}", f"y{2}"];
-    let _ = Array[1, 2];
+    let _: Array[P, 2] = [P { s: f"p{1}" }, P { s: f"p{2}" }];
+    let _: Array[String, 2] = [f"x{1}", f"y{2}"];
+    let _: Array[i64, 2] = [1, 2];
     println("s6");
 }
 fn main() {
     run(true);
     run(false);
     let mut i = 0;
-    while i < 2 { let _ = Array[mk(10 + i)]; Array[mk(20 + i)]; i = i + 1; }
+    while i < 2 { let _: Array[W1, 1] = [mk(10 + i)]; Array[mk(20 + i)]; i = i + 1; }
     println("end")
 }

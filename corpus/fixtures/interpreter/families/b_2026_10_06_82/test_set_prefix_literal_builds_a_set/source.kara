@@ -1,7 +1,7 @@
 fn main() {
-    let s = Set[1, 1, 2];
+    let s = Set.from([1, 1, 2]);
     println(f"{s.len()} {s.contains(2)} {s.contains(3)}");
-    let mut out: Set[i64] = Set[1, 2];
+    let mut out: Set[i64] = [1, 2];
     let fresh = out.insert(5);
     let again = out.insert(1);
     println(f"{fresh} {again} {out.len()}");
@@ -9,7 +9,7 @@ fn main() {
         println("guarded insert ok");
     }
     println(f"{out.remove(2)} {out.len()}");
-    let v = Vec[3, 3, 1];
-    let d = VecDeque[4, 4];
+    let v = [3, 3, 1];
+    let d: VecDeque[i64] = [4, 4];
     println(f"{v.len()} {d.len()}");
 }

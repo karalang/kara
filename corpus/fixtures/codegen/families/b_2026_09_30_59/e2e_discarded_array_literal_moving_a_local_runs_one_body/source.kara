@@ -8,13 +8,13 @@ fn run() {
     let _ = [a];
     println("s1");
     let b = mk(2);
-    let _ = Array[b];
+    let _: Array[W1, 1] = [b];
     println("s2");
     let c = mk(3);
     [c];
     println("s3");
     let d = mk(4);
-    let _ = Array[d, mk(5)];
+    let _: Array[W1, 2] = [d, mk(5)];
     println("s4");
     let e = mk(6);
     let f = mk(7);

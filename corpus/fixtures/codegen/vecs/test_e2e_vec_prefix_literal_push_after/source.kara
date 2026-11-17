@@ -1,5 +1,5 @@
 fn main() {
-let mut xs: Vec[i64] = Vec[1, 2];
+let mut xs: Vec[i64] = [1, 2];
 xs.push(3);
 xs.push(4);
 println(xs.len());
