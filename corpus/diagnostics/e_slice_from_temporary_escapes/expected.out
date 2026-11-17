@@ -1,0 +1,1 @@
+ERROR at line 2: slice from temporary value escapes the enclosing statement

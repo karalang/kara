@@ -37,8 +37,46 @@ Two consequences follow:
 - **Function parameters** use the kinds `Fn`, `MutFn` and `OnceFn` ([core-semantics.md §9.6](../core-semantics.md#9-closures)). A parameter that is called once is `OnceFn`; one called repeatedly is `MutFn`. Since `Fn` is accepted where `MutFn` or `OnceFn` is expected, these are the most permissive kinds for the caller. A borrowed `MutFn` or `OnceFn` cannot be called, so such a parameter is written `own`: `f: own OnceFn() -> T`. Function parameters are non-escaping unless written `escaping`, and an `escaping` parameter is owned. Inside a function type, `own` marks an argument the closure receives ownership of (`MutFn(own Self.Item) -> U`); a bare argument is lent to it. A lazy iterator adaptor, which stores its function, takes it as a generic parameter instead (`f: own F` with `F: MutFn(own Self.Item) -> U`; see [iterators.md](iterators.md#how-the-methods-work)).
 - **Named parameters** follow a `;` in the parameter list, and only they may have defaults: `fn new(; limit: i64 = i64.MAX) -> TaskGroup` is called `TaskGroup.new()` or `TaskGroup.new(limit: 8)` ([design.md §7](../design.md#named-and-default-parameters)).
 - **Sizes, counts, indexes and offsets are `i64`**, I/O byte counts included.
-- **Effects** follow [design.md §12](../design.md#12-effects). Signatures list the effects a caller must know about: resource effects such as `reads(FileSystem)` or `sends(self)`, and `blocks`. `allocates(Heap)` and `panics` are default-permitted, so signatures here omit them; a "panics if ..." note marks a method that can panic. A function-typed parameter needs no effect annotation: a call has the effects of the argument passed ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10)).
+- **Effects** follow [design.md §12](../design.md#12-effects). Signatures list the effects a caller must know about: resource effects such as `reads(FileSystem)` or `sends(self)`, and `blocks`. `allocates(Heap)` and `panics` are default-permitted, so signatures here omit them; a "panics if ..." note marks a method that can panic, and [Panics](#panics) gives each one's condition and kind. A function-typed parameter needs no effect annotation: a call has the effects of the argument passed ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10)).
 - **Not yet implemented** marks an item the language promises but the compiler does not yet provide.
+
+## Panics
+
+A library call that panics produces a panic record whose **kind** is part of the contract and whose **message** is informative: a tool keys on the kind and the location, and the message may be reworded between releases ([design.md § Panic record](../design.md#panic-record)). Each row gives the condition, the kind, and the message every backend prints today. A page's "panics if ..." note refers here.
+
+| Operation | Panics when | Kind | Message today |
+|---|---|---|---|
+| `v[i]`, `v[i] = x`, `v.swap(i, j)`, `v.insert(i, x)`, `v.remove(i)`, `v.split_at(i)`, `v.split_off(i)` on `Vec`, `Array`, `Slice`; `VecDeque.insert` / `remove` | the index is negative or past the end (`insert` and `split_*` allow the end itself) | `index_out_of_bounds` | `index out of bounds` |
+| `v[a..b]` on a sequence | `a > b`, or `b` is past the end | `index_out_of_bounds` | `index out of bounds` |
+| `s.bytes()[i]` | `i` is out of range | `index_out_of_bounds` | `index out of bounds` |
+| `s[a..b]`, `s.split_at(i)` on text | an end falls inside a multi-byte char | `index_out_of_bounds` | `byte index N is not a char boundary` (N is the first end that cuts a char; the text is not quoted) |
+| `s.substring(a, b)` | an end falls inside a multi-byte char | `explicit` | the same message as `s[a..b]` |
+| `s.truncate(n)` on a `String` | `n` falls inside a multi-byte char | `explicit` | `String.truncate: the length is not on a UTF-8 char boundary` |
+| `v.drain(a..b)` | the range is inverted or past the end | `index_out_of_bounds` | `drain range out of bounds` |
+| `v.rotate_left(mid)` | `mid` is past the end | `explicit` | `rotate_left: mid out of bounds` |
+| `dst.clone_from_slice(src)` | the lengths differ | `explicit` | `clone_from_slice: destination and source slices have different lengths` |
+| `v[a..b] = w` | `w`'s length differs from the range's | `explicit` | `range assignment: the value's length differs from the range's` |
+| `m[k]` on `Map` or `SortedMap` | `k` is not a key (`get` returns `None` instead) | `explicit` | `key not found` |
+| `windows(n)`, `chunks(n)` | `n <= 0` | `explicit` | `windows: size must be positive`, `chunks: size must be positive` |
+| `step_by(n)` | `n <= 0` | `explicit` | `step_by: step must be positive` |
+| `Array.from_fn(n, f)` | `n` is not the array's length | `explicit` | `Array.from_fn: n is not the array's length` |
+| `c.is_digit(r)`, `c.to_digit(r)` | `r` is outside `2..=36` | `explicit` | `char.is_digit: radix 40 is not in 2..=36` |
+| `+`, `-`, `*`, unary `-`, `pow`, `abs` on integers; `MIN / -1`; a `RangeFrom` stepped past `MAX` | the result does not fit the type | `overflow` | `integer overflow` |
+| `<<`, `>>` | the shift amount is negative or at least the width | `overflow` | `shift amount out of range` |
+| `/`, `%` on integers; `Duration / 0` | the divisor is zero | `div_by_zero` | `division by zero` |
+| `unwrap()` | `None`, or `Err` | `unwrap` | `called unwrap() on None`, `called unwrap() on Err` |
+| `unwrap_err()` | `Ok` | `unwrap` | `called unwrap_err() on Ok` |
+| `expect(msg)`, `expect_err(msg)` | as `unwrap` / `unwrap_err` | `unwrap` | `msg` alone |
+| `assert(c)`, `assert_eq(a, b)`, `assert_ne(a, b)` | the assertion is false | `assertion` | `assertion failed: <expr>`, then `left:` / `right:` (or `value:`) lines; a given message replaces the first line |
+| `unreachable()` | it is reached | `unreachable` | `entered unreachable code` |
+| `todo()` | it is reached | `explicit` | `not yet implemented` |
+| `panic(msg)` | always | `explicit` | `msg` |
+| a `requires` clause | the clause is false at the call | `explicit` | `contract violated: requires clause` |
+| a borrow of a `shared` value's `mut` field | another live borrow conflicts with it at run time | `borrow_conflict` | `already borrowed: ...` |
+| `recv()` on sequential `wasm_wasi` | no task can run to send | `deadlock` | `deadlock: ...` |
+| an allocation | the allocator fails or the size overflows | `alloc_failure` | see B-2026-11-16-317 |
+
+Several operations that look as if they might panic return instead, as their pages say: `Vec.filled` and `Vec.with_capacity` with `n < 0` give an empty `Vec`, `substring` saturates out-of-range bounds, `pop`, `first` and `min` on an empty sequence return `None`, `parse` returns `Err`, and a float-to-integer `as` cast saturates.
 
 ## Layers: `core`, `alloc`, `std`
 

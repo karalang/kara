@@ -1,0 +1,1 @@
+ERROR at line 11: conflicting impl: `Point` already implements `Describe`; a type implements a trait once, and two impls whose headers unify overlap whatever their bounds (design.md § Coherence)

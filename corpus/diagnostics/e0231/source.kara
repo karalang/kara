@@ -1,0 +1,13 @@
+trait Source {
+    fn load(ref self) -> i64;
+}
+effect resource Audit: Source;
+
+trait Report {
+    fn render(self) -> String with reads(Stdin) {
+        let n = Audit.load();
+        f"{n} entries"
+    }
+}
+
+fn main() {}

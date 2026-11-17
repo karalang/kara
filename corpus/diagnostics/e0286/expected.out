@@ -1,0 +1,1 @@
+ERROR at line 1: `main()` takes no parameters (design.md § Entry Point). help: read command-line arguments with `env.args()`

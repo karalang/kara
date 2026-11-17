@@ -1,0 +1,10 @@
+effect resource Ledger;
+
+fn apply(f: Fn(i64) -> i64 with reads(Ledger), x: i64) -> i64 {
+    f(x)
+}
+
+fn main() {
+    let r = apply(|x| { println("side effect"); x + 1 }, 1);
+    println(f"{r}");
+}

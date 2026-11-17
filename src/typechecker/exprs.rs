@@ -15868,7 +15868,7 @@ impl<'a> super::TypeChecker<'a> {
                     // String slicing: `s[a..b]` → a fresh `String` (a
                     // sub-range copy), NOT a `Slice[T]`. UTF-8 char-boundary
                     // validation happens at runtime (panic
-                    // `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` on a non-boundary
+                    // `byte index N is not a char boundary` on a non-boundary
                     // index, mirroring Rust). No borrowed-substring view at
                     // v1. See phase-8-stdlib-floor.md "String substring /
                     // slicing surface".

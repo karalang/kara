@@ -1,0 +1,6 @@
+struct Plain { v: i64 }
+
+#[derive(Message)]
+struct Bag { items: Vec[Plain] }
+
+fn main() {}

@@ -1,0 +1,1 @@
+ERROR at line 8: argument 1 has effect writes(Stdout) not declared in slot `with reads(Ledger)`

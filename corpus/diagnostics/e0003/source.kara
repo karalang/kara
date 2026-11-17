@@ -1,0 +1,4 @@
+fn main() {
+    let yield = 3;
+    println(f"{yield}");
+}

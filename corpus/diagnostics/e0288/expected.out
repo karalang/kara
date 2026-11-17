@@ -1,0 +1,1 @@
+ERROR at line 8: impl method 'Clicks.bump' takes its receiver as `mut ref self`, but 'Counter.bump' declares `self`: an impl's mode may be weaker than the trait's, never stronger (core-semantics.md §4.7). Declare `self`

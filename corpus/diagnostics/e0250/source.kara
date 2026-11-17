@@ -1,0 +1,10 @@
+const START: i64 = read_start();
+
+fn read_start() -> i64 {
+    println("reading");
+    1
+}
+
+fn main() {
+    println(f"{START}");
+}

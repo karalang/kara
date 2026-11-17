@@ -1,0 +1,1 @@
+ERROR at line 2: fn `sum_squares` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`

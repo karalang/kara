@@ -1,0 +1,1 @@
+ERROR at line 2: `MAX` is Const-class but binding names must be Value-class (snake_case) (design.md §3 CN-2); consider renaming to `max`

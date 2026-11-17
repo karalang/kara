@@ -1,0 +1,1 @@
+ERROR at line 1: module-level `let mut COUNTER` is mutable global state, and Kāra has no mutable globals (design.md § Constants, "No mutable globals")

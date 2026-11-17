@@ -1,0 +1,1 @@
+ERROR at line 6: `frozen` parameter `n` is passed to a non-`frozen` slot

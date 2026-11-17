@@ -1,0 +1,9 @@
+fn main() {
+    let lo = 1;
+    let n = 5;
+    let s = match n {
+        lo..=9 => "small",
+        _ => "big",
+    };
+    println(s);
+}

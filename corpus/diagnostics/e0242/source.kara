@@ -1,0 +1,9 @@
+import std.encoding.{base64_decode, DecodeError};
+
+fn main() {
+    match base64_decode("@@@") {
+        Ok(bytes) => println(f"{bytes.len()} bytes"),
+        Err(DecodeError.InvalidByte(at)) => println(f"bad byte at {at}"),
+        Err(DecodeError.InvalidLength) => println("bad length"),
+    }
+}

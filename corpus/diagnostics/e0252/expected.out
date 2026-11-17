@@ -1,0 +1,1 @@
+ERROR at line 4: cannot assign to constant `LIMIT`: a constant is a value, not a place, and each use builds a fresh one, so the write would change nothing (design.md § Constants); to change a copy, bind it first (`let mut v = LIMIT;`), and build state that changes in `main` and pass it down

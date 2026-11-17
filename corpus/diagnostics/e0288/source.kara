@@ -1,0 +1,15 @@
+trait Counter {
+    fn bump(self);
+}
+
+struct Clicks { n: i64 }
+
+impl Counter for Clicks {
+    fn bump(mut ref self) { self.n += 1; }
+}
+
+fn main() {
+    let mut c = Clicks { n: 0 };
+    c.bump();
+    println(f"{c.n}");
+}

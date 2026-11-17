@@ -1,0 +1,1 @@
+ERROR at line 4: this expression cannot be assigned to: only a binding, a field, an index, a tuple element or a `*` dereference can be assigned to

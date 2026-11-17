@@ -1,0 +1,1 @@
+ERROR at line 7: default body of 'Report.render' performs reads(Audit) but the method ceiling is [reads(Stdin)]; declare the effect on the method or remove it from the default body

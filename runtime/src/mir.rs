@@ -1279,10 +1279,16 @@ fn str_range_panic(s: &str, lo: i64, hi: i64, mode: i32) {
         push_i64(&mut msg, len);
         msg.push(b')');
     } else {
-        msg.extend_from_slice(b"E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range ");
-        range(&mut msg);
-        msg.extend_from_slice(b" does not fall on UTF-8 char boundaries of ");
-        push_str_debug(&mut msg, s);
+        // Names the first end that cuts a char, and quotes none of the text:
+        // the string may be large or secret (B-2026-11-16-320).
+        let cut = if s.is_char_boundary(lo as usize) {
+            hi
+        } else {
+            lo
+        };
+        msg.extend_from_slice(b"byte index ");
+        push_i64(&mut msg, cut);
+        msg.extend_from_slice(b" is not a char boundary");
     }
     set_panic_bytes(msg.as_slice());
 }
@@ -1295,33 +1301,6 @@ fn push_i64(out: &mut LeanVec<u8>, v: i64) {
         out.push(b'-');
     }
     out.extend_from_slice(d.get(i..).unwrap_or_default());
-}
-
-/// `s` as `{:?}` writes a `str`: quoted, with what `str::escape_debug`
-/// escapes escaped, except a single quote, which `Debug` leaves alone.
-fn push_str_debug(out: &mut LeanVec<u8>, s: &str) {
-    let mut put = |c: char| {
-        let mut b = [0u8; 4];
-        out.extend_from_slice(c.encode_utf8(&mut b).as_bytes());
-    };
-    put('"');
-    let mut esc = s.escape_debug();
-    while let Some(c) = esc.next() {
-        if c != '\\' {
-            put(c);
-            continue;
-        }
-        // Every backslash `escape_debug` writes opens an escape.
-        match esc.next() {
-            Some('\'') => put('\''),
-            Some(n) => {
-                put('\\');
-                put(n);
-            }
-            None => put('\\'),
-        }
-    }
-    put('"');
 }
 
 /// The text [`str_range`] picks: a view into the string, or, for a byte

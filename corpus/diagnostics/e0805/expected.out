@@ -1,0 +1,1 @@
+ERROR at line 2: `ref` is not a valid parameter type for the foreign import 'strlen': pass `*const u8` and hand over the data pointer at the call site with `.as_ptr()` — `fn strlen(s: *const u8) …` called as `strlen(x.as_ptr())`

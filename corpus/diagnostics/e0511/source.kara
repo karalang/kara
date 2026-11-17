@@ -1,0 +1,14 @@
+shared struct Node { val: i64 }
+
+struct Holder { mut keep: Vec[Node] }
+
+fn stash(n: frozen Node, h: mut ref Holder) {
+    h.keep.push(n);
+}
+
+fn main() {
+    let n = freeze Node { val: 1 };
+    let mut h = Holder { keep: [] };
+    stash(n, mut h);
+    println(f"{h.keep.len()}");
+}

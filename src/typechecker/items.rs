@@ -7030,9 +7030,10 @@ impl<'a> super::TypeChecker<'a> {
         self.type_error(
             format!(
                 "error[E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING]: cannot assign to \
-                 module-level binding '{}' — declared without `mut`{}. Change the \
-                 declaration to `let mut {}: ...` if mutation is required.",
-                name, decl_hint, name,
+                 module-level binding '{}'{}: a value at module scope is a \
+                 constant, and Kāra has no mutable globals (design.md § \
+                 Constants); build state that changes in `main` and pass it down",
+                name, decl_hint,
             ),
             target.span,
             TypeErrorKind::ReassignToImmutableModuleBinding,

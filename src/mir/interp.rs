@@ -12606,11 +12606,10 @@ impl<'a> Interp<'a> {
                     return new_string(self, String::new());
                 }
                 if cut(lo) || cut(hi) {
-                    // Worded as the compiled backend's runtime words it.
-                    self.panic_message = Some(format!(
-                        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range {lo}..{hi} does not \
-                         fall on UTF-8 char boundaries of {s:?}"
-                    ));
+                    // Worded as the compiled backend's runtime words it, and
+                    // quoting none of the text (B-2026-11-16-320).
+                    let at = if cut(lo) { lo } else { hi };
+                    self.panic_message = Some(format!("byte index {at} is not a char boundary"));
                     if self.trace {
                         self.events.push(Event::Abort(AbortReason::Panic));
                     }
@@ -12660,11 +12659,10 @@ impl<'a> Interp<'a> {
                     Some(format!(
                         "string slice bounds {lo}..{hi} out of range (len {len})"
                     ))
-                } else if !s.is_char_boundary(lo as usize) || !s.is_char_boundary(hi as usize) {
-                    Some(format!(
-                        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range {lo}..{hi} does not \
-                         fall on UTF-8 char boundaries of {s:?}"
-                    ))
+                } else if !s.is_char_boundary(lo as usize) {
+                    Some(format!("byte index {lo} is not a char boundary"))
+                } else if !s.is_char_boundary(hi as usize) {
+                    Some(format!("byte index {hi} is not a char boundary"))
                 } else {
                     None
                 };

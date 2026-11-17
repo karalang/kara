@@ -2050,9 +2050,11 @@ const fn res(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
 const CODE_PROSE: &[(&str, &str)] = &[
     (
         "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
-        "A runtime error: a string was sliced by a byte range (`s[a..b]`) whose \
-         ends do not fall between UTF-8 characters, so the slice would cut a \
-         character in two. Slice at a boundary (`s.char_indices()` gives each \
+        "A runtime error (panic kind `index_out_of_bounds`): a string was sliced \
+         by a byte range (`s[a..b]`) whose ends do not fall between UTF-8 \
+         characters, so the slice would cut a character in two. The message \
+         reads `byte index N is not a char boundary` and names the first end \
+         that cuts one; it quotes none of the text (B-2026-11-16-320). Slice at a boundary (`s.char_indices()` gives each \
          character's byte offset), or work in characters with `s.chars()`.",
     ),
     (
@@ -2163,6 +2165,297 @@ const CODE_PROSE: &[(&str, &str)] = &[
          `mut ref name` from a mutable owner. To change a copy of its own \
          instead, take it `own U` or `.clone()` it.",
     ),
+    // B-2026-11-16-296: the codes the corpus emits that had no prose of
+    // their own. Each has a program in corpus/diagnostics/<code>/ that
+    // `tests/diagnostics_corpus.rs` checks still produces it. E0216 is here
+    // because its class paragraph described another error (-297).
+    (
+        "E0003",
+        "A word reserved for a later feature (`yield`, `async`, `try`, `box` \
+         and the rest of design.md § Keywords, Reserved for future use) was \
+         used as a name. Reserving it now lets the feature arrive without \
+         breaking code. Rename the item, or keep the name as a raw \
+         identifier: `r#yield`.",
+    ),
+    (
+        "E0107",
+        "A `break 'label` or `continue 'label` names a label that no \
+         enclosing loop or block carries (design.md § Loops and labels). \
+         Labels are visible only inside the loop they name, so a typo or a \
+         label on a sibling loop both land here. Use one of the enclosing \
+         labels; the message suggests the closest one.",
+    ),
+    (
+        "E0112",
+        "An `import` names a module that does not exist (design.md § \
+         Modules). A single `.kara` file outside a package can import only \
+         the library's `std.*` modules; a program of several files is a \
+         package, with a `kara.toml` beside its `src/`, and imports its own \
+         modules by their path under `src/`.",
+    ),
+    (
+        "E0115",
+        "`#[compiler_builtin]` marks library source that is compiled into \
+         karac itself; a user program may not use it. Remove the attribute: \
+         an ordinary function needs none.",
+    ),
+    (
+        "E0121",
+        "A bare `#[name]` attribute that the compiler does not know \
+         (design.md § Attributes lists every one). A misspelt attribute would \
+         otherwise do nothing silently, so it is an error. Fix the spelling, \
+         or write a tool's attribute with its namespace, such as \
+         `#[diagnostic::name]`.",
+    ),
+    (
+        "E0127",
+        "A local binding is named in Const or Type style (`MAX`, `Total`), \
+         but binding names are Value-class: snake_case (design.md § 3, CN-2). \
+         The class of a name tells a reader what it is, so the rule is \
+         enforced. Rename it as the message suggests (`max`); `karac fix` \
+         applies the rename.",
+    ),
+    (
+        "E0128",
+        "A name bound by a pattern (a `match` arm, `if let`, a destructuring \
+         `let`) is written in Type style (`Radius`), but pattern bindings are \
+         Value-class: snake_case (design.md § 3, CN-2). A capitalized name in \
+         a pattern reads as a type or variant, so the rule keeps the two \
+         apart. Rename the binding (`radius`).",
+    ),
+    (
+        "E0216",
+        "In a call to a standard-library method, the labeled arguments \
+         (`name: value`) must form one run: an unlabeled argument may not sit \
+         between labeled ones (design.md § 7, Named and default parameters). \
+         Write the positional arguments first and the labeled ones after \
+         them.",
+    ),
+    (
+        "E0231",
+        "A trait method's default body performs an effect that the method's \
+         declared effect clause does not admit (design.md § Trait methods and \
+         generic calls). The clause is the ceiling every implementation, the \
+         default included, must stay under, so callers can rely on it. Add \
+         the effect to the method's `with` clause, or remove the call from \
+         the default body.",
+    ),
+    (
+        "E0240",
+        "A type implements the same trait twice (design.md § Coherence). A \
+         trait impl is chosen by its header alone, so two impls whose headers \
+         can match the same type overlap, whatever their bounds. Keep one \
+         impl; if the two differ on purpose, give one of them its own trait \
+         or a wrapper type.",
+    ),
+    (
+        "E0242",
+        "A `match` reaches into a `#[non_exhaustive]` enum from another \
+         package (the library's `DecodeError`, for example) without an arm \
+         for variants added later (design.md § `#[non_exhaustive]`). The \
+         owning package may add a variant in a minor release, so the match \
+         must say what to do with one. Add a wildcard arm for the uncovered \
+         pattern the message names.",
+    ),
+    (
+        "E0250",
+        "A module-level constant's initializer is not a compile-time constant \
+         expression (design.md § Constants). It is evaluated into the binary \
+         as data, so it may use literals, other constants, operators, \
+         constructors and fixed-size array literals, but not a function call. \
+         Compute the value in `main` and pass it down, or use \
+         `LazyLock.new(|| ...)` for a value built once on first use.",
+    ),
+    (
+        "E0251",
+        "A module-level constant's type holds heap memory (`String`, `Vec`, \
+         or a struct with such a field), but a constant lives in the binary \
+         as data (design.md § Constants). Use `Str` for constant text and a \
+         fixed-size `Array` for a constant list; `karac fix` rewrites \
+         `String` to `Str`.",
+    ),
+    (
+        "E0252",
+        "An assignment targets a module-level binding, and module-level \
+         bindings are constants (design.md § Constants, No mutable globals). \
+         Keep the changing value in a local in `main` and pass it to the \
+         functions that need it.",
+    ),
+    (
+        "E0263",
+        "A range pattern's bound (`lo..=9`) names a local variable, but the \
+         bounds of a range pattern must be known at compile time (design.md § \
+         Patterns): a literal, or a module-level integer or `char` constant. \
+         A pattern never compares against a runtime value; for that, bind the \
+         value and test it in a guard: `n if n >= lo => ...`.",
+    ),
+    (
+        "E0267",
+        "`main` returns `Result[(), E]` and `E` does not implement `Display` \
+         (design.md § The `main` function and exit codes). When `main` \
+         returns `Err(e)`, the runtime prints `Error: {e}` and exits 1, so it \
+         needs `Display` to print `e`. Add `#[derive(Display)]` to the error \
+         type or write `impl Display for` it.",
+    ),
+    (
+        "E0269",
+        "A field of a `shared struct` is assigned, but the field is not \
+         declared `mut` (design.md § Shared types). A shared value is reached \
+         through several handles at once, so the type says which of its \
+         fields may change. Declare the field `mut name: T` in the struct.",
+    ),
+    (
+        "E0286",
+        "`main` is declared in a form it may not take (design.md § The `main` \
+         function and exit codes): it is never `pub` or generic and takes no \
+         parameters. Read command-line arguments with `env.args()`.",
+    ),
+    (
+        "E0287",
+        "The left side of an assignment is not a place (core-semantics.md § \
+         2): only a binding, a field, an index, a tuple element or a `*` \
+         dereference names storage that can be written. A function call or \
+         other expression produces a temporary value. Assign to a binding \
+         that holds the value instead.",
+    ),
+    (
+        "E0288",
+        "An impl method takes its receiver or a parameter in a stronger mode \
+         than the trait declares (core-semantics.md § 4.7): here `mut ref \
+         self` where the trait says `self`. A caller holding only the trait's \
+         promise passes a read-only borrow, so an impl may ask for less than \
+         the trait, never more. Change the impl to the trait's mode, or \
+         change the trait if every implementation must write.",
+    ),
+    (
+        "E0289",
+        "A pattern binds a non-`Copy` part of a value whose type has a `Drop` \
+         body, which would move the part out (core-semantics.md § 3.7). The \
+         `Drop` body runs on the whole value later and expects every field to \
+         be there. Bind the part as `ref name` to borrow it, or `.clone()` it \
+         inside the arm; `karac fix` inserts the `ref`.",
+    ),
+    (
+        "E0404",
+        "A function value passed to a parameter has an effect that the \
+         parameter's function type does not admit (design.md § Function \
+         values and effects): the slot says `Fn(..) with reads(Ledger)`, and \
+         the closure also writes `Stdout`. The callee only promised its own \
+         callers the slot's effects. Remove the effect from the closure, or \
+         widen the slot's `with` clause.",
+    ),
+    (
+        "E0416",
+        "A function under `#[no_effect(...)]` performs the effect it forbids \
+         (design.md § Default-permitted effects, `allocates` as a real-time \
+         guarantee). The check follows every callee, so a `collect()` or a \
+         `Vec` push anywhere below counts. Rewrite the path to avoid the \
+         effect, or remove the attribute if the guarantee is not needed.",
+    ),
+    (
+        "E0419",
+        "A call needs a provider for a resource that has no default, and \
+         nothing supplies one (core-semantics.md § 14.6). `main` takes no \
+         hidden provider, so every use of a provider-rooted resource must run \
+         inside `with_provider[R](provider, || ...)`, directly or through its \
+         callers. Wrap the call, or give the resource a default: `effect \
+         resource R: Trait = value;`.",
+    ),
+    (
+        "E0420",
+        "A call reaches a `mut ref self` method of a resource whose default \
+         provider has fields (core-semantics.md § 14.14). Outside an override \
+         that default is one static value every task shares, so writing it \
+         would be a global race. Make the method take `self`, or run the call \
+         inside `with_provider[R](provider, || ...)`.",
+    ),
+    (
+        "E0511",
+        "A `frozen` handle is passed somewhere that could keep it without the \
+         `frozen` guarantee (design.md § Frozen handles): a non-`frozen` \
+         parameter, a field, or a closure that outlives the call. `frozen` \
+         promises that nothing changes the value while the handle lives, so \
+         every place that holds it must be `frozen` too. Declare the \
+         receiving parameter `frozen`, or clone the value out of the handle.",
+    ),
+    (
+        "E0512",
+        "`freeze` or a `frozen` type was applied to a type that is not \
+         `shared` (design.md § Frozen handles). Freezing is how a \
+         reference-counted `shared` value becomes safe to read from many \
+         tasks; a plain struct is already copied or moved, never aliased, so \
+         it has nothing to freeze. Declare the type `shared struct`, or drop \
+         `freeze`.",
+    ),
+    (
+        "E0600",
+        "A closure that uses a provider-rooted resource leaves the \
+         `with_provider` scope that supplies it (core-semantics.md § 14.5), \
+         by being returned, stored or sent. Outside the scope the provider no \
+         longer exists, so the closure could not run. Call the closure inside \
+         the scope, or pass the value it produces out instead.",
+    ),
+    (
+        "E0805",
+        "A foreign function in an `unsafe extern \"C\"` block has a parameter \
+         or return type that has no C ABI form (design.md § 15): a Kāra \
+         reference, `String`, `Vec` or other managed type. Foreign signatures \
+         use C-shaped types: integers, floats, raw pointers, `#[repr(C)]` \
+         structs and opaque `type T;` handles. Pass a raw pointer and hand \
+         over the data with `.as_ptr()` at the call site, as the message \
+         shows.",
+    ),
+    (
+        "E_COMPTIME",
+        "A derive or other compile-time evaluation failed; the message names \
+         what it was computing and why (deferred.md § Comptime; the derives \
+         run on it). For `#[derive(Message)]`, every field must be a type the \
+         format can encode, so a field whose element type does not derive \
+         `Message` is refused. Derive the trait on that type too, or change \
+         the field.",
+    ),
+    (
+        "E_HELPER_ATTRIBUTE_INVALID_POSITION",
+        "A derive helper attribute (`#[serde(...)]` and the like) is on an \
+         item that no derive reads (design.md § Attributes, derive helpers): \
+         helpers are read only on a struct, an enum, a field or a variant. \
+         Elsewhere it would do nothing, so it is an error. Move it to the \
+         type or field it configures, or remove it.",
+    ),
+    (
+        "E_MODULE_LET",
+        "A module-level `let mut` declares mutable global state, which Kāra \
+         does not have (design.md § Constants, No mutable globals). Create \
+         the value in `main` and pass it down to the functions that use it, \
+         gathering several into a context struct; a module-level value that \
+         never changes is a `const`.",
+    ),
+    (
+        "E_REQUIRE_SIMD",
+        "A function marked `#[require_simd]` contains a vector operation that \
+         would not lower to SIMD instructions on this target (deferred.md § \
+         Portable SIMD); the message names the operation and why, such as a \
+         lane count that is not a power of two. Change the vector width to \
+         one the target supports, or remove the attribute to accept the \
+         scalar loop. `--simd-report` shows each operation's lowering.",
+    ),
+    (
+        "E_SLICE_FROM_TEMPORARY_ESCAPES",
+        "A slice is taken of a temporary value (an array literal, a \
+         function's result) and outlives the statement (core-semantics.md § \
+         5.5). The temporary is freed at the end of the statement, so the \
+         slice would point at freed memory. Bind the value first (`let all = \
+         [10, 20, 30];`), then slice the binding.",
+    ),
+    (
+        "W0299",
+        "A typecheck warning that has no code of its own yet; the record's \
+         `lint` field and the message name it, and `#[allow(<lint>)]` \
+         silences it. The one that reaches this code today is \
+         `f16_software_emulated`: `f16` or `bf16` arithmetic that the target \
+         computes by widening to `f32` and rounding back. Compute in `f32` \
+         and store in the narrow type.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
@@ -2247,6 +2540,56 @@ fn unknown_code_message(code: &str) -> String {
     }
 }
 
+/// A code whose own prose replaces its class paragraph, because the class it
+/// is filed under describes a different error (B-2026-11-16-297).
+const CLASS_MISFITS: &[&str] = &["E0216"];
+
+/// The paragraph `karac explain` gives for a code that marks a construct
+/// outside the language this compiler implements (B-2026-11-16-297).
+const SCOPE_PROSE: &str = "This code marks a construct that is not in the language this compiler \
+     implements: a feature scheduled for a later track (docs/deferred.md says \
+     which), or one removed on purpose. Nothing in the program's types is \
+     wrong; the message names the construct and the form to write instead. \
+     `karac explain --concept=scope/later-tracks` gives the scope of v1.";
+
+/// A code marks a later-track or removed construct: its kind says so, or its
+/// name does (`E_TRY_BLOCK_NOT_IMPLEMENTED_YET`).
+fn is_scope_code(code: &str, entry: &CodeEntry) -> bool {
+    concept_for_kind(entry.kind) == Some("scope/later-tracks")
+        || code.ends_with("_NOT_IMPLEMENTED_YET")
+        || code.ends_with("_NOT_YET")
+}
+
+/// What `karac explain` says a code means, or `None` when there is nothing
+/// but the message (B-2026-11-16-296, -297). A class paragraph describes
+/// the class as a whole, so it is printed as the code's description only
+/// where it fits: a later-track code gets [`SCOPE_PROSE`] instead, a
+/// misfit its own prose alone, and a symbolic code with no prose of its own
+/// says that the class paragraph is general. `sep` joins two paragraphs.
+fn code_description(code: &str, entry: &CodeEntry, sep: &str) -> Option<String> {
+    let prose = code_prose(code);
+    if is_scope_code(code, entry) {
+        return Some(match prose {
+            Some(p) => format!("{SCOPE_PROSE}{sep}{p}"),
+            None => SCOPE_PROSE.to_string(),
+        });
+    }
+    match (entry.class, prose) {
+        (Some(_), Some(p)) if CLASS_MISFITS.contains(&code) => Some(p.to_string()),
+        (Some(class), Some(p)) => Some(format!("{}{sep}{p}", class_description(class))),
+        (Some(class), None) if code.starts_with("E_") || code.starts_with("W_") => Some(format!(
+            "This code is filed under the {} class, which gathers many \
+             diagnostics; the class's general description follows, and the \
+             message is the authoritative account of this one.{sep}{}",
+            class.as_str(),
+            class_description(class)
+        )),
+        (Some(class), None) => Some(class_description(class).to_string()),
+        (None, Some(p)) => Some(p.to_string()),
+        (None, None) => None,
+    }
+}
+
 fn render_code_text(code: &str, entries: Vec<CodeEntry>) -> String {
     let mut out = format!("karac explain — diagnostic code: {code}\n");
     if entries.len() > 1 {
@@ -2263,19 +2606,12 @@ fn render_code_text(code: &str, entries: Vec<CodeEntry>) -> String {
             entry.kind,
             concept_for(entry.phase, code, None, None)
         ));
-        match (entry.class, code_prose(code)) {
-            (Some(class), prose) => {
-                out.push_str(&format!(
-                    "class: {}\n\n{}\n",
-                    class.as_str(),
-                    class_description(class)
-                ));
-                if let Some(prose) = prose {
-                    out.push_str(&format!("\n{prose}\n"));
-                }
+        match (entry.class, code_description(code, entry, "\n\n")) {
+            (Some(class), Some(text)) => {
+                out.push_str(&format!("class: {}\n\n{text}\n", class.as_str()));
             }
-            (None, Some(prose)) => out.push_str(&format!("class: OTHER\n\n{prose}\n")),
-            (None, None) => out.push_str(
+            (None, Some(text)) => out.push_str(&format!("class: OTHER\n\n{text}\n")),
+            (_, None) => out.push_str(
                 "class: OTHER — this diagnostic has no class page yet. Its JSON \
                  record reports `\"class\": \"OTHER\"`; the message text is the \
                  authoritative description.\n",
@@ -2290,14 +2626,9 @@ fn render_code_json(code: &str, entries: Vec<CodeEntry>) -> String {
         .iter()
         .map(|e| {
             let class = e.class.map(|c| c.as_str()).unwrap_or("OTHER");
-            let description = match (e.class, code_prose(code)) {
-                (Some(class), Some(prose)) => format!("{} {prose}", class_description(class)),
-                (Some(class), None) => class_description(class).to_string(),
-                (None, Some(prose)) => prose.to_string(),
-                (None, None) => {
-                    "No class page yet; the diagnostic message is authoritative.".to_string()
-                }
-            };
+            let description = code_description(code, e, " ").unwrap_or_else(|| {
+                "No class page yet; the diagnostic message is authoritative.".to_string()
+            });
             format!(
                 "{{\"phase\":\"{}\",\"kind\":\"{}\",\"class\":\"{}\",\"concept\":\"{}\",\"description\":\"{}\"}}",
                 e.phase,
@@ -4566,15 +4897,21 @@ mod tests {
     }
 
     /// A code with no class must say so plainly instead of printing
-    /// the vacuous `OTHER` page as though it were an explanation.
+    /// the vacuous `OTHER` page as though it were an explanation. E0250
+    /// was the example until B-2026-11-16-296 gave it prose, so the test
+    /// takes any unclassified code that has none.
     #[test]
     fn unclassified_code_says_so_rather_than_printing_other() {
-        let entries = lookup_code("E0250");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].class, None);
-        let text = render_code_text("E0250", entries);
-        assert!(text.contains("ModuleBindingEffectfulInit"));
-        assert!(text.contains("no class page yet"));
+        let (code, entry) = CODE_TABLE
+            .iter()
+            .find(|(c, e)| e.class.is_none() && code_prose(c).is_none() && !is_scope_code(c, e))
+            .expect("an unclassified code with no prose");
+        let text = render_code_text(code, vec![*entry]);
+        assert!(text.contains(entry.kind), "{text}");
+        assert!(text.contains("no class page yet"), "{text}");
+        let e0250 = render_code_text("E0250", lookup_code("E0250"));
+        assert!(e0250.contains("ModuleBindingEffectfulInit"), "{e0250}");
+        assert!(!e0250.contains("no class page yet"), "{e0250}");
     }
 
     /// The multi-row renderer is kept even though no code collides

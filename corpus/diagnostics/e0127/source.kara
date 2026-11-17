@@ -1,0 +1,4 @@
+fn main() {
+    let MAX = 10;
+    println(f"{MAX}");
+}

@@ -1,0 +1,1 @@
+ERROR at line 3: `main()` returns `Result[(), ConfigError]`, but `ConfigError` does not implement `Display` — the runtime prints a returned `Err(e)` as `Error: {e}` using its `Display` impl. help: add `#[derive(Display)]` to `ConfigError` (or write `impl Display for ConfigError`)

@@ -1,0 +1,6 @@
+fn main() {
+    let a: bf16 = 1.5;
+    let b: bf16 = 2.25;
+    let c = a * b;
+    println(f"{c}");
+}

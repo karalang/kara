@@ -1,0 +1,16 @@
+struct Ticket { id: i64, owner: String }
+
+impl Drop for Ticket {
+    fn drop(mut ref self) { println(f"closing ticket {self.id}"); }
+}
+
+fn owner_of(t: own Ticket) -> String {
+    match t {
+        Ticket { id, owner } => owner,
+    }
+}
+
+fn main() {
+    let t = Ticket { id: 7, owner: "ana".to_string() };
+    println(owner_of(t));
+}

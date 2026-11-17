@@ -47,9 +47,9 @@ Two things to keep in mind:
   as `s.bytes()`. For ASCII the two coincide; for text with multi-byte
   characters they don't.
 - **A range must land on UTF-8 character boundaries.** Slicing through the
-  middle of a multi-byte character panics at runtime
-  (`E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY`) rather than handing back invalid
-  UTF-8:
+  middle of a multi-byte character panics at runtime (`byte index 2 is not
+  a char boundary`, kind `index_out_of_bounds`) rather than handing back
+  invalid UTF-8:
 
   ```kara
   let s = "héllo";         // 'é' occupies bytes 1..3

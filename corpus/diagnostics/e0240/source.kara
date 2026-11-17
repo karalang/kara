@@ -1,0 +1,17 @@
+trait Describe {
+    fn describe(self) -> String;
+}
+
+struct Point { x: i64, y: i64 }
+
+impl Describe for Point {
+    fn describe(self) -> String { f"({self.x}, {self.y})" }
+}
+
+impl Describe for Point {
+    fn describe(self) -> String { "a point" }
+}
+
+fn main() {
+    println(Point { x: 1, y: 2 }.describe());
+}

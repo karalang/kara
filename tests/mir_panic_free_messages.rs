@@ -170,8 +170,9 @@ fn mir_formatted_panic_reports_without_the_panic_hook() {
     );
 }
 
-/// A `substring` cut inside a code point: the message quotes the text as
-/// `{:?}` does, a single quote unescaped and the rest escaped.
+/// A `substring` cut inside a code point: the message names the byte index
+/// and quotes none of the text, which may be large or secret
+/// (B-2026-11-16-320).
 #[test]
 fn mir_substring_cut_reports_without_the_panic_hook() {
     let src = "fn main() {\n    let s: String = f\"a'b\\\"c\\\\d\\ne{1}\u{e9}\";\n    let n = s.len();\n    println(f\"{n}\");\n    let t = s.substring(0, n - 1);\n    println(t);\n}\n";
@@ -179,7 +180,7 @@ fn mir_substring_cut_reports_without_the_panic_hook() {
         "substring",
         src,
         101,
-        "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..11 does not fall on UTF-8 char boundaries of \"a'b\\\"c\\\\d\\ne1\u{e9}\"\n  at main.kara:5:13\n",
+        "runtime error: byte index 11 is not a char boundary\n  at main.kara:5:13\n",
     );
 }
 

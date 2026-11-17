@@ -1,0 +1,3 @@
+fn main(args: Vec[String]) {
+    println(f"{args.len()}");
+}

@@ -30236,9 +30236,11 @@ fn test_module_binding_immutable_reassign_rejected() {
     assert!(
         errs.iter().any(
             |e| e.message.contains("E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING")
-                && e.message.contains("declared without `mut`")
+                && e.message.contains("no mutable globals")
+                && !e.message.contains("let mut")
         ),
-        "diagnostic should name the code and reference `mut`",
+        "diagnostic should name the code, and not suggest `let mut`, which \
+         E_MODULE_LET refuses (B-2026-11-17-73)",
     );
 }
 

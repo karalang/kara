@@ -212,8 +212,8 @@ pub unsafe extern "C" fn karac_string_slice_into(
 ///
 /// A dedicated `-> !` entry point is what makes that free WITHOUT giving up
 /// the diagnostics: `emit_panic` would also have been noreturn, but its
-/// message is a compile-time constant, so the `start`/`end`/`len` values and
-/// the `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` code would have been lost. This
+/// message is a compile-time constant, so the `start`/`end`/`len` values in
+/// the message would have been lost. This
 /// calls the SAME `slice_validate` the non-fast path calls, so the text is
 /// identical by construction rather than by transcription.
 ///
@@ -382,9 +382,8 @@ unsafe fn slice_validate(data: *const u8, len: i64, start: i64, end: i64) -> (us
         let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
         if !is_boundary(start_us) || !is_boundary(end_us) {
             crate::fatal::eprint_fmt(format_args!(
-                "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
-             {}..{} does not fall on UTF-8 char boundaries\n",
-                start, end
+                "runtime error: byte index {} is not a char boundary\n",
+                if is_boundary(start_us) { end } else { start }
             ));
             std::process::exit(1);
         }
@@ -408,7 +407,7 @@ unsafe fn slice_validate(data: *const u8, len: i64, start: i64, end: i64) -> (us
 /// * UTF-8 char boundaries: both `start` and `end` must fall on a char
 ///   boundary (a byte index `i` is a boundary iff `i == 0`, `i == len`, or
 ///   `data[i]` is not a `0b10xxxxxx` continuation byte), else a fatal
-///   `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY` runtime error.
+///   `byte index N is not a char boundary` runtime error.
 ///
 /// Both fatal paths print to stderr and `exit(1)`, matching codegen's
 /// `emit_panic` shape (a non-boundary slice is a panic, not a recoverable
@@ -849,9 +848,8 @@ pub unsafe extern "C" fn karac_string_slice_borrow(
         let is_boundary = |i: usize| i == 0 || i == len_us || (bytes[i] & 0xC0) != 0x80;
         if !is_boundary(start_us) || !is_boundary(end_us) {
             crate::fatal::eprint_fmt(format_args!(
-                "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range \
-             {}..{} does not fall on UTF-8 char boundaries\n",
-                start, end
+                "runtime error: byte index {} is not a char boundary\n",
+                if is_boundary(start_us) { end } else { start }
             ));
             std::process::exit(1);
         }

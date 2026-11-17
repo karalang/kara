@@ -477,8 +477,7 @@ fn mir_string_slice_panics_name_the_cut() {
         (
             "fn main() {\n    let s = String.from(\"h\\u{e9}llo\");\n    let n = s.len() - 4;\n    \
              println(f\"{s[0..n]}\");\n}\n",
-            "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..2 does not fall \
-             on UTF-8 char boundaries of \"h\u{e9}llo\"\n",
+            "runtime error: byte index 2 is not a char boundary\n",
         ),
     ];
     for (src, want) in cases {

@@ -1,0 +1,7 @@
+fn main() {
+    'outer: for i in 0..3 {
+        for j in 0..3 {
+            if i + j == 3 { break 'outr; }
+        }
+    }
+}

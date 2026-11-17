@@ -9,8 +9,9 @@ auto-par on the pre-M3 backend.
 > workload today**, so a default build and a `KARAC_AUTO_PAR=0` build run in
 > the same time. The speedup tables this README used to carry (2.81x, and a
 > 15.88x scaling run) were measured on the pre-M3 backend, which was deleted
-> at M3; they do not reproduce and have been removed. The decline is ledger
-> row B-2026-11-16-274.
+> at M3; they do not reproduce and have been removed. Since
+> B-2026-11-16-274 the three writes no longer conflict; what declines them
+> now is auto-par's cost rule.
 
 ## What it demonstrates
 
@@ -40,11 +41,12 @@ karac query concurrency /tmp/parallax_lite.kara.process_request
 ```
 
 It reports the parallel group `[0, 1, 2]` ("independent effects on different
-resources"), then an `auto_par` entry with `tasks: false`: auto-par refuses to
-run them as tasks, with the reason "`mutable borrow of provider of MetricsA`
-and `mutable borrow of provider of MetricsB` must keep their order". The same three calls written as
-`par { record_a(), record_b(), record_c() }` check clean and run in parallel,
-so the two checks disagree; that disagreement is what B-2026-11-16-274 tracks.
+resources"), then an `auto_par` entry with `tasks: false` and the reason "0 of
+its 3 statements nest loops or recurse". The writes are independent (that was
+B-2026-11-16-274, fixed at ec237045da), but the loop is inside the provider's
+method, one call away, so the cost rule does not count it, and auto-par keeps
+the statements in order. The same three calls written as
+`par { record_a(), record_b(), record_c() }` run in parallel.
 
 ## How to run
 

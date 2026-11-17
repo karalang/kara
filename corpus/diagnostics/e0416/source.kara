@@ -1,0 +1,9 @@
+#[no_effect(allocates(Heap))]
+fn sum_squares(xs: ref Vec[i64]) -> i64 {
+    let squares: Vec[i64] = xs.iter().map(|x| x * x).collect();
+    squares.iter().sum()
+}
+
+fn main() {
+    println(f"{sum_squares([1, 2, 3])}");
+}

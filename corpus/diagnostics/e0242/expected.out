@@ -1,0 +1,1 @@
+ERROR at line 4: pattern `Err(_)` not covered — a `#[non_exhaustive]` enum defined in another package sits inside this match, so new variants may land without breaking source compatibility. Add `Err(_) => panic("handle new variant")` (or a real handler) before the closing brace. See design.md § `#[non_exhaustive]` for Evolvable Public Types.

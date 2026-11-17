@@ -1,0 +1,5 @@
+const GREETING: String = "hello";
+
+fn main() {
+    println(GREETING);
+}

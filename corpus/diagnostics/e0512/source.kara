@@ -1,0 +1,6 @@
+struct Counter { mut n: i64 }
+
+fn main() {
+    let c = freeze Counter { n: 0 };
+    println(f"{c.n}");
+}

@@ -1,0 +1,9 @@
+enum Shape { Circle(f64), Square(f64) }
+
+fn main() {
+    let s = Shape.Circle(1.0);
+    match s {
+        Shape.Circle(Radius) => println(f"{Radius}"),
+        Shape.Square(side) => println(f"{side}"),
+    }
+}

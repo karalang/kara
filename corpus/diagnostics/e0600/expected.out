@@ -1,0 +1,1 @@
+ERROR at line 11: closure captures provider-rooted resource `Clock` but escapes its provider scope (value returned via `return`)

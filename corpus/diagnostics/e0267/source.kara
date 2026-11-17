@@ -1,0 +1,5 @@
+struct ConfigError { line: i64 }
+
+fn main() -> Result[(), ConfigError] {
+    Err(ConfigError { line: 3 })
+}

@@ -37,6 +37,8 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 
 ## Reading: `Str` and `String`
 
+An empty pattern matches at every char boundary, the start and the end included, for every method below that takes one; each row says what that gives. Every backend agrees, and the answers are Rust's.
+
 | Method | Signature | Notes |
 |---|---|---|
 | `len` | `fn len(self) -> i64` | Length in bytes. O(1) |
@@ -45,26 +47,26 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 | `char_indices` | `fn char_indices(self) -> impl DoubleEndedIterator[Item = (i64, char)]` | Each scalar value with its byte offset, a valid place to cut with `s[a..b]` (B-2026-11-09-57) |
 | `bytes` | `fn bytes(self) -> Slice[u8]` | The raw UTF-8 bytes. `s.bytes()[i]` is a `u8` and panics if out of bounds. Use it for protocols and binary formats, not text |
 | `char_at` | `fn char_at(self, i: i64) -> Option[char]` | The `i`-th scalar value. O(n); `None` if out of range. For many indexed reads, collect once (`let cs: Vec[char] = s.chars().collect();`) and index the `Vec`, where indexing really is O(1). For a pass over every character, `for c in s.chars()` is O(n) in total |
-| `contains` | `fn contains(self, pat: Str) -> bool` | Substring search |
-| `starts_with` | `fn starts_with(self, pat: Str) -> bool` | |
-| `ends_with` | `fn ends_with(self, pat: Str) -> bool` | |
-| `find` | `fn find(self, pat: Str) -> Option[i64]` | Byte offset of the first match. A valid place to cut with `s[a..b]` |
-| `rfind` | `fn rfind(self, pat: Str) -> Option[i64]` | Byte offset of the last match. An empty `pat` is found at the end |
+| `contains` | `fn contains(self, pat: Str) -> bool` | Substring search. An empty `pat` is in every text: `"abc".contains("")` is `true` |
+| `starts_with` | `fn starts_with(self, pat: Str) -> bool` | `true` for an empty `pat` |
+| `ends_with` | `fn ends_with(self, pat: Str) -> bool` | `true` for an empty `pat` |
+| `find` | `fn find(self, pat: Str) -> Option[i64]` | Byte offset of the first match. A valid place to cut with `s[a..b]`. An empty `pat` is found at the start: `"abc".find("")` is `Some(0)` |
+| `rfind` | `fn rfind(self, pat: Str) -> Option[i64]` | Byte offset of the last match. An empty `pat` is found at the end: `"abc".rfind("")` is `Some(3)` |
 | `match_indices` | `fn match_indices(self, pat: Str) -> impl Iterator[Item = (i64, Str)]` | Every non-overlapping match, left to right, with its byte offset; the `Str` is a view into `self`. An empty `pat` matches at every char boundary, the end included (B-2026-11-09-57) |
-| `matches` | `fn matches(self, pat: Str) -> impl Iterator[Item = Str]` | Every non-overlapping match, left to right, each a view into `self`: `match_indices` without the offsets. `s.matches(pat).count()` counts the occurrences of `pat` without overlap |
-| `split_once` | `fn split_once(self, sep: Str) -> Option[(Str, Str)]` | The text before and after the first `sep`, both views into `self`; `None` when `sep` does not occur |
-| `rsplit_once` | `fn rsplit_once(self, sep: Str) -> Option[(Str, Str)]` | The same at the last `sep` |
+| `matches` | `fn matches(self, pat: Str) -> impl Iterator[Item = Str]` | Every non-overlapping match, left to right, each a view into `self`: `match_indices` without the offsets. `s.matches(pat).count()` counts the occurrences of `pat` without overlap; for an empty `pat` that is one more than the number of chars (`"abc".matches("").count()` is 4) |
+| `split_once` | `fn split_once(self, sep: Str) -> Option[(Str, Str)]` | The text before and after the first `sep`, both views into `self`; `None` when `sep` does not occur. An empty `sep` occurs at the start: `"abc".split_once("")` is `Some(("", "abc"))` |
+| `rsplit_once` | `fn rsplit_once(self, sep: Str) -> Option[(Str, Str)]` | The same at the last `sep`. An empty `sep` occurs at the end: `"abc".rsplit_once("")` is `Some(("abc", ""))` |
 | `split_at` | `fn split_at(self, mid: i64) -> (Str, Str)` | The text before and after byte `mid`, both views into `self`. Panics if `mid` is past the end or falls inside a multi-byte code point, as `s[a..b]` does |
-| `strip_prefix` | `fn strip_prefix(self, prefix: Str) -> Option[Str]` | The text after `prefix`, a view into `self`; `None` when it does not start with `prefix` |
-| `strip_suffix` | `fn strip_suffix(self, suffix: Str) -> Option[Str]` | The text before `suffix`, a view into `self`; `None` when it does not end with `suffix` |
-| `split` | `fn split(self, sep: Str) -> impl Iterator[Item = Str]` | Lazy; each piece is a view into `self`. Empty text is one empty piece: `"".split(",")` yields `""` once (review-thread ruling 2026-11-16) |
-| `splitn` | `fn splitn(self, n: i64, sep: Str) -> impl Iterator[Item = Str]` | At most `n` pieces, as `split` makes them; the last holds the rest of the text. `n <= 0` makes none |
+| `strip_prefix` | `fn strip_prefix(self, prefix: Str) -> Option[Str]` | The text after `prefix`, a view into `self`; `None` when it does not start with `prefix`. An empty `prefix` strips nothing: `Some(self)` |
+| `strip_suffix` | `fn strip_suffix(self, suffix: Str) -> Option[Str]` | The text before `suffix`, a view into `self`; `None` when it does not end with `suffix`. An empty `suffix` strips nothing: `Some(self)` |
+| `split` | `fn split(self, sep: Str) -> impl Iterator[Item = Str]` | Lazy; each piece is a view into `self`. Empty text is one empty piece: `"".split(",")` yields `""` once (review-thread ruling 2026-11-16). An empty `sep` matches at every char boundary, the ends included, so `"abc".split("")` yields `""`, `"a"`, `"b"`, `"c"`, `""` |
+| `splitn` | `fn splitn(self, n: i64, sep: Str) -> impl Iterator[Item = Str]` | At most `n` pieces, as `split` makes them; the last holds the rest of the text. `n <= 0` makes none. With an empty `sep`, `"abc".splitn(2, "")` yields `""`, `"abc"` |
 | `lines` | `fn lines(self) -> impl Iterator[Item = Str]` | Lazy; splits at line ends. Only `\n` and `\r\n` end a line; a lone `\r` is text. A final line end makes no empty last line (review-thread ruling 2026-11-16) |
 | `split_whitespace` | `fn split_whitespace(self) -> impl Iterator[Item = Str]` | Lazy; splits at runs of whitespace, as `trim` reads it. Empty or all-whitespace text yields no pieces, unlike `split` (review-thread ruling 2026-11-16) |
 | `trim` | `fn trim(self) -> Str` | Strips leading and trailing whitespace; a view into `self`, like the splitters. Whitespace is Unicode `White_Space`: U+3000, U+00A0 and U+0085 are stripped as well as ASCII space, tab and line ends (review-thread ruling 2026-11-16) |
 | `trim_start` | `fn trim_start(self) -> Str` | Strips leading whitespace only; a view into `self` |
 | `trim_end` | `fn trim_end(self) -> Str` | Strips trailing whitespace only; a view into `self` |
-| `replace` | `fn replace(self, from: Str, to: Str) -> String` | Replaces every occurrence |
+| `replace` | `fn replace(self, from: Str, to: Str) -> String` | Replaces every non-overlapping occurrence, left to right. An empty `from` matches at every char boundary, so `to` is inserted before each char and at the end: `"abc".replace("", "<>")` is `"<>a<>b<>c<>"` |
 | `to_uppercase` | `fn to_uppercase(self) -> String` | Unicode uppercasing |
 | `to_lowercase` | `fn to_lowercase(self) -> String` | Unicode lowercasing |
 | `normalize` | `fn normalize(self, form: NormalizationForm) -> String` | See [Equality and normalization](#equality-and-normalization) |

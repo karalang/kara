@@ -454,7 +454,7 @@ type   := 'x' | 'X' | 'o' | 'b' | 'd'
 - `.precision` sets the digits after the decimal point.
 - `type` prints an integer in hexadecimal (`x`, `X`), octal (`o`), binary (`b`) or decimal (`d`). Under `x`, `X`, `o` and `b` a negative value prints its two's complement at its own type's width, as Rust does: `-1i8` is `ff`, `-2i32` is `fffffffe`. A bit pattern has no sign, so `+` with one of these four types is a compile error at the hole; `+` with `d` is accepted (review-thread ruling 2026-11-14).
 - An unrecognized specifier is a compile error at the hole.
-- **Which parts apply to which values.** `fill`, `align` and `width` apply to every value: they pad its `Display` text, so `{flag:>6}` on a `bool`, `{c:^3}` on a `char` and `{x:>8}` on an `f64` are all accepted. `+` and `0` apply to numbers. `type` applies to integers. `.precision` applies to floats; on a string, truncation to `precision` characters is not in v1 and is refused with a diagnostic. A float without `.precision` prints its `Display` text (the shortest form that reads back to the same value), so `{x:+}` is `+1.5` and `{nan:>5}` is `  NaN`. A part that does not apply to the value's type is a compile error at the hole (review-thread ruling 2026-11-08, B-2026-11-08-74).
+- **Which parts apply to which values.** `fill`, `align` and `width` apply to every value: they pad its `Display` text, so `{flag:>6}` on a `bool`, `{c:^3}` on a `char` and `{x:>8}` on an `f64` are all accepted. `+` and `0` apply to numbers. `type` applies to integers. `.precision` applies to floats; on a string, truncation to `precision` characters is not in v1 and is refused with a diagnostic. A float without `.precision` prints its `Display` text (the shortest form that reads back to the same value), so `{x:+}` is `+1.5` and `{nan:>5}` is `  NaN`. On the non-finite floats, `+` and `0` act as on a number's text: NaN never takes a sign, so `{nan:+}` is `NaN`, while infinity does, so `{inf:+}` is `+inf`; `0` pads both with zeros to the width, so `{inf:08.2}` is `00000inf` and `{nan:08.2}` is `00000NaN`; `.precision` changes neither (B-2026-11-17-3). A part that does not apply to the value's type is a compile error at the hole (review-thread ruling 2026-11-08, B-2026-11-08-74).
 
 ```kara
 let pi = 3.14159;
@@ -7300,7 +7300,7 @@ The batch `--output=json` document is emitted once, at the end of a build. A cli
 {"type":"phase_start","phase":"lex","scope":{"files":["src/main.kara"]}}
 {"type":"phase_complete","phase":"lex","errors":0,"warnings":0,"notes":0}
 {"type":"phase_start","phase":"parse"}
-{"type":"diagnostic","phase":"parse","id":"d1","primary":true,"severity":"error","code":"E0099","message":"unexpected token `}`","file":"src/main.kara","line":12,"column":3}
+{"type":"diagnostic","id":"d1","severity":"error","primary":true,"phase":"parse","code":"E0002","category":"parse","concept":"syntax/lexical-structure","file":"src/main.kara","line":12,"column":3,"message":"Expected expression, found `}`"}
 {"type":"phase_complete","phase":"parse","errors":1,"warnings":0,"notes":0}
 {"type":"phase_skipped","phase":"resolve","reason":"parse errors in input","blocking":["d1"]}
 {"type":"phase_skipped","phase":"typecheck","reason":"parse errors in input","blocking":["d1"]}

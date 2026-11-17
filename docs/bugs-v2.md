@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 450 |
+| diagnostics | 451 |
 | false-positive | 246 |
 | missing-feature | 189 |
 | perf | 183 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 578 |
+| typecheck | 579 |
 | mir-llvm | 281 |
 | mir | 242 |
 | cli | 191 |
@@ -221,6 +221,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-68 | 2026-11-17 | runtime | medium | On wasm_wasi, once `Regex.compile` has returned its size-limit error ('Compiled regex exceeds size limit of 10485760 bytes'), the program's next print kills the host: node exits by SIGSEGV (139), though the same program runs to the end on interp, llvm and asan | — |
 | B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
+| B-2026-11-17-73 | 2026-11-17 | typecheck | low | E0252 on assigning a module-level binding suggests declaring it `let mut`, which E_MODULE_LET refuses: the fix it names is itself an error | — |
 
 ### Relocated
 

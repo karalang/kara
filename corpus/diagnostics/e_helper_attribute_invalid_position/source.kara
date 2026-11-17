@@ -1,0 +1,6 @@
+#[serde(rename: "pt")]
+fn origin() -> i64 { 0 }
+
+fn main() {
+    println(f"{origin()}");
+}

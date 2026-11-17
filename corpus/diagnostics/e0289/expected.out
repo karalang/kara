@@ -1,0 +1,1 @@
+ERROR at line 9: cannot move 'owner' out of 'Ticket', which has a `Drop` body (core-semantics.md §3.7): bind it as `ref owner` to borrow it, or `.clone()` it inside the arm

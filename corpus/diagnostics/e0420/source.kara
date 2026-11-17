@@ -1,0 +1,25 @@
+// core-semantics §14.14: a default with state is read-only. `Ids`'s default
+// has a field, so `main` calling its `mut ref self` method outside an
+// override is refused (E_STATEFUL_DEFAULT): it would be a global every task
+// writes. The same call inside `with_provider` is fine.
+trait Counter {
+    fn next(mut ref self) -> i64;
+}
+
+struct Seq { n: i64 }
+
+impl Counter for Seq {
+    fn next(mut ref self) -> i64 {
+        self.n = self.n + 1;
+        self.n
+    }
+}
+
+effect resource Ids: Counter = Seq { n: 0 };
+
+fn bump() -> i64 { Ids.next() }
+
+fn main() {
+    with_provider[Ids](Seq { n: 10 }, || { println(bump()); });
+    println(bump());
+}

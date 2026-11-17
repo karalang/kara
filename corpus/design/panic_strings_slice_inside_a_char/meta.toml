@@ -6,4 +6,4 @@ tags = ["design", "library", "strings", "panic"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "Conformance pass over docs/library/strings.md (2026-11-16): s[0..2] on héllo ends inside é: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY. Same message and exit 101 on interp, mir-llvm and ASan."
+note = "Conformance pass over docs/library/strings.md (2026-11-16): s[0..2] on héllo ends inside é: \"byte index 2 is not a char boundary\" (worded so since B-2026-11-16-320; it was E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY with the text quoted). Same message and exit 101 on interp, mir-llvm and ASan."
