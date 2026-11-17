@@ -929,6 +929,7 @@ USAGE:
     karac explain --code=E0200
     karac explain --class=TYPE_MISMATCH
     karac explain --concept=closures
+    karac explain redundant_clone        (a lint, by its `lint_name`)
     karac explain ownership/move-semantics   (a diagnostic's `concept` id)
     karac explain src/order.kara.process     (an item: <file>.<function>)
 
@@ -946,6 +947,7 @@ can be pasted straight in:
     TYPE_MISMATCH      a diagnostic class — the `class` field of the
                        same record (UPPER_SNAKE)
     closures           a concept page (lower-case, may contain `-`)
+    redundant_clone    a lint — the `lint_name` field of the same record
     ownership/move-semantics
                        a concept id — the `concept` field of the same
                        record: the spec sections and the codes that
@@ -953,11 +955,19 @@ can be pasted straight in:
     a.kara.top         an item of a source file
 
 CODES:
-    Catalogued for the `resolve` and `typecheck` families (E01xx,
-    E02xx / W02xx, E08xx). Each lookup reports the emitting phase, the
+    Every code the compiler mints is catalogued: parse E00xx, resolve
+    E01xx, typecheck E02xx / W02xx, typecheck lints W03xx / E03xx (one
+    per lint), effect E04xx, ownership E05xx / N05xx, provider-escape
+    E0600, target / GPU E08xx, and the symbolic codes such as
+    E_SLICE_BORROW_CONFLICT. Each lookup reports the emitting phase, the
     compiler's error-kind name, and the diagnostic class where one is
-    assigned. Codes from the parse / effect / ownership phases are not
-    catalogued yet — look those up by `--class` instead.
+    assigned. A record's `parent_code`, when it has one, is the shared
+    code it was filed under before it got its own, and explains too.
+
+LINTS:
+    A lint name (`redundant_clone`, `lossless_cast`) explains the lint:
+    what it flags, its default level, and its own code where it has one.
+    It is the `lint_name` field of a `karac check --output=json` record.
 
 CONCEPTS:
     closures           Closure capture-mode inference (Rule 2),

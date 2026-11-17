@@ -121,7 +121,7 @@ Every statement in this specification belongs to one of three layers. The layer 
   - Across an edition, inference may broaden. Every broadening is itemized in the edition's release notes, `karac explain` shows what changed, and the author resolves a warning-then-error before the new edition compiles.
   - A private function with an explicit effect declaration is guaranteed like a public one.
 - **The would-be parameter mode** that `karac explain` shows beside the declared one, for example an `own` parameter whose body only reads it, reported as "could be borrowed".
-- **Diagnostic wording, error codes and the shape of `karac explain` output.** Codes come from per-phase bands, so one code names one diagnostic: parse `E00xx`, resolve `E01xx`, typecheck `E02xx`/`W02xx`, effects `E04xx`, ownership `E05xx` (notes `N05xx`), and `E08xx` shared by target errors with disjoint numbers. A new code is allocated from its phase's band. A few codes predate the bands and keep their numbers, because renumbering a shipping code breaks every consumer keyed on it. Tests in the compiler hold both invariants: no number is minted by two phases, and every code is catalogued for `karac explain`.
+- **Diagnostic wording, error codes and the shape of `karac explain` output.** Codes come from per-phase bands, so one code names one diagnostic: parse `E00xx`, resolve `E01xx`, typecheck `E02xx`/`W02xx`, typecheck lints `W03xx`/`E03xx` (one per lint, `W03nn` at warn and `E03nn` under `-D`; the code a lint shared before 0.8.2 is its `parent_code`), effects `E04xx`, ownership `E05xx` (notes `N05xx`), and `E08xx` shared by target errors with disjoint numbers. A new code is allocated from its phase's band. A few codes predate the bands and keep their numbers, because renumbering a shipping code breaks every consumer keyed on it. Tests in the compiler hold both invariants: no number is minted by two phases, and every code is catalogued for `karac explain`.
 - **Monomorphization counts**: how many instances the compiler produces for a generic, shown by `karac query monomorphization`. The rule is guaranteed (one instance per distinct tuple of type arguments); the count may shrink across releases as instances are merged, and may not silently grow.
 - **The compiler queries report** (below).
 
@@ -7178,6 +7178,8 @@ $ karac build --output=json
 Diagnostic codes come from per-phase bands, and every code is catalogued for `karac explain` ([§2](#2-specification-layers)).
 
 **`code` is the most specific code.** Some diagnostics belong to a numbered family and also have a symbolic code of their own: a `char` cast to `u8` is in the cast family `E0210` and is `E_CHAR_AS_NARROW_INT`. Such a record's `code` is the symbolic code, and `parent_code` is the family's number; a record with one code has no `parent_code`. The message does not repeat the code. The text renderer's header names the same code. A tool that groups diagnostics by family reads `parent_code` when it is there and `code` otherwise (review-thread ruling 2026-11-17, B-2026-11-16-303).
+
+**A lint has its own code.** Each typecheck lint is one number in the `W03xx` band, and the same lint escalated by `-D` or `#[deny]` is the matching `E03xx`: `redundant_clone` is `W0300` / `E0300`. The code it shared with other diagnostics before 0.8.2 (`W0295` / `E0295` for `redundant_clone`) is its `parent_code`, and `lint_name` names the lint. `karac explain` takes either code or the lint name (review-thread ruling 2026-11-17, B-2026-11-16-299).
 
 #### Diagnostic quality commitments
 

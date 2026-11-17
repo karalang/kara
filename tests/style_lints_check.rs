@@ -227,7 +227,9 @@ fn main() {\n    println(a() + b() + c());\n}\n";
     // Only `c` warns: `a` allows it (the attribute beats the flag), `b`
     // expects it, and the expectation is fulfilled.
     assert_eq!(json.matches("\"needless_return\"").count(), 1, "{json}");
-    assert!(json.contains("\"code\":\"W0295\""), "{json}");
+    // Its own code, the shared W0295 as parent (B-2026-11-16-299).
+    assert!(json.contains("\"code\":\"W0306\""), "{json}");
+    assert!(json.contains("\"parent_code\":\"W0295\""), "{json}");
     assert!(json.contains("\"fix_diff\":["), "{json}");
     assert!(!json.contains("unfulfilled_lint_expectation"), "{json}");
     assert_eq!(plain.status.code(), Some(0), "{json}");

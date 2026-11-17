@@ -1649,6 +1649,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   iterators get the collect-then-reverse rewrite (B-2026-11-17-6).
 - E0514 (a moved value with a `Drop` body used again) no longer cites the
   removed RC fallback (B-2026-11-17-31).
+- Each typecheck lint has its own code: `W0300`–`W0319`, and the matching
+  `E03nn` when `-D` or `#[deny]` makes it an error. They used to share
+  `W0295`, `W0291` or `W0299` with unrelated lints; that shared code is
+  now the record's `parent_code`, so a tool keyed on it keeps working.
+  `karac explain` takes a lint name (`karac explain redundant_clone`) as
+  well as either code (B-2026-11-16-299).
+- `karac explain --help` no longer says parse, effect and ownership codes
+  are uncatalogued; every band is, and the help lists them (B-2026-11-16-300).
 - `Make.name()` for a trait's associated function names no type and says
   so, instead of "a type that failed to check is not lowered yet"
   (B-2026-11-16-331).

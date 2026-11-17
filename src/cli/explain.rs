@@ -82,6 +82,9 @@ pub fn render(target: &ExplainTarget, format: ExplainFormat) {
 pub fn render_to_string(target: &ExplainTarget, format: ExplainFormat) -> Result<String, String> {
     match target {
         ExplainTarget::Concept(name) => {
+            if let Some(page) = lint_page(name, format) {
+                return Ok(page);
+            }
             if let Some(c) = concept_id(name) {
                 return Ok(match format {
                     ExplainFormat::Text => render_concept_id_text(c),
@@ -128,6 +131,11 @@ pub fn render_to_string(target: &ExplainTarget, format: ExplainFormat) -> Result
 }
 
 fn render_concept(name: &str, format: ExplainFormat) {
+    // A lint's name, as `lint_name` and `-A` give it (B-2026-11-16-299).
+    if let Some(page) = lint_page(name, format) {
+        print!("{page}{}", if page.ends_with('\n') { "" } else { "\n" });
+        return;
+    }
     // A diagnostic's `concept` id (`ownership/move-semantics`): where the
     // spec says it, and the codes that carry it.
     if let Some(c) = concept_id(name) {
@@ -197,12 +205,13 @@ struct CodeEntry {
 
 /// Diagnostic-code catalogue: `code → (phase, kind, class)`.
 ///
-/// **Scope is by BAND, not by phase.** The table covers `E01xx`,
-/// `E02xx` / `W02xx`, `E08xx`, and the two loose numbers `E0223` /
-/// `E0227` — COMPLETELY, every code any emitter mints in them. The
-/// effect (`E04xx`), ownership (`E05xx`) and provider-escape (`E0600`)
-/// bands are not catalogued yet; `explain` reports those as
-/// uncatalogued rather than guessing.
+/// **Scope is by BAND, not by phase.** The table covers every numbered
+/// band — parse `E00xx`, resolve `E01xx`, typecheck `E02xx` / `W02xx`,
+/// the typecheck lint band `W03xx` / `E03xx` (one code per lint,
+/// B-2026-11-16-299), effect `E04xx`, ownership `E05xx` / `N05xx`,
+/// provider-escape `E0600`, target/GPU `E08xx` — and the two loose
+/// numbers `E0223` / `E0227`, COMPLETELY: every code any emitter mints
+/// in them.
 ///
 /// The by-band framing is the B-2026-08-20-30 correction. The scope
 /// used to be stated by PHASE — "the typecheck and resolve families" —
@@ -703,6 +712,48 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // its own number should get one — `W0299` showing up in a report is the
     // signal that it has not.
     ("W0299", ty("<unclassified typecheck warning>", None)),
+    // One code per lint (B-2026-11-16-299): the typecheck lint band, W03nn
+    // warning / E03nn error, in `diag_json::LINT_CODES` order.
+    ("W0300", lint_own("redundant_clone")),
+    ("E0300", lint_own("redundant_clone")),
+    ("W0301", lint_own("unused_mut")),
+    ("E0301", lint_own("unused_mut")),
+    ("W0302", lint_own("irrefutable_let_pattern")),
+    ("E0302", lint_own("irrefutable_let_pattern")),
+    ("W0303", lint_own("unreachable_errdefer")),
+    ("E0303", lint_own("unreachable_errdefer")),
+    ("W0304", lint_own("counter_while_loop")),
+    ("E0304", lint_own("counter_while_loop")),
+    ("W0305", lint_own("manual_compound_assign")),
+    ("E0305", lint_own("manual_compound_assign")),
+    ("W0306", lint_own("needless_return")),
+    ("E0306", lint_own("needless_return")),
+    ("W0307", lint_own("redundant_literal_method")),
+    ("E0307", lint_own("redundant_literal_method")),
+    ("W0308", lint_own("redundant_ref_param")),
+    ("E0308", lint_own("redundant_ref_param")),
+    ("W0309", lint_own("redundant_cast")),
+    ("E0309", lint_own("redundant_cast")),
+    ("W0310", lint_own("lossless_cast")),
+    ("E0310", lint_own("lossless_cast")),
+    ("W0311", lint_own("f16_software_emulated")),
+    ("E0311", lint_own("f16_software_emulated")),
+    ("W0312", lint_own("map_value_clone_reinsert")),
+    ("E0312", lint_own("map_value_clone_reinsert")),
+    ("W0313", lint_own("borrow_projection_copy")),
+    ("E0313", lint_own("borrow_projection_copy")),
+    ("W0314", lint_own("for_element_drop_copy")),
+    ("E0314", lint_own("for_element_drop_copy")),
+    ("W0315", lint_own("partial_move_of_drop_enum")),
+    ("E0315", lint_own("partial_move_of_drop_enum")),
+    ("W0316", lint_own("partial_move_of_drop_struct")),
+    ("E0316", lint_own("partial_move_of_drop_struct")),
+    ("W0317", lint_own_cp("undocumented_unsafe")),
+    ("E0317", lint_own_cp("undocumented_unsafe")),
+    ("W0318", lint_own_cp("ffi_float_eq")),
+    ("E0318", lint_own_cp("ffi_float_eq")),
+    ("W0319", lint_own_cp("ambiguous_not_comparison")),
+    ("E0319", lint_own_cp("ambiguous_not_comparison")),
     ("E0801", ty("GpuNotSafe", None)),
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),
@@ -1965,6 +2016,21 @@ const fn lint(kind: &'static str) -> CodeEntry {
         kind,
         class: Some(DiagnosticClass::LintWarning),
     }
+}
+
+/// A lint's own code (B-2026-11-16-299, `diag_json::LINT_CODES`), from a
+/// typecheck-phase lint: `kind` is the lint's name, what `-A` / `-D` address.
+const fn lint_own(kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase: "typecheck",
+        kind,
+        class: Some(DiagnosticClass::LintWarning),
+    }
+}
+
+/// [`lint_own`] for a lint the compile path reports (phase `lint`).
+const fn lint_own_cp(kind: &'static str) -> CodeEntry {
+    lint(kind)
 }
 
 /// An effect-checker row. Effect diagnostics carry `class: None` in the JSON
@@ -3300,15 +3366,14 @@ fn unknown_code_message(code: &str) -> String {
         format!(
             "'{code}' is not a diagnostic code this compiler mints. Every \
              NUMBERED code does have an entry — parse E00xx, resolve E01xx, \
-             typecheck E02xx / W02xx, effect E04xx, ownership E05xx / N05xx, \
-             provider-escape E0600, target/GPU E08xx, and the loose E0223 / \
-             E0227 — so a code in that shape which lands here is either a \
-             typo or from a different compiler version. Some diagnostics \
-             carry a SYMBOLIC code instead (`E_SLICE_BORROW_CONFLICT` and \
-             the rest of the borrow-conflict family); look those up by class \
-             — `karac check --output=json` reports one in each record's \
-             `class` field, and `karac explain --class=NAME` explains it. \
-             Supported classes: {}.",
+             typecheck E02xx / W02xx, typecheck lints W03xx / E03xx, effect \
+             E04xx, ownership E05xx / N05xx, provider-escape E0600, \
+             target/GPU E08xx, and the loose E0223 / E0227 — so a code in \
+             that shape which lands here is either a typo or from a \
+             different compiler version. Symbolic codes \
+             (`E_SLICE_BORROW_CONFLICT`) and lint names (`redundant_clone`) \
+             explain too, as does a record's class with \
+             `karac explain --class=NAME`. Supported classes: {}.",
             class_list(),
         )
     } else {
@@ -3480,6 +3545,9 @@ fn retired_note(code: &str) -> Option<&'static str> {
 /// misfit its own prose alone, and a symbolic code with no prose of its own
 /// says that the class paragraph is general. `sep` joins two paragraphs.
 fn code_description(code: &str, entry: &CodeEntry, sep: &str) -> Option<String> {
+    if let Some(text) = lint_code_description(code, sep) {
+        return Some(text);
+    }
     if let Some(note) = retired_note(code) {
         return Some(format!(
             "This code is retired: no diagnostic emits it any more, and its number \
@@ -3514,6 +3582,55 @@ fn code_description(code: &str, entry: &CodeEntry, sep: &str) -> Option<String> 
         (None, Some(p)) => Some(p.to_string()),
         (None, None) => None,
     }
+}
+
+/// What a lint's own code means (B-2026-11-16-299): the lint's registry
+/// entry, how to change its level, and the code it used to share.
+fn lint_code_description(code: &str, sep: &str) -> Option<String> {
+    let (name, warn, error) = super::diag_json::LINT_CODES
+        .iter()
+        .find(|(_, w, e)| *w == code || *e == code)?;
+    let info = crate::lints::lint_by_name(name)?;
+    Some(format!(
+        "The `{name}` lint: {}{sep}It is `{}` by default. `{warn}` is the lint \
+         warning and `{error}` the same lint made an error by `-D {name}` or \
+         `#[deny({name})]`; `-A {name}` or `#[allow({name})]` silences it. Until \
+         0.8.2 it shared a code with other diagnostics; that code is the \
+         record's `parent_code`, and `lint_name` is `{name}`.",
+        info.description,
+        info.default_level.as_attr_name(),
+    ))
+}
+
+/// `karac explain <lint_name>`: the lint's own code page when it has one,
+/// else its registry entry (B-2026-11-16-299).
+fn lint_page(name: &str, format: ExplainFormat) -> Option<String> {
+    let info = crate::lints::lint_by_name(name)?;
+    let own = super::diag_json::LINT_CODES
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, w, _)| *w);
+    if let Some(code) = own {
+        return Some(match format {
+            ExplainFormat::Text => render_code_text(code, lookup_code(code)),
+            ExplainFormat::Json => render_code_json(code, lookup_code(code)),
+        });
+    }
+    let level = info.default_level.as_attr_name();
+    Some(match format {
+        ExplainFormat::Text => format!(
+            "karac explain — lint: {name}\n\n{}\n\nIt is `{level}` by default; \
+             `-A {name}` / `-W {name}` / `-D {name}`, or `#[allow({name})]` and the \
+             other level attributes, change that. A diagnostic of this lint carries \
+             `\"lint_name\": \"{name}\"` in `karac check --output=json`, and its \
+             `code` is the one to pass to `karac explain` for the rest.\n",
+            info.description,
+        ),
+        ExplainFormat::Json => format!(
+            "{{\"kind\":\"lint\",\"name\":\"{name}\",\"default_level\":\"{level}\",\"description\":\"{}\"}}",
+            escape_json_string(info.description),
+        ),
+    })
 }
 
 fn render_code_text(code: &str, entries: Vec<CodeEntry>) -> String {

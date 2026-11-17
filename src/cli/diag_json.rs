@@ -1484,7 +1484,13 @@ impl DiagnosticJson {
         // leaves the message, and the kind's numeric code then goes in
         // `parent_code` (design.md § 17; review-thread ruling 2026-11-17 on
         // B-2026-11-16-303).
-        let (code, parent_code, message) = super::specific_code(d.code, d.message);
+        let (mut code, mut parent_code, message) = super::specific_code(d.code, d.message);
+        // A lint with a number of its own reports it, and the code it used
+        // to share moves to `parent_code` (B-2026-11-16-299).
+        if let (Some(own), None) = (lint_code(d.lint_name, d.severity), parent_code) {
+            parent_code = Some(code);
+            code = own;
+        }
         let parent = parent_code
             .map(|p| format!("\"parent_code\":{},", json_string(p)))
             .unwrap_or_default();
@@ -3517,6 +3523,48 @@ pub(crate) fn effect_error_code(
         crate::effectchecker::EffectErrorKind::TaskProviderConflict => ("E0424", "error"),
         crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
     }
+}
+
+/// One code per lint, for the lints that used to share one (B-2026-11-16-299;
+/// review-thread ruling 2026-11-17): `W03nn` while the lint warns, `E03nn`
+/// when `-D` or `#[deny]` makes it an error, in the typecheck LINT band
+/// (design.md §2). The code the lint used to share (`W0295` for every style
+/// lint, `W0291` for both cast lints, the catch-all `W0299` and its `E0200`
+/// error twin, the compile path's `W0259`) becomes the record's
+/// `parent_code`, so a tool keyed on it keeps working. A lint that already
+/// had a number of its own keeps it. Append only: a number, once shipped,
+/// names its lint for good.
+pub(crate) const LINT_CODES: &[(&str, &str, &str)] = &[
+    ("redundant_clone", "W0300", "E0300"),
+    ("unused_mut", "W0301", "E0301"),
+    ("irrefutable_let_pattern", "W0302", "E0302"),
+    ("unreachable_errdefer", "W0303", "E0303"),
+    ("counter_while_loop", "W0304", "E0304"),
+    ("manual_compound_assign", "W0305", "E0305"),
+    ("needless_return", "W0306", "E0306"),
+    ("redundant_literal_method", "W0307", "E0307"),
+    ("redundant_ref_param", "W0308", "E0308"),
+    ("redundant_cast", "W0309", "E0309"),
+    ("lossless_cast", "W0310", "E0310"),
+    ("f16_software_emulated", "W0311", "E0311"),
+    ("map_value_clone_reinsert", "W0312", "E0312"),
+    ("borrow_projection_copy", "W0313", "E0313"),
+    ("for_element_drop_copy", "W0314", "E0314"),
+    ("partial_move_of_drop_enum", "W0315", "E0315"),
+    ("partial_move_of_drop_struct", "W0316", "E0316"),
+    ("undocumented_unsafe", "W0317", "E0317"),
+    ("ffi_float_eq", "W0318", "E0318"),
+    ("ambiguous_not_comparison", "W0319", "E0319"),
+];
+
+/// The code of lint `lint` at `severity` (`"warning"` or `"error"`), when it
+/// has one of its own in [`LINT_CODES`].
+pub(crate) fn lint_code(lint: Option<&str>, severity: &str) -> Option<&'static str> {
+    let lint = lint?;
+    LINT_CODES
+        .iter()
+        .find(|(name, _, _)| *name == lint)
+        .map(|(_, w, e)| if severity == "error" { *e } else { *w })
 }
 
 /// The catalogue code of a typecheck WARNING (a `W` code); see

@@ -1470,9 +1470,13 @@ pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
         let file = super::project_v2::shown(&te.file);
         for err in &te.errors {
             let code = type_error_code(&err.kind);
+            // A lint escalated by `-D` is its own `E03nn`, with the code it
+            // shared as `parent_code` — the single-file feed's shape
+            // (B-2026-11-16-299).
+            let own = super::diag_json::lint_code(err.lint_name.as_deref(), "error");
             let mut record = format!(
                 "{{\"severity\":\"error\",\"phase\":\"typecheck\",\"code\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{},\"class\":{}",
-                json_string(code),
+                json_string(own.unwrap_or(code)),
                 json_string(super::explain::concept_for(
                     "typecheck",
                     code,
@@ -1485,6 +1489,12 @@ pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
                 json_string(&err.message),
                 json_string(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
             );
+            if own.is_some() {
+                record.push_str(&format!(",\"parent_code\":{}", json_string(code)));
+            }
+            if let Some(lint) = err.lint_name.as_deref() {
+                record.push_str(&format!(",\"lint_name\":{}", json_string(lint)));
+            }
             if let Some(expected) = &err.expected {
                 record.push_str(&format!(",\"expected\":{}", json_string(expected)));
             }
@@ -1826,13 +1836,17 @@ impl PackageCheck {
         for m in &self.type_warnings {
             for e in &m.errors {
                 let d = diag("typecheck", "warning", &e.message, &e.span, Vec::new());
-                out.push(coded(d, super::diag_json::type_warning_code(&e.kind)));
+                let code = super::diag_json::lint_code(e.lint_name.as_deref(), "warning")
+                    .unwrap_or_else(|| super::diag_json::type_warning_code(&e.kind));
+                out.push(coded(d, code));
             }
         }
         for m in &self.type_errors {
             for e in &m.errors {
                 let d = diag("typecheck", "error", &e.message, &e.span, Vec::new());
-                out.push(coded(d, type_error_code(&e.kind)));
+                let code = super::diag_json::lint_code(e.lint_name.as_deref(), "error")
+                    .unwrap_or_else(|| type_error_code(&e.kind));
+                out.push(coded(d, code));
             }
         }
         out
