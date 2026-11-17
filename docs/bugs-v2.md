@@ -60,8 +60,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 450 |
 | false-positive | 246 |
-| missing-feature | 188 |
-| perf | 182 |
+| missing-feature | 189 |
+| perf | 183 |
 | other | 111 |
 | miscompile | 81 |
 | soundness | 81 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 578 |
 | mir-llvm | 281 |
 | mir | 242 |
-| cli | 190 |
+| cli | 191 |
 | parser | 103 |
 | ownership | 99 |
 | interp | 87 |
@@ -88,7 +88,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | effect | 38 |
 | other | 33 |
 | codegen | 22 |
-| autopar | 6 |
+| autopar | 7 |
 | lexer | 1 |
 ## Current state
 
@@ -139,14 +139,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-301 | 2026-11-16 | typecheck+cli | low | E0208 (comparison without the trait) offers the `#[derive]` machine fix at an `==` site but none at a `<` / `>` site | — |
 | B-2026-11-16-302 | 2026-11-16 | other | low | [doc-only] design.md's streaming-phase-events example shows code E0099, which the compiler never emits (parse errors are E0001/E0002) and explain does not know | — |
 | B-2026-11-16-303 | 2026-11-16 | other | low | 389 of the 491 codes `karac explain` knows are produced by no corpus program under `karac check` (102 distinct codes appear over all 21918 sources), so most catalogue entries have no pin that the code is reachable or that its text matches | — |
-| B-2026-11-16-310 | 2026-11-16 | runtime+mir-llvm | high | On wasm_wasi a capacity argument is truncated to 32 bits instead of reporting CapacityOverflow: `w.try_reserve(4294967297)` returns Ok with capacity 4, `v.try_reserve(1 << 58)` returns Ok, and `String.try_with_capacity(i64.MAX)` reports OutOfMemory of 4294967295 bytes | — |
 | B-2026-11-16-311 | 2026-11-16 | mir-llvm+runtime | medium | Dropping a deep two-child `shared` chain overflows the stack on wasm_wasi at about 20000 levels (RangeError: Maximum call stack size exceeded, exit 1), while native drops a 5,000,000-level chain; a one-field chain drops fine at 100000 on both | — |
 | B-2026-11-16-312 | 2026-11-16 | mir-llvm | medium | A 21,824-line program (apps/cli/mini_tldextract) takes 246 s and 11.4 GB peak RSS to build for wasm_wasi at the default -O2, against 18 s and 1.5 GB for native; KARAC_MIR_OPT=0 builds it for wasm in 9 s, O1 in 197 s | — |
 | B-2026-11-16-313 | 2026-11-16 | cli | low | `karac build --target=wasm32-wasip1` (or -threads) is taken as a native triple and fails at link with `wasm-ld: cannot open crt1.o`, `unable to find library -lpthread`, instead of mapping to wasm_wasi or pointing at it | — |
 | B-2026-11-16-314 | 2026-11-16 | cli | low | `karac build --help` describes `--target=wasm_browser` as emitting `.wasm` + `.js` glue + `.d.ts` with no 'Not in 0.8' mark, but the build refuses it ('builds the browser wasm bindings, which is not in 0.8') | — |
 | B-2026-11-16-315 | 2026-11-16 | other | low | [doc-only] design.md's resource table marks `Env` on wasm_wasi as '(limited)' without saying what is limited, and §16 names `libkarac_runtime_wasm_threads_{unicode,regex}.a` although no 0.8 build can link a threaded wasm module | — |
-| B-2026-11-16-316 | 2026-11-16 | runtime+mir-llvm | high | `v.reserve(n)` with n*8 past 2^64 (e.g. `reserve(1 << 61)`, `reserve(i64.MAX)`) sets a wrapped capacity without allocating, and the next pushes write past the buffer: heap-buffer-overflow under ASan, SIGSEGV in a plain build | — |
-| B-2026-11-16-317 | 2026-11-16 | runtime+mir-llvm+interp | medium | Allocation failure is not a panic: natively it prints `panic: out of memory` / `panic: capacity overflow` and aborts with SIGABRT (exit 134, no `runtime error:`, no location, no panic record, no handler); on wasm it traps with exit 1; the interpreter reports 'explicit panic' or does not fail at all | — |
 | B-2026-11-16-318 | 2026-11-16 | mir-llvm | medium | The compiled lanes drop the panic's `at file:line:col` when the panic is raised inside a `#[track_caller]` function: a user `#[track_caller] fn at(v, i) { v[i] }` and `Str.split_at` inside a char print the message with no location on llvm and wasm, while the interpreter prints the caller's location | — |
 | B-2026-11-16-319 | 2026-11-16 | mir-llvm+interp | medium | Stack overflow is not a specified outcome and differs per lane: the interpreter exits 134 with 'fatal runtime error: stack overflow', the -O2 native build turns the recursion into a loop and exits 0 with the answer, and wasm traps with exit 1; the corpus pins 134 | — |
 | B-2026-11-16-320 | 2026-11-16 | runtime+mir | low | The string-slicing panic text carries a diagnostic-style code (`runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..2 does not fall on UTF-8 char boundaries of "héllo"`) that `karac explain` treats as a compile-time code, and quotes the whole string into the report | — |
@@ -222,6 +219,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-66 | 2026-11-17 | typecheck+runtime | low | `SipHash13BuildHasher` and `FxBuildHasher` have no `build()` and do not satisfy a `B: BuildHasher` bound, though collections.md calls both 'ordinary BuildHasher types', so a program cannot compute the default hasher's digest or hand either hasher to generic code | — |
 | B-2026-11-17-67 | 2026-11-17 | typecheck | low | `Duration` and `Instant` have no text form: `println(f"took {t.elapsed()}")` is refused E0232 (no Display), Debug is not implemented yet, and time-random-env.md gives no format, so every timing message is written as `{d.as_ms()} ms` by hand | — |
 | B-2026-11-17-68 | 2026-11-17 | runtime | medium | On wasm_wasi, once `Regex.compile` has returned its size-limit error ('Compiled regex exceeds size limit of 10485760 bytes'), the program's next print kills the host: node exits by SIGSEGV (139), though the same program runs to the end on interp, llvm and asan | — |
+| B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
+| B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 
 ### Relocated
 
@@ -1576,6 +1575,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-307 | typecheck | low | `a, b = (1, 2, 3)` adds a spurious E0222 'refutable pattern in `let` binding' next to the arity error | b31d77e15a |
 | B-2026-11-16-308 | parser | low | A float range pattern `0.0..=1.0` is a parse error at `..=`, not the spec's 'float ranges are not supported' | b31d77e15a |
 | B-2026-11-16-309 | typecheck | low | A default naming an earlier parameter gets a duplicate 'not a known const' error, or only 'undefined name' once the function is called | b31d77e15a |
+| B-2026-11-16-310 | runtime+mir-llvm | high | On wasm_wasi a capacity argument is truncated to 32 bits instead of reporting CapacityOverflow: `w.try_reserve(4294967297)` returns Ok with capacity… | 268f63b699 |
+| B-2026-11-16-316 | runtime+mir-llvm | high | `v.reserve(n)` with n*8 past 2^64 (e.g | 268f63b699 |
+| B-2026-11-16-317 | runtime+mir-llvm+interp | medium | Allocation failure is not a panic: natively it prints `panic: out of memory` / `panic: capacity overflow` and aborts with SIGABRT (exit 134, no `runt… | 268f63b699 |
 | B-2026-11-16-325 | other | low | [doc-only] core-types.md § Parsing does not say which spellings of the special float values `f64.parse` accepts; every lane accepts `inf`, `-inf`, `i… | ada66fb83f |
 | B-2026-11-16-272 | mir | low | When a `par` branch or `par for` iteration leaves early (`?`, `return`), the block's other values dropped in source order, where core-semantics §11.7… | a04638fd9e |
 | B-2026-11-16-326 | mir | high | `<` on a type whose derived ordering reaches itself (`#[derive(PartialEq, PartialOrd)] enum Tree { Leaf(i64), Node(Vec[Tree]) }`) overflows the stack… | a8c99e46a9 |
