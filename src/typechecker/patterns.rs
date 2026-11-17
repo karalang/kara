@@ -4172,7 +4172,14 @@ impl<'a> super::TypeChecker<'a> {
                         if patterns.len() == types.len() {
                             let is_mut = matches!(ty, Type::MutRef(_));
                             for (pat, t) in patterns.iter().zip(types.iter()) {
-                                let field_ty = borrowed_field_binding_ty(t, is_mut);
+                                // A number whose type no use has fixed yet is
+                                // a scalar too (`SortedMap.from([(-1, 0)])`,
+                                // B-2026-11-17-115).
+                                let field_ty = if self.is_open_literal(t) {
+                                    t.clone()
+                                } else {
+                                    borrowed_field_binding_ty(t, is_mut)
+                                };
                                 self.bind_pattern_types(pat, &field_ty);
                                 // On the MIR pipeline a `Copy` field bound by
                                 // value is still a view of the borrowed tuple,
@@ -4790,6 +4797,14 @@ fn non_exhaustive_match_fix_it(
 impl<'a> super::TypeChecker<'a> {
     /// v2 core §4.6: whether a plain binding of a `Copy` part copies it: not
     /// an explicit `ref` / `mut ref` binding, and not of a reference type.
+    /// Whether `t` is a literal's variable that no use has fixed yet.
+    pub(super) fn is_open_literal(&self, t: &Type) -> bool {
+        matches!(
+            super::inference::resolve_type_var_top(t, &self.env.substitutions),
+            Type::TypeVar(id) if super::inference::literal_var_kind(id).is_some()
+        )
+    }
+
     fn core_binding_copies(&self, pattern: &Pattern, expected: &Type) -> bool {
         let key = SpanKey::from_span(&pattern.span);
         (self.cli_lint_overrides.strict_core || self.library_methods_from_source)

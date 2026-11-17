@@ -6396,8 +6396,47 @@ impl<'a> super::TypeChecker<'a> {
                         t => super::inference::literal_takes(kind, &t),
                     }
                 };
+                // A constructor of a list of literals, for a parameter the
+                // call returns (`fold(SortedMap.from([(-1, 0)]), ..)`), keeps
+                // the list's numbers open, so the closure's return may fix
+                // them (kata 1187's Rust arm, B-2026-11-17-115).
+                let open_ctor = match &arg.value.kind {
+                    ExprKind::Call {
+                        callee,
+                        args: ctor_args,
+                    } if seeded_slot.is_none()
+                        && matches!(&callee.kind, ExprKind::Path { segments, .. } if segments.len() == 2)
+                        && matches!(formal_param_ty,
+                                Type::TypeParam(p) if Self::result_carries_param(return_type, p)) =>
+                    {
+                        ctor_args
+                            .iter()
+                            .find(|a| is_collection_literal(&a.value))
+                            .map(|a| a.value.id)
+                    }
+                    _ => None,
+                };
                 let inferred = match &seeded_slot {
                     Some(slot) => self.check_expr(&arg.value, slot),
+                    None if open_ctor.is_some() => {
+                        let saved = self.open_collection_let;
+                        self.open_collection_let = open_ctor;
+                        let t = self.infer_expr(&arg.value);
+                        self.open_collection_let = saved;
+                        let resolved = resolve_type_var_top(&t, &self.env.substitutions);
+                        let mut ids = Vec::new();
+                        type_var_ids(&resolved, &mut ids);
+                        for id in ids {
+                            if let Type::TypeVar(v) =
+                                resolve_type_var_top(&Type::TypeVar(id), &self.env.substitutions)
+                            {
+                                if inference::literal_var_kind(v).is_some() {
+                                    self.held_open_literals.push(v);
+                                }
+                            }
+                        }
+                        t
+                    }
                     None if match formal_param_ty {
                         Type::TypeParam(p) => {
                             matches!(arg.value.kind, ExprKind::Identifier(_))
@@ -14949,6 +14988,13 @@ impl<'a> super::TypeChecker<'a> {
     /// [`Self::infer_expr`] leaving an integer or float literal's variable
     /// open, for a use a later one may fix: a `let`'s value, an operand,
     /// an expression checked against a slot (B-2026-11-07-3).
+    /// A tuple literal of unsuffixed integer literals: `(-1, 0)`.
+    pub(super) fn literal_tuple(e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Tuple(items)
+            if !items.is_empty()
+                && items.iter().all(|i| Self::unsuffixed_int_literal_value(i).is_some()))
+    }
+
     pub(super) fn infer_expr_open(&mut self, expr: &Expr) -> Type {
         let saved = self.open_literal_expr.replace(expr.id);
         let ty = self.infer_expr(expr);
@@ -18591,11 +18637,15 @@ impl<'a> super::TypeChecker<'a> {
                                         | ExprKind::If { .. }
                                         | ExprKind::Match { .. }
                                 ) && Self::is_literal_tree(e, &Type::Int(IntSize::I64)))
-                        }) || elements.iter().all(unsuffixed_float));
+                        }) || elements.iter().all(unsuffixed_float)
+                            || elements.iter().all(Self::literal_tuple));
+                    // So do the numbers of a list of tuples of them (`let
+                    // m = [(-1, 0)]`, `SortedMap.from([(-1, 0)])` as a fold's
+                    // seed, kata 1187's Rust arm, B-2026-11-17-115).
                     let first_ty = if open {
-                        let first = self.infer_expr_open(&elements[0]);
+                        let first = self.infer_element_open(&elements[0]);
                         for e in &elements[1..] {
-                            let t = self.infer_expr_open(e);
+                            let t = self.infer_element_open(e);
                             unify_types(
                                 &first,
                                 &t,

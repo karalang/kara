@@ -9153,6 +9153,34 @@ impl<'a> TypeChecker<'a> {
                 if resolved != *found {
                     return self.check_assignable(expected, &resolved, span);
                 }
+            } else if let Type::Ref(inner) = found {
+                // A borrow of a value whose numbers no use has fixed yet
+                // (`rook.iter()` over `let rook = [(1, 0)]`) fixes them from
+                // the slot it is read into, as a fixed one would be read
+                // (B-2026-11-17-115).
+                let mut ids = Vec::new();
+                exprs::type_var_ids(inner, &mut ids);
+                let only_literals = !ids.is_empty()
+                    && ids.iter().all(|id| {
+                        matches!(
+                            inference::resolve_type_var_top(&Type::TypeVar(*id), &self.env.substitutions),
+                            Type::TypeVar(r) if inference::literal_var_kind(r).is_some()
+                        ) || inference::literal_var_kind(*id).is_some()
+                    });
+                let mut subs = self.env.substitutions.clone();
+                let mut const_subs = self.env.const_substitutions.clone();
+                if only_literals
+                    && self.is_copy_type_during_check(inner)
+                    && !matches!(expected, Type::Ref(_) | Type::MutRef(_))
+                    && inference::unify_types(expected, inner, &mut subs, &mut const_subs)
+                {
+                    self.env.substitutions = subs;
+                    self.env.const_substitutions = const_subs;
+                    let resolved = self.resolved_now(found);
+                    if resolved != *found {
+                        return self.check_assignable(expected, &resolved, span);
+                    }
+                }
             }
         }
         // B-2026-10-20-18 — the converse: a slot whose type still carries an
