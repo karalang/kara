@@ -690,6 +690,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 | "karac_mir_string_push_char"
                 | "karac_mir_string_push_str"
                 | "karac_mir_str_repeat"
+                | "karac_mir_str_try_repeat"
                 | "karac_mir_str_from_utf8"
                 | "karac_mir_str_from_utf8_lossy"
         )

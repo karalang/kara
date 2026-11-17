@@ -3690,7 +3690,15 @@ impl<'a> Interp<'a> {
                 // `val` moves into the first slot and is cloned into the rest;
                 // `n < 0` counts as 0 (docs/library/collections.md).
                 let n = (*n).max(0) as usize;
-                let mut elems = Vec::with_capacity(n);
+                if self.over_max_alloc(n as u128, ret) {
+                    return self.capacity_overflow();
+                }
+                // A count the allocator refuses is the program's panic, not
+                // the interpreter's abort (B-2026-11-17-86).
+                let mut elems = Vec::new();
+                if elems.try_reserve_exact(n).is_err() {
+                    return self.out_of_memory();
+                }
                 for i in 0..n {
                     if i + 1 == n {
                         elems.push(val.clone());
@@ -4145,6 +4153,15 @@ impl<'a> Interp<'a> {
                     _ => return err(format!("{name}: wrong arguments")),
                 };
                 let len = self.vec_elems(id)?.len();
+                if want > len {
+                    let size = super::layout::layout(self.tys, e).map_or(1, |l| l.size as u128);
+                    if (want as u128).saturating_mul(size) > (1 << 61) - 1 {
+                        return self.capacity_overflow();
+                    }
+                    if self.vec_elems(id)?.try_reserve_exact(want - len).is_err() {
+                        return self.out_of_memory();
+                    }
+                }
                 let from = if method == "fill" { 0 } else { len.min(want) };
                 for i in from..len {
                     self.drop_at(&elem(i), e)?;
@@ -12612,7 +12629,18 @@ impl<'a> Interp<'a> {
                 new_string(self, t)
             }
             "repeat" => {
-                let t = s.repeat(int(1)?.max(0) as usize);
+                let n = int(1)?.max(0);
+                let total = (s.len() as u128).saturating_mul(n as u128);
+                if total > (1 << 61) - 1 {
+                    return self.capacity_overflow();
+                }
+                let mut t = String::new();
+                if t.try_reserve_exact(total as usize).is_err() {
+                    return self.out_of_memory();
+                }
+                for _ in 0..n {
+                    t.push_str(s);
+                }
                 new_string(self, t)
             }
             "substring" => {
@@ -12987,7 +13015,17 @@ impl<'a> Interp<'a> {
     /// The panic of a capacity no buffer can hold: kind `alloc_failure`,
     /// "capacity overflow", as the compiled runtime's (B-2026-11-16-317).
     fn capacity_overflow(&mut self) -> R<Value> {
-        self.panic_message = Some("capacity overflow".to_string());
+        self.alloc_panic("capacity overflow")
+    }
+
+    /// An allocation the allocator refused: the same panic, "out of
+    /// memory" (B-2026-11-17-86).
+    fn out_of_memory(&mut self) -> R<Value> {
+        self.alloc_panic("out of memory")
+    }
+
+    fn alloc_panic(&mut self, msg: &str) -> R<Value> {
+        self.panic_message = Some(msg.to_string());
         self.panic_kind = Some(crate::mir::syntax::panic_kind_code("alloc_failure"));
         if self.trace {
             self.events.push(Event::Abort(AbortReason::Panic));

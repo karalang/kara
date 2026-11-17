@@ -622,10 +622,54 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(tmp, ptr.into())?;
         self.store(self.offset(tmp, 8)?, len.into())?;
         self.store(self.offset(tmp, 16)?, cap.into())?;
+        if self.contain_block().is_some() {
+            // In a task of an isolating group the failure is the task's
+            // panic, not the process's: the fallible twin leaves the vector
+            // as it was, and the call leaves by its cancel exit
+            // (core-semantics §11.12, B-2026-11-17-86).
+            let code = self.rt_int(
+                "vec_try_reserve",
+                &[tmp.into(), more.into(), size.into()],
+                64,
+            )?;
+            self.store(v, self.load_ptr(tmp)?.into())?;
+            let cap = self.load_i64(self.offset(tmp, 16)?)?;
+            self.store(self.offset(v, 16)?, cap.into())?;
+            return self.alloc_code_or_panic(code);
+        }
         self.rt("vec_reserve", &[tmp.into(), more.into(), size.into()])?;
         self.store(v, self.load_ptr(tmp)?.into())?;
         let cap = self.load_i64(self.offset(tmp, 16)?)?;
         self.store(self.offset(v, 16)?, cap.into())
+    }
+
+    /// A fallible twin's `code` (-1 made, -2 a capacity no buffer holds,
+    /// else the byte count the allocator refused) as the panicking form's
+    /// outcome: "capacity overflow" or "out of memory" unless it is -1.
+    pub(super) fn alloc_code_or_panic(&mut self, code: IntValue<'ctx>) -> R<()> {
+        let f = self.cur_fn()?;
+        let (failed, over, oom, made) = (
+            self.llcx.append_basic_block(f, "alloc.failed"),
+            self.llcx.append_basic_block(f, "alloc.over"),
+            self.llcx.append_basic_block(f, "alloc.oom"),
+            self.llcx.append_basic_block(f, "alloc.made"),
+        );
+        let b = &self.builder;
+        let ok = b
+            .build_int_compare(IntPredicate::EQ, code, self.i64(u64::MAX), "")
+            .map_err(e)?;
+        b.build_conditional_branch(ok, made, failed).map_err(e)?;
+        b.position_at_end(failed);
+        let is_over = b
+            .build_int_compare(IntPredicate::EQ, code, self.i64(u64::MAX - 1), "")
+            .map_err(e)?;
+        b.build_conditional_branch(is_over, over, oom).map_err(e)?;
+        self.builder.position_at_end(over);
+        self.abort_with("capacity overflow")?;
+        self.builder.position_at_end(oom);
+        self.abort_with("out of memory")?;
+        self.builder.position_at_end(made);
+        Ok(())
     }
 
     /// The char starting at byte `i` of the text `p[..n]`, as an `i32`:
@@ -1608,7 +1652,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (sp, sn) = self.str_parts(s)?;
                 let n = self.int_arg(n)?;
                 let d = self.place_ptr(dest)?;
-                self.rt("str_repeat", &[d.into(), sp.into(), sn.into(), n.into()])?;
+                if self.contain_block().is_some() {
+                    // A task of an isolating group takes the failure
+                    // (core-semantics §11.12, B-2026-11-17-86).
+                    let code = self.rt_int(
+                        "str_try_repeat",
+                        &[d.into(), sp.into(), sn.into(), n.into()],
+                        64,
+                    )?;
+                    self.alloc_code_or_panic(code)?;
+                } else {
+                    self.rt("str_repeat", &[d.into(), sp.into(), sn.into(), n.into()])?;
+                }
             }
             ("split" | "split_whitespace" | "lines", [s, rest @ ..]) => {
                 let (sp, sn) = self.str_parts(s)?;

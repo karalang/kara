@@ -2287,6 +2287,29 @@ pub extern "C" fn karac_mir_sleep_ns(ns: i64) {
 /// `out` is writable for a `String`; `s` readable for `sn` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn: u64, n: i64) {
+    // SAFETY: the caller's contract.
+    match unsafe { karac_mir_str_try_repeat(out, s, sn, n) } {
+        -1 => {}
+        -2 => alloc_failure("capacity overflow"),
+        _ => alloc_failure("out of memory"),
+    }
+}
+
+/// [`karac_mir_str_repeat`]'s fallible form, for a task of an isolating
+/// group, whose failure is its own panic (core-semantics §11.12,
+/// B-2026-11-17-86): -1 when the `String` was written at `out`, -2 when
+/// its length is no buffer's, else the byte count the allocator refused;
+/// `out` holds an empty `String` then.
+///
+/// # Safety
+/// As [`karac_mir_str_repeat`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_try_repeat(
+    out: *mut RawVec,
+    s: *const u8,
+    sn: u64,
+    n: i64,
+) -> i64 {
     let sn = sn as usize;
     // Copied out by doubling rather than through `str::repeat`, whose
     // `expect` on the length keeps std's panic hook in every binary that
@@ -2297,12 +2320,19 @@ pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn
         Err(_) => None,
     };
     let Some(total) = total else {
-        alloc_failure("capacity overflow")
+        // SAFETY: the caller's contract.
+        unsafe { out.write(RawVec::new(std::ptr::null_mut(), 0, 0)) };
+        return -2;
     };
     let ptr = if total == 0 {
         std::ptr::null_mut()
     } else {
-        let p = karac_realloc_or_panic(std::ptr::null_mut(), total);
+        let p = crate::alloc::karac_alloc_fallible(total);
+        if p.is_null() {
+            // SAFETY: the caller's contract.
+            unsafe { out.write(RawVec::new(std::ptr::null_mut(), 0, 0)) };
+            return total as i64;
+        }
         // SAFETY: `s` is readable for `sn` bytes and `p` has room for
         // `total`, a whole number of copies; each copy reads the `filled`
         // bytes already written before them.
@@ -2319,6 +2349,7 @@ pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn
     };
     // SAFETY: the caller's contract.
     unsafe { out.write(RawVec::new(ptr, total, total)) };
+    -1
 }
 
 /// A new `Vec[String]` at `out` of the parts of `s`: 0 `split(sep)`, 1

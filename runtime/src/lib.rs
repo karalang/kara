@@ -302,6 +302,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_str_from_utf8_lossy,
         mir::karac_mir_str_replace,
         mir::karac_mir_str_repeat,
+        mir::karac_mir_str_try_repeat,
         mir::karac_mir_str_find,
         mir::karac_mir_str_chars,
         mir::karac_mir_str_strip,

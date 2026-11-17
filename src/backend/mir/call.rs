@@ -2323,9 +2323,16 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(self.offset(d, 16)?, n.into())?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(slow);
-        // Past the ceiling the runtime panics and does not come back.
-        self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
-        self.builder.build_unreachable().map_err(e)?;
+        if self.contain_block().is_some() {
+            // A task of an isolating group takes the panic, and the call
+            // leaves by its cancel exit (core-semantics §11.12,
+            // B-2026-11-17-86).
+            self.abort_with("capacity overflow")?;
+        } else {
+            // Past the ceiling the runtime panics and does not come back.
+            self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+            self.builder.build_unreachable().map_err(e)?;
+        }
         self.builder.position_at_end(done);
         Ok(())
     }
