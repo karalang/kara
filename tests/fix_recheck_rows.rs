@@ -258,3 +258,26 @@ fn ordering_over_an_unordered_field_gets_no_derive_fix() {
         "does not implement PartialOrd",
     );
 }
+
+/// B-2026-11-16-295: the shared-to-sync migration also routes a read of a
+/// wrapped field inside the `par` through its lock (`c.items.len()`,
+/// `c.count`), so the migrated file checks clean.
+#[test]
+fn shared_to_sync_migration_locks_reads_inside_the_par() {
+    refused_then_fixed(
+        "sync-migration-par-reads",
+        "shared struct Counter { val: i64, mut count: i64, mut items: Vec[i64] }\n\
+         fn use_a(c: Counter) { }\n\
+         fn use_b(c: Counter) { }\n\
+         fn main() {\n\
+         let c = Counter { val: 0, count: 0, items: [] };\n\
+         par {\n\
+         use_a(c);\n\
+         use_b(c);\n\
+         println(c.items.len() + c.count);\n\
+         }\n\
+         }\n",
+        "cannot enter a `par` branch",
+        "let items_guard = c.items.lock(); items_guard.value.len()",
+    );
+}

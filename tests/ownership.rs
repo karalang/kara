@@ -8395,12 +8395,10 @@ fn test_l205_lock_block_wraps_user_mut_ref_self_method() {
 }
 
 #[test]
-fn test_l205_lock_block_skips_immutable_method() {
-    // `c.items.len()` is a read (`Vec.len` → `BorrowKind::ImmRef`).
-    // Classifier returns false; no wrap emitted even though the
-    // receiver shape `Identifier(c).items` matches a mut field and
-    // the diagnostic fires. Pins that the classifier gate is load-
-    // bearing.
+fn test_l205_lock_block_reads_immutable_method_through_the_guard() {
+    // `c.items.len()` is a read (`Vec.len` → `BorrowKind::ImmRef`), so
+    // the classifier does not wrap its statement as a write; the read
+    // walker routes it through the guard instead.
     let src = "shared struct Counter { mut items: Vec[i64] }\n\
                fn use_a(c: ref Counter) { }\n\
                fn main() {\n\
@@ -8421,9 +8419,19 @@ fn test_l205_lock_block_skips_immutable_method() {
         .expect("expected ConcurrentSharedStruct error");
     let key = karac::resolver::SpanKey::from_span(&err.span);
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    // B-2026-11-16-295 flipped this pin: the same fix migrates `items` to
+    // `Mutex[Vec[i64]]`, so a read inside the `par` that skipped the lock
+    // no longer type-checked. The read goes through the guard; the
+    // classifier still keeps it from being wrapped as a WRITE.
     assert!(
-        !edits.iter().any(|e| e.replacement.contains(".lock()")),
-        "immutable method (`Vec.len`) must NOT trigger a lock wrap; got {edits:?}",
+        edits
+            .iter()
+            .any(|e| e.replacement.contains("let items_guard = c.items.lock(); ")),
+        "a read of a migrated field inside the par must go through its lock; got {edits:?}",
+    );
+    assert!(
+        edits.iter().any(|e| e.replacement == "items_guard.value"),
+        "the read must use the guard's value; got {edits:?}",
     );
 }
 
@@ -8590,7 +8598,7 @@ fn test_l207_lock_block_wraps_field_followed_by_index() {
 }
 
 #[test]
-fn test_l207_lock_block_skips_index_first_chain() {
+fn test_l207_lock_block_reads_index_first_chain_through_the_guard() {
     // `arr[0]` where `arr` is the diagnosed binding (the par branches
     // reference `arr` itself). resolve_place_chain returns
     // `{ root: "arr", projections: [Index] }`; the first projection is
@@ -8623,9 +8631,18 @@ fn test_l207_lock_block_skips_index_first_chain() {
     // The fixture is a read (`let _x = c.items[0]`), so no lock-block
     // edit would fire even with full L207 support. The key assertion
     // is the negative one: no `lock ` edit appears for the read path.
+    // B-2026-11-16-295 flipped this pin: the migrated `Mutex[Vec[i64]]`
+    // cannot be indexed, so the read goes through the guard as a read
+    // (`items_guard.value[0]`), never as a write-wrap of the statement.
     assert!(
-        !edits.iter().any(|e| e.replacement.contains(".lock()")),
-        "read-through-index should not emit a lock-block edit; got {edits:?}",
+        edits
+            .iter()
+            .any(|e| e.replacement.contains("let items_guard = c.items.lock(); ")),
+        "a read through an index must go through the lock; got {edits:?}",
+    );
+    assert!(
+        edits.iter().any(|e| e.replacement == "items_guard.value"),
+        "the read must index the guard's value; got {edits:?}",
     );
 }
 

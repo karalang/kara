@@ -3291,6 +3291,18 @@ fn build_lock_block_edits_for_binding(
         WrapShape::Shorthand,
         &mut edits,
     );
+    // Reads of a wrapped field inside the `par` go through the lock too:
+    // `c.items.len()` becomes `{ let items_guard = c.items.lock();
+    // items_guard.value.len() }`. The migrate path's read walker drops
+    // edits inside par bodies as this diagnostic's territory, so without
+    // this the migrated file fails at each read (B-2026-11-16-295).
+    collect_lock_block_reads_in_block(
+        par_body,
+        binding_name,
+        &mut_fields,
+        &empty_atomic,
+        &mut edits,
+    );
     edits
 }
 
