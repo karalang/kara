@@ -1,0 +1,10 @@
+source = "B-2026-11-17-132"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency"]
+expected_from = "spec"
+rules = ["5.7", "5.8"]
+backends = []
+env = {}
+note = "B-2026-11-17-132: the refusal of a view stored through a Mutex's lock leaves owned values alone: a copy of each element read through an iterator goes in."

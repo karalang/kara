@@ -1,0 +1,1 @@
+error[E0509]: a view (`Option[ref i64]`) is stored in `g.value`, the value a `Mutex` holds, where a view may not go (core semantics §5.7)

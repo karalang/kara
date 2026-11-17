@@ -913,17 +913,43 @@ fn through_shared_ref(body: &Body, tys: &TyInterner, place: &Place) -> bool {
     read_only
 }
 
-/// Does `place` name a field of a `shared` value (`s.items`, `(*s).items`
-/// through a `ref` handle)? A view may not go there (core semantics §5.7).
-fn in_shared_field(body: &Body, tys: &TyInterner, place: &Place) -> bool {
-    (0..place.projection.len()).any(|i| {
+/// Where a view may not go that `place` names (core semantics §5.7): a
+/// field of a `shared` value (`s.items`, `(*s).items` through a `ref`
+/// handle), or the value a `Mutex` holds, reached through its lock's guard
+/// (`*g.value`), which a `ref` to the mutex writes, so no borrow of the
+/// mutex keeps what is stored there (B-2026-11-17-132).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NoViewPlace {
+    SharedField,
+    MutexValue,
+}
+
+impl NoViewPlace {
+    fn describe(self) -> &'static str {
+        match self {
+            NoViewPlace::SharedField => "a field of a `shared` value",
+            NoViewPlace::MutexValue => "the value a `Mutex` holds",
+        }
+    }
+}
+
+fn no_view_place(body: &Body, tys: &TyInterner, place: &Place) -> Option<NoViewPlace> {
+    (0..place.projection.len()).find_map(|i| {
+        if !matches!(place.projection[i], ProjElem::Field(..)) {
+            return None;
+        }
         let prefix = Place {
             local: place.local,
             projection: place.projection[..i].to_vec(),
         };
-        matches!(place.projection[i], ProjElem::Field(..))
-            && place_ty(body, tys, &prefix)
-                .is_ok_and(|pt| matches!(tys.kind(pt.ty), TyKind::Shared(_)))
+        let pt = place_ty(body, tys, &prefix).ok()?;
+        match tys.kind(pt.ty) {
+            TyKind::Shared(_) => Some(NoViewPlace::SharedField),
+            TyKind::Adt(a) if tys.adt(a).library_name() == Some("MutexGuard") => {
+                Some(NoViewPlace::MutexValue)
+            }
+            _ => None,
+        }
     })
 }
 
@@ -966,15 +992,17 @@ pub(crate) fn holds_view(tys: &TyInterner, ty: Ty) -> bool {
     go(tys, ty, &mut Vec::new())
 }
 
-/// The field of a `shared` value statement `s` stores a view-typed value
-/// in, with that value's type.
-fn stored_view(body: &Body, tys: &TyInterner, s: &StatementKind) -> Option<(Place, Ty)> {
+/// The place where a view may not go ([`no_view_place`]) statement `s`
+/// stores a view-typed value in, with that value's type.
+fn stored_view(
+    body: &Body,
+    tys: &TyInterner,
+    s: &StatementKind,
+) -> Option<(Place, Ty, NoViewPlace)> {
     let StatementKind::Assign(dest, rv) = s else {
         return None;
     };
-    if !in_shared_field(body, tys, dest) {
-        return None;
-    }
+    let kind = no_view_place(body, tys, dest)?;
     let op_ty = |op: &Operand| match op {
         Operand::Copy(p) | Operand::Move(p) => place_ty(body, tys, p).ok().map(|pt| pt.ty),
         Operand::Const(c) => Some(c.ty),
@@ -985,7 +1013,7 @@ fn stored_view(body: &Body, tys: &TyInterner, s: &StatementKind) -> Option<(Plac
         Rvalue::Aggregate(_, ops) => ops.iter().filter_map(op_ty).find(|t| holds_view(tys, *t)),
         _ => None,
     }?;
-    holds_view(tys, t).then(|| (dest.clone(), t))
+    holds_view(tys, t).then(|| (dest.clone(), t, kind))
 }
 
 /// A view-typed value stored in a field of a `shared` value (core
@@ -1035,26 +1063,32 @@ fn view_into_shared_errors(body: &Body, tys: &TyInterner) -> Vec<BorrowError> {
                     let TyKind::MutRef(holder) = tys.kind(pt.ty) else {
                         return None;
                     };
-                    let field = lent(p.local).filter(|f| in_shared_field(body, tys, f))?;
+                    let field = lent(p.local)?;
+                    let kind = no_view_place(body, tys, &field)?;
                     args.iter().enumerate().find_map(|(j, b)| {
                         let q = b.place().filter(|_| j != i)?;
                         let t = place_ty(body, tys, q).ok()?.ty;
                         (holds_view(tys, t) && contains_ty(tys, holder, t))
-                            .then(|| (field.clone(), t))
+                            .then(|| (field.clone(), t, kind))
                     })
                 })
             } else {
                 None
             };
-            let Some((field, t)) = stored else {
+            let Some((field, t, kind)) = stored else {
                 continue;
             };
+            // A guard the program never names (`m.lock().value.push(r)`)
+            // leaves the place unnamed: the mutex's value is enough.
+            let place = match (source_place(body, tys, &field), kind) {
+                (Some(p), _) => format!("`{p}`, {}", kind.describe()),
+                (None, NoViewPlace::MutexValue) => kind.describe().to_string(),
+                (None, _) => format!("{}, {}", show_place(body, tys, &field), kind.describe()),
+            };
             let text = format!(
-                "{}: {} in {}, a field of a `shared` value, where a view may not go; store an owned copy instead (core semantics §5.7, §5.8) [E0509]",
+                "{}: {} in {place}, where a view may not go; store an owned copy instead (core semantics §5.7, §5.8) [E0509]",
                 site(body, (bi, si), None),
                 subject(t),
-                source_place(body, tys, &field)
-                    .map_or_else(|| show_place(body, tys, &field), |p| format!("`{p}`")),
             );
             errs.push(BorrowError {
                 place: source_place(body, tys, &field),
@@ -3645,6 +3679,11 @@ fn main() -> () {
             // (B-2026-11-17-127).
             "drop_body_suspends_in_a_channel_queue",
             "drop_body_suspends_in_a_once_cell",
+            // `Mutex.lock` (B-2026-11-17-132).
+            "err_generic_instance_view_into_a_mutex",
+            "err_view_assigned_through_a_mutex_guard",
+            "err_view_pushed_into_a_mutex_through_its_lock",
+            "ok_owned_copies_pushed_into_a_mutex",
             // `ref a.child.items`, a `ref` of a field path: this check's
             // plain typecheck takes only `ref v[i]` (E_REF_OPERAND_UNSUPPORTED)
             // and the library build reads core places, so these run there

@@ -112,6 +112,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a
   function value it is not lowered yet and stops with a message
   (B-2026-11-17-101).
+- A view stored in the value a `Mutex` holds, through its lock
+  (`m.lock().value.push(r)`, `*g.value = Some(ref x)`), is refused (E0509)
+  as a store into a `shared` field is, a generic instance's included
+  (`Holder[ref i64].put`); it was accepted, and later reads saw whatever
+  the dead places held (B-2026-11-17-132).
 - A `Drop` body that suspends is now waited for behind a `shared` value's
   last handle (a `weak` handle that outlives it then reads as gone), a
   `dyn` value, a `Map`, `Set`, `SortedMap`, `SortedSet` or `VecDeque`

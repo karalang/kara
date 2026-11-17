@@ -1,0 +1,9 @@
+fn main() {
+    let m: Mutex[Option[ref i64]] = Mutex.new(None);
+    {
+        let x = 4;
+        let mut g = m.lock();
+        *g.value = Some(ref x);
+    }
+    println("end");
+}

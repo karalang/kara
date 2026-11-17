@@ -1,0 +1,13 @@
+struct Holder[T] { values: Mutex[VecDeque[T]] }
+impl[T] Holder[T] {
+    fn put(self, e: own T) { self.values.lock().value.push_back(e); }
+    fn take(self) -> T { self.values.lock().value.pop_front().unwrap() }
+}
+fn main() {
+    let h: Holder[i64] = Holder { values: Mutex.new(VecDeque.new()) };
+    {
+        let mine: Vec[i64] = [1, 0, 2, 3];
+        for v in mine.iter() { h.put(*v); }
+    }
+    println(f"{h.take()} {h.take()}");
+}

@@ -1,0 +1,8 @@
+fn main() {
+    let m: Mutex[Vec[ref i64]] = Mutex.new(Vec.new());
+    {
+        let mine: Vec[i64] = [1, 2];
+        for v in mine.iter() { m.lock().value.push(v); }
+    }
+    println(f"{m.lock().value.len()}");
+}

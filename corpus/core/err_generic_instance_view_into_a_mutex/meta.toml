@@ -1,0 +1,10 @@
+source = "B-2026-11-17-132"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["concurrency"]
+expected_from = "spec"
+rules = ["5.7", "5.8"]
+backends = []
+env = {}
+note = "B-2026-11-17-132 (kata 1188): core semantics §5.8, an instance whose body stores a view where a view may not go is an error; Holder[ref i64].put pushes its ref i64 into the VecDeque its Mutex holds, and before the fix the run printed 3 3 for 1 0. The expected.out wording of an error pin is guidance, not a byte oracle."
