@@ -2975,8 +2975,17 @@ impl<'a> super::TypeChecker<'a> {
         // scope at all.
         self.check_effect_partition_keys(f.effects.as_ref(), &gp);
 
-        // Validate inline bounds and where clause (merged — both apply)
-        self.validate_all_bounds(&f.generic_params, &f.where_clause, &gp);
+        // Validate inline bounds and where clause (merged — both apply). A
+        // method's `where Self: Clone` names the receiver's type, in scope
+        // wherever there is one: a trait's default body copied into an impl
+        // carries its trait's clause (B-2026-11-17-97).
+        if self_type.is_some() && !gp.iter().any(|p| p == "Self") {
+            let mut with_self = gp.clone();
+            with_self.push("Self".to_string());
+            self.validate_all_bounds(&f.generic_params, &f.where_clause, &with_self);
+        } else {
+            self.validate_all_bounds(&f.generic_params, &f.where_clause, &gp);
+        }
 
         // Bind self
         if f.self_param.is_some() {
@@ -5633,6 +5642,23 @@ impl<'a> super::TypeChecker<'a> {
         let subs: HashMap<String, SubstValue> =
             std::iter::once(("Self".to_string(), SubstValue::Type(self_type.clone()))).collect();
         for constraint in &wc.constraints {
+            // `where Self: Clone` (`Iterator.cycle`, B-2026-11-17-97): an
+            // implementor that is not `Clone` has no `cycle`.
+            if let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = constraint
+            {
+                if type_name == "Self"
+                    && bounds.iter().any(|b| {
+                        b.path
+                            .last()
+                            .is_some_and(|name| !self.type_satisfies_bound(self_type, name))
+                    })
+                {
+                    return true;
+                }
+                continue;
+            }
             let WhereConstraint::ProjectionBound {
                 projection, bounds, ..
             } = constraint

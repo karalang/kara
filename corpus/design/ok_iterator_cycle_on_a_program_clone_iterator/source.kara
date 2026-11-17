@@ -1,0 +1,67 @@
+// library/iterators.md § `cycle` and design.md § Supertraits ("A bound on one
+// method"): `cycle` is `Iterator`'s default method under `where Self: Clone`,
+// so a program's own `Clone` iterator has it, in a generic function bounded by
+// `Clone` too, and a trait's own default method may carry the same bound.
+#[derive(Clone)]
+struct Countdown {
+    n: i64,
+}
+
+impl Iterator for Countdown {
+    type Item = i64;
+
+    fn next(mut ref self) -> Option[i64] {
+        if self.n == 0 {
+            return None;
+        }
+        self.n -= 1;
+        Some(self.n)
+    }
+}
+
+fn firsts[I: Iterator[Item = i64] + Clone](it: own I, k: i64) -> Vec[i64] {
+    it.cycle().take(k).collect()
+}
+
+trait Named {
+    fn name(self) -> String;
+
+    fn twice(own self) -> (Self, Self) where Self: Clone {
+        let c = self.clone();
+        (c, self)
+    }
+}
+
+#[derive(Clone)]
+struct Tag {
+    s: String,
+}
+
+impl Named for Tag {
+    fn name(self) -> String {
+        self.s.clone()
+    }
+}
+
+struct Plain {
+    s: String,
+}
+
+impl Named for Plain {
+    fn name(self) -> String {
+        self.s.clone()
+    }
+}
+
+fn main() {
+    let a: Vec[i64] = Countdown { n: 3 }.cycle().take(7).collect();
+    println(f"{a}");
+    let b = firsts(Countdown { n: 2 }, 5);
+    println(f"{b}");
+    let e: Vec[i64] = Countdown { n: 0 }.cycle().take(3).collect();
+    println(f"{e}");
+    let (x, y) = Tag { s: "t".to_string() }.twice();
+    println(f"{x.name()}{y.name()}");
+    let p = Plain { s: "p".to_string() };
+    println(p.name());
+}

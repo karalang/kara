@@ -593,6 +593,42 @@ impl<'a> super::TypeChecker<'a> {
         // is the caller's (`self.read(..)` in `impl[R] BufReader[R]`,
         // B-2026-11-11-62).
         let receiver_for_lookup = &self.impl_self_with_args(receiver_for_lookup.clone());
+        // `Iterator.cycle` restarts from a copy of the iterator (`where Self:
+        // Clone`, B-2026-11-17-80, -97). A library adaptor that is not `Clone`
+        // holds a closure: name it and the two rewrites. A program's own
+        // iterator gets the derive. Either way the call stops here, so the
+        // adaptors chained after it do not each report the same bound.
+        if method == "cycle" {
+            if let Type::Named { name, .. } = receiver_for_lookup {
+                if self.library_iter_item_type(receiver_for_lookup).is_some()
+                    && !self.type_satisfies_bound(receiver_for_lookup, "Clone")
+                {
+                    let library = !self.program_declares_type(name);
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    let message = if library {
+                        format!(
+                            "no method 'cycle' on type '{name}': `cycle` starts each \
+                             round from a copy of the iterator, and this one holds a \
+                             closure (`map`, `filter`, ..), which is not `Clone`. Cycle \
+                             the source and adapt after it (`v.iter().cycle().map(..)`), \
+                             or collect the items into a `Vec` and cycle over its `iter()` \
+                             (library/iterators.md § `cycle`)"
+                        )
+                    } else {
+                        format!(
+                            "no method 'cycle' on type '{name}': `cycle` starts each \
+                             round from a copy of the iterator (`where Self: Clone`), and \
+                             `{name}` is not `Clone`; add `#[derive(Clone)]` to its \
+                             declaration (library/iterators.md § `cycle`)"
+                        )
+                    };
+                    self.type_error(message, *span, TypeErrorKind::NoMethodFound);
+                    return Type::Error;
+                }
+            }
+        }
         let (type_name, type_args) = match receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             // B-2026-08-12-32 — a `String` receiver reaching here has already
@@ -2131,28 +2167,6 @@ impl<'a> super::TypeChecker<'a> {
                                 },
                                 replacement: ".value".to_string(),
                             },
-                        );
-                        return Type::Error;
-                    }
-                    // `cycle` restarts from a copy of the iterator, which an
-                    // adaptor holding a closure cannot make (B-2026-11-17-80).
-                    if method == "cycle"
-                        && self.library_iter_item_type(receiver_for_lookup).is_some()
-                    {
-                        for arg in args {
-                            self.infer_expr(&arg.value);
-                        }
-                        self.type_error(
-                            format!(
-                                "no method 'cycle' on type '{type_name}': `cycle` starts each \
-                                 round from a copy of the iterator, and this one holds a \
-                                 closure (`map`, `filter`, ..), which is not `Clone`. Cycle \
-                                 the source and adapt after it (`v.iter().cycle().map(..)`), \
-                                 or collect the items into a `Vec` and cycle over its `iter()` \
-                                 (library/iterators.md § `cycle`)"
-                            ),
-                            *span,
-                            TypeErrorKind::NoMethodFound,
                         );
                         return Type::Error;
                     }

@@ -1,0 +1,1 @@
+ERROR at line 24: this method needs `Self: Clone` (its `where` clause), and `Plain` does not implement `Clone`; add `#[derive(Clone)]` to `Plain`'s declaration

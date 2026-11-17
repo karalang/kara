@@ -1,0 +1,12 @@
+source = "docs/library/iterators.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "iterators"]
+class = "e"
+expected_from = "decision"
+backends = []
+env = {}
+note = "B-2026-11-17-97: `cycle` is Iterator's default method under `where Self: Clone`, so a program's own Clone iterator cycles, and a trait's default method may carry its own `where Self: Bound` while an implementor that misses it still implements the trait (review-thread assignment of the -80 follow-up, 2026-11-17). e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "f5cc7fd71"

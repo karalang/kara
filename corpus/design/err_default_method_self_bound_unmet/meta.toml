@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "traits"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "B-2026-11-17-97: a default method's `where Self: Clone` is checked at the call, naming the bound and the derive. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,27 @@
+// design.md § Supertraits ("A bound on one method"): a default method's own
+// `where Self: Clone` is checked at the call; `Plain` implements `Named`
+// without being `Clone`, so it has no `twice`.
+trait Named {
+    fn name(self) -> String;
+
+    fn twice(own self) -> (Self, Self) where Self: Clone {
+        let c = self.clone();
+        (c, self)
+    }
+}
+
+struct Plain {
+    s: String,
+}
+
+impl Named for Plain {
+    fn name(self) -> String {
+        self.s.clone()
+    }
+}
+
+fn main() {
+    let (x, y) = Plain { s: "p".to_string() }.twice();
+    println(x.name());
+    println(y.name());
+}

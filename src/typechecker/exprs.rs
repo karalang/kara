@@ -9917,6 +9917,41 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+        // A method's own `where Self: Clone` (`Iterator.cycle`,
+        // B-2026-11-17-97) names the receiver: the method is not there for
+        // it. A struct or enum the program declares gets the derive; the
+        // list of other implementors does not help a receiver.
+        if type_name == "Self" && bound.generic_args.is_none() {
+            let shown = type_display(concrete_ty);
+            let mut out = format!(
+                "this method needs `Self: {trait_name}` (its `where` clause), and `{shown}` \
+                 does not implement `{trait_name}`"
+            );
+            let declared = match concrete_ty {
+                Type::Named { name, .. } => {
+                    self.env.structs.contains_key(name) || self.env.enums.contains_key(name)
+                }
+                _ => false,
+            };
+            const DERIVABLE: &[&str] = &[
+                "Clone",
+                "Copy",
+                "Debug",
+                "Default",
+                "PartialEq",
+                "Eq",
+                "PartialOrd",
+                "Ord",
+                "Hash",
+            ];
+            if declared && DERIVABLE.contains(&trait_name) {
+                let base = shown.split('[').next().unwrap_or(&shown);
+                out.push_str(&format!(
+                    "; add `#[derive({trait_name})]` to `{base}`'s declaration"
+                ));
+            }
+            return out;
+        }
         let default = format!(
             "trait bound `{}: {}` is not satisfied; `{}` does not implement `{}`",
             type_name,

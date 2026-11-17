@@ -3402,6 +3402,8 @@ Every type that implements `Ord` must also implement `PartialOrd` and `Eq`. The 
 
 A trait may require several traits (`trait Hashable: Eq + Copy`); each must be implemented separately. Deep chains (`A: B: C: D`) used only to organise a library's vocabulary are discouraged: if a link is not used by a default body or a bound, prefer flat traits with several bounds at the use site.
 
+**A bound on one method.** A default method can ask more of `Self` than its trait does, with a `where Self: Bound` of its own: `Iterator.cycle` is `fn cycle(own self) -> IterCycle[Self] where Self: Clone`. Its body is checked under the bound. A type that implements the trait without meeting the bound still implements the trait and lacks only that method, so `it.cycle()` on an iterator that is not `Clone` is refused at the call, naming the bound (B-2026-11-17-97).
+
 **Diagnostics say "requires".** A failing impl reports "`impl Ord for T` requires `impl PartialOrd for T`", never "extends" or "inherits".
 
 **Effects are not inherited.** Each trait's methods declare their own effects, and each impl is checked against its own trait. `trait Writer: Reader` does not give `Writer`'s methods `Reader`'s effects ([§12 Trait methods and generic calls](#trait-methods-and-generic-calls)).

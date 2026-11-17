@@ -328,6 +328,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- A trait's default method can carry its own `where Self: Bound`: the body
+  is checked under it, a type that implements the trait without meeting it
+  lacks only that method, and a call on one is refused naming the bound.
+  `Iterator.cycle` is now that default method (`where Self: Clone`) rather
+  than a copy on each library iterator, so a program's own `Clone`
+  iterator cycles too (B-2026-11-17-97).
 - `..mut ref rest` in a slice pattern binds a `mut Slice[T]` over a `Vec`
   or a `Slice` reached through a mutable place, so writes through `rest` land
   in the vector; against a `let` without `mut` it is refused as any

@@ -3807,7 +3807,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Whether a type named `name` is declared by the program (or a package
     /// it depends on), not by the library: a builtin, or an item past
     /// `library_start`, is the library's.
-    fn program_declares_type(&self, name: &str) -> bool {
+    pub(super) fn program_declares_type(&self, name: &str) -> bool {
         let library = self.program.library_start.unwrap_or(usize::MAX);
         self.program.items.iter().any(|item| {
             let (n, span) = match item {

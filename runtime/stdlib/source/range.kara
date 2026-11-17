@@ -345,13 +345,6 @@ struct Range[T] {
     end: T,
 }
 
-impl[T: RangeStep + PartialOrd + Copy] Range[T] {
-    /// The values over and over (`IterCycle`).
-    fn cycle(own self) -> IterCycle[Range[T]] {
-        IterCycle { orig: self, it: self }
-    }
-}
-
 impl[T: RangeStep + PartialOrd + Copy] Iterator for Range[T] {
     type Item = T;
 
@@ -419,13 +412,6 @@ struct RangeInclusive[T] {
     /// Set once the last value has been given out, since `start` cannot step
     /// past `end` when `end` is the type's largest value.
     exhausted: bool,
-}
-
-impl[T: RangeStep + PartialOrd + Copy] RangeInclusive[T] {
-    /// The values over and over (`IterCycle`).
-    fn cycle(own self) -> IterCycle[RangeInclusive[T]] {
-        IterCycle { orig: self, it: self }
-    }
 }
 
 impl[T: RangeStep + PartialOrd + Copy] Iterator for RangeInclusive[T] {

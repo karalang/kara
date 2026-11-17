@@ -463,8 +463,11 @@ impl super::Parser {
             let saved = self.pos;
             // `Self.Item: Ord` on a trait method (iterators.md's `min` /
             // `max`, B-2026-10-21-61) bounds a projection of `Self`.
+            // `Self: Clone` on a trait's default method (iterators.md's
+            // `cycle`, B-2026-11-17-97) bounds the implementing type for
+            // that one method.
             let type_name = if self.check(&Token::SelfType)
-                && matches!(self.peek_token_ref_at(1), Token::Dot)
+                && matches!(self.peek_token_ref_at(1), Token::Dot | Token::Colon)
             {
                 self.advance();
                 "Self".to_string()
