@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 451 |
+| diagnostics | 452 |
 | false-positive | 246 |
 | missing-feature | 189 |
 | perf | 183 |
-| other | 111 |
+| other | 112 |
 | miscompile | 81 |
 | soundness | 81 |
 | run-vs-build | 55 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 579 |
+| typecheck | 580 |
 | mir-llvm | 281 |
 | mir | 242 |
 | cli | 191 |
 | parser | 103 |
 | ownership | 99 |
 | interp | 87 |
-| runtime | 83 |
+| runtime | 84 |
 | resolver | 40 |
 | effect | 38 |
 | other | 33 |
@@ -211,6 +211,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-68 | 2026-11-17 | runtime | medium | On wasm_wasi, once `Regex.compile` has returned its size-limit error ('Compiled regex exceeds size limit of 10485760 bytes'), the program's next print kills the host: node exits by SIGSEGV (139), though the same program runs to the end on interp, llvm and asan | — |
 | B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
+| B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
 
 ### Relocated
 
