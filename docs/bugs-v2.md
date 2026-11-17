@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 477 |
 | false-positive | 253 |
 | missing-feature | 194 |
-| perf | 186 |
+| perf | 187 |
 | other | 113 |
 | soundness | 85 |
 | miscompile | 81 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 601 |
-| mir-llvm | 284 |
+| mir-llvm | 285 |
 | mir | 249 |
 | cli | 193 |
 | parser | 109 |
@@ -118,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-109 | 2026-11-17 | ownership | low | A `scan` state seeded with `[None; 4]` reads as not `Copy`: `Some((last, last))` is refused as a use after a move and `karac fix` writes `Some((last.clone(), last))` | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-17-97 | 2026-11-17 | typecheck | low | A library trait's default method cannot carry its own `where Self: Clone` bound, so `Iterator.cycle` is an inherent method on each Clone-able adaptor instead of one default method on `Iterator` | — |
-| B-2026-11-17-124 | 2026-11-17 | mir-llvm | low | Kata 220 runs 14.01G Ir against Rust's 9.16G with the same SipHash: the gap is the table's insert/remove runtime calls (3.6G) and an out-of-line get probe (about 70 Ir a call against hashbrown's about 23) | — |
 | B-2026-11-17-125 | 2026-11-17 | resolver | low | A top-level `let my_count` beside `fn main` gets E_MODULE_BINDING_NAMING, whose machine rename to `MY_COUNT` only leads to E_MODULE_LET; it should say directly that a module-level value is a `const` | — |
 | B-2026-11-17-127 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a function value's environment, a OnceCell / OnceLock / LazyLock, or a channel's queue, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: the remainder of B-2026-11-17-101, which lowered the shared, dyn, Map/Set/sorted/VecDeque and Mutex routes | — |
 | B-2026-11-17-129 | 2026-11-17 | typecheck | low | A `fold` seed settled to `i64` by a method on the accumulator (`v.iter().map(|x| 1).fold(0, |a, b| a.max(b))` returned as `i32`) is refused with advice to truncate by `as i32` and no fix, where the same literal in a `let` is named and given a `: i32` fix | — |
@@ -126,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-131 | 2026-11-17 | typecheck | medium | An impl's `CrossTask` bound refuses every type: `impl[T: CrossTask] BoundedBlockingQueue[T]` makes `q.enqueue(..)` on a `BoundedBlockingQueue[String]` an error, "`String` does not implement `CrossTask`" (and `i64`, `Vec[i64]` alike), where `fn f[T: CrossTask](x: T)` takes a `String` | — |
 | B-2026-11-17-132 | 2026-11-17 | mir | high | A view stored through a `Mutex` in a field is accepted, and later reads see whatever the place holds then: a `Holder[ref i64]` (or a generic `sync struct BoundedBlockingQueue[T: CrossTask]` whose `T` is inferred as `ref i64`) filled by `h.put(v)` over `mine.iter()` in an inner scope prints `3 3` for the first two values, not `1 0` | — |
 | B-2026-11-17-133 | 2026-11-17 | typecheck | medium | A struct's type parameter left open inside `Mutex.new(..)` is never fixed by a later call: `let h = Holder { values: Mutex.new(VecDeque.new()) }; h.put(5)` stops at lowering with "an expression whose type does not lower (Type(UnknownParam(\"T\"))) is not lowered yet" [E0516], where `Holder { values: VecDeque.new() }` takes `T = i64` from the same `put` | — |
+| B-2026-11-17-134 | 2026-11-17 | mir-llvm | low | A `Map` insert or remove is a runtime call of about 110 to 130 Ir (kata 220: mir_map::insert 1.45G, remove_slot 1.72G over 13M each) where hashbrown's inline insert and erase take about 75; kata 220 still runs 11.71G Ir against Rust's 9.15G | — |
 
 ### Relocated
 
@@ -1650,6 +1650,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-121 | resolver+parser | medium | `use std::sync::atomic::{AtomicI64, Ordering};` is "unknown module `std.sync.atomic`" with no fix, and `AtomicI64` everywhere after it unknown | 9848aac48d |
 | B-2026-11-17-122 | resolver+parser | medium | `Arc` in `use std::sync::{Arc, Mutex};` is "`std.sync` has no item `Arc`" with no fix, and `Arc::new(Mutex::new(s))` / `server.clone()` have none eit… | 9848aac48d |
 | B-2026-11-17-123 | typecheck | low | `Duration::from_nanos(x)` with `x: u64` mends to `Duration.ns(x)` and then has a narrowing error with no fix | 9848aac48d |
+| B-2026-11-17-124 | mir-llvm | low | FIXED for the get side (a lookup helper inlines, kata 220 13.98G to 11.71G Ir); insert/remove and probe width remain as B-2026-11-17-134 | a6581f8672 |
 | B-2026-11-17-126 | mir | low | An iterator adaptor or terminal called straight on a Set, SortedSet, Map or SortedMap (`s.difference(t).cloned()`, `sorted.map(..)`) got no machine f… | 85459908b12962ac0dcccbc6e464861568361a42 |
 | B-2026-11-17-128 | cli | high | `karac fix` applies `redundant_suffix` and `lossless_cast` in one pass and narrows an `i64` table: `vec![vec![0i64; n]; m]` with `t[i][j] = x as i64`… | d3c2716a19 |
 
