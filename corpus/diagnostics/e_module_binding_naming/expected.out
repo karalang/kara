@@ -1,1 +1,0 @@
-ERROR at line 1: module-level binding name `my_count` is Value-class but module-level `let` / `let mut` bindings introduce Const-class identifiers (SCREAMING_SNAKE_CASE); consider renaming to `MY_COUNT`

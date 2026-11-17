@@ -156,6 +156,7 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E0417", "may panic"),
         ("E0508", "E0515"),
         ("E_ENUM_NESTED_ENUM_PAYLOAD", "any depth"),
+        ("E_MODULE_BINDING_NAMING", "E_MODULE_LET"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(out.contains("This code is retired"), "{code}: {out}");

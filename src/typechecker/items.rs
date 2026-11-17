@@ -6948,6 +6948,53 @@ impl<'a> super::TypeChecker<'a> {
             );
             return;
         }
+        // B-2026-11-17-125: an initializer computed at run time cannot be a
+        // `const`, so the help points at what holds such a value instead.
+        let computed = self.errors[before..]
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit));
+        if computed {
+            self.type_error(
+                format!(
+                    "error[E_MODULE_LET]: module-level `let {}`: a value at module scope is a \
+                     constant (design.md § Constants: `const NAME: T = e;` is the only value \
+                     declared at module scope), and this one is computed at run time\nhelp: \
+                     build it in `main`, or in a `fn` that `main` calls, and pass it down; a \
+                     service every function reaches is an `effect resource` whose provider \
+                     `main` installs with `with_provider`",
+                    b.name
+                ),
+                b.name_span,
+                TypeErrorKind::ModuleLet,
+            );
+            return;
+        }
+        // A `const` is named in SCREAMING_SNAKE_CASE, so the fix renames the
+        // binding, and its uses, in the same edit (B-2026-11-17-125). The
+        // resolver computed the uses; it leaves no entry where it cannot
+        // place them all, or where a `pub` name may be read elsewhere.
+        let const_class = crate::lexer::classify_ident(&b.name) == crate::lexer::IdentClass::Const;
+        let const_name = if const_class {
+            Some(b.name.clone())
+        } else {
+            crate::lexer::suggest_name_for_class(&b.name, crate::lexer::IdentClass::Const)
+        };
+        let uses = if const_class {
+            Some(Vec::new())
+        } else {
+            self.resolve_result
+                .module_let_renames
+                .get(&b.name_span.offset)
+                .filter(|r| Some(&r.new_name) == const_name.as_ref())
+                .map(|r| r.uses.clone())
+        };
+        let help = match &const_name {
+            Some(n) if const_class => format!("declare it with `const`: `const {n}`"),
+            Some(n) => format!("declare it `const {n}`: a constant's name is SCREAMING_SNAKE_CASE"),
+            None => "declare it with `const`, under a SCREAMING_SNAKE_CASE name of more than \
+                     one letter (a single-letter name is Type-class)"
+                .to_string(),
+        };
         let annotation = match &b.ty {
             Some(_) => Some(String::new()),
             None => self
@@ -6960,24 +7007,37 @@ impl<'a> super::TypeChecker<'a> {
         let message = format!(
             "error[E_MODULE_LET]: module-level `let {}`: a value at module scope is a \
              constant (design.md § Constants: `const NAME: T = e;` is the only value \
-             declared at module scope)\nhelp: declare it with `const`",
+             declared at module scope)\nhelp: {help}",
             b.name
         );
-        match annotation {
-            Some(annotation) if self.errors.len() == before => {
+        match (annotation, const_name, uses) {
+            (Some(annotation), Some(name), Some(uses)) if self.errors.len() == before => {
                 let end = b.name_span.offset + b.name_span.length;
-                self.type_error_with_fix_it(
-                    message,
-                    b.name_span,
-                    TypeErrorKind::ModuleLet,
-                    crate::typechecker::FixIt {
-                        span: Span {
-                            length: end - b.span.offset,
-                            ..b.span
-                        },
-                        replacement: format!("const {}{annotation}", b.name),
+                let decl = crate::typechecker::FixIt {
+                    span: Span {
+                        length: end - b.span.offset,
+                        ..b.span
                     },
-                );
+                    replacement: format!("const {name}{annotation}"),
+                };
+                if uses.is_empty() {
+                    self.type_error_with_fix_it(
+                        message,
+                        b.name_span,
+                        TypeErrorKind::ModuleLet,
+                        decl,
+                    );
+                } else {
+                    self.type_error(message, b.name_span, TypeErrorKind::ModuleLet);
+                    let mut edits = vec![crate::resolver::TextEdit {
+                        offset: decl.span.offset,
+                        length: decl.span.length,
+                        replacement: decl.replacement,
+                    }];
+                    edits.extend(uses);
+                    self.error_fix_diffs
+                        .insert(SpanKey::from_span(&b.name_span), edits);
+                }
             }
             _ => self.type_error(message, b.name_span, TypeErrorKind::ModuleLet),
         }

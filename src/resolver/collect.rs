@@ -954,7 +954,7 @@ impl<'a> super::Resolver<'a> {
         let actual = crate::lexer::classify_ident(&b.name);
         // Set when the naming diagnostic fires with a usable candidate;
         // consumed after `define` below, once the symbol id exists.
-        let mut pending_rename: Option<(usize, String)> = None;
+        let mut pending_rename: Option<(Option<usize>, String)> = None;
         if actual != crate::lexer::IdentClass::Const {
             // B-2026-07-31-32 — only advertise a rename that actually lands in
             // Const-class. `suggest_const_name` is the identity on a name whose
@@ -984,27 +984,32 @@ impl<'a> super::Resolver<'a> {
                 }
                 None => "rename it to SCREAMING_SNAKE_CASE".to_string(),
             };
-            self.errors.push(ResolveError {
-                message: format!(
-                    "error[E_MODULE_BINDING_NAMING]: module-level binding name \
-                     `{}` is {actual_desc} but module-level `let` / `let mut` \
-                     bindings introduce Const-class identifiers \
-                     (SCREAMING_SNAKE_CASE); {advice}",
-                    b.name,
-                ),
-                span: b.span,
-                kind: ResolveErrorKind::UndefinedName,
-                suggestion: suggestion.as_ref().map(|s| format!("rename to `{s}`")),
-                // Machine-applicable rename (B-2026-07-06-3), deferred.
-                // The candidate is known here, but the binding's USE SITES
-                // are not — collection runs before any body resolves — and
-                // a rename that misses them breaks the program
-                // (B-2026-07-31-33). `attach_module_binding_renames` fills
-                // this in after pass 2, or leaves it empty when it cannot
-                // rewrite every reference.
-                replacement: None,
-                stub_hint: None,
-            });
+            // Under the core rules every module `let` is refused with
+            // E_MODULE_LET, whose `const` fix carries the rename; a naming
+            // error first would only lead to it (B-2026-11-17-125).
+            if !self.module_let_refused {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_MODULE_BINDING_NAMING]: module-level binding name \
+                         `{}` is {actual_desc} but module-level `let` / `let mut` \
+                         bindings introduce Const-class identifiers \
+                         (SCREAMING_SNAKE_CASE); {advice}",
+                        b.name,
+                    ),
+                    span: b.span,
+                    kind: ResolveErrorKind::UndefinedName,
+                    suggestion: suggestion.as_ref().map(|s| format!("rename to `{s}`")),
+                    // Machine-applicable rename (B-2026-07-06-3), deferred.
+                    // The candidate is known here, but the binding's USE SITES
+                    // are not — collection runs before any body resolves — and
+                    // a rename that misses them breaks the program
+                    // (B-2026-07-31-33). `attach_module_binding_renames` fills
+                    // this in after pass 2, or leaves it empty when it cannot
+                    // rewrite every reference.
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
             // A `pub` binding belonging to a package can be referenced from
             // modules this session cannot see — each module resolves in its
             // own session, with its own symbol ids, so an importer's use
@@ -1014,7 +1019,8 @@ impl<'a> super::Resolver<'a> {
             // importers and keeps the fix.
             let escapes_this_module = b.is_pub && self.pub_refs_may_be_external;
             if let (Some(s), false) = (suggestion, escapes_this_module) {
-                pending_rename = Some((self.errors.len() - 1, s));
+                let error_index = (!self.module_let_refused).then(|| self.errors.len() - 1);
+                pending_rename = Some((error_index, s));
             }
             // Continue and still attempt registration under the
             // offending name so use-site references don't double-up

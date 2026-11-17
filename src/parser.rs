@@ -1154,10 +1154,11 @@ impl Parser {
         // design.md § Script mode makes script mode and an explicit `main`
         // MUTUALLY EXCLUSIVE, so in a file with explicit main a top-level `let`
         // cannot be a script statement — it can only be an (incorrectly named)
-        // module binding. Reclassify those so the resolver's
-        // E_MODULE_BINDING_NAMING fires instead: it names the rule and carries
-        // a machine-applicable rename that rewrites use sites too, turning a
-        // misdirecting parse error into a `karac fix` case. Statements that are
+        // module binding. Reclassify those so E_MODULE_LET fires instead: it
+        // names the rule and carries a machine-applicable `const` declaration
+        // under the SCREAMING_SNAKE_CASE name that rewrites use sites too
+        // (B-2026-11-17-125), turning a misdirecting parse error into a
+        // `karac fix` case. Statements that are
         // NOT module-binding shaped (expression statements, assignments, tuple
         // destructures) stay behind and keep the ambiguity error, which is the
         // right diagnostic for them.

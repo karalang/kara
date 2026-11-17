@@ -809,10 +809,13 @@ pub(super) fn resolve_modules(
         crate::desugar::desugar_multi_assigns(&mut program.items);
         // A package is checked by the v2 pipeline, which admits a user
         // operator-trait impl as a lone file's does (B-2026-11-05-21).
+        // Every command refuses a module `let` with E_MODULE_LET, whose fix
+        // carries the rename (B-2026-11-17-125).
         let mut result = Resolver::new(&program)
             .with_tree(tree, id as ModuleId)
             .with_test_file(m.is_test_file)
             .with_user_operator_impls(true)
+            .with_module_let_refused(true)
             .resolve();
         result
             .errors
@@ -1131,6 +1134,7 @@ pub(super) fn typecheck_modules(
         let resolved = Resolver::new(&program)
             .with_tree(tree, id as ModuleId)
             .with_user_operator_impls(true)
+            .with_module_let_refused(lint_overrides.strict_core)
             .resolve();
         let mut result = crate::typechecker::TypeChecker::new(&program, &resolved)
             .with_tree(tree, id as ModuleId)
@@ -1232,6 +1236,7 @@ pub(crate) fn editor_module_tables(path: &std::path::Path, source: &str) -> Opti
     let resolved = Resolver::new(&program)
         .with_tree(&tree, id as ModuleId)
         .with_user_operator_impls(true)
+        .with_module_let_refused(true)
         .resolve();
     let typed = crate::typechecker::TypeChecker::new(&program, &resolved)
         .with_tree(&tree, id as ModuleId)
@@ -1362,6 +1367,7 @@ pub(super) fn package_module_type_results(
         let resolved = Resolver::new(&program)
             .with_tree(&tree, id as ModuleId)
             .with_user_operator_impls(true)
+            .with_module_let_refused(lint_overrides.strict_core)
             .resolve();
         let mut result = crate::typechecker::TypeChecker::new(&program, &resolved)
             .with_tree(&tree, id as ModuleId)

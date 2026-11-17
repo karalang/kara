@@ -1660,6 +1660,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A module-level `let` whose name is not SCREAMING_SNAKE_CASE (`let my_count`
+  beside `fn main`) is reported as E_MODULE_LET, whose fix declares it
+  `const MY_COUNT` and renames its uses in one edit; it was
+  E_MODULE_BINDING_NAMING, whose rename only led to E_MODULE_LET. A module
+  `let` computed at run time gets no fix, and its help points at a `fn` that
+  `main` calls or an effect resource's provider. E_MODULE_BINDING_NAMING is
+  retired (B-2026-11-17-125).
 - E0600 on a program-rooted resource (core-semantics §14.7: `Env`, `Clock`,
   the std streams, any resource with a default provider) says the resource
   is overridden by the `with_provider`, and no longer calls it

@@ -1060,6 +1060,24 @@ pub struct ResolveResult {
     /// applies nothing rather than the declaration half that breaks the
     /// program.
     pub error_fix_diffs: FxHashMap<SpanKey, Vec<TextEdit>>,
+    /// B-2026-11-17-125: where a module-level `let` is refused
+    /// (`E_MODULE_LET`, see [`Resolver::with_module_let_refused`]), the
+    /// Const-class rename its `const` fix needs, keyed by the offset of the
+    /// binding's name: the new name and an edit for each use site. Absent
+    /// when the name is already Const-class, when no case change reaches
+    /// Const-class, when a `pub` binding may be read from another module,
+    /// or when a use site cannot be placed exactly.
+    pub module_let_renames: FxHashMap<usize, ModuleLetRename>,
+}
+
+/// The rename an `E_MODULE_LET` fix applies with `let` → `const`
+/// (B-2026-11-17-125).
+#[derive(Debug, Clone)]
+pub struct ModuleLetRename {
+    /// The Const-class name.
+    pub new_name: String,
+    /// One edit per use site, in source order; the declaration is not one.
+    pub uses: Vec<TextEdit>,
 }
 
 // ── Cross-module lookup helpers (CR-24 slice 5) ─────────────────
@@ -1350,6 +1368,10 @@ pub struct Resolver<'a> {
     /// (B-2026-07-31-33). Left false for a standalone file, where the
     /// module's whole world is the source in hand.
     pub(crate) pub_refs_may_be_external: bool,
+    /// See [`Resolver::with_module_let_refused`].
+    pub(crate) module_let_refused: bool,
+    /// See [`ResolveResult::module_let_renames`].
+    pub(crate) module_let_renames: FxHashMap<usize, ModuleLetRename>,
 }
 
 /// A proposed module-binding rename, parked between collection (pass 1,
@@ -1359,7 +1381,11 @@ pub(crate) struct PendingBindingRename {
     /// Index into `Resolver::errors` of the diagnostic this rename belongs
     /// to. The sweep writes the edit back onto that error in place, so the
     /// diagnostic keeps its collection-time position in the error list.
-    pub(crate) error_index: usize,
+    ///
+    /// `None` when module-level `let` is refused: no naming diagnostic is
+    /// raised, and the rename goes to [`ResolveResult::module_let_renames`]
+    /// for `E_MODULE_LET`'s fix (B-2026-11-17-125).
+    pub(crate) error_index: Option<usize>,
     /// The binding's symbol. Use sites are the `resolutions` entries
     /// pointing at it — a shadowing local resolves to a *different* symbol
     /// and is correctly left alone.
@@ -1411,6 +1437,8 @@ impl<'a> Resolver<'a> {
             pending_binding_renames: Vec::new(),
             ident_ref_offsets: FxHashMap::default(),
             pub_refs_may_be_external: false,
+            module_let_refused: false,
+            module_let_renames: FxHashMap::default(),
         }
     }
 
@@ -1455,6 +1483,16 @@ impl<'a> Resolver<'a> {
     /// (B-2026-07-31-33). See [`Resolver::pub_refs_may_be_external`].
     pub fn with_external_pub_refs(mut self, external: bool) -> Self {
         self.pub_refs_may_be_external = external;
+        self
+    }
+
+    /// The program is checked under the core rules, which refuse every
+    /// module-level `let` with `E_MODULE_LET` (design.md § Constants). Its
+    /// name is then not reported as `E_MODULE_BINDING_NAMING`: the rename to
+    /// a Const-class name is part of the `const` fix, and goes to
+    /// [`ResolveResult::module_let_renames`] (B-2026-11-17-125).
+    pub fn with_module_let_refused(mut self, refused: bool) -> Self {
+        self.module_let_refused = refused;
         self
     }
 
@@ -1727,6 +1765,7 @@ impl<'a> Resolver<'a> {
             def_paths: crate::def_path::collect_item_def_paths(self.program),
             queries: Vec::new(),
             error_fix_diffs: self.error_fix_diffs,
+            module_let_renames: self.module_let_renames,
         }
     }
 
@@ -1819,9 +1858,31 @@ impl<'a> Resolver<'a> {
                 length: p.name_span.length,
                 replacement: p.new_name.clone(),
             };
+            let Some(error_index) = p.error_index else {
+                // Module `let` is refused: `E_MODULE_LET` writes the
+                // declaration, and takes the use sites from here.
+                let mut offsets: Vec<usize> = idents.into_iter().collect();
+                offsets.sort_unstable();
+                let uses = offsets
+                    .into_iter()
+                    .map(|offset| TextEdit {
+                        offset,
+                        length: p.name_len,
+                        replacement: p.new_name.clone(),
+                    })
+                    .collect();
+                self.module_let_renames.insert(
+                    p.name_span.offset,
+                    ModuleLetRename {
+                        new_name: p.new_name,
+                        uses,
+                    },
+                );
+                continue;
+            };
             if idents.is_empty() {
                 // Case 1 — the single-edit slot is complete on its own.
-                self.errors[p.error_index].replacement = Some(Box::new(decl));
+                self.errors[error_index].replacement = Some(Box::new(decl));
                 continue;
             }
             // Case 2 — publish the whole rename, declaration first, then

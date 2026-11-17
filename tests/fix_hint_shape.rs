@@ -97,11 +97,16 @@ fn a_one_edit_fix_is_a_replacement_and_a_hint_diff_of_its_line() {
 #[test]
 fn a_several_edit_fix_is_a_fix_diff_and_one_hint_diff_over_its_lines() {
     let dir = scratch("several");
-    let src = "let mut my_count: i64 = 0;\n\
-               fn bump() { my_count = my_count + 1; }\n\
-               fn main() { bump(); }\n";
+    // B-2026-11-17-125: a module `let` is E_MODULE_LET, whose fix declares
+    // it `const` under its SCREAMING_SNAKE_CASE name and renames the uses.
+    let src = "let my_count: i64 = 2;\n\
+               fn twice() -> i64 { my_count + my_count }\n\
+               fn main() { println(twice()); }\n";
     std::fs::write(dir.join("r.kara"), src).unwrap();
-    let d = the(&diagnostics(&dir, "--output=json", &["r.kara"]), "E0100");
+    let d = the(
+        &diagnostics(&dir, "--output=json", &["r.kara"]),
+        "E_MODULE_LET",
+    );
     assert!(d.get("replacement").is_none(), "{d}");
     let edits = d["fix_diff"].as_array().unwrap_or_else(|| panic!("{d}"));
     assert_eq!(edits.len(), 3, "{d}");
@@ -117,8 +122,8 @@ fn a_several_edit_fix_is_a_fix_diff_and_one_hint_diff_over_its_lines() {
         serde_json::json!({
             "file": "r.kara",
             "line": 1,
-            "old": "let mut my_count: i64 = 0;\nfn bump() { my_count = my_count + 1; }",
-            "new": "let mut MY_COUNT: i64 = 0;\nfn bump() { MY_COUNT = MY_COUNT + 1; }",
+            "old": "let my_count: i64 = 2;\nfn twice() -> i64 { my_count + my_count }",
+            "new": "const MY_COUNT: i64 = 2;\nfn twice() -> i64 { MY_COUNT + MY_COUNT }",
         }),
         "{d}"
     );

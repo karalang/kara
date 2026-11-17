@@ -11049,10 +11049,9 @@ fn test_fix_applies_module_binding_const_rename() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // The rename lets the file reach the typechecker, which then turns the
-    // module `let` into the `const` it must be (B-2026-10-22-8): two fixes,
-    // one invocation (B-2026-11-15-131).
-    assert!(stdout.contains("applied 2 fix"), "stdout: {stdout}");
+    // E_MODULE_LET's one edit declares the `const` under the Const-class
+    // name (B-2026-11-17-125).
+    assert!(stdout.contains("applied 1 fix"), "stdout: {stdout}");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         "pub const MY_CONFIG: i64 = 5;\n"
@@ -11098,12 +11097,11 @@ fn test_fix_module_binding_rename_updates_use_sites() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // The declaration and two use sites, then a later pass turns the module
-    // `let` into a `const` (B-2026-10-22-8), in one invocation
-    // (B-2026-11-15-131).
+    // E_MODULE_LET's fix: the `const` declaration under the Const-class
+    // name and the two use sites, as one fix (B-2026-11-17-125).
     assert!(
-        stdout.contains("applied 4 fix"),
-        "declaration + two use sites + const: {stdout}"
+        stdout.contains("applied 3 fix"),
+        "declaration + two use sites: {stdout}"
     );
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -11152,8 +11150,8 @@ fn test_fix_withholds_pub_binding_rename_inside_a_package() {
     write(
         &tmp.join("src/helper.kara"),
         "pub let myConfig: i64 = 5;\n\
-         let mut LocalCounter: i64 = 0;\n\n\
-         pub fn bump() -> i64 {\n    LocalCounter = LocalCounter + 1;\n    return LocalCounter;\n}\n",
+         let LocalLimit: i64 = 7;\n\n\
+         pub fn limit() -> i64 {\n    return LocalLimit + LocalLimit;\n}\n",
     );
 
     let out = karac_bin()
@@ -11161,8 +11159,8 @@ fn test_fix_withholds_pub_binding_rename_inside_a_package() {
         .args(["fix", "src/helper.kara"])
         .output()
         .unwrap();
-    // The withheld rename leaves its naming error, which `fix` reports by
-    // failing (B-2026-11-16-287).
+    // The withheld rename leaves its E_MODULE_LET without a fix, which `fix`
+    // reports by failing (B-2026-11-16-287, B-2026-11-17-125).
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{err}");
     assert!(err.contains("have no machine-applicable fix"), "{err}");
@@ -11172,7 +11170,7 @@ fn test_fix_withholds_pub_binding_rename_inside_a_package() {
         "a `pub` binding with off-screen readers must be left alone:\n{rewritten}"
     );
     assert!(
-        rewritten.contains("let mut LOCAL_COUNTER") && !rewritten.contains("LocalCounter"),
+        rewritten.contains("const LOCAL_LIMIT: i64 = 7;") && !rewritten.contains("LocalLimit"),
         "the module-private binding must still be renamed everywhere:\n{rewritten}"
     );
     // The importer still resolves — nothing under `src/` was left dangling.
@@ -11206,8 +11204,9 @@ fn test_check_json_emits_module_binding_rename_fix_diff() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let diag = stdout
         .split("{\"id\":")
-        .find(|s| s.contains("E_MODULE_BINDING_NAMING"))
-        .expect("naming diagnostic in JSON");
+        // B-2026-11-17-125: E_MODULE_LET carries the rename with `const`.
+        .find(|s| s.contains("E_MODULE_LET"))
+        .expect("module let diagnostic in JSON");
     assert!(
         diag.contains("\"fix_diff\":["),
         "expected a multi-edit envelope: {diag}"
@@ -25245,7 +25244,7 @@ fn fix_reports_no_progress_on_unfixable_naming_diagnostic() {
     let check = karac_bin().arg("check").arg(&path).output().unwrap();
     assert!(!check.status.success());
     assert!(
-        String::from_utf8_lossy(&check.stderr).contains("E_MODULE_BINDING_NAMING"),
+        String::from_utf8_lossy(&check.stderr).contains("E_MODULE_LET"),
         "diagnostic must survive"
     );
     let _ = std::fs::remove_dir_all(&tmp);

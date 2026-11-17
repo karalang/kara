@@ -3241,15 +3241,6 @@ const CODE_PROSE: &[(&str, &str)] = &[
          needed.",
     ),
     (
-        "E_MODULE_BINDING_NAMING",
-        "A top-level binding in a file that has `fn main` is read as a \
-         module-level binding, and module-level names are Const-class \
-         (SCREAMING_SNAKE_CASE). Note that a module-level value is declared \
-         `const NAME: T = e;`; a module `let` is reported next as \
-         E_MODULE_LET, and there are no mutable globals. If the binding was \
-         meant to be local, move it into `main`.",
-    ),
-    (
         "E_NO_EFFECT_BAD_VERB",
         "`#[no_effect(...)]` lists effect verbs, written as in a `with` \
          clause: `allocates(Heap)`, `panics`, `blocks`, `reads(Config)`, \
@@ -4493,6 +4484,7 @@ const RETIRED_CODES: &[(&str, &str)] = &[
     ("E0401", "A public function may declare effects it does not perform; the extra effects are room for the API to grow (design.md § 12, Effects, the declaration paragraph)."),
     ("E0417", "A `Drop` body may panic; the panic ends the process (core-semantics.md § 7.11)."),
     ("E0508", "A closure that would outlive a value it borrows is E0515."),
+    ("E_MODULE_BINDING_NAMING", "A module-level `let` is E_MODULE_LET, whose fix declares it `const` under its SCREAMING_SNAKE_CASE name and renames its uses (design.md § Constants)."),
 ];
 
 fn retired_note(code: &str) -> Option<&'static str> {
@@ -5443,9 +5435,6 @@ Rejected, each with its own error code:
         scope IS a `StringSlice` — the function-body default of
         `String` does not apply here.
 
-    E_MODULE_BINDING_NAMING
-        the binding name is Type-class (e.g. `G`, `Config`). Module
-        bindings use SCREAMING_SNAKE_CASE.
 
 ────────────────────────────────────────────────────────────────────
 `let mut` and the synthetic per-binding resource

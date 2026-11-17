@@ -1642,6 +1642,7 @@ impl Pipeline {
                 .with_target_tombstones(target_tombstones)
                 .with_user_operator_impls(self.strict_core)
                 .with_lone_file(self.strict_core && !in_package)
+                .with_module_let_refused(self.strict_core)
                 .resolve(),
         );
         self.refuse_modules_the_target_lacks();
