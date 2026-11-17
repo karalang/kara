@@ -291,10 +291,17 @@ impl JsonTextReader {
         self.error_at(self.pos, msg)
     }
 
-    /// An error at the char about to be read, counting it.
+    /// An error at the char about to be read, counting its first byte as
+    /// serde_json does: a BOM or `é` there is column 1 past what was read,
+    /// not 3 or 2 (B-2026-11-17-43).
     fn peek_error(ref self, msg: Str) -> JsonError {
-        let at = if self.pos < self.chars.len() { self.pos + 1 } else { self.pos };
-        self.error_at(at, msg)
+        if self.pos >= self.chars.len() or self.chars[self.pos] == '\n' {
+            let at = if self.pos < self.chars.len() { self.pos + 1 } else { self.pos };
+            return self.error_at(at, msg);
+        }
+        let e = self.error_at(self.pos, msg);
+        let column = e.column + 1;
+        JsonError { line: e.line, column, message: f"{msg} at line {e.line} column {column}" }
     }
 
     fn peek(ref self) -> Option[char] {

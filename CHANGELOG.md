@@ -581,6 +581,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `Json.deserialize` reads JSON's grammar as `Json.parse` does. A
+  surrogate-pair escape (`"\ud83d\ude00"`, what Python's `json.dumps`
+  writes for an emoji) reads as its one character where it was refused
+  (B-2026-11-17-40). A leading zero (`[01]`), a bare fraction (`.5`), a raw
+  control character in a string, `1e400` (read as infinity and written
+  back as `null`), `-0` into an integer and an integer map key that is not
+  the integer alone (`"01"`, `" 1"`) are refused where they were accepted
+  (B-2026-11-17-41). A derived `Serialize` on a struct variant with a
+  field named `s` builds (B-2026-11-17-42). `Json.serialize` writes `\b`
+  and `\f` as `stringify` does, `Json.parse` puts an error at a BOM or
+  other multi-byte character in column 1 past what it read, as serde_json
+  does, and a bare variant name for a variant with a payload says which
+  shape it expected (B-2026-11-17-43).
 - `<` on a type whose derived ordering reaches itself
   (`enum Tree { Leaf(i64), Node(Vec[Tree]) }`) overflowed the stack in
   `karac check` and every backend (B-2026-11-16-326).
