@@ -1988,6 +1988,72 @@ impl<'a> super::Resolver<'a> {
         false
     }
 
+    /// B-2026-11-17-38: a package imports only the packages its own
+    /// manifest declares (design.md § The package name in paths: the first
+    /// segment is matched against the dependencies "as listed in
+    /// kara.toml"). Every resolved package is in the tree, so without this
+    /// a package reached only through another resolved as if declared.
+    fn report_undeclared_dependency(
+        &mut self,
+        tree: &crate::module::ProgramTree,
+        imp: &ImportDecl,
+    ) {
+        let Some(first) = imp
+            .path
+            .first()
+            .or_else(|| imp.items.first().map(|it| &it.name))
+        else {
+            return;
+        };
+        let Some(pkg) = tree.dependency_packages.get(first) else {
+            return;
+        };
+        let importer = self
+            .current_module
+            .and_then(|id| tree.modules.get(id))
+            .and_then(|m| m.package.clone());
+        let Some(scope) = tree.dependency_scope.get(&importer) else {
+            return;
+        };
+        if scope.contains(first) {
+            return;
+        }
+        let manifest = match &importer {
+            None => "kara.toml".to_string(),
+            Some(p) => format!("`{p}`'s kara.toml"),
+        };
+        let mut through: Vec<&str> = tree
+            .dependency_scope
+            .iter()
+            .filter(|(k, v)| k.is_some() && *k != &importer && v.contains(first))
+            .filter_map(|(k, _)| k.as_deref())
+            .filter(|k| *k != pkg.as_str())
+            .collect();
+        through.sort_unstable();
+        let mut message = format!(
+            "unknown module `{first}`: `{pkg}` is not a dependency of this package, so it \
+             cannot be imported here; add `{pkg}` to `[dependencies]` in {manifest}"
+        );
+        if !through.is_empty() {
+            message.push_str(&format!(
+                " (it is a dependency of {}, which does not make it this package's)",
+                through
+                    .iter()
+                    .map(|t| format!("`{t}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        self.errors.push(ResolveError {
+            message,
+            span: imp.span,
+            kind: ResolveErrorKind::UnknownModule,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+
     fn collect_import(&mut self, imp: &ImportDecl) {
         let Some(tree) = self.tree else {
             // Single-file mode — cross-module validation is skipped (the file
@@ -2040,6 +2106,8 @@ impl<'a> super::Resolver<'a> {
         {
             return;
         }
+
+        self.report_undeclared_dependency(tree, imp);
 
         // Validate the dotted prefix exists. A prefix that is only a
         // directory (`db/` with no `db.kara`) is a valid one when every name

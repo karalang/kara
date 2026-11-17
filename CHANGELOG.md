@@ -20,6 +20,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A package that imports a dependency of one of its dependencies without
+  declaring it (`app` depends on `mid`, `mid` on `lib`, and `app` writes
+  `import lib.f;`) is refused, E0112, naming the manifest to add it to; a
+  dependency's own imports are held to its own manifest (B-2026-11-17-38).
 - A constant shift amount that is negative or at least the type's width
   (`let y: i8 = 1 << 8;`, `let y = 1 << 64;`, `a << 8` over `a: i8`) is a
   compile error, as constant overflow is; it evaluated to 0 on every

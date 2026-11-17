@@ -154,6 +154,14 @@ pub struct ProgramTree {
     /// The package's modules that only other platforms' files define, with
     /// those platforms' suffixes ([`crate::walker::WalkResult::elsewhere`]).
     pub elsewhere: HashMap<ModulePath, Vec<&'static str>>,
+    /// Per package (`None` for the root, else the dependency's name), the
+    /// registered import names of the packages it may import: those its
+    /// own manifest declares, and itself. A package absent here is not
+    /// checked (B-2026-11-17-38).
+    pub dependency_scope: HashMap<Option<String>, std::collections::HashSet<String>>,
+    /// Registered import name -> package name, for every dependency merged
+    /// into the tree.
+    pub dependency_packages: HashMap<String, String>,
 }
 
 impl ProgramTree {
@@ -225,6 +233,13 @@ pub struct DepPackageWalk {
     /// dependency is registered under (its own `alias` for it, say). Each
     /// import whose first segment is `written` is rewritten to `registered`.
     pub renames: Vec<(String, String)>,
+    /// The import names of the packages this one declares in its own
+    /// manifest, as registered; `None` when no manifest was read, which
+    /// leaves its imports of other packages unchecked (B-2026-11-17-38).
+    pub declares: Option<Vec<String>>,
+    /// Whether the root package's manifest declares this one. A package it
+    /// reaches only through another is not its to import.
+    pub direct: bool,
     pub walked: WalkResult,
 }
 
@@ -624,6 +639,24 @@ pub fn build_program_tree_with_overlay(
     // module segment is skipped wholesale (design.md § Resolution order —
     // the local module wins and the external package is shadowed).
     let mut import_renames = std::collections::HashMap::new();
+    let mut dependency_scope: HashMap<Option<String>, std::collections::HashSet<String>> =
+        HashMap::new();
+    let mut dependency_packages: HashMap<String, String> = HashMap::new();
+    if !deps.is_empty() && deps.iter().all(|d| d.declares.is_some()) {
+        dependency_scope.insert(
+            None,
+            deps.iter()
+                .filter(|d| d.direct)
+                .map(|d| d.import_name.clone())
+                .collect(),
+        );
+        for d in deps {
+            let mut own: std::collections::HashSet<String> =
+                d.declares.iter().flatten().cloned().collect();
+            own.insert(d.import_name.clone());
+            dependency_scope.insert(Some(d.name.clone()), own);
+        }
+    }
     if !deps.is_empty() {
         let root_first_segments: std::collections::HashSet<String> = modules
             .iter()
@@ -634,6 +667,7 @@ pub fn build_program_tree_with_overlay(
             if root_first_segments.contains(prefix) {
                 continue; // shadowed by a local module — spec'd behavior
             }
+            dependency_packages.insert(prefix.clone(), dep.name.clone());
             if !dep.renames.is_empty() {
                 import_renames.insert(prefix.clone(), dep.renames.clone());
             }
@@ -858,6 +892,8 @@ pub fn build_program_tree_with_overlay(
         target_tombstones,
         wildcard_ambiguities: std::collections::HashMap::new(),
         import_renames,
+        dependency_scope,
+        dependency_packages,
         elsewhere: walked
             .elsewhere
             .iter()
@@ -1972,6 +2008,8 @@ mod tests {
             wildcard_ambiguities: HashMap::new(),
             import_renames: HashMap::new(),
             elsewhere: HashMap::new(),
+            dependency_scope: HashMap::new(),
+            dependency_packages: HashMap::new(),
         }
     }
 

@@ -1857,6 +1857,8 @@ fn dep_walk(d: &ScratchDir, rel: &str, name: &str) -> karac::module::DepPackageW
         name: name.to_string(),
         import_name: name.to_string(),
         renames: Vec::new(),
+        declares: None,
+        direct: true,
         walked: walk_project(&d.root().join(rel), WalkerOpts::default())
             .expect("dep walker succeeds"),
     }
@@ -2098,6 +2100,8 @@ fn dep_test_companions_are_skipped() {
         name: "geo_pkg".to_string(),
         import_name: "geo_pkg".to_string(),
         renames: Vec::new(),
+        declares: None,
+        direct: true,
         walked: walk_project(
             &d.root().join("dep"),
             WalkerOpts {

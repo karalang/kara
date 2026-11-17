@@ -2312,6 +2312,19 @@ impl Manifest {
     /// The import name this package writes for its dependency `dep`: its
     /// `alias`, else `declared` (the dependency's own `[package].import`),
     /// else `dep` with `-` mapped to `_`. Dev-dependencies' aliases count.
+    /// Every package this manifest names as a dependency anywhere:
+    /// `[dependencies]`, `[dev-dependencies]` and their per-target
+    /// overlays. A package may import exactly these (B-2026-11-17-38).
+    pub fn every_declared_dependency(&self) -> std::collections::BTreeSet<&str> {
+        self.dependencies
+            .keys()
+            .chain(self.dev_dependencies.keys())
+            .chain(self.target_dependencies.values().flat_map(|m| m.keys()))
+            .chain(self.target_dev_dependencies.values().flat_map(|m| m.keys()))
+            .map(String::as_str)
+            .collect()
+    }
+
     pub fn import_name_for_dependency(&self, dep: &str, declared: Option<&str>) -> String {
         self.dependency_aliases
             .get(dep)

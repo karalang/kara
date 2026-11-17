@@ -2365,16 +2365,7 @@ pub(super) fn dep_package_walks(
             );
             return Err(());
         }
-        let (import_name, renames) = names
-            .get(&pkg.name)
-            .cloned()
-            .unwrap_or_else(|| (manifest::default_import_name(&pkg.name), Vec::new()));
-        out.push(module::DepPackageWalk {
-            name: pkg.name.clone(),
-            import_name,
-            renames,
-            walked,
-        });
+        out.push(dep_package_walk(&pkg.name, names.get(&pkg.name), walked));
     }
     Ok(out)
 }
@@ -2399,8 +2390,20 @@ pub(super) fn resolved_dep_dir(
 /// dependencies (its own `alias`, or a package the root aliased) gets a
 /// rename from that name to the registered one. Two packages registered
 /// under one name are an error, `(package, message)`.
-pub(super) type DepImportNames =
-    std::collections::BTreeMap<String, (String, Vec<(String, String)>)>;
+pub(super) type DepImportNames = std::collections::BTreeMap<String, DepImportName>;
+
+/// One resolved package's import names ([`dep_import_names`]).
+#[derive(Clone)]
+pub(super) struct DepImportName {
+    /// The name its modules are registered under.
+    pub(super) import_name: String,
+    /// Its own imports' renames ([`module::DepPackageWalk::renames`]).
+    pub(super) renames: Vec<(String, String)>,
+    /// The registered names of the packages it declares itself.
+    pub(super) declares: Vec<String>,
+    /// Whether the root package declares it.
+    pub(super) direct: bool,
+}
 
 pub(super) fn dep_import_names(
     root: &std::path::Path,
@@ -2444,9 +2447,53 @@ pub(super) fn dep_import_names(
                 (written != target).then_some((written, target))
             })
             .collect();
-        out.insert(name.clone(), (import_name, renames));
+        let declares = mf
+            .every_declared_dependency()
+            .into_iter()
+            .map(registered)
+            .collect();
+        let direct = root_mf
+            .as_ref()
+            .is_none_or(|r| r.every_declared_dependency().contains(name.as_str()));
+        out.insert(
+            name.clone(),
+            DepImportName {
+                import_name,
+                renames,
+                declares,
+                direct,
+            },
+        );
     }
     Ok(out)
+}
+
+/// The [`module::DepPackageWalk`] of the resolved package `name`. A package
+/// [`dep_import_names`] read no manifest for imports under its default name
+/// and has no dependency scope.
+pub(super) fn dep_package_walk(
+    name: &str,
+    names: Option<&DepImportName>,
+    walked: walker::WalkResult,
+) -> module::DepPackageWalk {
+    match names {
+        Some(n) => module::DepPackageWalk {
+            name: name.to_string(),
+            import_name: n.import_name.clone(),
+            renames: n.renames.clone(),
+            declares: Some(n.declares.clone()),
+            direct: n.direct,
+            walked,
+        },
+        None => module::DepPackageWalk {
+            name: name.to_string(),
+            import_name: manifest::default_import_name(name),
+            renames: Vec::new(),
+            declares: None,
+            direct: true,
+            walked,
+        },
+    }
 }
 
 /// Render a dependency-walk failure (walker error or non-library dep) in

@@ -124,16 +124,11 @@ pub(super) fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::Dep
         if walked.entry != walker::EntryKind::Lib {
             return Vec::new();
         }
-        let (import_name, renames) = names
-            .get(&pkg.name)
-            .cloned()
-            .unwrap_or_else(|| (manifest::default_import_name(&pkg.name), Vec::new()));
-        out.push(module::DepPackageWalk {
-            name: pkg.name.clone(),
-            import_name,
-            renames,
+        out.push(super::build_cmds::dep_package_walk(
+            &pkg.name,
+            names.get(&pkg.name),
             walked,
-        });
+        ));
     }
     out
 }
