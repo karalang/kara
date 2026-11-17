@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 474 |
+| diagnostics | 475 |
 | false-positive | 251 |
 | missing-feature | 193 |
 | perf | 186 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 597 |
 | mir-llvm | 284 |
-| mir | 246 |
+| mir | 247 |
 | cli | 192 |
 | parser | 109 |
 | ownership | 103 |
@@ -1644,6 +1644,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-121 | resolver+parser | medium | `use std::sync::atomic::{AtomicI64, Ordering};` is "unknown module `std.sync.atomic`" with no fix, and `AtomicI64` everywhere after it unknown | 9848aac48d |
 | B-2026-11-17-122 | resolver+parser | medium | `Arc` in `use std::sync::{Arc, Mutex};` is "`std.sync` has no item `Arc`" with no fix, and `Arc::new(Mutex::new(s))` / `server.clone()` have none eit… | 9848aac48d |
 | B-2026-11-17-123 | typecheck | low | `Duration::from_nanos(x)` with `x: u64` mends to `Duration.ns(x)` and then has a narrowing error with no fix | 9848aac48d |
+| B-2026-11-17-126 | mir | low | An iterator adaptor or terminal called straight on a Set, SortedSet, Map or SortedMap (`s.difference(t).cloned()`, `sorted.map(..)`) got no machine f… | 85459908b12962ac0dcccbc6e464861568361a42 |
 
 </details>
 
