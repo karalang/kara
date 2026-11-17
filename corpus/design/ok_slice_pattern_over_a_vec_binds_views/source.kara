@@ -1,0 +1,32 @@
+fn bump_tail(s: mut Slice[i64]) {
+    match s {
+        [_, ..mut ref rest] => {
+            for i in 0..rest.len() {
+                rest[i] = rest[i] * 10;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn main() {
+    let v = [String.from("a"), String.from("b")];
+    match v {
+        [s, ..] => println(s),
+        _ => {}
+    }
+    println(v.len());
+
+    let mut w = [1, 2, 3];
+    match w {
+        [first, ..mut ref rest] => {
+            rest[0] = 20;
+            println(first);
+        }
+        _ => {}
+    }
+    println(f"{w[0]} {w[1]} {w[2]}");
+
+    bump_tail(mut w);
+    println(f"{w[0]} {w[1]} {w[2]}");
+}

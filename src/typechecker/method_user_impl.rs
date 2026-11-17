@@ -1992,6 +1992,38 @@ impl<'a> super::TypeChecker<'a> {
                             return Type::Error;
                         }
                     }
+                    // `.rev()` on a library iterator that is not double-ended
+                    // (`chain`, `flat_map`, an open range; iterators.md lists
+                    // which are): name the trait, and the collect-then-rev
+                    // spelling where there is a back to walk from
+                    // (B-2026-11-17-6).
+                    if method == "rev" && args.is_empty() {
+                        if let Some(item) = self.library_iter_item_type(receiver_for_lookup) {
+                            let why = if type_name == "RangeFrom" {
+                                format!(
+                                    "`{type_name}` has no back: an open range never ends, so \
+                                     there is no last item to start from"
+                                )
+                            } else {
+                                format!(
+                                    "`{type_name}` is not one (docs/library/iterators.md lists \
+                                     which iterators are) -- collect it first and reverse the \
+                                     `Vec`: `let v: Vec[{}] = it.collect(); v.into_iter().rev()`",
+                                    type_display(&item)
+                                )
+                            };
+                            self.type_error(
+                                format!(
+                                    "no method 'rev' on type '{type_name}': `rev` needs a \
+                                     `DoubleEndedIterator`, one that can also be walked from \
+                                     the back; {why}"
+                                ),
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                            );
+                            return Type::Error;
+                        }
+                    }
                     // `.clone()` on a library iterator that is not `Clone`
                     // (one holding a closure; a view, a range and the
                     // closure-free adaptors are, B-2026-11-17-80): the

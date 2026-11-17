@@ -1,0 +1,9 @@
+source = "B-2026-11-17-6"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "iterators", "diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-6: docs/library/iterators.md: rev needs a DoubleEndedIterator; an open range has no back, and the error says so rather than only that the method is missing. The expected.out wording of an error pin is guidance, not a byte oracle."

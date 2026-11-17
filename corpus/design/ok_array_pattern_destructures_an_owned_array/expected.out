@@ -1,0 +1,32 @@
+1 2
+drop 2
+drop 1
+--
+1 4
+drop 4
+drop 1
+drop 2
+drop 3
+--
+1 3
+drop 3
+drop 1
+after the match
+drop 2
+--
+1 2 2
+drop 2
+drop 3
+drop 1
+after the match
+--
+took 1
+drop 1
+after the if
+drop 2
+drop 3
+--
+after the if
+drop 1
+drop 2
+drop 3

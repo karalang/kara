@@ -4347,7 +4347,8 @@ fn test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit() {
     );
     assert!(!out.status.success(), "karac check accepted it:\n{text}");
     assert_eq!(
-        text.matches("cannot be shared by RC fallback").count(),
+        text.matches("cannot be used again: a `Drop` body runs")
+            .count(),
         2,
         "expected 2 E0514 error(s):\n{text}"
     );
@@ -4427,7 +4428,8 @@ fn test_rc_promoted_param_reached_through_a_let_rebind_frees_once() {
     );
     assert!(!out.status.success(), "karac check accepted it:\n{text}");
     assert_eq!(
-        text.matches("cannot be shared by RC fallback").count(),
+        text.matches("cannot be used again: a `Drop` body runs")
+            .count(),
         1,
         "expected 1 E0514 error(s):\n{text}"
     );

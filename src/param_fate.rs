@@ -1476,7 +1476,7 @@ fn pattern_names(p: &Pattern) -> Vec<String> {
                 for e in prefix.iter().chain(suffix) {
                     go(e, out);
                 }
-                if let Some(RestPattern::Bound(n)) = rest {
+                if let Some(RestPattern::Bound(n, _)) = rest {
                     out.push(n.clone());
                 }
             }

@@ -10304,7 +10304,7 @@ fn test_slice_pattern_single_bound_rest() {
             suffix,
         } => {
             assert!(prefix.is_empty());
-            assert!(matches!(rest, Some(RestPattern::Bound(n)) if n == "rest"));
+            assert!(matches!(rest, Some(RestPattern::Bound(n, false)) if n == "rest"));
             assert!(suffix.is_empty());
         }
         other => panic!("expected Slice, got {other:?}"),
@@ -10322,8 +10322,20 @@ fn test_slice_pattern_two_bound_rest() {
         } => {
             assert_eq!(prefix.len(), 1);
             assert!(matches!(&prefix[0].kind, PatternKind::Binding(n) if n == "head"));
-            assert!(matches!(rest, Some(RestPattern::Bound(n)) if n == "tail"));
+            assert!(matches!(rest, Some(RestPattern::Bound(n, false)) if n == "tail"));
             assert!(suffix.is_empty());
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_mut_ref_rest() {
+    // `..mut ref rest` binds a mutable view of the rest (B-2026-11-17-30).
+    let prog = parse_ok("fn main() { match xs { [head, ..mut ref tail] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice { rest, .. } => {
+            assert!(matches!(rest, Some(RestPattern::Bound(n, true)) if n == "tail"));
         }
         other => panic!("expected Slice, got {other:?}"),
     }

@@ -649,8 +649,9 @@ impl<'a> super::OwnershipChecker<'a> {
             };
             errors.push(OwnershipError {
                 message: format!(
-                    "{reuse}; its type `{ty_text}` runs a user `Drop` body, so it cannot be \
-                     shared by RC fallback"
+                    "{reuse}; a moved `{ty_text}` cannot be used again: a `Drop` body runs \
+                     for it (its own or a part's), and there is no shared copy to keep it \
+                     alive"
                 ),
                 span: entry.other_use_span,
                 kind: OwnershipErrorKind::RcFallbackOfDropType,

@@ -594,10 +594,20 @@ impl super::Parser {
                     if self.check(&Token::DotDot) {
                         let rest_span = self.current_span();
                         self.advance();
-                        let new_rest = if let Token::Identifier { .. } = self.peek_token_ref() {
+                        // `..mut ref rest` binds a mutable view of the
+                        // rest (design.md § Slice and array patterns).
+                        let mut_ref = matches!(self.peek_token_ref(), Token::Mut)
+                            && matches!(self.peek_token_ref_at(1), Token::Ref);
+                        if mut_ref {
+                            self.advance();
+                            self.advance();
+                        }
+                        let new_rest = if mut_ref
+                            || matches!(self.peek_token_ref(), Token::Identifier { .. })
+                        {
                             let name = self.expect_identifier()?;
                             self.check_ident_class(&name, IdentClass::Value, "binding", rest_span);
-                            RestPattern::Bound(name)
+                            RestPattern::Bound(name, mut_ref)
                         } else {
                             RestPattern::Ignored
                         };
@@ -627,6 +637,15 @@ impl super::Parser {
                     }
                 }
                 self.expect(&Token::RightBracket)?;
+                let span = self.span_from(&start);
+                // A `..mut ref rest` is a `mut ref` binding to every pass
+                // that asks `Program::mut_ref_binding_spans`; its span there
+                // is the slice pattern's, the one `binding_name_spans` gives
+                // a rest binding.
+                if matches!(rest, Some(RestPattern::Bound(_, true))) {
+                    self.mut_ref_binding_spans
+                        .insert(crate::resolver::SpanKey::from_span(&span));
+                }
                 Some(Pattern {
                     id: crate::ids::NodeId::DUMMY,
                     kind: PatternKind::Slice {

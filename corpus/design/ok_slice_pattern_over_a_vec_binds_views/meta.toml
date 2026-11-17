@@ -1,0 +1,9 @@
+source = "B-2026-11-17-30"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "patterns", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-30: design.md § Slice and array patterns: over a Vec or a Slice every element binding is a view and nothing moves, so the vector is whole after the match; ..mut ref rest against a mutable place binds a mut Slice that writes into it."

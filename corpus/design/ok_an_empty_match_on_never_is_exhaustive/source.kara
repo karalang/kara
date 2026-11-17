@@ -1,0 +1,14 @@
+fn never() -> Never {
+    panic("unreachable")
+}
+
+fn pick(c: bool) -> i64 {
+    if c {
+        return 7;
+    }
+    match never() {}
+}
+
+fn main() {
+    println(pick(true));
+}

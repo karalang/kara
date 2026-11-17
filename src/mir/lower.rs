@@ -19776,7 +19776,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 rest,
                 suffix,
             } => {
-                matches!(rest, Some(ast::RestPattern::Bound(_)))
+                matches!(rest, Some(ast::RestPattern::Bound(_, _)))
                     || prefix.iter().chain(suffix).any(|p| self.pattern_binds(p))
             }
         }
@@ -19971,17 +19971,37 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.bind_pattern(p, &ep, elem, by_ref, out)?;
                     }
                 }
-                if let Some(ast::RestPattern::Bound(name)) = rest {
+                if let Some(ast::RestPattern::Bound(name, mut_ref)) = rest {
+                    let mut_ref = *mut_ref;
+                    if mut_ref && known.is_some() {
+                        return self.unsupported(pat.span, "`..mut ref rest` over an array");
+                    }
                     // Over an array, `..rest` is the middle as an array; a
                     // middle of `Copy` elements is copied, which reads the
                     // same as the borrow the spec describes.
                     if let Some(n) = known {
-                        if !self.is_copy(elem) {
-                            return self
-                                .unsupported(pat.span, "a named rest of non-`Copy` elements");
+                        // Non-`Copy` elements of an owned array move into
+                        // the `Array[T, K]` the checker types the rest as,
+                        // each from its own element, so the array is left
+                        // with none of them to drop (B-2026-11-17-30). Under
+                        // a borrowed scrutinee nothing may move: that rest
+                        // is not lowered yet.
+                        let copy = self.is_copy(elem);
+                        if !copy && (by_ref || place.is_move_forbidden()) {
+                            return self.unsupported(
+                                pat.span,
+                                "a named rest of non-`Copy` elements under a borrow",
+                            );
                         }
                         let ops = (k..n - j)
-                            .map(|i| Operand::Copy(place.project(ProjElem::ConstIndex(i))))
+                            .map(|i| {
+                                let ep = place.project(ProjElem::ConstIndex(i));
+                                if copy {
+                                    Operand::Copy(ep)
+                                } else {
+                                    Operand::Move(ep)
+                                }
+                            })
                             .collect();
                         let at = self.tys().tcx().intern(HK::Array {
                             elem,
@@ -20007,15 +20027,26 @@ impl<'l, 'a> Bx<'l, 'a> {
                             }),
                         ),
                     );
+                    // `..mut ref rest` is the `mut Slice[T]` view, through
+                    // a mutable borrow the borrow checker judges like any
+                    // other (B-2026-11-17-30).
                     let st = self.tys().tcx().intern(HK::Slice {
                         elem,
-                        mutable: false,
+                        mutable: mut_ref,
                     });
-                    let r = self.ref_to(place.clone(), t);
+                    let r = if mut_ref {
+                        let rt = self.tys().tcx().reference(t, true);
+                        let r = self.temp(rt);
+                        self.assign(r, Rvalue::Ref(BorrowKind::Mut, place.clone()));
+                        Operand::Move(Place::local(r))
+                    } else {
+                        self.ref_to(place.clone(), t)
+                    };
                     let tname = self.tys().display(t);
+                    let method = if mut_ref { "slice_mut" } else { "slice" };
                     let l = self.user_local(name, st, pat.id);
                     self.call_native(
-                        &format!("{tname}.slice"),
+                        &format!("{tname}.{method}"),
                         vec![
                             r,
                             Operand::Const(Const {

@@ -506,7 +506,7 @@ impl<'a> super::Resolver<'a> {
                 for p in prefix {
                     self.resolve_pattern(p);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, _)) = rest {
                     let defined = self.table.define(
                         name.clone(),
                         SymbolKind::Variable { is_mut: false },
@@ -736,7 +736,7 @@ impl<'a> super::Resolver<'a> {
                 for p in prefix {
                     self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, _)) = rest {
                     self.define_binding_leaf(
                         name,
                         is_mut,

@@ -674,7 +674,7 @@ fn pattern_names_into(p: &Pattern, out: &mut Vec<String>) {
             for sub in prefix.iter().chain(suffix) {
                 pattern_names_into(sub, out);
             }
-            if let Some(RestPattern::Bound(n)) = rest {
+            if let Some(RestPattern::Bound(n, _)) = rest {
                 out.push(n.clone());
             }
         }

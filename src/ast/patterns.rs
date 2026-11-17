@@ -110,7 +110,7 @@ impl Pattern {
                 for p in prefix {
                     p.collect_bindings(out);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, _)) = rest {
                     out.push(name.clone());
                 }
                 for p in suffix {
@@ -160,7 +160,7 @@ impl Pattern {
                 for p in prefix {
                     p.collect_binding_name_spans(out);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, _)) = rest {
                     out.push((name.clone(), self.span));
                 }
                 for p in suffix {
@@ -231,11 +231,14 @@ pub enum PatternKind {
 }
 
 /// Rest marker inside a slice pattern. `..` is `Ignored`; `..name` is
-/// `Bound(name)` and introduces a fresh binding into the arm scope.
+/// `Bound(name, false)` and introduces a fresh binding into the arm scope;
+/// `..mut ref name` is `Bound(name, true)` and binds a `mut Slice[T]` (or a
+/// `mut ref Array[T, K]`) against a mutable place (design.md § Slice and
+/// array patterns, B-2026-11-17-30).
 #[derive(Debug, Clone)]
 pub enum RestPattern {
     Ignored,
-    Bound(String),
+    Bound(String, bool),
 }
 
 #[derive(Debug, Clone)]

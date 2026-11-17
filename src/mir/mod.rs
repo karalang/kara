@@ -290,32 +290,47 @@ fn eat(_1: R, _2: bool) -> () {
 
     #[test]
     fn mir_validator_rejects_move_out_of_index_and_deref() {
+        // A move through a reference or a runtime index is refused; a move
+        // out of a constant index of an owned array is a part move, which
+        // array destructuring emits (B-2026-11-17-30).
         let (mut tys, _, rt, _) = types();
         let arr = tys.intern(TyKind::Array(rt, 2));
         let rref = tys.intern(TyKind::Ref(rt));
-        let body = one_block(&mut tys, &[("a", arr), ("p", rref)], rt, |b, a, bb| {
-            b.assign(
-                bb,
-                Local::RETURN_PLACE,
-                Rvalue::Use(Operand::Move(
-                    Place::from(a[0]).project(ProjElem::ConstIndex(1)),
-                )),
-            );
-            b.assign(
-                bb,
-                Local::RETURN_PLACE,
-                Rvalue::Use(Operand::Move(Place::from(a[1]).project(ProjElem::Deref))),
-            );
-            b.terminate(bb, TerminatorKind::Return);
-        });
-        let errs = validate(&body, &tys);
-        assert_eq!(
-            errs.iter()
-                .filter(|e| e.contains("behind a reference or an index"))
-                .count(),
-            2,
-            "{errs:?}"
+        let word = tys.int(IntTy::U64);
+        let body = one_block(
+            &mut tys,
+            &[("a", arr), ("p", rref), ("i", word)],
+            rt,
+            |b, a, bb| {
+                b.assign(
+                    bb,
+                    Local::RETURN_PLACE,
+                    Rvalue::Use(Operand::Move(
+                        Place::from(a[0]).project(ProjElem::ConstIndex(1)),
+                    )),
+                );
+                b.assign(
+                    bb,
+                    Local::RETURN_PLACE,
+                    Rvalue::Use(Operand::Move(Place::from(a[1]).project(ProjElem::Deref))),
+                );
+                b.assign(
+                    bb,
+                    Local::RETURN_PLACE,
+                    Rvalue::Use(Operand::Move(
+                        Place::from(a[0]).project(ProjElem::Index(a[2])),
+                    )),
+                );
+                b.terminate(bb, TerminatorKind::Return);
+            },
         );
+        let errs: Vec<_> = validate(&body, &tys)
+            .into_iter()
+            .filter(|e| e.contains("behind a reference or an index"))
+            .collect();
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(errs.iter().any(|e| e.contains("(*_2)")), "{errs:?}");
+        assert!(errs.iter().all(|e| !e.contains("_1[1]")), "{errs:?}");
     }
 
     #[test]

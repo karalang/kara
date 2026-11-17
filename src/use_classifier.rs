@@ -2672,7 +2672,7 @@ impl<'a> UseClassifier<'a> {
                 rest,
                 suffix,
             } => {
-                matches!(rest, Some(RestPattern::Bound(_)))
+                matches!(rest, Some(RestPattern::Bound(..)))
                     || prefix
                         .iter()
                         .chain(suffix.iter())

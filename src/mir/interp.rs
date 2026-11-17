@@ -10357,15 +10357,9 @@ impl<'a> Interp<'a> {
         ret: Ty,
     ) -> R<Value> {
         let name = format!("{ty_name}.{method}");
+        // `cap < 0` counts as 0, as for `Vec` (collections.md,
+        // B-2026-11-17-4).
         if matches!(method, "new" | "with_capacity") {
-            if let [Value::Int(n), ..] = args.as_slice() {
-                if *n < 0 {
-                    if self.trace {
-                        self.events.push(Event::Abort(AbortReason::Panic));
-                    }
-                    return Err(Stop::Abort(AbortReason::Panic));
-                }
-            }
             return Ok(self.alloc_box(ty_name, Value::Agg(vec![])));
         }
         let Some(recv) = args.first() else {
@@ -10532,6 +10526,8 @@ impl<'a> Interp<'a> {
             ("Vec" | "String" | "VecDeque", "try_with_capacity", [Value::Int(n)]) if *n >= 0 => {
                 (*n as u128, 0, 0, elem_size(self, ok_ty))
             }
+            // A negative capacity counts as 0 (B-2026-11-17-4).
+            ("VecDeque", "try_with_capacity", [Value::Int(_)]) => (0, 0, 0, elem_size(self, ok_ty)),
             ("Vec" | "String", "try_reserve" | "try_reserve_exact", [recv, Value::Int(n)])
                 if *n > 0 =>
             {

@@ -268,13 +268,16 @@ impl Place {
     }
 
     /// Does any projection forbid moving out (core semantics §3.7)?
+    /// Whether a move out of `self` is refused: it reaches its value through
+    /// a reference or a runtime index (core semantics §3.7). An element at a
+    /// constant index of an owned array is not refused: destructuring an
+    /// owned `Array[T, N]` moves elements out as a tuple pattern moves
+    /// fields (design.md § Slice and array patterns, B-2026-11-17-30), and
+    /// drop elaboration drops the rest one by one.
     pub fn is_move_forbidden(&self) -> bool {
-        self.projection.iter().any(|e| {
-            matches!(
-                e,
-                ProjElem::Deref | ProjElem::Index(_) | ProjElem::ConstIndex(_)
-            )
-        })
+        self.projection
+            .iter()
+            .any(|e| matches!(e, ProjElem::Deref | ProjElem::Index(_)))
     }
 
     /// Is `self` a prefix of `other` (equal counts)?

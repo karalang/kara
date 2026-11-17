@@ -1863,7 +1863,7 @@ pub(crate) fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
                 for sp in prefix.iter().chain(suffix.iter()) {
                     walk(sp, out);
                 }
-                if let Some(crate::ast::RestPattern::Bound(name)) = rest {
+                if let Some(crate::ast::RestPattern::Bound(name, _)) = rest {
                     out.push(name.clone());
                 }
             }

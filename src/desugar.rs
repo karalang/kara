@@ -1960,7 +1960,7 @@ fn collect_binding_names(p: &Pattern, out: &mut std::collections::HashSet<String
             for sub in prefix.iter().chain(suffix.iter()) {
                 collect_binding_names(sub, out);
             }
-            if let Some(RestPattern::Bound(name)) = rest {
+            if let Some(RestPattern::Bound(name, _)) = rest {
                 out.insert(name.clone());
             }
         }

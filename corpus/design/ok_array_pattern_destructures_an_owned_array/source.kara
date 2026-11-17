@@ -1,0 +1,60 @@
+struct D {
+    n: i64,
+}
+
+impl Drop for D {
+    fn drop(mut ref self) {
+        println(f"drop {self.n}");
+    }
+}
+
+fn pair() {
+    let a: Array[D, 2] = [D { n: 1 }, D { n: 2 }];
+    let [x, y] = a;
+    println(f"{x.n} {y.n}");
+}
+
+fn ends() {
+    let a: Array[D, 4] = [D { n: 1 }, D { n: 2 }, D { n: 3 }, D { n: 4 }];
+    let [x, .., z] = a;
+    println(f"{x.n} {z.n}");
+}
+
+fn in_match() {
+    let a: Array[D, 3] = [D { n: 1 }, D { n: 2 }, D { n: 3 }];
+    match a {
+        [x, _, z] => println(f"{x.n} {z.n}"),
+    }
+    println("after the match");
+}
+
+fn named_rest() {
+    let a: Array[D, 3] = [D { n: 1 }, D { n: 2 }, D { n: 3 }];
+    match a {
+        [x, ..rest] => println(f"{x.n} {rest.len()} {rest[0].n}"),
+    }
+    println("after the match");
+}
+
+fn maybe(c: bool) {
+    let a: Array[D, 3] = [D { n: 1 }, D { n: 2 }, D { n: 3 }];
+    if c {
+        let [x, ..] = a;
+        println(f"took {x.n}");
+    }
+    println("after the if");
+}
+
+fn main() {
+    pair();
+    println("--");
+    ends();
+    println("--");
+    in_match();
+    println("--");
+    named_rest();
+    println("--");
+    maybe(true);
+    println("--");
+    maybe(false);
+}

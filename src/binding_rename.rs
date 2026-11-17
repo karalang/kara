@@ -84,7 +84,7 @@ pub(crate) fn rename_pattern_binding(p: &mut Pattern, from: &str, to: &str) {
             for sub in prefix.iter_mut().chain(suffix.iter_mut()) {
                 rename_pattern_binding(sub, from, to);
             }
-            if let Some(RestPattern::Bound(n)) = rest {
+            if let Some(RestPattern::Bound(n, _)) = rest {
                 if n == from {
                     *n = to.to_string();
                 }

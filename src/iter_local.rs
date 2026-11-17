@@ -924,7 +924,7 @@ fn collect_pattern_bindings(pattern: &Pattern, out: &mut HashSet<String>) {
             for p in prefix.iter().chain(suffix.iter()) {
                 collect_pattern_bindings(p, out);
             }
-            if let Some(RestPattern::Bound(name)) = rest {
+            if let Some(RestPattern::Bound(name, _)) = rest {
                 out.insert(name.clone());
             }
         }

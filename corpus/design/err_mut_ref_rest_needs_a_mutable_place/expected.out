@@ -1,0 +1,1 @@
+ERROR at line 4: cannot bind `mut ref rest` into `v` — `v` is declared without `mut`

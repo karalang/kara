@@ -1,0 +1,9 @@
+source = "B-2026-11-17-30"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "patterns", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-30: design.md § Slice and array patterns: ..mut ref rest binds a mut Slice only against a mutable place; over a let without mut it is refused like any mut ref binding. The expected.out wording of an error pin is guidance, not a byte oracle."

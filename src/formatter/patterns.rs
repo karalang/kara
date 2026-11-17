@@ -137,8 +137,8 @@ impl super::Formatter {
                     }
                     match r {
                         RestPattern::Ignored => self.write_str(".."),
-                        RestPattern::Bound(name) => {
-                            self.write_str("..");
+                        RestPattern::Bound(name, mut_ref) => {
+                            self.write_str(if *mut_ref { "..mut ref " } else { ".." });
                             self.write_ident(name);
                         }
                     }

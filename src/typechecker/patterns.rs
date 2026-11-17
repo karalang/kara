@@ -2224,10 +2224,21 @@ impl<'a> super::TypeChecker<'a> {
             } => {
                 let (element_ty, rest_ty) =
                     self.slice_pattern_types(prefix, rest, suffix, expected, &pattern.span);
+                // Over a `Vec[T]` or a `Slice[T]` the pattern sees a view:
+                // every element binding is a `ref` and nothing moves out,
+                // even under an owned scrutinee (design.md § Slice and array
+                // patterns, B-2026-11-17-30). An owned `Array[T, N]`
+                // destructures like a tuple.
+                let viewed = matches!(mode, ScrutineeMode::Owned)
+                    && !matches!(
+                        self.resolved_now(expected),
+                        Type::Array { .. } | Type::Error
+                    );
+                let elem_mode = if viewed { ScrutineeMode::Ref } else { mode };
                 for pat in prefix.iter().chain(suffix.iter()) {
-                    self.check_pattern_against(pat, &element_ty, mode);
+                    self.check_pattern_against(pat, &element_ty, elem_mode);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, mut_ref)) = rest {
                     // Slice-rest mutability propagation
                     // (design.md § Slice and array patterns > Mutability
                     // propagation, lines 7657–7661): a `..rest` over a
@@ -2242,6 +2253,15 @@ impl<'a> super::TypeChecker<'a> {
                     // the rest binding's source is the freshly
                     // synthesised window, so the elevation rule is
                     // applied locally here.
+                    // `..mut ref rest` asks for the mutable view whatever the
+                    // scrutinee's mode; whether the place may be borrowed
+                    // mutably is the borrow checker's question, as for any
+                    // `mut ref` (B-2026-11-17-30).
+                    let mode = if *mut_ref {
+                        ScrutineeMode::MutRef
+                    } else {
+                        mode
+                    };
                     let binding_ty = match (mode, rest_ty) {
                         (ScrutineeMode::MutRef, Type::Slice { element, .. }) => Type::Slice {
                             element,
@@ -3193,6 +3213,11 @@ impl<'a> super::TypeChecker<'a> {
 
     fn check_exhaustiveness(&mut self, scrutinee_type: &Type, arms: &[MatchArm], span: Span) {
         use crate::exhaustive::{check_match_exhaustive, unreachable_arms, ExhaustiveResult};
+        // `match x { }` on a `Never`: no value reaches it, so no arm is
+        // missing (design.md § Pattern exhaustiveness, B-2026-11-17-31).
+        if arms.is_empty() && matches!(self.resolved_now(scrutinee_type), Type::Never) {
+            return;
+        }
         for idx in unreachable_arms(scrutinee_type, arms, &self.env) {
             // The fix deletes the arm: from the end of the arm before it, so
             // the separator between them goes too (`karac fix` widens it to
@@ -4503,7 +4528,7 @@ impl<'a> super::TypeChecker<'a> {
                 for pat in prefix.iter().chain(suffix.iter()) {
                     self.bind_pattern_types(pat, &element_ty);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, _)) = rest {
                     self.local_scope.insert(name.clone(), rest_ty);
                 }
             }

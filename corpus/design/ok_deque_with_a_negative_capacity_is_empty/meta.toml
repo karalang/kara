@@ -1,0 +1,9 @@
+source = "B-2026-11-17-4"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "deque", "lib:vecdeque"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-4: docs/library collections: a negative capacity counts as 0 for VecDeque.with_capacity, as it does for Vec.with_capacity; the deque is empty and usable."

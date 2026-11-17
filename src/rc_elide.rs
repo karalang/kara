@@ -555,7 +555,7 @@ pub(crate) fn collect_pattern_bindings(pat: &Pattern, out: &mut HashSet<String>)
             for p in prefix {
                 collect_pattern_bindings(p, out);
             }
-            if let Some(RestPattern::Bound(name)) = rest {
+            if let Some(RestPattern::Bound(name, _)) = rest {
                 out.insert(name.clone());
             }
             for p in suffix {

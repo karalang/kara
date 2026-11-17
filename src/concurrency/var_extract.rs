@@ -48,7 +48,7 @@ impl<'a> super::ConcurrencyChecker<'a> {
                 for p in prefix.iter().chain(suffix.iter()) {
                     self.collect_pattern_bindings(p, defines);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, _)) = rest {
                     defines.insert(name.clone());
                 }
             }

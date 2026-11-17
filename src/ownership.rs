@@ -4574,7 +4574,7 @@ impl<'a> OwnershipChecker<'a> {
                 for p in prefix.iter().chain(suffix.iter()) {
                     self.define_pattern_states(p, states);
                 }
-                if let Some(RestPattern::Bound(name)) = rest {
+                if let Some(RestPattern::Bound(name, _)) = rest {
                     states.insert(name.clone(), ValueState::Live);
                 }
             }

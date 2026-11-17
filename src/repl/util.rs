@@ -725,7 +725,7 @@ pub(super) fn collect_pattern_bindings(
             for p in prefix.iter().chain(suffix.iter()) {
                 collect_pattern_bindings(&p.kind, out);
             }
-            if let Some(crate::ast::RestPattern::Bound(name)) = rest {
+            if let Some(crate::ast::RestPattern::Bound(name, _)) = rest {
                 out.insert(name.clone());
             }
         }

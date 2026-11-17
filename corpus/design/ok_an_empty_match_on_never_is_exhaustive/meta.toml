@@ -1,0 +1,9 @@
+source = "B-2026-11-17-31"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "patterns", "never"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-31: design.md: Never has no values, so a match on it with no arms is exhaustive and diverges; the function after it needs no return value."

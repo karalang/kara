@@ -314,6 +314,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `..mut ref rest` in a slice pattern binds a `mut Slice[T]` over a `Vec`
+  or a `Slice` reached through a mutable place, so writes through `rest` land
+  in the vector; against a `let` without `mut` it is refused as any
+  `mut ref` binding is (B-2026-11-17-30).
 - `x.hash(mut h)` written in a program works for `F64`, `F32`, `()`,
   `i128`, `u128` and tuples, feeding the bytes a table feeds (the float's
   bits, nothing, 16 bytes, each part), so a hand-written `impl Hash` can
@@ -708,6 +712,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `too few values in a variant's payload at line 1 column 10`, at the `]`
   that ended it early, as serde_json places it, or at the first value past
   the end (B-2026-11-17-74).
+- Slice and array patterns follow design.md's binding rules: over a `Vec`
+  or a `Slice` an element binding is a view and leaves the vector whole
+  (`match v { [s, ..] => .. }` then `v.len()` compiles); a pattern over an
+  owned `Array[D, N]` destructures it like a tuple, moving the bound
+  elements out and dropping the rest at the array's scope end; a named rest
+  over an owned array of non-`Copy` elements takes them into its
+  `Array[D, K]` (B-2026-11-17-30).
+- `match x {}` on a `Never` value is exhaustive and accepted
+  (B-2026-11-17-31).
+- `VecDeque.with_capacity(-5)` makes an empty deque, as
+  `Vec.with_capacity(-5)` does; it aborted (B-2026-11-17-4).
 - On `wasm_wasi` the default hasher's key is random per process (WASI
   `random_get`) and `KARAC_HASH_SEED` pins it, giving the order the same pin
   gives natively; every wasm run used one fixed key and ignored the pin.
@@ -1618,6 +1633,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `rev` on an iterator that is not double-ended says `rev` needs a
+  `DoubleEndedIterator`, and for an open range that it has no back; other
+  iterators get the collect-then-reverse rewrite (B-2026-11-17-6).
+- E0514 (a moved value with a `Drop` body used again) no longer cites the
+  removed RC fallback (B-2026-11-17-31).
 - `Make.name()` for a trait's associated function names no type and says
   so, instead of "a type that failed to check is not lowered yet"
   (B-2026-11-16-331).

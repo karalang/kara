@@ -689,6 +689,17 @@ impl Elaborator<'_> {
                 let fields = self.adt_fields(place, ty, None, n)?;
                 self.drop_fields(st, &fields, p, succ)
             }
+            // An array some of whose elements a pattern moved out
+            // (B-2026-11-17-30): the rest drop first to last (core
+            // semantics §6), so the list is given last first, as
+            // `drop_fields` runs its last entry first.
+            TyKind::Array(el, n) => {
+                let elems: Vec<(Place, Ty)> = (0..n)
+                    .rev()
+                    .map(|i| (place.project(ProjElem::ConstIndex(i)), el))
+                    .collect();
+                self.drop_fields(st, &elems, p, succ)
+            }
             TyKind::Adt(a) => {
                 let counts: Vec<usize> = self
                     .tys

@@ -22,12 +22,9 @@ impl<'ctx> Cx<'ctx, '_> {
         dest: &Place,
     ) -> R<Option<()>> {
         let dty = self.place_type(dest)?;
+        // `cap < 0` counts as 0, as for `Vec` (collections.md,
+        // B-2026-11-17-4); an empty deque allocates nothing either way.
         if matches!(method, "new" | "with_capacity") {
-            if let [n] = args {
-                let n = self.int_arg(n)?;
-                let ok = self.non_negative(n)?;
-                self.abort_unless(ok, "explicit panic")?;
-            }
             let d = self.place_ptr(dest)?;
             self.builder
                 .build_memset(d, 1, self.llcx.i8_type().const_zero(), self.i64(32))
@@ -41,8 +38,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 return Ok(None);
             };
             let n = self.int_arg(n)?;
+            // A negative capacity counts as 0 (B-2026-11-17-4).
             let ok = self.non_negative(n)?;
-            self.abort_unless(ok, "explicit panic")?;
+            let n = self
+                .builder
+                .build_select(ok, n, n.get_type().const_zero(), "")
+                .map_err(e)?
+                .into_int_value();
             let okv = self.variant_of(dty, "Ok")?;
             let qty = self
                 .tys
