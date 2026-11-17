@@ -4035,6 +4035,8 @@ let p = Positive.try_from(n)?;
 
 ### Contracts (requires / ensures / invariant)
 
+**Status: experimental in 0.8** (Gowtham's decision, 2026-11-17). The compiler already parses, checks and runs `requires` / `ensures` (including `old(..)`): a violated contract aborts, as the `test_e2e_contract_*` fixtures pin. That implementation is kept, but it is not part of the v1 language. The syntax, the semantics below, and the diagnostic codes (`E_CONTRACT_*`, `E_OLD_*`, `E_CONSUMED_SELF_IN_ENSURES`) may change without a deprecation cycle until this track lands, and `karac explain` lists those codes as deferred. Programs that need a stable check use an explicit `if` with a `Result` or a panic.
+
 Contracts express what a function guarantees about its inputs and outputs, and what a struct guarantees about its fields. Checked at runtime in debug builds, stripped in release:
 
 ```
