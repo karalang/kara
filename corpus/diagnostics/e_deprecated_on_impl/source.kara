@@ -1,0 +1,8 @@
+struct Point { x: i64 }
+
+#[deprecated]
+impl Point {
+    fn get(self) -> i64 { self.x }
+}
+
+fn main() {}

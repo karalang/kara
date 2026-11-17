@@ -1,0 +1,6 @@
+struct Point {
+    #[deprecated]
+    x: i64,
+}
+
+fn main() {}

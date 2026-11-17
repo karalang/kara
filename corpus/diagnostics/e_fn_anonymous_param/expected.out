@@ -1,0 +1,1 @@
+ERROR at line 1: function parameters require a name; write `_: i64` for an unused parameter, or `arg: i64` for a meaningful name

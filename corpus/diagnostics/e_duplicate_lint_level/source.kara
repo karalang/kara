@@ -1,0 +1,4 @@
+#[allow(deprecated, deprecated)]
+fn f() {}
+
+fn main() { f(); }

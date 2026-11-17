@@ -1,0 +1,1 @@
+ERROR at line 4: continue label `outer` refers to a labeled block; continue is only valid for loops

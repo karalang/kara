@@ -1,0 +1,1 @@
+ERROR at line 1: `#[deprecated(...)]` requires named arguments — use `since: "..."` and/or `note: "..."`

@@ -1,0 +1,4 @@
+#[repr(u8)]
+enum Level { Low = 1, High = 300 }
+
+fn main() {}

@@ -1,0 +1,8 @@
+struct Pair { a: String, b: String }
+
+fn main() {
+    let p = Pair { a: "x".to_string(), b: "y".to_string() };
+    match p {
+        whole @ Pair { a, b } => println(a),
+    }
+}

@@ -1,0 +1,1 @@
+ERROR at line 4: type `Guard` already has an `impl Drop` block — a type may declare at most one Drop implementation; merge the cleanup logic into the existing `impl Drop for Guard` block

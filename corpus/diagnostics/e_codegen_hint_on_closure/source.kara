@@ -1,4 +1,0 @@
-fn main() {
-    let f = #[inline] |x: i64| x + 1;
-    println(f(1));
-}

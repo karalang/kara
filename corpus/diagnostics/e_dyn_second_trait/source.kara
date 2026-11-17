@@ -1,0 +1,6 @@
+trait Shape { fn area(self) -> f64; }
+trait Named { fn name(self) -> String; }
+
+fn show(s: ref dyn Shape + Named) {}
+
+fn main() {}

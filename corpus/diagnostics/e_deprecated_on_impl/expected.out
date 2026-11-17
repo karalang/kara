@@ -1,0 +1,1 @@
+ERROR at line 3: `#[deprecated]` is not valid on an `impl` block — deprecate the underlying methods individually instead. See design.md § `#[deprecated]` for Item Deprecation.

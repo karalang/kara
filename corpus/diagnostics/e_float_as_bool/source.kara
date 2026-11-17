@@ -1,0 +1,5 @@
+fn main() {
+    let x = 1.5;
+    let b = x as bool;
+    println(b);
+}

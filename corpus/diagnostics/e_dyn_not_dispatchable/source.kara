@@ -1,0 +1,5 @@
+trait Maker { fn make() -> Self; }
+
+fn use_it(m: ref dyn Maker) {}
+
+fn main() {}

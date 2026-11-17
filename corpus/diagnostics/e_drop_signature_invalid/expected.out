@@ -1,0 +1,1 @@
+ERROR at line 3: `impl Drop for Guard` does not match `trait Drop { fn drop(mut ref self); }` — the `drop` method's receiver must be `mut ref self`

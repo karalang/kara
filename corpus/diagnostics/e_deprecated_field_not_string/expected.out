@@ -1,0 +1,1 @@
+ERROR at line 1: `#[deprecated]` field `note` requires a string-literal value

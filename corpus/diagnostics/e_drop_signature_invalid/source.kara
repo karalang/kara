@@ -1,0 +1,5 @@
+struct Guard { id: i64 }
+
+impl Drop for Guard { fn drop(self) { println("a"); } }
+
+fn main() {}

@@ -1,1 +1,0 @@
-ERROR at line 1: `#[inline]` is not valid on struct; codegen hints attach to named functions — a free `fn`, an inherent or trait-impl method, a trait method declaration, an `extern "C" fn` definition, or a `Drop` destructor. To hint every method of an `impl` block, annotate each method (block-level shorthand is not in 0.8).

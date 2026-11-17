@@ -1,0 +1,1 @@
+ERROR at line 4: a `dyn` type names one trait, and the only trait allowed after `+` is `CrossTask`; `Named` cannot be added. Declare a trait with both as supertraits and use `dyn` of that (design.md § `dyn Trait`)

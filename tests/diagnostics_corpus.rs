@@ -167,6 +167,8 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E0407", "Project Profiles"),
         ("E0409", "Module-Level Mutable State"),
         ("E0800", "deferred.md § GPU"),
+        ("E_CODEGEN_HINT_ON_CLOSURE", "Codegen Hint Attributes"),
+        ("E_COLD_INLINE_ALWAYS_CONFLICT", "not yet lowered"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(

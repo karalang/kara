@@ -1,0 +1,1 @@
+ERROR at line 3: `Maker` cannot be used as `dyn`: its required method `make` cannot be called through a method table, because it has no receiver. Give `make` a default body, or take the value through a generic parameter `[T: Maker]` (design.md § `dyn Trait`)

@@ -1,1 +1,0 @@
-ERROR at line 2: `#[cold]` and `#[inline(always)]` express opposite intents — a cold function is rarely run, so force-inlining it everywhere contradicts the hint. Keep `#[cold]` with `#[inline]`/`#[inline(never)]`, or drop `#[cold]`

@@ -1,0 +1,6 @@
+struct Handle { fd: i64 }
+
+#[derive(Default)]
+struct Config { name: String, handle: Handle }
+
+fn main() {}

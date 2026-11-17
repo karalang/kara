@@ -1,0 +1,4 @@
+#[deprecated("use new instead")]
+fn old() {}
+
+fn main() {}

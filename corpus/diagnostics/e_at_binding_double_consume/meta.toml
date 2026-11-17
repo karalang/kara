@@ -1,0 +1,9 @@
+source = "B-2026-11-16-303"
+dedup_of = []
+expect = "error:E_AT_BINDING_DOUBLE_CONSUME"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-303: the smallest program that produces E_AT_BINDING_DOUBLE_CONSUME, the example behind `karac explain E_AT_BINDING_DOUBLE_CONSUME`. tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

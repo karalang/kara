@@ -1,0 +1,1 @@
+ERROR at line 1: lint name `deprecated` appears more than once in `#[allow(...)]`

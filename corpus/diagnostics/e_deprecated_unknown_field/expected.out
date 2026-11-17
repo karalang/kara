@@ -1,0 +1,1 @@
+ERROR at line 1: `#[deprecated]` does not accept field `reason`; the accepted fields are `since` and `note`

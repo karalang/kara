@@ -1,0 +1,6 @@
+struct Guard { id: i64 }
+
+impl Drop for Guard { fn drop(mut ref self) { println("a"); } }
+impl Drop for Guard { fn drop(mut ref self) { println("b"); } }
+
+fn main() {}

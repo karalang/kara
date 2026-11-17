@@ -1,0 +1,5 @@
+#[deprecated]
+#[deprecated]
+fn old() {}
+
+fn main() {}

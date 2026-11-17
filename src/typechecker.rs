@@ -6907,7 +6907,7 @@ impl<'a> TypeChecker<'a> {
                     "error[E_FLOAT_AS_BOOL]: cannot cast `{}` to `bool`; \
                      a float-to-bool conversion is not well-defined \
                      (NaN? denormal? -0?); decide on a predicate \
-                     explicitly (e.g., `f != 0.0`) before casting",
+                     explicitly instead (e.g., `f != 0.0`)",
                     type_display(from_ty)
                 ),
                 *span,

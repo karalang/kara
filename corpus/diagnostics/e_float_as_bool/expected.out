@@ -1,0 +1,1 @@
+ERROR at line 3: cannot cast `f64` to `bool`; a float-to-bool conversion is not well-defined (NaN? denormal? -0?); decide on a predicate explicitly instead (e.g., `f != 0.0`)

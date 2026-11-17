@@ -1,0 +1,1 @@
+ERROR at line 1: variant 'High' has the same discriminant value '1' as variant 'Low'

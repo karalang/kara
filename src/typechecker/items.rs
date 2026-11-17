@@ -4530,7 +4530,7 @@ impl<'a> super::TypeChecker<'a> {
             if self_consumed && references_self_outside_old(&ens.body) {
                 self.type_error(
                     "error[E_CONSUMED_SELF_IN_ENSURES]: cannot reference consumed parameter \
-                     `self` in an `ensures` clause — an owned (`self`) receiver is moved by the \
+                     `self` in an `ensures` clause — an `own self` receiver is moved by the \
                      time the postcondition runs; capture its pre-state with `old(self)` or \
                      `old(self.field)`"
                         .to_string(),

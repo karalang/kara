@@ -1,0 +1,1 @@
+ERROR at line 2: `#[deprecated]` on individual struct fields is not in 0.8; only item-level deprecation is supported.

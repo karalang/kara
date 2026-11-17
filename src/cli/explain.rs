@@ -2851,45 +2851,6 @@ const CODE_PROSE: &[(&str, &str)] = &[
          for the character's UTF-8 encoding use `c.to_string().bytes()`.",
     ),
     (
-        "E_CODEGEN_HINT_INVALID_POSITION",
-        "The codegen hints `#[inline]`, `#[inline(always)]`, \
-         `#[inline(never)]` and `#[cold]` shape how a function is compiled, \
-         so they go only on a named function: a free `fn`, an \
-         inherent or trait-impl method, a trait method \
-         declaration, an `extern \"C\" fn` \
-         definition, or a `Drop` destructor. On a struct, enum, impl block, \
-         const or any other item there is no function to apply it to. To \
-         hint every method of an `impl`, annotate each method; a \
-         block-level shorthand is not in 0.8.",
-    ),
-    (
-        "E_CODEGEN_HINT_ON_CLOSURE",
-        "A codegen hint (`#[inline]`, `#[inline(always)]`, \
-         `#[inline(never)]`, `#[cold]`) cannot be written on a closure: the \
-         hints attach to named functions. A closure passed to a \
-         closure-typed parameter is already inlined by the dispatch \
-         lowering, so the hint would add nothing. If you need control over \
-         a closure's body, move it into a named `fn` and put the hint \
-         there.",
-    ),
-    (
-        "E_CODEGEN_HINT_ON_EXTERN_DECL",
-        "A foreign-function declaration inside an `unsafe extern \"C\" { \
-         ... }` block has no Kāra body, only a symbol the linker finds \
-         elsewhere, so there is nothing to inline or to mark cold. Remove \
-         the hint. A Kāra function exported to C, written `extern \"C\" fn \
-         name(...) { ... }` with a body, does take one.",
-    ),
-    (
-        "E_COLD_INLINE_ALWAYS_CONFLICT",
-        "`#[cold]` says a function rarely runs and should be kept out of \
-         the hot path; `#[inline(always)]` says to copy its body into every \
-         caller. The two contradict each other, so the pair is refused \
-         rather than one silently winning. Keep `#[cold]` alone (optionally \
-         with `#[inline(never)]`, which agrees with it), or drop `#[cold]` \
-         if the function is on a hot path after all.",
-    ),
-    (
         "E_DEFAULT_MULTIPLE_VARIANTS",
         "`#[derive(Default)]` on an enum makes `Mode.default()` return the \
          variant marked `#[default]`, so exactly one variant may carry the \
@@ -2913,6 +2874,168 @@ const CODE_PROSE: &[(&str, &str)] = &[
          Mark a field-less variant instead, or drop the derive and write \
          `impl Mode { fn default() -> Mode { Mode.Busy(0) } }` with the \
          starting value you want.",
+    ),
+    // B-2026-11-16-303: the deprecation, Drop, discriminant, dyn, contract and
+    // pattern families, each pinned under corpus/diagnostics.
+    (
+        "E_AT_BINDING_DOUBLE_CONSUME",
+        "A pattern `whole @ Pair { a, b }` binds the whole value and, \
+         inside it, its fields. If both bindings take ownership, the same \
+         field would be moved twice: once inside `whole` and once as `a`. \
+         Borrow one side (`ref whole @ Pair { a, b }`, or bind the fields \
+         with `ref a`), or drop one of the two bindings and read the field \
+         from the other.",
+    ),
+    (
+        "E_CONSUMED_SELF_IN_ENSURES",
+        "An `ensures` clause runs after the body returns. A method that \
+         takes `own self` has moved or dropped its receiver by then, so the \
+         clause cannot read `self`. Capture what the postcondition needs on \
+         entry with `old(...)`: `ensures(result) result == \
+         old(self.balance)`. A method whose receiver only borrows (`self`, \
+         `mut ref self`) can name `self` in `ensures` as usual.",
+    ),
+    (
+        "E_CONTINUE_LABEL_BLOCK",
+        "`continue 'label` starts the next iteration of the labeled loop, \
+         and a labeled block (`'outer: { ... }`) has no next iteration. Use \
+         `break 'outer` to leave the block, or put the label on a loop if \
+         the intent was to continue an outer loop.",
+    ),
+    (
+        "E_CONTRACT_IMPURE",
+        "A contract (`requires`, `ensures`, an invariant) is a check, not \
+         part of the computation: it can be compiled out and must not \
+         change what the program does. Its expression may therefore have no \
+         effect other than `panics` (indexing, division, `unwrap`). Move \
+         printing, I/O or mutation out of the clause; to log a failed \
+         precondition, check it in the body instead.",
+    ),
+    (
+        "E_DEPRECATED_DUPLICATE",
+        "An item carries at most one `#[deprecated]` attribute, since one \
+         item has one deprecation (design.md § `#[deprecated]`). Merge the \
+         two into one, with `since` and `note` as needed, and remove the \
+         other.",
+    ),
+    (
+        "E_DEPRECATED_FIELD_NOT_STRING",
+        "The `since` and `note` arguments of `#[deprecated]` are shown to \
+         users of the item as written, so each must be a string literal: \
+         `#[deprecated(since: \"0.9\", note: \"use `area` instead\")]`. A \
+         number, a name or an expression is refused.",
+    ),
+    (
+        "E_DEPRECATED_ON_FIELD",
+        "`#[deprecated]` applies to items (functions, methods, types, \
+         constants, traits, modules), not to a single struct field, in 0.8. \
+         To retire a field, deprecate the accessor or constructor that \
+         exposes it, or the struct itself with a note naming the \
+         replacement.",
+    ),
+    (
+        "E_DEPRECATED_ON_IMPL",
+        "An `impl` block is not something a caller names, so deprecating it \
+         would warn nowhere. Put `#[deprecated]` on each method being \
+         retired, or on the type itself if the whole type is going away \
+         (design.md § `#[deprecated]`).",
+    ),
+    (
+        "E_DEPRECATED_POSITIONAL_ARG",
+        "`#[deprecated]` takes only named arguments, so that which string \
+         is the version and which is the explanation is never ambiguous: \
+         `#[deprecated(note: \"use `next` instead\")]` or \
+         `#[deprecated(since: \"0.9\", note: \"...\")]`. A bare \
+         `#[deprecated]` with no arguments is also valid.",
+    ),
+    (
+        "E_DEPRECATED_UNKNOWN_FIELD",
+        "`#[deprecated]` accepts two arguments, `since` (the version that \
+         deprecated the item) and `note` (what to use instead). Any other \
+         name, such as `reason`, is refused rather than ignored; most often \
+         it should be `note`.",
+    ),
+    (
+        "E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT",
+        "`#[derive(Default)]` on a struct builds each field from its own \
+         type's default, so every field's type must implement `Default`. \
+         Derive or implement `Default` on the field's type, or write `impl \
+         Config { fn default() -> Config { ... } }` by hand and choose that \
+         field's starting value there.",
+    ),
+    (
+        "E_DISCRIMINANT_OUT_OF_RANGE",
+        "An explicit discriminant must fit in the enum's representation \
+         type: under `#[repr(u8)]` the values run from 0 to 255. Choose a \
+         value in range, or widen the representation (`#[repr(u16)]`) if \
+         the values are fixed by an external format.",
+    ),
+    (
+        "E_DROP_DUPLICATE_IMPL",
+        "A type has one destructor. A second `impl Drop for T` would leave \
+         it unclear which cleanup runs and in what order, so it is refused. \
+         Merge both bodies into the one `drop` method, in the order the \
+         cleanup should happen.",
+    ),
+    (
+        "E_DROP_SIGNATURE_INVALID",
+        "`Drop` is declared `trait Drop { fn drop(mut ref self); }`: the \
+         destructor borrows the value mutably for the moment before its \
+         fields are dropped. A `self` (shared borrow) or `own self` (which \
+         would drop the value again inside its own destructor) receiver, \
+         extra parameters or a return type are refused. Write `fn drop(mut \
+         ref self) { ... }`.",
+    ),
+    (
+        "E_DUPLICATE_DISCRIMINANT",
+        "Two variants of the enum have the same discriminant value, so \
+         converting the value back to a variant could not tell them apart. Give each variant its own value; \
+         an implicit discriminant is the previous one plus one, which is \
+         often where the collision comes from.",
+    ),
+    (
+        "E_DUPLICATE_LINT_LEVEL",
+        "The same lint name appears twice in one lint-level attribute \
+         (`#[allow(deprecated, deprecated)]`). The repeat does nothing, and \
+         usually means a different lint was meant. Remove the duplicate or \
+         replace it with the intended name.",
+    ),
+    (
+        "E_DYN_NOT_DISPATCHABLE",
+        "A `dyn Trait` value is called through a table of the trait's \
+         methods, so every required method must be callable on a value \
+         whose concrete type is unknown. A method with no receiver (`fn \
+         make() -> Self`) has no value to dispatch on. Give that method a \
+         default body, so it is not required, or keep the concrete type and \
+         take a generic `[T: Maker]` instead of `dyn Maker` (design.md § \
+         `dyn Trait`).",
+    ),
+    (
+        "E_DYN_SECOND_TRAIT",
+        "A `dyn` type names one trait, optionally with the marker \
+         `CrossTask` after `+`. Two ordinary traits would need two method \
+         tables in one value. Declare a trait with both as supertraits \
+         (`trait NamedShape: Shape + Named {}`), implement it, and use `dyn \
+         NamedShape` (design.md § `dyn Trait`).",
+    ),
+    (
+        "E_EMPTY_UNION",
+        "A union with no fields has no storage and no value can be written \
+         to or read from it. Declare at least one field; for a type that \
+         can never be constructed, use an enum with no variants or the type `Never`.",
+    ),
+    (
+        "E_FLOAT_AS_BOOL",
+        "`as` does not convert a float to `bool`: whether NaN, -0.0 or a \
+         tiny denormal counts as true has no single right answer. Write the \
+         predicate you mean instead, such as `f != 0.0` or `f > 0.0`.",
+    ),
+    (
+        "E_FN_ANONYMOUS_PARAM",
+        "Every function parameter has a name. Write `_: i64` for a \
+         parameter the body does not use, or give it a meaningful name. \
+         Only a function TYPE (`fn(i64, i64) -> i64`) lists parameter types \
+         alone.",
     ),
 ];
 
@@ -3057,6 +3180,26 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
     (
         "E0800",
         "GPU kernels are deferred (docs/deferred.md § GPU).",
+    ),
+    (
+        "E_CODEGEN_HINT_INVALID_POSITION",
+        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
+    ),
+    (
+        "E_CODEGEN_HINT_ON_CLOSURE",
+        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
+    ),
+    (
+        "E_CODEGEN_HINT_ON_EXTERN_DECL",
+        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
+    ),
+    (
+        "E_COLD_INLINE_ALWAYS_CONFLICT",
+        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
+    ),
+    (
+        "E_INLINE_HINT_CONFLICT",
+        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
     ),
 ];
 

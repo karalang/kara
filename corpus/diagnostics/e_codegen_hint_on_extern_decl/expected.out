@@ -1,1 +1,0 @@
-ERROR at line 2: `#[inline]` cannot apply to a foreign-function declaration; there is no Kāra-side body to inline. The hint belongs on a Kāra function definition — including an `extern "C" fn name(...) { ... }` *definition* with a body.
