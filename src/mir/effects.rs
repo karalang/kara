@@ -577,11 +577,19 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
                 let Some(d) = program.resources.get(r) else {
                     continue;
                 };
-                let site = NoProvider {
-                    instance: "main".to_string(),
-                    block,
-                    span,
-                    resource: r.clone(),
+                let site = match a.test_site(main, block, r, &report.providers) {
+                    Some((instance, block, span)) => NoProvider {
+                        instance,
+                        block,
+                        span,
+                        resource: r.clone(),
+                    },
+                    None => NoProvider {
+                        instance: "main".to_string(),
+                        block,
+                        span,
+                        resource: r.clone(),
+                    },
                 };
                 if d.default.is_none() {
                     // A `dyn` `main` makes runs with the defaults, so a
@@ -2281,6 +2289,48 @@ impl<'p> Analysis<'p> {
 
     /// [`Self::needs_sites`], each with the local a statement's needs come
     /// from making (its destination), `None` for a terminator's.
+    /// Where `main`'s call at `block` needs `r`, when `main` is `karac
+    /// test`'s harness and the call runs a case: the first site in the test
+    /// function's own body that needs it. A test body is a root that
+    /// supplies nothing, as `main` is (core semantics §14.6), so a provider
+    /// it lacks is reported at its use there, not at the harness's call
+    /// (B-2026-11-17-102). The case (`__karac_case_k`) runs the test
+    /// function (`__test_*`) inside the test's `with_provider`s, which have
+    /// already discharged what they bind.
+    fn test_site(
+        &self,
+        main: &Body,
+        block: BasicBlock,
+        r: &str,
+        needs: &BTreeMap<String, Needs>,
+    ) -> Option<(String, BasicBlock, crate::token::Span)> {
+        let callee =
+            |body: &Body, block: BasicBlock| match &body.blocks[block.index()].terminator.kind {
+                TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(i),
+                            ..
+                        }),
+                    ..
+                } => Some(i.name.clone()),
+                _ => None,
+            };
+        let case = callee(main, block).filter(|n| n.starts_with("__karac_case_"))?;
+        let case = self.program.bodies.get(&case)?;
+        let test = self
+            .needs_sites_made(case, needs)
+            .into_iter()
+            .filter(|(_, _, n, _)| n.contains_key(r))
+            .find_map(|(b, _, _, _)| callee(case, b).filter(|n| n.starts_with("__test_")))?;
+        let body = self.program.bodies.get(&test)?;
+        let (block, span, _, _) = self
+            .needs_sites_made(body, needs)
+            .into_iter()
+            .find(|(_, _, n, _)| n.contains_key(r))?;
+        Some((test, block, span))
+    }
+
     fn needs_sites_made(
         &self,
         body: &Body,

@@ -29713,7 +29713,7 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
                 "effects: in `{}` at line {}, {}",
                 n.instance,
                 n.span.line,
-                no_provider_text(&n.resource)
+                no_provider_text(&n.resource, &n.instance)
             ));
         }
         if let Some((n, callee)) = report.stateful_default.first() {
@@ -29787,9 +29787,15 @@ pub fn stateful_default_text(
 
 /// The message for a call that needs `resource`'s provider where nothing
 /// supplies it (core semantics §14.6).
-pub fn no_provider_text(resource: &str) -> String {
+pub fn no_provider_text(resource: &str, instance: &str) -> String {
+    // A test function's body is a root too (B-2026-11-17-102).
+    let root = if instance.starts_with("__test_") {
+        "a test body"
+    } else {
+        "`main`"
+    };
     format!(
-        "no provider for `{resource}`: this needs one and nothing supplies it, since `main` \
+        "no provider for `{resource}`: this needs one and nothing supplies it, since {root} \
          takes no hidden provider parameter (core semantics §14.6); run it inside \
          `with_provider[{resource}](provider, || ...)`"
     )
@@ -29882,7 +29888,7 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
         add(
             n.span,
             SourceEffectError::NoProvider,
-            no_provider_text(&n.resource),
+            no_provider_text(&n.resource, &n.instance),
         );
     }
     for (n, callee) in &report.stateful_default {
