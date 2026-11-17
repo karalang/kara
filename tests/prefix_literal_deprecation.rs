@@ -96,6 +96,38 @@ fn prefix_array_literals_fix_where_the_array_is_expected() {
 }
 
 #[test]
+fn prefix_array_literal_in_a_tuple_or_payload_slot_takes_the_slot_fix() {
+    // B-2026-11-17-112: a tuple element, an enum or `Some` / `Ok` payload
+    // gets its array type from the slot by unification, so the bare `[..]`
+    // builds the same array there, and the warning offers it.
+    fixes_to(
+        "enum E { A((Array[i64, 1], i64)), B }\nfn g(p: (Array[i64, 1], i64)) -> i64 { p.0[0] + p.1 }\n\
+         fn main() {\n    let t: (Array[String, 2], i64) = (Array[f\"a\", f\"b\"], 7);\n    \
+         match E.A((Array[16], 17)) { E.A(u) => println(f\"{u.0[0]} {u.1}\"), E.B => {} }\n    \
+         let mut v: Vec[Option[(Array[bool, 1], i64)]] = Vec.new();\n    \
+         v.push(Some((Array[true], 18)));\n    \
+         let r: Result[(Array[i64, 1], i64), String] = Ok((Array[5], 6));\n    \
+         println(f\"{t.0[1]} {v.len()} {g((Array[7], 8))} {r.unwrap().1}\");\n}\n",
+        5,
+        "enum E { A((Array[i64, 1], i64)), B }\nfn g(p: (Array[i64, 1], i64)) -> i64 { p.0[0] + p.1 }\n\
+         fn main() {\n    let t: (Array[String, 2], i64) = ([f\"a\", f\"b\"], 7);\n    \
+         match E.A(([16], 17)) { E.A(u) => println(f\"{u.0[0]} {u.1}\"), E.B => {} }\n    \
+         let mut v: Vec[Option[(Array[bool, 1], i64)]] = Vec.new();\n    \
+         v.push(Some(([true], 18)));\n    \
+         let r: Result[(Array[i64, 1], i64), String] = Ok(([5], 6));\n    \
+         println(f\"{t.0[1]} {v.len()} {g(([7], 8))} {r.unwrap().1}\");\n}\n",
+    );
+    // `extend_from_slice` takes a `Vec` as well as an array, so `[9u8]`
+    // there would be a `Vec`: no fix.
+    let ws = prefix_warnings(
+        "fn main() {\n    let mut p: Vec[u8] = Vec.new();\n    \
+         p.extend_from_slice(Array[9u8]);\n    println(f\"{p.len()}\");\n}\n",
+    );
+    assert_eq!(ws.len(), 1, "{ws:#?}");
+    assert!(ws[0].fixes.is_empty(), "{ws:#?}");
+}
+
+#[test]
 fn prefix_literal_warning_is_silenced_by_allow_deprecated() {
     let ws = prefix_warnings(
         "#[allow(deprecated)]\nfn main() {\n    let a = Vec[1, 2];\n    println(f\"{a}\");\n}\n",

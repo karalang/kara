@@ -1907,6 +1907,7 @@ impl<'a> super::TypeChecker<'a> {
         self.note_call_args(expr);
         self.note_tuple_literal(expr);
         self.warn_vec_macro(expr, Some(expected));
+        self.warn_prefix_in_tuple(expr, expected);
         self.note_loose_expr(expr);
         if matches!(expr.kind, ExprKind::Cast { .. }) {
             self.pending_cast_expected
@@ -12008,6 +12009,48 @@ impl<'a> super::TypeChecker<'a> {
     /// (B-2026-11-16-255); the next minor release refuses them. The fix is
     /// the parser's rewrite, or the bare literal where the expected type is
     /// the literal's own collection, which the bare literal then builds.
+    /// A tuple, or an `Ok` / `Err` / `Some` payload, checked against its
+    /// type hands each part its slot, so a prefix literal part (`(Array[16],
+    /// 17)` against `(Array[i64, 1], i64)`, `Some((Array[true], 1))` into a
+    /// `Vec[Option[(Array[bool, 1], i64)]]`) is warned with the typed fix
+    /// its slot allows. These arms synthesise their parts, so without this
+    /// the slot reached the literal only by unification and the warning had
+    /// no fix (B-2026-11-17-112).
+    fn warn_prefix_in_tuple(&mut self, expr: &Expr, expected: &Type) {
+        let expected = resolve_type_var_top(expected, &self.env.substitutions);
+        match (&expr.kind, &expected) {
+            (ExprKind::Tuple(elems), Type::Tuple(slots)) if elems.len() == slots.len() => {
+                for (e, slot) in elems.iter().zip(slots.iter()) {
+                    self.warn_prefix_in_slot(e, slot);
+                }
+            }
+            (ExprKind::Call { callee, args }, Type::Named { name, args: targs })
+                if args.len() == 1 =>
+            {
+                let ExprKind::Identifier(ctor) = &callee.kind else {
+                    return;
+                };
+                let slot = match (ctor.as_str(), name.as_str(), targs.len()) {
+                    ("Some", "Option", 1) | ("Ok", "Result", 2) => &targs[0],
+                    ("Err", "Result", 2) => &targs[1],
+                    _ => return,
+                };
+                let slot = slot.clone();
+                self.warn_prefix_in_slot(&args[0].value, &slot);
+            }
+            _ => {}
+        }
+    }
+
+    fn warn_prefix_in_slot(&mut self, e: &Expr, slot: &Type) {
+        match &e.kind {
+            ExprKind::PrefixCollectionLiteral { .. } | ExprKind::RepeatLiteral { .. } => {
+                self.warn_vec_macro(e, Some(slot))
+            }
+            _ => self.warn_prefix_in_tuple(e, slot),
+        }
+    }
+
     fn warn_prefix_literal(
         &mut self,
         expr: &Expr,

@@ -68,7 +68,9 @@ def main():
     files = []
     for path in map(pathlib.Path, a.paths):
         files += [path] if path.is_file() else sorted(path.rglob("*.kara"))
-    files = [f.resolve() for f in files]
+    # `source.orig.kara` is a corpus entry's source as first written, kept
+    # verbatim beside the runnable one.
+    files = [f.resolve() for f in files if not f.name.endswith(".orig.kara")]
     total = 0
     with ThreadPoolExecutor(a.jobs) as ex:
         for p, n in ex.map(lambda f: migrate(a.karac, f), files):
