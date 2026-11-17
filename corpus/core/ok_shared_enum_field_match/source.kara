@@ -1,0 +1,4 @@
+shared enum S { One(Vec[i64]), Two(i64) }
+shared struct H { mut s: S }
+fn f(a: H, b: H) { match a.s { S.One(v) => { b.s = S.Two(1); println(v.len()); } S.Two(_) => {} } }
+fn main() { let h = H { s: S.One([1, 2]) }; println("start"); f(h, h); }

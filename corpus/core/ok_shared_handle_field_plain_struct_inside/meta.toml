@@ -1,0 +1,10 @@
+source = "B-2026-11-17-26"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+expected_from = "spec"
+rules = ["6.2"]
+backends = []
+env = {}
+note = "B-2026-11-17-26: a plain struct inside the child, `ref a.child.inner.v`. Core semantics §6.2: a `mut` field whose type is a handle is read as a value, a counted copy, so what is reached through it lives until that copy drops, and the field may be assigned meanwhile; the old object's Drop runs when the read's scope ends. Before the fix nothing counted the child, so the replace freed it under the live borrow: interp use after free, ASan heap-use-after-free, llvm a stale or garbage value (B-2026-11-17-26). Expected output worked by hand from the rule."

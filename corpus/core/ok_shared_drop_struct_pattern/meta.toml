@@ -1,0 +1,10 @@
+source = "B-2026-11-17-33"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+expected_from = "spec"
+rules = ["4.6", "6.2"]
+backends = []
+env = {}
+note = "B-2026-11-17-33: `match a.child { C { items } => .. }` on a `shared struct` with `impl Drop`: the part binds a `ref` (core semantics §4.6), so nothing moves out. Core semantics §4.6: a shared scrutinee is a ref scrutinee, so the part binding is a ref and nothing moves out of C; MIR's typecheck refused it as a partial move out of a Drop type although `karac check` accepted it (B-2026-11-17-33). The arm also replaces the field through another handle, which the counted scrutinee (§6.2) outlives. Expected output worked by hand from the rule."

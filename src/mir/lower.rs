@@ -3978,6 +3978,12 @@ struct Bx<'l, 'a> {
     /// value its initializer borrows lives to that block's end
     /// (B-2026-10-18-53).
     let_scope: Option<usize>,
+    /// The scope of the block a `let` or `let ... else` being lowered
+    /// binds into, while its initializer is lowered in the statement's own
+    /// scope just inside it: a handle field pinned there
+    /// ([`Self::pin_handle_field`]) lives as long as the bindings
+    /// (B-2026-11-17-32).
+    pin_scope: Option<usize>,
     /// The closure being lowered is a library sort's key function.
     closure_key: bool,
     /// The closure being lowered is a task handed to `TaskGroup.spawn`,
@@ -4148,6 +4154,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             writable_reborrows: FxHashSet::default(),
             element_reborrows: FxHashSet::default(),
             let_scope: None,
+            pin_scope: None,
             closure_key: false,
             closure_task: false,
             closure_ret: None,
@@ -6904,6 +6911,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.note_declared_effects(l, (pattern.id, name), ty.as_ref(), value);
                     self.note_frozen(value, l);
                     let outer = self.let_scope.replace(self.scopes.len() - 1);
+                    let outer_pin = self.pin_scope.replace(self.scopes.len() - 1);
                     self.push_scope();
                     // `let idx: i64 = m.get(k).unwrap()` reads the `ref i64`
                     // (core semantics §5.10), as does `let mut t = since` of a
@@ -6919,6 +6927,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     self.pop_scope()?;
                     self.let_scope = outer;
+                    self.pin_scope = outer_pin;
                     self.declare(l, t);
                     if !is_mut && !matches!(self.lcx.auto_par, AutoPar::Off) {
                         if let (Some(c), Some(&sym)) = (
@@ -6941,6 +6950,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 {
                     return Ok(());
                 }
+                let outer_pin = self.pin_scope.replace(self.scopes.len() - 1);
                 self.push_scope();
                 // An owned place is destructured where it is (§4.6): the
                 // parts it keeps live on in it. Anything else is evaluated
@@ -6982,6 +6992,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let mut binds = Vec::new();
                         self.bind_pattern(pattern, &p, st, by_ref, &mut binds)?;
                         self.pop_scope()?;
+                        self.pin_scope = outer_pin;
                         for (l, t) in binds {
                             self.declare(l, t);
                         }
@@ -7011,6 +7022,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let mut binds = Vec::new();
                 self.bind_irrefutable(pattern, src, t, &mut binds)?;
                 self.pop_scope()?;
+                self.pin_scope = outer_pin;
                 for (l, t) in binds {
                     self.declare(l, t);
                 }
@@ -7052,8 +7064,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // `let P = v else { diverge };`: the bindings belong to the
                 // enclosing block; the scrutinee's temporaries are the
                 // statement's, dropped on either path.
+                let outer_pin = self.pin_scope.replace(self.scopes.len() - 1);
                 self.push_scope();
-                let (place, st, by_ref) = self.scrutinee(value, self.binds_mut_ref([pattern]))?;
+                let scrutinee = self.scrutinee(value, self.binds_mut_ref([pattern]));
+                self.pin_scope = outer_pin;
+                let (place, st, by_ref) = scrutinee?;
                 let fail = self.b.new_block();
                 self.test_pattern(pattern, &place, st, fail)?;
                 let matched = self.cur;
@@ -8250,6 +8265,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         matches!(self.tys().tcx().kind(ot), HK::Shared { .. })
                     });
                 let (base, bt) = self.deref_place(object, mutable && !through_shared)?;
+                let base = self.pin_handle_field(base);
                 match self.field_of(bt, None, field) {
                     Some((idx, ft)) => Ok(base.field(idx, ft)),
                     None => self.unsupported(e.span, &format!("the field `{field}`")),
@@ -8859,6 +8875,37 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Operand::Copy(Place::local(t))
             }
         }
+    }
+
+    /// `base` itself, unless it is a handle held in a `mut` field of a
+    /// `shared` value (`a.child` with `child: C` and C `shared`), about to
+    /// be read through. Another handle to the object may replace that
+    /// field while what is reached through it is still in use, and the
+    /// field is read as a value (core semantics §6.2), so the handle is
+    /// copied with a count into a temporary, read through instead: the
+    /// object it names lives until the temporary drops, at the end of the
+    /// scope, or of the block a `let`'s bindings belong to
+    /// (B-2026-11-17-26, B-2026-11-17-32).
+    fn pin_handle_field(&mut self, base: Place) -> Place {
+        let t = self.place_type(&base);
+        if !self.is_handle(t) || !self.shared_mut_field(&base) {
+            return base;
+        }
+        let l = self.temp(t);
+        self.assign(l, Rvalue::Retain(base));
+        self.schedule_pin(l);
+        Place::local(l)
+    }
+
+    /// Schedules the drop of a pinned handle (`pin_handle_field`): in the
+    /// block a `let` binds into while its initializer is lowered, else in
+    /// the innermost scope.
+    fn schedule_pin(&mut self, l: Local) {
+        let at = match self.pin_scope {
+            Some(s) if s + 2 == self.scopes.len() => s,
+            _ => self.scopes.len() - 1,
+        };
+        self.scopes[at].push(ScopeEntry::Drop(Place::local(l)));
     }
 
     /// A value expression evaluated into a fresh temporary, as a place.
@@ -18454,6 +18501,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         let value_read = !mutable
             && (self.is_copy(st) || self.is_handle(st) || self.is_handle_aggregate(st))
             && self.shared_mut_field(&place);
+        // A handle so read is matched as a counted copy, so a part an arm
+        // binds through it outlives a write of the field through another
+        // handle (`match a.s { S.One(v) => { b.s = ..; v.len() } }`,
+        // B-2026-11-17-28).
+        if value_read && self.is_handle(st) {
+            let l = self.temp(st);
+            self.assign(l, Rvalue::Retain(place));
+            self.schedule_pin(l);
+            return Ok((Place::local(l), st, false));
+        }
         if value_read {
             self.element_reborrows.insert(place.local);
         }

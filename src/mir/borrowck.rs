@@ -3240,6 +3240,17 @@ fn main() -> () {
         // The build in `built_core_pins_match_their_expected_output` runs
         // them with the library, through the same move and borrow checks.
         let needs_library = [
+            // `ref a.child.items`, a `ref` of a field path: this check's
+            // plain typecheck takes only `ref v[i]` (E_REF_OPERAND_UNSUPPORTED)
+            // and the library build reads core places, so these run there
+            // (B-2026-11-17-26, -32).
+            "ok_shared_handle_field_closure_capture",
+            "ok_shared_handle_field_local_alias",
+            "ok_shared_handle_field_plain_struct_inside",
+            "ok_shared_handle_field_ref",
+            "ok_shared_handle_field_scalar_ref",
+            "ok_shared_handle_field_two_levels",
+            "ok_shared_handle_field_via_weak",
             // `Option` is option.kara's.
             "ok_mut_ref_cursor_walks_to_tail",
             "ok_ref_cursor_rebinds",

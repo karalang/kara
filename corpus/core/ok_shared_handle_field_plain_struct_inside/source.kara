@@ -1,0 +1,5 @@
+struct In { v: Vec[String] }
+shared struct C { mut inner: In }
+shared struct Pp { mut child: C }
+fn g(a: Pp, b: Pp) { let r = ref a.child.inner.v; b.child = C { inner: In { v: Vec.new() } }; println(f"{r.len()}"); }
+fn main() { let p = Pp { child: C { inner: In { v: ["x"] } } }; println("start"); g(p, p); }

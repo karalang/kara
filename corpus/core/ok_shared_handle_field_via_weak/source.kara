@@ -1,0 +1,8 @@
+shared struct C { mut items: Vec[String] }
+impl Drop for C { fn drop(mut ref self) { println("drop C"); } }
+trait Len { fn n(self) -> i64; }
+impl Len for C { fn n(self) -> i64 { self.items.len() } }
+fn newc() -> C { C { items: Vec.new() } }
+fn oldc() -> C { C { items: [String.from("x"), String.from("yy")] } }
+shared struct Pp { mut child: C, mut me: weak Pp }
+fn main() { let a = Pp { child: oldc(), me: None }; a.me = a; println("start"); let r = ref a.child.items; match a.me.upgrade() { Some(b) => { b.child = newc(); } None => {} } println(r.len()); println("end"); }

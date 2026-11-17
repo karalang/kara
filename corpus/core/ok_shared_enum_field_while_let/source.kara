@@ -1,0 +1,6 @@
+shared enum S { One(Vec[String]), Two }
+impl Drop for S { fn drop(mut ref self) { println("drop S"); } }
+shared struct Pp { mut s: S }
+fn olds() -> S { S.One([String.from("x"), String.from("yy")]) }
+fn t(a: Pp, b: Pp) { while let S.One(v) = a.s { b.s = S.Two; println(v.len()); } }
+fn main() { let p = Pp { s: olds() }; println("start"); t(p, p); println("end"); }

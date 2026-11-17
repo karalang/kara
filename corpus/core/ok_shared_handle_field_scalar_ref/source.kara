@@ -1,0 +1,4 @@
+shared struct C { n: i64 }
+shared struct Pp { mut child: C }
+fn g(a: Pp, b: Pp) { let r = ref a.child.n; b.child = C { n: 5 }; println(f"{*r}"); }
+fn main() { let p = Pp { child: C { n: 1 } }; g(p, p); }

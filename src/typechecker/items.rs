@@ -11040,6 +11040,12 @@ impl<'a> super::TypeChecker<'a> {
         let Some(info) = self.env.structs.get(struct_name).cloned() else {
             return;
         };
+        // A `shared` or `sync` value is a `ref` scrutinee wherever it is
+        // matched (core semantics §4.6): its parts bind `ref`s through the
+        // handle, so nothing leaves the object (B-2026-11-17-33).
+        if info.is_shared || info.is_par {
+            return;
+        }
         // A field is MOVED when its sub-pattern binds it by value. A `_`
         // binds nothing, and a nested pattern that only reads scalars moves
         // nothing either — but the conservative test is the field's TYPE,

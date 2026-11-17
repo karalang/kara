@@ -1,0 +1,6 @@
+shared struct C { mut items: Vec[String] }
+impl Drop for C { fn drop(mut ref self) { println("drop C"); } }
+shared struct B { mut c: C }
+shared struct A { mut b: B }
+fn g(x: A, y: A) { let r = ref x.b.c.items; y.b = B { c: C { items: Vec.new() } }; println(f"{r.len()}"); }
+fn main() { let a = A { b: B { c: C { items: ["x"] } } }; println("start"); g(a, a); }
