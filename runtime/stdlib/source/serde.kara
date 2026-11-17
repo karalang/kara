@@ -1213,10 +1213,17 @@ impl Deserializer for JsonDeserializer {
     /// (B-2026-11-17-74).
     fn deserialize_length(ref self, msg: own String) -> DeserializeError {
         if msg.starts_with("too few") and self.pos > 0 {
-            self.fail_at(self.pos - 1, msg)
-        } else {
-            self.fail(msg)
+            return self.fail_at(self.pos - 1, msg);
         }
+        let mut at = self.pos;
+        while at < self.chars.len() {
+            let c = self.chars[at];
+            if c != ' ' and c != '\t' and c != '\n' and c != '\r' {
+                break;
+            }
+            at += 1;
+        }
+        self.fail_at(at, msg)
     }
 
     /// `duplicate field `a` at line 1 column 11`: serde_json's text, at the

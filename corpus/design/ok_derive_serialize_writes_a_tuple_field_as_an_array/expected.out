@@ -8,5 +8,5 @@
 {"Seg":[[0,0],[3,4]]}
 {"Named":{"at":[5,6]}}
 {"Named":{"at":[5,6]}}
-err too few values in a tuple
-err too many values in a tuple
+err pair: too few values in a tuple at line 1 column 11
+err pair: too many values in a tuple at line 1 column 17

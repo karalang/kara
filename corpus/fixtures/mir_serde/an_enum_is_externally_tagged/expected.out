@@ -4,4 +4,4 @@ Circle(2.5)
 Rect(3, 4)
 Named(tri, 3)
 error: unknown variant `Hexagon` of Shape
-error: too many values in Shape.Rect
+error: too many values in Shape.Rect at line 1 column 17

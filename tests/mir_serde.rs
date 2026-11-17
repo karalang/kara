@@ -127,7 +127,7 @@ fn main() {
         "[\"Dot\",{\"circle\":2.5},{\"Rect\":[3,4]},{\"Named\":{\"label\":\"tri\",\"sides\":3}}]\n\
          Dot\nCircle(2.5)\nRect(3, 4)\nNamed(tri, 3)\n\
          error: unknown variant `Hexagon` of Shape\n\
-         error: too many values in Shape.Rect\n",
+         error: too many values in Shape.Rect at line 1 column 17\n",
     );
 }
 
