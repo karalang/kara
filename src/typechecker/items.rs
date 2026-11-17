@@ -2697,6 +2697,24 @@ impl<'a> super::TypeChecker<'a> {
         if !fresh || inner.span.offset <= ret.span.offset {
             return;
         }
+        // A value that itself holds a borrow (`struct Holder { r: ref
+        // String }`) still points into the body's locals once the `ref` is
+        // dropped, so the rewrite trades this error for a dangling-borrow one
+        // (B-2026-11-16-291): explain it, and attach no machine fix.
+        if self.type_expr_holds_borrow(inner) {
+            self.type_error(
+                format!(
+                    "'{}' is declared to return a reference, but its body makes a new value: a \
+                     reference points into something the caller lent (core semantics §5). \
+                     Dropping the `ref` is not enough here, since the value holds a borrow \
+                     itself: return owned data, or build the value from what a parameter lends",
+                    f.name
+                ),
+                tail.span,
+                TypeErrorKind::ReturnTypeMismatch,
+            );
+            return;
+        }
         self.type_error_with_fix_it(
             format!(
                 "'{}' is declared to return a reference, but its body makes a new value: a \
@@ -2716,6 +2734,52 @@ impl<'a> super::TypeChecker<'a> {
                 replacement: String::new(),
             },
         );
+    }
+
+    /// Whether a value of the written type holds a borrow: a `ref` /
+    /// `mut ref` anywhere in it, through tuples, arrays, slices, type
+    /// arguments and the fields of the structs it names.
+    fn type_expr_holds_borrow(&self, t: &TypeExpr) -> bool {
+        match &t.kind {
+            TypeKind::Ref(_) | TypeKind::MutRef(_) => true,
+            TypeKind::Tuple(ts) => ts.iter().any(|e| self.type_expr_holds_borrow(e)),
+            TypeKind::Array { element, .. } => self.type_expr_holds_borrow(element),
+            TypeKind::Path(p) => {
+                let args = p.generic_args.as_deref().unwrap_or(&[]).iter().any(|a| {
+                    matches!(a, crate::ast::GenericArg::Type(te) if self.type_expr_holds_borrow(te))
+                });
+                let mut seen = HashSet::new();
+                args || p
+                    .segments
+                    .last()
+                    .is_some_and(|n| self.named_type_holds_borrow(n, &mut seen))
+            }
+            _ => false,
+        }
+    }
+
+    fn named_type_holds_borrow(&self, name: &str, seen: &mut HashSet<String>) -> bool {
+        if !seen.insert(name.to_string()) {
+            return false;
+        }
+        let Some(info) = self.env.structs.get(name) else {
+            return false;
+        };
+        let fields: Vec<Type> = info.fields.iter().map(|(_, t, _)| t.clone()).collect();
+        fields.iter().any(|t| self.type_holds_borrow(t, seen))
+    }
+
+    fn type_holds_borrow(&self, t: &Type, seen: &mut HashSet<String>) -> bool {
+        match t {
+            Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. } => true,
+            Type::Tuple(ts) => ts.iter().any(|e| self.type_holds_borrow(e, seen)),
+            Type::Array { element, .. } => self.type_holds_borrow(element, seen),
+            Type::Named { name, args } => {
+                args.iter().any(|a| self.type_holds_borrow(a, seen))
+                    || self.named_type_holds_borrow(name, seen)
+            }
+            _ => false,
+        }
     }
 
     fn check_function(
