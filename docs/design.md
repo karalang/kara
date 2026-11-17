@@ -6855,7 +6855,7 @@ Kāra v1 has a **closed set** of compilation targets:
 
 The set is closed so that the effect checker's target-to-resource table is finite and `karac check` has a bounded number of configurations. The [web track](deferred.md#web) adds `wasm_browser` and the [GPU track](deferred.md#gpu) adds `gpu`. Opening the set to user-defined targets is additive.
 
-Under node, run a `wasm_wasi` module with `node --no-turbo-fast-api-calls`. In node 22 a garbage collection that starts inside a WASI `fd_write` fast-API call can crash V8 itself with SIGSEGV, outside the module's memory; the flag routes those calls the slow way (B-2026-11-17-68).
+Under node, run a `wasm_wasi` module with `node --no-turbo-fast-api-calls`. In node 22 a garbage collection that starts inside a WASI `fd_write` fast-API call can crash V8 itself with SIGSEGV, outside the module's memory; the flag routes those calls the slow way (B-2026-11-17-68). How deep a program can recurse on `wasm_wasi` is bounded by the host engine's own stack, not the module's: node's default (about 1 MB) ends near 20,000 frames of a small recursive function where a native build's 1 GiB main stack goes on, and `node --stack-size=4000` (in KiB, under the thread's 8 MiB) raises it. The compiler's own drops of a deep `shared` chain or tree take no frames per level (B-2026-11-16-311).
 
 An item that exists on some targets only is marked with `#[cfg(target: ...)]` ([§4](#4-modules-and-packages)). There is no runtime `if target == ...` form.
 

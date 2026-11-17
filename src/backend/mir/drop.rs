@@ -768,6 +768,9 @@ impl<'ctx> Cx<'ctx, '_> {
     /// last, after the box is freed, and its box in turn by the same loop,
     /// so a long chain is not dropped by one call per node.
     fn release_last(&mut self, b0: PointerValue<'ctx>, ty: Ty, a: AdtId) -> R<()> {
+        if let Some(offs) = self.own_handle_fields(ty)?.filter(|o| o.len() > 1) {
+            return self.release_tree(b0, ty, a, &offs);
+        }
         let chain = self.chain_field(ty)?;
         let cur = self.entry_slot(8, "box")?;
         self.store(cur, b0.into())?;
@@ -839,17 +842,158 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
+    /// [`Cx::release_last`] for a `shared` struct whose fields needing a
+    /// drop are two or more handles of its own type at `offs` (a tree's
+    /// `left` and `right`): the boxes whose bodies still have handles to
+    /// release form a stack, kept in those bodies' own handle slots, so a
+    /// deep tree is not dropped by one call per level (B-2026-11-16-311:
+    /// wasm's engine stack ended a 20000-deep one). Each box's handles are
+    /// released last to first, each subtree whole before the next, as
+    /// the recursive glue releases them, so `Drop` bodies run in the same
+    /// order. A box waiting on the stack is freed once its last handle is
+    /// released; its strong count is 0, so no handle can reach its body.
+    fn release_tree(&mut self, b0: PointerValue<'ctx>, ty: Ty, a: AdtId, offs: &[u64]) -> R<()> {
+        let k = offs.len();
+        let atomic = self.atomic_counts(ty);
+        let off = self
+            .shared_body_off(ty)
+            .ok_or_else(|| format!("`{}` has no layout", self.tys.display(ty)))?;
+        let null = self.ptr_ty().const_null();
+        let cur = self.entry_slot(8, "box")?;
+        let stack = self.entry_slot(8, "pending")?;
+        self.store(cur, b0.into())?;
+        self.store(stack, null.into())?;
+        let f = self.cur_fn()?;
+        let top = self.llcx.append_basic_block(f, "release");
+        let pop = self.llcx.append_basic_block(f, "pending");
+        let cell = self.llcx.append_basic_block(f, "cell");
+        let done = self.llcx.append_basic_block(f, "released");
+        self.builder
+            .build_unconditional_branch(top)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(top);
+        let b = self.load_ptr(cur)?;
+        if self.adt_has_drop_body(a)? {
+            let h = self.entry_slot(8, "handle")?;
+            self.store(h, b.into())?;
+            let slot = self.entry_slot(8, "self")?;
+            self.store(slot, h.into())?;
+            self.call_drop_body(a, ty, slot)?;
+        }
+        let body = self.offset(b, off)?;
+        let mut hs = Vec::with_capacity(k);
+        for &o in offs {
+            hs.push(self.load_ptr(self.offset(body, o)?)?);
+        }
+        // The body, its handles taken, becomes the stack's top cell: the
+        // first slot links the cell below, the others hold the handles
+        // still to release, all but the last field's.
+        self.store(self.offset(body, offs[0])?, self.load_ptr(stack)?.into())?;
+        for i in 0..k - 1 {
+            self.store(self.offset(body, offs[i + 1])?, hs[i].into())?;
+        }
+        self.store(stack, b.into())?;
+        self.release_into(hs[k - 1], cur, top, pop, atomic)?;
+        self.builder.position_at_end(pop);
+        let s = self.load_ptr(stack)?;
+        let empty = self
+            .builder
+            .build_is_null(s, "")
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_conditional_branch(empty, done, cell)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(cell);
+        let sbody = self.offset(s, off)?;
+        for i in (0..k - 1).rev() {
+            let p = self.offset(sbody, offs[i + 1])?;
+            let h = self.load_ptr(p)?;
+            self.store(p, null.into())?;
+            let next = self.llcx.append_basic_block(f, "cell.next");
+            self.release_into(h, cur, top, next, atomic)?;
+            self.builder.position_at_end(next);
+        }
+        let below = self.load_ptr(self.offset(sbody, offs[0])?)?;
+        self.store(stack, below.into())?;
+        self.free_dropped_box(s, ty)?;
+        self.builder
+            .build_unconditional_branch(pop)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
+    /// Releases the handle `h` (null for `None`): when it was its box's
+    /// last strong handle, `cur` takes the box and the code goes to `top`
+    /// to release it; otherwise to `otherwise`.
+    fn release_into(
+        &mut self,
+        h: PointerValue<'ctx>,
+        cur: PointerValue<'ctx>,
+        top: inkwell::basic_block::BasicBlock<'ctx>,
+        otherwise: inkwell::basic_block::BasicBlock<'ctx>,
+        atomic: bool,
+    ) -> R<()> {
+        let f = self.cur_fn()?;
+        let some = self.llcx.append_basic_block(f, "handle");
+        let last = self.llcx.append_basic_block(f, "handle.last");
+        let null = self
+            .builder
+            .build_is_null(h, "")
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_conditional_branch(null, otherwise, some)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(some);
+        let left = self.add_count(h, false, atomic)?;
+        let zero = self.is_zero(left)?;
+        self.builder
+            .build_conditional_branch(zero, last, otherwise)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(last);
+        self.store(cur, h.into())?;
+        self.builder
+            .build_unconditional_branch(top)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Frees the box `b`, whose body is dropped, unless a `weak` handle
+    /// still keeps it.
+    fn free_dropped_box(&mut self, b: PointerValue<'ctx>, ty: Ty) -> R<()> {
+        if self.has_weak_count(ty) {
+            let atomic = self.atomic_counts(ty);
+            let wp = self.weak_count_ptr(b, ty)?;
+            let left = self.add_count(wp, false, atomic)?;
+            let no_weak = self.is_zero(left)?;
+            self.if_then(no_weak, |cx| cx.free(b))
+        } else {
+            self.free(b)
+        }
+    }
+
     /// For the `shared` struct `ty` whose only field needing a drop is a
     /// handle of `ty` itself (as `ty` or as an `Option[ty]` held as a bare
     /// pointer), that field's offset in the body.
     fn chain_field(&self, ty: Ty) -> R<Option<u64>> {
+        Ok(match self.own_handle_fields(ty)?.as_deref() {
+            Some(&[off]) => Some(off),
+            _ => None,
+        })
+    }
+
+    /// For the `shared` struct `ty` each of whose fields needing a drop is
+    /// a handle of `ty` itself (as `ty` or as an `Option[ty]` held as a
+    /// bare pointer), those fields' offsets in the body, in field order;
+    /// `None` when another field needs a drop or none does.
+    fn own_handle_fields(&self, ty: Ty) -> R<Option<Vec<u64>>> {
         let Some((adt, _)) = self.tys.tcx().adt_of(ty) else {
             return Ok(None);
         };
         if adt.is_enum {
             return Ok(None);
         }
-        let mut found = None;
+        let mut found = Vec::new();
         for f in 0..adt.variants[0].fields.len() as u32 {
             let Some(ft) = self.tys.field_ty(ty, None, f) else {
                 return Ok(None);
@@ -865,12 +1009,12 @@ impl<'ctx> Cx<'ctx, '_> {
                         .adt_of(ft)
                         .and_then(|(_, a)| a.first().copied())
                         == Some(ty));
-            if !own || found.is_some() {
+            if !own {
                 return Ok(None);
             }
-            found = Some(self.field_offset(ty, None, f)?);
+            found.push(self.field_offset(ty, None, f)?);
         }
-        Ok(found)
+        Ok((!found.is_empty()).then_some(found))
     }
 
     /// Drops the `weak` handle of type `ty` at `p`.
