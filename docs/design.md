@@ -284,7 +284,7 @@ The logical operators are the words `and`, `or` and `not`. The symbols `&&`, `||
 
 #### Reserved for future use
 
-These words are reserved, so that a later feature can use them without breaking code. All but `pure` have no meaning yet. Using one as an identifier is `error[E_RESERVED_KEYWORD]` (`E0003`), and the fix is `r#name`.
+These words are reserved, so that a later feature can use them without breaking code. All but `pure` have no meaning yet. Using one as an identifier is `error[E_RESERVED_KEYWORD]` (`E0003`), and the fix is `r#name`, except for `priv`, which is also a structural marker (below) and cannot be escaped.
 
 | Keyword | Why reserved |
 |---|---|
@@ -370,9 +370,9 @@ Escaping one of these is `error[E_RAW_IDENT_NOT_ALLOWED]` (`E0004`). It is a dif
 
 ### Numeric, character and boolean literals
 
-- **Integers** are decimal (`1_000_000`), hexadecimal (`0xFF`), binary (`0b1010`) or octal (`0o17`). `_` separates digits. A suffix fixes the type: `i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128` (`255u8`).
-- **Floats** use IEEE 754 decimal notation: a decimal point, an exponent, or both (`3.14`, `1.5e-3`, `6.022e23`, `1e10`, `2.5E+6_f32`). A literal with neither a point nor an exponent is an integer, so `1f32` is not a float; write `1.0f32`. The exponent marker is `e` or `E`, optionally followed by `+` or `-`. `_` groups digits in the mantissa and the exponent (`1_000.000_5`, `1e1_000`). A float may carry the suffix `f32` or `f64`.
-- Without a suffix, a numeric literal's type comes from inference, and it defaults to `i64` or `f64` ([§8](#8-type-inference-and-generics)). Its value is checked against the range of that type at compile time. How suffixes and expected types combine is in [§5 Numeric literals](#numeric-literals).
+- **Integers** are decimal (`1_000_000`), hexadecimal (`0xFF`), binary (`0b1010`) or octal (`0o17`). `_` separates digits, so it stands only between two digits: `1__0`, `1_`, `0x_FF` and `1_000_.5` are errors, each with a fix that removes the stray `_`. A suffix fixes the type: `i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`, `isize`, `usize` (`255u8`).
+- **Floats** use IEEE 754 decimal notation: a decimal point, an exponent, or both (`3.14`, `1.5e-3`, `6.022e23`, `1e10`, `2.5E+6_f32`). A literal with neither a point nor an exponent is an integer, so `1f32` is not a float; write `1.0f32`. The exponent marker is `e` or `E`, optionally followed by `+` or `-`. `_` groups digits in the mantissa and the exponent (`1_000.000_5`, `1e1_000`). A decimal point is followed by a digit: `1.` and `1.e5` are errors, with the fix `1.0` and `1.0e5`. A float may carry the suffix `f32` or `f64`; the data track adds `f16` and `bf16` ([library/data.md](library/data.md)).
+- Without a suffix, a numeric literal's type comes from inference, and it defaults to `i64` or `f64` ([§8](#8-type-inference-and-generics)). Its value is checked against the range of that type at compile time. A float literal is out of range when it rounds to infinity in its type; one that rounds to zero or to a subnormal is in range. How suffixes and expected types combine is in [§5 Numeric literals](#numeric-literals).
 - **Characters** are `'a'`, `'\n'`, `'\u{1F600}'`, of type `char`. `b'A'` is a byte literal ([Byte and byte-string literals](#byte-and-byte-string-literals)).
 - **Booleans** are `true` and `false`.
 
@@ -380,14 +380,14 @@ Escaping one of these is `error[E_RAW_IDENT_NOT_ALLOWED]` (`E0004`). It is a dif
 
 | Form | Escapes | Notes |
 |---|---|---|
-| `"..."` | yes | The basic form. |
+| `"..."` | yes | The basic form. It may span lines: a newline inside it is part of the text, taken verbatim with no dedent. |
 | `"""..."""` | yes | Multi-line, with dedent (below). |
 | `r"..."`, `r#"..."#` | no | Raw: a backslash is an ordinary character (below). |
 | `f"..."`, `f"""..."""` | yes | Interpolated ([Interpolated strings](#interpolated-strings)). |
 | `b"..."` | byte escapes | `Array[u8, N]` ([Byte and byte-string literals](#byte-and-byte-string-literals)). |
 | `c"..."` | byte escapes plus `\u{...}` | NUL-terminated, for FFI ([C-string literals](#c-string-literals)). |
 
-**Escapes** in text literals: `\n`, `\t`, `\r`, `\\`, `\'`, `\"`, `\0`, `\u{...}` (a Unicode scalar value) and `\xHH` (a hex byte). A text literal must be valid UTF-8. There is no `\{` escape; in an f-string a literal brace is `{{` or `}}` ([Interpolated strings](#interpolated-strings)).
+**Escapes** in text and character literals: `\n`, `\t`, `\r`, `\\`, `\'`, `\"`, `\0`, `\u{...}` (a Unicode scalar value) and `\xHH` (a hex byte). A text literal must be valid UTF-8. There is no `\{` escape; in an f-string a literal brace is `{{` or `}}` ([Interpolated strings](#interpolated-strings)).
 
 **Prefixes.** A prefix is recognized only when it touches the opening quote: `f"x"` is an interpolated string, while `f "x"` is the identifier `f` followed by a string. The prefixes are `f`, `r`, `b` and `c`, and `b` on a character literal. Combinations such as `rf`, `br`, `rb` and `cr` are not literal forms in v1, and the lexer reports them with a focused error rather than lexing an identifier and a string. No other prefix is reserved.
 
@@ -414,7 +414,7 @@ let query = """
 // The value is "SELECT * FROM users\nWHERE age > 25\nORDER BY name", with no final line break.
 ```
 
-**Raw strings.** `r"..."` processes no escapes: `\n` is two characters. Raw strings suit regular expressions and Windows paths. To contain a `"`, add `#` on both sides: `r#"say "hi""#`. More `#` contain more: `r##"..."##` may hold `"#`. A raw string never dedents and has no triple-quoted form. There is no `rf"..."`. Raw strings are not yet implemented.
+**Raw strings.** `r"..."` processes no escapes: `\n` is two characters. Raw strings suit regular expressions and Windows paths. To contain a `"`, add `#` on both sides: `r#"say "hi""#`. More `#` contain more: `r##"..."##` may hold `"#`. A raw string never dedents and has no triple-quoted form. There is no `rf"..."`.
 
 ```kara
 let pattern = r"\d{3}-\d{4}";
