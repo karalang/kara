@@ -1,0 +1,331 @@
+// LeetCode #1187: Make Array Strictly Increasing -- the differential: the
+// five arms against the statement read literally, and seven properties of
+// what they return.
+
+// ---- make_array_increasing.kara ----
+
+fn a0_make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let mut spare = arr2.clone();
+    spare.sort();
+    spare.dedup();
+    let n = arr1.len();
+    let none = i64.MAX;
+    // end[k]: the least last value with k replacements, `none` if out of reach
+    let mut end = Vec.filled(n + 1, none);
+    end[0] = i64.MIN;
+    for a in arr1.iter() {
+        let mut next = Vec.filled(n + 1, none);
+        for k in 0..=n {
+            if end[k] != none and a > end[k] {
+                next[k] = a;
+            }
+            if k > 0 and end[k - 1] != none {
+                let p = spare.partition_point(|b| b <= end[k - 1]);
+                if p < spare.len() and spare[p] < next[k] {
+                    next[k] = spare[p];
+                }
+            }
+        }
+        end = next;
+    }
+    match (0..=n).find(|k| end[k] != none) {
+        Some(k) => k,
+        None => -1,
+    }
+}
+
+// ---- make_array_increasing_map.kara ----
+
+fn a1_make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let mut spare = arr2.clone();
+    spare.sort();
+    spare.dedup();
+    let mut ends: SortedMap[i64, i64] = SortedMap.new();
+    ends.insert(-1, 0);
+    for a in arr1.iter() {
+        let mut next: SortedMap[i64, i64] = SortedMap.new();
+        for (last, ops) in ends.iter() {
+            if a > last {
+                let best = next.get(a).unwrap_or(ops).min(ops);
+                next.insert(a, best);
+            }
+            let p = spare.partition_point(|b| b <= last);
+            if p < spare.len() {
+                let best = next.get(spare[p]).unwrap_or(ops + 1).min(ops + 1);
+                next.insert(spare[p], best);
+            }
+        }
+        ends = next;
+    }
+    match ends.values().min() {
+        Some(ops) => ops,
+        None => -1,
+    }
+}
+
+// ---- make_array_increasing_memo.kara ----
+
+fn a2_fewest(i: i64, prev: i64, arr1: Vec[i64], spare: Vec[i64], memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == arr1.len() {
+        return 0;
+    }
+    if let Some(known) = memo.get((i, prev)) {
+        return known;
+    }
+    let far = arr1.len() + 1;
+    let mut best = far;
+    if arr1[i] > prev {
+        best = a2_fewest(i + 1, arr1[i], arr1, spare, mut memo);
+    }
+    let p = spare.partition_point(|b| b <= prev);
+    if p < spare.len() {
+        best = best.min(1 + a2_fewest(i + 1, spare[p], arr1, spare, mut memo));
+    }
+    memo.insert((i, prev), best);
+    best
+}
+
+fn a2_make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let mut spare = arr2.clone();
+    spare.sort();
+    spare.dedup();
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    let best = a2_fewest(0, -1, arr1, spare, mut memo);
+    if best > arr1.len() { -1 } else { best }
+}
+
+// ---- make_array_increasing_solution.kara ----
+
+struct Solution3 {}
+
+impl Solution3 {
+    pub fn make_array_increasing(arr1: Vec[i32], arr2: own Vec[i32]) -> i32 {
+        let mut arr2 = arr2;
+        arr2.sort();
+        arr2.dedup();
+        let mut dp: Map[i32, i32] = Map.new();
+        dp.insert(-1, 0);
+        for a in arr1.iter() {
+            let mut next: Map[i32, i32] = Map.new();
+            for (prev, ops) in dp.iter() {
+                if a > prev {
+                    let e = next.entry(a).or_insert(i32.MAX);
+                    *e = (*e).min(ops);
+                }
+                let idx = arr2.partition_point(|x| x <= prev);
+                if idx < arr2.len() {
+                    let e = next.entry(arr2[idx]).or_insert(i32.MAX);
+                    *e = (*e).min(ops + 1);
+                }
+            }
+            if next.is_empty() {
+                return -1;
+            }
+            dp = next;
+        }
+        *dp.values().min().unwrap()
+    }
+}
+
+fn a3_make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let arr1: Vec[i32] = arr1.iter().map(|v| v as i32).collect();
+    let arr2: Vec[i32] = arr2.iter().map(|v| v as i32).collect();
+    Solution3.make_array_increasing(arr1, arr2)
+}
+
+// ---- make_array_increasing_chain.kara ----
+
+struct Solution4 {}
+
+impl Solution4 {
+    pub fn make_array_increasing(arr1: Vec[i32], arr2: own Vec[i32]) -> i32 {
+        let mut arr2 = arr2;
+        arr2.sort();
+        arr2.dedup();
+        let dp = arr1.iter().fold(SortedMap.from([(-1, 0)]), |dp, a| {
+            let mut next = SortedMap.new();
+            for (prev, ops) in ref dp {
+                if a > prev {
+                    next.entry(a).and_modify(|v: mut ref i32| { *v = (*v).min(ops); }).or_insert(ops);
+                }
+                if let Some(b) = arr2.get(arr2.partition_point(|x| x <= prev)) {
+                    next.entry(b).and_modify(|v: mut ref i32| { *v = (*v).min(ops + 1); }).or_insert(ops + 1);
+                }
+            }
+            next
+        });
+        dp.values().cloned().min().unwrap_or(-1)
+    }
+}
+
+fn a4_make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let arr1: Vec[i32] = arr1.iter().map(|v| v as i32).collect();
+    let arr2: Vec[i32] = arr2.iter().map(|v| v as i32).collect();
+    Solution4.make_array_increasing(arr1, arr2)
+}
+
+// ---- the statement, read literally ----------------------------------------
+
+// the fewest elements of arr1 changed over every choice, for each element, of
+// keeping it or setting it to a value of arr2 that leaves arr1 strictly
+// increasing, or -1 when no choice does
+fn literal(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let n = arr1.len();
+    let m = arr2.len();
+    let mut best = -1;
+    // choice c in base m + 1: digit 0 keeps the element, digit j sets it to arr2[j - 1]
+    let mut total = 1;
+    for _ in 0..n {
+        total *= m + 1;
+    }
+    for c in 0..total {
+        let mut rest = c;
+        let mut prev = -1;
+        let mut changed = 0;
+        let mut rising = true;
+        for i in 0..n {
+            let digit = rest % (m + 1);
+            rest /= m + 1;
+            let v = if digit == 0 { arr1[i] } else { arr2[digit - 1] };
+            if v != arr1[i] {
+                changed += 1;
+            }
+            if v <= prev {
+                rising = false;
+            }
+            prev = v;
+        }
+        if rising and (best < 0 or changed < best) {
+            best = changed;
+        }
+    }
+    best
+}
+
+fn arm(w: i64, arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    match w {
+        0 => a0_make_array_increasing(arr1, arr2),
+        1 => a1_make_array_increasing(arr1, arr2),
+        2 => a2_make_array_increasing(arr1, arr2),
+        3 => a3_make_array_increasing(arr1, arr2),
+        _ => a4_make_array_increasing(arr1, arr2),
+    }
+}
+
+// whether some choice leaves arr1 strictly increasing: the least value each
+// position can take, from the left
+fn reachable(arr1: Vec[i64], arr2: Vec[i64]) -> bool {
+    let mut prev = -1;
+    for a in arr1.iter() {
+        let mut least = if a > prev { a } else { i64.MAX };
+        for b in arr2.iter() {
+            if b > prev and b < least {
+                least = b;
+            }
+        }
+        if least == i64.MAX {
+            return false;
+        }
+        prev = least;
+    }
+    true
+}
+
+// the length of the longest strictly increasing subsequence
+fn longest_rise(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut ends: Vec[i64] = Vec.filled(n, 1);
+    for i in 0..n {
+        for j in 0..i {
+            if arr[j] < arr[i] and ends[j] + 1 > ends[i] {
+                ends[i] = ends[j] + 1;
+            }
+        }
+    }
+    ends.iter().max().unwrap_or(0)
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: i64, want: i64) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(8, 0) };
+    // 2000 pairs of 1 to 8 values in 0..span; the first hundred with arr1
+    // already rising, the next hundred with one value in arr2, the next
+    // hundred with arr1 one value repeated
+    let mut seed = 11870;
+    for plan in 0..2000 {
+        let n = 1 + next_random(mut seed) % 8;
+        let m = 1 + next_random(mut seed) % 8;
+        let span = 2 + next_random(mut seed) % 12;
+        let mut arr1: Vec[i64] = (0..n).map(|_| next_random(mut seed) % span).collect();
+        let mut arr2: Vec[i64] = (0..m).map(|_| next_random(mut seed) % span).collect();
+        if plan < 100 {
+            arr1.sort();
+            arr1.dedup();
+        } else if plan < 200 {
+            arr2 = [arr2[0]];
+        } else if plan < 300 {
+            arr1 = Vec.filled(n, arr1[0]);
+        }
+        let n = arr1.len();
+        let extra = next_random(mut seed) % span;
+        let mut more = arr2.clone();
+        more.push(extra);
+        let mut doubled: Vec[i64] = arr2.iter().rev().collect();
+        doubled.extend(arr2.iter());
+        let star = a0_make_array_increasing(arr1, arr2);
+        t.check = (t.check * 31 + star + 2) % 1000000007;
+        let small = n <= 5 and arr2.len() <= 5;
+        let want_literal = if small { literal(arr1, arr2) } else { -2 };
+        let rising = (1..n).all(|i| arr1[i - 1] < arr1[i]);
+        let lower = n - longest_rise(arr1);
+        for w in 0..5 {
+            let d = arm(w, arr1, arr2);
+            // P1: the statement read literally, on arrays of at most 5 values
+            if small {
+                expect(mut t, w, 1, plan, d, want_literal);
+            }
+            // P2: -1 exactly when no choice leaves arr1 strictly increasing
+            expect(mut t, w, 2, plan, if d == -1 { 0 } else { 1 }, if reachable(arr1, arr2) { 1 } else { 0 });
+            // P3: 0 exactly when arr1 already rises
+            expect(mut t, w, 3, plan, if d == 0 { 1 } else { 0 }, if rising { 1 } else { 0 });
+            // P4: the kept elements rise, so n - (longest rise) <= d <= n
+            expect(mut t, w, 4, plan, if d == -1 or (lower <= d and d <= n) { 1 } else { 0 }, 1);
+            // P5: one more value in arr2 never makes the answer worse
+            let e = arm(w, arr1, more);
+            expect(mut t, w, 5, plan, if d == -1 or (e != -1 and e <= d) { 1 } else { 0 }, 1);
+            // P6: arr2's order and repeats do not matter
+            expect(mut t, w, 6, plan, arm(w, arr1, doubled), d);
+            // P7: the ★ arm's answer
+            expect(mut t, w, 7, plan, d, star);
+        }
+    }
+    println(f"2000 pairs: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..8).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

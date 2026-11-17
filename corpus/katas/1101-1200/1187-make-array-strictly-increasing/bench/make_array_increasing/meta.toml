@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1187-make-array-strictly-increasing/bench/make_array_increasing.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1187 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "ae7c71c4c"
+extracted_src = "a54d106b"

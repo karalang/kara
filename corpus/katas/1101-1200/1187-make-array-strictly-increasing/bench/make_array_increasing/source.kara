@@ -1,0 +1,75 @@
+// LeetCode #1187: Make Array Strictly Increasing -- the ★ arm: for each
+// count `k` of replacements so far, the least value the prefix can end on.
+// An element is kept when it rises above the end with `k` replacements, or
+// replaced by the least value of `arr2` above the end with `k - 1`. The
+// answer is the least `k` whose prefix reaches the end of `arr1`.
+// O(n^2 log m) time, O(n) space.
+
+fn make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let mut spare = arr2.clone();
+    spare.sort();
+    spare.dedup();
+    let n = arr1.len();
+    let none = i64.MAX;
+    // end[k]: the least last value with k replacements, `none` if out of reach
+    let mut end = Vec.filled(n + 1, none);
+    end[0] = i64.MIN;
+    for a in arr1.iter() {
+        let mut next = Vec.filled(n + 1, none);
+        for k in 0..=n {
+            if end[k] != none and a > end[k] {
+                next[k] = a;
+            }
+            if k > 0 and end[k - 1] != none {
+                let p = spare.partition_point(|b| b <= end[k - 1]);
+                if p < spare.len() and spare[p] < next[k] {
+                    next[k] = spare[p];
+                }
+            }
+        }
+        end = next;
+    }
+    match (0..=n).find(|k| end[k] != none) {
+        Some(k) => k,
+        None => -1,
+    }
+}
+
+// ---- bench harness --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` values in `0..span`, each from two draws so that `span` may pass 2^15.
+fn values(seed: mut ref i64, n: i64, span: i64) -> Vec[i64] {
+    (0..n).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % span).collect()
+}
+
+fn main() {
+    // 4 pairs of 2000 values each, the constraints' most, built once: both
+    // random up to 10^9; a rising arr1 with a dip every 40 values; both
+    // random below 4000; a falling arr1. Then 6 rounds over the pairs, each
+    // answer folded into a checksum
+    let mut seed: i64 = 1187;
+    let mut firsts: Vec[Vec[i64]] = Vec.new();
+    let mut seconds: Vec[Vec[i64]] = Vec.new();
+    firsts.push(values(mut seed, 2000, 1000000001));
+    seconds.push(values(mut seed, 2000, 1000000001));
+    firsts.push((0..2000).map(|i| if i % 40 == 39 { 0 } else { i * 500000 }).collect());
+    seconds.push(values(mut seed, 2000, 1000000001));
+    firsts.push(values(mut seed, 2000, 4000));
+    seconds.push(values(mut seed, 2000, 4000));
+    firsts.push((0..2000).map(|i| (2000 - i) * 1000).collect());
+    seconds.push(values(mut seed, 2000, 1000000001));
+    let rounds = 6;
+    let mut check = 0;
+    for round in 0..rounds {
+        for p in 0..4 {
+            let ops = make_array_increasing(firsts[p], seconds[p]);
+            check = (check * 131 + ops + 2 + round) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 4 pairs of 2000 values: checksum {check}");
+}

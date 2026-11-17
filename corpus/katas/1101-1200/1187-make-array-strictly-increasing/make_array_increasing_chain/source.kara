@@ -1,0 +1,76 @@
+// LeetCode #1187: Make Array Strictly Increasing -- another Rust solution, in
+// iterator chains: a `fold` over `arr1` whose state is a `BTreeMap` seeded
+// with `BTreeMap::from([(-1, 0)])`, each entry moved on through
+// `entry(..).and_modify(..).or_insert(..)`, the replacement found with
+// `arr2.get(arr2.partition_point(..))`, and the answer
+// `dp.values().copied().min().unwrap_or(-1)`; carried to Kāra by `karac
+// fix`. O(n * m * log m) time.
+
+struct Solution {}
+
+impl Solution {
+    pub fn make_array_increasing(arr1: Vec[i32], arr2: own Vec[i32]) -> i32 {
+        let mut arr2 = arr2;
+        arr2.sort();
+        arr2.dedup();
+        let dp = arr1.iter().fold(SortedMap.from([(-1, 0)]), |dp, a| {
+            let mut next = SortedMap.new();
+            for (prev, ops) in ref dp {
+                if a > prev {
+                    next.entry(a).and_modify(|v: mut ref i32| { *v = (*v).min(ops); }).or_insert(ops);
+                }
+                if let Some(b) = arr2.get(arr2.partition_point(|x| x <= prev)) {
+                    next.entry(b).and_modify(|v: mut ref i32| { *v = (*v).min(ops + 1); }).or_insert(ops + 1);
+                }
+            }
+            next
+        });
+        dp.values().cloned().min().unwrap_or(-1)
+    }
+}
+
+fn make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let arr1: Vec[i32] = arr1.iter().map(|v| v as i32).collect();
+    let arr2: Vec[i32] = arr2.iter().map(|v| v as i32).collect();
+    Solution.make_array_increasing(arr1, arr2)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` values in `0..span`, each from two draws so that `span` may pass 2^15.
+fn values(seed: mut ref i64, n: i64, span: i64) -> Vec[i64] {
+    (0..n).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % span).collect()
+}
+
+fn main() {
+    println(f"example 1: {make_array_increasing([1, 5, 3, 6, 7], [1, 3, 2, 4])}");
+    println(f"example 2: {make_array_increasing([1, 5, 3, 6, 7], [4, 3, 1])}");
+    println(f"example 3: {make_array_increasing([1, 5, 3, 6, 7], [1, 6, 3, 3])}");
+    println(f"small 1: {make_array_increasing([5], [1])}");
+    println(f"small 2: {make_array_increasing([3, 2, 1], [1, 2, 3])}");
+    println(f"small 3: {make_array_increasing([3, 3, 3], [3])}");
+    println(f"small 4: {make_array_increasing([0, 1000000000, 0], [1000000000, 999999999])}");
+    let mut seed: i64 = 1187;
+    let mut checksum: i64 = 0;
+    for t in 0..2000 {
+        let n = 1 + next_random(mut seed) % 8;
+        let m = 1 + next_random(mut seed) % 8;
+        let span = 2 + next_random(mut seed) % 12;
+        let arr1 = values(mut seed, n, span);
+        let arr2 = values(mut seed, m, span);
+        checksum = (checksum * 31 + make_array_increasing(arr1, arr2) + 2 + t) % 1000000007;
+    }
+    println(f"2000 random pairs: checksum {checksum}");
+    // the constraints' most: 2000 values each, up to 10^9
+    let arr1 = values(mut seed, 2000, 1000000001);
+    let arr2 = values(mut seed, 2000, 1000000001);
+    println(f"2000 and 2000 values: {make_array_increasing(arr1, arr2)}");
+    let mut rising: Vec[i64] = (0..2000).map(|i| i * 500000).collect();
+    rising[1000] = 0;
+    println(f"2000 rising, one dip: {make_array_increasing(rising, [1, 499999999, 499999998])}");
+}

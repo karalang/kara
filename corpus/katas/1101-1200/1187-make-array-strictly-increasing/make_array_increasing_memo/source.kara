@@ -1,0 +1,76 @@
+// LeetCode #1187: Make Array Strictly Increasing -- top down: the fewest
+// replacements that finish `arr1` from index `i` above `prev`, the better of
+// keeping `arr1[i]` when it rises above `prev` and replacing it with the
+// least value of `arr2` above `prev`, each answer kept in a `Map`. A
+// replacement only ever takes the least value above `prev`: a larger one
+// leaves the rest no easier.
+// O(n * (n + m) * log m) time and space.
+
+fn fewest(i: i64, prev: i64, arr1: Vec[i64], spare: Vec[i64], memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == arr1.len() {
+        return 0;
+    }
+    if let Some(known) = memo.get((i, prev)) {
+        return known;
+    }
+    let far = arr1.len() + 1;
+    let mut best = far;
+    if arr1[i] > prev {
+        best = fewest(i + 1, arr1[i], arr1, spare, mut memo);
+    }
+    let p = spare.partition_point(|b| b <= prev);
+    if p < spare.len() {
+        best = best.min(1 + fewest(i + 1, spare[p], arr1, spare, mut memo));
+    }
+    memo.insert((i, prev), best);
+    best
+}
+
+fn make_array_increasing(arr1: Vec[i64], arr2: Vec[i64]) -> i64 {
+    let mut spare = arr2.clone();
+    spare.sort();
+    spare.dedup();
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    let best = fewest(0, -1, arr1, spare, mut memo);
+    if best > arr1.len() { -1 } else { best }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` values in `0..span`, each from two draws so that `span` may pass 2^15.
+fn values(seed: mut ref i64, n: i64, span: i64) -> Vec[i64] {
+    (0..n).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % span).collect()
+}
+
+fn main() {
+    println(f"example 1: {make_array_increasing([1, 5, 3, 6, 7], [1, 3, 2, 4])}");
+    println(f"example 2: {make_array_increasing([1, 5, 3, 6, 7], [4, 3, 1])}");
+    println(f"example 3: {make_array_increasing([1, 5, 3, 6, 7], [1, 6, 3, 3])}");
+    println(f"small 1: {make_array_increasing([5], [1])}");
+    println(f"small 2: {make_array_increasing([3, 2, 1], [1, 2, 3])}");
+    println(f"small 3: {make_array_increasing([3, 3, 3], [3])}");
+    println(f"small 4: {make_array_increasing([0, 1000000000, 0], [1000000000, 999999999])}");
+    let mut seed: i64 = 1187;
+    let mut checksum: i64 = 0;
+    for t in 0..2000 {
+        let n = 1 + next_random(mut seed) % 8;
+        let m = 1 + next_random(mut seed) % 8;
+        let span = 2 + next_random(mut seed) % 12;
+        let arr1 = values(mut seed, n, span);
+        let arr2 = values(mut seed, m, span);
+        checksum = (checksum * 31 + make_array_increasing(arr1, arr2) + 2 + t) % 1000000007;
+    }
+    println(f"2000 random pairs: checksum {checksum}");
+    // the constraints' most: 2000 values each, up to 10^9
+    let arr1 = values(mut seed, 2000, 1000000001);
+    let arr2 = values(mut seed, 2000, 1000000001);
+    println(f"2000 and 2000 values: {make_array_increasing(arr1, arr2)}");
+    let mut rising: Vec[i64] = (0..2000).map(|i| i * 500000).collect();
+    rising[1000] = 0;
+    println(f"2000 rising, one dip: {make_array_increasing(rising, [1, 499999999, 499999998])}");
+}
