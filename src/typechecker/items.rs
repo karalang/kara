@@ -11920,7 +11920,14 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(ty, Type::Function { .. }) {
             return;
         }
-        let has_clone = self.type_supports_clone(ty);
+        // A type parameter clones only under a `Clone` bound: the
+        // environment answers `true` for any parameter, and the
+        // `.clone()` fix then failed its re-check with E0236 on an unbounded
+        // `T` (B-2026-11-16-294).
+        let has_clone = match ty {
+            Type::TypeParam(p) => self.type_param_has_clone_bound(p),
+            _ => self.type_supports_clone(ty),
+        };
         // The element as written (`v[0]`), not a schematic `v[i]`
         // (B-2026-10-19-61).
         let text = crate::formatter::render_expr(value);

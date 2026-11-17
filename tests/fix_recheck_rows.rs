@@ -208,3 +208,27 @@ fn cross_task_mark_on_a_plain_return_is_still_fixed() {
         "-> dyn Bump + CrossTask",
     );
 }
+
+/// B-2026-11-16-294: an unbounded `T` has no `.clone()`, so the index read
+/// gets the borrow advice and no `.clone()` fix.
+#[test]
+fn index_move_of_an_unbounded_parameter_gets_no_clone_fix() {
+    refused_and_left_alone(
+        "index-move-unbounded",
+        "fn f[T](v: ref Vec[T]) -> T { let a = v[0]; return a; }\n\
+         fn main() { println(\"x\"); }\n",
+        "No `.clone()` is offered: `T` does not have one",
+    );
+}
+
+/// B-2026-11-16-294 control: under a `Clone` bound the `.clone()` fix stays.
+#[test]
+fn index_move_of_a_clone_bounded_parameter_is_still_fixed() {
+    refused_then_fixed(
+        "index-move-clone-bound",
+        "fn f[T: Clone](v: ref Vec[T]) -> T { let a = v[0]; return a; }\n\
+         fn main() { println(\"x\"); }\n",
+        "take an independent copy",
+        "v[0].clone()",
+    );
+}
