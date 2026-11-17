@@ -291,7 +291,7 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Array[a, b]` or `VecDeque[a]` with nothing expecting that type keeps
   the warning without a fix. `#[allow(deprecated)]` on the enclosing item
   silences it. The next minor release refuses the prefix form
-  (B-2026-11-16-255, tracker TRACKER-255).
+  (B-2026-11-16-255, tracker B-2026-11-17-112).
 - An argument at a method's `mut ref` parameter takes the call-site `mut`
   marker, as a free function's already does (design.md § Call-site `mut`
   markers): `r.fill(s)` with `fn fill(ref self, buf: mut ref String)` warns
