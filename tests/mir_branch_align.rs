@@ -80,6 +80,13 @@ fn build(dir: &Path, on: bool) -> Option<PathBuf> {
     if on {
         c.env("KARAC_MIR_ALIGN_BRANCHES", "1");
     }
+    // The control arm needs a jump that crosses a line without the knob,
+    // which this program has at x86-64-v3, where the check was measured; a
+    // plain build is x86-64-v2 since B-2026-11-16-201 and lays the loops out
+    // with none crossing.
+    if cfg!(target_arch = "x86_64") {
+        c.arg("--target-cpu=x86-64-v3");
+    }
     let built = c
         .args(["build", file.to_str().unwrap(), "-o", exe.to_str().unwrap()])
         .output()
