@@ -757,18 +757,18 @@ pub fn coroutines_flag() -> bool {
 pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, String> {
     let mut bodies: Vec<Body> = program.bodies.values().cloned().collect();
     let seed = program.suspending.clone().unwrap_or_default();
+    let mut vtables = program.vtables.clone();
     // A drop that reaches a `Drop` body that suspends is a suspending call
     // (B-2026-11-17-35).
     let drop_body = |t: Ty| match tys.kind(t) {
-        TyKind::Adt(a) => program
+        TyKind::Adt(a) | TyKind::Shared(a) => program
             .drop_impls
             .get(&a)
             .or_else(|| program.drop_by_ty.get(&t))
             .cloned(),
         _ => None,
     };
-    super::suspending_drop::lower(&mut bodies, tys, &seed, &drop_body)?;
-    let mut vtables = program.vtables.clone();
+    super::suspending_drop::lower(&mut bodies, tys, &seed, &drop_body, &mut vtables)?;
     let (bodies, _) = coroutine::transform_with_tables(
         &bodies,
         tys,
@@ -2390,6 +2390,54 @@ impl<'a> Interp<'a> {
                 _ => false,
             })),
             ("__unwinding", "") => Ok(Value::Bool(*self.unwind_flag())),
+            // A `shared` handle's release split around its parts' drop
+            // (`suspending_drop::SHARED_RELEASE`), as `release` does: the
+            // box stays through the drop, kept by one weak count.
+            ("__shared_release", "") => {
+                let [h] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let Some(id) = self.handle_behind(h)? else {
+                    return err(format!("{name} of no handle"));
+                };
+                let obj = self.live(id)?;
+                obj.count -= 1;
+                let last = obj.count == 0;
+                if last {
+                    obj.weak += 1;
+                }
+                Ok(Value::Bool(last))
+            }
+            ("__shared_free", "") => {
+                let [h] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let Some(id) = self.handle_behind(h)? else {
+                    return err(format!("{name} of no handle"));
+                };
+                let obj = self.live(id)?;
+                obj.weak -= 1;
+                if obj.weak > 0 {
+                    obj.value = Value::Uninit;
+                } else {
+                    self.free_slot(id);
+                }
+                Ok(Value::Unit)
+            }
+            // An owned `dyn` value whose concrete value its table's drop
+            // slot dropped (`suspending_drop::DYN_FREE`): its block.
+            ("__dyn_free", "") => {
+                let [Value::Ref(a)] = args.as_slice() else {
+                    return err(format!("{name} takes a reference to a `dyn` value"));
+                };
+                match std::mem::replace(self.slot_mut(a)?, Value::Uninit) {
+                    Value::Dyn { data, .. } => {
+                        self.free_slot(data);
+                        Ok(Value::Unit)
+                    }
+                    other => err(format!("{name} of {other:?}")),
+                }
+            }
             // A value `suspending_drop`'s glue dropped part by part.
             ("__dropped", "") => {
                 if let [Value::Ref(a)] = args.as_slice() {
@@ -10420,6 +10468,14 @@ impl<'a> Interp<'a> {
                 }
                 self.option(ret, v)
             }
+            // Every element moved out into a `Vec`, front to back, the
+            // deque left empty (`suspending_drop`'s glue).
+            ("drain_entries", []) => {
+                let out: Vec<Value> = self.vec_elems(id)?.drain(..).skip(off).collect();
+                self.set_deque_off(id, 0);
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
             ("pop_front", []) => {
                 let elems = self.vec_elems(id)?;
                 let v =
@@ -16141,7 +16197,7 @@ impl<'a> Interp<'a> {
                     .contains_key(&coroutine::resume_name(&f))
             {
                 return err(format!(
-                    "the `Drop` body of {} suspends, and a value of it is dropped where the drop cannot wait: inside a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a function value (B-2026-11-17-101)",
+                    "the `Drop` body of {} suspends, and a value of it is dropped where the drop cannot wait: inside a function value, a OnceCell, OnceLock or LazyLock, or a channel's queue (B-2026-11-17-127)",
                     adt.name
                 ));
             }

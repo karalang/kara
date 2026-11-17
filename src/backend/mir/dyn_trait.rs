@@ -260,6 +260,15 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store_bool(dest, some)
     }
 
+    /// `__dyn_free(view)`: frees the block of the owned `dyn` value `view`
+    /// views, whose concrete value is dropped already.
+    pub(super) fn dyn_free(&mut self, view: &Operand) -> R<()> {
+        let pair = self.operand_ptr(view)?;
+        let data = self.load_ptr(pair)?;
+        let table = self.load_ptr(self.offset(pair, 8)?)?;
+        self.free_dyn_block(data, table)
+    }
+
     /// Frees the block of an owned `dyn` value at `data`, unless its type
     /// has no size (then `data` is a dangling address).
     fn free_dyn_block(&mut self, data: PointerValue<'ctx>, table: PointerValue<'ctx>) -> R<()> {

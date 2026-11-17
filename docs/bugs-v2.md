@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 81 |
 | run-vs-build | 55 |
 | crash | 48 |
-| codegen-gap | 34 |
+| codegen-gap | 35 |
 | use-after-free | 10 |
 | leak | 4 |
 | double-free | 2 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 597 |
 | mir-llvm | 284 |
-| mir | 247 |
+| mir | 248 |
 | cli | 192 |
 | parser | 109 |
 | ownership | 103 |
@@ -126,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-115 | 2026-11-17 | typecheck | medium | A constructor seed's numbers are fixed at the call: `it.fold(SortedMap.from([(-1, 0)]), |dp, a| ..)` over `i32` items is refused (expected 'SortedMap[i64, i64]', found 'SortedMap[i32, i32]') with no fix, where `fold(0, ..)` and `fold([0], ..)` take the closure's type | — |
 | B-2026-11-17-124 | 2026-11-17 | mir-llvm | low | Kata 220 runs 14.01G Ir against Rust's 9.16G with the same SipHash: the gap is the table's insert/remove runtime calls (3.6G) and an out-of-line get probe (about 70 Ir a call against hashbrown's about 23) | — |
 | B-2026-11-17-125 | 2026-11-17 | resolver | low | A top-level `let my_count` beside `fn main` gets E_MODULE_BINDING_NAMING, whose machine rename to `MY_COUNT` only leads to E_MODULE_LET; it should say directly that a module-level value is a `const` | — |
+| B-2026-11-17-127 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a function value's environment, a OnceCell / OnceLock / LazyLock, or a channel's queue, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: the remainder of B-2026-11-17-101, which lowered the shared, dyn, Map/Set/sorted/VecDeque and Mutex routes | — |
 
 ### Relocated
 

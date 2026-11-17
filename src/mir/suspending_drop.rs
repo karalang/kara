@@ -15,10 +15,25 @@
 //! `Drop` body, so the transform makes them coroutines, and with them
 //! every body that drops such a value: the drop suspends its caller.
 //!
-//! A drop that reaches a suspending body only through a part MIR cannot
-//! reach (a `shared` value's last handle, a map, a `dyn` or function
-//! value, a library cell) keeps the backends' glue, which reports that the
-//! drop cannot wait there (B-2026-11-17-101).
+//! The parts MIR cannot name are reached through natives (B-2026-11-17-101):
+//!
+//! - a `shared` value: `__shared_release` counts the handle off, and only
+//!   the last one drops the value's parts, then `__shared_free` frees the
+//!   box unless a `weak` handle keeps it;
+//! - a `dyn` value: each table of its trait gets one more slot, after the
+//!   methods, filled with its concrete type's glue (the backends' plain
+//!   drop where that one does not suspend), which the `dyn` type's glue
+//!   calls through like a method that may suspend, then `__dyn_free`
+//!   frees the value's block;
+//! - a `Map`, `Set`, `SortedMap`, `SortedSet` or `VecDeque`: its entries
+//!   move out into a `Vec` (`drain_entries`) and drop from there, a map
+//!   entry's key before its value;
+//! - a `Mutex[T]`: its `T` drops in place, through `get_mut`.
+//!
+//! A drop that reaches a suspending body only through anything else (a
+//! function value's environment, a `OnceCell` / `OnceLock` / `LazyLock`,
+//! a channel's queue) keeps the backends' glue, which reports that the
+//! drop cannot wait there (B-2026-11-17-127).
 //!
 //! In a cancelled task's teardown the drop runs to completion: its waits
 //! are not cancellation points. The teardown's own calls are not
@@ -38,6 +53,18 @@ use super::ty::{IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
 /// drop does; the compiled backends do nothing.
 pub const DROPPED: &str = "__dropped";
 
+/// `__shared_release(mut ref h) -> bool`: counts the `shared` handle `h`
+/// off and answers whether it was the last strong one. When it was, the
+/// box stays, for the glue to drop its parts and then free it with
+/// [`SHARED_FREE`], as the backends' `release` does in one go.
+pub const SHARED_RELEASE: &str = "__shared_release";
+/// `__shared_free(mut ref h)`: frees the box of the last handle `h`, whose
+/// parts are dropped, unless a `weak` handle still keeps it.
+pub const SHARED_FREE: &str = "__shared_free";
+/// `__dyn_free(mut ref d)`: frees the block of the owned `dyn` value `d`,
+/// whose concrete value its table's drop slot dropped in place.
+pub const DYN_FREE: &str = "__dyn_free";
+
 /// The name of the glue body that drops a `ty` in place.
 pub fn glue_name(tys: &TyInterner, ty: Ty) -> String {
     format!("{}#sdrop", tys.display(ty))
@@ -56,6 +83,7 @@ pub fn lower(
     tys: &TyInterner,
     seed: &BTreeSet<String>,
     drop_body: &dyn Fn(Ty) -> Option<String>,
+    vtables: &mut [Vtable],
 ) -> Result<(), String> {
     let set = coroutine::coroutines_from(bodies.iter(), seed);
     let by_name: BTreeMap<String, usize> = bodies
@@ -63,9 +91,18 @@ pub fn lower(
         .enumerate()
         .map(|(i, b)| (b.instance.name.clone(), i))
         .collect();
+    let tables: Vec<(crate::ids::DefId, Ty, u32)> = vtables
+        .iter()
+        .filter_map(|v| match tys.kind(v.dyn_ty) {
+            TyKind::Dyn { trait_, .. } => Some((trait_, v.concrete, v.slots.len() as u32)),
+            _ => None,
+        })
+        .collect();
     let mut pass = Pass {
         tys,
         drop_body,
+        tables,
+        drop_slots: BTreeMap::new(),
         suspending: BTreeMap::new(),
         memo: HashMap::new(),
         deciding: BTreeSet::new(),
@@ -104,10 +141,40 @@ pub fn lower(
     let Some(template) = template else {
         return Ok(());
     };
-    while let Some(ty) = pass.queue.pop() {
-        let mut g = pass.glue(ty, &template)?;
-        pass.rewrite_drops(&mut g)?;
-        pass.bodies.push(g);
+    // A `dyn` type's glue calls the drop slot of its trait's tables, which
+    // each table fills with its concrete type's glue.
+    let mut filled: BTreeSet<crate::ids::DefId> = BTreeSet::new();
+    loop {
+        while let Some(ty) = pass.queue.pop() {
+            let mut g = pass.glue(ty, &template)?;
+            pass.rewrite_drops(&mut g)?;
+            pass.bodies.push(g);
+        }
+        let new: Vec<(crate::ids::DefId, u32)> = pass
+            .drop_slots
+            .iter()
+            .filter(|(t, _)| !filled.contains(t))
+            .map(|(&t, &k)| (t, k))
+            .collect();
+        if new.is_empty() {
+            break;
+        }
+        for (trait_, k) in new {
+            filled.insert(trait_);
+            for v in vtables.iter_mut() {
+                if !matches!(tys.kind(v.dyn_ty), TyKind::Dyn { trait_: t, .. } if t == trait_) {
+                    continue;
+                }
+                if v.slots.len() != k as usize {
+                    return Err(format!(
+                        "the `dyn` tables of `{}` disagree on their slots",
+                        v.name
+                    ));
+                }
+                let glue = pass.glue_of(v.concrete);
+                v.slots.push(glue.name);
+            }
+        }
     }
     // A suspending `Drop` body runs to completion.
     let names: BTreeSet<String> = pass.suspending.values().map(|(_, n)| n.clone()).collect();
@@ -122,6 +189,13 @@ pub fn lower(
 struct Pass<'a, 'b> {
     tys: &'a TyInterner,
     drop_body: &'a dyn Fn(Ty) -> Option<String>,
+    /// The program's `dyn` tables: each one's trait, concrete type and
+    /// number of slots.
+    tables: Vec<(crate::ids::DefId, Ty, u32)>,
+    /// Per trait whose `dyn` values a glue drops: the slot, after the
+    /// trait's methods, that its tables fill with their concrete type's
+    /// glue.
+    drop_slots: BTreeMap<crate::ids::DefId, u32>,
     /// Per type with a `Drop` body: its instance and name, when it suspends.
     suspending: BTreeMap<Ty, (InstanceId, String)>,
     memo: HashMap<Ty, bool>,
@@ -147,7 +221,7 @@ impl Pass<'_, '_> {
         if let Some(s) = self.suspending.get(&ty) {
             return Some(s.clone());
         }
-        if !self.tys.has_drop_impl(ty) {
+        if !self.has_drop_impl(ty) {
             return None;
         }
         let name = (self.drop_body)(ty)?;
@@ -160,9 +234,18 @@ impl Pass<'_, '_> {
         Some((inst, name))
     }
 
+    /// Whether `ty`, a struct or enum or its `shared` handle, has a `Drop`
+    /// impl (`TyInterner::has_drop_impl` answers for plain ADTs only).
+    fn has_drop_impl(&self, ty: Ty) -> bool {
+        match self.tys.kind(ty) {
+            TyKind::Adt(a) | TyKind::Shared(a) => self.tys.adt(a).has_drop_impl,
+            _ => false,
+        }
+    }
+
     /// The `Drop` body of `ty` itself, suspending or not.
     fn own_drop(&self, ty: Ty) -> Option<InstanceId> {
-        if !self.tys.has_drop_impl(ty) {
+        if !self.has_drop_impl(ty) {
             return None;
         }
         let name = (self.drop_body)(ty)?;
@@ -174,7 +257,8 @@ impl Pass<'_, '_> {
     fn parts(&self, ty: Ty) -> Option<Vec<Ty>> {
         let tys = self.tys;
         match tys.kind(ty) {
-            TyKind::Adt(a) => {
+            TyKind::Adt(_) if mutex_held(tys, ty).is_some() => mutex_held(tys, ty).map(|h| vec![h]),
+            TyKind::Adt(a) | TyKind::Shared(a) => {
                 let adt = tys.adt(a);
                 if coroutine::is_frame(&adt.name)
                     || adt.library_name().is_some_and(|n| !plain_library(n))
@@ -192,7 +276,15 @@ impl Pass<'_, '_> {
             }
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => Some(ts),
             TyKind::Array(e, n) if n > 0 => Some(vec![e]),
-            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => Some(vec![e]),
+            TyKind::Intrinsic(
+                IntrinsicTy::Vec(e)
+                | IntrinsicTy::Set(e)
+                | IntrinsicTy::SortedSet(e)
+                | IntrinsicTy::VecDeque(e),
+            ) => Some(vec![e]),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                Some(vec![k, v])
+            }
             _ => None,
         }
     }
@@ -212,16 +304,43 @@ impl Pass<'_, '_> {
             return false;
         }
         let outer = std::mem::take(&mut self.leaned);
-        let r = self.parts(ty).is_some_and(|parts| {
-            (matches!(self.tys.kind(ty), TyKind::Adt(_)) && self.own_suspending(ty).is_some())
-                || parts.into_iter().any(|p| self.reaches(p))
-        });
+        let r = if let TyKind::Dyn { trait_, .. } = self.tys.kind(ty) {
+            // A `dyn` value reaches what any concrete type behind it does.
+            let behind: Vec<Ty> = self
+                .tables
+                .iter()
+                .filter(|(t, _, _)| *t == trait_)
+                .map(|&(_, c, _)| c)
+                .collect();
+            behind.into_iter().any(|c| self.reaches(c))
+        } else {
+            self.parts(ty).is_some_and(|parts| {
+                (matches!(self.tys.kind(ty), TyKind::Adt(_) | TyKind::Shared(_))
+                    && self.own_suspending(ty).is_some())
+                    || parts.into_iter().any(|p| self.reaches(p))
+            })
+        };
         self.deciding.remove(&ty);
         if r || !self.leaned {
             self.memo.insert(ty, r);
         }
         self.leaned |= outer;
         r
+    }
+
+    /// The drop slot of the `dyn` tables of `trait_`: the first after its
+    /// methods.
+    fn drop_slot(&mut self, trait_: crate::ids::DefId) -> u32 {
+        if let Some(&k) = self.drop_slots.get(&trait_) {
+            return k;
+        }
+        let k = self
+            .tables
+            .iter()
+            .find(|(t, _, _)| *t == trait_)
+            .map_or(0, |&(_, _, n)| n);
+        self.drop_slots.insert(trait_, k);
+        k
     }
 
     /// The glue body of `ty`, queued to be made if it is not yet.
@@ -361,8 +480,90 @@ impl Pass<'_, '_> {
             },
         );
         let body = match tys.kind(ty) {
-            TyKind::Adt(a) => {
+            // A type behind a `dyn` whose drop does not suspend: the
+            // backends' glue, as its table's drop slot.
+            _ if !self.reaches(ty) => g.drops(vec![(this.clone(), ty)], finish),
+            // The table's drop slot drops the concrete value in place, then
+            // `__dyn_free` frees its block.
+            TyKind::Dyn { trait_, .. } => {
+                let k = self.drop_slot(trait_);
+                let u = g.local(tys.unit());
+                let free = g.block(
+                    vec![],
+                    TerminatorKind::Call {
+                        func: fn_const(
+                            tys,
+                            InstanceId {
+                                def: crate::ids::DefId(u32::MAX),
+                                args: Vec::new(),
+                                name: DYN_FREE.to_string(),
+                            },
+                        ),
+                        args: vec![Operand::Move(Place::local(Local(1)))],
+                        destination: Place::local(u),
+                        target: Some(finish),
+                        unwind: UnwindAction::Abort,
+                    },
+                );
+                let u = g.local(tys.unit());
+                g.block(
+                    vec![],
+                    TerminatorKind::Call {
+                        func: Operand::Const(Const {
+                            ty: tys.unit(),
+                            kind: ConstKind::DynSlot {
+                                dyn_ty: ty,
+                                slot: k,
+                            },
+                        }),
+                        args: vec![Operand::Copy(Place::local(Local(1)))],
+                        destination: Place::local(u),
+                        target: Some(free),
+                        unwind: UnwindAction::Abort,
+                    },
+                )
+            }
+            // A `Mutex[T]` holds its `T` in place: dropped there, through
+            // `get_mut`.
+            TyKind::Adt(_) if mutex_held(tys, ty).is_some() => {
+                let held = mutex_held(tys, ty).unwrap_or(ty);
+                let r = g.local(tys.intern(TyKind::MutRef(ty)));
+                let v = g.local(tys.intern(TyKind::MutRef(held)));
+                let drop_v = g.drops(vec![(Place::local(v).project(ProjElem::Deref), held)], ret);
+                g.block(
+                    vec![Statement {
+                        kind: StatementKind::Assign(
+                            Place::local(r),
+                            Rvalue::Ref(BorrowKind::Mut, this.clone()),
+                        ),
+                        source_info: si,
+                    }],
+                    TerminatorKind::Call {
+                        func: Operand::Const(Const {
+                            ty: tys.unit(),
+                            kind: ConstKind::FnDef(InstanceId {
+                                def: crate::ids::DefId(u32::MAX),
+                                args: Vec::new(),
+                                name: format!("{}.get_mut", tys.display(ty)),
+                            }),
+                        }),
+                        args: vec![Operand::Move(Place::local(r))],
+                        destination: Place::local(v),
+                        target: Some(drop_v),
+                        unwind: UnwindAction::Abort,
+                    },
+                )
+            }
+            TyKind::Adt(a) | TyKind::Shared(a) => {
                 let adt = tys.adt(a);
+                let shared = matches!(tys.kind(ty), TyKind::Shared(_));
+                // A `shared` value's parts go with its last handle, and its
+                // box after them: `__shared_free`.
+                let end = if shared {
+                    g.on_handle(SHARED_FREE, this.clone(), ty, ret)
+                } else {
+                    ret
+                };
                 let rest = if adt.is_enum {
                     let disc = g.local(tys.int(IntTy::I64));
                     let mut arms = Vec::new();
@@ -380,7 +581,7 @@ impl Pass<'_, '_> {
                             .filter(|(_, ft)| tys.needs_drop(*ft))
                             .collect();
                         if !parts.is_empty() {
-                            arms.push((v as u128, g.drops(parts, ret)));
+                            arms.push((v as u128, g.drops(parts, end)));
                         }
                     }
                     g.block(
@@ -395,7 +596,7 @@ impl Pass<'_, '_> {
                             discr: Operand::Copy(Place::local(disc)),
                             targets: SwitchTargets {
                                 values: arms,
-                                otherwise: ret,
+                                otherwise: end,
                             },
                         },
                     )
@@ -409,11 +610,19 @@ impl Pass<'_, '_> {
                         })
                         .filter(|(_, ft)| tys.needs_drop(*ft))
                         .collect();
-                    g.drops(parts, ret)
+                    g.drops(parts, end)
                 };
-                match self.own_drop(ty) {
+                let parts = match self.own_drop(ty) {
                     Some(inst) => g.call_on(inst, this.clone(), ty, rest),
                     None => rest,
+                };
+                if shared {
+                    // Only the last handle drops the parts:
+                    // `__shared_release` counts this one off and answers
+                    // whether it was the last, leaving the box for them.
+                    g.release_then(this.clone(), ty, parts, ret)
+                } else {
+                    parts
                 }
             }
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
@@ -430,7 +639,16 @@ impl Pass<'_, '_> {
                     .collect();
                 g.drops(parts, ret)
             }
-            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => g.vec_elems(this.clone(), ty, e, ret),
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => g.vec_elems(this.clone(), ty, e, false, ret),
+            // A map's, a set's or a deque's entries, moved out into a
+            // `Vec` and dropped from there.
+            TyKind::Intrinsic(
+                IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e) | IntrinsicTy::VecDeque(e),
+            ) => g.drain_then(this.clone(), ty, e, false, ret),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                let entry = tys.intern(TyKind::Tuple(vec![k, v]));
+                g.drain_then(this.clone(), ty, entry, true, ret)
+            }
             _ => {
                 return Err(format!(
                     "no drop glue in MIR for `{}` (B-2026-11-17-35)",
@@ -527,6 +745,97 @@ impl Glue<'_> {
         )
     }
 
+    /// `r = &mut place; _ = native(move r) -> next`; the block.
+    fn on_handle(&mut self, native: &str, place: Place, ty: Ty, next: BasicBlock) -> BasicBlock {
+        let f = InstanceId {
+            def: crate::ids::DefId(u32::MAX),
+            args: Vec::new(),
+            name: native.to_string(),
+        };
+        self.call_on(f, place, ty, next)
+    }
+
+    /// `r = &mut h; last = __shared_release(move r)`, then `parts` when
+    /// it was the last handle and `next` when not; the first block.
+    fn release_then(
+        &mut self,
+        h: Place,
+        ty: Ty,
+        parts: BasicBlock,
+        next: BasicBlock,
+    ) -> BasicBlock {
+        let r = self.local(self.tys.intern(TyKind::MutRef(ty)));
+        let last = self.local(self.tys.bool());
+        let sw = self.block(
+            vec![],
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(last)),
+                targets: SwitchTargets::if_else(parts, next),
+            },
+        );
+        self.block(
+            vec![Statement {
+                kind: StatementKind::Assign(Place::local(r), Rvalue::Ref(BorrowKind::Mut, h)),
+                source_info: self.si,
+            }],
+            TerminatorKind::Call {
+                func: fn_const(
+                    self.tys,
+                    InstanceId {
+                        def: crate::ids::DefId(u32::MAX),
+                        args: Vec::new(),
+                        name: SHARED_RELEASE.to_string(),
+                    },
+                ),
+                args: vec![Operand::Move(Place::local(r))],
+                destination: Place::local(last),
+                target: Some(sw),
+                unwind: UnwindAction::Abort,
+            },
+        )
+    }
+
+    /// The entries of the map, set or deque at `c` (of type `ct`) moved out
+    /// into a `Vec[E]` (`drain_entries`, in iteration order, a deque's
+    /// front to back) and dropped in that order, a map entry's key before
+    /// its value (core semantics §4); then the emptied `c` by a plain
+    /// `Drop`. The first block.
+    fn drain_then(&mut self, c: Place, ct: Ty, e: Ty, entry: bool, next: BasicBlock) -> BasicBlock {
+        let tys = self.tys;
+        let vt = tys.intern(TyKind::Intrinsic(IntrinsicTy::Vec(e)));
+        let tmp = self.local(vt);
+        let r = self.local(tys.intern(TyKind::MutRef(ct)));
+        let done = self.block(
+            vec![],
+            TerminatorKind::Drop {
+                place: c.clone(),
+                target: next,
+                unwind: UnwindAction::Abort,
+            },
+        );
+        let elems = self.vec_elems(Place::local(tmp), vt, e, entry, done);
+        self.block(
+            vec![Statement {
+                kind: StatementKind::Assign(Place::local(r), Rvalue::Ref(BorrowKind::Mut, c)),
+                source_info: self.si,
+            }],
+            TerminatorKind::Call {
+                func: Operand::Const(Const {
+                    ty: tys.unit(),
+                    kind: ConstKind::FnDef(InstanceId {
+                        def: crate::ids::DefId(u32::MAX),
+                        args: Vec::new(),
+                        name: format!("{}.drain_entries", tys.display(ct)),
+                    }),
+                }),
+                args: vec![Operand::Move(Place::local(r))],
+                destination: Place::local(tmp),
+                target: Some(elems),
+                unwind: UnwindAction::Abort,
+            },
+        )
+    }
+
     /// Drops the elements of the `Vec` at `v` in index order, in place,
     /// then forgets them and drops the emptied `Vec`, as `mir::frozen`
     /// does; the first block.
@@ -541,7 +850,10 @@ impl Glue<'_> {
     /// forget: rf = &mut v; _ = Vec[E].__forget_items(move rf) -> done
     /// done:  drop(v) -> next
     /// ```
-    fn vec_elems(&mut self, v: Place, vt: Ty, e: Ty, next: BasicBlock) -> BasicBlock {
+    ///
+    /// With `entry`, each element is a map's `(key, value)` entry, whose
+    /// key drops first.
+    fn vec_elems(&mut self, v: Place, vt: Ty, e: Ty, entry: bool, next: BasicBlock) -> BasicBlock {
         let tys = self.tys;
         let (i64t, boolt, unit) = (tys.int(IntTy::I64), tys.bool(), tys.unit());
         let n = self.local(i64t);
@@ -644,8 +956,37 @@ impl Glue<'_> {
             d.statements = stmts;
             d.terminator.kind = kind;
         }
+        if let (true, TyKind::Tuple(kv)) = (entry, tys.kind(e)) {
+            let at = Place::local(re).project(ProjElem::Deref);
+            let value = self.block(
+                vec![],
+                TerminatorKind::Drop {
+                    place: at.field(1, kv[1]),
+                    target: step,
+                    unwind: UnwindAction::Abort,
+                },
+            );
+            self.blocks[drop_e.index()].terminator.kind = TerminatorKind::Drop {
+                place: at.field(0, kv[0]),
+                target: value,
+                unwind: UnwindAction::Abort,
+            };
+        }
         start
     }
+}
+
+/// The type a library `Mutex[T]` holds in place, `T`, when `ty` is one.
+fn mutex_held(tys: &TyInterner, ty: Ty) -> Option<Ty> {
+    let TyKind::Adt(a) = tys.kind(ty) else {
+        return None;
+    };
+    if tys.adt(a).library_name() != Some("Mutex") {
+        return None;
+    }
+    tys.tcx()
+        .adt_of(ty)
+        .and_then(|(_, args)| args.first().copied())
 }
 
 fn fn_const(tys: &TyInterner, inst: InstanceId) -> Operand {

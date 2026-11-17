@@ -106,6 +106,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a
   function value it is not lowered yet and stops with a message
   (B-2026-11-17-101).
+- A `Drop` body that suspends is now waited for behind a `shared` value's
+  last handle (a `weak` handle that outlives it then reads as gone), a
+  `dyn` value, a `Map`, `Set`, `SortedMap`, `SortedSet` or `VecDeque`
+  entry, and a `Mutex`, with the spec's order: a map entry's key before
+  its value, a deque front to back. These stopped with 'a `Drop` body that
+  suspends was reached from a drop that cannot wait' (B-2026-11-17-101).
+  A function value's environment, a `OnceCell` / `OnceLock` / `LazyLock`
+  and a channel's queue still stop with it (B-2026-11-17-127).
 - A closure a function returns holding a view of its argument, passed on
   to an `escaping` parameter that stores it in a struct, a `shared` value
   or a `dyn`, is refused (E0509) as a closure written at the call is; it

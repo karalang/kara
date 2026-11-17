@@ -1,0 +1,9 @@
+source = "B-2026-11-17-101"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Drop, 'A drop body may suspend' (B-2026-11-17-101): the last strong handle's drop may wait, and a weak handle that outlives it then reads as gone."

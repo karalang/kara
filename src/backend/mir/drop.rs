@@ -119,7 +119,7 @@ pub(super) struct Glue<'ctx> {
 
 /// The abort of a drop that reaches a suspending `Drop` body where it
 /// cannot wait (B-2026-11-17-35).
-const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a drop that cannot wait (inside a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a function value; B-2026-11-17-101)";
+const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a drop that cannot wait (inside a function value, a OnceCell, OnceLock or LazyLock, or a channel's queue; B-2026-11-17-127)";
 
 /// The quiet fields of a body ([`Cx::own_handle_fields`]): offset and type.
 type QuietFields = Vec<(u64, Ty)>;

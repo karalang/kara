@@ -1,0 +1,20 @@
+import std.time.{Duration, sleep};
+trait Job { fn id(self) -> i64; }
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+impl Job for Slow { fn id(self) -> i64 { self.n } }
+struct Fast { n: i64, name: String }
+impl Job for Fast { fn id(self) -> i64 { self.n } }
+struct Holder { jobs: Vec[dyn Job], tag: String }
+fn main() {
+    {
+        let one: dyn Job = Slow { n: 0 };
+        let mut v: Vec[dyn Job] = Vec.new();
+        v.push(Slow { n: 1 });
+        v.push(Fast { n: 2, name: "f" });
+        v.push(Slow { n: 3 });
+        let h = Holder { jobs: v, tag: "h" };
+        println(f"{h.jobs.len()} jobs, first {one.id()}");
+    }
+    println("end");
+}

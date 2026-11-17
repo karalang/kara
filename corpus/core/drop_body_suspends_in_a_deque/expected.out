@@ -1,0 +1,9 @@
+slow drop 5
+slow drop 4
+slow drop 3
+left 4
+slow drop 2
+slow drop 1
+slow drop 0
+slow drop 9
+end

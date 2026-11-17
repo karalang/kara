@@ -1,0 +1,9 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+shared struct Svc { state: Mutex[Vec[Slow]] }
+fn main() {
+    { let m = Mutex.new(Slow { n: 1 }); println(f"{m.lock().value.n}"); }
+    { let s = Svc { state: Mutex.new([Slow { n: 2 }, Slow { n: 3 }]) }; println("svc"); }
+    println("end");
+}

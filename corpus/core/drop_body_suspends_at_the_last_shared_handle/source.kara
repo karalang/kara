@@ -1,0 +1,14 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+shared struct H { s: Slow }
+impl Drop for H { fn drop(mut ref self) { sleep(Duration.ms(1)); println(f"h drop {self.s.n}"); } }
+fn keep(h: H) -> H { h }
+fn main() {
+    let a = H { s: Slow { n: 1 } };
+    {
+        let b = keep(a);
+        println("b is not the last handle");
+    }
+    println("end");
+}

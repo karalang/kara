@@ -1,0 +1,13 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+fn main() {
+    {
+        let mut d: VecDeque[Slow] = VecDeque.new();
+        for i in 0..6 { d.push_front(Slow { n: i }); }
+        d.push_back(Slow { n: 9 });
+        for _ in 0..3 { let _ = d.pop_front(); }
+        println("left 4");
+    }
+    println("end");
+}

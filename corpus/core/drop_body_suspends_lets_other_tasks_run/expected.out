@@ -1,0 +1,9 @@
+drop 1 starts
+tick 1
+slow drop 1
+after the dyn drop
+drop 2 starts
+tick 2
+slow drop 2
+after the handle drop
+end

@@ -1,0 +1,19 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+#[derive(Hash, PartialEq, Eq)]
+struct K { n: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"key drop {self.n}"); } }
+fn main() {
+    {
+        let mut m: Map[K, Slow] = Map.new();
+        m.insert(K { n: 1 }, Slow { n: 10 });
+        let mut s: Set[K] = Set.new();
+        s.insert(K { n: 5 });
+        let mut o: SortedMap[i64, Slow] = SortedMap.new();
+        o.insert(3, Slow { n: 3 });
+        o.insert(2, Slow { n: 2 });
+        println(f"{m.len() + s.len() + o.len()} entries");
+    }
+    println("end");
+}

@@ -1,0 +1,9 @@
+source = "B-2026-11-17-101"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Drop, 'A drop body may suspend' (B-2026-11-17-101): a map's and a set's entries drop through their glue, a map entry's key before its value, a sorted map's in key order."

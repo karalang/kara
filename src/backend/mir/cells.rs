@@ -296,6 +296,13 @@ impl<'ctx> Cx<'ctx, '_> {
             self.copy(d, cell, t)?;
             return Ok(Some(()));
         }
+        // So is `get_mut`, the reference to the value in place, which
+        // `suspending_drop`'s glue drops a `Mutex[T]`'s value through.
+        if let ("get_mut", [_]) = (method, args) {
+            let d = self.place_ptr(dest)?;
+            self.store(d, cell.into())?;
+            return Ok(Some(()));
+        }
         let width = self.llvm_ty(t)?.into_int_type();
         let align = width.get_bit_width().div_ceil(8);
         match (method, &args[1..]) {
@@ -303,10 +310,6 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = self.atomic_load(cell, t)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, v.into())?;
-            }
-            ("get_mut", []) => {
-                let d = self.place_ptr(dest)?;
-                self.store(d, cell.into())?;
             }
             ("store", [v, ..]) => {
                 let v = self.operand_scalar(v)?;

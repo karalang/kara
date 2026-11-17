@@ -246,6 +246,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store_ref(d, at, el)?;
             }
+            // Every element moved out into a `Vec`, front to back, the
+            // deque left empty (`suspending_drop`'s glue).
+            ("drain_entries", []) => {
+                let d = self.place_ptr(dest)?;
+                self.vec_alloc(d, len, size)?;
+                if size != 0 {
+                    let buf = self.load_ptr(d)?;
+                    self.count_loop(len, |cx, i| {
+                        let at = cx.slot(q, i, size)?;
+                        let out = cx.elem_ptr(buf, i, size)?;
+                        cx.copy(out, at, el)
+                    })?;
+                }
+                self.store(self.offset(q, 8)?, self.i64(0).into())?;
+                self.store(self.offset(q, 16)?, self.i64(0).into())?;
+            }
             ("clear", []) => {
                 if self.tys.needs_drop(el) {
                     self.drop_ring(q, el)?;

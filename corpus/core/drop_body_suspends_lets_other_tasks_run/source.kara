@@ -1,0 +1,19 @@
+import std.time.{Duration, sleep};
+trait Job { fn id(self) -> i64; }
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { println(f"drop {self.n} starts"); sleep(Duration.ms(60)); println(f"slow drop {self.n}"); } }
+impl Job for Slow { fn id(self) -> i64 { self.n } }
+shared struct H { s: Slow }
+fn by_dyn() -> i64 { { let j: dyn Job = Slow { n: 1 }; } println("after the dyn drop"); 1 }
+fn by_handle() -> i64 { sleep(Duration.ms(100)); { let h = H { s: Slow { n: 2 } }; } println("after the handle drop"); 2 }
+fn ticks() -> i64 { sleep(Duration.ms(20)); println("tick 1"); sleep(Duration.ms(100)); println("tick 2"); 0 }
+fn main() {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| by_dyn());
+    let b = g.spawn(|| by_handle());
+    let t = g.spawn(|| ticks());
+    let _ = a.join();
+    let _ = b.join();
+    let _ = t.join();
+    println("end");
+}

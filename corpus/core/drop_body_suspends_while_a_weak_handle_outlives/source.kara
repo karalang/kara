@@ -1,0 +1,15 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+shared struct P { s: Slow }
+shared struct C { mut parent: weak P }
+fn main() {
+    let c = C { parent: None };
+    {
+        let p = P { s: Slow { n: 7 } };
+        c.parent = p;
+        match c.parent { Some(q) => println(f"alive {q.s.n}"), None => println("gone") }
+    }
+    match c.parent { Some(_) => println("alive"), None => println("gone") }
+    println("end");
+}

@@ -1114,6 +1114,31 @@ impl<'ctx> Cx<'ctx, '_> {
             // A value `suspending_drop`'s glue dropped part by part: its
             // memory holds nothing to free.
             ("__dropped", "") => Ok(()),
+            // An owned `dyn` value whose table's drop slot dropped its
+            // concrete value (`suspending_drop::DYN_FREE`): its block.
+            ("__dyn_free", "") => self.dyn_free(&args[0]),
+            // A `shared` handle's release split around its parts' drop,
+            // which may suspend (`suspending_drop::SHARED_RELEASE`): the
+            // count, then the box, as `release` and `release_last` do.
+            ("__shared_release", "") => {
+                let ty = self.operand_type(&args[0])?;
+                let b = self.handle_arg(&args[0])?;
+                let left = self.add_count(b, false, self.atomic_counts(ty))?;
+                let last = self.is_zero(left)?;
+                self.store_bool(dest, last)
+            }
+            ("__shared_free", "") => {
+                let ty = self.operand_type(&args[0])?;
+                let b = self.handle_arg(&args[0])?;
+                if self.has_weak_count(ty) {
+                    let wp = self.weak_count_ptr(b, ty)?;
+                    let left = self.add_count(wp, false, self.atomic_counts(ty))?;
+                    let none = self.is_zero(left)?;
+                    self.if_then(none, |cx| cx.free(b))
+                } else {
+                    self.free(b)
+                }
+            }
             // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`).
             ("__cancelled" | "__unwinding", "") => {
                 let name = &base[2..];
