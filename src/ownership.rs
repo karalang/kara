@@ -3055,7 +3055,11 @@ impl<'a> OwnershipChecker<'a> {
         let mut visited = HashSet::new();
         let mut in_stack = HashSet::new();
 
-        let all_types: Vec<String> = graph.keys().cloned().collect();
+        // In source order, not the map's (randomly keyed) order: the type
+        // declared first starts the cycle, so the message names the cycle
+        // the same way on every run (B-2026-11-17-96).
+        let mut all_types: Vec<String> = graph.keys().cloned().collect();
+        all_types.sort_by_cached_key(|n| (self.find_type_span(n).offset, n.clone()));
         for type_name in &all_types {
             if !visited.contains(type_name) {
                 self.dfs_cycle(
