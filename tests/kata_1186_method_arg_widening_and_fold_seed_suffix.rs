@@ -1,4 +1,4 @@
-//! Two gaps kata 1182 (Maximum Subarray Sum with One Deletion) found in
+//! Two gaps kata 1186 (Maximum Subarray Sum with One Deletion) found in
 //! LeetCode's Rust solutions carried to Kāra.
 //!
 //! B-2026-11-17-90: a method's argument did not widen into its parameter's
@@ -19,7 +19,7 @@ use std::process::{Command, Output, Stdio};
 
 fn karac(tag: &str, args: &[&str], src: &str) -> (Output, String) {
     let path =
-        std::env::temp_dir().join(format!("karac-kata1182-{tag}-{}.kara", std::process::id()));
+        std::env::temp_dir().join(format!("karac-kata1186-{tag}-{}.kara", std::process::id()));
     std::fs::write(&path, src).expect("write");
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .args(args)
