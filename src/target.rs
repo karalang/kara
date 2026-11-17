@@ -291,6 +291,16 @@ pub fn is_v1_target_name(name: &str) -> bool {
     V1_TARGETS.contains(&name)
 }
 
+/// The target NAME a `--target` value stands for: `wasm32-wasip1`, the
+/// triple `wasm_wasi` builds, is that name, so the build takes the wasm
+/// runtime archive and link (B-2026-11-16-313); any other value is itself.
+pub fn target_name_of(value: &str) -> &str {
+    match value {
+        "wasm32-wasip1" => "wasm_wasi",
+        other => other,
+    }
+}
+
 /// A cross build's target triple: `--target=<triple>` (or `[build].target`)
 /// naming a triple other than the host's. The native code generator emits
 /// for it and the link takes that triple's runtime archive and linker

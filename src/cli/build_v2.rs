@@ -313,7 +313,22 @@ fn refuse_triple(target: Option<&str>, output: OutputMode) {
     let Some(t) = target.filter(|t| !crate::target::is_v1_target_name(t)) else {
         return;
     };
-    let msg = if t.split('-').any(|c| c == "none" || c == "elf") {
+    let msg = if t.starts_with("wasm32-") || t.starts_with("wasm64-") {
+        // `--target=wasm32-wasip1` is `wasm_wasi` already (the argument
+        // parser maps it); this is any other wasm triple, or one written in
+        // `[build].target`, which a native link cannot build
+        // (B-2026-11-16-313).
+        let threads = if t.contains("threads") {
+            " Threaded wasm (shared memory, `--features=wasm-threads`) is not in 0.8."
+        } else {
+            ""
+        };
+        format!(
+            "error: `{t}` is a wasm triple, which `karac build` does not link as a native \
+             triple: a wasm module is built with `--target=wasm_wasi` (wasm32-wasip1, a WASI \
+             preview-1 module), the one wasm target in 0.8 (design.md § 16).{threads}"
+        )
+    } else if t.split('-').any(|c| c == "none" || c == "elf") {
         format!(
             "error: `{t}` is a bare-metal (no_std) target, which is not in v1: the Kāra runtime \
              needs an operating system's std. A build targets `native`, `wasm_wasi` or the triple \

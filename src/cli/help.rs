@@ -216,7 +216,8 @@ OPTIONS:
                             multi-profile compatibility. Exits non-zero
                             if any profile fails.
     --targets=<list|all>    Run the full pipeline once per named compilation
-                            target (native, wasm_browser, wasm_wasi, gpu),
+                            target (native, wasm_wasi; wasm_browser and gpu
+                            are Not in 0.8 and refused by name),
                             parameterizing the target-provided resource
                             set each time. Diagnostics are tagged with
                             the producing target; findings identical on
@@ -302,18 +303,13 @@ OPTIONS:
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
     --target=<name|triple>  Compilation target. A target NAME
-                            (native, wasm_wasi, wasm_browser; gpu is
-                            recognized but not standalone-buildable)
-                            selects the cross-compile target:
-                            `--target=wasm_wasi` emits `<stem>.wasm`,
-                            a WASI preview-1 command module;
-                            `--target=wasm_browser` emits `<stem>.wasm`
-                            plus `<stem>.js` ES-module glue (host fn
-                            imports + WASI polyfill) and `<stem>.d.ts`
-                            TypeScript declarations for browser hosts.
-                            Project mode (no file argument) lands the
-                            same set as `dist/wasm/<pkg>.{wasm,js,d.ts}`
-                            with the package name from kara.toml.
+                            (native, wasm_wasi; wasm_browser is Not in
+                            0.8 and refused by name; gpu is recognized
+                            but not standalone-buildable) selects the
+                            cross-compile target: `--target=wasm_wasi`
+                            emits `<stem>.wasm`, a WASI preview-1
+                            command module; `wasm32-wasip1` is the same
+                            target. No other wasm triple builds in 0.8.
                             Any other value is a target TRIPLE: the
                             executable is built for it (the linker is
                             KARAC_LINKER, else the triple's GNU cross gcc
@@ -417,19 +413,14 @@ TARGETS:
     Target names (`native`, `wasm_browser`, `wasm_wasi`, `gpu`)
     select the COMPILATION target: `#[target(...)]`-gated items,
     the per-target provided-resource effect gate (E0411), codegen,
-    and the link step all key on it. `--target=wasm_wasi` builds a
-    headless WASM module (`<stem>.wasm`, runnable under wasmtime /
-    node:wasi). `--target=wasm_browser` builds the same wasip1
-    module flavor plus `<stem>.js` ES-module glue and `<stem>.d.ts`
-    TypeScript declarations: every `host fn` becomes a WASM import
-    under the `kara_host` namespace the glue wires to your
-    implementations, and the glue's inline WASI polyfill replaces
-    the WASI host (works in browsers and node; bundlers need no
-    custom loader). In project mode the artifacts land as
-    `dist/wasm/<pkg>.{wasm,js,d.ts}` named from kara.toml's
-    `[package].name`. Both targets require the wasm runtime
-    archive (`libkarac_runtime_wasm.a`) and a wasm linker (wasm-ld
-    or rust-lld; override with KARAC_WASM_LD).
+    and the link step all key on it. `--target=wasm_wasi` (or its
+    triple, `wasm32-wasip1`) builds a headless WASM module
+    (`<stem>.wasm`, runnable under wasmtime / node:wasi). It needs
+    the wasm runtime archive (`libkarac_runtime_wasm.a`) and a wasm
+    linker (wasm-ld or rust-lld; override with KARAC_WASM_LD).
+    `--target=wasm_browser` (the `.js` glue and `.d.ts` declarations
+    for browser hosts) is Not in 0.8: `karac build` and `karac
+    check` refuse it by name.
 
     Any other `--target=<triple>` value is built for: the object is
     compiled for the triple, linked with KARAC_LINKER (else the

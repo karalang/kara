@@ -922,7 +922,7 @@ fn parse_build_command(args: &[String]) -> Command {
                 eprintln!("error: --target requires a non-empty target triple");
                 process::exit(1);
             }
-            target = Some(rest.to_string());
+            target = Some(crate::target::target_name_of(rest).to_string());
         } else if arg == "--target" {
             // Space-separated form: `--target <triple>`. Mirrors how
             // operators write the flag in shell scripts that prefer
@@ -936,7 +936,7 @@ fn parse_build_command(args: &[String]) -> Command {
                 eprintln!("error: --target requires a non-empty target triple");
                 process::exit(1);
             }
-            target = Some(val.clone());
+            target = Some(crate::target::target_name_of(val).to_string());
             i += 1;
         } else if let Some(rest) = arg.strip_prefix("--target-cpu=") {
             // `--target-cpu=<name|help>` — CPU baseline override

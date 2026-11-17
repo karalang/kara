@@ -108,7 +108,8 @@ fn build_v2_hot_swap_is_refused_on_a_wasm_triple() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(out.status.code(), Some(1));
     assert!(
-        text(&out.stderr).contains("--enable-hot-swap is incompatible with --target=wasm32-wasip1"),
+        // `wasm32-wasip1` is the target `wasm_wasi` (B-2026-11-16-313).
+        text(&out.stderr).contains("--enable-hot-swap is incompatible with --target=wasm_wasi"),
         "{}",
         text(&out.stderr)
     );
