@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 468 |
-| false-positive | 249 |
+| false-positive | 250 |
 | missing-feature | 193 |
 | perf | 184 |
 | other | 113 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 594 |
+| typecheck | 595 |
 | mir-llvm | 281 |
 | mir | 246 |
 | cli | 192 |
@@ -140,6 +140,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-17-113 | 2026-11-17 | other | low | `karac query`'s layout_choice query proposes a `layout` block, which the compiler now refuses as deferred (E_DEFERRED_LAYOUT_BLOCK, B-2026-11-16-257) | — |
 | B-2026-11-17-97 | 2026-11-17 | typecheck | low | A library trait's default method cannot carry its own `where Self: Clone` bound, so `Iterator.cycle` is an inherent method on each Clone-able adaptor instead of one default method on `Iterator` | — |
+| B-2026-11-17-115 | 2026-11-17 | typecheck | medium | A constructor seed's numbers are fixed at the call: `it.fold(SortedMap.from([(-1, 0)]), |dp, a| ..)` over `i32` items is refused (expected 'SortedMap[i64, i64]', found 'SortedMap[i32, i32]') with no fix, where `fold(0, ..)` and `fold([0], ..)` take the closure's type | — |
 
 ### Relocated
 
