@@ -3338,6 +3338,9 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(t) = self.rename_sorted_twin(object, method, args, span, &obj_ty_for_named) {
             return t;
         }
+        if let Some(t) = self.collection_iter_hop(object, method, span, &obj_ty_for_named) {
+            return t;
+        }
         if let Some(t) =
             self.try_mapset_method(method, args, span, args_close_span, &obj_ty_for_named)
         {

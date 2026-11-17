@@ -128,6 +128,62 @@ impl<'a> super::TypeChecker<'a> {
         Some(Type::Error)
     }
 
+    /// An iterator adaptor or terminal called on a set or map itself:
+    /// Rust's `a.difference(&b).cloned().collect()` chains on the iterator
+    /// Rust's set operations give, where Kāra's give a set, and a `.map(..)`
+    /// on a `SortedSet` read as a typo of `max` (kata 2215). Like `Vec`'s
+    /// (B-2026-07-17-12), the message names the `.iter()` hop, or
+    /// `.into_iter()` on a call's result, and `karac fix` inserts it. A name
+    /// the collection answers itself (`min` / `max` on the sorted ones) or a
+    /// user impl gives it is left to its dispatch.
+    pub(super) fn collection_iter_hop(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        span: &Span,
+        obj_ty: &Type,
+    ) -> Option<Type> {
+        let Type::Named {
+            name,
+            args: type_args,
+        } = obj_ty
+        else {
+            return None;
+        };
+        let builtins = match name.as_str() {
+            "Set" => SET_BUILTIN_METHODS,
+            "SortedSet" => SORTED_SET_BUILTIN_METHODS,
+            "Map" => MAP_BUILTIN_METHODS,
+            "SortedMap" => SORTED_MAP_BUILTIN_METHODS,
+            _ => return None,
+        };
+        if !Self::is_iterator_surface_method(method)
+            || builtins.contains(&method)
+            || !self
+                .env
+                .find_methods_with_args(name, type_args, method)
+                .is_empty()
+        {
+            return None;
+        }
+        let recv = Self::iter_hint_receiver(object);
+        let hop = Self::iter_hop(object);
+        let mut msg = format!(
+            "no method '{method}' on type '{name}': iterator adaptors/terminals \
+             require an explicit `.{hop}()` — write `{recv}.{hop}().{method}(...)`"
+        );
+        if let ExprKind::MethodCall { method: made, .. } = &object.kind {
+            if matches!(made.as_str(), "union" | "intersection" | "difference") {
+                msg.push_str(&format!(
+                    "; Kāra's `{made}` gives a `{name}`, not Rust's iterator \
+                     (library/collections.md)"
+                ));
+            }
+        }
+        self.iter_hint_error_by(object, msg, *span, hop);
+        Some(Type::Error)
+    }
+
     /// Type a call on a named container / stdlib type.
     ///
     /// Returns `Some(ty)` when this surface claims `method` (including
