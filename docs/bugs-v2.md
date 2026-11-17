@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 477 |
-| false-positive | 252 |
+| false-positive | 253 |
 | missing-feature | 193 |
 | perf | 186 |
 | other | 113 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 599 |
+| typecheck | 600 |
 | mir-llvm | 284 |
 | mir | 248 |
 | cli | 193 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-127 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a function value's environment, a OnceCell / OnceLock / LazyLock, or a channel's queue, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: the remainder of B-2026-11-17-101, which lowered the shared, dyn, Map/Set/sorted/VecDeque and Mutex routes | — |
 | B-2026-11-17-129 | 2026-11-17 | typecheck | low | A `fold` seed settled to `i64` by a method on the accumulator (`v.iter().map(|x| 1).fold(0, |a, b| a.max(b))` returned as `i32`) is refused with advice to truncate by `as i32` and no fix, where the same literal in a `let` is named and given a `: i32` fix | — |
 | B-2026-11-17-130 | 2026-11-17 | typecheck | medium | A literal handed on as a `mut` argument is not fixed by the parameter: `let mut best = 0; bump(mut best); best` with `bump(x: mut ref i32)`, returned as `i32`, is refused as an `i64`, where `let best = 0; take(best)` into an `i32` checks | — |
+| B-2026-11-17-131 | 2026-11-17 | typecheck | medium | An impl's `CrossTask` bound refuses every type: `impl[T: CrossTask] BoundedBlockingQueue[T]` makes `q.enqueue(..)` on a `BoundedBlockingQueue[String]` an error, "`String` does not implement `CrossTask`" (and `i64`, `Vec[i64]` alike), where `fn f[T: CrossTask](x: T)` takes a `String` | — |
 
 ### Relocated
 
