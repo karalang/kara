@@ -186,8 +186,11 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
     let (deref, bare) = uses(body, name);
     // A state written through its index reads bare too (`counts.iter()`),
     // as Rust reads through the reference; the rewrite copies it, so every
-    // read and write below meets the copy.
-    let indexed = !deref && writes_index_of(body, name);
+    // read and write below meets the copy. Rust hands a `Copy` state out
+    // with `*` after such a write (kata 1182's `|last, (i, c)| { last[c] =
+    // Some(i); Some(*last) }`), and that `*` reads the copy too
+    // (B-2026-11-17-105).
+    let indexed = writes_index_of(body, name);
     if !(deref || indexed) || (bare && !indexed) || writes_field_of(body, name) {
         return None;
     }

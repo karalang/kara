@@ -1167,6 +1167,9 @@ impl super::Parser {
                 Token::GreaterGreater => &[Token::LessThan, Token::LessThan],
                 Token::RightBracket => &[Token::LeftBracket],
                 Token::RightParen => &[Token::LeftParen],
+                // Rust's array type inside the list (`Vec<[T; 4]>`) holds a
+                // `;` of its own (B-2026-11-17-104).
+                Token::Semicolon if open_brackets.last() == Some(&Token::LeftBracket) => &[],
                 Token::EOF | Token::Semicolon | Token::LeftBrace | Token::RightBrace => break,
                 // An associated-type binding inside a nested list
                 // (`impl<T: Add<Output = T>>`) is part of it; at the list's

@@ -380,8 +380,8 @@ fn shape(by: By) -> String {
 }
 
 /// `text` laid out by the formatter, its lines after the first indented
-/// to `column`, where the expression it replaces starts; as it is when it
-/// does not parse alone.
+/// to `column`, where the statement holding the expression it replaces
+/// starts; as it is when it does not parse alone.
 fn reflow(text: &str, column: usize) -> String {
     let parsed = crate::parse(&format!("fn __reflow() {{\n{text}\n}}\n"));
     let laid = match parsed.program.items.first() {
@@ -424,7 +424,14 @@ impl TypeChecker<'_> {
         let shape = shape(by);
         match rewrite {
             Ok(text) => {
-                let text = reflow(&text, at.column);
+                // The later lines line up with the statement the search
+                // starts on, not with the search itself (`let k = match ..`
+                // in kata 1182's Rust arm, B-2026-11-17-108).
+                let column = match self.current_stmt {
+                    Some(stmt) if stmt.line == at.line => stmt.column,
+                    _ => at.column,
+                };
+                let text = reflow(&text, column);
                 self.error_fix_diffs.insert(
                     SpanKey::from_span(&at),
                     vec![crate::resolver::TextEdit {

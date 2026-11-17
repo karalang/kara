@@ -148,105 +148,131 @@ pub(super) fn index_lets(body: &Block, c: &Classification, out: &mut IndexLets<'
             } => (pattern, value),
             _ => continue,
         };
-        // A destructuring `let (a, b) = v[i];` borrows the same way when
-        // every part is only read (B-2026-10-24-38).
-        let mut names = Vec::new();
-        // A field of an element (`let s = v[i].samples;`) moves out of the
-        // collection the same way, and borrows the same way (B-2026-11-04-3).
-        let Some(indexed) = indexed_place(value) else {
-            continue;
-        };
-        if !simple_bindings(pattern, &mut names) {
-            continue;
-        }
         // The uses after the `let` are the ones past its initializer.
         let end = value.span.offset + value.span.length;
-        let mut uses = Vec::new();
-        for name in &names {
-            uses_in_block(body, name, &mut uses);
-        }
-        uses.retain(|k| k.0 >= end);
-        // The writes through a binding (`t.f = x`, `t.n += 1`, `mut t.v`):
-        // the classifier sees a field store as a `Reassign` of `t.f`, and a
-        // compound one as a read.
-        let mut writes = HashSet::new();
-        for name in &names {
-            writes_through_block(body, name, &mut writes);
-        }
-        if !uses.iter().all(|k| match c.kinds.get(k) {
-            Some(UseKind::Read) => true,
-            Some(UseKind::Reassign) => writes.contains(&k.0),
-            _ => false,
-        }) {
-            continue;
-        }
-        let written = uses.iter().any(|k| writes.contains(&k.0));
-        let ExprKind::Index { object, .. } = &indexed.kind else {
-            continue;
-        };
-        // The statements from the `let` to the one holding the last use.
-        let last = uses.iter().map(|k| k.0).max().unwrap_or(end);
-        let held_to = body
-            .stmts
-            .iter()
-            .map(|s| s.span.offset + s.span.length)
-            .chain(
-                body.final_expr
-                    .iter()
-                    .map(|e| e.span.offset + e.span.length),
-            )
-            .filter(|&e| e > last)
-            .min()
-            .unwrap_or(last);
-        let window = (end, held_to.max(last + 1));
-        // An element of a temporary (`vec!["LR", "RL"][k]`, `f()[i]`) is
-        // not borrowed: the temporary drops at the end of the `let`, so
-        // `ref` there is an E0516, and the `.clone()` fix stands
-        // (B-2026-11-03-23).
-        let Some(root) = place_root(object) else {
-            continue;
-        };
-        let key = SpanKey::from_span(&value.span);
-        let uses: Vec<usize> = uses.iter().map(|k| k.0).collect();
-        // A collection the function may not write keeps the copy when the
-        // binding is written: the writes can only be meant for it.
-        let mutable = pattern_is_binding(pattern) && out.writable(&root);
-        if written {
-            if !mutable {
-                continue;
+        // A tuple `let (i, t) = (q[0], v[k]);` moves the element out the
+        // same way, part by part, and borrows it the same way when that
+        // part's binding is only read (B-2026-11-17-103).
+        match (&pattern.kind, &value.kind) {
+            (PatternKind::Tuple(ps), ExprKind::Tuple(es)) if ps.len() == es.len() => {
+                for (p, e) in ps.iter().zip(es) {
+                    index_let(body, c, out, p, e, end, true);
+                }
             }
-            let borrowable = !used_while_held(body, &root, end, &uses);
-            let mut writes: Vec<usize> = uses
-                .iter()
-                .copied()
-                .filter(|u| writes.contains(u))
-                .collect();
-            writes.sort_unstable();
-            out.written
-                .insert(key, WrittenIndexLet { borrowable, writes });
-            continue;
-        }
-        let mut written = false;
-        writes_in_block(body, &root, window, c, &mut written);
-        if written {
-            continue;
-        }
-        out.read_only.insert(key);
-        if std::ptr::eq(indexed, value) {
-            out.elements.insert(key);
-        }
-        if mutable {
-            let borrowable = !used_while_held(body, &root, end, &uses);
-            out.only_read.insert(
-                key,
-                WrittenIndexLet {
-                    borrowable,
-                    writes: uses,
-                },
-            );
+            _ => index_let(body, c, out, pattern, value, end, false),
         }
     }
     for_each_block_child(body, &mut |ch| nested(ch, c, out));
+}
+
+/// One `let` of [`index_lets`], or one part of a tuple `let` (`part`), whose
+/// initializer ends at `end`.
+fn index_let(
+    body: &Block,
+    c: &Classification,
+    out: &mut IndexLets<'_>,
+    pattern: &Pattern,
+    value: &Expr,
+    end: usize,
+    part: bool,
+) {
+    // A destructuring `let (a, b) = v[i];` borrows the same way when
+    // every part is only read (B-2026-10-24-38).
+    let mut names = Vec::new();
+    // A field of an element (`let s = v[i].samples;`) moves out of the
+    // collection the same way, and borrows the same way (B-2026-11-04-3).
+    let Some(indexed) = indexed_place(value) else {
+        return;
+    };
+    if !simple_bindings(pattern, &mut names) {
+        return;
+    }
+    let mut uses = Vec::new();
+    for name in &names {
+        uses_in_block(body, name, &mut uses);
+    }
+    uses.retain(|k| k.0 >= end);
+    // The writes through a binding (`t.f = x`, `t.n += 1`, `mut t.v`):
+    // the classifier sees a field store as a `Reassign` of `t.f`, and a
+    // compound one as a read.
+    let mut writes = HashSet::new();
+    for name in &names {
+        writes_through_block(body, name, &mut writes);
+    }
+    if !uses.iter().all(|k| match c.kinds.get(k) {
+        Some(UseKind::Read) => true,
+        Some(UseKind::Reassign) => writes.contains(&k.0),
+        _ => false,
+    }) {
+        return;
+    }
+    let written = uses.iter().any(|k| writes.contains(&k.0));
+    let ExprKind::Index { object, .. } = &indexed.kind else {
+        return;
+    };
+    // The statements from the `let` to the one holding the last use.
+    let last = uses.iter().map(|k| k.0).max().unwrap_or(end);
+    let held_to = body
+        .stmts
+        .iter()
+        .map(|s| s.span.offset + s.span.length)
+        .chain(
+            body.final_expr
+                .iter()
+                .map(|e| e.span.offset + e.span.length),
+        )
+        .filter(|&e| e > last)
+        .min()
+        .unwrap_or(last);
+    let window = (end, held_to.max(last + 1));
+    // An element of a temporary (`vec!["LR", "RL"][k]`, `f()[i]`) is
+    // not borrowed: the temporary drops at the end of the `let`, so
+    // `ref` there is an E0516, and the `.clone()` fix stands
+    // (B-2026-11-03-23).
+    let Some(root) = place_root(object) else {
+        return;
+    };
+    let key = SpanKey::from_span(&value.span);
+    let uses: Vec<usize> = uses.iter().map(|k| k.0).collect();
+    // A collection the function may not write keeps the copy when the
+    // binding is written: the writes can only be meant for it.
+    // A part of a tuple `let` keeps the copy when it is written: only a
+    // whole `let` is repaired with `mut ref`.
+    let mutable = !part && pattern_is_binding(pattern) && out.writable(&root);
+    if written {
+        if !mutable {
+            return;
+        }
+        let borrowable = !used_while_held(body, &root, end, &uses);
+        let mut writes: Vec<usize> = uses
+            .iter()
+            .copied()
+            .filter(|u| writes.contains(u))
+            .collect();
+        writes.sort_unstable();
+        out.written
+            .insert(key, WrittenIndexLet { borrowable, writes });
+        return;
+    }
+    let mut written = false;
+    writes_in_block(body, &root, window, c, &mut written);
+    if written {
+        return;
+    }
+    out.read_only.insert(key);
+    if std::ptr::eq(indexed, value) {
+        out.elements.insert(key);
+    }
+    if mutable {
+        let borrowable = !used_while_held(body, &root, end, &uses);
+        out.only_read.insert(
+            key,
+            WrittenIndexLet {
+                borrowable,
+                writes: uses,
+            },
+        );
+    }
 }
 
 fn pattern_is_binding(p: &Pattern) -> bool {

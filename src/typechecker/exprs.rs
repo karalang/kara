@@ -6432,10 +6432,15 @@ impl<'a> super::TypeChecker<'a> {
         // The same for one inside a tuple (`fold((0, None), ..)`): its
         // enum's own parameters become fresh variables there, so a later
         // argument (the closure's return) solves them (kata 2036).
+        // So does a list of them (`scan([None; 4], ..)`, `scan([None,
+        // None], ..)`): the element's parameters become one fresh variable
+        // each (kata 1182's Rust arm, B-2026-11-17-106).
         if self.library_methods_from_source {
             for (arg, t) in args.iter().zip(arg_tys.iter_mut()) {
                 if let (ExprKind::Tuple(_), Some(ty)) = (&arg.value.kind, t.as_mut()) {
                     *ty = self.freshen_undecided_in_tuple(&arg.value, ty);
+                } else if let Some(ty) = t.as_mut() {
+                    *ty = self.freshen_undecided_in_list(&arg.value, ty);
                 }
             }
         }
@@ -6785,7 +6790,7 @@ impl<'a> super::TypeChecker<'a> {
                     // `fold((v[0], 0), |(a, b), x| ..)`: the closure's tuple
                     // parameter binds the seed's literals as `let (a, b) =
                     // (..)` would, so a refusal at a use offers the literal's
-                    // suffix (kata 1182's Rust arm, B-2026-11-17-91).
+                    // suffix (kata 1186's Rust arm, B-2026-11-17-91).
                     if let ExprKind::Closure { params: cps, .. } = &arg.value.kind {
                         let seed = args
                             .iter()
@@ -9328,6 +9333,50 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         Type::Tuple(out)
+    }
+
+    /// A list literal's type whose elements are all bare unit variants of
+    /// a generic enum (`[None; 4]`, `[None, None]`) with the enum's own
+    /// parameters made fresh variables, one per parameter.
+    fn freshen_undecided_in_list(&mut self, arg: &Expr, ty: &Type) -> Type {
+        let items: Vec<&Expr> = match &arg.kind {
+            ExprKind::RepeatLiteral { value, .. } => vec![value.as_ref()],
+            ExprKind::ArrayLiteral(items) => items.iter().collect(),
+            _ => return ty.clone(),
+        };
+        let element = match ty {
+            Type::Array { element, .. } | Type::Vector { element, .. } => element.as_ref(),
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => &args[0],
+            _ => return ty.clone(),
+        };
+        if items.is_empty()
+            || !items
+                .iter()
+                .all(|i| self.is_undecided_unit_variant(i, element))
+        {
+            return ty.clone();
+        }
+        let Type::Named { args, .. } = element else {
+            return ty.clone();
+        };
+        let subs: HashMap<String, SubstValue> = args
+            .iter()
+            .filter_map(|a| match a {
+                Type::TypeParam(n) => {
+                    Some((n.clone(), SubstValue::Type(self.env.fresh_type_var())))
+                }
+                _ => None,
+            })
+            .collect();
+        let out = substitute_type_params(ty, &subs);
+        // Typed HIR reads the list and its elements off these, solved by
+        // the time it is built.
+        let element = substitute_type_params(element, &subs);
+        self.record_node_type(arg.id, &out);
+        for item in items {
+            self.record_node_type(item.id, &element);
+        }
+        out
     }
 
     fn is_undecided_unit_variant(&self, arg: &Expr, ty: &Type) -> bool {
@@ -13574,7 +13623,7 @@ impl<'a> super::TypeChecker<'a> {
                     _ => out.push(e),
                 },
                 // `(del + x).max(keep)` keeps its operands' widest type, as
-                // an operator does (kata 1182's Rust arm, B-2026-11-17-91).
+                // an operator does (kata 1186's Rust arm, B-2026-11-17-91).
                 ExprKind::MethodCall {
                     object,
                     method,

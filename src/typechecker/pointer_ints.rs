@@ -46,6 +46,12 @@ impl<'a> super::TypeChecker<'a> {
             (Type::Ref(x), Type::Ref(y)) | (Type::MutRef(x), Type::MutRef(y)) => {
                 self.note_pointer_int_mix_within(x, y)
             }
+            // `Vec[Array[Option[usize], 4]]` against the arrays of `i64`
+            // indices a `scan` gives (kata 1182's Rust arm, B-2026-11-17-107).
+            (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+            | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+                self.note_pointer_int_mix_within(x, y)
+            }
             _ => self.note_pointer_int_mix(a, b),
         }
     }

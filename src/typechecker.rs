@@ -8970,6 +8970,25 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // A slot that still names the callee's own parameters beside a
+        // variable of the call (a closure's `Option[(StateV, OutV)]` where
+        // `StateV` came from a `None` or a `Vec.new()` and only the closure
+        // decides `OutV`) has that variable solved by the value, each such
+        // parameter read as whatever stands there: the closure's type is
+        // unified back into the slot once it is checked, which solves the
+        // parameter (B-2026-11-17-106).
+        if self.mentions_foreign_param(expected)
+            && exprs::contains_type_var(&self.resolved_now(expected))
+        {
+            let open = self.foreign_params_as_vars(&self.resolved_now(expected));
+            let mut subs = self.env.substitutions.clone();
+            let mut const_subs = self.env.const_substitutions.clone();
+            if inference::unify_types(&open, found, &mut subs, &mut const_subs) {
+                self.env.substitutions = subs;
+                self.env.const_substitutions = const_subs;
+                return true;
+            }
+        }
         if !types::contains_type_param(expected)
             && ids
                 .iter()
@@ -10484,6 +10503,24 @@ impl<'a> TypeChecker<'a> {
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         walk(ty, scope)
+    }
+
+    /// `ty` with every generic parameter not in scope here (see
+    /// `mentions_foreign_param`) a fresh variable.
+    pub(super) fn foreign_params_as_vars(&mut self, ty: &Type) -> Type {
+        let mut names = Vec::new();
+        expr_method_call::collect_type_param_names(ty, &mut names);
+        let scope = self
+            .node_generic_frames
+            .get(self.current_generic_frame as usize)
+            .cloned()
+            .unwrap_or_default();
+        let subs: std::collections::HashMap<String, types::SubstValue> = names
+            .into_iter()
+            .filter(|n| !scope.contains(n))
+            .map(|n| (n, types::SubstValue::Type(self.env.fresh_type_var())))
+            .collect();
+        inference::substitute_type_params(ty, &subs)
     }
 
     /// `ty` with every generic parameter not in scope here (see
