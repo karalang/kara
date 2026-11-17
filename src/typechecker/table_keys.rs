@@ -425,6 +425,22 @@ impl<'a> super::TypeChecker<'a> {
         Some(derive_line(span, &["PartialEq"]))
     }
 
+    /// `#[derive(PartialOrd)]` on the program's own declaration of `ty`, when
+    /// it has no ordering yet and every field orders (B-2026-11-16-301).
+    pub(super) fn partial_ord_derive_fix(&self, ty: &Type) -> Option<FixIt> {
+        let (name, span, fields, derived) = self.derivable_decl(ty)?;
+        if derived.contains("PartialOrd")
+            || derived.contains("Ord")
+            || self.env.has_impl("PartialOrd", name, &[])
+        {
+            return None;
+        }
+        if !fields.iter().all(|f| self.type_supports_partial_ord(f)) {
+            return None;
+        }
+        Some(derive_line(span, &["PartialOrd"]))
+    }
+
     /// Whether the program's own source declares the type `ty` names, so
     /// that a `#[derive(..)]` written there could apply to it. A library
     /// or built-in type (`Map[K, V]`, `Option[T]`) and a type with no

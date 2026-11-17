@@ -232,3 +232,29 @@ fn index_move_of_a_clone_bounded_parameter_is_still_fixed() {
         "v[0].clone()",
     );
 }
+
+/// B-2026-11-16-301: `<` on a struct with no ordering gets the
+/// `#[derive(PartialOrd)]` edit, as `==` gets `#[derive(PartialEq)]`.
+#[test]
+fn ordering_without_partial_ord_is_fixed_by_the_derive() {
+    refused_then_fixed(
+        "partial-ord-derive",
+        "struct S { a: i64 }\n\
+         fn main() { let x = S { a: 1 }; let y = S { a: 2 }; if x < y { println(\"lt\"); } }\n",
+        "add #[derive(PartialOrd)]",
+        "PartialOrd",
+    );
+}
+
+/// B-2026-11-16-301: a field that does not order makes the derive fail, so
+/// no edit is attached.
+#[test]
+fn ordering_over_an_unordered_field_gets_no_derive_fix() {
+    refused_and_left_alone(
+        "partial-ord-unordered-field",
+        "struct In { a: i64 }\n\
+         struct S { i: In }\n\
+         fn main() { let x = S { i: In { a: 1 } }; let y = S { i: In { a: 2 } }; if x > y { println(\"gt\"); } }\n",
+        "does not implement PartialOrd",
+    );
+}

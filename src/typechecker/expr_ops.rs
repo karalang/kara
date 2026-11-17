@@ -5994,34 +5994,7 @@ impl<'a> super::TypeChecker<'a> {
                     // an explicit `#[derive(Ord)]` (design.md § Distinct Types:
                     // "no comparison unless opted in"). Other named types keep
                     // their pre-existing comparison behavior.
-                    self.type_error(
-                        // B-2026-08-25-30 — the `PartialOrd` sibling of
-                        // the `PartialEq` correction above: the guard is
-                        // `type_supports_partial_ord` and
-                        // `#[derive(PartialOrd)]` alone compiles, on a
-                        // struct/enum and on a distinct type alike.
-                        self.comparison_impl_written_but_undispatched(cmp_left, false)
-                            .or_else(|| self.ordering_unsupported_because_generic(cmp_left))
-                            .unwrap_or_else(|| {
-                                if self.program_declares(cmp_left) {
-                                    format!(
-                                        "type '{}' does not implement PartialOrd; add \
-                                     #[derive(PartialOrd)] to use <, <=, >, or >=",
-                                        type_display(cmp_left)
-                                    )
-                                } else {
-                                    // A library or built-in type takes no
-                                    // derive from the program (B-2026-11-08-82).
-                                    format!(
-                                        "type '{}' does not implement PartialOrd, so <, <=, \
-                                         > and >= do not apply to it",
-                                        type_display(cmp_left)
-                                    )
-                                }
-                            }),
-                        *span,
-                        TypeErrorKind::InvalidBinaryOp,
-                    );
+                    self.report_partial_ord_missing(cmp_left, *span);
                 } else if matches!(cmp_left, Type::Shared(name)
                         if self.env.structs.contains_key(name) || self.env.enums.contains_key(name))
                     && !self.ordering_operator_dispatches(cmp_left)
@@ -6071,34 +6044,7 @@ impl<'a> super::TypeChecker<'a> {
                     // message. Now the derive requirement is a clean type error
                     // and derived types lower through the `karac_cmp`/`value_compare`
                     // declaration-order comparator (B-2026-07-03-7).
-                    self.type_error(
-                        // B-2026-08-25-30 — the `PartialOrd` sibling of
-                        // the `PartialEq` correction above: the guard is
-                        // `type_supports_partial_ord` and
-                        // `#[derive(PartialOrd)]` alone compiles, on a
-                        // struct/enum and on a distinct type alike.
-                        self.comparison_impl_written_but_undispatched(cmp_left, false)
-                            .or_else(|| self.ordering_unsupported_because_generic(cmp_left))
-                            .unwrap_or_else(|| {
-                                if self.program_declares(cmp_left) {
-                                    format!(
-                                        "type '{}' does not implement PartialOrd; add \
-                                     #[derive(PartialOrd)] to use <, <=, >, or >=",
-                                        type_display(cmp_left)
-                                    )
-                                } else {
-                                    // A library or built-in type takes no
-                                    // derive from the program (B-2026-11-08-82).
-                                    format!(
-                                        "type '{}' does not implement PartialOrd, so <, <=, \
-                                         > and >= do not apply to it",
-                                        type_display(cmp_left)
-                                    )
-                                }
-                            }),
-                        *span,
-                        TypeErrorKind::InvalidBinaryOp,
-                    );
+                    self.report_partial_ord_missing(cmp_left, *span);
                 }
                 Type::Bool
             }
@@ -7903,5 +7849,45 @@ impl super::TypeChecker<'_> {
                 },
             ],
         );
+    }
+}
+
+impl super::TypeChecker<'_> {
+    /// `<` / `<=` / `>` / `>=` on a struct, enum or distinct type with no
+    /// ordering. The `#[derive(PartialOrd)]` the message names is attached as
+    /// the edit `karac fix` applies, where it compiles as written, as `==`'s
+    /// `PartialEq` derive is (B-2026-11-16-301).
+    fn report_partial_ord_missing(&mut self, cmp_left: &Type, span: Span) {
+        // B-2026-08-25-30 — the `PartialOrd` sibling of the `PartialEq`
+        // correction: the guard is `type_supports_partial_ord` and
+        // `#[derive(PartialOrd)]` alone compiles, on a struct/enum and on a
+        // distinct type alike.
+        if let Some(msg) = self
+            .comparison_impl_written_but_undispatched(cmp_left, false)
+            .or_else(|| self.ordering_unsupported_because_generic(cmp_left))
+        {
+            self.type_error(msg, span, TypeErrorKind::InvalidBinaryOp);
+            return;
+        }
+        if !self.program_declares(cmp_left) {
+            // A library or built-in type takes no derive from the program
+            // (B-2026-11-08-82).
+            let msg = format!(
+                "type '{}' does not implement PartialOrd, so <, <=, > and >= do not apply to it",
+                type_display(cmp_left)
+            );
+            self.type_error(msg, span, TypeErrorKind::InvalidBinaryOp);
+            return;
+        }
+        let msg = format!(
+            "type '{}' does not implement PartialOrd; add #[derive(PartialOrd)] to use <, <=, >, or >=",
+            type_display(cmp_left)
+        );
+        match self.partial_ord_derive_fix(cmp_left) {
+            Some(fix) => {
+                self.type_error_with_fix_it(msg, span, TypeErrorKind::InvalidBinaryOp, fix)
+            }
+            None => self.type_error(msg, span, TypeErrorKind::InvalidBinaryOp),
+        }
     }
 }
