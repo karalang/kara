@@ -1,0 +1,5 @@
+#[unstable]
+#[unstable]
+pub fn f() {}
+
+fn main() {}

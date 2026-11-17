@@ -1,0 +1,3 @@
+trait Shape { fn scale(self, f64) -> f64; }
+
+fn main() {}

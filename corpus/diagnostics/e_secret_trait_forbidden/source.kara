@@ -1,0 +1,9 @@
+import std.secret.{Secret};
+
+struct Key { k: i64 }
+
+impl Display for Secret[Key] {
+    fn to_string(self) -> String { "key".to_string() }
+}
+
+fn main() {}

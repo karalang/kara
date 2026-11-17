@@ -1,0 +1,3 @@
+fn main() {
+    let s = c"ab\0cd";
+}

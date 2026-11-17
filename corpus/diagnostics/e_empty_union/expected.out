@@ -1,1 +1,0 @@
-ERROR at line 4: union `Nothing` declares no fields; empty unions have no storage and no use — declare at least one field

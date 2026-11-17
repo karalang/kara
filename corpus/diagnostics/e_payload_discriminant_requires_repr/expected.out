@@ -1,0 +1,1 @@
+ERROR at line 1: explicit discriminants on payload variants require '#[repr(intN)]' or '#[repr(C)]'; without one, the discriminant location is unspecified and the value commitment is unreachable (variant 'Data')

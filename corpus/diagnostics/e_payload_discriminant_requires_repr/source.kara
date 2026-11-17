@@ -1,0 +1,3 @@
+enum Msg { Ping = 1, Data(i64) = 2 }
+
+fn main() {}

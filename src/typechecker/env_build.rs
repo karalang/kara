@@ -3073,7 +3073,7 @@ impl<'a> super::TypeChecker<'a> {
                          `{trait_str}` for `Secret[T]` — the wrapper deliberately \
                          withholds this trait so a secret cannot be printed, \
                          serialized, or structurally compared by accident (see \
-                         design.md § Secret Type). Read the value with \
+                         docs/library/secret.md). Read the value with \
                          `.expose()` where you genuinely need it; for equality \
                          use the constant-time `.ct_eq(...)`, and rely on the \
                          built-in `Zeroize`/`Drop` for wiping"

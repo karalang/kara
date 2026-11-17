@@ -2675,6 +2675,8 @@ Atomics and fences are available in the `embedded` profile. The `embedded` profi
 
 ### Module-Level Mutable State
 
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). The module-level cells `LazyLock`, `OnceLock` and `OnceCell`: the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
+
 v1 allows only `const` at module scope ([design.md §4](design.md#constants)). This entry brings back module-level `let` and `let mut`, mainly for embedded and bare-metal code, together with the lazy-initialization family.
 
 Module-level initializers would additionally allow:
@@ -2847,6 +2849,8 @@ struct PageTableEntry {
 **Per-field alignment:** Not supported as a direct attribute. Use a wrapper type with `#[repr(align(N))]` as the field type. This keeps the attribute model simple and the alignment guarantee visible at the type level.
 
 #### Field Offsets: `offset_of[T](field)`
+
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `offset_of`: the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
 
 `offset_of[T](field)` returns the byte offset of `field` from the start of a value of type `T`. The form sits beside `T.size_of()` / `T.align_of()` ([design.md §15](design.md#intrinsics)) — type lives in the bracket slot, field is a special-form positional argument. The result is `i64`, the value is computed at compile time, and the operation contributes no effects.
 
@@ -3688,6 +3692,8 @@ fn store_simd[T, const N: i64](t: mut ref Tensor[T, [?]], offset: i64, mask: Mas
 
 ### Multiversioning: `cpu-baseline` and `#[multiversion]`
 
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `#[target_feature]` (not `#[multiversion]`, which is parsed and checked but builds no variants): the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
+
 > v1 sets the CPU baseline per target with `--target-cpu` and a per-target table ([design.md §16](design.md#cpu-baseline)). The `cpu-baseline` manifest knob below is this track's proposal and must be reconciled with that table when it returns. Reconciled for v1 by the review-thread ruling 2026-11-16 (B-2026-11-16-201): the knob's levels are accepted, but with no level the table is the default, `x86-64-v2` on x86_64, so the "Default: `v3`" below is not v1's.
 
 CPU-feature variance across deployment hardware is handled by two complementary mechanisms:
@@ -3809,6 +3815,8 @@ Predicates on distinct types, refinement types and contracts (`requires`, `ensur
 > The scope review recommends that this track keep one predicate mechanism: `distinct … where` plus `requires`. Structural refinement subtyping (implicit widening of a refined value to its base, and through covariant slots) and the asserting meaning of `as` are already removed from the text below. Whether plain `type … where` refinements return beside `distinct … where` is for the track to decide.
 
 ### Refinement Types
+
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). Refinement types (`type Even = i64 where self % 2 == 0`): the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
 
 Refinement types attach value constraints to types via `where` clauses. The constraint is checked at construction boundaries; once a value has the refined type, the constraint is guaranteed:
 
@@ -5442,6 +5450,8 @@ This entry is the canonical tracker for a Kāra frontend UI framework.
 
 ## GPU
 
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). GPU kernels (`#[gpu]`, `gpu.upload`, `gpu.dispatch`): the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
+
 GPU compute: the `#[gpu]` kernel subset, `gpu.dispatch` and the device backends.
 
 <a id="feature-7-compilation-target-flexibility"></a>
@@ -5832,6 +5842,8 @@ A graphics and adjacent-real-time-media library equivalent to Rust's `wgpu` (~15
 **Cross-reference:** [Compilation Target Flexibility](#compilation-target-flexibility); [MLIR Adoption as Codegen Substrate](#mlir-adoption-as-codegen-substrate) (the paired substrate question).
 
 ## Comptime
+
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `comptime fn`, `comptime` parameters and `Type` values: the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
 
 Compile-time evaluation: `comptime fn`, the reflection it needs, and the effects it may have.
 
@@ -7548,6 +7560,8 @@ The implementation covers:
 Test coverage: grammar; positive expansion at every position (bound, `where`-clause, `dyn`); nested alias chains expand correctly with generic-arg propagation; impl-of-alias rejection with enumeration of components; cycle detection on direct and indirect cycles; `where`-clause-on-alias gating; effect-bound rejection diagnostic; `dyn` accepted on single-method-trait expansions, rejected on zero / multi-method-trait expansions; cross-package re-exports compile and resolve correctly.
 
 ### Generic Associated Types (GATs)
+
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). Generic associated types: the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
 
 An associated type may itself take type parameters — `type Mapped[U]` — making it a type-level function from those parameters to a concrete output. This is the well-known **generic associated type** (GAT) feature, with the same surface syntax as a non-generic associated type ([design.md §9](design.md#associated-types)), just with `[...]` parameters appended.
 

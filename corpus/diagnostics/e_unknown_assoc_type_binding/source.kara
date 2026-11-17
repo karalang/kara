@@ -1,0 +1,3 @@
+fn f(it: impl Iterator[Elem = i64]) {}
+
+fn main() {}

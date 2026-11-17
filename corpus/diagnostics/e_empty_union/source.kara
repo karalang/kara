@@ -1,4 +1,0 @@
-#[repr(C)]
-union Nothing {}
-
-fn main() {}

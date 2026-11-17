@@ -3302,6 +3302,207 @@ const CODE_PROSE: &[(&str, &str)] = &[
          `pub struct` or `pub enum`. On a function, a trait or a private \
          type it has nothing to protect (design.md § `#[non_exhaustive]`).",
     ),
+    // B-2026-11-16-303: patterns, discriminants, FFI borrows, attribute
+    // validation and test placement, each pinned under corpus/diagnostics.
+    (
+        "E_DUPLICATE_MODULE_BINDING",
+        "Two module-level bindings in one module have the same name, so \
+         every use would be ambiguous. Rename one, or delete the duplicate. \
+         A module-level value is declared `const NAME: T = e;` (design.md § \
+         Constants).",
+    ),
+    (
+        "E_DYN_REPLACE_THROUGH_VIEW",
+        "A `mut ref dyn Trait` lets you call `mut ref self` methods on the \
+         value it views, but not replace that value with `*s = ...`: the \
+         new value may be a different type with a different size, and the \
+         view only knows the old one's storage (design.md § `dyn Trait`). \
+         Assign to the owned `dyn Trait` binding or field itself, which \
+         drops the old value first, or change the value through its \
+         methods.",
+    ),
+    (
+        "E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION",
+        "An empty collection literal such as `Set[]` or `Map[]` has no \
+         elements to infer its element type from, and nothing later in the \
+         code fixed it. Annotate the binding (`let s: Set[i64] = Set[];`) \
+         or use the constructor with an annotated binding (`let s: Set[i64] \
+         = Set.new();`).",
+    ),
+    (
+        "E_EXTERN_REF_PARAM",
+        "`ref` and `mut ref` are Kāra borrows, checked by the compiler, and \
+         have no C representation, so a foreign function's parameter cannot \
+         be one. Use a raw pointer, `*const T` or `*mut T`; for text, take \
+         `*const u8` and pass `s.as_ptr()` at the call site. An opaque \
+         foreign type is the exception: `ref Foo` is its handle (design.md \
+         § 15).",
+    ),
+    (
+        "E_EXTERN_REF_RETURN",
+        "A foreign function cannot return a Kāra borrow: nothing on the C \
+         side can promise how long the pointee lives, which is what a `ref` \
+         claims. Declare the return as a raw pointer, `*const T` or `*mut \
+         T`, and read through it inside an `unsafe` block, copying the data \
+         into an owned value if it must outlive the call.",
+    ),
+    (
+        "E_IMPL_TARGET_NOT_DISTINGUISHABLE",
+        "Several `impl` blocks define the same method for a type, differing \
+         only in a const argument (`impl Grid[3]` and another `impl \
+         Grid[3]`, or two sizes the dispatcher cannot tell apart). Every \
+         call would compile to one function, and the interpreter and the \
+         compiled backends could each pick a different body. Give the \
+         methods different names, or define one method that branches on the \
+         size.",
+    ),
+    (
+        "E_IMPL_TRAIT_MISSING_BOUND",
+        "A function declared to return `impl Trait` must return a value \
+         whose type implements that trait; here the body's type does not. \
+         Implement or derive the trait for the returned type, return a \
+         different value, or change the declared return type.",
+    ),
+    (
+        "E_INTERIOR_NUL_IN_C_STRING",
+        "A C string ends at its first NUL byte, so a `\\0` inside a \
+         `c\"...\"` literal would silently cut it short for every C \
+         function that reads it. Remove the escape; to pass bytes that \
+         contain zeros, use a byte slice and an explicit length.",
+    ),
+    (
+        "E_LINT_LEVEL_ON_HARD_RULE",
+        "Some rules are not lints and cannot be allowed, warned or denied: \
+         `unsafe_op_in_unsafe_fn` is one, since an unsafe operation always \
+         needs its own `unsafe { ... }` block, even inside an `unsafe fn`. \
+         Remove the lint-level attribute and wrap the operation in `unsafe \
+         { ... }`, with a `// Safety:` comment saying why it holds.",
+    ),
+    (
+        "E_PANIC_HANDLER",
+        "A function marked `#[panic_handler]` replaces the default panic \
+         report, and the runtime calls it with one argument, so its \
+         signature is fixed: `fn name(info: PanicInfo)`, with no type \
+         parameters and no return value (design.md § Panic handler). A \
+         program has at most one.",
+    ),
+    (
+        "E_PARTIAL_EXPLICIT_DISCRIMINANTS",
+        "An enum either gives every variant an explicit discriminant or \
+         none of them. A mix (`Low = 1, Mid, High = 5`) leaves the reader \
+         to work out the implicit ones and makes reordering variants \
+         silently change values. Write a value on each variant, or remove \
+         them all and let declaration order number the variants from 0.",
+    ),
+    (
+        "E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR",
+        "An explicit discriminant on an enum whose variants carry data is a \
+         promise about the stored tag, and without a layout the tag's \
+         location is unspecified, so the value could never be observed. Add \
+         `#[repr(u8)]` (or another integer type) or `#[repr(C)]` to fix the \
+         layout (design.md § 15), or remove the explicit values.",
+    ),
+    (
+        "E_RANGE_PATTERN_BOUND_NOT_SIMPLE",
+        "A range pattern's bounds are fixed when the `match` is compiled, \
+         so each must be a literal or the name of a module-level `const`: \
+         `0..=9`, `MIN..=MAX`. An expression such as `(1 + 2)` or a call is \
+         refused. Declare a `const` for the bound, or use a guard (`n if n \
+         <= limit() =>`).",
+    ),
+    (
+        "E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING",
+        "A module-level `const` is a value, not a variable: each use builds \
+         a fresh copy, so assigning to it would change nothing, and Kāra \
+         has no mutable globals (design.md § Constants). To change a copy, \
+         bind it first (`let mut v = LIMIT;`). State that changes during \
+         the run is created in `main` and passed to the functions that use \
+         it.",
+    ),
+    (
+        "E_REST_PATTERN_DUPLICATE",
+        "A struct pattern takes at most one `..`, which stands for all the \
+         fields the pattern does not name. A second one adds nothing. \
+         Remove the extra `..`.",
+    ),
+    (
+        "E_REST_PATTERN_NOT_LAST",
+        "In a struct pattern, `..` (the fields not named) comes after every \
+         named field: `P { x, .. }`. Move it to the end, or drop the named \
+         fields that follow it.",
+    ),
+    (
+        "E_RPITIT_INCOMPATIBLE_WITH_DYN",
+        "A trait method that returns `impl Trait` hides a different \
+         concrete type in each implementation, so a `dyn` value cannot call \
+         it through a single method-table entry. Take the value through a \
+         generic parameter (`[T: Source]`) instead of `dyn Source`, or \
+         change the method to return a concrete type or a `dyn` value.",
+    ),
+    (
+        "E_SECRET_TRAIT_FORBIDDEN",
+        "`Secret[T]` withholds `Display`, `Debug`, `Serialize`, `Eq` and \
+         similar traits on purpose, so a secret cannot be printed, logged, \
+         serialized or compared in variable time by accident, and an `impl` \
+         cannot add them back (docs/library/secret.md). Read the value with \
+         `.expose()` where it is really needed, compare with the \
+         constant-time `.ct_eq(...)`, and let the built-in drop wipe it.",
+    ),
+    (
+        "E_TEST_BLOCK_NOT_TOP_LEVEL",
+        "`test \"name\" { ... }` declares a test case, which is a top-level \
+         item in a test file, not a statement (design.md § 14). Inside a \
+         function it is refused. Move the block to module scope in a \
+         `_test.kara` file, or, for a check that should run with the \
+         function, call the assertion directly.",
+    ),
+    (
+        "E_TRACK_CALLER_ARGS_NOT_PERMITTED",
+        "`#[track_caller]` has no options: it makes a panic inside the \
+         function report its caller's location. Write it bare, \
+         `#[track_caller]`.",
+    ),
+    (
+        "E_TRACK_CALLER_INVALID_TARGET",
+        "`#[track_caller]` makes a panic inside a function report the \
+         location of the call instead (design.md § 10, \"Panics report the \
+         caller's location\"), so it applies only to a `fn`. On a struct, \
+         enum, trait or impl block there is no call site. Put it on the \
+         functions that panic on their arguments.",
+    ),
+    (
+        "E_TRAIT_METHOD_ANONYMOUS_PARAM",
+        "Every parameter of a trait method has a name, as in any function. \
+         Write `_: f64` for a parameter the declaration does not use, or \
+         give it a name that documents it for implementations.",
+    ),
+    (
+        "E_UNKNOWN_ASSOC_TYPE_BINDING",
+        "An associated-type binding such as `Iterator[Item = i64]` fixes a \
+         type the trait declares. The name given is not one of the trait's \
+         associated types, so the binding would constrain nothing; the \
+         message lists the ones it has. Correct the name (for `Iterator` it \
+         is `Item`).",
+    ),
+    (
+        "E_UNKNOWN_ATTRIBUTE",
+        "The compiler does not recognize this attribute name. design.md § \
+         Attributes lists the attributes the language defines; an unknown \
+         one is refused rather than ignored, so a misspelling \
+         (`#[derives]`, `#[must_used]`) cannot silently do nothing. Correct \
+         the name or remove the attribute.",
+    ),
+    (
+        "E_UNSTABLE_DUPLICATE",
+        "An item carries at most one `#[unstable]` attribute. Keep one, \
+         with a `note` if needed, and remove the rest.",
+    ),
+    (
+        "E_UNSTABLE_POSITIONAL_ARG",
+        "`#[unstable]` takes only a named `note`: `#[unstable(note: \"may \
+         change before 1.0\")]`, or no arguments at all. A positional \
+         string is refused so the argument's role is never ambiguous.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
@@ -3452,10 +3653,6 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
          Mutable State); a module `let mut` is E_MODULE_LET.",
     ),
     (
-        "E0800",
-        "GPU kernels are deferred (docs/deferred.md § GPU).",
-    ),
-    (
         "E_CODEGEN_HINT_INVALID_POSITION",
         "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
     ),
@@ -3489,31 +3686,119 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Codes of contracts (`requires`, `ensures`, `old(...)`), which 0.8 ships as
-/// an experimental implementation outside the v1 language (Gowtham's
-/// decision 2026-11-17, docs/deferred.md § Contracts).
-const EXPERIMENTAL_CODES: &[&str] = &[
-    "E_CONTRACT_IMPURE",
-    "E_CONSUMED_SELF_IN_ENSURES",
-    "E_OLD_NOT_CLONE",
-    "E_OLD_OUTSIDE_ENSURES",
-    "E_OLD_RESULT",
-];
-
-const EXPERIMENTAL_PROSE: &str = "Contracts (`requires`, `ensures`, `old(...)`) are \
-     experimental: they are implemented and run in 0.8 (a violated contract \
-     aborts), but they are not part of the v1 language and may change until \
-     the contracts track lands (docs/deferred.md § Contracts (requires / \
-     ensures / invariant)). This code reports a contract the compiler cannot \
-     check or run as written; the message names the expression and the form \
-     that works, such as capturing a value with `old(...)` in an `ensures` \
-     clause, where a contract may have no effect other than `panics`.";
-
 fn deferred_section(code: &str) -> Option<&'static str> {
     DEFERRED_CODES
         .iter()
         .find(|(c, _)| *c == code)
         .map(|(_, section)| *section)
+        .or_else(|| family_of(DEFERRED_FAMILIES, code))
+}
+
+/// A family of codes: the codes that start with one of `prefixes` or are
+/// listed in `codes`, and the sentence pointing at the spec section.
+struct CodeFamily {
+    prefixes: &'static [&'static str],
+    codes: &'static [&'static str],
+    pointer: &'static str,
+}
+
+fn family_of(families: &[CodeFamily], code: &str) -> Option<&'static str> {
+    families
+        .iter()
+        .find(|f| f.codes.contains(&code) || f.prefixes.iter().any(|p| code.starts_with(p)))
+        .map(|f| f.pointer)
+}
+
+/// Features deferred.md specifies that nothing in the corpus runs: their
+/// codes print [`SCOPE_PROSE`] and the pointer (review-thread ruling
+/// 2026-11-17 on B-2026-11-16-303, one rule per family).
+const DEFERRED_FAMILIES: &[CodeFamily] = &[
+    CodeFamily {
+        prefixes: &["E_UNION_"],
+        codes: &["E_EMPTY_UNION"],
+        pointer: "Unions are deferred (docs/deferred.md § FFI Unions: `union Foo { ... }`).",
+    },
+    CodeFamily {
+        prefixes: &["E_PROFILE_"],
+        codes: &[
+            "E_UNKNOWN_PROFILE",
+            "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE",
+        ],
+        pointer: "Profiles are deferred (docs/deferred.md § Project Profiles).",
+    },
+    CodeFamily {
+        prefixes: &[],
+        codes: &["E_VARIANCE_DECLARATION_INCONSISTENT"],
+        pointer: "Declared variance is deferred (docs/deferred.md § Declared Variance Markers).",
+    },
+];
+
+/// Features deferred.md specifies that the compiler implements and corpus
+/// programs run: experimental in 0.8 (Gowtham's decision on contracts
+/// 2026-11-17, applied by family). Each deferred.md section says so.
+const EXPERIMENTAL_FAMILIES: &[CodeFamily] = &[
+    CodeFamily {
+        prefixes: &[],
+        codes: &[
+            "E_CONTRACT_IMPURE",
+            "E_CONSUMED_SELF_IN_ENSURES",
+            "E_OLD_NOT_CLONE",
+            "E_OLD_OUTSIDE_ENSURES",
+            "E_OLD_RESULT",
+        ],
+        pointer: "Contracts (`requires`, `ensures`, `old(...)`); docs/deferred.md § \
+                  Contracts (requires / ensures / invariant)",
+    },
+    CodeFamily {
+        prefixes: &["E_COMPTIME_"],
+        codes: &["E_TYPE_VALUE_AT_RUNTIME"],
+        pointer: "Comptime (`comptime fn`, `comptime` parameters); docs/deferred.md § Comptime",
+    },
+    CodeFamily {
+        prefixes: &["E_OFFSET_OF_"],
+        codes: &[],
+        pointer: "`offset_of`; docs/deferred.md § Field Offsets: `offset_of[T](field)`",
+    },
+    CodeFamily {
+        prefixes: &["E_ONCE_CELL_"],
+        codes: &["E_LAZYLOCK_RUNTIME_CAPTURE"],
+        pointer: "Module-level cells (`LazyLock`, `OnceLock`, `OnceCell`); docs/deferred.md \
+                  § Module-Level Mutable State",
+    },
+    CodeFamily {
+        prefixes: &["E_GPU_"],
+        codes: &["E0800"],
+        pointer: "GPU kernels (`#[gpu]`, `gpu.upload`); docs/deferred.md § GPU",
+    },
+    CodeFamily {
+        prefixes: &["E_REFINEMENT_"],
+        codes: &["E_INVALID_REFINEMENT_PREDICATE"],
+        pointer: "Refinement types (`type Even = i64 where self % 2 == 0`); docs/deferred.md \
+                  § Refinement Types",
+    },
+    CodeFamily {
+        prefixes: &["E_GAT_"],
+        codes: &[],
+        pointer: "Generic associated types; docs/deferred.md § Generic Associated Types (GATs)",
+    },
+    CodeFamily {
+        prefixes: &["E_TARGET_FEATURE_"],
+        codes: &[],
+        pointer: "`#[target_feature]`; docs/deferred.md § Multiversioning: `cpu-baseline` and \
+                  `#[multiversion]`",
+    },
+];
+
+fn experimental_note(code: &str) -> Option<String> {
+    family_of(EXPERIMENTAL_FAMILIES, code).map(|what| {
+        let (feature, section) = what.split_once("; ").unwrap_or((what, "docs/deferred.md"));
+        format!(
+            "This code belongs to an experimental feature, {feature}: it is \
+             implemented and runs in 0.8, but it is not part of the v1 language \
+             and may change until its track lands ({section}). The message names \
+             what is wrong and the form that works."
+        )
+    })
 }
 
 /// Codes no diagnostic emits any more. The number stays reserved so it is
@@ -3554,10 +3839,13 @@ fn code_description(code: &str, entry: &CodeEntry, sep: &str) -> Option<String> 
              stays reserved so it is never reused.{sep}{note}"
         ));
     }
-    if EXPERIMENTAL_CODES.contains(&code) {
-        return Some(EXPERIMENTAL_PROSE.to_string());
-    }
     let prose = code_prose(code);
+    if let Some(note) = experimental_note(code) {
+        return Some(match prose {
+            Some(p) => format!("{note}{sep}{p}"),
+            None => note,
+        });
+    }
     if is_scope_code(code, entry) {
         let scope = match deferred_section(code) {
             Some(pointer) => format!("{SCOPE_PROSE}{sep}{pointer}"),
@@ -5952,6 +6240,7 @@ mod tests {
                     && code_prose(c).is_none()
                     && !is_scope_code(c, e)
                     && retired_note(c).is_none()
+                    && experimental_note(c).is_none()
             })
             .expect("an unclassified code with no prose");
         let text = render_code_text(code, vec![*entry]);

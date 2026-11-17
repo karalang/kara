@@ -1,0 +1,1 @@
+ERROR at line 2: `test "name" { body }` declares a top-level test case and may not appear inside a function body. Move the case to module scope (any `_test.kara` file) or, if you meant a runtime assertion, drop the `test "..."` wrapper and call the assertion directly.

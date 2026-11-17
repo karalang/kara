@@ -1,0 +1,7 @@
+struct P { x: i64, y: i64, z: i64 }
+
+fn main() {
+    let p = P { x: 1, y: 2, z: 3 };
+    let P { x, .., .. } = p;
+    println(x);
+}

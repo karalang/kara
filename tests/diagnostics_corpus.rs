@@ -95,7 +95,7 @@ fn diagnostics_corpus_later_track_codes_get_the_scope_paragraph() {
 #[test]
 fn diagnostics_corpus_symbolic_code_frames_its_class_paragraph() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let out = karac(dir, &["explain", "E_UNION_REQUIRES_REPR"]);
+    let out = karac(dir, &["explain", "E_SHAPE"]);
     assert!(
         out.contains("filed under the TYPE_MISMATCH class, which gathers many"),
         "{out}"
@@ -171,7 +171,8 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E0405", "Project Profiles"),
         ("E0407", "Project Profiles"),
         ("E0409", "Module-Level Mutable State"),
-        ("E0800", "deferred.md § GPU"),
+        ("E_UNION_REQUIRES_REPR", "FFI Unions"),
+        ("E_PROFILE_NO_PROFILES", "Project Profiles"),
         ("E_MULTIVERSION_EMPTY", "Multiversioning"),
         ("E_CODEGEN_HINT_ON_CLOSURE", "Codegen Hint Attributes"),
         ("E_COLD_INLINE_ALWAYS_CONFLICT", "not yet lowered"),
@@ -190,10 +191,22 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
 #[test]
 fn diagnostics_corpus_contract_codes_are_experimental() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for code in ["E_CONTRACT_IMPURE", "E_OLD_OUTSIDE_ENSURES", "E_OLD_RESULT"] {
+    for code in [
+        "E_CONTRACT_IMPURE",
+        "E_OLD_OUTSIDE_ENSURES",
+        "E_OLD_RESULT",
+        "E_COMPTIME_PANIC",
+        "E_OFFSET_OF_UNKNOWN_FIELD",
+        "E_LAZYLOCK_RUNTIME_CAPTURE",
+        "E0800",
+        "E_GPU_DISPATCH_ARITY",
+        "E_REFINEMENT_PREDICATE_VIOLATION",
+        "E_GAT_EFFECT_PARAM",
+        "E_TARGET_FEATURE_EMPTY",
+    ] {
         let out = karac(dir, &["explain", code]);
         assert!(
-            out.contains("experimental") && out.contains("§ Contracts"),
+            out.contains("experimental feature") && out.contains("docs/deferred.md § "),
             "{code}: {out}"
         );
         assert!(

@@ -1,0 +1,8 @@
+fn main() {
+    let n = 3;
+    let r = match n {
+        0..=(1 + 2) => "low",
+        _ => "high",
+    };
+    println(r);
+}

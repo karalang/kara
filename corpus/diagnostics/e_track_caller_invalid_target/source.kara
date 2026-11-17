@@ -1,0 +1,4 @@
+#[track_caller]
+struct P { x: i64 }
+
+fn main() {}

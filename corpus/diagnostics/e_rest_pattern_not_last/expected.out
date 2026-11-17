@@ -1,0 +1,1 @@
+ERROR at line 5: `..` rest-pattern must appear last in the struct pattern's field list — move it after every named field, or drop the named fields that follow it

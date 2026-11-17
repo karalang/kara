@@ -1,0 +1,1 @@
+ERROR at line 1: enum 'Level' mixes explicit and implicit discriminants; declare a value on every variant or remove the explicit values and rely on declaration order (variant 'Low' has one, 'Mid' does not)

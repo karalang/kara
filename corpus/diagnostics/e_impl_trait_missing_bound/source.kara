@@ -1,0 +1,7 @@
+struct Point { x: i64 }
+
+fn make() -> impl Display {
+    Point { x: 1 }
+}
+
+fn main() {}

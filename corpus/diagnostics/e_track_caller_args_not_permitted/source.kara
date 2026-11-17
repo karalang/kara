@@ -1,0 +1,4 @@
+#[track_caller(1)]
+fn check(x: i64) {}
+
+fn main() { check(1); }

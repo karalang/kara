@@ -1,0 +1,9 @@
+shared struct Counter { n: i64 }
+
+fn show(c: Counter) -> i64 { c.n }
+
+fn main() {
+    let c = Counter { n: 0 };
+    let (a, b) = par { show(c), 1 };
+    println(a + b);
+}

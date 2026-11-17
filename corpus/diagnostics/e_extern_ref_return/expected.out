@@ -1,0 +1,1 @@
+ERROR at line 2: `ref` is not a valid return type for the foreign import 'getenv_ref': return `*const u8` and read the C string it points to inside an `unsafe` block

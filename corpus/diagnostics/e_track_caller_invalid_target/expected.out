@@ -1,0 +1,1 @@
+ERROR at line 1: `#[track_caller]` is not valid on struct; the attribute redirects the panic-site source location and only applies to `fn` declarations — see design.md § 10, "Panics report the caller's location"

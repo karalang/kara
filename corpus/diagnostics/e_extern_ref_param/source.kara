@@ -1,0 +1,5 @@
+unsafe extern "C" {
+    fn strlen(s: ref String) -> usize;
+}
+
+fn main() {}

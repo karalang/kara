@@ -1041,7 +1041,7 @@ impl<'a> super::TypeChecker<'a> {
         let mutable = matches!(&ty.kind, TypeKind::MutRef(_));
         let spelled = if mutable { "mut ref" } else { "ref" };
         let (code, position) = if is_return {
-            ("E_EXTERN_REF_RETURN", "return type")
+            ("E_EXTERN_REF_RETURN", "return")
         } else {
             ("E_EXTERN_REF_PARAM", "parameter")
         };
@@ -1057,6 +1057,11 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let remedy = match referent {
+            // A returned borrow has no call-site pointer to hand over: the
+            // C side returns an address, read under `unsafe`.
+            "CStr" | "String" if is_return => "return `*const u8` and read the C string it \
+                 points to inside an `unsafe` block"
+                .to_string(),
             "CStr" | "String" => format!(
                 "pass `*const u8` and hand over the data pointer at the call site with `.as_ptr()` \
                  — `fn {}(s: *const u8) …` called as `{}(x.as_ptr())`",

@@ -517,12 +517,13 @@ impl super::Parser {
         }
         self.errors.push(super::ParseError {
             kind: crate::parser::ParseErrorKind::Syntax,
-            message: "`test \"name\" { body }` declares a top-level test \
+            message: "error[E_TEST_BLOCK_NOT_TOP_LEVEL]: `test \"name\" { body }` \
+                      declares a top-level test \
                       case and may not appear inside a function body. \
                       Move the case to module scope (any `_test.kara` \
                       file) or, if you meant a runtime assertion, drop \
                       the `test \"...\"` wrapper and call the assertion \
-                      directly. (`E_TEST_BLOCK_NOT_TOP_LEVEL`)"
+                      directly."
                 .to_string(),
             span: self.span_from(&start),
         });

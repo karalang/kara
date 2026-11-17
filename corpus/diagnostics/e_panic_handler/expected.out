@@ -1,0 +1,1 @@
+ERROR at line 1: the panic handler `on_panic` must be `fn on_panic(info: PanicInfo)`: one `PanicInfo` parameter, no type parameters and no return value

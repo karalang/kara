@@ -1,0 +1,5 @@
+trait Source { fn items(self) -> impl Iterator[Item = i64]; }
+
+fn total(s: ref dyn Source) -> i64 { 0 }
+
+fn main() {}

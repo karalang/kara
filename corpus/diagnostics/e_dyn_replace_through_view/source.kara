@@ -1,0 +1,9 @@
+trait Shape { fn area(self) -> f64; }
+struct Square { side: f64 }
+impl Shape for Square { fn area(self) -> f64 { self.side * self.side } }
+
+fn reset(s: mut ref dyn Shape) {
+    *s = Square { side: 1.0 };
+}
+
+fn main() {}

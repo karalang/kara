@@ -1,0 +1,3 @@
+let LIMIT: i64 = 1;
+let LIMIT: i64 = 2;
+fn main() { println(LIMIT); }

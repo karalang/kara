@@ -1,0 +1,4 @@
+#[panic_handler]
+fn on_panic(x: i64) {}
+
+fn main() {}

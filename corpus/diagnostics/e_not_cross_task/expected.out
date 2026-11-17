@@ -1,0 +1,2 @@
+ERROR at line 7: `c` (a `shared` handle of type `Counter`) cannot enter a `par` branch (core semantics §11.3: a branch takes owned values, `frozen` and `sync` handles, and views, and a `shared` handle is none of them)
+help: declare `Counter` as a `sync` type, or read what the branches need out of `c` before the `par`

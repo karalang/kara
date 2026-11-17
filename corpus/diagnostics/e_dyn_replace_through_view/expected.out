@@ -1,0 +1,1 @@
+ERROR at line 6: a `mut ref dyn Shape` cannot replace the value it views, because the new value may have another type and size (design.md § dyn Trait). Assign the owned `dyn Shape` itself, which drops the old value first, or call a `mut ref self` method through the view

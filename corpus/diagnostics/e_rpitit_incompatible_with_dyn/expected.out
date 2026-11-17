@@ -1,0 +1,1 @@
+ERROR at line 3: cannot use `dyn Source` because method `items` returns `impl Trait` — return-position `impl Trait` in trait methods (RPITIT) has no fixed vtable slot, so `dyn`-dispatched callers cannot synthesize a thunk; route through a generic parameter `[T: Source]` instead

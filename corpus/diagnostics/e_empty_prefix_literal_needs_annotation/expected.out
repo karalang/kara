@@ -1,0 +1,1 @@
+ERROR at line 2: cannot infer element type from empty `Set[]` literal — add a binding annotation: `let v: Set[T] = Set[]`, or use `Set.new()`

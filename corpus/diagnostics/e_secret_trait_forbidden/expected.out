@@ -1,0 +1,1 @@
+ERROR at line 5: cannot implement `Display` for `Secret[T]` — the wrapper deliberately withholds this trait so a secret cannot be printed, serialized, or structurally compared by accident (see docs/library/secret.md). Read the value with `.expose()` where you genuinely need it; for equality use the constant-time `.ct_eq(...)`, and rely on the built-in `Zeroize`/`Drop` for wiping

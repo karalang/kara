@@ -1,0 +1,1 @@
+ERROR at line 5: `..` rest-pattern appears more than once in the same struct pattern — only one is permitted

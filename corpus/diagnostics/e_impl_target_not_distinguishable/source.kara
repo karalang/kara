@@ -1,0 +1,6 @@
+struct Grid[const N: i64] { cells: Array[i64, N] }
+
+impl Grid[3] { fn size(self) -> i64 { 3 } }
+impl Grid[3] { fn size(self) -> i64 { 4 } }
+
+fn main() {}

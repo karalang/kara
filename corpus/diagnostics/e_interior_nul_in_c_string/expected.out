@@ -1,0 +1,1 @@
+ERROR at line 2: interior NUL bytes are not permitted in C-string literals; remove the `\0` escape

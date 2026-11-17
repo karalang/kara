@@ -141,8 +141,8 @@ impl<'a> super::Resolver<'a> {
                          `#[track_caller]` is not valid on {target_kind}; \
                          the attribute redirects the panic-site source \
                          location and only applies to `fn` declarations \
-                         — see design.md § Error Handling > \"Stdlib \
-                         panic-emitters report the caller's source location\"",
+                         — see design.md § 10, \"Panics report the caller's \
+                         location\"",
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::TrackCallerInvalidTarget,

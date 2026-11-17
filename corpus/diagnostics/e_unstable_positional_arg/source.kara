@@ -1,0 +1,4 @@
+#[unstable("soon")]
+pub fn f() {}
+
+fn main() {}
