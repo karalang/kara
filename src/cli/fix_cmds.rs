@@ -652,8 +652,28 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
                 .effects
                 .as_ref()
                 .is_some_and(|e| !e.errors.is_empty());
+        //
+        // `lossless_cast` and `redundant_cast` wait the same way for a pass
+        // with no `redundant_suffix` fix: each is right alone, but a cast
+        // read as lossless against a suffixed literal's type stops being so
+        // once the suffix goes, and the two together leave the literal and
+        // every store into it at the narrower default (`vec![0i64; n]` and
+        // `t[i] = x as i64` fixed into an `i32` table that overflows,
+        // B-2026-11-17-128). The next pass judges the cast afresh.
+        let suffix_dropped = t
+            .warnings
+            .iter()
+            .any(|e| e.fix_it.is_some() && e.lint_name.as_deref() == Some("redundant_suffix"));
         fixes.anchored(t.warnings.iter().filter_map(|e| {
             if refused && e.lint_name.as_deref() == Some("redundant_clone") {
+                return None;
+            }
+            if suffix_dropped
+                && matches!(
+                    e.lint_name.as_deref(),
+                    Some("lossless_cast") | Some("redundant_cast")
+                )
+            {
                 return None;
             }
             e.fix_it.as_ref().map(|f| {
