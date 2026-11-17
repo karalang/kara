@@ -251,7 +251,7 @@ fn splitmix64(mut x: u64) -> u64 {
 /// Cortex-M target matrix.
 #[cfg(feature = "std")]
 fn random_pair() -> (u64, u64) {
-    // The operating system's random source first (`getentropy` on Unix,
+    // The operating system's random source first (`/dev/urandom` on Unix,
     // WASI's `random_get`), as collections.md's "a random value" reads
     // (B-2026-11-17-64); the mix below where it is not available.
     if let Some(pair) = os_entropy() {
@@ -384,13 +384,34 @@ fn random_pair() -> (u64, u64) {
 /// halves; `None` where there is none or it failed.
 #[cfg(all(unix, feature = "std"))]
 fn os_entropy() -> Option<(u64, u64)> {
+    // `/dev/urandom` through plain `open`/`read`, not `getentropy`: glibc
+    // before 2.25 has no `getentropy`, and the cross-compile jobs link
+    // against such a sysroot (`undefined reference to getentropy`). The
+    // path is a static C string, so nothing is allocated (B-2026-10-03-11).
     extern "C" {
-        fn getentropy(buf: *mut u8, len: usize) -> i32;
+        fn open(path: *const core::ffi::c_char, flags: i32, ...) -> i32;
+        fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
+        fn close(fd: i32) -> i32;
     }
+    const O_RDONLY: i32 = 0;
     let mut b = [0u8; 16];
-    // SAFETY: `b` is 16 writable bytes; `getentropy` takes up to 256.
-    if unsafe { getentropy(b.as_mut_ptr(), b.len()) } != 0 {
-        return None;
+    // SAFETY: the path is NUL-terminated; `b` is 16 writable bytes and the
+    // descriptor is closed before returning.
+    unsafe {
+        let fd = open(c"/dev/urandom".as_ptr(), O_RDONLY);
+        if fd < 0 {
+            return None;
+        }
+        let mut got = 0usize;
+        while got < b.len() {
+            let n = read(fd, b.as_mut_ptr().add(got), b.len() - got);
+            if n <= 0 {
+                close(fd);
+                return None;
+            }
+            got += n as usize;
+        }
+        close(fd);
     }
     Some(halves(&b))
 }
@@ -482,6 +503,14 @@ mod wasi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(unix, feature = "std"))]
+    #[test]
+    fn unix_entropy_comes_from_the_os_and_differs_per_draw() {
+        let a = super::os_entropy().expect("/dev/urandom read");
+        let b = super::os_entropy().expect("/dev/urandom read");
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn hex_and_decimal_pins_both_parse() {

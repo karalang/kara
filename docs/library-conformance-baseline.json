@@ -9,7 +9,7 @@
       "first_diagnostic": "value 'log' moved here, used again here (moved at line 7:21)"
     },
     "ab90428d83ba": {
-      "where": "docs/book/src/appendix-d-attributes.md:135",
+      "where": "docs/book/src/appendix-d-attributes.md:116",
       "heading": "Module-level bindings > `#[thread_local]`",
       "outcome": "REJECTED",
       "reason": "deferred: module-level `let` is past v1 (deferred.md § systems); the block shows the planned form",
@@ -29,13 +29,6 @@
       "reason": "fragment: a signature with a placeholder body",
       "first_diagnostic": "function 'parse_port' declares return type 'Result[u16, ParseError]' but its body can complete without producing a value — end it with a tail expression, `return` on every path, or declare no return type"
     },
-    "e227a6d876c7": {
-      "where": "docs/book/src/ch11-effects.md:130",
-      "heading": "The Effect System > Effect groups",
-      "outcome": "REJECTED",
-      "reason": "fragment: `Data`, `Error` and the `io` group come from the surrounding prose",
-      "first_diagnostic": "undefined type 'Data'"
-    },
     "84c7ad3b2be5": {
       "where": "docs/book/src/ch13-modules.md:48",
       "heading": "Modules and Visibility > Imports",
@@ -49,6 +42,13 @@
       "outcome": "REJECTED",
       "reason": "package: imports of the chapter's own modules, which a single file cannot have",
       "first_diagnostic": "unknown module `db.connection`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
+    },
+    "73981a16c9e8": {
+      "where": "docs/book/src/ch15-data-layout.md:15",
+      "heading": "Data Layout > Layout blocks (a later track)",
+      "outcome": "REJECTED",
+      "reason": "deferred: layout blocks are past v1 (deferred.md § Layout); the block shows the planned form and the refusal is the specified behaviour",
+      "first_diagnostic": "`layout swarm` is not available: layout blocks are deferred (deferred.md § Layout) and not in 0.8; remove the block, which does not change what the program does"
     },
     "2d5ae165540b": {
       "where": "docs/book/src/ch19-secrets.md:47",
@@ -114,7 +114,7 @@
       "first_diagnostic": "unknown module `data`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
     },
     "866d552a9220": {
-      "where": "docs/library/io.md:669",
+      "where": "docs/library/io.md:674",
       "heading": "Input and output > Examples",
       "outcome": "RUN-FAILED",
       "reason": "as written: the tool skeleton exits 1 with its usage line when run without an argument",
