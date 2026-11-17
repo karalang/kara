@@ -4736,6 +4736,13 @@ impl<'a> super::TypeChecker<'a> {
                 Some(result(l))
             }
             (Some((l, LiteralKind::Int)), _) if matches!(op, BinOp::Shl | BinOp::Shr) => {
+                // Its amount is judged once the literal's type is settled
+                // (B-2026-11-16-323), unless a promotion judges it first.
+                if let Some(n) = Self::const_shift_amount(right) {
+                    if !(self.promoting_literal_tree && Self::is_int_literal_operator_tree(left)) {
+                        self.pending_const_shifts.push((l, n, *span));
+                    }
+                }
                 if rl.is_some() {
                     *right_ty = self.settle_literals(right_ty);
                     self.record_expr_type(&right.span, right_ty);
@@ -6145,6 +6152,24 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor) {
                     self.lint_operand_casts(left, right, &left_ty, &right_ty);
                 }
+                // A constant shift amount outside the left type's width is
+                // the compile-time error constant overflow is, not the
+                // run-time trap (B-2026-11-16-323). An unsuffixed literal
+                // tree on its way to another integer type is judged at that
+                // type, by `promote_int_literal_operator_tree`.
+                if matches!(op, BinOp::Shl | BinOp::Shr)
+                    && !(self.promoting_literal_tree && Self::is_int_literal_operator_tree(left))
+                {
+                    // A literal's type is settled when its body ends.
+                    if let (Type::TypeVar(v), Some(n)) = (
+                        self.resolved_now(strip_refs_for_compare(&left_ty)),
+                        Self::const_shift_amount(right),
+                    ) {
+                        self.pending_const_shifts.push((v, n, *span));
+                    } else if !self.check_const_shift_amount(right, &left_ty, span) {
+                        return Type::Error;
+                    }
+                }
                 if mixed && int_cast_preserves_all_values(&left_ty, &right_ty) {
                     return right_ty;
                 }
@@ -6197,6 +6222,59 @@ impl<'a> super::TypeChecker<'a> {
     /// i64` widens `u` implicitly. Only when the other operand is not a cast
     /// itself: in `(a as i64) * (b as i64)` deleting both would multiply in
     /// the narrow type.
+    /// `false`, with the error, when `amount` is a constant shift amount
+    /// that is negative or at least `ty`'s width (design.md § Division,
+    /// remainder and shifts: such a shift traps, so a constant one is known
+    /// to; B-2026-11-16-323). A pointer-width type is judged at its widest.
+    pub(super) fn check_const_shift_amount(
+        &mut self,
+        amount: &Expr,
+        ty: &Type,
+        span: &Span,
+    ) -> bool {
+        match Self::const_shift_amount(amount) {
+            Some(value) => self.check_shift_amount_value(value, ty, span),
+            None => true,
+        }
+    }
+
+    /// The value of a shift amount written as a constant: a literal of any
+    /// suffix, its negation, or a shift-free unsuffixed literal tree.
+    pub(super) fn const_shift_amount(amount: &Expr) -> Option<i128> {
+        match &amount.kind {
+            ExprKind::Integer(n, _) => Some(*n),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => match &operand.kind {
+                ExprKind::Integer(n, _) => n.checked_neg(),
+                _ => None,
+            },
+            _ => Self::int_literal_operator_tree_value(amount),
+        }
+    }
+
+    /// [`Self::check_const_shift_amount`] once the amount is known.
+    pub(super) fn check_shift_amount_value(&mut self, value: i128, ty: &Type, span: &Span) -> bool {
+        let Some((_, width)) = int_width_range(ty) else {
+            return true;
+        };
+        if (0..i128::from(width)).contains(&value) {
+            return true;
+        }
+        self.type_error(
+            format!(
+                "this shift amount is {value}, which is out of range for '{}': a shift \
+                 amount must be at least 0 and less than the type's width, {width}, or the \
+                 shift traps; `wrapping_shl` / `wrapping_shr` mask the amount",
+                type_display(ty)
+            ),
+            *span,
+            TypeErrorKind::TypeMismatch,
+        );
+        false
+    }
+
     fn lint_operand_casts(&mut self, left: &Expr, right: &Expr, left_ty: &Type, right_ty: &Type) {
         self.lint_operand_casts_in(left, right, left_ty, right_ty, false);
     }

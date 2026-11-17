@@ -20,6 +20,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A constant shift amount that is negative or at least the type's width
+  (`let y: i8 = 1 << 8;`, `let y = 1 << 64;`, `a << 8` over `a: i8`) is a
+  compile error, as constant overflow is; it evaluated to 0 on every
+  backend, where the same shift by a variable traps (B-2026-11-16-323).
 - A module file or directory under `src/` whose name is not snake_case
   (`src/Db.kara`, `src/Net/`) is refused, as design.md CN-2 says; the error
   names the path to rename it to (`src/db.kara`), keeping a platform or

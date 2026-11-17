@@ -12560,7 +12560,10 @@ impl<'a> super::TypeChecker<'a> {
         if !root_is_operator || !Self::is_int_literal_operator_tree(expr) {
             return None;
         }
-        if self.infer_expr(expr) == Type::Error {
+        let was = std::mem::replace(&mut self.promoting_literal_tree, true);
+        let inferred = self.infer_expr(expr);
+        self.promoting_literal_tree = was;
+        if inferred == Type::Error {
             return Some(Type::Error);
         }
         let ty = ctx.clone();
@@ -12629,6 +12632,11 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if !matches!(op, BinOp::Shl | BinOp::Shr)
                     && !self.promote_int_literal_operator_tree(right, ty)
+                {
+                    return false;
+                }
+                if matches!(op, BinOp::Shl | BinOp::Shr)
+                    && !self.check_const_shift_amount(right, ty, &e.span)
                 {
                     return false;
                 }

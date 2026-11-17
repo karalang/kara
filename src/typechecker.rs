@@ -3700,6 +3700,13 @@ pub struct TypeChecker<'a> {
     /// the call's span: its `Self` picks the impl
     /// (`method_ufcs::trait_call_by_expected`).
     pub(super) trait_call_expected: Option<(SpanKey, Type)>,
+    /// Set while an unsuffixed literal operator tree is synthesized before
+    /// its promotion to a narrower or wider context type, which judges its
+    /// constant shift amounts at that type instead (B-2026-11-16-323).
+    pub(super) promoting_literal_tree: bool,
+    /// Constant shift amounts over a literal whose type is not settled yet,
+    /// judged by [`Self::default_literal_vars`] (B-2026-11-16-323).
+    pub(super) pending_const_shifts: Vec<(types::TypeVarId, i128, Span)>,
     /// The `Trait.name(..)` calls an expected type routed to an impl: their
     /// callee is that impl's, never the trait's declaration the path names.
     pub(super) routed_trait_calls: FxHashSet<crate::ids::NodeId>,
@@ -4692,6 +4699,8 @@ impl<'a> TypeChecker<'a> {
             method_impl_dispatch: FxHashMap::default(),
             ufcs_calls: FxHashMap::default(),
             trait_call_expected: None,
+            promoting_literal_tree: false,
+            pending_const_shifts: Vec::new(),
             routed_trait_calls: FxHashSet::default(),
             dyn_coercion_spans: FxHashMap::default(),
             method_default_fills: FxHashMap::default(),
@@ -6190,6 +6199,22 @@ impl<'a> TypeChecker<'a> {
     /// need to distinguish const-eval failures from other type errors.
     pub(crate) fn emit_const_eval_error(&mut self, err: ConstEvalError) {
         use ConstEvalError::*;
+        // A constant shift amount out of range was already reported where
+        // the operator was typed (B-2026-11-16-323); one finding, once.
+        if let Overflow {
+            op: BinOp::Shl | BinOp::Shr,
+            span,
+            ..
+        } = &err
+        {
+            if self
+                .errors
+                .iter()
+                .any(|e| e.span == *span && e.message.starts_with("this shift amount is"))
+            {
+                return;
+            }
+        }
         let (msg, span) = match err {
             NonConstShape(s) => (
                 "expression is not a valid const expression \
@@ -10666,6 +10691,10 @@ impl<'a> TypeChecker<'a> {
         // Only once the outermost open body ends: an inner one's spans may
         // name an outer body's literals, which are still open.
         if from == 0 || self.body_literal_vars.is_empty() {
+            for (id, n, span) in std::mem::take(&mut self.pending_const_shifts) {
+                let t = resolve(self, &Type::TypeVar(id));
+                self.check_shift_amount_value(n, &t, &span);
+            }
             for (span, name, id) in std::mem::take(&mut self.pending_literal_call_subs) {
                 let t = resolve(self, &Type::TypeVar(id));
                 if !matches!(t, Type::TypeVar(_)) {
