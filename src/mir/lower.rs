@@ -3990,6 +3990,15 @@ struct Bx<'l, 'a> {
     /// The `par for` whose body is lowered next: its body, the `Vec` local
     /// that collects the bodies' values, and that `Vec`'s type.
     par_acc: Option<(*const Block, Local, Ty, usize)>,
+    /// The `Vec`s the sequential `par for` bodies being lowered push onto,
+    /// innermost last: an early exit from the function reverses each, so
+    /// the values the iterations before it made drop last first
+    /// (core semantics §11.7, B-2026-11-16-272).
+    par_for_accs: Vec<(Local, Ty)>,
+    /// Blocks that belong to no `par` branch though lowered inside one:
+    /// the reversal of a `par for`'s `Vec` on an early exit, which touches
+    /// only the loop's own result.
+    par_exempt: FxHashSet<u32>,
     /// When that `par for`'s iterations run as tasks: their group and the
     /// `Vec` of their handles.
     par_for_tasks: Option<ParForTasks>,
@@ -4107,6 +4116,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             ty_hints: FxHashMap::default(),
             unordered: None,
             par_acc: None,
+            par_for_accs: Vec::new(),
+            par_exempt: FxHashSet::default(),
             par_for_tasks: None,
             closure_by_value: FxHashSet::default(),
             auto_par_candidate: None,
@@ -13171,7 +13182,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let v = self.temp(et);
         let entry = self.branch_begin();
-        self.block_into(body, Place::local(v))?;
+        self.par_for_accs.push((acc, vt));
+        let r = self.block_into(body, Place::local(v));
+        self.par_for_accs.pop();
+        r?;
         self.branch_end(region, entry);
         let rt = self.tys().tcx().reference(vt, true);
         let r = self.temp(rt);
@@ -13221,7 +13235,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn branch_end_at(&mut self, region: usize, entry: BasicBlock, after: BasicBlock) {
         let end = self.b.block_count() as u32;
         let blocks = (entry.0..end)
-            .filter(|&i| i != after.0)
+            .filter(|&i| i != after.0 && !self.par_exempt.contains(&i))
             .map(BasicBlock)
             .collect();
         self.b.par_regions[region].branches.push(blocks);
@@ -13382,6 +13396,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(group_ty) = self.library_struct("TaskGroup", &[]) else {
             return self.unsupported(span, "`par` without the library's `TaskGroup`");
         };
+        let mut task_tys = Vec::with_capacity(es.len());
+        for &x in es {
+            task_tys.push(self.par_task_ty(x, err, exits, ret_ty)?);
+        }
+        // The joined results wait in slots scheduled before the group: on
+        // an early exit the group drops first, and with it the later
+        // branches' handles and results, last first, then the earlier
+        // branches' values, last first, so the block's other values drop
+        // in reverse source order (core semantics §11.7, B-2026-11-16-272).
+        let early = err.is_some() || exits;
+        let mut slots = Vec::with_capacity(es.len());
+        for &(tt, _) in &task_tys {
+            let o = self.temp(tt);
+            if early {
+                self.schedule(ScopeEntry::Drop(Place::local(o)));
+            }
+            slots.push(o);
+        }
         let g = self.temp(group_ty);
         self.call_native("TaskGroup.new", Vec::new(), Place::local(g));
         if hidden {
@@ -13394,33 +13426,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // B-2026-11-02-1). A joined handle is moved, so it does not drop.
         self.schedule(ScopeEntry::Drop(Place::local(g)));
         let mut handles = Vec::new();
-        for &x in es {
-            let vt = self.expr_ty(x)?;
-            let mut exit = None;
-            let tt = match err {
-                None if exits => {
-                    let t = self.enum_of("Result", &[vt, ret_ty]);
-                    let Some((t, xv)) = t.and_then(|t| Some((t, self.error_variant(t)?))) else {
-                        return self.unsupported(x.span, "this `par` branch's result type");
-                    };
-                    exit = Some((ret_ty, xv));
-                    t
-                }
-                None => vt,
-                Some(ev) => {
-                    let wrapped = match self.tys().tcx().adt_of(ret_ty) {
-                        Some((adt, _)) if adt.name == "Result" => {
-                            let et = self.tys().tcx().field_ty(ret_ty, Some(ev), 0);
-                            et.and_then(|et| self.enum_of("Result", &[vt, et]))
-                        }
-                        _ => self.enum_of("Option", &[vt]),
-                    };
-                    let Some(t) = wrapped else {
-                        return self.unsupported(x.span, "this `par` branch's result type");
-                    };
-                    t
-                }
-            };
+        for (&x, &(tt, exit)) in es.iter().zip(&task_tys) {
             let Some(ht) = self.library_struct("TaskHandle", &[tt]) else {
                 return self.unsupported(x.span, "`par` without the library's `TaskHandle`");
             };
@@ -13454,11 +13460,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
         let mut outs = Vec::new();
         for (k, &(h, ht, tt)) in handles.iter().enumerate() {
-            let o = match err {
-                Some(_) => self.scoped_temp(tt),
-                None if exits => self.scoped_temp(tt),
-                None => self.temp(tt),
-            };
+            let o = slots[k];
             let name = format!("{}.join", self.tys().display(ht));
             self.call_native(&name, vec![Operand::Move(Place::local(h))], Place::local(o));
             outs.push((o, tt));
@@ -13542,6 +13544,44 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
         Ok(())
+    }
+
+    /// The type a `par` branch `x`'s task returns, and the exit it leaves
+    /// by when a branch `return`s: [`Self::par_tasks`].
+    fn par_task_ty(
+        &mut self,
+        x: &'a Expr,
+        err: Option<u32>,
+        exits: bool,
+        ret_ty: Ty,
+    ) -> R<(Ty, Option<(Ty, u32)>)> {
+        let vt = self.expr_ty(x)?;
+        let mut exit = None;
+        let tt = match err {
+            None if exits => {
+                let t = self.enum_of("Result", &[vt, ret_ty]);
+                let Some((t, xv)) = t.and_then(|t| Some((t, self.error_variant(t)?))) else {
+                    return self.unsupported(x.span, "this `par` branch's result type");
+                };
+                exit = Some((ret_ty, xv));
+                t
+            }
+            None => vt,
+            Some(ev) => {
+                let wrapped = match self.tys().tcx().adt_of(ret_ty) {
+                    Some((adt, _)) if adt.name == "Result" => {
+                        let et = self.tys().tcx().field_ty(ret_ty, Some(ev), 0);
+                        et.and_then(|et| self.enum_of("Result", &[vt, et]))
+                    }
+                    _ => self.enum_of("Option", &[vt]),
+                };
+                let Some(t) = wrapped else {
+                    return self.unsupported(x.span, "this `par` branch's result type");
+                };
+                t
+            }
+        };
+        Ok((tt, exit))
     }
 
     /// The closure `|| x` a `par` branch `x` runs as: one per branch, kept
@@ -17561,6 +17601,31 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the function's error; a branch that ends with its own value runs
     /// none (core semantics §11.7).
     fn return_exit(&mut self) -> R<()> {
+        // Leaving from a `par for` body: the values its earlier iterations
+        // made drop in reverse iteration order (§11.7).
+        let accs = self.par_for_accs.clone();
+        let start = self.b.block_count() as u32;
+        if !accs.is_empty() {
+            let from = self.b.new_block();
+            self.goto(from);
+            self.cur = from;
+        }
+        for &(acc, vt) in accs.iter().rev() {
+            let rt = self.tys().tcx().reference(vt, true);
+            let r = self.temp(rt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(acc)));
+            let u = self.unit();
+            let u = self.temp(u);
+            let name = format!("{}.reverse", self.tys().display(vt));
+            self.call_native(&name, vec![Operand::Move(Place::local(r))], Place::local(u));
+        }
+        if !accs.is_empty() {
+            let end = self.b.block_count() as u32;
+            self.par_exempt.extend(start..end);
+            let next = self.b.new_block();
+            self.goto(next);
+            self.cur = next;
+        }
         // A postcondition reads the value it is about to return: a value
         // not `Copy` is lent to it, or a `match result` in it would move the
         // value out of the return place (B-2026-10-31-29).
@@ -26207,6 +26272,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let builtin = self.task_moves
                     && matches!(callee.kind, ExprKind::Path { .. })
                     && def.is_none_or(|d| !self.lcx.fns.contains_key(&d));
+                // The prelude's `drop(x)`, which `mem_call` lowers with no
+                // body of its own, takes its argument by value, so a `par`
+                // branch may drop a capture it alone uses (B-2026-11-16-254).
+                let drops = def.is_some_and(|d| {
+                    !self.lcx.fns.contains_key(&d)
+                        && self.lcx.def_owner(d).is_none()
+                        && self.lcx.def_name(d) == "drop"
+                });
                 // A call through a function value (`f(s)`, `f: Fn(own
                 // String)`) takes what its type's parameters own
                 // (B-2026-10-25-36).
@@ -26224,6 +26297,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 for (i, a) in args.iter().enumerate() {
                     let owned = variant
                         || builtin
+                        || drops
                         || (binds && i == 0)
                         || def.is_some_and(|d| self.owned_param(d, i))
                         || value_params

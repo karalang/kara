@@ -1,0 +1,10 @@
+source = "B-2026-11-16-254"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "par", "drops"]
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "core-semantics §11.2: a par branch may move a capture no other branch uses, and drop(x) is an ordinary own call. Dropping the last Sender from a branch closes the channel the other branch drains (concurrency.md §Channels). drop(r) in a branch was refused as a move out of a borrowed place while eat(r) with an own parameter checked."

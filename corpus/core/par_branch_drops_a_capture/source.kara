@@ -1,0 +1,14 @@
+// A `par` branch may move a capture it alone uses (core semantics §11.2), and
+// `drop(x)` is an ordinary `own` call: dropping the last Sender from a branch
+// closes the channel the other branch drains (B-2026-11-16-254).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn main() {
+    let r = R { id: 7 };
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
+    let (a, b) = par {
+        { drop(r); let _ = tx.send(5); drop(tx); 2 },
+        { let mut t = 0; while let Some(v) = rx.recv() { t += v; } t },
+    };
+    println(f"{a} {b}");
+}

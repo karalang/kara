@@ -3251,6 +3251,7 @@ fn main() -> () {
             "ok_ref_handle_collects_as_the_handle",
             "ok_weak_slot_upgrade",
             "ok_closure_reads_method_args_handles_and_matches",
+            "par_branch_drops_a_capture",
             // `into_iter`, `iter` and `vec!` are the library's.
             "for_into_iter_consumes",
             "ok_ref_copied_from_a_tuple_element",

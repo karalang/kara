@@ -1,0 +1,24 @@
+// core-semantics §11.7: when a branch or iteration leaves early (`?`, `return`), the
+// block's other values drop in reverse source (iteration) order as it is left
+// (B-2026-11-16-272); they dropped in source order.
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn ok(n: i64) -> Result[D, String] { Ok(D { n: n }) }
+fn mk(n: i64) -> Result[D, String] { if n == 3 { Err("three".to_string()) } else { Ok(D { n: n }) } }
+fn run() -> Result[i64, String] {
+    let (a, b, c, d, e) = par { ok(1)?, ok(2)?, mk(3)?, ok(4)?, ok(5)? };
+    Ok(a.n + b.n + c.n + d.n + e.n)
+}
+fn runf() -> Result[i64, String] {
+    let v = par for i in 1..6 { mk(i)? };
+    Ok(v.len())
+}
+fn ret() -> i64 {
+    let (a, b, c) = par { D { n: 7 }, { return 9; }, D { n: 8 } };
+    a.n + c.n
+}
+fn main() {
+    match run() { Ok(v) => println(v), Err(e) => println(f"err {e}") }
+    match runf() { Ok(v) => println(v), Err(e) => println(f"errf {e}") }
+    println(ret());
+}

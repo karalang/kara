@@ -1,0 +1,10 @@
+source = "B-2026-11-16-272"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "par", "drops"]
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "core-semantics §11.7: on an early exit the source-earliest branch's error is returned and the block's other values, errors included, drop in reverse source order (par for: iteration order). par blocks dropped the earlier branches' values before the later ones', and par for dropped its Vec of earlier values front to back."
