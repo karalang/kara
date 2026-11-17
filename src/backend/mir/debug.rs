@@ -401,8 +401,15 @@ impl<'ctx> Cx<'ctx, '_> {
                     if let ConstKind::FnDef(inst) = &c.kind {
                         // In a program with an isolating group, an `Abort`
                         // is a call of `__panic` (core-semantics §11.12).
-                        aborts =
-                            inst.name == crate::mir::coroutine::PANIC || self.may_abort(&inst.name);
+                        // A native (no body) can abort where it is built:
+                        // an index's bounds, a string cut inside a char,
+                        // an allocation. Counted as aborting, so that a
+                        // `#[track_caller]` or library body whose only
+                        // abort is a native's still reports its caller's
+                        // place (B-2026-11-16-318).
+                        aborts = inst.name == crate::mir::coroutine::PANIC
+                            || !program.bodies.contains_key(&inst.name)
+                            || self.may_abort(&inst.name);
                     }
                 }
                 _ => {}
