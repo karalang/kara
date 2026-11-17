@@ -121,6 +121,9 @@ pub(super) struct Glue<'ctx> {
 /// cannot wait (B-2026-11-17-35).
 const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a drop that cannot wait (inside a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a function value; B-2026-11-17-101)";
 
+/// The quiet fields of a body ([`Cx::own_handle_fields`]): offset and type.
+type QuietFields = Vec<(u64, Ty)>;
+
 fn err<T>(e: impl ToString) -> R<T> {
     Err(e.to_string())
 }
@@ -768,8 +771,8 @@ impl<'ctx> Cx<'ctx, '_> {
     /// last, after the box is freed, and its box in turn by the same loop,
     /// so a long chain is not dropped by one call per node.
     fn release_last(&mut self, b0: PointerValue<'ctx>, ty: Ty, a: AdtId) -> R<()> {
-        if let Some(offs) = self.own_handle_fields(ty)?.filter(|o| o.len() > 1) {
-            return self.release_tree(b0, ty, a, &offs);
+        if let Some((offs, quiet)) = self.own_handle_fields(ty)?.filter(|(o, _)| o.len() > 1) {
+            return self.release_tree(b0, ty, a, &offs, &quiet);
         }
         let chain = self.chain_field(ty)?;
         let cur = self.entry_slot(8, "box")?;
@@ -800,9 +803,13 @@ impl<'ctx> Cx<'ctx, '_> {
             .shared_body_off(ty)
             .ok_or_else(|| format!("`{}` has no layout", self.tys.display(ty)))?;
         let body = self.offset(b, off)?;
-        let next = match chain {
-            // Every other field is plain data: only the handle is taken.
-            Some(foff) => Some(self.load_ptr(self.offset(body, foff)?)?),
+        let next = match &chain {
+            // Every other field is plain data or quiet: the quiet ones
+            // drop, and the handle is taken.
+            Some((foff, quiet)) => {
+                self.drop_quiet(body, quiet)?;
+                Some(self.load_ptr(self.offset(body, *foff)?)?)
+            }
             None => {
                 self.drop_fields(body, ty)?;
                 None
@@ -852,7 +859,14 @@ impl<'ctx> Cx<'ctx, '_> {
     /// the recursive glue releases them, so `Drop` bodies run in the same
     /// order. A box waiting on the stack is freed once its last handle is
     /// released; its strong count is 0, so no handle can reach its body.
-    fn release_tree(&mut self, b0: PointerValue<'ctx>, ty: Ty, a: AdtId, offs: &[u64]) -> R<()> {
+    fn release_tree(
+        &mut self,
+        b0: PointerValue<'ctx>,
+        ty: Ty,
+        a: AdtId,
+        offs: &[u64],
+        quiet: &[(u64, Ty)],
+    ) -> R<()> {
         let k = offs.len();
         let atomic = self.atomic_counts(ty);
         let off = self
@@ -881,6 +895,7 @@ impl<'ctx> Cx<'ctx, '_> {
             self.call_drop_body(a, ty, slot)?;
         }
         let body = self.offset(b, off)?;
+        self.drop_quiet(body, quiet)?;
         let mut hs = Vec::with_capacity(k);
         for &o in offs {
             hs.push(self.load_ptr(self.offset(body, o)?)?);
@@ -972,21 +987,26 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
-    /// For the `shared` struct `ty` whose only field needing a drop is a
-    /// handle of `ty` itself (as `ty` or as an `Option[ty]` held as a bare
-    /// pointer), that field's offset in the body.
-    fn chain_field(&self, ty: Ty) -> R<Option<u64>> {
-        Ok(match self.own_handle_fields(ty)?.as_deref() {
-            Some(&[off]) => Some(off),
+    /// For the `shared` struct `ty` whose only field needing a drop, past
+    /// the quiet ones ([`Cx::own_handle_fields`]), is a handle of `ty`
+    /// itself (as `ty` or as an `Option[ty]` held as a bare pointer), that
+    /// field's offset in the body, and the quiet fields.
+    fn chain_field(&self, ty: Ty) -> R<Option<(u64, QuietFields)>> {
+        Ok(match self.own_handle_fields(ty)? {
+            Some((h, quiet)) if h.len() == 1 => Some((h[0], quiet)),
             _ => None,
         })
     }
 
     /// For the `shared` struct `ty` each of whose fields needing a drop is
     /// a handle of `ty` itself (as `ty` or as an `Option[ty]` held as a
-    /// bare pointer), those fields' offsets in the body, in field order;
-    /// `None` when another field needs a drop or none does.
-    fn own_handle_fields(&self, ty: Ty) -> R<Option<Vec<u64>>> {
+    /// bare pointer) or a quiet one, those handles' offsets in the body, in
+    /// field order, and the quiet fields' offsets and types; `None` when
+    /// another field needs a drop or no handle does. A quiet field's drop
+    /// runs no `Drop` body (a `weak` handle, a `String`, a `Vec` of plain
+    /// data), so when it runs among the handles' releases is not seen
+    /// (B-2026-11-17-117).
+    fn own_handle_fields(&self, ty: Ty) -> R<Option<(Vec<u64>, QuietFields)>> {
         let Some((adt, _)) = self.tys.tcx().adt_of(ty) else {
             return Ok(None);
         };
@@ -994,6 +1014,7 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(None);
         }
         let mut found = Vec::new();
+        let mut quiet = Vec::new();
         for f in 0..adt.variants[0].fields.len() as u32 {
             let Some(ft) = self.tys.field_ty(ty, None, f) else {
                 return Ok(None);
@@ -1009,12 +1030,32 @@ impl<'ctx> Cx<'ctx, '_> {
                         .adt_of(ft)
                         .and_then(|(_, a)| a.first().copied())
                         == Some(ty));
-            if !own {
+            if own {
+                found.push(self.field_offset(ty, None, f)?);
+                continue;
+            }
+            let is_quiet = !layout::boxed_field(self.tys, ty, None, f)
+                && match self.tys.kind(ft) {
+                    TyKind::Weak(_) | TyKind::Intrinsic(IntrinsicTy::String) => true,
+                    TyKind::Intrinsic(IntrinsicTy::Vec(e)) => !self.tys.needs_drop(e),
+                    _ => false,
+                };
+            if !is_quiet {
                 return Ok(None);
             }
-            found.push(self.field_offset(ty, None, f)?);
+            quiet.push((self.field_offset(ty, None, f)?, ft));
         }
-        Ok((!found.is_empty()).then_some(found))
+        Ok((!found.is_empty()).then_some((found, quiet)))
+    }
+
+    /// Drops the quiet fields ([`Cx::own_handle_fields`]) of the body at
+    /// `body`, last to first.
+    fn drop_quiet(&mut self, body: PointerValue<'ctx>, quiet: &[(u64, Ty)]) -> R<()> {
+        for &(off, ft) in quiet.iter().rev() {
+            let q = self.offset(body, off)?;
+            self.call_glue(q, ft)?;
+        }
+        Ok(())
     }
 
     /// Drops the `weak` handle of type `ty` at `p`.

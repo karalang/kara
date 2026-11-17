@@ -159,3 +159,72 @@ fn tree_release_keeps_the_drop_order_on_every_lane() {
         assert_eq!(out, ORDER_OUT, "wasm");
     }
 }
+
+/// B-2026-11-17-117, the remainder of -311: a node that also holds a
+/// `weak` handle or a `String` released recursively. A doubly linked list
+/// and a tree with `weak` back links, each 200000 deep, and a tree whose
+/// `Drop` bodies read the `weak` parent.
+const WEAK: &str = r#"shared struct N { name: String, mut parent: weak N, mut left: Option[N], mut right: Option[N] }
+
+impl Drop for N {
+    fn drop(mut ref self) {
+        let p = match self.parent.upgrade() { Some(p) => p.name.clone(), None => "-".to_string() };
+        println(f"drop {self.name} parent {p}");
+    }
+}
+
+shared struct L { v: i64, tag: String, mut prev: weak L, mut next: Option[L] }
+
+shared struct T { v: i64, mut up: weak T, mut left: Option[T], mut right: Option[T] }
+
+fn node(s: own String) -> N { N { name: s, parent: None, left: None, right: None } }
+
+fn main() {
+    {
+        let root = node("root");
+        let l = node("l");
+        let r = node("r");
+        let rl = node("rl");
+        l.parent = root;
+        r.parent = root;
+        rl.parent = r;
+        r.left = Some(rl);
+        root.left = Some(l);
+        root.right = Some(r);
+        println("dropping root");
+    }
+    let head = L { v: 0, tag: "h", prev: None, next: None };
+    let mut cur = head;
+    for i in 1..200000 {
+        let n = L { v: i, tag: f"n{i}", prev: None, next: None };
+        n.prev = cur;
+        cur.next = Some(n);
+        cur = n;
+    }
+    println(f"list {head.v}");
+    let top = T { v: 0, up: None, left: None, right: None };
+    let mut c = top;
+    for i in 1..200000 {
+        let n = T { v: i, up: None, left: None, right: None };
+        n.up = c;
+        c.left = Some(n);
+        c = n;
+    }
+    println(f"tree {top.v}");
+}
+"#;
+
+const WEAK_OUT: &str = "dropping root\ndrop root parent -\ndrop r parent -\ndrop rl parent -\ndrop l parent -\nlist 0\ntree 0\n";
+
+#[test]
+fn deep_chains_with_weak_back_links_drop_in_order() {
+    let dir = scratch("weak");
+    let file = dir.join("main.kara");
+    std::fs::write(&file, WEAK).unwrap();
+    assert_eq!(karac(&["__mir-run"], &file), WEAK_OUT, "interp");
+    assert_eq!(karac(&["__mir-llvm-run"], &file), WEAK_OUT, "llvm");
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(out) = on_wasm("weak", WEAK) {
+        assert_eq!(out, WEAK_OUT, "wasm");
+    }
+}
