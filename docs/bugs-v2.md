@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 452 |
+| diagnostics | 453 |
 | false-positive | 246 |
 | missing-feature | 190 |
 | perf | 183 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 582 |
 | mir-llvm | 281 |
-| mir | 243 |
+| mir | 244 |
 | cli | 191 |
 | parser | 103 |
 | ownership | 99 |
@@ -187,6 +187,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
 | B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
 | B-2026-11-17-80 | 2026-11-17 | typecheck+mir | medium | Iterators have no `cycle` (`backends.iter().cycle()`, `(0..n).cycle().take(k)`): it is refused as "no method 'cycle' on type 'VecIter'", and 11 legacy corpus fixtures that cycle stay class e | — |
+| B-2026-11-17-85 | 2026-11-17 | typecheck+mir | medium | core-semantics §3-§7 refusals that do not name both places or carry the fix the doc implies: E0516 live-borrow conflicts give no borrow or use position, moves out of a borrowed place name neither the place nor its root, a `mut ref` scrutinee binding moved out is a bare type mismatch, E0288's fix writes `own ref String`, a Drop receiver is refused at the impl with no fix, a returned view of a local reads as a drop conflict | — |
 
 ### Relocated
 

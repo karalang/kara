@@ -4965,6 +4965,22 @@ impl<'a> super::TypeChecker<'a> {
                         replacement: prefix.to_string(),
                     }),
                     (TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_), _) => None,
+                    // `s: own String` against a borrowed `s`: the `own` goes
+                    // (a bare parameter borrows, §4.1), or becomes `mut ref`.
+                    // Inserting before the type would leave `own ref String`.
+                    (_, Some(prefix)) if ip.is_own && ip.ty.span.offset >= 4 => Some(FixIt {
+                        span: Span {
+                            offset: ip.ty.span.offset - 4,
+                            length: 4,
+                            column: ip.ty.span.column.saturating_sub(4),
+                            ..ip.ty.span
+                        },
+                        replacement: if prefix == "ref " {
+                            String::new()
+                        } else {
+                            prefix.to_string()
+                        },
+                    }),
                     (_, Some(prefix)) => Some(FixIt {
                         span: Span {
                             length: 0,
@@ -4974,20 +4990,19 @@ impl<'a> super::TypeChecker<'a> {
                     }),
                     (_, None) => None,
                 };
-                let show = |m: &str| {
-                    if m == "owned" {
-                        "by value".to_string()
-                    } else {
-                        format!("as `{m}`")
-                    }
+                // A bare parameter borrows, and reads as `ref` here.
+                let show = |m: &str, it: &str| match m {
+                    "owned" => format!("takes {it} by value (`own`)"),
+                    "ref" => format!("borrows {it}"),
+                    m => format!("takes {it} as `{m}`"),
                 };
                 found.push((
                     format!(
-                        "impl method '{type_name}.{name}' takes '{pname}' {}, but \
-                         '{trait_name}.{name}' takes it {}: an impl's mode may be weaker \
-                         than the trait's, never stronger (core-semantics.md §4.7)",
-                        show(iw),
-                        show(tw),
+                        "impl method '{type_name}.{name}' {}, but '{trait_name}.{name}' {}: \
+                         an impl's mode may be weaker than the trait's, never stronger \
+                         (core-semantics.md §4.7)",
+                        show(iw, &format!("'{pname}'")),
+                        show(tw, "it"),
                         name = method.name,
                     ),
                     ip.ty.span,
@@ -9131,6 +9146,27 @@ impl<'a> super::TypeChecker<'a> {
                 || name == "SortedMap")
     }
 
+    /// §3.7's refusal names the place and what it is reached through: `u.name`
+    /// through the bare parameter `u`, `self.items` through the receiver.
+    fn core_borrowed_place_lead(&self, value: &Expr) -> String {
+        const LEAD: &str = "cannot move a non-`Copy` value out of a borrowed place";
+        let Some(place) = super::core_ref_write::place_text(value) else {
+            return LEAD.to_string();
+        };
+        let through = match &Self::projection_root(value).kind {
+            ExprKind::SelfValue => "the receiver `self`, which borrows".to_string(),
+            ExprKind::Identifier(r) if self.current_fn_d5_params.contains_key(r) => {
+                format!("`{r}`, a bare parameter, which borrows (core-semantics.md §4.1)")
+            }
+            ExprKind::Identifier(r) => match self.local_scope.lookup(r) {
+                Some(Type::Ref(_) | Type::MutRef(_)) => format!("`{r}`, a reference"),
+                _ => format!("`{r}`, which does not own it"),
+            },
+            _ => return LEAD.to_string(),
+        };
+        format!("{LEAD}: `{place}` is reached through {through}")
+    }
+
     /// The root of a field / tuple projection chain.
     fn projection_root(value: &Expr) -> &Expr {
         let mut root = value;
@@ -9721,7 +9757,7 @@ impl<'a> super::TypeChecker<'a> {
                  the stored value"
                     .to_string()
             } else {
-                "cannot move a non-`Copy` value out of a borrowed place".to_string()
+                self.core_borrowed_place_lead(value)
             };
             let derive_clone =
                 !has_clone && self.copy_derive_fix(ty).is_some_and(|f| f.adds_clone());

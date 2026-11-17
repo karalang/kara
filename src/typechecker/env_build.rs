@@ -3096,6 +3096,9 @@ impl<'a> super::TypeChecker<'a> {
                 })
                 .collect();
             let mut sig_problems: Vec<&'static str> = Vec::new();
+            // The receiver alone is wrong (`fn drop(self)`, `fn drop(own
+            // self)`): the error sits on it, and the fix spells the form.
+            let mut receiver_fix: Option<crate::token::Span> = None;
             let has_assoc_type = imp
                 .items
                 .iter()
@@ -3109,6 +3112,7 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(m) = method_items.first() {
                 if m.self_param != Some(SelfParam::MutRef) {
                     sig_problems.push("the `drop` method's receiver must be `mut ref self`");
+                    receiver_fix = m.self_span;
                 }
                 if !m.params.is_empty() {
                     sig_problems
@@ -3123,16 +3127,24 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             if !sig_problems.is_empty() {
-                self.type_error(
-                    format!(
-                        "error[E_DROP_SIGNATURE_INVALID]: `impl Drop for {}` does not \
-                         match `trait Drop {{ fn drop(mut ref self); }}` — {}",
-                        type_name,
-                        sig_problems.join("; "),
-                    ),
-                    imp.span,
-                    TypeErrorKind::TypeMismatch,
+                let message = format!(
+                    "error[E_DROP_SIGNATURE_INVALID]: `impl Drop for {}` does not \
+                     match `trait Drop {{ fn drop(mut ref self); }}` — {}",
+                    type_name,
+                    sig_problems.join("; "),
                 );
+                match receiver_fix.filter(|_| sig_problems.len() == 1) {
+                    Some(at) => self.type_error_with_fix_it(
+                        message,
+                        at,
+                        TypeErrorKind::TypeMismatch,
+                        crate::typechecker::FixIt {
+                            span: at,
+                            replacement: "mut ref self".to_string(),
+                        },
+                    ),
+                    None => self.type_error(message, imp.span, TypeErrorKind::TypeMismatch),
+                }
                 return;
             }
         }

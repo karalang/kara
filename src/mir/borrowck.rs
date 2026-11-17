@@ -405,6 +405,27 @@ pub fn borrow_errors_with(
                         continue;
                     }
                     if conflicts(loan, &place, access) {
+                        // The result holds the borrow of a local this
+                        // function drops on the way out: that is §5.4's
+                        // refusal (the result outlives what it borrows),
+                        // named as such rather than as a drop conflict.
+                        if matches!(access, Access::Drop | Access::StorageDead)
+                            && o.get(Local::RETURN_PLACE).iter().any(|h| h == li)
+                            && !loan.place.projection.contains(&ProjElem::Deref)
+                        {
+                            let text = format!(
+                                "{}: the result borrows {}, which this function owns (borrow at {}) [E0509]",
+                                site(body, at, Some(loan.at)),
+                                show_place(body, tys, &loan.place),
+                                borrow_site(body, loan.at),
+                            );
+                            errs.push(BorrowError {
+                                place: source_place(body, tys, &loan.place),
+                                loan_at: source_at(body, loan.at),
+                                ..BorrowError::new(text, "E0509", site_at(body, at, Some(loan.at)))
+                            });
+                            continue;
+                        }
                         let text = format!(
                             "{}: {} of {} while it is borrowed{} (borrow at {}) [E0516]",
                             site(body, at, Some(loan.at)),

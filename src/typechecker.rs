@@ -8628,6 +8628,17 @@ impl<'a> TypeChecker<'a> {
         (self.local_scope.depth_of(&sym.name) == Some(depth)).then(|| (sym.name.clone(), end))
     }
 
+    /// The name an identifier at `span` uses and where that binding is
+    /// introduced (line, column), when it is a use rather than the binding.
+    fn named_binding_at(&self, span: Span) -> Option<(String, usize, usize)> {
+        let id = self
+            .resolve_result
+            .resolutions
+            .get(&SpanKey::from_span(&span))?;
+        let sym = self.resolve_result.symbol_table.get_symbol(*id);
+        (sym.span.offset != span.offset).then(|| (sym.name.clone(), sym.span.line, sym.span.column))
+    }
+
     fn d5_param_of_local_at(&self, span: Span) -> Option<(String, Span)> {
         let id = self
             .resolve_result
@@ -9522,12 +9533,17 @@ impl<'a> TypeChecker<'a> {
             return false;
         }
         if self.cli_lint_overrides.strict_core {
-            if let Type::Ref(inner) = found {
+            if let Type::Ref(inner) | Type::MutRef(inner) = found {
                 if **inner == *expected
                     && self.type_cannot_leave_a_borrowed_place(expected)
                     && self.type_supports_clone(expected)
                 {
                     let shown = type_display(expected);
+                    let kw = if matches!(found, Type::MutRef(_)) {
+                        "mut ref"
+                    } else {
+                        "ref"
+                    };
                     // Kata 2046: a local bound out of a bare parameter
                     // (`let mut cur = head; while let Some(node) = cur ..
                     // Some(node)`) borrows because the parameter does, so
@@ -9535,7 +9551,7 @@ impl<'a> TypeChecker<'a> {
                     if let Some((param, at)) = self.d5_param_of_local_at(span) {
                         self.errors.push(TypeError {
                             message: format!(
-                                "expected '{shown}', found 'ref {shown}': this is bound out \
+                                "expected '{shown}', found '{kw} {shown}': this is bound out \
                                  of parameter `{param}`, and a bare parameter borrows \
                                  (core-semantics §4.1). Take `{param}` by value with `own`, \
                                  or take an owned copy with `.clone()`"
@@ -9549,7 +9565,7 @@ impl<'a> TypeChecker<'a> {
                             }),
                             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                             expected: Some(shown.clone()),
-                            got: Some(format!("ref {shown}")),
+                            got: Some(format!("{kw} {shown}")),
                         });
                         return false;
                     }
@@ -9559,7 +9575,7 @@ impl<'a> TypeChecker<'a> {
                     let (message, at) = match at_let {
                         Some((name, end)) => (
                             format!(
-                                "expected '{shown}', found 'ref {shown}': `{name}` is bound \
+                                "expected '{shown}', found '{kw} {shown}': `{name}` is bound \
                                  from a borrowed value, which cannot be moved out of what it \
                                  borrows. Take an owned copy with `.clone()` where `{name}` \
                                  is bound"
@@ -9567,11 +9583,20 @@ impl<'a> TypeChecker<'a> {
                             end,
                         ),
                         None => (
-                            format!(
-                                "expected '{shown}', found 'ref {shown}': a borrowed value \
-                                 cannot be moved out of what it borrows. Take an owned copy \
-                                 with `.clone()`"
-                            ),
+                            match self.named_binding_at(span) {
+                                Some((name, line, column)) => format!(
+                                    "expected '{shown}', found '{kw} {shown}': a borrowed \
+                                     value cannot be moved out of what it borrows, and \
+                                     `{name}` (bound at {line}:{column}) borrows its value \
+                                     (core-semantics.md §3.7, §4.6). Take an owned copy \
+                                     with `.clone()`"
+                                ),
+                                None => format!(
+                                    "expected '{shown}', found '{kw} {shown}': a borrowed \
+                                     value cannot be moved out of what it borrows. Take an \
+                                     owned copy with `.clone()`"
+                                ),
+                            },
                             Span {
                                 line: span.line,
                                 column: span.column,
@@ -9591,7 +9616,7 @@ impl<'a> TypeChecker<'a> {
                         }),
                         class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                         expected: Some(shown.clone()),
-                        got: Some(format!("ref {shown}")),
+                        got: Some(format!("{kw} {shown}")),
                     });
                     return false;
                 }

@@ -2068,6 +2068,16 @@ impl super::Parser {
         self.escaping_ok = false;
         let is_frozen = std::mem::take(&mut self.frozen_consumed);
         let ty = ty?;
+        // `own ref T` is no mode: `own T` owns the argument and a bare `T`
+        // borrows it (core-semantics.md §4.1).
+        if own_written && is_own && matches!(ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+            self.error_at(
+                "`own` and `ref` together are not a parameter mode: `own T` owns the \
+                 argument, a bare `T` borrows it and `mut ref T` borrows it to write \
+                 (core-semantics.md §4.1). Write one of them",
+                own_span,
+            );
+        }
         // design.md § Escaping function values: "An `escaping` parameter is
         // owned ... `own` is not written beside `escaping`" (B-2026-11-04-69).
         if own_written

@@ -244,9 +244,7 @@ fn impl_mode_stronger_than_trait_is_an_error() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "check must reject: {err}");
     assert!(
-        err.contains(
-            "impl method 'P.grab' takes 'w' as `mut ref`, but 'Grab.grab' takes it as `ref`"
-        ),
+        err.contains("impl method 'P.grab' takes 'w' as `mut ref`, but 'Grab.grab' borrows it"),
         "expected the stronger `w` in: {err}"
     );
     for bare in ["its receiver as `self`", "takes 'v' by value"] {

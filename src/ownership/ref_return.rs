@@ -226,7 +226,22 @@ impl<'a> super::OwnershipChecker<'a> {
                             .core_return_shape(e, &all_params, &all_locals)
                             .is_none() =>
                 {
-                    receiver_rule_message()
+                    // The parameter that lends it instead, named; the first
+                    // by name when several do.
+                    let lender = all_params
+                        .iter()
+                        .filter(|p| *p != "self")
+                        .filter(|p| {
+                            let one: HashSet<String> = HashSet::from([(*p).clone()]);
+                            self.core_return_shape(
+                                e,
+                                &one,
+                                &self.borrow_locals(f, &one, &ref_returning_fns),
+                            )
+                            .is_none()
+                        })
+                        .min();
+                    receiver_rule_message(lender.map(String::as_str))
                 }
                 BorrowReturnShape::DanglingSource => (
                     "returned borrow does not originate from a borrowed parameter; its source \
@@ -759,11 +774,21 @@ impl<'a> super::OwnershipChecker<'a> {
                 && self.view_return_shape(e, &self_only, &self_locals)
                     == Some(BorrowReturnShape::DanglingSource)
             {
-                refused.push(e.span);
+                // Name the parameter that lends the result instead.
+                let lender = all_params
+                    .iter()
+                    .filter(|p| *p != "self")
+                    .filter(|p| {
+                        let one: HashSet<String> = HashSet::from([(*p).clone()]);
+                        let locals = self.borrow_locals(f, &one, &ref_returning_fns);
+                        self.view_return_shape(e, &one, &locals).is_none()
+                    })
+                    .min();
+                refused.push((e.span, lender.cloned()));
             }
         }
-        for span in refused {
-            let (message, suggestion) = receiver_rule_message();
+        for (span, lender) in refused {
+            let (message, suggestion) = receiver_rule_message(lender.as_deref());
             self.errors.push(OwnershipError {
                 message,
                 span,
@@ -869,12 +894,19 @@ impl<'a> super::OwnershipChecker<'a> {
 
 /// The §5.4 receiver rule's error: a method with a `self` or `mut ref self`
 /// receiver returned a borrow that is not reached through `self`.
-fn receiver_rule_message() -> (String, Option<String>) {
+fn receiver_rule_message(lender: Option<&str>) -> (String, Option<String>) {
     (
-        "a method with a `self` receiver returns a borrow of `self` only \
-         (core semantics §5.4), and this returned borrow is not reached \
-         through `self`"
-            .to_string(),
+        match lender {
+            Some(p) => format!(
+                "a method with a `self` receiver returns a borrow of `self` only \
+                 (core semantics §5.4), and this returned borrow is reached through \
+                 the parameter `{p}`, not through `self`"
+            ),
+            None => "a method with a `self` receiver returns a borrow of `self` only \
+                     (core semantics §5.4), and this returned borrow is not reached \
+                     through `self`"
+                .to_string(),
+        },
         Some(
             "return a borrow reached through `self` (`ref self.field`), return \
              an owned value, or make it an associated function without `self`, \

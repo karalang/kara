@@ -132,7 +132,7 @@ fn main() {
     println(f\"{view(Some([1].to_vec())).is_some()}\");
 }
 ",
-        "cannot drop `o` while it is still borrowed",
+        "the result borrows `o`, which this function owns",
     );
     refused(
         "esc3.kara",

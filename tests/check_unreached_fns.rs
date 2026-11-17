@@ -59,7 +59,7 @@ const ESCAPING_VIEW: &str =
 fn check_refuses_a_borrow_error_in_a_function_main_never_calls() {
     let (ok, out) = check_source("uncalled", &format!("{ESCAPING_VIEW}\nfn main() {{ }}\n"));
     assert!(!ok, "check must refuse: {out}");
-    assert!(out.contains("3:5") && out.contains("E0516"), "{out}");
+    assert!(out.contains("3:5") && out.contains("E0509"), "{out}");
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn check_refuses_a_borrow_error_in_an_uncalled_method() {
     let src = "struct S { n: i64 }\n\nimpl S {\n    fn label(ref self) -> Str {\n        let s = self.n.to_string();\n        s.as_str()\n    }\n}\n\nfn main() {\n    let s = S { n: 1 };\n    println(s.n);\n}\n";
     let (ok, out) = check_source("method", src);
     assert!(!ok, "check must refuse: {out}");
-    assert!(out.contains("6:9") && out.contains("E0516"), "{out}");
+    assert!(out.contains("6:9") && out.contains("E0509"), "{out}");
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn check_refuses_a_borrow_error_in_a_library_package() {
     assert!(!ok, "check must refuse: {out}");
     assert!(
         // The host's separator: `src\lib.kara` on Windows.
-        out.replace('\\', "/").contains("src/lib.kara:3:5") && out.contains("E0516"),
+        out.replace('\\', "/").contains("src/lib.kara:3:5") && out.contains("E0509"),
         "{out}"
     );
 }

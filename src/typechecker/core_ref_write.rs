@@ -199,8 +199,34 @@ struct RefHold {
     name: String,
     /// The binding's offset, which identifies the hold.
     at: usize,
-    /// Each use: its offset and the branches it sits in.
-    uses: Vec<(usize, Vec<(usize, usize)>)>,
+    /// The binding's line and column, which the conflict names.
+    pos: (usize, usize),
+    /// Each use: its offset, the branches it sits in, and its line and column.
+    uses: Vec<Use>,
+}
+
+/// One use of a held binding: its offset, the branches on the path to it,
+/// and its line and column for the message that names it.
+type Use = (usize, Vec<(usize, usize)>, (usize, usize));
+
+/// `line:column`.
+fn show_pos((line, column): (usize, usize)) -> String {
+    format!("{line}:{column}")
+}
+
+/// The position of the first use of `h` at or after `after` that the
+/// conflicting access can reach: the use that keeps the borrow live.
+fn next_use(
+    h: &RefHold,
+    after: usize,
+    branches: &[(usize, usize)],
+    dead: &[usize],
+) -> (usize, usize) {
+    h.uses
+        .iter()
+        .filter(|(u, p, _)| *u >= after && !exclusive(p, branches) && !dead.iter().any(|d| u >= d))
+        .min_by_key(|(u, ..)| *u)
+        .map_or(h.pos, |(.., pos)| *pos)
 }
 
 /// The branches (`if` / `match` node offset, branch index) on the path to a
@@ -813,6 +839,7 @@ impl Walk<'_, '_> {
             binding: Some(RefHold {
                 name: name.clone(),
                 at: pattern.span.offset,
+                pos: (pattern.span.line, pattern.span.column),
                 uses,
             }),
             fix: None,
@@ -886,6 +913,7 @@ impl Walk<'_, '_> {
                     binding: Some(RefHold {
                         name,
                         at: sp.offset,
+                        pos: (sp.line, sp.column),
                         uses,
                     }),
                     fix: None,
@@ -919,7 +947,7 @@ impl Walk<'_, '_> {
         let dead = &self.dead_after;
         let overlaps = |b: &Borrowed| {
             b.binding.as_ref().is_none_or(|h| {
-                h.uses.iter().any(|(u, p)| {
+                h.uses.iter().any(|(u, p, _)| {
                     *u >= after && !exclusive(p, branches) && !dead.iter().any(|d| u >= d)
                 })
             }) && b.root == root
@@ -932,13 +960,15 @@ impl Walk<'_, '_> {
             return;
         };
         let text = place_text(place).unwrap_or_else(|| b.text.clone());
-        let message = if let Some(RefHold { name, .. }) = &b.binding {
+        let message = if let Some(h @ RefHold { name, .. }) = &b.binding {
             let kw = if b.unique { "mut ref" } else { "ref" };
             format!(
                 "cannot {verb} `{text}` while `{kw} {name}` borrows `{}`: `{name}` is used \
-                 after this (core-semantics.md §5.6). Use `{name}` before the write, or \
-                 clone what you need from it first",
-                b.text
+                 after this, at {} (`{name}` is bound at {}; core-semantics.md §5.6). Use \
+                 `{name}` before the write, or clone what you need from it first",
+                b.text,
+                show_pos(next_use(h, after, branches, dead)),
+                show_pos(h.pos),
             )
         } else if b.handle || handle {
             format!(
@@ -989,7 +1019,7 @@ impl Walk<'_, '_> {
         let Some(b) = self.borrowed.iter().rev().find(|b| {
             b.unique
                 && b.binding.as_ref().is_some_and(|h| {
-                    h.uses.iter().any(|(u, p)| {
+                    h.uses.iter().any(|(u, p, _)| {
                         *u > after && !exclusive(p, branches) && !dead.iter().any(|d| u >= d)
                     })
                 })
@@ -1001,13 +1031,18 @@ impl Walk<'_, '_> {
         }) else {
             return;
         };
-        let name = b.binding.as_ref().map_or("", |h| h.name.as_str());
+        let Some(h) = b.binding.as_ref() else {
+            return;
+        };
+        let name = h.name.as_str();
         let text = place_text(place).unwrap_or_else(|| b.text.clone());
         let message = format!(
             "cannot read `{text}` while `mut ref {name}` borrows `{}`: `{name}` is used \
-             after this (core-semantics.md §5.6). Read it through `{name}`, or use \
-             `{name}` for the last time first",
-            b.text
+             after this, at {} (`{name}` is bound at {}; core-semantics.md §5.6). Read it \
+             through `{name}`, or use `{name}` for the last time first",
+            b.text,
+            show_pos(next_use(h, after + 1, branches, dead)),
+            show_pos(h.pos),
         );
         self.read_conflicts.push((place.span, message));
     }
@@ -2606,15 +2641,12 @@ impl Walk<'_, '_> {
 }
 
 /// Every read of the identifier `name` in `e`, with the branches it sits in.
-fn uses_in_expr(
-    e: &Expr,
-    name: &str,
-    branch: &mut Vec<(usize, usize)>,
-    out: &mut Vec<(usize, Vec<(usize, usize)>)>,
-) {
+fn uses_in_expr(e: &Expr, name: &str, branch: &mut Vec<(usize, usize)>, out: &mut Vec<Use>) {
     let at = e.span.offset;
     match &e.kind {
-        ExprKind::Identifier(n) if n == name => out.push((at, branch.clone())),
+        ExprKind::Identifier(n) if n == name => {
+            out.push((at, branch.clone(), (e.span.line, e.span.column)))
+        }
         ExprKind::If {
             condition,
             then_block,
@@ -2703,12 +2735,7 @@ fn child_jumps(c: Child<'_>) -> bool {
     }
 }
 
-fn uses_in_block(
-    b: &Block,
-    name: &str,
-    branch: &mut Vec<(usize, usize)>,
-    out: &mut Vec<(usize, Vec<(usize, usize)>)>,
-) {
+fn uses_in_block(b: &Block, name: &str, branch: &mut Vec<(usize, usize)>, out: &mut Vec<Use>) {
     crate::index_disjoint::for_each_block_child(b, &mut |c| match c {
         Child::Expr(x) => uses_in_expr(x, name, branch, out),
         Child::Block(b) => uses_in_block(b, name, branch, out),
@@ -2716,7 +2743,7 @@ fn uses_in_block(
 }
 
 /// A place expression as written: `self.items`, `b.items[]`.
-fn place_text(e: &Expr) -> Option<String> {
+pub(super) fn place_text(e: &Expr) -> Option<String> {
     Some(match &e.kind {
         ExprKind::Identifier(n) => n.clone(),
         ExprKind::SelfValue => "self".to_string(),
