@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 465 |
+| diagnostics | 468 |
 | false-positive | 248 |
-| missing-feature | 191 |
+| missing-feature | 192 |
 | perf | 184 |
 | other | 113 |
 | soundness | 84 |
@@ -76,20 +76,20 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 591 |
+| typecheck | 592 |
 | mir-llvm | 281 |
 | mir | 246 |
 | cli | 191 |
-| parser | 104 |
+| parser | 105 |
 | ownership | 103 |
 | interp | 87 |
 | runtime | 87 |
 | effect | 41 |
 | resolver | 40 |
-| other | 33 |
+| other | 34 |
 | codegen | 22 |
 | autopar | 7 |
-| lexer | 1 |
+| lexer | 2 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-17). Do not edit this block by hand; edit the ledger and regenerate._
@@ -109,18 +109,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
-| B-2026-11-16-255 | 2026-11-16 | typecheck | medium | Prefix collection literals `Vec[1, 2]`, `Set[1, 2]`, `Map["a": 1]`, `Array[0; 4]` are accepted with no diagnostic, though design.md §5 says there is no `Vec[...]` or `Set[...]` prefix literal; book ch09 teaches all four | — |
-| B-2026-11-16-256 | 2026-11-16 | typecheck | low | `effect group io = reads(FileSystem) + writes(FileSystem) + reads(Env);` checks with no diagnostic, though effect groups are deferred (design.md scope list, deferred.md §Effect Groups); book ch11 teaches it as current | — |
-| B-2026-11-16-257 | 2026-11-16 | parser | medium | A module-level `layout swarm: Vec[Particle] { group hot { x, y } cold { name } }` is accepted but binds nothing (`swarm` in main is E0100 undefined), and inside a function it is a parse error; layout blocks are deferred and `layout` is not a keyword in v1 (design.md line 279), yet book ch15 teaches them as working | — |
-| B-2026-11-16-260 | 2026-11-16 | typecheck | low | `struct HTTPClient` checks with no diagnostic; design.md CN-4 says Type names treat acronyms as words (`HttpClient`, not `HTTPClient`) but does not say whether that is an error or a lint, and book ch02 lists it among the compile errors | — |
-| B-2026-11-16-261 | 2026-11-16 | typecheck | low | `#[noblock]` and `@noblock` on an extern fn are accepted, though neither is in design.md's attribute table (an unknown bare attribute is E_UNKNOWN_ATTRIBUTE and `@` is not attribute syntax), and the attribute no longer does what appendix D says since an extern with no `with` clause has every effect | — |
-| B-2026-11-16-262 | 2026-11-16 | typecheck | low | `#[derive(Display(...))]` accepts any argument silently: `Display(bogus_arg)` and appendix C's `Display(all_fields)` check and change nothing, while design.md names only the casing argument (`Display(snake_case)`, enums) | — |
 | B-2026-11-16-275 | 2026-11-16 | runtime | low | The HTTP server labels every response `content-type: application/json` whatever the body: the README's own `Server.serve` example answers `/hello` as JSON, and the shortener's 302 and plain-text usage page carry it too; library/io.md does not say so | — |
 | B-2026-11-16-283 | 2026-11-16 | cli | medium | `karac run --output=json` on a program whose `main` returns `Err` prints two separate JSON objects on stdout (`{"error":"boom"}` then `{"error_return_trace":[...]}`), so the output is not one JSON document, and neither matches design.md §17's error-return-trace shape | — |
 | B-2026-11-16-285 | 2026-11-16 | cli | medium | `karac migrate shared-to-par` writes code that does not parse: it wraps uses in `lock self.n { ... }` blocks (`lock` is not a v1 keyword, design.md line 279) and renames a free function's parameter `c` to `self` | — |
 | B-2026-11-16-286 | 2026-11-16 | cli | low | `karac build --output=jsonl` on a failing build never emits `phase_skipped` for `codegen`, and a program whose effect phase reported an error gets `program_effects: []`, which is neither its effect set nor the `null` design.md §17 reserves for an unreached effect phase | — |
 | B-2026-11-16-287 | 2026-11-16 | cli | low | `karac help` and flags drift from behaviour: `--sequential` is listed as 'Disable parallel execution in par blocks' but `run` refuses it and `build` calls it unknown; `install` documents `path = ...` but only `path=...` parses; `cache key --pkg x` is refused (only `--pkg=x`); `fix` exits 0 on a file that still has an error; `debug` renders crash files nothing writes | — |
-| B-2026-11-16-288 | 2026-11-16 | cli | low | Malformed values of KARAC_HASH_SEED and KARAC_THREADS are ignored silently (`KARAC_HASH_SEED=abc` gives a fresh order each run; `KARAC_THREADS=0` runs one thread, `=abc` the default), unlike KARAC_OPT_LEVEL / KARAC_TARGET_CPU / KARAC_TARGET_FEATURES, which refuse; and KARA_BACKTRACE=1 (design.md § main error exit) is read nowhere | — |
 | B-2026-11-16-289 | 2026-11-16 | other | low | [doc-only] design.md describes `karac explain --edition <NEXT>` and `karac fix --edition <NEXT>` in the present tense (§4 editions, §3 `r#name`), but both are 'unknown flag'; with one edition (2026) there is nothing to migrate yet, so the text should say they arrive with the first edition boundary | — |
 | B-2026-11-16-290 | 2026-11-16 | resolver+cli | medium | The value-position did-you-mean offers the built-in `print` (`prnt`, `point` -> `print`) as a machine fix, and `karac fix` applies it into a fresh E0100 'print is a built-in function and cannot be used as a value'; `format` gets 'did you mean forget' | — |
 | B-2026-11-16-291 | 2026-11-16 | ownership+cli | medium | E0213's machine fix rewrites `fn bad() -> ref Holder` to `-> Holder`, and the fixed file fails with E0516 x2 | — |
@@ -128,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-293 | 2026-11-16 | typecheck+cli | medium | E0288 (receiver stronger than the trait's) fix rewrites `fn look(mut ref self)` to `fn look(self)` while the body does `self.n += 1`, and the fixed file fails with E0517 | — |
 | B-2026-11-16-294 | 2026-11-16 | typecheck+cli | low | E_INDEX_MOVE_NON_COPY fix rewrites `v[0]` to `v[0].clone()` where the element is an unbounded type parameter, and the fixed file fails with E0236 'no method clone on type parameter T' | — |
 | B-2026-11-16-295 | 2026-11-16 | typecheck+cli | medium | The E0520 shared->sync migration fix rewrites the fields to `Mutex[i64]` but leaves the literal `Counter { val: 0, count: 0, tag: 0 }`, so the fixed file fails with E0200 at the two wrapped fields | — |
-| B-2026-11-16-298 | 2026-11-16 | typecheck+cli | medium | Deferred-feature stubs emit wire code E0200 (class TYPE_MISMATCH) and put the catalogued symbolic code only inside the message text (`try { }` -> E0200 'try block syntax is recognized...'; a trait-alias bound -> E0200 'trait alias B is recognized but not yet expanded'), so `explain <code>` from the JSON never reaches E_TRY_BLOCK_NOT_IMPLEMENTED_YET / E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET | — |
 | B-2026-11-16-299 | 2026-11-16 | typecheck+cli | medium | One warning code covers several unrelated lints (W0295: redundant_clone, unused_mut, irrefutable_let_pattern, unreachable_errdefer; W0291: lossless_cast and redundant_cast; W0299: f16_software_emulated, map_value_clone_reinsert), and `karac explain` accepts neither the lint name nor tells them apart | — |
 | B-2026-11-16-300 | 2026-11-16 | cli | low | `karac explain --help` says parse / effect / ownership codes 'are not catalogued yet', but they are (explain E0003, E0400, E0500 work) and the E9999 message says every numbered code has an entry | — |
 | B-2026-11-16-301 | 2026-11-16 | typecheck+cli | low | E0208 (comparison without the trait) offers the `#[derive]` machine fix at an `==` site but none at a `<` / `>` site | — |
@@ -138,21 +130,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-315 | 2026-11-16 | other | low | [doc-only] design.md's resource table marks `Env` on wasm_wasi as '(limited)' without saying what is limited, and §16 names `libkarac_runtime_wasm_threads_{unicode,regex}.a` although no 0.8 build can link a threaded wasm module | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
 | B-2026-11-16-340 | 2026-11-16 | typecheck | low | An unsuffixed float literal that a context types as `f32`/`f16`/`bf16` is not range-checked there: `let a: f32 = 1e39;` is accepted as an f32 infinity | — |
-| B-2026-11-16-341 | 2026-11-16 | parser | low | `|>` is a token the parser accepts and the typechecker refuses late, so its stage's own type errors are reported first: `1 |> f` with a 2-parameter `f` gives `expected 2 argument(s), found 1` before `there is no pipe operator` | — |
 | B-2026-11-17-4 | 2026-11-17 | mir | medium | VecDeque.with_capacity(n) and try_with_capacity(n) with n < 0 panic "explicit panic" on all three lanes; collections.md says cap < 0 counts as 0, as for Vec | — |
 | B-2026-11-17-6 | 2026-11-17 | typecheck | low | rev on a chain, flat_map or open range says only "no method 'rev' on type 'IterChain'" (or IterFlatMap, RangeFrom); skip-over-range rev explains the missing bound | — |
-| B-2026-11-17-8 | 2026-11-17 | runtime | low | wasm_wasi: an empty path "" names the preopened directory: fs.exists("") is true, read_to_string("") fails EBADF and fs.write("", ..) fails EISDIR, where native and interp say not found / false | — |
-| B-2026-11-17-9 | 2026-11-17 | other | low | [doc-only] io.md is silent on wasm_wasi file behaviour: set_permissions and symlink return Unsupported, metadata.mode is 0o444 for a file the program just wrote, and Other messages carry WASI errno numbers | — |
-| B-2026-11-17-11 | 2026-11-17 | interp+mir-llvm | low | stdin.lines() goes on past an invalid-UTF-8 line (yields Err, then the next line) while BufReader.lines() ends at its first error by the 11-16 ruling; io.md gives stdin.lines no rule | — |
 | B-2026-11-17-16 | 2026-11-17 | typecheck | low | E0600 calls Env "provider-rooted" though Env is program-rooted (14.7), and `karac query effects` derivations name the internal `__builtin_index` | — |
 | B-2026-11-17-21 | 2026-11-17 | mir | low | A second `Err` held in the scope a `?` leaves keeps its frames ahead of the error going out: `let r1 = work(false); step(false)?` prints r1's `step(b)?` frame first in the trace of `step(false)?` | — |
 | B-2026-11-17-22 | 2026-11-17 | mir-llvm | low | A `Map`/`Set` insert or removal probes the index twice: compiled code finds the key, then `karac_mir_map_insert_hv` / `remove_entry` probe again for the cell (kata 220 still 1.51x Rust's wall time, 391 1.87x) | — |
 | B-2026-11-17-30 | 2026-11-17 | ownership | medium | Slice and array patterns do not follow design.md's binding rules: a plain element binding over a `Vec[String]` moves the vector (`match v { [s, ..] => .. }` then `v.len()` is E0500); destructuring an owned `Array[D, N]` is refused E0516 'move out of a borrowed place' in `let` and `match`; a named rest over non-Copy elements is 'not lowered yet'; `..mut ref rest` does not parse | — |
 | B-2026-11-17-31 | 2026-11-17 | typecheck | low | `match x { }` on a `Never` scrutinee is refused E0205 "pattern `_` not covered", though design.md calls it the one well-formed empty match; also E0514's partial-move message still cites the removed "RC fallback" | — |
-| B-2026-11-17-60 | 2026-11-17 | cli | medium | `karac run prog.kara -- <arg>` aborts with SIGABRT (exit 134, a Rust `unwrap()` panic in std/src/env.rs) when an argument is not valid UTF-8, while the built binary of the same program runs and sees the argument with each invalid sequence replaced by U+FFFD | — |
-| B-2026-11-17-61 | 2026-11-17 | runtime | low | `spawn` fails with kinds io.md says it never returns: an executable that is not a valid binary or script gives `Other("Exec format error (os error 8))`, a `current_dir` that is a file gives `Other("Not a directory (os error 20)")`, and a NUL in the program, an argument or an env value gives `InvalidInput`; meanwhile an env key containing `=` or an empty key is accepted and passed on corrupted | — |
-| B-2026-11-17-62 | 2026-11-17 | runtime | low | A `PATH` set on the Command (`Command.new("tool").env("PATH", dir)`) is used to find the program, though io.md says a name without `/` is looked up on the parent's PATH | — |
-| B-2026-11-17-63 | 2026-11-17 | runtime | low | `exit(n)` and `ExitCode.from(n)` take an i32 but the process status keeps only its low 8 bits, so `exit(256)` and `ExitCode.from(256)` end the process with 0, success; -1 gives 255 and 300 gives 44, and neither io.md nor design.md §10 says so | — |
 | B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
@@ -160,6 +144,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-101 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a `shared` value's last handle, a Map, Set, VecDeque or sorted collection, a library cell (Mutex, OnceLock, ...), a `dyn` or an erased function value, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: -35 lowers only the drops MIR reaches part by part (structs, enums, tuples, closures, arrays, Vec) | — |
 | B-2026-11-17-102 | 2026-11-17 | effect | low | A test body that uses a provider-rooted resource with no provider is E0419 at `<generated>`, on the harness's `__karac_case_k()` call, not at the use in the test file; core-semantics §14.6 makes a test body a root that supplies nothing, as `main` is | — |
 | B-2026-11-17-109 | 2026-11-17 | ownership | low | A `scan` state seeded with `[None; 4]` reads as not `Copy`: `Some((last, last))` is refused as a use after a move and `karac fix` writes `Some((last.clone(), last))` | — |
+| B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
+| B-2026-11-17-113 | 2026-11-17 | other | low | `karac query`'s layout_choice query proposes a `layout` block, which the compiler now refuses as deferred (E_DEFERRED_LAYOUT_BLOCK, B-2026-11-16-257) | — |
 
 ### Relocated
 
@@ -1492,8 +1478,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-252 | typecheck+cli | medium | A `par` block written as statements whose tail computes from its `let`s (`let total = par { let a = f(); let b = g(); a + b };`) is refused (core-sem… | 84c49b5431 |
 | B-2026-11-16-253 | interp | medium | On AArch64 (macOS CI) the MIR interpreter refused an `extern "C"` call whose arguments fill more than six integer registers ("8 integer and 0 float a… | 54a14fdd6b |
 | B-2026-11-16-254 | typecheck | medium | `drop(x)` of a captured outer value inside a `par` branch is refused as a move out of a borrowed place, while passing it to an `own` parameter or mov… | a04638fd9e |
+| B-2026-11-16-255 | typecheck | medium | Prefix collection literals `Vec[1, 2]`, `Set[1, 2]`, `Map["a": 1]`, `Array[0; 4]` are accepted with no diagnostic, though design.md §5 says there is… | 116ba83ed6 |
+| B-2026-11-16-256 | typecheck | low | `effect group io = reads(FileSystem) + writes(FileSystem) + reads(Env);` checks with no diagnostic, though effect groups are deferred (design.md scop… | 116ba83ed6 |
+| B-2026-11-16-257 | parser | medium | A module-level `layout swarm: Vec[Particle] { group hot { x, y } cold { name } }` is accepted but binds nothing (`swarm` in main is E0100 undefined),… | 116ba83ed6 |
 | B-2026-11-16-258 | resolver | low | A module file named `src/Db.kara` is accepted and `import Db.one;` resolves, though design.md CN-2 makes a Type-class module file name a compile erro… | 9ce524ce9d |
 | B-2026-11-16-259 | typecheck | low | [doc-only] `b as char` with `b: u8` is accepted and gives the character, while design.md §5's cast table rejected every integer to char cast and book… | af808ebfb9 |
+| B-2026-11-16-260 | typecheck | low | `struct HTTPClient` checks with no diagnostic; design.md CN-4 says Type names treat acronyms as words (`HttpClient`, not `HTTPClient`) but does not s… | 116ba83ed6 |
+| B-2026-11-16-261 | typecheck | low | `#[noblock]` and `@noblock` on an extern fn are accepted, though neither is in design.md's attribute table (an unknown bare attribute is E_UNKNOWN_AT… | 116ba83ed6 |
+| B-2026-11-16-262 | typecheck | low | `#[derive(Display(...))]` accepts any argument silently: `Display(bogus_arg)` and appendix C's `Display(all_fields)` check and change nothing, while… | 116ba83ed6 |
 | B-2026-11-16-263 | other | medium | [doc-only] Book ch01, ch03 and appendix A still teach pre-D5 parameter modes: `name: String` 'owned by default', `karac explain greet` suggesting `re… | af808ebfb9 |
 | B-2026-11-16-264 | other | medium | [doc-only] Book ch04, ch10 and appendix B teach a pipe operator `\|>`, which design.md line 369 says does not exist (the compiler refuses it with E052… | af808ebfb9 |
 | B-2026-11-16-265 | other | medium | [doc-only] Book ch07 teaches optional chaining `user.address?.city?.name` that 'short-circuits to None', which design.md line 369 rules out (no `?.`)… | af808ebfb9 |
@@ -1512,8 +1504,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-281 | other | low | [doc-only] First-run docs gaps: the book has no install section (ch00/ch01 never say how to get karac), the release tarball README lists `--target=wa… | 614211f7ff |
 | B-2026-11-16-282 | cli | medium | `karac run --example <NAME>` compiles a project example's src/main.kara as a lone file, so 6 of the 9 project examples fail (E0207, E0200, E0516 'a t… | 68b46298df |
 | B-2026-11-16-284 | typecheck+cli | low | `#[test(requires: [UserDB])]` on a resource that is not program-rooted is reported as E0419 'no provider for UserDB' at `<generated>:47:30` inside th… | 4ce2e4fb86 |
+| B-2026-11-16-288 | cli | low | Malformed values of KARAC_HASH_SEED and KARAC_THREADS are ignored silently (`KARAC_HASH_SEED=abc` gives a fresh order each run; `KARAC_THREADS=0` run… | 116ba83ed6 |
 | B-2026-11-16-296 | cli | medium | 275 of the 491 codes `karac explain` knows have no prose of their own: their entry prints only phase/kind and either the class's generic paragraph or… | 1a718ba8ca |
 | B-2026-11-16-297 | cli | medium | Class-level prose mis-describes the code: deferred-feature, archived and lint codes inherit the paragraph of an unrelated class (E_TAIT_NOT_IMPLEMENT… | 1a718ba8ca |
+| B-2026-11-16-298 | typecheck+cli | medium | Trait-alias and TAIT declarations pass check silently though both are deferred: an unused `trait B = A;` and `type T = impl A;` give no diagnostic an… | 116ba83ed6 |
 | B-2026-11-16-302 | other | low | [doc-only] design.md's streaming-phase-events example shows code E0099, which the compiler never emits (parse errors are E0001/E0002) and explain doe… | 1a718ba8ca |
 | B-2026-11-16-304 | typecheck | low | An irrefutable `let .. | b31d77e15a |
 | B-2026-11-16-305 | typecheck | low | `let r = ref make_value()` says 'only `ref <sequence>[i]` is supported in 0.8' instead of the temporary-borrow error and its fix | b31d77e15a |
@@ -1549,6 +1543,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-337 | parser | low | Combined string prefixes (`rf"…"`, `br"…"`, `cr"…"`, …) lex as an identifier and a string, where design.md §3 says the lexer reports them with a focu… | cd7ef684f9 |
 | B-2026-11-16-338 | parser | low | A token that spans lines is reported at the line it ENDS on with the column it starts at: an unterminated literal points past the end of the file and… | cd7ef684f9 |
 | B-2026-11-16-339 | parser | medium | A float literal past its type's range is accepted as infinity: `1e400` is `inf`, and `1e39f32` (or `65520.0f16`) is an f32 (f16) infinity, where desi… | cd7ef684f9 |
+| B-2026-11-16-341 | parser | low | `\|>` is a token the parser accepts and the typechecker refuses late, so its stage's own type errors are reported first: `1 \|> f` with a 2-parameter `… | 116ba83ed6 |
 | B-2026-11-16-342 | parser | medium | One mistake, several errors or the wrong one: a missing `=>` in a match arm, an `else` with no `if`, a block missing its `}` before the next item, an… | cd7ef684f9 |
 | B-2026-11-16-343 | resolver | low | The case-class rename advice can name a keyword: `let r#Async = 1;` is told `consider renaming to `async``, which is reserved, where it must be `r#as… | cd7ef684f9 |
 | B-2026-11-16-344 | cli | medium | `karac fmt` drops an FFI export's ABI: `extern "C" fn add_one(x: i32) -> i32` comes back as a plain `fn`, so the function loses its external symbol | cd7ef684f9 |
@@ -1560,7 +1555,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-3 | other | low | [doc-only] strings.md does not say what the empty pattern does for find, contains, starts_with, ends_with, split, splitn, split_once, rsplit_once, st… | 1a718ba8ca |
 | B-2026-11-17-5 | other | low | [doc-only] collections.md and iterators.md leave negative counts unspecified: Vec/VecDeque.truncate(-1) clears, take(-1) is empty, skip(-1) yields al… | 038ed5c65d |
 | B-2026-11-17-7 | typecheck | medium | impl From[VarError] for IoError disappears from a program that also uses From[NetError] for IoError: `?` on env.var inside a function that also `?`s… | 3864993f72 |
+| B-2026-11-17-8 | runtime | low | wasm_wasi: an empty path "" names the preopened directory: fs.exists("") is true, read_to_string("") fails EBADF and fs.write("", ..) fails EISDIR, w… | 116ba83ed6 |
+| B-2026-11-17-9 | other | low | [doc-only] io.md is silent on wasm_wasi file behaviour: set_permissions and symlink return Unsupported, metadata.mode is 0o444 for a file the program… | 116ba83ed6 |
 | B-2026-11-17-10 | other | low | [doc-only] io.md says read_lines "drops a trailing \r from each line", but a final line "a\r" (and a lone "\r") keeps it on all three lanes, as Rust'… | bf357e8030 |
+| B-2026-11-17-11 | interp+mir-llvm | low | stdin.lines() goes on past an invalid-UTF-8 line (yields Err, then the next line) while BufReader.lines() ends at its first error by the 11-16 ruling… | 2d5496cb60 |
 | B-2026-11-17-13 | effect | medium | A Drop body's effects are left out of every function effect set: a pub fn whose local's Drop prints needs no `with writes(Stdout)`, #[no_effect(write… | 97dd727a6c |
 | B-2026-11-17-14 | effect | medium | with_provider[R] does not take R out of the enclosing function's effects (core-semantics 14.4): a pub fn that binds its own provider must declare rea… | 97dd727a6c |
 | B-2026-11-17-15 | cli | low | #[test(requires: [R])] does not validate R: a provider-rooted resource fails with E0419 at `<generated>:25:30` quoting the harness's `__karac_case_0(… | 4ce2e4fb86 |
@@ -1603,6 +1601,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-57 | runtime | low | The WebSocket server echoes close codes RFC 6455 forbids on the wire (1005, 999, 5000) instead of failing the connection with 1002, accepts a close r… | 5fe799cedf |
 | B-2026-11-17-58 | mir | low | When `Server.serve` stops because `accept` failed, the interpreter's HttpError says `accept failed: os error -1` where a compiled program says `os er… | 5fe799cedf |
 | B-2026-11-17-59 | interp+mir-llvm+runtime | high | `env.set` with a name containing `=`, an empty name, or a NUL in the name or value crashes in Rust's `std::env::set_var` on every lane: the interpret… | 51e90e7583 |
+| B-2026-11-17-60 | cli | medium | `karac run prog.kara -- <arg>` aborts with SIGABRT (exit 134, a Rust `unwrap()` panic in std/src/env.rs) when an argument is not valid UTF-8, while t… | 116ba83ed6 |
+| B-2026-11-17-61 | runtime | low | `spawn` fails with kinds io.md says it never returns: an executable that is not a valid binary or script gives `Other("Exec format error (os error 8)… | 116ba83ed6 |
+| B-2026-11-17-62 | runtime | low | A `PATH` set on the Command (`Command.new("tool").env("PATH", dir)`) is used to find the program, though io.md says a name without `/` is looked up o… | 116ba83ed6 |
+| B-2026-11-17-63 | runtime | low | `exit(n)` and `ExitCode.from(n)` take an i32 but the process status keeps only its low 8 bits, so `exit(256)` and `ExitCode.from(256)` end the proces… | 116ba83ed6 |
 | B-2026-11-17-64 | runtime | medium | On wasm_wasi the default `Map`/`Set` hasher is keyed with a fixed constant: a program iterates its keys in the same order on every run, and `KARAC_HA… | b3b9b67db6 |
 | B-2026-11-17-65 | typecheck+mir | medium | A `.hash(mut h)` call written in a program is refused for `F64`, `F32` and `()` (E0516 'hashing this type is not lowered yet') and for `i128`, `u128`… | b3b9b67db6 |
 | B-2026-11-17-66 | typecheck+runtime | low | `SipHash13BuildHasher` and `FxBuildHasher` have no `build()` and do not satisfy a `B: BuildHasher` bound, though collections.md calls both 'ordinary… | b3b9b67db6 |
@@ -1629,6 +1631,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-106 | typecheck | medium | A generic call whose closure returns `(state, item)` is refused when the state is seeded by `None`, `Vec.new()` or `[None; 4]` and only the closure d… | 71e40ab8ed |
 | B-2026-11-17-107 | typecheck | low | A `usize` inside an array type that meets `i64` gets no fix: `Vec[Array[Option[usize], 4]]` collecting arrays of `enumerate`'s `i64` indices is refus… | 71e40ab8ed |
 | B-2026-11-17-108 | typecheck | low | The `binary_search` rewrite through `partition_point` indents its later lines to the `match`'s column, not the statement's: `let k = match p.binary_s… | 71e40ab8ed |
+| B-2026-11-17-110 | lexer | low | Number literals design.md §3 does not allow are accepted: a `_` that is not between two digits (`1__0`, `1_`, `0x_FF`, `1_000_.5`) and a point not fo… | 116ba83ed6 |
+| B-2026-11-17-111 | parser | low | E0003 on `priv` as a name offers no fix but reads like every reserved word's, though `priv` is also a structural marker and `r#priv` is E0004, so the… | 116ba83ed6 |
 
 </details>
 
