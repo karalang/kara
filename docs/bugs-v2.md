@@ -201,7 +201,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
 | B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
-| B-2026-11-17-77 | 2026-11-17 | typecheck | medium | `Point.make()` where two traits `Point` implements each declare `make` (no self) is accepted and silently runs the first impl; design.md § Associated functions says the method ambiguity rules apply, and `p.tag()` in the same shape is E0239 | — |
 
 ### Relocated
 
@@ -1608,6 +1607,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-69 | typecheck | low | A bare `ref String` arm beside a `Str` arm is refused with no fix: `match p.split_once(" ") { Some((w, _)) => w, None => p }` over `p` from `phrases.… | cf35bf7d49 |
 | B-2026-11-17-70 | parser | low | `karac fix` opens `from_iter(` inside a parenthesized receiver: `(0..n).flat_map(..).collect::<BTreeSet<_>>().into_iter()` becomes `(SortedSet.from_i… | cf35bf7d49 |
 | B-2026-11-17-73 | typecheck | low | E0252 on assigning a module-level binding suggests declaring it `let mut`, which E_MODULE_LET refuses: the fix it names is itself an error | 1a718ba8ca |
+| B-2026-11-17-77 | typecheck | medium | `Point.make()` where two traits `Point` implements each declare `make` (no self) is accepted and silently runs the first impl; design.md § Associated… | ba28831243 |
 
 </details>
 
