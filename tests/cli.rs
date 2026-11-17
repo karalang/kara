@@ -5826,7 +5826,7 @@ fn project_check_honours_the_singular_target_flag() {
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
-    let plural_out = String::from_utf8_lossy(&plural.stdout).into_owned();
+    let plural_out = String::from_utf8_lossy(&plural.stderr).into_owned();
     let plural_all = format!("{plural_out}{}", String::from_utf8_lossy(&plural.stderr));
     assert!(!plural.status.success(), "the wasm legs fail: {plural_all}");
     for target in ["native", "wasm_wasi"] {
@@ -10953,8 +10953,9 @@ fn test_fix_applies_concurrent_plain_struct_migration() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     // 1 `par ` insert + 1 `mut ` strip + 2 `Mutex[`/`]` wraps = 4 edits,
     // and the `par` block's comma form (two `;` to `,` and a `;` after the
-    // block, B-2026-11-16-182) = 7.
-    assert!(stdout.contains("applied 7 fix"), "stdout: {stdout}");
+    // block, B-2026-11-16-182) = 7, and the literal's `count: 0` wrapped in
+    // `Mutex.new(`/`)` so the result checks (B-2026-11-16-285) = 9.
+    assert!(stdout.contains("applied 9 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct State"),
@@ -11000,8 +11001,10 @@ fn test_fix_applies_concurrent_shared_struct_migration() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Plus the `par` block's comma form, 3 more (B-2026-11-16-182).
-    assert!(stdout.contains("applied 10 fix"), "stdout: {stdout}");
+    // Plus the `par` block's comma form, 3 more (B-2026-11-16-182), and the
+    // literal's two mut inits wrapped in `Mutex.new(`/`)`, 4 more, so the
+    // result checks (B-2026-11-16-285).
+    assert!(stdout.contains("applied 14 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct Counter"),
@@ -11156,11 +11159,11 @@ fn test_fix_withholds_pub_binding_rename_inside_a_package() {
         .args(["fix", "src/helper.kara"])
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "fix failed: stderr={}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    // The withheld rename leaves its naming error, which `fix` reports by
+    // failing (B-2026-11-16-287).
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains("have no machine-applicable fix"), "{err}");
     let rewritten = std::fs::read_to_string(tmp.join("src/helper.kara")).unwrap();
     assert!(
         rewritten.contains("pub let myConfig"),
@@ -17460,10 +17463,12 @@ fn test_migrate_help_lists_kind_and_flags() {
 
 #[test]
 fn test_migrate_wraps_assign_writes_against_typed_let_binding() {
-    // Canonical L215b1 case + L215b2 self-prefix shape: a `let c: Counter`
-    // binding with an assign write — the migrate path emits a
-    // `lock self.count { ... }` wrap and rewrites the binding root
-    // `c` to `self` inside the wrap body (design.md line 8522).
+    // Canonical L215b1 case: a `let c: Counter` binding with an assign
+    // write. Since B-2026-11-16-285 the write becomes a guard block —
+    // `{ let count_guard = c.count.lock(); *count_guard.value = 5; };` —
+    // and the binding `c` keeps its name (the old `lock self.count { ... }`
+    // shape with `c` renamed to `self` did not parse). The struct literal's
+    // mut-field init is wrapped in `Mutex.new(..)` to match the new type.
     let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 5;\n}\n";
     let path = migrate_scratch_file("consumer_assign", original);
     let out = karac_bin()
@@ -17488,16 +17493,20 @@ fn test_migrate_wraps_assign_writes_against_typed_let_binding() {
         "type-def rewrite missing; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("lock self.count {"),
-        "expected L215b2 self-prefix `lock self.count {{` wrap; got: {rewritten}",
+        rewritten.contains("{ let count_guard = c.count.lock(); *count_guard.value = 5; };"),
+        "expected the write wrapped in a `count_guard` block; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("self.count = 5"),
-        "binding `c` should be rewritten to `self` inside the wrap body; got: {rewritten}",
+        rewritten.contains("Counter { count: Mutex.new(0) }"),
+        "expected the struct literal's mut-field init wrapped in `Mutex.new`; got: {rewritten}",
     );
     assert!(
         !rewritten.contains("c.count = 5"),
-        "original `c.count = 5` should have been rewritten to `self.count = 5`; got: {rewritten}",
+        "original bare `c.count = 5` should not survive the rewrite; got: {rewritten}",
+    );
+    assert!(
+        !rewritten.contains("self."),
+        "binding `c` must keep its name, not be renamed to `self` (B-2026-11-16-285); got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17527,17 +17536,23 @@ fn test_migrate_wraps_writes_through_ref_parameter() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     // Both function bodies should have their `c.count = ...` writes
-    // wrapped with the L215b2 self-prefix shape.
-    let lock_wrap_count = rewritten.matches("lock self.count {").count();
+    // wrapped in a guard block (B-2026-11-16-285 shape).
+    let lock_wrap_count = rewritten
+        .matches("{ let count_guard = c.count.lock(); ")
+        .count();
     assert_eq!(
         lock_wrap_count, 2,
-        "expected two `lock self.count` wraps (one per ref-param fn); got {lock_wrap_count} in: {rewritten}",
+        "expected two `count_guard` wraps (one per ref-param fn); got {lock_wrap_count} in: {rewritten}",
     );
-    // The value-side `c.count` in `c.count = c.count + 1` should also be
-    // binding-rewritten to `self.count` inside the wrap.
+    // The value-side `c.count` in `c.count = c.count + 1` reads through
+    // the same guard inside the wrap.
     assert!(
-        rewritten.contains("self.count = self.count + 1"),
-        "value-side `c.count` should be rewritten to `self.count` inside the wrap; got: {rewritten}",
+        rewritten.contains("*count_guard.value = *count_guard.value + 1"),
+        "value-side `c.count` should read through the guard inside the wrap; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("*count_guard.value = 0"),
+        "the `mut ref` param's write should be wrapped too; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17561,15 +17576,18 @@ fn test_migrate_skips_writes_inside_par_block() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "dry-run should succeed");
-    // Three edits per outside-par write under L215b2 (1 binding-rewrite
-    // `c` → `self` + 2 wrap insertions: prefix + suffix). Inside-par
-    // assigns would contribute six more edits if not filtered.
-    // Sum: 4 type-def + 3 consumer = 7 total.
+    // Three edits per outside-par write (B-2026-11-16-285 guard shape:
+    // prefix insert + `c.count` → `*count_guard.value` + suffix insert).
+    // Inside-par assigns would contribute six more edits if not filtered.
+    // Sum: 4 type-def + 2 struct-literal (`Mutex.new(` + `)`) + 3 consumer
+    // = 9 total.
     assert!(
-        stdout.contains("would apply 7 migration edit(s)"),
-        "expected 7 edits (4 type-def + 3 consumer for the single outside-par write); got: {stdout}",
+        stdout.contains("would apply 9 migration edit(s)"),
+        "expected 9 edits (4 type-def + 2 literal + 3 consumer for the single outside-par write); got: {stdout}",
     );
-    let prefix_count = stdout.matches("(insert) → `lock self.count {").count();
+    let prefix_count = stdout
+        .matches("(insert) → `{ let count_guard = c.count.lock(); `")
+        .count();
     assert_eq!(
         prefix_count, 1,
         "expected one consumer-write wrap (the outside-par assign); got {prefix_count} in: {stdout}",
@@ -17601,12 +17619,8 @@ fn test_migrate_wraps_compound_assign() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("lock self.count {"),
-        "compound-assign should be wrapped with L215b2 self-prefix shape; got: {rewritten}",
-    );
-    assert!(
-        rewritten.contains("self.count += 1"),
-        "compound-assign body's binding `c` should be rewritten to `self`; got: {rewritten}",
+        rewritten.contains("{ let count_guard = c.count.lock(); *count_guard.value += 1; };"),
+        "compound-assign should be wrapped in a `count_guard` block (B-2026-11-16-285); got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17630,15 +17644,23 @@ fn test_migrate_skips_writes_to_non_mut_fields() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "dry-run should succeed");
-    let lock_count = stdout.matches("(insert) → `lock self.count {").count();
-    let lock_name = stdout.matches("(insert) → `lock self.name {").count();
+    let lock_count = stdout
+        .matches("(insert) → `{ let count_guard = c.count.lock(); `")
+        .count();
+    let lock_name = stdout.matches("name_guard").count();
     assert_eq!(
         lock_count, 1,
-        "expected single `lock self.count` wrap for the mut field; got {lock_count}",
+        "expected single `count_guard` wrap for the mut field; got {lock_count}",
     );
     assert_eq!(
         lock_name, 0,
-        "expected zero `lock self.name` wraps for the non-mut field; got {lock_name} in: {stdout}",
+        "expected zero `name_guard` wraps for the non-mut field; got {lock_name} in: {stdout}",
+    );
+    // Only the mut field's literal init is wrapped: one `Mutex.new(`.
+    assert_eq!(
+        stdout.matches("(insert) → `Mutex.new(`").count(),
+        1,
+        "expected only the mut field's literal init wrapped; got: {stdout}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17663,10 +17685,14 @@ fn test_migrate_ignores_bindings_of_other_types() {
     assert!(out.status.success(), "dry-run should succeed");
     // Exactly one wrap for the single Counter write — `n` is an i64
     // binding, so its assignment site shouldn't show up at all.
-    let wraps = stdout.matches("(insert) → `lock self.count {").count();
+    let wraps = stdout.matches(".lock(); `").count();
     assert_eq!(
         wraps, 1,
         "expected exactly one wrap for the c.count write; got {wraps} in: {stdout}",
+    );
+    assert!(
+        stdout.contains("(insert) → `{ let count_guard = c.count.lock(); `"),
+        "the wrap should be on the Counter binding `c`; got: {stdout}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17674,8 +17700,9 @@ fn test_migrate_ignores_bindings_of_other_types() {
 #[test]
 fn test_migrate_dry_run_lists_consumer_edits_in_addition_to_typedef() {
     // The dry-run epilogue claims consumer-site wraps are emitted.
-    // Pin the actual edit list: it must include both the type-def
-    // rewrites (4 for one mut field) AND consumer wraps (2 per assign).
+    // Pin the actual edit list: it must include the type-def rewrites
+    // (4 for one mut field), the struct literal's `Mutex.new(..)` wrap
+    // (2), AND the consumer guard wrap (3 per assign).
     let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 1;\n}\n";
     let path = migrate_scratch_file("consumer_dryrun_shape", original);
     let out = karac_bin()
@@ -17689,23 +17716,32 @@ fn test_migrate_dry_run_lists_consumer_edits_in_addition_to_typedef() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "dry-run should succeed");
-    // 4 type-def + 3 consumer (1 binding-rewrite + 2 wrap insertions
-    // for the single L215b2 self-prefix write) = 7 total.
+    // 4 type-def + 2 literal + 3 consumer (prefix insert, target
+    // replacement, suffix insert for the single B-2026-11-16-285 guard
+    // write) = 9 total.
     assert!(
-        stdout.contains("would apply 7 migration edit(s)"),
-        "expected 7 edits (4 type-def + 3 consumer for the single write); got: {stdout}",
+        stdout.contains("would apply 9 migration edit(s)"),
+        "expected 9 edits (4 type-def + 2 literal + 3 consumer for the single write); got: {stdout}",
     );
     assert!(
         stdout.contains("`shared` → `sync`"),
         "type-def keyword rename should still appear; got: {stdout}",
     );
     assert!(
-        stdout.contains("(insert) → `lock self.count {"),
+        stdout.contains("(insert) → `Mutex.new(`"),
+        "struct-literal init wrap should appear in dry-run; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("(insert) → `{ let count_guard = c.count.lock(); `"),
         "consumer wrap prefix should appear in dry-run; got: {stdout}",
     );
     assert!(
-        stdout.contains("`c` → `self`"),
-        "binding-rewrite edit should appear in dry-run; got: {stdout}",
+        stdout.contains("`c.count` → `*count_guard.value`"),
+        "write-target rewrite to the guard should appear in dry-run; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("(insert) → `; }`"),
+        "consumer wrap suffix should appear in dry-run; got: {stdout}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17713,9 +17749,10 @@ fn test_migrate_dry_run_lists_consumer_edits_in_addition_to_typedef() {
 #[test]
 fn test_migrate_wraps_read_site() {
     // L215b2: every `<binding>.<mut_field>` rvalue use gets a value-
-    // expression wrap. A `let x = c.count;` should rewrite to
-    // `let x = lock self.count { self.count };` — a single replacement
-    // edit covering the full `c.count` span.
+    // expression wrap. Since B-2026-11-16-285 a `let x = c.count;`
+    // rewrites to `let x = { let count_guard = c.count.lock();
+    // *count_guard.value };` — a single replacement edit covering the
+    // full `c.count` span.
     let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn read(c: ref Counter) -> i64 {\n    let x: i64 = c.count;\n    x\n}\n\nfn main() {}\n";
     let path = migrate_scratch_file("consumer_read_site", original);
     let out = karac_bin()
@@ -17736,12 +17773,13 @@ fn test_migrate_wraps_read_site() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("let x: i64 = lock self.count { self.count };"),
+        rewritten
+            .contains("let x: i64 = { let count_guard = c.count.lock(); *count_guard.value };"),
         "expected read-site wrap on `c.count` rvalue; got: {rewritten}",
     );
     assert!(
-        !rewritten.contains("c.count"),
-        "original `c.count` should have been subsumed by the read wrap; got: {rewritten}",
+        !rewritten.contains("= c.count;"),
+        "original bare `c.count` read should have been subsumed by the read wrap; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17751,8 +17789,9 @@ fn test_migrate_read_wrap_skips_assign_targets() {
     // L215b2: the read walker must NOT independently wrap reads that
     // are already inside a write-wrapped statement — otherwise the
     // output would have nested locks on the same field. For
-    // `c.count = c.count + 1`, both the target and the value RHS get
-    // binding-rewritten to `self.count` (one wrap, no nested wraps).
+    // `c.count = c.count + 1`, both the target and the value RHS go
+    // through the one `count_guard` (B-2026-11-16-285 shape: one wrap,
+    // no nested wraps).
     let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn bump(c: ref Counter) {\n    c.count = c.count + 1;\n}\n\nfn main() {}\n";
     let path = migrate_scratch_file("consumer_read_skip_write_target", original);
     let out = karac_bin()
@@ -17772,17 +17811,17 @@ fn test_migrate_read_wrap_skips_assign_targets() {
         String::from_utf8_lossy(&out.stderr),
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
-    // Exactly one `lock self.count` opener — the outer write-wrap.
-    // A nested read-wrap would produce a second occurrence.
-    let lock_count = rewritten.matches("lock self.count {").count();
+    // Exactly one `c.count.lock()` — the outer write-wrap. A nested
+    // read-wrap would produce a second occurrence.
+    let lock_count = rewritten.matches("c.count.lock()").count();
     assert_eq!(
         lock_count, 1,
-        "expected exactly one `lock self.count` wrap (no nested read-wrap); got {lock_count} in: {rewritten}",
+        "expected exactly one `c.count.lock()` wrap (no nested read-wrap); got {lock_count} in: {rewritten}",
     );
-    // Both sides of the assign should have their binding rewritten.
+    // Both sides of the assign should go through the guard.
     assert!(
-        rewritten.contains("self.count = self.count + 1"),
-        "expected the value-side `c.count` to be binding-rewritten to `self.count` inside the wrap; got: {rewritten}",
+        rewritten.contains("*count_guard.value = *count_guard.value + 1"),
+        "expected the value-side `c.count` to read through the guard inside the wrap; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17790,7 +17829,9 @@ fn test_migrate_read_wrap_skips_assign_targets() {
 #[test]
 fn test_migrate_wraps_read_inside_if_condition() {
     // L215b2: reads inside if-conditions, binary expressions, etc.
-    // should also receive the read-wrap.
+    // should also receive the read-wrap. A read that is the left operand
+    // of a binary op is parenthesized so the block is not taken as a
+    // statement (B-2026-11-16-285 guard shape).
     let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn check(c: ref Counter) -> i64 {\n    if c.count > 0 {\n        1\n    } else {\n        0\n    }\n}\n\nfn main() {}\n";
     let path = migrate_scratch_file("consumer_read_if_cond", original);
     let out = karac_bin()
@@ -17811,7 +17852,7 @@ fn test_migrate_wraps_read_inside_if_condition() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("if lock self.count { self.count } > 0"),
+        rewritten.contains("if ({ let count_guard = c.count.lock(); *count_guard.value }) > 0"),
         "expected if-condition read of `c.count` to be wrapped; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
@@ -17838,7 +17879,7 @@ fn test_migrate_skips_reads_inside_par_block() {
     // Exactly one read-wrap (the outside-par read). The two inside-par
     // reads must be filtered out.
     let read_wraps = stdout
-        .matches("`c.count` → `lock self.count { self.count }`")
+        .matches("`c.count` → `{ let count_guard = c.count.lock(); *count_guard.value }`")
         .count();
     assert_eq!(
         read_wraps, 1,
@@ -17874,12 +17915,12 @@ fn test_migrate_discovers_inferred_let_binding() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("lock self.count {"),
-        "expected the inferred-binding write to be wrapped; got: {rewritten}",
+        rewritten.contains("{ let count_guard = c.count.lock(); *count_guard.value = 5; };"),
+        "expected the inferred-binding write to be wrapped in a guard block; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("self.count = 5"),
-        "binding `c` (inferred-type) should be rewritten to `self` inside the wrap; got: {rewritten}",
+        rewritten.contains("Counter { count: Mutex.new(0) }"),
+        "expected the constructor's literal init wrapped in `Mutex.new`; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17891,7 +17932,9 @@ fn test_migrate_wraps_mutating_method_call_with_typecheck_data() {
     // (`c.items.push(x)`) silently no-op'd. With typecheck data
     // threaded through, `method_callee_types` resolves the call site
     // to `Vec.push` and `stdlib_method_self_borrow_kind` flags it as
-    // MutRef — the L207 walker then wraps the call.
+    // MutRef — the L207 walker then wraps the call. Since
+    // B-2026-11-16-285 the wrap is a guard block and the receiver goes
+    // through the guard: `items_guard.value.push(42)`.
     let original = "shared struct Queue {\n    mut items: Vec[i64],\n}\n\nfn main() {\n    let q: Queue = Queue { items: [10, 20, 30] };\n    q.items.push(42);\n}\n";
     let path = migrate_scratch_file("inferred_method_call", original);
     let out = karac_bin()
@@ -17912,12 +17955,12 @@ fn test_migrate_wraps_mutating_method_call_with_typecheck_data() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("lock self.items {"),
-        "expected mutating method-call to be wrapped; got: {rewritten}",
+        rewritten.contains("{ let items_guard = q.items.lock(); items_guard.value.push(42); };"),
+        "expected mutating method-call to be wrapped in a guard block; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("self.items.push(42)"),
-        "binding root `q` should be rewritten to `self` for the method receiver; got: {rewritten}",
+        rewritten.contains("Queue { items: Mutex.new([10, 20, 30]) }"),
+        "expected the struct literal's mut-field init wrapped in `Mutex.new`; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -17954,7 +17997,7 @@ fn test_migrate_typecheck_failure_falls_back_to_annotated_only() {
         "type-def rewrite should still run on typecheck-failing source; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("lock self.count {"),
+        rewritten.contains("{ let count_guard = c.count.lock(); *count_guard.value = 5; };"),
         "annotated binding write should still wrap under parse-only fallback; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
@@ -17979,20 +18022,27 @@ fn test_migrate_discovers_inferred_binding_alongside_annotated() {
         .unwrap();
     assert!(out.status.success(), "dry-run should succeed");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Exactly two `lock self.count {` inserts — one per binding.
-    let wraps = stdout.matches("lock self.count {").count();
+    // Exactly two guard-prefix inserts — one per binding.
+    let wraps = stdout.matches("(insert) → `{ let count_guard = ").count();
     assert_eq!(
         wraps, 2,
         "expected two lock-wrap inserts (one per binding); got {wraps} in: {stdout}",
     );
-    // Both `c` and `d` should get binding-root rewrites to `self`.
+    // Both `c` and `d` get a guard over their own field, keeping their
+    // names (B-2026-11-16-285: no rename to `self`).
     assert!(
-        stdout.contains("`c` → `self`"),
-        "annotated binding `c` should rewrite to `self`; stdout: {stdout}",
+        stdout.contains("(insert) → `{ let count_guard = c.count.lock(); `"),
+        "annotated binding `c` should be lock-wrapped; stdout: {stdout}",
     );
     assert!(
-        stdout.contains("`d` → `self`"),
-        "inferred binding `d` should rewrite to `self`; stdout: {stdout}",
+        stdout.contains("(insert) → `{ let count_guard = d.count.lock(); `"),
+        "inferred binding `d` should be lock-wrapped; stdout: {stdout}",
+    );
+    // 4 type-def + 2x2 literal (`Counter { count: 0 }` twice) + 2x3
+    // consumer = 14; a doubled annotated-binding edit set would show more.
+    assert!(
+        stdout.contains("would apply 14 migration edit(s)"),
+        "expected 14 edits (no duplicated edits on the annotated binding); stdout: {stdout}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -18053,8 +18103,8 @@ fn test_migrate_project_mode_walks_modules() {
         "expected main.kara in output; stdout={stdout}",
     );
     assert!(
-        stdout.contains("lock self.count {"),
-        "expected `lock self.count {{` consumer wrap; stdout={stdout}",
+        stdout.contains("(insert) → `{ let count_guard = c.count.lock(); `"),
+        "expected `count_guard` consumer wrap; stdout={stdout}",
     );
 }
 
@@ -18113,7 +18163,7 @@ fn test_migrate_project_mode_apply_rewrites_all_files() {
     );
     // Consumer file post-rewrite.
     assert!(
-        main_after.contains("lock self.count {"),
+        main_after.contains("{ let count_guard = c.count.lock(); *count_guard.value = 1; };"),
         "main.kara should wrap the write site; got: {main_after}",
     );
 }
@@ -18251,12 +18301,12 @@ fn test_migrate_l215c_atomic_when_only_bare_assigns() {
         "expected note about Atomic-classified fields; stdout={stdout}",
     );
     // L215c-cons — Atomic-classified consumer writes get rewritten to
-    // `.store(v, MemoryOrdering.Release)`. Pin the rewrite shape on
+    // `.store(v)`. Pin the rewrite shape on
     // dry-run output: both the ` = ` → `.store(` replacement and the
-    // trailing `, MemoryOrdering.Release)` insertion must appear.
+    // trailing `)` insertion must appear.
     // No lock-wrap should appear for Atomic-classified sites.
     assert!(
-        !stdout.contains("lock self.count {"),
+        !stdout.contains(".lock()"),
         "Atomic-classified consumer sites should NOT be lock-wrapped; stdout={stdout}",
     );
     assert!(
@@ -18264,8 +18314,8 @@ fn test_migrate_l215c_atomic_when_only_bare_assigns() {
         "expected ` = ` → `.store(` rewrite for Atomic consumer; stdout={stdout}",
     );
     assert!(
-        stdout.contains("(insert) → `, MemoryOrdering.Release)`"),
-        "expected Release-ordering suffix insert; stdout={stdout}",
+        stdout.contains("(insert) → `)`"),
+        "expected the store close-paren insert; stdout={stdout}",
     );
 }
 
@@ -18301,7 +18351,7 @@ fn test_migrate_l215c_mutex_when_compound_assign() {
         "should NOT emit Atomic[ when compound assign present; stdout={stdout}",
     );
     assert!(
-        stdout.contains("lock self.count {"),
+        stdout.contains("(insert) → `{ let count_guard = c.count.lock(); `"),
         "consumer compound assign should be lock-wrapped; stdout={stdout}",
     );
 }
@@ -18401,9 +18451,9 @@ fn test_migrate_l215c_mixed_fields_atomic_and_mutex() {
         "expected exactly 1 Mutex[ wrap (for total); stdout={stdout}",
     );
     // count is Atomic — should NOT be lock-wrapped at consumer site;
-    // its bare = should be rewritten to `.store(v, MemoryOrdering.Release)`.
+    // its bare = should be rewritten to `.store(v)`.
     assert!(
-        !stdout.contains("lock self.count {"),
+        !stdout.contains("c.count.lock()"),
         "Atomic count should not get a consumer wrap; stdout={stdout}",
     );
     assert!(
@@ -18412,7 +18462,7 @@ fn test_migrate_l215c_mixed_fields_atomic_and_mutex() {
     );
     // total is Mutex — its compound-assign SHOULD be lock-wrapped.
     assert!(
-        stdout.contains("lock self.total {"),
+        stdout.contains("(insert) → `{ let total_guard = c.total.lock(); `"),
         "Mutex total should get a consumer wrap; stdout={stdout}",
     );
 }
@@ -18423,7 +18473,7 @@ fn test_migrate_l215c_mixed_fields_atomic_and_mutex() {
 fn test_migrate_l215c_cons_atomic_read_rewrites_to_load() {
     // Counter with a single bare-= Atomic-eligible field. A consumer
     // function `read` does `c.count` (rvalue read in return position).
-    // L215c-cons rewrites that read to `c.count.load(MemoryOrdering.Acquire)`.
+    // L215c-cons rewrites that read to `c.count.load()`.
     let tmp = scratch_project("migrate-l215c-cons-read");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
@@ -18443,11 +18493,11 @@ fn test_migrate_l215c_cons_atomic_read_rewrites_to_load() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(out.status.success(), "dry-run should succeed");
     assert!(
-        stdout.contains("(insert) → `.load(MemoryOrdering.Acquire)`"),
-        "Atomic read should be rewritten to .load(MemoryOrdering.Acquire); stdout={stdout}",
+        stdout.contains("(insert) → `.load()`"),
+        "Atomic read should be rewritten to .load(); stdout={stdout}",
     );
     assert!(
-        !stdout.contains("lock self.count {"),
+        !stdout.contains(".lock()"),
         "Atomic read should NOT be lock-wrapped; stdout={stdout}",
     );
 }
@@ -18456,8 +18506,8 @@ fn test_migrate_l215c_cons_atomic_read_rewrites_to_load() {
 fn test_migrate_l215c_cons_atomic_apply_produces_compilable_shape() {
     // End-to-end --apply verification: the on-disk rewrite of an
     // Atomic-classified write produces the canonical Kāra source
-    // shape `c.count.store(1, MemoryOrdering.Release);` (semicolon
-    // preserved, field name preserved, ordering literal preserved).
+    // shape `c.count.store(1);` (semicolon preserved, field name
+    // preserved).
     // Pinning the actual rewritten text — not just the edit preview
     // — guards against an offset-math regression that would silently
     // drop or duplicate bytes around the edit boundary.
@@ -18494,11 +18544,11 @@ fn test_migrate_l215c_cons_atomic_apply_produces_compilable_shape() {
         "type def should wrap as Atomic[i64]; got: {counter_rewritten}",
     );
     assert!(
-        main_rewritten.contains("c.count.store(42, MemoryOrdering.Release);"),
+        main_rewritten.contains("c.count.store(42);"),
         "write should be rewritten to .store call; got: {main_rewritten}",
     );
     assert!(
-        main_rewritten.contains("c.count.load(MemoryOrdering.Acquire)"),
+        main_rewritten.contains("c.count.load()"),
         "read should be rewritten to .load call; got: {main_rewritten}",
     );
     assert!(
@@ -18529,9 +18579,7 @@ fn test_migrate_l215c_cons_atomic_read_in_complex_expression() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(out.status.success(), "dry-run should succeed");
     // Two distinct read sites — expect two load-insert edits.
-    let load_inserts = stdout
-        .matches("(insert) → `.load(MemoryOrdering.Acquire)`")
-        .count();
+    let load_inserts = stdout.matches("(insert) → `.load()`").count();
     assert_eq!(
         load_inserts, 2,
         "expected 2 .load inserts (one per read site); stdout={stdout}",
@@ -18543,7 +18591,8 @@ fn test_migrate_l215c_cons_mixed_atomic_and_mutex_rewrites_apply() {
     // Mixed-classification fixture under --apply: count is Atomic
     // (bare = only), total is Mutex (compound +=). Verify the
     // on-disk shape: count writes/reads become .store/.load, total
-    // writes become `lock self.total { ... }`. The two field shapes
+    // writes become a `total_guard` block (B-2026-11-16-285 shape:
+    // `{ let total_guard = c.total.lock(); ... }`). The two field shapes
     // must coexist in one file without offset drift between them.
     let tmp = scratch_project("migrate-l215c-cons-mixed-apply");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -18573,19 +18622,19 @@ fn test_migrate_l215c_cons_mixed_atomic_and_mutex_rewrites_apply() {
     let rewritten = std::fs::read_to_string(tmp.join("src/main.kara")).unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
-        rewritten.contains("c.count.store(1, MemoryOrdering.Release);"),
+        rewritten.contains("c.count.store(1);"),
         "Atomic count write should be .store-rewritten; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("c.count.load(MemoryOrdering.Acquire)"),
+        rewritten.contains("c.count.load()"),
         "Atomic count read should be .load-rewritten; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("lock self.total {"),
+        rewritten.contains("{ let total_guard = c.total.lock(); *total_guard.value += 1; };"),
         "Mutex total compound assign should be lock-wrapped; got: {rewritten}",
     );
     assert!(
-        !rewritten.contains("lock self.count {"),
+        !rewritten.contains("c.count.lock()"),
         "Atomic count should NEVER be lock-wrapped; got: {rewritten}",
     );
 }
@@ -18615,7 +18664,7 @@ fn test_migrate_l215c_cons_no_atomic_flag_keeps_mutex_path() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(out.status.success(), "dry-run should succeed");
     assert!(
-        stdout.contains("lock self.count {"),
+        stdout.contains("(insert) → `{ let count_guard = c.count.lock(); `"),
         "with --no-atomic, default Mutex lock-wrap should apply; stdout={stdout}",
     );
     assert!(
@@ -18634,7 +18683,7 @@ fn test_migrate_l215c_cons_no_atomic_flag_keeps_mutex_path() {
 fn test_migrate_default_atomic_when_only_bare_assigns() {
     // Default-flip: with NO flag at all, project-mode runs the Atomic[T]
     // heuristic. A bare-`=`-only i64 field is wrapped as `Atomic[i64]`
-    // and its consumer write is rewritten to `.store(v, ...)` rather than
+    // and its consumer write is rewritten to `.store(v)` rather than
     // lock-wrapped. Equivalent to passing --atomic explicitly.
     let tmp = scratch_project("migrate-default-atomic");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
@@ -18663,7 +18712,7 @@ fn test_migrate_default_atomic_when_only_bare_assigns() {
         "default (no flag) should NOT emit Mutex[ for an Atomic-eligible field; stdout={stdout}",
     );
     assert!(
-        !stdout.contains("lock self.count {"),
+        !stdout.contains(".lock()"),
         "default Atomic classification should NOT lock-wrap; stdout={stdout}",
     );
     assert!(
@@ -26605,7 +26654,7 @@ fn test_platform_all_sweeps_every_platform_and_names_the_failure() {
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out.stderr); // the sweep's report (B-2026-11-16-287)
     let combined = format!("{stdout}{}", String::from_utf8_lossy(&out.stderr));
 
     assert!(!out.status.success(), "a failing platform fails the sweep");
@@ -26636,7 +26685,7 @@ fn test_platform_all_passes_when_every_platform_is_clean() {
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out.stderr); // the sweep's report (B-2026-11-16-287)
     assert!(
         out.status.success(),
         "all platforms clean must exit 0: {stdout}"
@@ -26720,7 +26769,7 @@ fn test_project_mode_sweeps_the_manifests_declared_targets() {
         "[package]\nname = \"plat\"\n\n[build]\ntargets = [\"native\", \"wasm_wasi\"]\n",
     );
     let out = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out.stderr); // the sweep's report (B-2026-11-16-287)
     assert!(out.status.success(), "clean package: {stdout}");
     for target in ["native", "wasm_wasi"] {
         assert!(
@@ -26737,7 +26786,7 @@ fn test_project_mode_sweeps_the_manifests_declared_targets() {
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out.stderr); // the sweep's report (B-2026-11-16-287)
     assert!(out.status.success(), "explicit sweep: {stdout}");
     assert!(
         stdout.contains("All 2 target(s) checked clean."),
@@ -26756,7 +26805,7 @@ fn test_singular_target_and_profiles_keep_their_project_mode_behaviour() {
         .args(["check", "--target=wasm_wasi"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out.stderr); // the sweep's report (B-2026-11-16-287)
     assert!(out.status.success(), "{stdout}");
     assert!(
         !stdout.contains("── target:"),

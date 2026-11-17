@@ -7875,13 +7875,23 @@ fn test_concurrent_struct_fix_diff_wraps_each_mut_field() {
         .expect("expected fix_diff edits for shared-struct diagnostic");
     // Two mut fields (count, tag) → 4 Mutex-wrap edits (prefix +
     // suffix per field) + 2 `mut ` strip edits (one per mut field) +
-    // 1 `shared` → `par` keyword rename = 7 edits total. The
-    // immutable `val` field stays untouched.
+    // 1 `shared` → `par` keyword rename = 7, and the literal's two mut
+    // inits wrapped in `Mutex.new(`/`)` so the result checks
+    // (B-2026-11-16-285) = 11 edits total. The immutable `val` field stays
+    // untouched.
     assert_eq!(
         edits.len(),
-        7,
-        "expected 7 edits (1 keyword rename + 2 mut strips + 2 mut fields × 2 wraps); got {}",
+        11,
+        "expected 11 edits (1 keyword rename + 2 mut strips + 2 mut fields × 2 wraps + 2 literal inits × 2 wraps); got {}",
         edits.len(),
+    );
+    assert_eq!(
+        edits
+            .iter()
+            .filter(|e| e.replacement == "Mutex.new(")
+            .count(),
+        2,
+        "expected the literal's 2 mut inits wrapped"
     );
     let prefix_count = edits.iter().filter(|e| e.replacement == "Mutex[").count();
     let suffix_count = edits.iter().filter(|e| e.replacement == "]").count();
@@ -7923,13 +7933,15 @@ fn test_concurrent_plain_struct_fix_diff_wraps_each_mut_field() {
         .error_fix_diffs
         .get(&key)
         .expect("expected fix_diff edits for plain-struct diagnostic");
-    // 1 mut field × 2 wraps + 1 mut strip + 1 `par ` keyword insert = 4 edits.
+    // 1 mut field × 2 wraps + 1 mut strip + 1 `par ` keyword insert = 4,
+    // and the literal's `count: 0` wrapped in `Mutex.new(`/`)` (B-2026-11-16-285) = 6.
     assert_eq!(
         edits.len(),
-        4,
-        "expected 4 edits (1 `par ` insert + 1 mut strip + 1 mut field × 2 wraps); got {}",
+        6,
+        "expected 6 edits (1 `par ` insert + 1 mut strip + 1 mut field × 2 wraps + 1 literal init × 2 wraps); got {}",
         edits.len(),
     );
+    assert!(edits.iter().any(|e| e.replacement == "Mutex.new("));
     assert!(edits.iter().any(|e| e.replacement == "Mutex["));
     assert!(edits.iter().any(|e| e.replacement == "]"));
     assert!(
@@ -8118,19 +8130,18 @@ fn test_l201a_mut_strip_covers_mut_and_trailing_whitespace() {
 //
 // Third edit family for E_CONCURRENT_*_STRUCT fix_diff. For each
 // write to a `binding.<mut_field>` form occurring textually inside a
-// par block (any nesting depth), emit two pure-insertion edits
-// wrapping the statement in `lock <field> {\n    ... \n}`. The
-// wrap target is the bare field name — Kara's `lock` takes an
-// identifier, not an expression, so no source-text reconstruction is
-// needed. Existing tests' fixtures contain no writes, so their edit
-// counts are unaffected.
+// par block (any nesting depth), the write goes through the field's
+// guard: `{ let <field>_guard = c.<field>.lock(); *<field>_guard.value = ...; }`
+// (B-2026-11-16-285; `lock self.field { ... }` is no longer the form).
+// Existing tests' fixtures contain no writes, so their edit counts are
+// unaffected.
 
 #[test]
 fn test_l201b_lock_block_wraps_assign_in_par_branch() {
     // Canonical case: `par { c.count = ...; ... }` — assignment to
     // a mut field of the diagnosed binding, textually inside the par
-    // block. Emits prefix `lock count {\n    ` at stmt start and
-    // suffix `\n}` at stmt end (both pure insertions).
+    // block. Emits prefix `{ let count_guard = c.count.lock(); ` at stmt
+    // start and suffix `; }` at stmt end (both pure insertions).
     let src = "shared struct Counter { mut count: i64 }\n\
                fn use_a(c: ref Counter) { }\n\
                fn main() {\n\
@@ -8153,12 +8164,15 @@ fn test_l201b_lock_block_wraps_assign_in_par_branch() {
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     let prefix = edits
         .iter()
-        .find(|e| e.replacement.starts_with("lock count {"))
-        .expect("expected `lock count {` prefix insertion");
+        .find(|e| {
+            e.replacement
+                .starts_with("{ let count_guard = c.count.lock(); ")
+        })
+        .expect("expected the `count` guard prefix insertion");
     let suffix = edits
         .iter()
-        .find(|e| e.replacement == "\n}")
-        .expect("expected `\\n}` suffix insertion");
+        .find(|e| e.replacement == "; }")
+        .expect("expected `; }` suffix insertion");
     assert_eq!(prefix.length, 0, "prefix must be a pure insertion");
     assert_eq!(suffix.length, 0, "suffix must be a pure insertion");
     let target_start = src.find("c.count = 7;").expect("stmt anchor");
@@ -8202,7 +8216,7 @@ fn test_l201b_lock_block_skips_immutable_field_writes() {
     let key = karac::resolver::SpanKey::from_span(&err.span);
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     assert!(
-        !edits.iter().any(|e| e.replacement.starts_with("lock ")),
+        !edits.iter().any(|e| e.replacement.contains(".lock()")),
         "no mut fields → no lock-block wrap edits; got {edits:?}",
     );
 }
@@ -8233,9 +8247,9 @@ fn test_l201b_lock_block_wraps_nested_assign_inside_par_if() {
     let key = karac::resolver::SpanKey::from_span(&err.span);
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     assert!(
-        edits
-            .iter()
-            .any(|e| e.replacement.starts_with("lock count {")),
+        edits.iter().any(|e| e
+            .replacement
+            .starts_with("{ let count_guard = c.count.lock(); ")),
         "nested assign inside `if` should still receive the lock wrap; got {edits:?}",
     );
 }
@@ -8266,9 +8280,9 @@ fn test_l201b_lock_block_wraps_compound_assign() {
     let key = karac::resolver::SpanKey::from_span(&err.span);
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     assert!(
-        edits
-            .iter()
-            .any(|e| e.replacement.starts_with("lock count {")),
+        edits.iter().any(|e| e
+            .replacement
+            .starts_with("{ let count_guard = c.count.lock(); ")),
         "compound-assign write should also be wrapped; got {edits:?}",
     );
 }
@@ -8315,11 +8329,14 @@ fn test_l205_lock_block_wraps_stdlib_vec_push() {
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     let prefix = edits
         .iter()
-        .find(|e| e.replacement.starts_with("lock items {"))
-        .expect("expected `lock items {` prefix insertion");
+        .find(|e| {
+            e.replacement
+                .starts_with("{ let items_guard = c.items.lock(); ")
+        })
+        .expect("expected the `items` guard prefix insertion");
     let suffix_offsets: Vec<usize> = edits
         .iter()
-        .filter(|e| e.replacement == "\n}" && e.length == 0)
+        .filter(|e| e.replacement == "; }" && e.length == 0)
         .map(|e| e.offset)
         .collect();
     assert_eq!(prefix.length, 0, "prefix must be a pure insertion");
@@ -8372,7 +8389,7 @@ fn test_l205_lock_block_wraps_user_mut_ref_self_method() {
     assert!(
         edits
             .iter()
-            .any(|e| e.replacement.starts_with("lock tracker {")),
+            .any(|e| e.replacement.starts_with("{ let tracker_guard = c.tracker.lock(); ")),
         "user-impl `mut ref self` method on a mut field should be wrapped via `method_self_modes`; got {edits:?}",
     );
 }
@@ -8405,7 +8422,7 @@ fn test_l205_lock_block_skips_immutable_method() {
     let key = karac::resolver::SpanKey::from_span(&err.span);
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     assert!(
-        !edits.iter().any(|e| e.replacement.starts_with("lock ")),
+        !edits.iter().any(|e| e.replacement.contains(".lock()")),
         "immutable method (`Vec.len`) must NOT trigger a lock wrap; got {edits:?}",
     );
 }
@@ -8439,9 +8456,9 @@ fn test_l205_lock_block_wraps_method_call_nested_in_par_if() {
     let key = karac::resolver::SpanKey::from_span(&err.span);
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     assert!(
-        edits
-            .iter()
-            .any(|e| e.replacement.starts_with("lock items {")),
+        edits.iter().any(|e| e
+            .replacement
+            .starts_with("{ let items_guard = c.items.lock(); ")),
         "method-call mutation nested inside `if` should still receive the lock wrap; got {edits:?}",
     );
 }
@@ -8492,7 +8509,7 @@ fn test_l207_lock_block_wraps_chained_field_projection_assign() {
     assert!(
         edits
             .iter()
-            .any(|e| e.replacement.starts_with("lock nested {")),
+            .any(|e| e.replacement.starts_with("{ let nested_guard = c.nested.lock(); ")),
         "chained-field assign `c.nested.val = 7` should lock the outer field `nested`; got {edits:?}",
     );
 }
@@ -8531,7 +8548,7 @@ fn test_l207_lock_block_wraps_chained_field_method_call() {
     assert!(
         edits
             .iter()
-            .any(|e| e.replacement.starts_with("lock nested {")),
+            .any(|e| e.replacement.starts_with("{ let nested_guard = c.nested.lock(); ")),
         "method on deep field chain (`c.nested.bump()`) should still lock the outer field; got {edits:?}",
     );
 }
@@ -8565,9 +8582,9 @@ fn test_l207_lock_block_wraps_field_followed_by_index() {
     let key = karac::resolver::SpanKey::from_span(&err.span);
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     assert!(
-        edits
-            .iter()
-            .any(|e| e.replacement.starts_with("lock items {")),
+        edits.iter().any(|e| e
+            .replacement
+            .starts_with("{ let items_guard = c.items.lock(); ")),
         "field-then-index write (`c.items[0] = 7`) should lock the field `items`; got {edits:?}",
     );
 }
@@ -8607,7 +8624,7 @@ fn test_l207_lock_block_skips_index_first_chain() {
     // edit would fire even with full L207 support. The key assertion
     // is the negative one: no `lock ` edit appears for the read path.
     assert!(
-        !edits.iter().any(|e| e.replacement.starts_with("lock ")),
+        !edits.iter().any(|e| e.replacement.contains(".lock()")),
         "read-through-index should not emit a lock-block edit; got {edits:?}",
     );
 }

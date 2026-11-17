@@ -258,6 +258,7 @@ pub(super) fn check_v2_streamed(
         ),
     };
     if tail.errors > 0 {
+        super::diag_json::skip_codegen_phase(&tail);
         super::diag_json::finish_stream_jsonl(&tail, false, "");
         process::exit(1);
     }
@@ -718,12 +719,30 @@ impl RuntimeReports {
             if code == 1 && r.error.is_none() {
                 if let Some(message) = line.strip_prefix("Error: ") {
                     // Only the last thing the program wrote, the trace aside.
-                    let rest_is_trace = lines[i + 1..]
-                        .first()
-                        .is_none_or(|l| l.starts_with("Error return trace:"));
-                    if rest_is_trace {
-                        r.error = Some(message.to_string());
-                        i += 1;
+                    // A message of several lines (a `.context()` text with a
+                    // newline in it) runs up to the trace, when the trace is
+                    // all that follows it.
+                    let trace_at = lines[i + 1..]
+                        .iter()
+                        .position(|l| l.starts_with("Error return trace:"))
+                        .map(|k| i + 1 + k);
+                    let end = match trace_at {
+                        Some(t)
+                            if t == i + 1 || lines[t + 1..].iter().all(|l| l.starts_with("  ")) =>
+                        {
+                            t
+                        }
+                        _ if i + 1 == lines.len() => i + 1,
+                        _ => i,
+                    };
+                    if end > i {
+                        let mut message = message.to_string();
+                        for l in &lines[i + 1..end] {
+                            message.push('\n');
+                            message.push_str(l);
+                        }
+                        r.error = Some(message);
+                        i = end;
                         continue;
                     }
                 }
@@ -763,9 +782,34 @@ impl RuntimeReports {
             .join(",");
         match output {
             OutputMode::Text => {}
+            // One document (design.md § Error return traces): `main`'s `Err`
+            // is a `runtime_error` diagnostic carrying its trace, a panic a
+            // `runtime_errors` record; a trace with no `Err` (an `unwrap`'s
+            // panic keeps the error's frames) sits beside the records
+            // (B-2026-11-16-283).
             OutputMode::Json => {
+                let mut trace = if let Some(why) = &self.unavailable {
+                    Some(format!(
+                        "{{\"frames\":[],\"unavailable\":{}}}",
+                        json_string(why)
+                    ))
+                } else if self.trace.is_empty() {
+                    None
+                } else if self.truncated {
+                    Some(format!("{{\"frames\":[{frames}],\"truncated\":true}}"))
+                } else {
+                    Some(format!("[{frames}]"))
+                };
+                let mut parts = Vec::new();
                 if let Some(e) = &self.error {
-                    println!("{{\"error\":{}}}", json_string(e));
+                    let carried = trace
+                        .take()
+                        .map(|t| format!(",\"error_return_trace\":{t}"))
+                        .unwrap_or_default();
+                    parts.push(format!(
+                        "\"diagnostics\":[{{\"severity\":\"runtime_error\",\"message\":{}{carried}}}]",
+                        json_string(e)
+                    ));
                 }
                 if !self.faults.is_empty() {
                     let arr = self
@@ -781,21 +825,13 @@ impl RuntimeReports {
                         })
                         .collect::<Vec<_>>()
                         .join(",");
-                    println!("{{\"runtime_errors\":[{arr}]}}");
+                    parts.push(format!("\"runtime_errors\":[{arr}]"));
                 }
-                if let Some(why) = &self.unavailable {
-                    println!(
-                        "{{\"error_return_trace\":{{\"frames\":[],\"unavailable\":{}}}}}",
-                        json_string(why)
-                    );
+                if let Some(t) = trace {
+                    parts.push(format!("\"error_return_trace\":{t}"));
                 }
-                if !self.trace.is_empty() {
-                    let trace = if self.truncated {
-                        format!("{{\"frames\":[{frames}],\"truncated\":true}}")
-                    } else {
-                        format!("[{frames}]")
-                    };
-                    println!("{{\"error_return_trace\":{trace}}}");
+                if !parts.is_empty() {
+                    println!("{{{}}}", parts.join(","));
                 }
             }
             OutputMode::Jsonl => {

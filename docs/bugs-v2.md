@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 468 |
-| false-positive | 248 |
-| missing-feature | 192 |
+| false-positive | 249 |
+| missing-feature | 193 |
 | perf | 184 |
 | other | 113 |
 | soundness | 84 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 592 |
+| typecheck | 594 |
 | mir-llvm | 281 |
 | mir | 246 |
-| cli | 191 |
+| cli | 192 |
 | parser | 105 |
 | ownership | 103 |
 | interp | 87 |
@@ -144,6 +144,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-109 | 2026-11-17 | ownership | low | A `scan` state seeded with `[None; 4]` reads as not `Copy`: `Some((last, last))` is refused as a use after a move and `karac fix` writes `Some((last.clone(), last))` | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-17-113 | 2026-11-17 | other | low | `karac query`'s layout_choice query proposes a `layout` block, which the compiler now refuses as deferred (E_DEFERRED_LAYOUT_BLOCK, B-2026-11-16-257) | — |
+| B-2026-11-17-114 | 2026-11-17 | typecheck+cli | medium | `karac check <file>`, the editor and the LSP refuse a module that imports a `shared struct` and names it in a function signature: "expected 'Counter', found 'Counter'" at every call passing one, while `karac check`, `build` and `run` accept the package | — |
+| B-2026-11-17-97 | 2026-11-17 | typecheck | low | A library trait's default method cannot carry its own `where Self: Clone` bound, so `Iterator.cycle` is an inherent method on each Clone-able adaptor instead of one default method on `Iterator` | — |
 
 ### Relocated
 

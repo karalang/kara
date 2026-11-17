@@ -262,6 +262,35 @@ impl CrashReport {
         if !v.is_object() {
             return Err("crash report must be a JSON object".to_string());
         }
+        // The panic record `karac run --output=json` carries (design.md §17
+        // Panic record): the document's first `runtime_errors` entry, or the
+        // entry alone, `{kind, message, location: {file, line, col}}`. There
+        // is no crash file, so this is what `karac debug` is given
+        // (B-2026-11-16-287).
+        if let Some(first) = v
+            .get("runtime_errors")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+        {
+            return CrashReport::from_value(first);
+        }
+        if v.get("panic_kind").is_none() && v.get("kind").is_some() {
+            let mut record = v.clone();
+            if let Some(obj) = record.as_object_mut() {
+                if let Some(kind) = obj.remove("kind") {
+                    obj.insert("panic_kind".to_string(), kind);
+                }
+                if let Some(mut loc) = obj.remove("location") {
+                    if let Some(l) = loc.as_object_mut() {
+                        if let Some(col) = l.remove("col") {
+                            l.insert("column".to_string(), col);
+                        }
+                    }
+                    obj.insert("panic_site".to_string(), loc);
+                }
+            }
+            return CrashReport::from_value(&record);
+        }
         let panic_site = v
             .get("panic_site")
             .map(|ps| PanicSite {

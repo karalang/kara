@@ -130,7 +130,7 @@ fn mir_error_trace_unavailable_in_json_output() {
             assert_eq!(c, Some(1), "{lane:?}: {out}");
             assert_eq!(
                 out,
-                "{\"error\":\"7\"}\n{\"error_return_trace\":{\"frames\":[],\"unavailable\":\"the ? chain was split across parallel tasks\"}}\n",
+                "{\"diagnostics\":[{\"severity\":\"runtime_error\",\"message\":\"7\",\"error_return_trace\":{\"frames\":[],\"unavailable\":\"the ? chain was split across parallel tasks\"}}]}\n",
                 "{lane:?}"
             );
         }

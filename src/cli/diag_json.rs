@@ -2253,6 +2253,11 @@ fn effect_text(e: &crate::effectchecker::Effect) -> String {
 
 pub(super) fn program_effects_json(pipeline: &Pipeline) -> String {
     match &pipeline.effects {
+        // `main`'s set is the summary of a build that passed effect analysis:
+        // where it reported an error, a callee's missing declaration stands
+        // in for effects it does perform, so the set is wrong rather than
+        // empty, and it reports as not established (B-2026-11-16-286).
+        Some(effects) if !effects.errors.is_empty() => "null".to_string(),
         Some(effects) => {
             // Collect all effects from main() or program-level
             let mut all_effects: Vec<String> = Vec::new();
@@ -2994,6 +2999,9 @@ pub(super) struct StreamTail {
     emitted: usize,
     /// Whether `codegen`'s `phase_start` is out.
     codegen: bool,
+    /// The ids of the error diagnostics out, a skipped `codegen`'s
+    /// `blocking`.
+    error_ids: Vec<String>,
 }
 
 /// The stream's events from `build_start` through the checks' last phase.
@@ -3020,7 +3028,23 @@ pub(super) fn stream_checks_jsonl(
         effects: program_effects_json(pipeline),
         emitted: stream.emitted,
         codegen: false,
+        error_ids: stream.error_ids,
     }
+}
+
+/// `karac build`'s `codegen` when an analysis phase reported an error: it
+/// runs only once every analysis phase completed with none, and a skipped
+/// phase says so with the diagnostics that blocked it (design.md § Streaming
+/// phase events, B-2026-11-16-286).
+pub(super) fn skip_codegen_phase(tail: &StreamTail) {
+    let blocking: Vec<String> = tail.error_ids.iter().map(|id| json_string(id)).collect();
+    emit_jsonl_event(
+        "phase_skipped",
+        &format!(
+            "\"phase\":\"codegen\",\"reason\":\"errors in input\",\"blocking\":[{}]",
+            blocking.join(",")
+        ),
+    );
 }
 
 /// The stream's `build_complete`, with `extra` fields (`,"k":v`) after the

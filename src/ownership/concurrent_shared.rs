@@ -2239,6 +2239,22 @@ fn detect_par_block_conflicts(
                         classifier,
                     );
                     edits.extend(lock_edits);
+                    // The type's literals build the wrapped fields, or the
+                    // fixed program does not check (B-2026-11-16-287's
+                    // `karac fix` exit code made that visible).
+                    let mut_fields = collect_mut_field_names(&binding.type_name, program_items);
+                    if !edits.is_empty() && !mut_fields.is_empty() {
+                        let no_atomics = HashSet::new();
+                        visit_each_function(program_items, &mut |_params, body| {
+                            collect_literal_init_wraps_in_block(
+                                body,
+                                &binding.type_name,
+                                &mut_fields,
+                                &no_atomics,
+                                &mut edits,
+                            );
+                        });
+                    }
                     if !edits.is_empty() {
                         fix_diffs.insert(SpanKey::from_span(&err.span), edits);
                     }
@@ -2665,8 +2681,11 @@ pub(crate) fn build_consumer_rewrite_edits_with_mut_fields(
     };
     let par_spans = collect_par_body_spans_in_items(program_items);
     let mut edits = Vec::new();
-    visit_each_function(program_items, &mut |params, body| {
+    visit_each_function_with_self(program_items, &mut |params, body, self_ty| {
         let mut bindings: Vec<String> = Vec::new();
+        if self_ty.is_some_and(|t| type_expr_is_single_segment_named(t, type_name)) {
+            bindings.push("self".to_string());
+        }
         for p in params {
             if let Some(name) = p.name() {
                 // Parse-only annotation check covers `ref Foo` / `mut ref Foo`
@@ -2719,7 +2738,84 @@ pub(crate) fn build_consumer_rewrite_edits_with_mut_fields(
             .iter()
             .any(|(s, en)| *s <= e.offset && e.offset < *en)
     });
+    // B-2026-11-16-285 — every literal of the migrating type must build
+    // the wrapped field: `Counter { n: 0 }` becomes
+    // `Counter { n: Mutex.new(0) }` (or `Atomic.new(0)`), or the migrated
+    // program does not type-check.
+    visit_each_function(program_items, &mut |_params, body| {
+        collect_literal_init_wraps_in_block(body, type_name, mut_fields, atomic_fields, &mut edits);
+    });
     edits
+}
+
+fn collect_literal_init_wraps_in_block(
+    block: &Block,
+    type_name: &str,
+    mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
+    out: &mut Vec<TextEdit>,
+) {
+    crate::index_disjoint::for_each_block_child(block, &mut |c| match c {
+        crate::index_disjoint::Child::Expr(e) => {
+            collect_literal_init_wraps_in_expr(e, type_name, mut_fields, atomic_fields, out)
+        }
+        crate::index_disjoint::Child::Block(b) => {
+            collect_literal_init_wraps_in_block(b, type_name, mut_fields, atomic_fields, out)
+        }
+    });
+}
+
+fn collect_literal_init_wraps_in_expr(
+    expr: &Expr,
+    type_name: &str,
+    mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
+    out: &mut Vec<TextEdit>,
+) {
+    if let ExprKind::StructLiteral { path, fields, .. } = &expr.kind {
+        if path.last().map(String::as_str) == Some(type_name) {
+            for fi in fields {
+                if !mut_fields.contains(&fi.name) {
+                    continue;
+                }
+                let ctor = if atomic_fields.contains(&fi.name) {
+                    "Atomic.new("
+                } else {
+                    "Mutex.new("
+                };
+                if fi.shorthand {
+                    out.push(TextEdit {
+                        offset: fi.span.offset,
+                        length: fi.span.length,
+                        replacement: format!("{}: {ctor}{})", fi.name, fi.name),
+                    });
+                } else {
+                    // The FieldInit span runs to the end of the value; the
+                    // value's own span may cover only its head (a field
+                    // access spans its object), so the close paren goes at
+                    // the init's end.
+                    out.push(TextEdit {
+                        offset: fi.span.offset + fi.span.length,
+                        length: 0,
+                        replacement: ")".to_string(),
+                    });
+                    out.push(TextEdit {
+                        offset: fi.value.span.offset,
+                        length: 0,
+                        replacement: ctor.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    crate::index_disjoint::for_each_child_public(expr, &mut |c| match c {
+        crate::index_disjoint::Child::Expr(e) => {
+            collect_literal_init_wraps_in_expr(e, type_name, mut_fields, atomic_fields, out)
+        }
+        crate::index_disjoint::Child::Block(b) => {
+            collect_literal_init_wraps_in_block(b, type_name, mut_fields, atomic_fields, out)
+        }
+    });
 }
 
 /// Public access to the mut-field collector for project-mode callers
@@ -2814,18 +2910,38 @@ fn collect_method_self_modes_in_items(items: &[Item]) -> FxHashMap<String, SelfP
 }
 
 fn visit_each_function(items: &[Item], visitor: &mut impl FnMut(&[Param], &Block)) {
+    visit_each_function_with_self(items, &mut |params, body, _| visitor(params, body));
+}
+
+/// [`visit_each_function`], also handing over the impl's target type for a
+/// method that takes `self`, so a walk can treat `self` as a binding of it.
+fn visit_each_function_with_self(
+    items: &[Item],
+    visitor: &mut impl FnMut(&[Param], &Block, Option<&TypeExpr>),
+) {
     for it in items {
         match it {
-            Item::Function(f) => visitor(&f.params, &f.body),
+            Item::Function(f) => visitor(&f.params, &f.body, None),
             Item::ImplBlock(ib) => {
                 for ii in &ib.items {
                     if let ImplItem::Method(m) = ii {
-                        visitor(&m.params, &m.body);
+                        let self_ty = m.self_param.as_ref().map(|_| &ib.target_type);
+                        visitor(&m.params, &m.body, self_ty);
                     }
                 }
             }
             _ => {}
         }
+    }
+}
+
+/// Whether `e` is the binding `name`: an identifier, or `self` when the
+/// binding is a method's receiver.
+fn is_binding_expr(e: &Expr, name: &str) -> bool {
+    match &e.kind {
+        ExprKind::Identifier(n) => n == name,
+        ExprKind::SelfValue => name == "self",
+        _ => false,
     }
 }
 
@@ -3246,7 +3362,7 @@ fn collect_lock_block_writes_in_stmt(
                 if atomic_fields.contains(field) {
                     // L215c-cons — bare `<binding>.<field> = <value>`
                     // on an Atomic[T]-classified field. Rewrite to
-                    // `<binding>.<field>.store(<value>, MemoryOrdering.Release)`.
+                    // `<binding>.<field>.store(<value>)`.
                     // Don't emit the binding-root SelfPrefix rewrite —
                     // the source binding name stays in place (no
                     // enclosing lock body to retarget at `self`), and
@@ -3267,7 +3383,7 @@ fn collect_lock_block_writes_in_stmt(
                         field: outer_field,
                     } = &target.kind
                     {
-                        if matches!(&object.kind, ExprKind::Identifier(n) if n == binding_name) {
+                        if is_binding_expr(object, binding_name) {
                             let target_full_end =
                                 object.span.offset + object.span.length + 1 + outer_field.len();
                             let value_start = value.span.offset;
@@ -3291,11 +3407,24 @@ fn collect_lock_block_writes_in_stmt(
                     // edits BEFORE the wrap-prefix insertion so the
                     // stable sort by `Reverse(offset)` preserves their
                     // relative order at the same offset.
-                    if shape == WrapShape::SelfPrefix {
-                        collect_binding_root_rewrites_in_expr(target, binding_name, out);
-                        collect_binding_root_rewrites_in_expr(value, binding_name, out);
-                    }
-                    emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
+                    let _ = shape;
+                    collect_guard_rewrites_in_expr(
+                        target,
+                        binding_name,
+                        field,
+                        mut_fields,
+                        false,
+                        out,
+                    );
+                    collect_guard_rewrites_in_expr(
+                        value,
+                        binding_name,
+                        field,
+                        mut_fields,
+                        false,
+                        out,
+                    );
+                    emit_lock_wrap_around(wrap_start, wrap_end, binding_name, field, out);
                 }
             }
             // Recurse into target / value to catch writes nested inside
@@ -3333,11 +3462,24 @@ fn collect_lock_block_writes_in_stmt(
                 if !atomic_fields.contains(field) {
                     let wrap_start = target.span.offset;
                     let wrap_end = value.span.offset + value.span.length;
-                    if shape == WrapShape::SelfPrefix {
-                        collect_binding_root_rewrites_in_expr(target, binding_name, out);
-                        collect_binding_root_rewrites_in_expr(value, binding_name, out);
-                    }
-                    emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
+                    let _ = shape;
+                    collect_guard_rewrites_in_expr(
+                        target,
+                        binding_name,
+                        field,
+                        mut_fields,
+                        false,
+                        out,
+                    );
+                    collect_guard_rewrites_in_expr(
+                        value,
+                        binding_name,
+                        field,
+                        mut_fields,
+                        false,
+                        out,
+                    );
+                    emit_lock_wrap_around(wrap_start, wrap_end, binding_name, field, out);
                 }
             }
             collect_lock_block_writes_in_expr(
@@ -3383,10 +3525,15 @@ fn collect_lock_block_writes_in_stmt(
                         if !atomic_fields.contains(field) {
                             let wrap_start = e.span.offset;
                             let wrap_end = args_close_span.offset + args_close_span.length;
-                            if shape == WrapShape::SelfPrefix {
-                                collect_binding_root_rewrites_in_expr(e, binding_name, out);
-                            }
-                            emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
+                            collect_guard_rewrites_in_expr(
+                                e,
+                                binding_name,
+                                field,
+                                mut_fields,
+                                false,
+                                out,
+                            );
+                            emit_lock_wrap_around(wrap_start, wrap_end, binding_name, field, out);
                         }
                     }
                 }
@@ -4079,8 +4226,11 @@ pub(crate) fn classify_field_wrap_kinds(
                 .unwrap_or(&empty_callee_types),
             method_self_modes: &method_self_modes,
         };
-        visit_each_function(file.program_items, &mut |params, body| {
+        visit_each_function_with_self(file.program_items, &mut |params, body, self_ty| {
             let mut bindings: Vec<String> = Vec::new();
+            if self_ty.is_some_and(|t| type_expr_is_single_segment_named(t, type_name)) {
+                bindings.push("self".to_string());
+            }
             for p in params {
                 if let Some(name) = p.name() {
                     if type_expr_is_single_segment_named(&p.ty, type_name) {
@@ -4140,6 +4290,10 @@ pub(crate) struct ProjectMigrationFile<'a> {
 /// identifier (literals, calls, struct literals, etc.).
 fn resolve_place_chain(expr: &Expr) -> Option<PlaceExpr> {
     match &expr.kind {
+        ExprKind::SelfValue => Some(PlaceExpr {
+            root: "self".to_string(),
+            projections: Vec::new(),
+        }),
         ExprKind::Identifier(name) => Some(PlaceExpr {
             root: name.clone(),
             projections: Vec::new(),
@@ -4171,38 +4325,119 @@ fn resolve_place_chain(expr: &Expr) -> Option<PlaceExpr> {
 fn emit_lock_wrap_around(
     start: usize,
     end: usize,
+    binding_name: &str,
     field: &str,
-    shape: WrapShape,
     out: &mut Vec<TextEdit>,
 ) {
-    let prefix = match shape {
-        WrapShape::Shorthand => format!("lock {field} {{\n    "),
-        WrapShape::SelfPrefix => format!("lock self.{field} {{\n    "),
-    };
+    // The v1 form is a `MutexGuard` held for the statement
+    // (library/concurrency.md § Mutex): `lock` blocks are not v1 syntax
+    // (B-2026-11-16-285).
     out.push(TextEdit {
         offset: start,
         length: 0,
-        replacement: prefix,
+        replacement: format!("{{ let {field}_guard = {binding_name}.{field}.lock(); "),
     });
     out.push(TextEdit {
         offset: end,
         length: 0,
-        replacement: "\n}".to_string(),
+        replacement: "; }".to_string(),
     });
+}
+
+/// Inside a statement the guard wraps, every `<binding>.<field>` reads
+/// through the guard: `<field>_guard.value` where a projection, an index or
+/// a method call follows, `*<field>_guard.value` where the value itself is
+/// read or assigned.
+fn collect_guard_rewrites_in_expr(
+    expr: &Expr,
+    binding_name: &str,
+    field: &str,
+    mut_fields: &HashSet<String>,
+    as_object: bool,
+    out: &mut Vec<TextEdit>,
+) {
+    if let ExprKind::FieldAccess { object, field: f } = &expr.kind {
+        if is_binding_expr(object, binding_name) {
+            let replacement = if f == field {
+                Some(if as_object {
+                    format!("{field}_guard.value")
+                } else {
+                    format!("*{field}_guard.value")
+                })
+            } else if mut_fields.contains(f) && !as_object {
+                // Another field read by value: its own guard, released
+                // before the statement's.
+                Some(format!(
+                    "{{ let {f}_guard = {binding_name}.{f}.lock(); *{f}_guard.value }}"
+                ))
+            } else {
+                None
+            };
+            if let Some(replacement) = replacement {
+                out.push(TextEdit {
+                    offset: object.span.offset,
+                    length: object.span.length + 1 + f.len(),
+                    replacement,
+                });
+                return;
+            }
+        }
+    }
+    let mut go = |e: &Expr, obj: bool| {
+        collect_guard_rewrites_in_expr(e, binding_name, field, mut_fields, obj, out)
+    };
+    match &expr.kind {
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            go(object, true)
+        }
+        ExprKind::Index { object, index } => {
+            go(object, true);
+            go(index, false);
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            go(object, true);
+            for a in args {
+                go(&a.value, false);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            go(callee, false);
+            for a in args {
+                go(&a.value, false);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            go(left, false);
+            go(right, false);
+        }
+        ExprKind::Unary { operand, .. } => go(operand, false),
+        ExprKind::Cast { expr, .. } => go(expr, false),
+        ExprKind::Range { start, end, .. } => {
+            if let Some(x) = start.as_deref() {
+                go(x, false);
+            }
+            if let Some(x) = end.as_deref() {
+                go(x, false);
+            }
+        }
+        ExprKind::Tuple(items) => {
+            for x in items {
+                go(x, false);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// L215c-cons — Emit the two-edit rewrite that turns a bare assign
 /// `<binding>.<field> = <value>` into the Atomic store form
-/// `<binding>.<field>.store(<value>, MemoryOrdering.Release)`. Edits:
-/// (1) overwrite the byte range between the target's last byte and the
-/// value's first byte (the ` = ` separator) with `.store(`; (2) insert
-/// `, MemoryOrdering.Release)` immediately after the value's last byte.
-/// The trailing `;` (statement terminator) falls outside both edits and
-/// stays in place — `<binding>.<field>.store(v, MemoryOrdering.Release);`
-/// is a valid expression-statement form. `MemoryOrdering.Release` is
-/// chosen as the v1 default ordering for store; it pairs with the
-/// `MemoryOrdering.Acquire` chosen for [`emit_atomic_load_after`] to
-/// give canonical acquire/release semantics for ISR-style signaling.
+/// `<binding>.<field>.store(<value>)`. Edits: (1) overwrite the byte range
+/// between the target's last byte and the value's first byte (the ` = `
+/// separator) with `.store(`; (2) insert `)` immediately after the value's
+/// last byte. The trailing `;` falls outside both edits. Every atomic
+/// operation is sequentially consistent and takes no ordering argument
+/// (concurrency.md), so the `MemoryOrdering` form this used to emit is
+/// the deprecated one (B-2026-11-16-285).
 fn emit_atomic_store_around(
     target_end: usize,
     value_start: usize,
@@ -4217,14 +4452,13 @@ fn emit_atomic_store_around(
     out.push(TextEdit {
         offset: value_end,
         length: 0,
-        replacement: ", MemoryOrdering.Release)".to_string(),
+        replacement: ")".to_string(),
     });
 }
 
 /// L215c-cons — Emit the one-edit rewrite that turns an rvalue read
 /// `<binding>.<field>` into the Atomic load form
-/// `<binding>.<field>.load(MemoryOrdering.Acquire)`. Inserts the
-/// `.load(...)` suffix immediately after the field-access span; the
+/// `<binding>.<field>.load()`. Inserts the `.load()` suffix immediately after the field-access span; the
 /// original prefix bytes (`<binding>.<field>`) stay intact so chained
 /// projections / method calls on the resulting load value remain
 /// syntactically rooted at the same place as the original read.
@@ -4232,86 +4466,8 @@ fn emit_atomic_load_after(end: usize, out: &mut Vec<TextEdit>) {
     out.push(TextEdit {
         offset: end,
         length: 0,
-        replacement: ".load(MemoryOrdering.Acquire)".to_string(),
+        replacement: ".load()".to_string(),
     });
-}
-
-/// L215b2 — Walk `expr` and emit a binding-root rewrite `TextEdit`
-/// (`<binding>` → `self`) for every place-rooted occurrence of
-/// `Identifier(<binding>)` at the object position of a `FieldAccess`.
-/// Used by the SelfPrefix wrap path so wrap bodies reference
-/// `self.<field>` instead of the migrating binding's name, matching
-/// design.md line 8522's `lock self.field { ... }` wrap shape.
-///
-/// Only fires for `Identifier(<binding>)` at a `FieldAccess` object
-/// position; bare references (`func(c)`, `let x = c;`) are NOT
-/// rewritten — those usages pass / move the binding as a whole and
-/// should stay literal. Method-call receivers and chained projections
-/// rooted at `<binding>` get rewritten via the FieldAccess recursion
-/// (e.g., `c.field.subfield` → the inner `FieldAccess { Identifier(c),
-/// "field" }` is matched and `c` becomes `self`).
-fn collect_binding_root_rewrites_in_expr(expr: &Expr, binding_name: &str, out: &mut Vec<TextEdit>) {
-    match &expr.kind {
-        ExprKind::FieldAccess { object, .. } => {
-            if let ExprKind::Identifier(name) = &object.kind {
-                if name == binding_name {
-                    out.push(TextEdit {
-                        offset: object.span.offset,
-                        length: object.span.length,
-                        replacement: "self".to_string(),
-                    });
-                }
-            }
-            // Recurse so chained field access (`c.outer.inner`) and
-            // method-call receivers (`c.f.method()` — but the method
-            // call form is handled via the MethodCall arm) get the
-            // root rewrite via the inner FieldAccess match above.
-            collect_binding_root_rewrites_in_expr(object, binding_name, out);
-        }
-        ExprKind::Index { object, index } => {
-            collect_binding_root_rewrites_in_expr(object, binding_name, out);
-            collect_binding_root_rewrites_in_expr(index, binding_name, out);
-        }
-        ExprKind::TupleIndex { object, .. } => {
-            collect_binding_root_rewrites_in_expr(object, binding_name, out);
-        }
-        ExprKind::MethodCall { object, args, .. } => {
-            collect_binding_root_rewrites_in_expr(object, binding_name, out);
-            for a in args {
-                collect_binding_root_rewrites_in_expr(&a.value, binding_name, out);
-            }
-        }
-        ExprKind::Call { callee, args } => {
-            collect_binding_root_rewrites_in_expr(callee, binding_name, out);
-            for a in args {
-                collect_binding_root_rewrites_in_expr(&a.value, binding_name, out);
-            }
-        }
-        ExprKind::Binary { left, right, .. } => {
-            collect_binding_root_rewrites_in_expr(left, binding_name, out);
-            collect_binding_root_rewrites_in_expr(right, binding_name, out);
-        }
-        ExprKind::Unary { operand, .. } => {
-            collect_binding_root_rewrites_in_expr(operand, binding_name, out);
-        }
-        ExprKind::Cast { expr, .. } => {
-            collect_binding_root_rewrites_in_expr(expr, binding_name, out);
-        }
-        ExprKind::Range { start, end, .. } => {
-            if let Some(s) = start.as_deref() {
-                collect_binding_root_rewrites_in_expr(s, binding_name, out);
-            }
-            if let Some(e) = end.as_deref() {
-                collect_binding_root_rewrites_in_expr(e, binding_name, out);
-            }
-        }
-        ExprKind::Tuple(items) => {
-            for e in items {
-                collect_binding_root_rewrites_in_expr(e, binding_name, out);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// L215b2 — Read-site walker. Walks the function body and emits a
@@ -4415,6 +4571,36 @@ fn collect_lock_block_reads_in_stmt(
     }
 }
 
+/// A guarded read that more of an expression follows (`c.n + 1`,
+/// `c.n as f64`) goes in parentheses: at the start of a statement,
+/// `{ ... } + 1` parses as a block and then a stray `+ 1`. Returns whether
+/// `e` was such a read.
+fn emit_parenthesized_read(
+    e: &Expr,
+    binding_name: &str,
+    mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
+    out: &mut Vec<TextEdit>,
+) -> bool {
+    let ExprKind::FieldAccess { object, field } = &e.kind else {
+        return false;
+    };
+    if !is_binding_expr(object, binding_name)
+        || !mut_fields.contains(field)
+        || atomic_fields.contains(field)
+    {
+        return false;
+    }
+    out.push(TextEdit {
+        offset: object.span.offset,
+        length: object.span.length + 1 + field.len(),
+        replacement: format!(
+            "({{ let {field}_guard = {binding_name}.{field}.lock(); *{field}_guard.value }})"
+        ),
+    });
+    true
+}
+
 fn collect_lock_block_reads_in_expr(
     expr: &Expr,
     binding_name: &str,
@@ -4431,14 +4617,93 @@ fn collect_lock_block_reads_in_expr(
     // the `.`, which is the canonical Kāra formatting; whitespace-
     // around-dot lands a slightly-wrong edit and the reviewer
     // hand-completes it.
+    // A method called on a guarded field holds the guard for the call:
+    // `c.log.len()` reads `{ let log_guard = c.log.lock(); log_guard.value.len() }`.
+    if let ExprKind::MethodCall {
+        object: receiver,
+        args,
+        args_close_span,
+        ..
+    } = &expr.kind
+    {
+        if let ExprKind::FieldAccess { object, field } = &receiver.kind {
+            if is_binding_expr(object, binding_name)
+                && mut_fields.contains(field)
+                && !atomic_fields.contains(field)
+            {
+                out.push(TextEdit {
+                    offset: object.span.offset,
+                    length: object.span.length + 1 + field.len(),
+                    replacement: format!("{field}_guard.value"),
+                });
+                out.push(TextEdit {
+                    offset: object.span.offset,
+                    length: 0,
+                    replacement: format!("{{ let {field}_guard = {binding_name}.{field}.lock(); "),
+                });
+                // Inside the guard the field reads through it: a second
+                // `lock()` of the same mutex here would deadlock.
+                for a in args {
+                    collect_guard_rewrites_in_expr(
+                        &a.value,
+                        binding_name,
+                        field,
+                        mut_fields,
+                        false,
+                        out,
+                    );
+                }
+                out.push(TextEdit {
+                    offset: args_close_span.offset + args_close_span.length,
+                    length: 0,
+                    replacement: " }".to_string(),
+                });
+                return;
+            }
+        }
+    }
+    // An index into a guarded field holds the guard for the index:
+    // `c.log[0]` reads `{ let log_guard = c.log.lock(); log_guard.value[0] }`
+    // (a block followed by `[0]` would parse as a block and an array).
+    if let ExprKind::Index {
+        object: indexed,
+        index,
+    } = &expr.kind
+    {
+        if let ExprKind::FieldAccess { object, field } = &indexed.kind {
+            if is_binding_expr(object, binding_name)
+                && mut_fields.contains(field)
+                && !atomic_fields.contains(field)
+            {
+                out.push(TextEdit {
+                    offset: object.span.offset,
+                    length: object.span.length + 1 + field.len(),
+                    replacement: format!("{field}_guard.value"),
+                });
+                out.push(TextEdit {
+                    offset: object.span.offset,
+                    length: 0,
+                    replacement: format!("{{ let {field}_guard = {binding_name}.{field}.lock(); "),
+                });
+                collect_guard_rewrites_in_expr(index, binding_name, field, mut_fields, false, out);
+                out.push(TextEdit {
+                    offset: expr.span.offset + expr.span.length,
+                    length: 0,
+                    replacement: " }".to_string(),
+                });
+                return;
+            }
+        }
+    }
     if let ExprKind::FieldAccess { object, field } = &expr.kind {
-        if let ExprKind::Identifier(name) = &object.kind {
-            if name == binding_name && mut_fields.contains(field) {
+        if is_binding_expr(object, binding_name) {
+            let name = binding_name;
+            if mut_fields.contains(field) {
                 let start = object.span.offset;
                 let len = object.span.length + 1 + field.len();
                 if atomic_fields.contains(field) {
                     // L215c-cons — Atomic[T]-classified field read.
-                    // Append `.load(MemoryOrdering.Acquire)` to the
+                    // Append `.load()` to the
                     // FieldAccess; leave the original `<binding>.<field>`
                     // text intact so chained projections on the result
                     // (`c.field.subfield`, `c.field[0]`) still resolve
@@ -4447,15 +4712,19 @@ fn collect_lock_block_reads_in_expr(
                     // method call, so `c.field.push()` shapes don't
                     // reach here — but for a `.method()` shape that
                     // somehow does, this append would produce
-                    // `c.field.load(MemoryOrdering.Acquire).method()`
+                    // `c.field.load().method()`
                     // which is semantically a load-then-call (safe vs
                     // wrong-receiver). Reviewer would catch the shape.
                     emit_atomic_load_after(start + len, out);
                 } else {
+                    // A guard of its own, released at the block's end, so
+                    // two reads in one statement never hold it twice.
                     out.push(TextEdit {
                         offset: start,
                         length: len,
-                        replacement: format!("lock self.{field} {{ self.{field} }}"),
+                        replacement: format!(
+                            "{{ let {field}_guard = {name}.{field}.lock(); *{field}_guard.value }}"
+                        ),
                     });
                 }
                 // Don't descend — the FieldAccess.object (`Identifier(c)`)
@@ -4586,14 +4855,30 @@ fn collect_lock_block_reads_in_expr(
             collect_lock_block_reads_in_expr(object, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Binary { left, right, .. } => {
-            collect_lock_block_reads_in_expr(left, binding_name, mut_fields, atomic_fields, out);
+            if !emit_parenthesized_read(left, binding_name, mut_fields, atomic_fields, out) {
+                collect_lock_block_reads_in_expr(
+                    left,
+                    binding_name,
+                    mut_fields,
+                    atomic_fields,
+                    out,
+                );
+            }
             collect_lock_block_reads_in_expr(right, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Unary { operand, .. } => {
             collect_lock_block_reads_in_expr(operand, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Cast { expr, .. } => {
-            collect_lock_block_reads_in_expr(expr, binding_name, mut_fields, atomic_fields, out);
+            if !emit_parenthesized_read(expr, binding_name, mut_fields, atomic_fields, out) {
+                collect_lock_block_reads_in_expr(
+                    expr,
+                    binding_name,
+                    mut_fields,
+                    atomic_fields,
+                    out,
+                );
+            }
         }
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start.as_deref() {

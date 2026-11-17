@@ -181,7 +181,7 @@ fn mir_run_json_frames_carry_their_context_messages() {
     ]
     .join(",");
     assert!(
-        stdout.contains(&format!("{{\"error_return_trace\":[{want}]}}")),
+        stdout.contains(&format!("\"error_return_trace\":[{want}]}}]}}")),
         "{stdout}"
     );
     let _ = std::fs::remove_dir_all(&dir);

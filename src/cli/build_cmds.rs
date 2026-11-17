@@ -1147,6 +1147,71 @@ pub(super) fn typecheck_modules(
     }
 }
 
+/// Each module's typecheck result in the package at `root`, keyed by its
+/// file, every module checked with its imports resolved as [`package_check`]
+/// checks it. `None` when the package cannot be walked or does not parse.
+/// `karac migrate` reads binding types from these, which a module typechecked
+/// on its own cannot give for `let c = make()` with `make` imported
+/// (B-2026-11-16-285).
+pub(super) fn package_module_type_results(
+    root: &std::path::Path,
+) -> Option<std::collections::HashMap<std::path::PathBuf, TypeCheckResult>> {
+    let walked = walker::walk_project(root, WalkerOpts::default()).ok()?;
+    let dep_walks = super::run_check_cmds::quiet_dep_package_walks(root);
+    let BuildTreeOk {
+        mut tree,
+        parse_errors,
+    } = module::build_program_tree_with_overlay(
+        &walked,
+        &dep_walks,
+        module::BuildTreeOpts {
+            merge_test_companions: false,
+        },
+        None,
+    )
+    .ok()?;
+    if !parse_errors.is_empty() {
+        return None;
+    }
+    let lib = PackageLibrary::of(&tree);
+    borrow_bare_params_of(&mut tree, lib.as_ref());
+    let lint_overrides = crate::lints::CliLintOverrides {
+        core_places: true,
+        strict_core: true,
+        ..Default::default()
+    };
+    let mut out = std::collections::HashMap::new();
+    for (id, m) in tree.modules.iter().enumerate() {
+        if m.is_synthetic {
+            continue;
+        }
+        let mut program = PackageLibrary::program(lib.as_ref(), &m.items);
+        crate::desugar::desugar_multi_assigns(&mut program.items);
+        let resolved = Resolver::new(&program)
+            .with_tree(&tree, id as ModuleId)
+            .with_user_operator_impls(true)
+            .resolve();
+        let mut result = crate::typechecker::TypeChecker::new(&program, &resolved)
+            .with_tree(&tree, id as ModuleId)
+            .with_cli_lint_overrides(lint_overrides.clone())
+            .check();
+        // The tree rebases each module's spans past the previous ones';
+        // the keys go back to offsets into the module's own file.
+        let base = m.span_base;
+        let to_file = |map: &mut FxHashMap<crate::resolver::SpanKey, String>| {
+            *map = std::mem::take(map)
+                .into_iter()
+                .filter(|(k, _)| k.0 >= base)
+                .map(|(k, v)| (crate::resolver::SpanKey(k.0 - base, k.1), v))
+                .collect();
+        };
+        to_file(&mut result.pattern_binding_types);
+        to_file(&mut result.method_callee_types);
+        out.insert(m.file.clone(), result);
+    }
+    Some(out)
+}
+
 pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
     // The JSON feed's table, whole: this one used to list 28 kinds and code
     // every other kind `E0200` (review-thread ruling 2026-11-16).

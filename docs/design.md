@@ -340,7 +340,7 @@ Escaping one of these is `error[E_RAW_IDENT_NOT_ALLOWED]` (`E0004`). It is a dif
 
 **No conflict with raw strings.** The characters after `r` decide: `r#` followed by an identifier-start character is a raw identifier, while `r"`, `r#"`, `r##"` and so on start a raw string ([String literals](#string-literals)).
 
-**Forward compatibility.** `r#name` is how code keeps using a name that a later edition makes a keyword. A `karac fix --edition` rewrite inserts the prefix mechanically. Without the escape, every new keyword would be a hard source break, which the edition guarantee ([§2](#2-specification-layers)) does not allow.
+**Forward compatibility.** `r#name` is how code keeps using a name that a later edition makes a keyword. A `karac fix --edition` rewrite will insert the prefix mechanically; that flag arrives with the first edition boundary, since with one edition (2026) there is nothing to migrate yet. Without the escape, every new keyword would be a hard source break, which the edition guarantee ([§2](#2-specification-layers)) does not allow.
 
 ### Symbols
 
@@ -720,7 +720,7 @@ target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host
   2. **Deny.** Later in the edition, the lint becomes deny-by-default; code needs an explicit `#[allow(<lint>)]` to compile.
   3. **Error.** At the next edition boundary the behavior becomes a hard error under the new edition.
 
-  The warning stage gives authors lead time, the deny stage forces awareness without forcing immediate migration, and the edition boundary is the final stop. `karac explain --edition <NEXT>` shows a package's pending migrations, `karac fix --edition <NEXT>` applies the mechanical ones, and lint attributes can escalate or allow a lint ([§17 Lint levels](#lint-levels)). A `[lints]` table in `kara.toml` comes with the tooling track ([deferred.md](deferred.md#tooling)).
+  The warning stage gives authors lead time, the deny stage forces awareness without forcing immediate migration, and the edition boundary is the final stop. With the first edition boundary, `karac explain --edition <NEXT>` will show a package's pending migrations and `karac fix --edition <NEXT>` will apply the mechanical ones; neither flag exists while 2026 is the only edition. Lint attributes can escalate or allow a lint ([§17 Lint levels](#lint-levels)). A `[lints]` table in `kara.toml` comes with the tooling track ([deferred.md](deferred.md#tooling)).
 
 **Versions and resolution.**
 - **Semver.** `"1.2"` means `>=1.2.0, <2.0.0`; `"=1.2.3"` is exact; `">=1.0, <1.5"` is a range. A conflict is a compile error showing the constraint chain.
@@ -7132,7 +7132,7 @@ All diagnostics are available as JSON with machine-applicable fix diffs. AI agen
 ```bash
 $ karac build --output=json
 {
-  "program_effects": ["reads(FileSystem, Env)", "writes(Stdin, Stdout, Stderr, UserDB)", "sends(Network)"],  // null if build did not reach effect analysis
+  "program_effects": ["reads(FileSystem, Env)", "writes(Stdin, Stdout, Stderr, UserDB)", "sends(Network)"],  // null if build did not reach effect analysis, or it reported an error
   "diagnostics": [{
     "id": "d1",
     "severity": "error", "primary": true,
@@ -7324,7 +7324,7 @@ The batch `--output=json` document is emitted once, at the end of a build. A cli
 | `phase_complete` | once per observable phase that ran | `phase`, `errors`, `warnings`, `notes` |
 | `phase_skipped` | zero or more | `phase`, `reason`, `blocking` (the ids of earlier diagnostics that forced the skip) |
 | `diagnostic` | zero or more | The shape of an entry in the batch `diagnostics` array, plus a `phase` field naming the emitting phase |
-| `build_complete` | once per build | `build_id`, `success`, `total_errors`, `total_warnings`, `program_effects` (null if the build did not reach effect analysis) |
+| `build_complete` | once per build | `build_id`, `success`, `total_errors`, `total_warnings`, `program_effects` (null if the build did not reach effect analysis, or effect analysis reported an error) |
 
 Sub-phase events (monomorphization requests, SCC rounds, cache hits, individual LLVM passes) are deliberately **not** in the protocol: they flood the stream and are internal. If tools need them, they go to separate files like `--emit-timings`, never into the diagnostic stream.
 
@@ -7426,7 +7426,7 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 | `textDocument/inlayHint` | A `let` binding's inferred type and a private function's inferred effects. |
 | `textDocument/codeAction` | The diagnostics' machine-applicable fixes, the edits `karac fix` applies, as quick fixes. |
 | `textDocument/formatting` | `karac fmt`'s output, as one whole-document edit. |
-| `kara/renderCrashReport` | A custom request: `{"text": <crash report JSON>}` in, `{"rendered": <text>}` out, as `karac debug` renders it. |
+| `kara/renderCrashReport` | A custom request: `{"text": <panic record JSON>}` in, `{"rendered": <text>}` out, as `karac debug` renders it. The record is the one `karac run --output=json` carries ([Panic record](#panic-record)); there is no crash file. |
 
 Positions are UTF-16, as the protocol requires. A diagnostic's `code` is its catalogue code (`E0500`), or its phase when it has none. Requests reach one document: references and rename do not cross files in v1.
 

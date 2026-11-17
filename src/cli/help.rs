@@ -76,8 +76,9 @@ COMMANDS:
     lint --list       List every lint with its default level and what it
                       reports; --output=json for the registry as JSON.
     fmt [<path>]      Format a .kara file, or with no path the package
-    debug <crash>     Render a std.panic crash report (JSON file, or `-` for
-                      stdin) as a human-readable report; --output=json
+    debug <record>    Render a panic record as a human-readable report:
+                      the `karac run --output=json` document of a run that
+                      panicked (a file, or `-` for stdin); --output=json
                       re-emits the structured form.
     fix [<file>]      Apply machine-applicable suggestions (e.g. resolver
                       `did you mean` corrections) to a .kara file, or with
@@ -87,8 +88,11 @@ COMMANDS:
                       Preemptively migrate a `shared struct` to `sync struct`.
                       Rewrites the type definition (keyword rename, `mut `
                       strip, `Mutex[T]` wrap on every mut field) and every
-                      consumer site (assigns, compound-assigns, reads, and
-                      mutating method calls wrap in `lock self.field {{ ... }}`).
+                      consumer site (assigns, compound-assigns, reads and
+                      method calls take the field's `lock()` guard), and
+                      struct literals' field inits (`Mutex.new(..)`).
+                      --apply re-checks the result and restores every
+                      file if it does not check.
                       With `<file>` omitted, walks every module under the
                       project's `src/` (discovered via `kara.toml`). Dry-run
                       by default; use --apply to write. The dirty-workspace
@@ -111,8 +115,8 @@ COMMANDS:
                         key   - derive the cache-key digest for a key
                                 tuple (--pkg / --version required)
     install <spec>    Build a binary package and install it into
-                      ~/.kara/bin/. Spec accepts `path = ...`,
-                      `git = ...`, or a registry-proxy reference.
+                      ~/.kara/bin/. Spec accepts `path=...`,
+                      `git=...`, or a registry-proxy reference.
                       (Path sources only in 0.8.)
     vendor            Copy resolved dependencies into ./vendor/.
                       Pairs with `karac build --offline`. (Path
@@ -123,9 +127,10 @@ COMMANDS:
     version           Show version
 
 OPTIONS:
-    --output=json     Structured JSON output (on stdout)
-    --output=jsonl    Streaming JSONL output (on stdout)
-    --sequential      Disable parallel execution in par blocks
+    --output=json     Structured JSON output on stdout, for the commands
+                      whose `--help` lists it (check, build, run, test,
+                      query, explain, cache, ...)
+    --output=jsonl    Streaming JSONL output on stdout, likewise
     -h, --help        Print help. After a subcommand (e.g. `karac init
                       --help`), prints help scoped to that subcommand."
     );
@@ -550,19 +555,21 @@ OPTIONS:
         }
         "debug" => {
             "\
-karac debug - Render a std.panic crash report
+karac debug - Render a panic record
 
 USAGE:
-    karac debug <crash.json> [--output=json|text]
-    karac debug -                       (read the report from stdin)
+    karac debug <record.json> [--output=json|text]
+    karac debug -                       (read the record from stdin)
 
 DETAILS:
-    Reads the structured JSON crash report a Kāra program's std.panic
-    handler writes on a panic (docs/design.md § 4. Crash Report Format) and
-    renders it for a human: panic site + kind + message, the effect set in
-    compact form, the logical stack, parallel context (which par branch
-    panicked, which siblings were cancelled), provider stack, and any
-    RC-fallback annotations, with a build-metadata footer.
+    Reads a panic record (docs/design.md § 17 Panic record) and renders it
+    for a human: the panic's kind, message and location. The record is what
+    `karac run --output=json` prints for a run that panicked (its first
+    `runtime_errors` entry is used), or that entry on its own:
+        karac run --output=json app.kara | karac debug -
+    A program writes no crash file. The richer report shape of
+    docs/design.md § 4 (logical stack, provider stack, parallel context) is
+    rendered too when a record carries those fields.
 
 OPTIONS:
     --output=text      Human-readable report (default; TTY-aware colour,
@@ -630,13 +637,16 @@ DETAILS:
     `Mutex[T]` instead. Single-file mode is always all-Mutex (no
     workspace visibility for the classifier).
 
-    Consumer sites are rewritten to match the wrapper. `Mutex[T]` fields
-    get `lock self.field { ... }` blocks around every read, assign,
-    compound-assign, and mutating method call. `Atomic[T]` fields get
-    `.store(v, MemoryOrdering.Release)` for writes and
-    `.load(MemoryOrdering.Acquire)` for reads. Annotated bindings
-    (`let c: Counter = ...`) fire from parse-only data; inferred bindings
-    (`let c = make_counter()`) require the file to typecheck.
+    Consumer sites are rewritten to match the wrapper. A `Mutex[T]`
+    field's assign, compound-assign or method call becomes a block that
+    holds the guard (`{ let n_guard = c.n.lock(); *n_guard.value += 1; }`),
+    and a read takes it for the read; struct literals initialize the
+    field with `Mutex.new(..)`. `Atomic[T]` fields get `.store(v)` for
+    writes, `.load()` for reads and `Atomic.new(..)` in literals.
+    Annotated bindings (`let c: Counter = ...`) fire from parse-only data;
+    inferred bindings (`let c = make_counter()`) require the package to
+    typecheck. `--apply` re-checks the result: when a file that checked
+    before no longer does, every file is put back and the command fails.
 
     Pass `<file.kara>` to migrate a single file. Omit it to run in
     project-mode: the tool discovers the project root via `kara.toml`

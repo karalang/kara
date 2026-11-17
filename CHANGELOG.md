@@ -2234,6 +2234,26 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `karac migrate shared-to-par` writes code that checks: each use takes the
+  field's `lock()` guard (`{ let n_guard = c.n.lock(); *n_guard.value += 1; }`)
+  instead of the `lock self.n { }` blocks that did not parse, struct literals
+  build `Mutex.new(..)` / `Atomic.new(..)`, methods taking `self` and bindings
+  typed through an imported constructor are covered, and atomics drop the
+  deprecated ordering argument. `--apply` re-checks the result and restores
+  every file when it does not check (B-2026-11-16-285).
+- `karac check <file>` and the editor no longer report "expected 'Counter',
+  found 'Counter'" in a module that imports a `shared struct` and names it in
+  a signature (B-2026-11-17-114).
+- `karac run --output=json` prints one JSON document (B-2026-11-16-283).
+- `karac build --output=jsonl` skips `codegen` with its blocking diagnostics
+  on a failing build, and `program_effects` is `null` when effect analysis
+  reported an error (B-2026-11-16-286).
+- `karac fix` exits 1 when the file still has an error it cannot fix;
+  `cache key` takes `--pkg x`; `karac debug` renders the panic record
+  `run --output=json` prints; the top-level help drops `--sequential` and
+  spells `install path=...`; `check --platform=all` / `--targets=all` report
+  on stderr as a file's sweep does (B-2026-11-16-287).
+
 - `karac build -O0` to `-O3` choose the optimization level, as design.md
   § 16 says; only `KARAC_OPT_LEVEL` did (B-2026-11-16-218).
 - A package's `[build] targets` name what a plain `karac build` builds: each

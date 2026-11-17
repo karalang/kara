@@ -63,7 +63,13 @@ fn karac_fix_writes_the_bound_and_the_shared_argument_is_then_refused_at_the_cal
     std::fs::write(&file, ROW).unwrap();
     let karac = env!("CARGO_BIN_EXE_karac");
     let fix = Command::new(karac).arg("fix").arg(&file).output().unwrap();
-    assert!(fix.status.success());
+    // The bound is written, and the refused call is the error `fix` leaves.
+    assert!(!fix.status.success());
+    assert!(
+        String::from_utf8_lossy(&fix.stderr).contains("have no machine-applicable fix"),
+        "{}",
+        String::from_utf8_lossy(&fix.stderr)
+    );
     let after = std::fs::read_to_string(&file).unwrap();
     assert!(
         after.contains("fn run_all[U: CrossTask](x: own U) -> i64 {"),

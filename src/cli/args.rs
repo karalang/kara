@@ -1328,7 +1328,31 @@ fn parse_cache_key_args(rest: &[String]) -> super::CacheSub {
     let mut profile: Option<String> = None;
     let mut target_triple: Option<String> = None;
     let mut compiler_version: Option<String> = None;
-    for arg in rest {
+    // `--pkg NAME` as well as `--pkg=NAME`, as the help's USAGE line spells
+    // it (B-2026-11-16-287).
+    let joined: Vec<String> = {
+        let valued = [
+            "--pkg",
+            "--version",
+            "--edition",
+            "--profile",
+            "--target-triple",
+            "--compiler-version",
+        ];
+        let mut out = Vec::with_capacity(rest.len());
+        let mut it = rest.iter().peekable();
+        while let Some(a) = it.next() {
+            match it.peek() {
+                Some(v) if valued.contains(&a.as_str()) && !v.starts_with("--") => {
+                    out.push(format!("{a}={v}"));
+                    it.next();
+                }
+                _ => out.push(a.clone()),
+            }
+        }
+        out
+    };
+    for arg in &joined {
         let s = arg.as_str();
         if let Some(v) = s.strip_prefix("--pkg=") {
             pkg = Some(v.to_string());

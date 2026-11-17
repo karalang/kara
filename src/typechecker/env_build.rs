@@ -506,6 +506,71 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // B-2026-11-17-114 — an imported `shared` aggregate is known to be
+        // shared before the module's own signatures are lowered, as a local
+        // one is through the stub pre-pass: otherwise `fn show(c: Counter)`
+        // lowers `Counter` as a plain nominal while `make()` returns the
+        // shared one, and the call reads "expected 'Counter', found
+        // 'Counter'". The full definition overwrites the stub later.
+        for item in &self.program.items {
+            let Item::Import(imp) = item else { continue };
+            for ii in &imp.items {
+                let bound = ii.alias.clone().unwrap_or_else(|| ii.name.clone());
+                if local_names.contains(&bound) {
+                    continue;
+                }
+                let Some((origin_path, origin_name)) =
+                    crate::module::canonical_origin(tree, &imp.path, &ii.name)
+                else {
+                    continue;
+                };
+                let Some(&origin_id) = tree.graph.by_path.get::<[String]>(&origin_path) else {
+                    continue;
+                };
+                for oitem in &tree.module(origin_id).items {
+                    match oitem {
+                        Item::StructDef(sd)
+                            if sd.name == origin_name && (sd.is_shared || sd.is_par) =>
+                        {
+                            self.env.structs.insert(
+                                bound.clone(),
+                                StructInfo {
+                                    generic_params: Self::generic_param_names(&sd.generic_params),
+                                    fields: Vec::new(),
+                                    field_attrs: std::collections::HashMap::new(),
+                                    mut_fields: HashSet::new(),
+                                    derived_traits: extract_derived_traits(&sd.attributes),
+                                    no_rc: sd.no_rc,
+                                    is_shared: sd.is_shared,
+                                    is_par: sd.is_par,
+                                    must_use_message: extract_must_use_message(&sd.attributes),
+                                    is_non_exhaustive: sd.is_non_exhaustive,
+                                    defining_stdlib_origin: sd.stdlib_origin,
+                                },
+                            );
+                        }
+                        Item::EnumDef(ed)
+                            if ed.name == origin_name && (ed.is_shared || ed.is_par) =>
+                        {
+                            self.env.enums.insert(
+                                bound.clone(),
+                                EnumInfo {
+                                    generic_params: Self::generic_param_names(&ed.generic_params),
+                                    variants: Vec::new(),
+                                    derived_traits: extract_derived_traits(&ed.attributes),
+                                    is_shared: ed.is_shared,
+                                    is_par: ed.is_par,
+                                    must_use_message: extract_must_use_message(&ed.attributes),
+                                    is_non_exhaustive: ed.is_non_exhaustive,
+                                    defining_stdlib_origin: ed.stdlib_origin,
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         for (bound, t, origin_path) in found {
             let mut local_def = t.clone();
             local_def.name = bound;

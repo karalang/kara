@@ -1009,9 +1009,9 @@ fn check_platform_sweep(
             OutputMode::Json => {}
             OutputMode::Text => {
                 if i > 0 {
-                    println!();
+                    eprintln!();
                 }
-                println!("── platform: {name} ──");
+                eprintln!("── platform: {name} ──");
             }
         }
         let pc = match super::build_cmds::package_check_on(root, lints, *platform) {
@@ -1043,7 +1043,7 @@ fn check_platform_sweep(
     }
     if !failed.is_empty() {
         if let OutputMode::Text = output {
-            println!(
+            eprintln!(
                 "\n{} of {} platform(s) failed: {}",
                 failed.len(),
                 platforms.len(),
@@ -1053,7 +1053,7 @@ fn check_platform_sweep(
         process::exit(1);
     }
     if let OutputMode::Text = output {
-        println!("\nAll {} platform(s) checked clean.", platforms.len());
+        eprintln!("\nAll {} platform(s) checked clean.", platforms.len());
     }
 }
 
@@ -1177,16 +1177,16 @@ fn check_target_sweep(
         }
         OutputMode::Text => {
             if !shared.is_empty() {
-                println!("── all targets ──");
+                eprintln!("── all targets ──");
                 for block in &shared {
                     eprintln!("{block}");
                 }
             }
             for (i, (target, run)) in runs.iter().enumerate() {
                 if i > 0 || !shared.is_empty() {
-                    println!();
+                    eprintln!();
                 }
-                println!("── target: {target} ──");
+                eprintln!("── target: {target} ──");
                 match run {
                     TargetCheck::Package(pc, errors) => {
                         render_package_check(pc, output, *errors, None)
@@ -1198,7 +1198,7 @@ fn check_target_sweep(
                             eprintln!("{block}");
                         }
                         // As a file's target sweep words it.
-                        println!("{errors} error(s) under target '{target}'.");
+                        eprintln!("{errors} error(s) under target '{target}'.");
                     }
                     TargetCheck::Refused(e) => emit_build_error(e, output),
                 }
@@ -1207,7 +1207,7 @@ fn check_target_sweep(
     }
     if !failed.is_empty() {
         if let OutputMode::Text = output {
-            println!(
+            eprintln!(
                 "\n{} of {} target(s) failed: {}",
                 failed.len(),
                 targets.len(),
@@ -1217,7 +1217,7 @@ fn check_target_sweep(
         process::exit(1);
     }
     if let OutputMode::Text = output {
-        println!("\nAll {} target(s) checked clean.", targets.len());
+        eprintln!("\nAll {} target(s) checked clean.", targets.len());
     }
 }
 
@@ -1366,9 +1366,9 @@ fn render_package_check(
             super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
             super::build_cmds::print_type_errors_text(&pc.type_errors);
             if errors == 0 {
-                println!("All checks passed.");
+                eprintln!("All checks passed.");
             } else {
-                println!("\n{errors} error(s) found.");
+                eprintln!("\n{errors} error(s) found.");
             }
         }
     }

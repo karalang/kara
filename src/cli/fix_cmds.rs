@@ -233,11 +233,15 @@ pub(super) fn cmd_fix_project(dry_run: bool) {
         process::exit(1);
     }
     FIXING_PACKAGE.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut stuck = false;
     for path in files {
         // Shown as the user would name it: relative to the working
         // directory when the package is under it.
         let shown = path.strip_prefix(&cwd).unwrap_or(&path);
-        cmd_fix(&shown.to_string_lossy(), dry_run);
+        stuck |= !fix_file(&shown.to_string_lossy(), dry_run);
+    }
+    if stuck {
+        process::exit(1);
     }
 }
 
@@ -247,7 +251,18 @@ pub(super) fn cmd_fix_project(dry_run: bool) {
 /// (B-2026-11-15-131). The cap stops two fixes that undo each other.
 const FIX_PASSES: usize = 10;
 
+/// `karac fix <file>`. It fails when the file still has an error once
+/// every fix is in, so a fix loop can tell a clean file from one only a
+/// person can finish (B-2026-11-16-287).
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
+    if !fix_file(filename, dry_run) {
+        process::exit(1);
+    }
+}
+
+/// [`cmd_fix`]'s work: whether the file checks without an error afterwards.
+/// A dry run writes nothing, so it reports only what it would apply.
+fn fix_file(filename: &str, dry_run: bool) -> bool {
     // A migration (`KARAC_*_MIGRATE`) is one reviewable rewrite: one pass.
     let migrating = [
         "KARAC_D5_MIGRATE",
@@ -279,6 +294,19 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     if total > 0 && !dry_run {
         println!("applied {total} fix(es) to {filename}");
     }
+    if dry_run || migrating {
+        return true;
+    }
+    let left = crate::check_source_at(&read_source(filename), std::path::Path::new(filename))
+        .iter()
+        .filter(|d| d.severity == "error")
+        .count();
+    if left > 0 {
+        eprintln!(
+            "error: {left} error(s) in {filename} have no machine-applicable fix; `karac check {filename}` lists them"
+        );
+    }
+    left == 0
 }
 
 /// One pass of `karac fix` over `filename`: the number of fixes it wrote.
@@ -999,9 +1027,9 @@ fn apply_edits<'e>(
 ///
 /// **Scope (v1, L215a–L215b4).** Type-definition rewrite (keyword rename
 /// `shared` → `par`, `mut ` strip per mut field, `Mutex[T]` wrap per mut
-/// field) plus consumer-site `lock self.field { ... }` wraps across every
+/// field) plus consumer-site `lock()` guard wraps across every
 /// read/write of bindings of `<Type>` — annotated bindings (L215b1),
-/// `lock self.field` wrap shape + read-site rewrite (L215b2), typecheck-
+/// guard wrap shape + read-site rewrite (L215b2, B-2026-11-16-285), typecheck-
 /// resolved inferred bindings + mutating-method-call wraps (L215b3), and
 /// cross-file workspace walk (L215b4). When the file argument is omitted,
 /// the tool discovers the project root via `kara.toml`, walks every
@@ -1068,7 +1096,7 @@ pub(super) fn cmd_migrate_single_file(type_name: &str, apply: bool, force: bool,
                 );
                 process::exit(1);
             }
-            emit_migration_for_file(&plan, apply);
+            verify_and_emit_migrations(std::slice::from_ref(&plan), apply);
             if !apply {
                 println!(
                     "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes, reads, and mutating method calls against bindings of `{type_name}` in this file — including type-inferred bindings when the file typechecks. Cross-file walks now run by default when `<file>` is omitted; see project-mode below)"
@@ -1120,7 +1148,11 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
         pipeline: Pipeline,
         has_shared_def: bool,
         has_wrong_kind: bool,
+        /// The module's typecheck with its imports resolved; preferred over
+        /// `pipeline.typed`, which typechecks the file on its own.
+        module_typed: Option<TypeCheckResult>,
     }
+    let mut module_types = package_module_type_results(&root).unwrap_or_default();
     let mut prepared: Vec<PreparedFile> = Vec::new();
     for module in &walked.modules {
         let filename = module.file.to_string_lossy().into_owned();
@@ -1161,12 +1193,14 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
             Some(_) => (false, true),
             None => (false, false),
         };
+        let module_typed = module_types.remove(&module.file);
         prepared.push(PreparedFile {
             filename,
             source,
             pipeline,
             has_shared_def,
             has_wrong_kind,
+            module_typed,
         });
     }
 
@@ -1213,12 +1247,14 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
             .iter()
             .map(|f| crate::ownership::ProjectMigrationFile {
                 program_items: &f.pipeline.parsed.program.items,
-                type_ctx: f.pipeline.typed.as_ref().map(|t| {
-                    crate::ownership::ConsumerRewriteTypeCtx {
+                type_ctx: f
+                    .module_typed
+                    .as_ref()
+                    .or(f.pipeline.typed.as_ref())
+                    .map(|t| crate::ownership::ConsumerRewriteTypeCtx {
                         pattern_binding_types: &t.pattern_binding_types,
                         method_callee_types: &t.method_callee_types,
-                    }
-                }),
+                    }),
             })
             .collect();
         crate::ownership::classify_field_wrap_kinds(
@@ -1232,8 +1268,8 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
     };
     // L215c-cons — Atomic-classified fields' consumer sites are now
     // auto-rewritten by `build_consumer_rewrite_edits_with_mut_fields`:
-    // bare `c.f = v` writes become `c.f.store(v, MemoryOrdering.Release)`
-    // and bare `c.f` reads become `c.f.load(MemoryOrdering.Acquire)`.
+    // bare `c.f = v` writes become `c.f.store(v)`
+    // and bare `c.f` reads become `c.f.load()`.
     // The Mutex-classified fields continue to receive the lock-wrap
     // shape from the same walker. Pass the full mut-fields set as the
     // rewrite target and the Atomic subset as the dispatch discriminator.
@@ -1261,14 +1297,14 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
         } else {
             Vec::new()
         };
-        let type_ctx =
-            file.pipeline
-                .typed
-                .as_ref()
-                .map(|t| crate::ownership::ConsumerRewriteTypeCtx {
-                    pattern_binding_types: &t.pattern_binding_types,
-                    method_callee_types: &t.method_callee_types,
-                });
+        let type_ctx = file
+            .module_typed
+            .as_ref()
+            .or(file.pipeline.typed.as_ref())
+            .map(|t| crate::ownership::ConsumerRewriteTypeCtx {
+                pattern_binding_types: &t.pattern_binding_types,
+                method_callee_types: &t.method_callee_types,
+            });
         let consumer_edits = crate::ownership::build_consumer_rewrite_edits_with_mut_fields(
             type_name,
             &file.pipeline.parsed.program.items,
@@ -1318,21 +1354,19 @@ pub(super) fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, ato
             plans.len()
         );
     }
-    for plan in &plans {
-        emit_migration_for_file(plan, apply);
-    }
+    verify_and_emit_migrations(&plans, apply);
     if !apply {
         println!(
             "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes, reads, and mutating method calls against bindings of `{type_name}` across the project — including type-inferred bindings in each file that typechecks)"
         );
         if atomic_field_count > 0 {
             println!(
-                "(note: {atomic_field_count} field(s) on `{type_name}` were classified as `Atomic[T]` — their consumer assigns rewritten to `.store(v, MemoryOrdering.Release)` and reads rewritten to `.load(MemoryOrdering.Acquire)`)"
+                "(note: {atomic_field_count} field(s) on `{type_name}` were classified as `Atomic[T]` — their consumer assigns rewritten to `.store(v)` and reads rewritten to `.load()`)"
             );
         }
     } else if atomic_field_count > 0 {
         println!(
-            "(note: {atomic_field_count} field(s) on `{type_name}` were rewritten as `Atomic[T]` — their consumer assigns auto-rewritten to `.store(v, MemoryOrdering.Release)` and reads to `.load(MemoryOrdering.Acquire)`)"
+            "(note: {atomic_field_count} field(s) on `{type_name}` were rewritten as `Atomic[T]` — their consumer assigns auto-rewritten to `.store(v)` and reads to `.load()`)"
         );
     }
 }
@@ -1479,24 +1513,105 @@ pub(super) fn emit_migration_for_file(plan: &FileMigrationPlan, apply: bool) {
         return;
     }
 
-    let mut rewritten = source.clone();
-    for edit in sorted {
-        let end = edit.offset.saturating_add(edit.length);
-        if end > rewritten.len() {
-            eprintln!(
-                "error: migrate would write past end of file ({} > {}) — aborting without modifying {filename}",
-                end,
-                rewritten.len()
-            );
-            process::exit(1);
-        }
-        rewritten.replace_range(edit.offset..end, &edit.replacement);
-    }
+    let rewritten = migrated_text(plan);
     if let Err(e) = std::fs::write(filename, &rewritten) {
         eprintln!("error: failed to write {filename}: {e}");
         process::exit(1);
     }
     println!("applied {} migration edit(s) to {filename}", sorted.len());
+}
+
+/// The plan's file text with every edit applied. Exits when an edit runs past
+/// the end of the file, before anything is written.
+fn migrated_text(plan: &FileMigrationPlan) -> String {
+    let mut rewritten = plan.source.clone();
+    for edit in &plan.edits {
+        let end = edit.offset.saturating_add(edit.length);
+        if end > rewritten.len() {
+            eprintln!(
+                "error: migrate would write past end of file ({} > {}) — aborting without modifying {}",
+                end,
+                rewritten.len(),
+                plan.filename
+            );
+            process::exit(1);
+        }
+        rewritten.replace_range(edit.offset..end, &edit.replacement);
+    }
+    rewritten
+}
+
+/// The `error` diagnostics `karac check` reports for `text` as the file at
+/// `filename`, one rendered line each.
+fn migration_check_errors(filename: &str, text: &str) -> Vec<String> {
+    crate::check_source_at(text, std::path::Path::new(filename))
+        .into_iter()
+        .filter(|d| d.severity == "error")
+        .map(|d| {
+            let code = d.code.map(|c| format!("[{c}]")).unwrap_or_default();
+            format!(
+                "error{code}: {filename}:{}:{}: {}",
+                d.line, d.column, d.message
+            )
+        })
+        .collect()
+}
+
+/// B-2026-11-16-285 — a migration must leave every file that checked clean
+/// still checking clean. Dry run: check the migrated text in memory and say
+/// what would break. `--apply`: write, re-check every file against the
+/// rewritten package, and put every file back when one that was clean now
+/// has errors. A file that already had errors is not held to it.
+pub(super) fn verify_and_emit_migrations(plans: &[FileMigrationPlan], apply: bool) {
+    let was_clean: Vec<bool> = plans
+        .iter()
+        .map(|p| migration_check_errors(&p.filename, &p.source).is_empty())
+        .collect();
+    if !apply {
+        for plan in plans {
+            emit_migration_for_file(plan, false);
+        }
+        // A dry run leaves the other files as they are on disk, so the
+        // in-memory check is exact only for a single migrated file.
+        if plans.len() == 1 && was_clean[0] {
+            let errs = migration_check_errors(&plans[0].filename, &migrated_text(&plans[0]));
+            if !errs.is_empty() {
+                eprintln!(
+                    "warning: the migrated {} would not check; `--apply` will refuse it:",
+                    plans[0].filename
+                );
+                for e in &errs {
+                    eprintln!("  {e}");
+                }
+            }
+        }
+        return;
+    }
+    for plan in plans {
+        emit_migration_for_file(plan, true);
+    }
+    let mut broken: Vec<String> = Vec::new();
+    for (plan, clean) in plans.iter().zip(&was_clean) {
+        if !*clean {
+            continue;
+        }
+        broken.extend(migration_check_errors(&plan.filename, &migrated_text(plan)));
+    }
+    if broken.is_empty() {
+        return;
+    }
+    for plan in plans {
+        if let Err(e) = std::fs::write(&plan.filename, &plan.source) {
+            eprintln!("error: failed to restore {}: {e}", plan.filename);
+        }
+    }
+    eprintln!(
+        "error: the migrated code does not check, so every file was restored (this is a `karac migrate` bug; please report it):"
+    );
+    for e in &broken {
+        eprintln!("  {e}");
+    }
+    process::exit(1);
 }
 
 /// Returns `true` when `git status --porcelain` reports any modified
