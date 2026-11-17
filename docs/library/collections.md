@@ -102,7 +102,7 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `remove_first` | `fn remove_first(mut ref self, pred: own MutFn(T) -> bool) -> Option[T]` | Removes and returns the first element satisfying `pred`. O(n) |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred` and drops the rest, in one pass |
 | `dedup` | `fn dedup(mut ref self) where T: PartialEq` | Drops consecutive equal elements |
-| `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from `len` on. Does nothing if `len >= self.len()` |
+| `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from `len` on. Does nothing if `len >= self.len()`; `len < 0` counts as 0, so it clears |
 | `drain` | `fn drain(mut ref self, r: Range[i64]) -> VecIntoIter[T]` | Removes the elements at `start..end` (the end excluded), shifting the rest down, and returns them front to back. They are removed at once, so dropping the iterator unread still removes them. Panics if the range is reversed or past the end. Rust's `drain(a..)`, `drain(..b)`, `drain(a..=b)` and `drain(..)` are refused with the `start..end` that means the same as a fix |
 | `split_off` | `fn split_off(mut ref self, at: i64) -> Vec[T]` | Moves the elements from `at` on into a new `Vec` and returns it, leaving `[0, at)`. Panics if `at > self.len()` |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
@@ -291,7 +291,7 @@ A ring buffer with O(1) push and pop at both ends.
 | `remove` | `fn remove(mut ref self, idx: i64) -> T` | Removes at `idx`, shifting from the nearer end. Panics if out of bounds |
 | `swap` | `fn swap(mut ref self, i: i64, j: i64)` | As `Vec.swap` |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred`, front to back |
-| `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from index `len` to the back. Does nothing if `len >= self.len()` |
+| `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from index `len` to the back. Does nothing if `len >= self.len()`; `len < 0` counts as 0, so it clears |
 | `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Pushes every item onto the back, in order |
 
 These are the whole surface, with iteration and the traits below. A `VecDeque` is not contiguous, so the methods that need one slice (`sort`, `dedup`, `binary_search`, `reverse`, ranges and `as_slice`) are refused with a diagnostic; collect into a `Vec` for them (`Vec.from_iter(dq.into_iter())`), as Rust's `make_contiguous` would (review-thread ruling 2026-10-26, from the ADR-3 collections audit).

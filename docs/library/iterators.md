@@ -36,8 +36,8 @@ A program's own function named `repeat`, `once` or `successors` takes the name, 
 | `enumerate` | `fn enumerate(own self) -> impl Iterator[Item = (i64, Self.Item)]` | Pairs each item with its index, from 0 |
 | `zip` | `fn zip[Other: Iterator](own self, other: own Other) -> impl Iterator[Item = (Self.Item, Other.Item)]` | Ends when either side ends |
 | `chain` | `fn chain[Other: Iterator[Item = Self.Item]](own self, other: own Other) -> impl Iterator[Item = Self.Item]` | All of `self`, then all of `other` |
-| `take` | `fn take(own self, n: i64) -> impl Iterator[Item = Self.Item]` | At most `n` items. After the `n`th it pulls nothing more, so `inspect(f).take(2)` runs `f` twice |
-| `skip` | `fn skip(own self, n: i64) -> impl Iterator[Item = Self.Item]` | Drops the first `n` items |
+| `take` | `fn take(own self, n: i64) -> impl Iterator[Item = Self.Item]` | At most `n` items. After the `n`th it pulls nothing more, so `inspect(f).take(2)` runs `f` twice. `n < 0` counts as 0 |
+| `skip` | `fn skip(own self, n: i64) -> impl Iterator[Item = Self.Item]` | Drops the first `n` items. `n < 0` counts as 0, so nothing is dropped |
 | `take_while` | `fn take_while[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> impl Iterator[Item = Self.Item]` | Stops at the first item that fails, which it has pulled and drops |
 | `skip_while` | `fn skip_while[F: MutFn(Self.Item) -> bool](own self, pred: own F) -> impl Iterator[Item = Self.Item]` | Skips items while `pred` holds, then yields the rest |
 | `step_by` | `fn step_by(own self, step: i64) -> impl Iterator[Item = Self.Item]` | The first item, then every `step`-th. Panics with `step_by: step must be positive` if `step <= 0`, forward and under `rev` alike (review-thread ruling 2026-11-16) |
@@ -86,7 +86,7 @@ let rest: Vec[Str] = words.collect();   // the words after "--"
 | `try_fold` | `fn try_fold[A, R: Try[Output = A]](own self, init: own A, f: own MutFn(own A, own Self.Item) -> R) -> R` | `fold` while `f` returns `Some(acc)` or `Ok(acc)`; the first `None` or `Err(e)` is the answer, and no more items are pulled. `v.iter().try_fold(0, \|acc, x\| acc.checked_add(x))` is the sum, or `None` on overflow |
 | `position` | `fn position(own self, pred: own MutFn(Self.Item) -> bool) -> Option[i64]` | Index of the first item that passes |
 | `last` | `fn last(own self) -> Option[Self.Item]` | |
-| `nth` | `fn nth(own self, n: i64) -> Option[Self.Item]` | The item at index `n` |
+| `nth` | `fn nth(own self, n: i64) -> Option[Self.Item]` | The item at index `n`. `None` when `n < 0`, as for `get` (B-2026-11-17-5) |
 | `collect` | `fn collect[C: FromIterator[V]](own self) -> C` | See below |
 | `for_each` | `fn for_each(own self, f: own MutFn(own Self.Item))` | |
 | `partition` | `fn partition(own self, pred: own MutFn(Self.Item) -> bool) -> (Vec[Self.Item], Vec[Self.Item])` | Items that pass, then items that fail |
