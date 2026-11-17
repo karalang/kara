@@ -97,6 +97,13 @@ pub trait Deserializer {
     fn deserialize_duplicate(ref self, field: String) -> DeserializeError {
         DeserializeError.new(f"duplicate field `{field}`")
     }
+    /// The error for a sequence with the wrong number of values for the
+    /// tuple or variant payload being read (`msg` says which), just after
+    /// its last value. A format that knows where it is says so
+    /// (B-2026-11-17-74).
+    fn deserialize_length(ref self, msg: own String) -> DeserializeError {
+        DeserializeError.new(msg)
+    }
 }
 
 pub trait Deserialize {
@@ -112,7 +119,7 @@ fn serde_next[X: Deserialize, D: Deserializer](d: mut ref D) -> Result[X, Deseri
 /// The next element of a variant's payload sequence, which must have one.
 fn serde_element[X: Deserialize, D: Deserializer](d: mut ref D) -> Result[X, DeserializeError] {
     if not d.deserialize_element()? {
-        return Err(DeserializeError.new("too few values in a variant's payload".to_string()));
+        return Err(d.deserialize_length("too few values in a variant's payload".to_string()));
     }
     X.deserialize(d)
 }
@@ -708,10 +715,15 @@ impl JsonDeserializer {
     /// Where `pos` is: the 1-based line and byte column on it, as
     /// `Json.parse` reports them (json.md, `JsonError`).
     fn place(ref self) -> (i64, i64) {
+        self.place_at(self.pos)
+    }
+
+    /// The 1-based line and column of the char at `at`.
+    fn place_at(ref self, at: i64) -> (i64, i64) {
         let mut line = 1;
         let mut column = 1;
         let mut i = 0;
-        while i < self.pos and i < self.chars.len() {
+        while i < at and i < self.chars.len() {
             let c = self.chars[i];
             if c == '\n' {
                 line += 1;
@@ -727,7 +739,12 @@ impl JsonDeserializer {
     /// `msg`, prefixed with the field path being read and followed by the
     /// line and column (B-2026-11-08-27).
     fn fail(ref self, msg: String) -> DeserializeError {
-        let (line, column) = self.place();
+        self.fail_at(self.pos, msg)
+    }
+
+    /// [`Self::fail`], placed at the char at `at`.
+    fn fail_at(ref self, at: i64, msg: String) -> DeserializeError {
+        let (line, column) = self.place_at(at);
         let mut at = String.new();
         for f in self.path.iter() {
             if not f.is_empty() {
@@ -1190,6 +1207,18 @@ impl Deserializer for JsonDeserializer {
         self.skip_value()
     }
 
+    /// `too few values in a variant's payload at line 1 column 10`: at the
+    /// `]` that closed the sequence early, where serde_json places an
+    /// invalid length, or at the first value past the end
+    /// (B-2026-11-17-74).
+    fn deserialize_length(ref self, msg: own String) -> DeserializeError {
+        if msg.starts_with("too few") and self.pos > 0 {
+            self.fail_at(self.pos - 1, msg)
+        } else {
+            self.fail(msg)
+        }
+    }
+
     /// `duplicate field `a` at line 1 column 11`: serde_json's text, at the
     /// end of the repeated name, with the path of the struct it is in.
     fn deserialize_duplicate(ref self, field: String) -> DeserializeError {
@@ -1472,14 +1501,14 @@ comptime fn serde_read_value(ty: ref String, owner: ref String, field: ref Strin
     let mut k = 0;
     while k < parts.len() {
         let x = "serde_t" + f"{depth}" + "_" + f"{k}";
-        reads = reads + "if not d.deserialize_element()? { return Err(DeserializeError.new("
+        reads = reads + "if not d.deserialize_element()? { return Err(d.deserialize_length("
             + "\"too few values in a tuple\".to_string())); } let " + x + ": " + parts[k] + " = "
             + serde_read_value(parts[k], owner, field, depth + 1) + "; ";
         vals = vals + x + ", ";
         k = k + 1;
     }
     "{ d.deserialize_seq_begin()?; " + reads + "if d.deserialize_element()? { "
-        + "return Err(DeserializeError.new(\"too many values in a tuple\".to_string())); } ("
+        + "return Err(d.deserialize_length(\"too many values in a tuple\".to_string())); } ("
         + vals + ") }"
 }
 
@@ -1635,14 +1664,14 @@ comptime fn serde_read_tuple(tys: ref Vec[String], ctor: ref String, what: ref S
     let mut k = 0;
     while k < tys.len() {
         let x = "serde_x" + f"{k}";
-        reads = reads + "if not d.deserialize_element()? { return Err(DeserializeError.new("
+        reads = reads + "if not d.deserialize_element()? { return Err(d.deserialize_length("
             + "\"too few values in a variant's payload\".to_string())); } let " + x + ": " + tys[k]
             + " = " + serde_read_value(tys[k], ctor, f"{k}", 0) + "; ";
         args = args + x + ", ";
         k = k + 1;
     }
     "{ d.deserialize_seq_begin()?; " + reads + "let serde_r = " + ctor + "(" + args + "); "
-        + "if d.deserialize_element()? { return Err(DeserializeError.new(\"too many values in " + what
+        + "if d.deserialize_element()? { return Err(d.deserialize_length(\"too many values in " + what
         + "\".to_string())); } serde_r }"
 }
 
