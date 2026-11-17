@@ -281,3 +281,38 @@ fn shared_to_sync_migration_locks_reads_inside_the_par() {
         "let items_guard = c.items.lock(); items_guard.value.len()",
     );
 }
+
+/// B-2026-11-16-290: in value position a built-in function is no
+/// suggestion, since it cannot be used as a value: `let q = prnt;` is no
+/// longer rewritten to `print`.
+#[test]
+fn value_position_did_you_mean_skips_builtin_functions() {
+    refused_and_left_alone(
+        "dym-value-builtin",
+        "fn main() { let q = prnt; }\n",
+        "undefined name 'prnt'",
+    );
+}
+
+/// B-2026-11-16-290 control: in call position the built-in is still the
+/// suggestion and the fix.
+#[test]
+fn call_position_did_you_mean_still_offers_builtin_functions() {
+    refused_then_fixed(
+        "dym-call-builtin",
+        "fn main() { prnt(\"x\"); }\n",
+        "did you mean 'print'?",
+        "print(\"x\")",
+    );
+}
+
+/// B-2026-11-16-290: `format(..)` is Rust's and Python's; it gets the
+/// f-string spelling, not "did you mean 'forget'".
+#[test]
+fn format_call_names_the_f_string() {
+    refused_and_left_alone(
+        "dym-format",
+        "fn main() { let s = format(\"{}\", 1); println(s); }\n",
+        "Kāra has no `format` function, and an f-string formats",
+    );
+}

@@ -5578,11 +5578,14 @@ fn the_rename_fix_replaces_only_the_identifier() {
 /// exists to serve.
 #[test]
 fn undefined_name_rename_is_applied_only_when_the_call_fits() {
-    // The row's repro. Suggestion present, machine-applicable edit absent.
-    let errors = resolve_errors("fn main() { let s = format(\"{}\", 1); println(s); }");
+    // The row's repro was `format("{}", 1)`; `format` now gets its own
+    // f-string message (B-2026-11-16-290), so the same shape is pinned with
+    // another two-argument call near `forget`. Suggestion present,
+    // machine-applicable edit absent.
+    let errors = resolve_errors("fn main() { let s = forgot(\"{}\", 1); println(s); }");
     let err = errors
         .iter()
-        .find(|e| e.message.contains("undefined name 'format'"))
+        .find(|e| e.message.contains("undefined name 'forgot'"))
         .expect("the undefined name must still be reported");
     assert!(
         err.message.contains("did you mean"),

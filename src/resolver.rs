@@ -2050,7 +2050,10 @@ impl<'a> Resolver<'a> {
             }
         }
         let before = self.errors.len();
+        // Call position: a built-in function is a fair suggestion here.
+        let saved = self.call_callee_span.replace((span.offset, span.length));
         self.error_undefined_name(name, span);
+        self.call_callee_span = saved;
         // Re-gate whatever the shared emitter produced. Done here rather than
         // by threading `argc` through `error_undefined_name` because that fn
         // has several early-return arms (par-sibling reads, builtin misuse)
@@ -2232,10 +2235,21 @@ impl<'a> Resolver<'a> {
         // A value name is suggested a value name: `range` is not `Range`,
         // nor `null` `Mul` (B-2026-11-07-40).
         let upper = |s: &str| s.starts_with(|c: char| c.is_ascii_uppercase());
+        // Outside call position a built-in function is no answer: it cannot
+        // be used as a value, so `let q = prnt;` rewritten to `print` fails
+        // again with "is a built-in function" (B-2026-11-16-290).
+        let in_call = self.call_callee_span == Some((span.offset, span.length));
+        let call_only = |c: &str| {
+            !in_call
+                && self
+                    .table
+                    .lookup(c)
+                    .is_some_and(|sym| self.table.prelude_fn_ids.contains(&sym.id))
+        };
         let visible: Vec<&str> = self
             .suggestable_names()
             .into_iter()
-            .filter(|c| upper(c) == upper(name))
+            .filter(|c| upper(c) == upper(name) && !call_only(c))
             .collect();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
@@ -2499,6 +2513,13 @@ impl<'a> Resolver<'a> {
                 "`fmt` is Go's: Kāra prints with `println(x)` and `print(x)`, and formats \
                  with an f-string `f\"{x}\"`",
                 call,
+            ),
+            // Rust's `format!` and Python's `format`: the nearest name is
+            // `forget`, the memory intrinsic (B-2026-11-16-290).
+            "format" => (
+                "undefined name 'format': Kāra has no `format` function, and an f-string formats, `f\"{x} and {y}\"`, \
+                 and `x.to_string()` renders one value",
+                None,
             ),
             "Rc" | "RefCell" => (RC_REFCELL_HELP, None),
             _ => return false,
