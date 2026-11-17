@@ -395,6 +395,8 @@ impl<'a> super::TypeChecker<'a> {
                         "i8" | "u8" => Some(1),
                         "i16" | "u16" => Some(2),
                         "i32" | "u32" => Some(4),
+                        // The target's pointer width (B-2026-11-16-324).
+                        "isize" | "usize" if crate::target::active_target_is_wasm() => Some(4),
                         "i64" | "u64" | "isize" | "usize" => Some(8),
                         "i128" | "u128" => Some(16),
                         _ => None,

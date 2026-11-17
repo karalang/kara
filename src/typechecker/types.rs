@@ -319,8 +319,8 @@ pub enum IntSize {
     I32,
     I64,
     I128,
-    /// Signed pointer-width. The mirror of `UIntSize::Usize`, and like it a
-    /// 64-bit type on every target the compiler currently emits for. design.md
+    /// Signed pointer-width. The mirror of `UIntSize::Usize`, and like it 64
+    /// bits natively and 32 on wasm32 (B-2026-11-16-324). design.md
     /// pairs the two everywhere it names them (§ 2178 method families, § 4000
     /// `as`-cast rule, § 5356 arithmetic traits, § 13104 the FFI table's
     /// `size_t` / `ptrdiff_t` row), so a `usize` arm without an `Isize` arm is

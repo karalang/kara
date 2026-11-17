@@ -706,7 +706,7 @@ impl Elaborator<'_> {
                     arms.push((v as u128, arm));
                 }
                 let unreachable = self.new_block(Vec::new(), TerminatorKind::Unreachable);
-                let usize_t = self.tys.int(IntTy::Usize);
+                let usize_t = self.tys.int(IntTy::U64);
                 let d = self.new_local(usize_t, LocalKind::Temp);
                 let info = SourceInfo::dummy();
                 Ok(self.new_block(
@@ -1317,7 +1317,7 @@ mod tests {
             sync: false,
         });
         let et = w.tys.intern(TyKind::Adt(ea));
-        let usize_t = w.tys.int(IntTy::Usize);
+        let usize_t = w.tys.int(IntTy::U64);
         let mut b = BodyBuilder::new(inst("main"), w.unit);
         let c = b.arg("c", w.boolt);
         let e = b.user_local("e", et, Mutability::Not);

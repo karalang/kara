@@ -33,7 +33,7 @@ fn main() -> () {
     let _9: ();
     let _10: Array[i64, 2];
     let _11: mut ref Vec[i64];
-    let _12: usize;
+    let _12: u64;
     let _13: mut ref i64;
     let _14: ref Vec[i64];
     let _15: ref i64;
@@ -76,13 +76,13 @@ fn main() -> () {
     }
     bb11: {
         _11 = &mut _4;
-        _12 = copy _5 as usize (IntToInt);
+        _12 = copy _5 as u64 (IntToInt);
         _13 = Vec[i64].index_mut(move _11, copy _12) -> bb12;
     }
     bb12: {
         (*_13) = copy _6;
         _14 = &_4;
-        _15 = Vec[i64].index(copy _14, const 1_usize) -> bb13;
+        _15 = Vec[i64].index(copy _14, const 1_u64) -> bb13;
     }
     bb13: {
         _9 = println(copy _1, const " ", copy _2.0, const " ", copy _2.1, const " ", copy _3, const " ", copy (*_15)) -> bb14;

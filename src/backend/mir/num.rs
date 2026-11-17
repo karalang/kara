@@ -632,10 +632,7 @@ impl<'ctx> Cx<'ctx, '_> {
             TyKind::Bool => false,
             _ => return Ok(None),
         };
-        let Some(&(_, bits, signed)) = crate::numeric_conv::INT_TARGETS
-            .iter()
-            .find(|(name, _, _)| *name == t)
-        else {
+        let Some((bits, signed)) = crate::numeric_conv::int_target_width(t) else {
             return Ok(None);
         };
         if bits > 64 {
@@ -1070,10 +1067,7 @@ impl<'ctx> Cx<'ctx, '_> {
         ) {
             return Ok(None);
         }
-        let Some(&(_, bits, signed)) = crate::numeric_conv::INT_TARGETS
-            .iter()
-            .find(|(name, _, _)| *name == t)
-        else {
+        let Some((bits, signed)) = crate::numeric_conv::int_target_width(t) else {
             return Ok(None);
         };
         let dty = self.place_type(dest)?;

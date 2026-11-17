@@ -6835,7 +6835,7 @@ Handles are plain scalars. Copying one increments no count; dropping one runs no
 
 `karac build --target=wasm_wasi` lowers each `host fn` to an import entry in the `kara_host` namespace:
 - **No glue file.** WASI hosts (wasmtime, node and others) each have their own import-object or linker interface. The embedder instantiates the module with both namespaces: `WebAssembly.instantiate(mod, { ...wasi.getImportObject(), kara_host: {...} })` under node, `linker.func_wrap("kara_host", "<name>", ...)` under wasmtime.
-- **Boundary types are core WebAssembly types.** The contract is the module's import signatures: `i64`, `u64`, `isize` and `usize` as wasm `i64`; everything else, wasm32 pointers included, as `i32`, `f32` or `f64`. Strings cross as `(pointer, length)` pairs read from the exported linear memory. How these appear in the host language is the host's convention.
+- **Boundary types are core WebAssembly types.** The contract is the module's import signatures: `i64` and `u64` as wasm `i64`; everything else, wasm32 pointers and the 32-bit `isize` and `usize` included, as `i32`, `f32` or `f64`. Strings cross as `(pointer, length)` pairs read from the exported linear memory. How these appear in the host language is the host's convention.
 - **`extern "C"` gets no import entry.** An unresolved `extern "C"` declaration stays an undefined-symbol link error. Only `host fn` opts into host-provided resolution.
 
 ---

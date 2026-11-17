@@ -848,7 +848,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .builder
             .build_int_truncate_or_bit_cast(n, usize_t, "")
             .map_err(e)?;
-        self.feed_int(th, state, crate::mir::ty::IntTy::Usize, len)?;
+        self.feed_int(th, state, crate::mir::ty::IntTy::U64, len)?;
         let size = self.layout(el)?.size;
         let th = th.clone();
         self.count_loop(n, |cx, i| {

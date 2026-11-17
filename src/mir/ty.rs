@@ -56,11 +56,15 @@ impl IntTy {
         }
     }
 
+    /// The width in bits. `isize` and `usize` are the target's pointer
+    /// width (design.md §5): 32 on wasm32, 64 elsewhere
+    /// (B-2026-11-16-324). MIR's own lengths and indices are `u64`.
     pub fn bits(self) -> u32 {
         match self {
             IntTy::I8 | IntTy::U8 => 8,
             IntTy::I16 | IntTy::U16 => 16,
             IntTy::I32 | IntTy::U32 => 32,
+            IntTy::Isize | IntTy::Usize if crate::target::active_target_is_wasm() => 32,
             IntTy::I64 | IntTy::U64 | IntTy::Isize | IntTy::Usize => 64,
             IntTy::I128 | IntTy::U128 => 128,
         }

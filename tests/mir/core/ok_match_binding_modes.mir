@@ -50,7 +50,7 @@ fn main() -> () {
     let _5: ref R; // r
     let _6: R; // r
     let _7: R;
-    let _8: usize;
+    let _8: u64;
     let _9: ();
     let _10: ref R;
     let mut _11: bool; // drop flag

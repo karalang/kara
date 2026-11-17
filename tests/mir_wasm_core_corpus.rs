@@ -189,13 +189,23 @@ fn run_one(e: &Entry, scratch: &Path) -> Option<String> {
     }
     let run = Command::new("node")
         .arg("--no-warnings")
+        .arg("--no-turbo-fast-api-calls")
         .arg(scratch.join("run.mjs"))
         .arg(&wasm)
         .current_dir(&dir)
         .output()
         .unwrap();
     let got = String::from_utf8_lossy(&run.stdout);
-    let want = std::fs::read_to_string(e.dir.join("expected.out")).unwrap();
+    // An entry whose output depends on the pointer width (`usize` is 32
+    // bits on wasm32, B-2026-11-16-324) keeps its wasm32 output beside the
+    // native one.
+    let wasm32 = e.dir.join("expected.wasm32.out");
+    let want = std::fs::read_to_string(if wasm32.exists() {
+        wasm32
+    } else {
+        e.dir.join("expected.out")
+    })
+    .unwrap();
     let same = if e.as_set {
         let mut a: Vec<&str> = got.lines().collect();
         let mut b: Vec<&str> = want.lines().collect();

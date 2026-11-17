@@ -1016,6 +1016,12 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Int(IntSize::I16) | Type::UInt(UIntSize::U16) => 2,
                 Type::Int(IntSize::I32) | Type::UInt(UIntSize::U32) => 4,
                 Type::Int(IntSize::I128) | Type::UInt(UIntSize::U128) => 16,
+                // isize / usize are the target's pointer width (B-2026-11-16-324).
+                Type::Int(IntSize::Isize) | Type::UInt(UIntSize::Usize)
+                    if crate::target::active_target_is_wasm() =>
+                {
+                    4
+                }
                 // i64 / u64 / isize / usize.
                 _ => 8,
             };

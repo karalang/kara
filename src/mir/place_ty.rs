@@ -87,9 +87,9 @@ pub(super) fn project(
                 .get(idx.index())
                 .ok_or_else(|| format!("index {idx} is not a local of this body"))?
                 .ty;
-            if tys.kind(idx_ty) != TyKind::Int(IntTy::Usize) {
+            if tys.kind(idx_ty) != TyKind::Int(IntTy::U64) {
                 return Err(format!(
-                    "index {idx} has type {}, not usize",
+                    "index {idx} has type {}, not u64 (MIR's index word)",
                     tys.display(idx_ty)
                 ));
             }

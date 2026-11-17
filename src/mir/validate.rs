@@ -617,7 +617,9 @@ impl Validator<'_> {
     }
 }
 
-/// `usize`, for index locals.
+/// `u64`, MIR's index word: `usize` is the target's pointer width,
+/// 32 bits on wasm32, while lengths and indices are 64-bit words on every
+/// target (B-2026-11-16-324).
 pub fn is_usize(tys: &TyInterner, t: Ty) -> bool {
-    tys.kind(t) == TyKind::Int(IntTy::Usize)
+    tys.kind(t) == TyKind::Int(IntTy::U64)
 }

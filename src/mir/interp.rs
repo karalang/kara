@@ -11679,7 +11679,7 @@ impl<'a> Interp<'a> {
 
     /// `write_usize` of the length, then each element.
     fn feed_seq(&mut self, th: &TableHash, sref: &Value, elems: &[Value], e: Ty) -> R<()> {
-        self.feed_int(th, sref, IntTy::Usize, elems.len() as i128)?;
+        self.feed_int(th, sref, IntTy::U64, elems.len() as i128)?;
         for x in elems {
             self.feed_key(th, sref, x, e)?;
         }

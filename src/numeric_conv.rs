@@ -37,7 +37,8 @@ pub enum FloatToIntFamily {
 }
 
 /// Every integer type a float can convert to: `(name, bit_width, signed)`.
-/// `usize` and `isize` are modeled as 64-bit (the only supported pointer width).
+/// `usize` and `isize` are listed at 64 bits; [`int_target_width`] gives
+/// their 32-bit width on wasm32.
 pub const INT_TARGETS: &[(&str, u32, bool)] = &[
     ("i8", 8, true),
     ("i16", 16, true),
@@ -52,6 +53,15 @@ pub const INT_TARGETS: &[(&str, u32, bool)] = &[
     ("usize", 64, false),
     ("isize", 64, true),
 ];
+
+/// `name`'s width and signedness as compiled code has it: as
+/// [`INT_TARGETS`], except that `usize` and `isize` are 32-bit on wasm32
+/// (design.md §5, B-2026-11-16-324).
+pub fn int_target_width(name: &str) -> Option<(u32, bool)> {
+    let &(_, bits, signed) = INT_TARGETS.iter().find(|(n, _, _)| *n == name)?;
+    let wasm32 = matches!(name, "usize" | "isize") && crate::target::active_target_is_wasm();
+    Some((if wasm32 { 32 } else { bits }, signed))
+}
 
 /// `true` iff `name` is one of the integer-conversion target type names.
 pub fn is_int_target(name: &str) -> bool {

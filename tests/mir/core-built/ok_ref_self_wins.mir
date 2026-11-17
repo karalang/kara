@@ -5,7 +5,7 @@ fn Bag.first(_1: ref Bag, _2: ref String) -> ref String {
     let _3: ref Vec[String];
     bb0: {
         _3 = &(*_1).0;
-        _0 = Vec[String].index(copy _3, const 0_usize) -> bb1;
+        _0 = Vec[String].index(copy _3, const 0_u64) -> bb1;
     }
     bb1: {
         return;

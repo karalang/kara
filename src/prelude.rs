@@ -810,6 +810,22 @@ pub static PRIMITIVE_CONSTS: &[(&str, &str, ConstValue)] = &[
 /// resolver / typechecker" message under the existing field-access
 /// fallback).
 pub fn lookup_primitive_const(type_name: &str, const_name: &str) -> Option<&'static ConstValue> {
+    // `isize` and `usize` are 32-bit on wasm32 (design.md §5,
+    // B-2026-11-16-324).
+    static WASM32: [(&str, &str, ConstValue); 4] = [
+        ("usize", "MAX", ConstValue::Usize(u32::MAX as u64)),
+        ("usize", "MIN", ConstValue::Usize(0)),
+        ("isize", "MAX", ConstValue::Isize(i32::MAX as i64)),
+        ("isize", "MIN", ConstValue::Isize(i32::MIN as i64)),
+    ];
+    if crate::target::active_target_is_wasm() {
+        if let Some((_, _, v)) = WASM32
+            .iter()
+            .find(|(t, c, _)| *t == type_name && *c == const_name)
+        {
+            return Some(v);
+        }
+    }
     PRIMITIVE_CONSTS
         .iter()
         .find(|(t, c, _)| *t == type_name && *c == const_name)

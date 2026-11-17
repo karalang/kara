@@ -7468,7 +7468,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         el: Ty,
     ) -> R<()> {
         let recv = self.recv_place(object, true)?;
-        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
         let idx = self.index_operand(object, index)?;
         let idx = self.cast_index(idx, usize_t);
         let op = self.expr_operand(value)?;
@@ -8530,7 +8530,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (usize_t, rt, et) = {
             let tcx = self.tys().tcx();
             (
-                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.intern(HK::UInt(UIntSize::U64)),
                 tcx.reference(bt, mutable),
                 tcx.reference(elem, mutable),
             )
@@ -8727,7 +8727,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn array_index(&mut self, base: Place, idx: Operand) -> Place {
         let (usize_t, bool_t) = {
             let tcx = self.tys().tcx();
-            (tcx.intern(HK::UInt(UIntSize::Usize)), tcx.intern(HK::Bool))
+            (tcx.intern(HK::UInt(UIntSize::U64)), tcx.intern(HK::Bool))
         };
         let idx = self.cast_index(idx, usize_t);
         let i = self.temp(usize_t);
@@ -11564,7 +11564,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (usize_t, isize_t, bool_t, rt, et) = {
             let tcx = self.tys().tcx();
             (
-                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.intern(HK::UInt(UIntSize::U64)),
                 tcx.intern(HK::Int(IntSize::I64)),
                 tcx.intern(HK::Bool),
                 tcx.reference(t, false),
@@ -12187,7 +12187,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             let tcx = self.tys().tcx();
             (
                 tcx.intern(HK::Bool),
-                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.intern(HK::UInt(UIntSize::U64)),
                 tcx.reference(t, false),
                 tcx.reference(elem, false),
             )
@@ -12431,6 +12431,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 elem,
                 len: crate::ty::ArrayLen::Known(n),
             } => {
+                // `write_usize` takes the target's `usize` (32 bits on
+                // wasm32, B-2026-11-16-324).
                 let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
                 let len = Operand::Const(Const {
                     ty: usize_t,
@@ -12564,7 +12566,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             let tcx = self.tys().tcx();
             (
                 tcx.intern(HK::Bool),
-                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.intern(HK::UInt(UIntSize::U64)),
                 tcx.reference(t, false),
                 tcx.reference(elem, false),
             )
@@ -12578,7 +12580,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             vec![Operand::Copy(Place::local(rf))],
             Place::local(n),
         );
-        self.hasher_call(span, hp, ht, "write_usize", Operand::Copy(Place::local(n)))?;
+        // `write_usize` takes the target's `usize`, while `n` is MIR's
+        // 64-bit word (B-2026-11-16-324).
+        let target_usize = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let nu = self.temp(target_usize);
+        self.assign(
+            nu,
+            Rvalue::Cast(
+                CastKind::IntToInt,
+                Operand::Copy(Place::local(n)),
+                target_usize,
+            ),
+        );
+        self.hasher_call(span, hp, ht, "write_usize", Operand::Move(Place::local(nu)))?;
         let i = self.temp(usize_t);
         let zero = Operand::Const(Const {
             ty: usize_t,
@@ -14253,7 +14267,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         sink: JoinSink<'a>,
     ) -> R<()> {
         let tcx = self.tys().tcx();
-        let usize_t = tcx.intern(HK::UInt(UIntSize::Usize));
+        let usize_t = tcx.intern(HK::UInt(UIntSize::U64));
         let ht = match tcx.kind(hvt) {
             HK::Intrinsic { args, .. } => tcx.list(args)[0],
             _ => unreachable!("a loop's handles are a `Vec`"),
@@ -15560,7 +15574,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // An in-place collect's task returns how many it stored.
             Some(AutoRed {
                 window: Some(_), ..
-            }) => self.tys().tcx().intern(HK::UInt(UIntSize::Usize)),
+            }) => self.tys().tcx().intern(HK::UInt(UIntSize::U64)),
             Some(r) => r.ty,
             None => self.unit(),
         };
@@ -15667,7 +15681,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // An in-place collect (`AutoRed::window`): `acc` reserved once for
         // all `n` pushes, before any task runs, and the address one past
         // its last element, where the windows start.
-        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
         let window = match red {
             Some(
                 r @ AutoRed {
@@ -16625,7 +16639,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if by_entry {
                     tcx.intern(HK::Int(IntSize::I64))
                 } else {
-                    tcx.intern(HK::UInt(UIntSize::Usize))
+                    tcx.intern(HK::UInt(UIntSize::U64))
                 },
                 tcx.intern(HK::Bool),
                 tcx.reference(coll, false),
@@ -17625,7 +17639,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mutable = how == Some(true);
         let (usize_t, bool_t) = {
             let tcx = self.tys().tcx();
-            (tcx.intern(HK::UInt(UIntSize::Usize)), tcx.intern(HK::Bool))
+            (tcx.intern(HK::UInt(UIntSize::U64)), tcx.intern(HK::Bool))
         };
         let usize_const = |v: u128| {
             Operand::Const(Const {
@@ -19384,7 +19398,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // the pattern to; a view's is tested.
                 if known.is_none() {
                     let n = self.seq_len(place, t);
-                    let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+                    let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
                     let bool_t = self.tys().bool();
                     let op = if rest.is_some() { BinOp::Ge } else { BinOp::Eq };
                     let c = self.temp(bool_t);
@@ -19534,7 +19548,7 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The length of the sequence at `place`, as a `usize` local.
     fn seq_len(&mut self, place: &Place, t: Ty) -> Local {
-        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
         let n = self.temp(usize_t);
         if matches!(self.tys().tcx().kind(t), HK::Array { .. }) {
             self.assign(n, Rvalue::Len(place.clone()));
@@ -19561,7 +19575,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             return Ok(place.project(ProjElem::ConstIndex(i)));
         }
-        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
         let idx = match pos {
             SeqPos::Start(i) => Operand::Const(Const {
                 ty: usize_t,
@@ -19919,7 +19933,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         return Ok(());
                     }
                     // `..rest` is a view of the middle, `[k, len - j)`.
-                    let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+                    let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
                     let n = self.seq_len(place, t);
                     let hi = self.temp(usize_t);
                     self.assign(
@@ -22337,7 +22351,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     elem,
                     mutable: false,
                 }),
-                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.intern(HK::UInt(UIntSize::U64)),
                 tcx.intern(HK::Bool),
             )
         };
@@ -22482,7 +22496,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             let tcx = self.tys().tcx();
             (
                 tcx.reference(ct, mutable),
-                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.intern(HK::UInt(UIntSize::U64)),
             )
         };
         let kind = if mutable {
@@ -22571,7 +22585,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             Place::local(self.temp_of(rng, t)?)
         };
         let (rp, rt) = self.strip_refs(rp);
-        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
         // `..=b` ends after `b` as `a..=b` does (B-2026-11-05-37).
         let inclusive =
             self.tys().tcx().adt_of(rt).is_some_and(|(a, _)| {
@@ -22932,7 +22946,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// its `usize` address.
     fn ptr_fn(&mut self, f: &str, args: &'a [CallArg], dest: Place) -> R<bool> {
         let tcx = self.tys().tcx();
-        let usize_t = tcx.intern(HK::UInt(UIntSize::Usize));
+        let usize_t = tcx.intern(HK::UInt(UIntSize::U64));
         match (f, args) {
             ("null" | "null_mut" | "dangling" | "dangling_mut", []) => {
                 let pt = self.place_type(&dest);
@@ -22975,7 +22989,7 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// Whether the raw pointer `p` (of type `pt`) is address 0.
     fn ptr_is_null(&mut self, p: Operand, pt: Ty, dest: Place) {
-        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
         let zero = Operand::Const(Const {
             ty: usize_t,
             kind: ConstKind::Scalar(0),
@@ -25415,7 +25429,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return None;
         };
         let targs = self.tys().tcx().list(targs);
-        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
         // The fallible forms (`try_push`, `try_resize`) take what the
         // plain ones do.
         let method = method.strip_prefix("try_").unwrap_or(method);
@@ -29344,6 +29358,7 @@ fn int_limit(kind: HK, path: &str) -> Option<u128> {
                 IntSize::I16 => 16,
                 IntSize::I32 => 32,
                 IntSize::I128 => 128,
+                IntSize::Isize => crate::mir::ty::IntTy::Isize.bits(),
                 _ => 64,
             },
             true,
@@ -29354,6 +29369,7 @@ fn int_limit(kind: HK, path: &str) -> Option<u128> {
                 UIntSize::U16 => 16,
                 UIntSize::U32 => 32,
                 UIntSize::U128 => 128,
+                UIntSize::Usize => crate::mir::ty::IntTy::Usize.bits(),
                 _ => 64,
             },
             false,
