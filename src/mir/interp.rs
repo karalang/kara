@@ -922,6 +922,7 @@ fn run_with(
         http_bodies: rustc_hash::FxHashMap::default(),
         http_error_responses: rustc_hash::FxHashMap::default(),
         http_requests: rustc_hash::FxHashMap::default(),
+        http_progress: rustc_hash::FxHashMap::default(),
         exposed_addrs: Vec::new(),
         built_requests: Vec::new(),
         free_requests: Vec::new(),
@@ -1509,6 +1510,9 @@ struct Interp<'a> {
     /// at 0), which `Request`'s methods read: a server answers each
     /// connection in a task of its own (B-2026-10-25-41).
     http_requests: rustc_hash::FxHashMap<usize, crate::http1::Request>,
+    /// Each task's connection's progress toward its next request
+    /// (`Server.__install`, `__need`, `__wait_ms`), by task.
+    http_progress: rustc_hash::FxHashMap<usize, crate::http1::Progress>,
     /// The places whose address `ptr.addr` / `ptr.expose` read: place `k`
     /// has the made-up address `SYNTH_ADDR_BASE + k * SYNTH_ADDR_STRIDE`,
     /// so an address that comes back unchanged (a tag set and then
@@ -2723,7 +2727,10 @@ impl<'a> Interp<'a> {
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_method(name, method, args)
             }
-            ("Server", "__install" | "__wire" | "__wire_fixed" | "__keep_alive")
+            (
+                "Server",
+                "__install" | "__need" | "__wait_ms" | "__wire" | "__wire_fixed" | "__keep_alive",
+            )
             | ("Request", _) => self.http_server_method(name, base, method, args, arg_tys, ret),
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
             ("Vec", "from_array") => {
@@ -7929,9 +7936,10 @@ impl<'a> Interp<'a> {
                             let s = self.sockets.accepted.remove(&fd).unwrap();
                             Ok(self.sockets.stream(s))
                         }
+                        // The errno comes along (B-2026-11-17-58).
                         Some(l) => match l.accept() {
                             Ok((s, _)) => Ok(self.sockets.stream(s)),
-                            Err(e) => Err(construct(&e)),
+                            Err(e) => Err(cause(&e)),
                         },
                         None => Err(("Other", Some(-1))),
                     },
@@ -8731,6 +8739,7 @@ impl<'a> Interp<'a> {
         v: Value,
     ) -> R<()> {
         self.http_requests.remove(&t);
+        self.http_progress.remove(&t);
         if self.tasks[t].unwind {
             self.free_slot(slot);
             let task = &mut self.tasks[t];
@@ -18375,30 +18384,41 @@ impl<'a> Interp<'a> {
             ("Server", "__install") => {
                 let bytes = self.bytes_of_view(&args[0], name)?;
                 let eof = matches!(args.get(1), Some(Value::Bool(true)));
-                let used = match crate::http1::parse_request(&bytes, eof) {
-                    crate::http1::Parse::Done(req, used) => {
-                        self.http_requests.insert(self.cur_task, req);
-                        used as i128
-                    }
-                    crate::http1::Parse::More => 0,
-                    crate::http1::Parse::Closed => -1,
-                    crate::http1::Parse::Bad(_) => -2,
-                };
-                Ok(Value::Int(used))
+                let task = self.cur_task;
+                let (used, req) = self
+                    .http_progress
+                    .entry(task)
+                    .or_default()
+                    .install(&bytes, eof);
+                if let Some(req) = req {
+                    self.http_requests.insert(task, req);
+                }
+                Ok(Value::Int(i128::from(used)))
+            }
+            ("Server", "__need") => {
+                let task = self.cur_task;
+                let need = self.http_progress.entry(task).or_default().need();
+                Ok(Value::Int(i128::from(need)))
+            }
+            ("Server", "__wait_ms") => {
+                let task = self.cur_task;
+                let wait = self.http_progress.entry(task).or_default().wait_ms();
+                Ok(Value::Int(i128::from(wait)))
             }
             ("Server", "__wire") => {
                 let rty = self.deref_ty(arg_tys.first().copied(), name)?;
                 let resp = self.through_refs(&args[0])?;
                 let (status, body, headers) = self.response_parts(&resp, rty, name)?;
-                let (keep, http10) = (self.served().keep_alive(), self.served().http10());
-                let wire =
-                    crate::http1::response_bytes(status, body.as_bytes(), &headers, keep, http10);
+                let task = self.cur_task;
+                let req = self.http_requests.entry(task).or_default();
+                let wire = crate::http1::response_bytes(status, body.as_bytes(), &headers, req);
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__wire_fixed") => {
                 let body = self.string_at(&args[0])?;
-                let (keep, http10) = (self.served().keep_alive(), self.served().http10());
-                let wire = crate::http1::response_bytes(200, body.as_bytes(), &[], keep, http10);
+                let task = self.cur_task;
+                let req = self.http_requests.entry(task).or_default();
+                let wire = crate::http1::response_bytes(200, body.as_bytes(), &[], req);
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__keep_alive") => Ok(Value::Bool(self.served().keep_alive())),

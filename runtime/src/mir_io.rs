@@ -1555,6 +1555,40 @@ crate::mir_task::program_state! {
     static MIR_REQUESTS: Option<std::collections::HashMap<u64, http1::Request>> = None;
 }
 
+#[cfg(feature = "net")]
+crate::mir_task::program_state! {
+    /// Each task's connection's progress toward its next request
+    /// (`Server.__install`, `__need`, `__wait_ms`), by task id.
+    static MIR_PROGRESS: Option<std::collections::HashMap<u64, http1::Progress>> = None;
+}
+
+/// `f` of the running task's [`MIR_PROGRESS`] entry.
+#[cfg(feature = "net")]
+fn with_progress<T>(f: impl FnOnce(&mut http1::Progress) -> T) -> T {
+    let key = request_key();
+    hook_task_end();
+    MIR_PROGRESS.with(|r| {
+        f(r.get_or_insert_with(Default::default)
+            .entry(key)
+            .or_default())
+    })
+}
+
+/// Forgets a task's request and progress when it ends, once per thread
+/// (each executor's own tasks end on its thread).
+#[cfg(feature = "net")]
+fn hook_task_end() {
+    thread_local! {
+        static HOOKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if request_key() != 0 && !HOOKED.with(|h| h.replace(true)) {
+        crate::mir_task::on_task_end(|task| {
+            MIR_REQUESTS.with(|r| r.as_mut().map(|r| r.remove(&task)));
+            MIR_PROGRESS.with(|r| r.as_mut().map(|r| r.remove(&task)));
+        });
+    }
+}
+
 /// The running task's key in [`MIR_REQUESTS`].
 #[cfg(feature = "net")]
 fn request_key() -> u64 {
@@ -1564,16 +1598,8 @@ fn request_key() -> u64 {
 /// Makes `req` the running task's request, forgotten when the task ends.
 #[cfg(feature = "net")]
 fn set_request(req: http1::Request) {
-    thread_local! {
-        static HOOKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
     let key = request_key();
-    // Each executor's own tasks end on its thread.
-    if key != 0 && !HOOKED.with(|h| h.replace(true)) {
-        crate::mir_task::on_task_end(|task| {
-            MIR_REQUESTS.with(|r| r.as_mut().map(|r| r.remove(&task)));
-        });
-    }
+    hook_task_end();
     MIR_REQUESTS.with(|r| r.get_or_insert_with(Default::default).insert(key, req));
 }
 
@@ -1585,6 +1611,18 @@ fn with_request<T>(f: impl FnOnce(&http1::Request) -> T) -> T {
     MIR_REQUESTS.with(|r| match r.as_ref().and_then(|r| r.get(&key)) {
         Some(req) => f(req),
         None => f(&http1::Request::default()),
+    })
+}
+
+/// `f` of the running task's request, mutably, an empty one made first if
+/// it has none.
+#[cfg(feature = "net")]
+fn with_request_mut<T>(f: impl FnOnce(&mut http1::Request) -> T) -> T {
+    let key = request_key();
+    MIR_REQUESTS.with(|r| {
+        f(r.get_or_insert_with(Default::default)
+            .entry(key)
+            .or_default())
     })
 }
 
@@ -1736,8 +1774,10 @@ pub unsafe extern "C" fn karac_mir_http_request_set(
 /// `Server.__install(buf, eof)` for the servers in
 /// runtime/stdlib/source/http_server.kara: makes the request at the start
 /// of the `n` bytes at `p` the current one, and returns the bytes it took;
-/// 0 when they hold no whole request yet and `eof` is 0, -1 when the
-/// connection holds no request, or -2 when it holds one that does not parse.
+/// 0 when they hold no whole request yet and `eof` is 0 (-100 when the
+/// client waits for a `100 Continue`), -1 when the connection holds no
+/// request, or minus the status of the answer to one the server refuses
+/// (`http1::Progress::install`).
 ///
 /// # Safety
 ///
@@ -1747,15 +1787,27 @@ pub unsafe extern "C" fn karac_mir_http_request_set(
 pub unsafe extern "C" fn karac_mir_http_install(p: *const u8, n: i64, eof: i32) -> i64 {
     // SAFETY: the caller's contract.
     let buf = unsafe { buf_bytes(p, n.max(0) as usize) };
-    match http1::parse_request(buf, eof != 0) {
-        http1::Parse::Done(req, used) => {
-            set_request(req);
-            used as i64
-        }
-        http1::Parse::More => 0,
-        http1::Parse::Closed => -1,
-        http1::Parse::Bad(_) => -2,
+    let (used, req) = with_progress(|p| p.install(buf, eof != 0));
+    if let Some(req) = req {
+        set_request(req);
     }
+    used
+}
+
+/// `Server.__need()`: how many bytes the connection's buffer must hold
+/// before `__install` is worth calling again (B-2026-11-17-51).
+#[cfg(feature = "net")]
+#[no_mangle]
+pub extern "C" fn karac_mir_http_need() -> i64 {
+    with_progress(|p| p.need())
+}
+
+/// `Server.__wait_ms()`: how long the connection's next read may wait,
+/// negative inside a request (`http1::Progress::wait_ms`).
+#[cfg(feature = "net")]
+#[no_mangle]
+pub extern "C" fn karac_mir_http_wait_ms() -> i64 {
+    with_progress(|p| p.wait_ms())
 }
 
 /// `Server.__wire(resp)`: the bytes of a response to the current request
@@ -1780,13 +1832,7 @@ pub unsafe extern "C" fn karac_mir_http_wire(
     let pairs = unsafe { header_pairs(headers, headers_len as usize) };
     // SAFETY: the caller's contract.
     let body = unsafe { bytes_at(body, body_len as usize) };
-    let wire = http1::response_bytes(
-        status,
-        body,
-        &pairs,
-        with_request(http1::Request::keep_alive),
-        with_request(http1::Request::http10),
-    );
+    let wire = with_request_mut(|req| http1::response_bytes(status, body, &pairs, req));
     // SAFETY: the caller's contract; a `Vec[u8]` is laid out as a `String`.
     unsafe { string_of(out, &wire) };
 }

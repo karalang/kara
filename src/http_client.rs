@@ -232,6 +232,22 @@ async fn http_fetch_redirects(
     Err(format!("{url}: too many redirects"))
 }
 
+/// `url` with the empty path a URL may have before its query made `/`
+/// (`http://h:1?x=1` is `http://h:1/?x=1`, RFC 3986 §3.3), which the URI
+/// parser refuses otherwise (B-2026-11-17-56).
+fn http_url_form(url: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(at) = url.find("://") {
+        let rest = &url[at + 3..];
+        if let Some(i) = rest.find(['/', '?', '#']) {
+            if rest[i..].starts_with('?') {
+                let cut = at + 3 + i;
+                return format!("{}/{}", &url[..cut], &url[cut..]).into();
+            }
+        }
+    }
+    url.into()
+}
+
 /// Resolve a `Location` header against the current request URL, as RFC
 /// 3986 §5.2 resolves a reference, dot segments removed (`src/http_proxy.rs`,
 /// B-2026-11-14-46).
@@ -249,7 +265,9 @@ async fn http_fetch_once(
     body: &[u8],
     headers: &[(String, String)],
 ) -> Result<HttpFetched, String> {
-    let uri: hyper::Uri = url.parse().map_err(|e| format!("{url}: bad url: {e}"))?;
+    let uri: hyper::Uri = http_url_form(url)
+        .parse()
+        .map_err(|e| format!("{url}: bad url: {e}"))?;
     let scheme = uri.scheme_str().unwrap_or("http").to_string();
     // A URL is http:// or https:// (docs/library/io.md § HTTP client); any
     // other scheme is refused before a connection rather than spoken to in
@@ -257,13 +275,31 @@ async fn http_fetch_once(
     if scheme != "http" && scheme != "https" {
         return Err(format!("{url}: Unknown Scheme: unknown scheme '{scheme}'"));
     }
+    // An IPv6 literal's brackets belong to the URL and the Host header,
+    // not to the address connected to or the TLS name (B-2026-11-17-56).
     let host = uri
         .host()
         .ok_or_else(|| format!("{url}: url has no host"))?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
         .to_string();
-    let port = uri
-        .port_u16()
-        .unwrap_or(if scheme == "https" { 443 } else { 80 });
+    // A port that does not fit 16 bits is no URL, not a default port.
+    // The URI parser reads a port that does not fit 16 bits as none, so
+    // the authority's own text decides.
+    let written = uri
+        .authority()
+        .map(|a| a.as_str().rsplit('@').next().unwrap_or_default())
+        .map(|a| a.rsplit(']').next().unwrap_or_default())
+        .and_then(|a| a.rsplit_once(':'))
+        .map(|(_, p)| p)
+        .filter(|p| !p.is_empty());
+    let port = match written {
+        Some(p) => p
+            .parse::<u16>()
+            .map_err(|_| format!("{url}: bad url: invalid port {p}"))?,
+        None if scheme == "https" => 443,
+        None => 80,
+    };
     let route = crate::http_proxy::proxy_for(&scheme, &host).map_err(|e| format!("{url}: {e}"))?;
     let tcp = match &route {
         None => tokio::net::TcpStream::connect((host.as_str(), port))
@@ -382,8 +418,13 @@ where
         let _ = conn.await;
     });
     let default_port = if scheme == "https" { 443 } else { 80 };
-    let host_header = if port == default_port {
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
         host.to_string()
+    };
+    let host_header = if port == default_port {
+        host
     } else {
         format!("{host}:{port}")
     };
@@ -472,7 +513,14 @@ fn http_build_request(
     if let Some(host) = host_header {
         builder = builder.header(hyper::header::HOST, host);
     }
+    // The body's length and the URL's host are the client's to send: a
+    // program's own `Content-Length` or `Host` (one copied from a request
+    // it received, say) would mis-frame the body or send a second Host
+    // (docs/library/io.md § HTTP client, B-2026-11-17-54).
     for (k, v) in headers {
+        if k.eq_ignore_ascii_case("content-length") || k.eq_ignore_ascii_case("host") {
+            continue;
+        }
         builder = builder.header(k.as_str(), v.as_str());
     }
     // The client's own headers, each unless the program set one

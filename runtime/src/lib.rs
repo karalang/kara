@@ -672,6 +672,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_http_request_set,
         mir_io::karac_mir_http_request_release,
         mir_io::karac_mir_http_install,
+        mir_io::karac_mir_http_need,
+        mir_io::karac_mir_http_wait_ms,
         mir_io::karac_mir_http_wire,
         mir_io::karac_mir_http_keep_alive,
     );
@@ -7563,12 +7565,10 @@ pub unsafe extern "C" fn karac_runtime_http_builder_new(
     unsafe {
         let method = slice_to_owned_string(method_ptr, method_len);
         let url = slice_to_owned_string(url_ptr, url_len);
+        // An empty method is refused when sent, as the interpreter
+        // refuses it, rather than sent as GET (B-2026-11-17-55).
         let state = HttpBuilderState {
-            method: if method.is_empty() {
-                "GET".to_string()
-            } else {
-                method
-            },
+            method,
             url,
             body: Vec::new(),
             headers: Vec::new(),

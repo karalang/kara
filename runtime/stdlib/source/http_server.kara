@@ -108,28 +108,59 @@ impl Server {
         accepting.join()
     }
 
+    // A failed `accept` is retried, never returned: out of descriptors
+    // (EMFILE, ENFILE), out of memory, or a connection the client aborted
+    // first is a moment's condition, and the connections being served are
+    // what frees it (docs/library/io.md, B-2026-11-17-49). The pause
+    // before the retry starts at 5 ms and doubles up to 1 s, reset by the
+    // next connection accepted, as Go's net/http does; it suspends, so the
+    // connections' tasks run meanwhile.
     fn __connections(l: own HttpListener, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask, upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         let connections = TaskGroup.isolating();
+        let mut pause = 0;
         loop {
             let conn = match l.accept() {
                 Ok(conn) => conn,
                 Err(NetError.Interrupted) => continue,
-                Err(e) => return Err(Server.__failed("accept failed", e)),
+                Err(_) => {
+                    pause = Server.__backoff(pause);
+                    continue;
+                }
             };
+            pause = 0;
             let _ = connections.spawn(|| Server.__connection(conn, handler, ws_handler, upgrades));
         }
     }
 
     fn __fixed_connections(l: own HttpListener, body: own String) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
         let connections = TaskGroup.isolating();
+        let mut pause = 0;
         loop {
             let conn = match l.accept() {
                 Ok(conn) => conn,
                 Err(NetError.Interrupted) => continue,
-                Err(e) => return Err(Server.__failed("accept failed", e)),
+                Err(_) => {
+                    pause = Server.__backoff(pause);
+                    continue;
+                }
             };
+            pause = 0;
             let _ = connections.spawn(|| Server.__fixed_connection(conn, body));
         }
+    }
+
+    // Waits out a failed `accept`: the pause after one of `pause` ms (0
+    // for the first), which it returns.
+    fn __backoff(pause: i64) -> i64 with suspends {
+        let next = if pause == 0 {
+            5
+        } else if pause >= 500 {
+            1000
+        } else {
+            pause * 2
+        };
+        sleep_ms(next);
+        next
     }
 
     // Answers the requests `conn` sends with `handler`'s responses, until
@@ -145,9 +176,14 @@ impl Server {
             }
             let req = Request { __id: 0 };
             let resp = handler(req);
+            // A 101 under `serve_ws` is the upgrade, for a request that is a
+            // valid opening handshake; one that asks to upgrade but is not
+            // valid is answered 400, or 426 for a version other than 13
+            // (RFC 6455 §4.2.2, B-2026-11-17-57). A 101 to a request that
+            // does not ask to upgrade is sent as the handler's response.
             if upgrades and resp.status == 101 {
                 match Server.__handshake_key(req) {
-                    Some(key) => {
+                    Ok(key) => {
                         let accept = WebSocket.__accept_key(key);
                         let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
                         match conn.write_all(reply.bytes()) {
@@ -166,11 +202,20 @@ impl Server {
                         });
                         return;
                     }
-                    None => {}
+                    Err(0) => {}
+                    Err(status) => {
+                        let refusal = Server.__refusal(status);
+                        let _ = conn.write_all(refusal.bytes());
+                        let _ = conn.shutdown_write();
+                        return;
+                    }
                 }
             }
+            // The response decides last whether the connection stays: a
+            // handler's `connection: close` closes it (B-2026-11-17-48).
+            let wire = Server.__wire(resp);
             let keep = Server.__keep_alive();
-            match conn.write_all(Server.__wire(resp)) {
+            match conn.write_all(wire) {
                 Ok(_) => {}
                 Err(_) => return,
             }
@@ -190,8 +235,9 @@ impl Server {
             if used < 0 {
                 return;
             }
+            let wire = Server.__wire_fixed(body);
             let keep = Server.__keep_alive();
-            match conn.write_all(Server.__wire_fixed(body)) {
+            match conn.write_all(wire) {
                 Ok(_) => {}
                 Err(_) => return,
             }
@@ -206,46 +252,96 @@ impl Server {
     // Reads off `conn` until `buf` starts with a whole request, and makes
     // it the current one: the bytes it took, or -1 when the connection
     // holds no more requests.
+    //
+    // Each read waits as long as `__wait_ms` says (docs/library/io.md,
+    // B-2026-11-17-50): a connection that sends no new request for 60 s
+    // is closed silently; a request whose head is not whole 30 s after its
+    // first byte, or whose body stalls for 60 s, is answered 408. The
+    // buffer is parsed again only once it holds the bytes `__need` names,
+    // so a large body is not re-read from its start after every read
+    // (B-2026-11-17-51). A client that asks `Expect: 100-continue` gets
+    // the interim `100 Continue` once, before its body is read
+    // (B-2026-11-17-53).
     fn __next(conn: WsConn, buf: mut ref Vec[u8]) -> i64 with sends(Network) receives(Network) blocks suspends {
         let mut chunk = [0u8; 8192];
+        let mut continued = false;
         let mut used = Server.__install(buf, false);
-        while used == 0 {
+        loop {
+            if used == -100 {
+                if not continued {
+                    continued = true;
+                    match conn.write_all("HTTP/1.1 100 Continue\r\n\r\n".bytes()) {
+                        Ok(_) => {}
+                        Err(_) => return -1,
+                    }
+                }
+                used = 0;
+            }
+            if used != 0 {
+                break;
+            }
+            let wait = Server.__wait_ms();
+            let ms = if wait < 0 { 0 - wait } else { wait };
+            let _ = conn.set_read_timeout(Some(ms));
             match conn.read(mut chunk) {
                 Ok(0) => used = Server.__install(buf, true),
                 Ok(n) => {
                     buf.extend_from_slice(chunk[0..n]);
-                    used = Server.__install(buf, false);
+                    if buf.len() >= Server.__need() {
+                        used = Server.__install(buf, false);
+                    }
                 }
                 Err(NetError.Interrupted) => {}
+                Err(NetError.TimedOut) => {
+                    if wait > 0 {
+                        return -1;
+                    }
+                    used = -408;
+                }
                 Err(_) => return -1,
             }
         }
-        // A request it cannot parse is answered 400 without the handler,
-        // and its connection closes (docs/library/io.md).
-        if used == -2 {
-            let _ = conn.write_all(
-                "HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".bytes(),
-            );
+        // A request the server refuses is answered with its status (400,
+        // 408, 413, 431 or 501) without the handler, and its connection
+        // closes (docs/library/io.md).
+        if used < -1 {
+            let refusal = Server.__refusal(0 - used);
+            let _ = conn.write_all(refusal.bytes());
             let _ = conn.shutdown_write();
             return -1;
         }
+        let _ = conn.set_read_timeout(None);
         used
+    }
+
+    // The answer to a request refused with `status`, which closes its
+    // connection.
+    fn __refusal(status: i64) -> String {
+        let reason = match status {
+            408 => "Request Timeout",
+            413 => "Content Too Large",
+            426 => "Upgrade Required",
+            431 => "Request Header Fields Too Large",
+            501 => "Not Implemented",
+            _ => "Bad Request",
+        };
+        let extra = if status == 426 { "Sec-WebSocket-Version: 13\r\n" } else { "" };
+        f"HTTP/1.1 {status} {reason}\r\n{extra}content-length: 0\r\nconnection: close\r\n\r\n"
     }
 
     // The session of a server that does not upgrade, which never runs.
     fn __no_session(ws: own WebSocket) {}
 
     // The client's key when `req` is a WebSocket opening handshake (RFC
-    // 6455 §4.2.1): a GET asking to upgrade to `websocket`, with a key.
-    fn __handshake_key(req: Request) -> Option[String] {
-        let upgrade = match req.header("upgrade".to_string()) {
-            Some(v) => v.to_lowercase().contains("websocket"),
-            None => false,
-        };
-        if not upgrade or req.method() != "GET" {
-            return None;
-        }
-        req.header("sec-websocket-key".to_string())
+    // 6455 §4.2.1), else the status its refusal takes
+    // (`WebSocket.__handshake`).
+    fn __handshake_key(req: Request) -> Result[String, i64] {
+        WebSocket.__handshake(
+            req.method(),
+            req.header("upgrade".to_string()),
+            req.header("sec-websocket-version".to_string()),
+            req.header("sec-websocket-key".to_string()),
+        )
     }
 
     // `BOUND_PORT=<n>` on stderr, as `serve` prints it for a test harness.
@@ -270,12 +366,27 @@ impl Server {
 
     // Makes the request at the start of `buf` the running task's current
     // one, which `Request`'s methods read: the bytes it took, 0 when `buf`
-    // holds no whole request yet (and `eof` says more may come), -1 when
-    // the connection holds no request, or -2 when it holds one that does
-    // not parse.
+    // holds no whole request yet (and `eof` says more may come; -100 when
+    // the client also waits for a `100 Continue`), -1 when the connection
+    // holds no request, or minus the status (400, 413, 431, 501) of the
+    // answer to one the server refuses (src/http1.rs `Progress::install`).
     #[compiler_builtin]
     fn __install(buf: Slice[u8], eof: bool) -> i64 {
         -1
+    }
+
+    // How many bytes `buf` must hold before `__install` can give another
+    // answer for the request it is reading.
+    #[compiler_builtin]
+    fn __need() -> i64 {
+        0
+    }
+
+    // How long the next read for the current connection may wait, in ms:
+    // positive between requests, negative inside one.
+    #[compiler_builtin]
+    fn __wait_ms() -> i64 {
+        0
     }
 
     // Whether the current request keeps its connection open for the next.

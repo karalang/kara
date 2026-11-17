@@ -124,41 +124,122 @@ fn form_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// A response's bytes: the status line, `headers` (with a JSON
-/// `content-type` when they give none, and the body's `content-length` in
-/// place of any they give), `connection: close` unless `keep_alive`, and
-/// the body. An HTTP/1.0 connection kept open says so, `connection:
-/// keep-alive`, since a 1.0 client otherwise reads the response as the
-/// last (review-thread ruling 2026-11-16, B-2026-11-16-210).
+/// The largest request head the server reads, request line and headers
+/// together (and a chunked body's trailers): a bigger one is answered
+/// `431` (docs/library/io.md, B-2026-11-17-50).
+pub const HEAD_LIMIT: usize = 64 * 1024;
+/// The largest request body the server reads: a bigger one is answered
+/// `413`.
+pub const BODY_LIMIT: usize = 16 * 1024 * 1024;
+/// How long after its first byte a request head may take to arrive before
+/// it is answered `408`.
+pub const HEAD_TIMEOUT_MS: i64 = 30_000;
+/// How long a connection may wait between requests, or a body between its
+/// reads, before it is closed.
+pub const IDLE_TIMEOUT_MS: i64 = 60_000;
+
+/// Whether `s` is an RFC 9110 token (a method or a header name).
+fn is_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
+/// Whether a header value holds a byte that would end or split the line
+/// it is written on (CR, LF) or that a peer may read as its end (NUL).
+fn breaks_line(s: &str) -> bool {
+    s.bytes().any(|b| matches!(b, b'\r' | b'\n' | 0))
+}
+
+/// Whether `status` is sent without a body: every `1xx`, `204` and `304`
+/// (RFC 9110 §6.4.1).
+fn bodiless(status: i64) -> bool {
+    (100..200).contains(&status) || status == 204 || status == 304
+}
+
+/// Whether the comma-separated `Connection` value `v` lists `token`,
+/// without case (RFC 9110 §7.6.1, B-2026-11-17-52).
+fn lists(v: &str, token: &str) -> bool {
+    v.split(',').any(|t| t.trim().eq_ignore_ascii_case(token))
+}
+
+/// A response's bytes, for the request `req` is answering: the status
+/// line, `headers` (with a JSON `content-type` when they give none, and
+/// the body's `content-length` in place of any they give), `connection:
+/// close` unless the connection is kept, and the body. An HTTP/1.0
+/// connection kept open says so, `connection: keep-alive`, since a 1.0
+/// client otherwise reads the response as the last (review-thread ruling
+/// 2026-11-16, B-2026-11-16-210).
+///
+/// What the handler cannot be allowed to send is the server's to fix
+/// (docs/library/io.md, B-2026-11-17-45, -47, -48): a status outside
+/// 100..=999, or a header whose name is not a token or whose value holds
+/// CR, LF or NUL, is answered `500` instead; the handler's
+/// `transfer-encoding` is dropped (the body goes out whole, framed by its
+/// length) and its `connection: close` closes the connection; a response
+/// to `HEAD`, and every `1xx`, `204` and `304`, goes without a body. A
+/// `1xx` from a handler is no interim response, so the connection closes
+/// after it. `req`'s `keep_alive` is updated to what the response does.
 pub fn response_bytes(
     status: i64,
     body: &[u8],
     headers: &[(String, String)],
-    keep_alive: bool,
-    http10: bool,
+    req: &mut Request,
 ) -> Vec<u8> {
+    let refused = !(100..=999).contains(&status)
+        || headers.iter().any(|(k, v)| !is_token(k) || breaks_line(v));
+    if refused {
+        return response_bytes(500, b"", &[], req);
+    }
     let mut head = format!("HTTP/1.1 {status} {}\r\n", reason(status));
     let mut typed = false;
     for (k, v) in headers {
-        if k.eq_ignore_ascii_case("content-length") {
+        if k.eq_ignore_ascii_case("content-length") || k.eq_ignore_ascii_case("transfer-encoding") {
+            continue;
+        }
+        if k.eq_ignore_ascii_case("connection") {
+            if lists(v, "close") {
+                req.keep_alive = false;
+            }
             continue;
         }
         typed |= k.eq_ignore_ascii_case("content-type");
         head.push_str(&format!("{k}: {v}\r\n"));
     }
-    if !typed {
+    let bodiless = bodiless(status);
+    if (100..200).contains(&status) {
+        req.keep_alive = false;
+    }
+    if !typed && !bodiless {
         head.push_str("content-type: application/json\r\n");
     }
-    head.push_str(&format!("content-length: {}\r\n", body.len()));
-    if !keep_alive {
+    // A HEAD response's length is the one a GET would get (RFC 9110
+    // §9.3.2); a 1xx, 204 or 304 has none.
+    if !bodiless {
+        head.push_str(&format!("content-length: {}\r\n", body.len()));
+    }
+    if !req.keep_alive {
         head.push_str("connection: close\r\n");
-    } else if http10 {
+    } else if req.http10 {
         head.push_str("connection: keep-alive\r\n");
     }
     head.push_str("\r\n");
     let mut wire = head.into_bytes();
-    wire.extend_from_slice(body);
+    if !bodiless && req.method != "HEAD" {
+        wire.extend_from_slice(body);
+    }
     wire
+}
+
+/// The bytes of the answer to a request the server refuses with `status`
+/// (400, 408, 413, 431 or 501) before any handler sees it; its connection
+/// closes.
+pub fn refusal_bytes(status: i64) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 {status} {}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        reason(status)
+    )
+    .into_bytes()
 }
 
 /// What the bytes read so far off a connection hold of its next request.
@@ -166,41 +247,94 @@ pub enum Parse {
     /// A whole request, and how many bytes it took.
     Done(Request, usize),
     /// Not a whole request yet: read more and ask again.
-    More,
+    More(Pending),
     /// Nothing but blank lines, and the client closed the connection.
     Closed,
-    /// Bytes that are no request; the connection is dropped.
-    Bad(&'static str),
+    /// Bytes the server refuses, with the status it answers (400, 413,
+    /// 431 or 501) and why; the connection closes.
+    Bad(u16, &'static str),
+}
+
+/// What a request that is not whole yet is waiting for.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct Pending {
+    /// How many bytes the buffer must hold before asking again can give
+    /// a different answer: the end of the body or of the chunk being read,
+    /// or one more byte (B-2026-11-17-51).
+    pub need: usize,
+    /// Whether any byte of the request has come (more than blank lines).
+    pub started: bool,
+    /// Whether its head is whole and its body is being read.
+    pub in_body: bool,
+    /// Whether the head asks `Expect: 100-continue` (B-2026-11-17-53).
+    pub expect_continue: bool,
+}
+
+/// The answer for a request that needs more than `buf` holds: `More` with
+/// `pending`, or, at the end of the input, a 400 for `what`.
+fn short(eof: bool, pending: Pending, what: &'static str) -> Parse {
+    if eof {
+        Parse::Bad(400, what)
+    } else {
+        Parse::More(pending)
+    }
 }
 
 /// Parses the next request at the start of `buf`, without blocking: a
 /// reader that may not have the whole request yet (a non-blocking socket)
 /// asks again once more bytes arrive. `eof` says no more will, so a request
 /// that needs more is a bad one.
+///
+/// A request is refused unless it is unambiguous (RFC 9112, review-thread
+/// ruling 2026-11-17 in docs/library/io.md, B-2026-11-17-44, -46): `400`
+/// for a malformed request line or header (no colon, whitespace before
+/// the colon, an empty or non-token name, CR, LF or NUL in a value), a
+/// version other than HTTP/1.0 and HTTP/1.1, an HTTP/1.1 request without
+/// exactly one `Host`, and ambiguous framing (`Content-Length` with
+/// `Transfer-Encoding`, two `Content-Length`s, one that is not plain
+/// digits, `chunked` that is not the last coding); `501` for a transfer
+/// coding other than `chunked`; `431` for a head over [`HEAD_LIMIT`];
+/// `413` for a body over [`BODY_LIMIT`].
 pub fn parse_request(buf: &[u8], eof: bool) -> Parse {
+    let more = Pending {
+        need: buf.len() + 1,
+        started: !buf.iter().all(u8::is_ascii_whitespace),
+        ..Pending::default()
+    };
+    let head_short = |eof: bool, what: &'static str| {
+        if !eof && buf.len() > HEAD_LIMIT {
+            Parse::Bad(431, "the request head is too large")
+        } else {
+            short(eof, more, what)
+        }
+    };
     let mut p = Lines { buf, pos: 0 };
     // Blank lines before a request line are skipped (RFC 9112 §2.2).
     let first = loop {
         match p.line() {
             None if eof && p.rest_is_blank() => return Parse::Closed,
-            None => return p.short(eof, "the request line ends early"),
-            Some(Err(e)) => return Parse::Bad(e),
+            None => return head_short(eof, "the request line ends early"),
+            Some(Err(e)) => return Parse::Bad(400, e),
             Some(Ok(l)) if l.trim().is_empty() => continue,
             Some(Ok(l)) => break l,
         }
     };
     // `method SP target SP HTTP/x.y` (RFC 9112 §3); anything else is
     // answered 400 without reaching the handler (docs/library/io.md).
-    let mut words = first.split_whitespace();
+    let mut words = first.split(' ');
     let (Some(method), Some(target), Some(version), None) =
         (words.next(), words.next(), words.next(), words.next())
     else {
-        return Parse::Bad("a malformed request line");
+        return Parse::Bad(400, "a malformed request line");
     };
-    if !version.starts_with("HTTP/") {
-        return Parse::Bad("a malformed request line");
+    if !is_token(method) || target.is_empty() || target.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        return Parse::Bad(400, "a malformed request line");
     }
-    let http10 = version == "HTTP/1.0";
+    let http10 = match version {
+        "HTTP/1.1" => false,
+        "HTTP/1.0" => true,
+        _ => return Parse::Bad(400, "an HTTP version other than 1.0 and 1.1"),
+    };
     let mut req = Request {
         method: method.to_string(),
         target: origin_target(target),
@@ -208,79 +342,218 @@ pub fn parse_request(buf: &[u8], eof: bool) -> Parse {
     };
     loop {
         let h = match p.line() {
-            None => return p.short(eof, "the headers end early"),
-            Some(Err(e)) => return Parse::Bad(e),
+            None => return head_short(eof, "the headers end early"),
+            Some(Err(e)) => return Parse::Bad(400, e),
             Some(Ok(h)) => h,
         };
         if h.is_empty() {
             break;
         }
         let Some((k, v)) = h.split_once(':') else {
-            return Parse::Bad("a malformed header");
+            return Parse::Bad(400, "a malformed header");
         };
+        // No whitespace before the colon (RFC 9112 §5.1), which is also
+        // how an obs-fold continuation line is refused; a value is
+        // trimmed of the spaces and tabs around it (OWS), and may hold
+        // neither CR nor NUL (RFC 9110 §5.5).
+        let v = v.trim_matches([' ', '\t']);
+        if !is_token(k) || breaks_line(v) {
+            return Parse::Bad(400, "a malformed header");
+        }
         // Names lowercased, as hyper gives them to legacy's handlers; a
         // lookup by `header` ignores case either way.
-        req.headers
-            .push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+        req.headers.push((k.to_ascii_lowercase(), v.to_string()));
     }
-    let connection = req.header("connection").map(str::to_ascii_lowercase);
+    let head_end = p.pos;
+    if head_end > HEAD_LIMIT {
+        return Parse::Bad(431, "the request head is too large");
+    }
+    fn all<'a>(h: &'a Headers, name: &'a str) -> impl Iterator<Item = &'a (String, String)> {
+        h.iter().filter(move |(k, _)| k == name)
+    }
+    if !http10 && all(&req.headers, "host").count() != 1 {
+        return Parse::Bad(400, "an HTTP/1.1 request without exactly one Host");
+    }
+    let connection = all(&req.headers, "connection")
+        .map(|(_, v)| v.as_str())
+        .collect::<Vec<_>>();
     req.http10 = http10;
     req.keep_alive = match http10 {
-        true => connection.as_deref() == Some("keep-alive"),
-        false => connection.as_deref() != Some("close"),
+        true => connection.iter().any(|v| lists(v, "keep-alive")),
+        false => !connection.iter().any(|v| lists(v, "close")),
     };
-    let chunked = req
-        .header("transfer-encoding")
-        .is_some_and(|t| t.to_ascii_lowercase().contains("chunked"));
-    if chunked {
+    // Framing (RFC 9112 §6): the codings of every Transfer-Encoding
+    // header in order, and every Content-Length.
+    let codings: Vec<String> = all(&req.headers, "transfer-encoding")
+        .flat_map(|(_, v)| v.split(','))
+        .map(|c| c.trim().to_ascii_lowercase())
+        .collect();
+    let lengths: Vec<&str> = all(&req.headers, "content-length")
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if !codings.is_empty() && !lengths.is_empty() {
+        return Parse::Bad(400, "both Content-Length and Transfer-Encoding");
+    }
+    if lengths.len() > 1 {
+        return Parse::Bad(400, "two Content-Length headers");
+    }
+    let expect_continue = !http10
+        && req
+            .header("expect")
+            .is_some_and(|e| e.eq_ignore_ascii_case("100-continue"));
+    let body_more = |need: usize| Pending {
+        need,
+        started: true,
+        in_body: true,
+        expect_continue,
+    };
+    if !codings.is_empty() {
+        if codings.last().map(String::as_str) != Some("chunked") {
+            return Parse::Bad(400, "a Transfer-Encoding whose last coding is not chunked");
+        }
+        if codings[..codings.len() - 1].iter().any(|c| c == "chunked") {
+            return Parse::Bad(400, "chunked applied twice");
+        }
+        if codings.len() > 1 {
+            return Parse::Bad(501, "a transfer coding other than chunked");
+        }
+        let mut trailers = 0usize;
         loop {
             let size = match p.line() {
-                None if eof => return Parse::Bad("a malformed chunk size"),
-                None => return Parse::More,
-                Some(Err(e)) => return Parse::Bad(e),
+                None => return short(eof, body_more(buf.len() + 1), "a malformed chunk size"),
+                Some(Err(e)) => return Parse::Bad(400, e),
                 Some(Ok(l)) => l,
             };
-            let size = size.trim().split(';').next().unwrap_or_default();
-            let Ok(n) = usize::from_str_radix(size, 16) else {
-                return Parse::Bad("a malformed chunk size");
+            let size = size
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim_matches([' ', '\t']);
+            if size.is_empty() || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Parse::Bad(400, "a malformed chunk size");
+            }
+            let n = match usize::from_str_radix(size, 16) {
+                Ok(n) if req.body.len().saturating_add(n) <= BODY_LIMIT => n,
+                _ => return Parse::Bad(413, "the body is too large"),
             };
             if n == 0 {
                 // Trailers, up to the blank line or the end.
                 loop {
+                    let at = p.pos;
                     match p.line() {
                         None if eof => {
                             p.pos = buf.len();
                             break;
                         }
-                        None => return Parse::More,
-                        Some(Err(e)) => return Parse::Bad(e),
+                        None if buf.len() - at > HEAD_LIMIT => {
+                            return Parse::Bad(431, "the trailers are too large")
+                        }
+                        None => return Parse::More(body_more(buf.len() + 1)),
+                        Some(Err(e)) => return Parse::Bad(400, e),
                         Some(Ok(l)) if l.trim().is_empty() => break,
-                        Some(Ok(_)) => {}
+                        Some(Ok(_)) => {
+                            trailers += p.pos - at;
+                            if trailers > HEAD_LIMIT {
+                                return Parse::Bad(431, "the trailers are too large");
+                            }
+                        }
                     }
                 }
                 break;
             }
+            let at = p.pos;
             let Some(data) = p.take(n) else {
-                return p.short(eof, "a chunk ends early");
+                return short(eof, body_more(at + n + 2), "a chunk ends early");
             };
             req.body.extend_from_slice(data);
-            // The chunk's line end; the end of the input stands for it.
+            // The chunk's line end, and nothing before it; the end of the
+            // input stands for it.
             match p.line() {
                 None if eof => p.pos = buf.len(),
-                None => return Parse::More,
-                Some(_) => {}
+                None => return Parse::More(body_more(at + n + 2)),
+                Some(Ok("")) => {}
+                Some(_) => return Parse::Bad(400, "a chunk longer than its size"),
             }
         }
-    } else if let Some(n) = req.header("content-length") {
-        let Ok(n) = n.parse::<usize>() else {
-            return Parse::Bad("a malformed content-length");
+    } else if let Some(n) = lengths.first() {
+        // `1*DIGIT` (RFC 9110 §8.6): no sign, no list, no space.
+        if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+            return Parse::Bad(400, "a malformed content-length");
+        }
+        let n = match n.parse::<usize>() {
+            Ok(n) if n <= BODY_LIMIT => n,
+            _ => return Parse::Bad(413, "the body is too large"),
         };
         let Some(data) = p.take(n) else {
-            return p.short(eof, "the body ends early");
+            return short(eof, body_more(head_end + n), "the body ends early");
         };
         req.body = data.to_vec();
     }
     Parse::Done(req, p.pos)
+}
+
+/// A connection's progress toward its next request, between the reads of
+/// the server's `__next` (runtime/stdlib/source/http_server.kara): what
+/// `Server.__install`, `__need` and `__wait_ms` answer. The interpreter
+/// and the runtime keep one per task.
+#[derive(Default)]
+pub struct Progress {
+    /// When the first byte of the request came.
+    started: Option<std::time::Instant>,
+    pending: Pending,
+}
+
+impl Progress {
+    /// `Server.__install(buf, eof)`: the request at the start of `buf`
+    /// with the bytes it took; or no request and 0 when more is needed,
+    /// -100 when more is needed and the client waits for a `100
+    /// Continue` before sending it, -1 when the connection holds no
+    /// request, or minus the status a refused one is answered with.
+    pub fn install(&mut self, buf: &[u8], eof: bool) -> (i64, Option<Request>) {
+        match parse_request(buf, eof) {
+            Parse::Done(req, used) => {
+                *self = Progress::default();
+                (used as i64, Some(req))
+            }
+            Parse::Closed => {
+                *self = Progress::default();
+                (-1, None)
+            }
+            Parse::Bad(status, _) => {
+                *self = Progress::default();
+                (-i64::from(status), None)
+            }
+            Parse::More(pending) => {
+                if pending.started && self.started.is_none() {
+                    self.started = Some(std::time::Instant::now());
+                }
+                self.pending = pending;
+                (if pending.expect_continue { -100 } else { 0 }, None)
+            }
+        }
+    }
+
+    /// `Server.__need()`: how many bytes the buffer must hold before
+    /// `install` is worth asking again.
+    pub fn need(&self) -> i64 {
+        self.pending.need as i64
+    }
+
+    /// `Server.__wait_ms()`: how long the next read may wait, in
+    /// milliseconds: positive between requests (a timeout closes the
+    /// connection silently), negative inside one (a timeout is answered
+    /// `408`): what is left of [`HEAD_TIMEOUT_MS`] since the head's first
+    /// byte, or [`IDLE_TIMEOUT_MS`] between a body's reads.
+    pub fn wait_ms(&self) -> i64 {
+        match self.started {
+            None => IDLE_TIMEOUT_MS,
+            Some(_) if self.pending.in_body => -IDLE_TIMEOUT_MS,
+            Some(t) => {
+                let spent = i64::try_from(t.elapsed().as_millis()).unwrap_or(i64::MAX);
+                -(HEAD_TIMEOUT_MS.saturating_sub(spent).max(1))
+            }
+        }
+    }
 }
 
 /// A cursor over the bytes [`parse_request`] reads.
@@ -311,15 +584,6 @@ impl<'a> Lines<'a> {
     fn rest_is_blank(&self) -> bool {
         self.buf[self.pos..].iter().all(u8::is_ascii_whitespace)
     }
-
-    /// The answer for input that ends inside a request.
-    fn short(&self, eof: bool, what: &'static str) -> Parse {
-        if eof {
-            Parse::Bad(what)
-        } else {
-            Parse::More
-        }
-    }
 }
 
 /// Reads one request from `r`, blocking, with the bytes after it left in
@@ -335,8 +599,8 @@ fn read_request(r: &mut impl std::io::Read, buf: &mut Vec<u8>) -> std::io::Resul
                 return Ok(Some(req));
             }
             Parse::Closed => return Ok(None),
-            Parse::Bad(what) => return Err(bad(what)),
-            Parse::More => {
+            Parse::Bad(_, what) => return Err(bad(what)),
+            Parse::More(_) => {
                 let mut chunk = [0u8; 8192];
                 let n = loop {
                     match r.read(&mut chunk) {
@@ -354,6 +618,7 @@ fn read_request(r: &mut impl std::io::Read, buf: &mut Vec<u8>) -> std::io::Resul
 /// The reason phrase for `status`.
 fn reason(status: i64) -> &'static str {
     match status {
+        100 => "Continue",
         101 => "Switching Protocols",
         200 => "OK",
         201 => "Created",
@@ -367,9 +632,13 @@ fn reason(status: i64) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        408 => "Request Timeout",
         409 => "Conflict",
+        413 => "Content Too Large",
         422 => "Unprocessable Entity",
+        426 => "Upgrade Required",
         429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",
         503 => "Service Unavailable",
@@ -402,7 +671,7 @@ mod tests {
 
     #[test]
     fn a_request_with_a_query_and_a_body() {
-        let r = parse("POST /todos?q=a+b&x=%41&flag&&y=1 HTTP/1.1\r\nContent-Length: 5\r\nX-A: 1\r\n\r\nhello");
+        let r = parse("POST /todos?q=a+b&x=%41&flag&&y=1 HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\nX-A: 1\r\n\r\nhello");
         assert_eq!(r.method, "POST");
         assert_eq!(r.path(), "/todos");
         assert_eq!(r.header("x-a"), Some("1"));
@@ -421,7 +690,7 @@ mod tests {
     #[test]
     fn a_chunked_body_and_a_closing_request() {
         let r = parse(
-            "PUT / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n2;x=1\r\nde\r\n0\r\n\r\n",
+            "PUT / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n2;x=1\r\nde\r\n0\r\n\r\n",
         );
         assert_eq!(r.body_text(), "abcde");
         assert!(!r.keep_alive);
@@ -442,11 +711,11 @@ mod tests {
     /// pipelined requests parse one after the other.
     #[test]
     fn a_request_arriving_in_pieces_parses_once_whole() {
-        let raw = "POST /a HTTP/1.1\r\nContent-Length: 3\r\n\r\nabcGET /b HTTP/1.1\r\n\r\n";
+        let raw = "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 3\r\n\r\nabcGET /b HTTP/1.1\r\nHost: h\r\n\r\n";
         let first = raw.find("GET").unwrap();
         for cut in 0..first {
             assert!(
-                matches!(parse_request(&raw.as_bytes()[..cut], false), Parse::More),
+                matches!(parse_request(&raw.as_bytes()[..cut], false), Parse::More(_)),
                 "cut at {cut}"
             );
         }
@@ -461,19 +730,215 @@ mod tests {
             panic!("the second request")
         };
         assert_eq!(b.target, "/b");
-        let chunked = "PUT / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+        let chunked =
+            "PUT / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
         for cut in 0..chunked.len() {
             assert!(
                 matches!(
                     parse_request(&chunked.as_bytes()[..cut], false),
-                    Parse::More
+                    Parse::More(_)
                 ),
                 "chunked cut at {cut}"
             );
         }
         assert!(matches!(
             parse_request(&chunked.as_bytes()[..20], true),
-            Parse::Bad(_)
+            Parse::Bad(..)
         ));
+    }
+
+    /// The status a request is refused with, or 0 when it parses.
+    fn refused(raw: &[u8]) -> u16 {
+        match parse_request(raw, false) {
+            Parse::Bad(status, _) => status,
+            Parse::Done(..) => 0,
+            Parse::More(_) => 1,
+            Parse::Closed => 2,
+        }
+    }
+
+    /// The probe's cells (B-2026-11-17-44, -46): what is ambiguous or
+    /// malformed is refused before a handler sees it.
+    #[test]
+    fn ambiguous_or_malformed_requests_are_refused() {
+        let h = |rest: &str| format!("POST /p HTTP/1.1\r\nHost: h\r\n{rest}");
+        let bad = [
+            // S10: CL and TE both.
+            h("Content-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /smuggled HTTP/1.1\r\n\r\n"),
+            // S13 differing, S14 equal Content-Lengths.
+            h("Content-Length: 5\r\nContent-Length: 6\r\n\r\nhello!"),
+            h("Content-Length: 5\r\nContent-Length: 5\r\n\r\nhello"),
+            // S17 a sign, a list, a space, a negative.
+            h("Content-Length: +5\r\n\r\nhello"),
+            h("Content-Length: 5, 5\r\n\r\nhello"),
+            h("Content-Length: -1\r\n\r\n"),
+            // chunked not last.
+            h("Transfer-Encoding: chunked, gzip\r\n\r\n"),
+            // S04 whitespace before the colon, S48 an empty name.
+            h("X-A : 1\r\n\r\n"),
+            h(": v\r\n\r\n"),
+            // S29 a CR or NUL in a value.
+            h("X-A: a\rb\r\n\r\n"),
+            h("X-A: a\0b\r\n\r\n"),
+            // obs-fold.
+            h("X-A: a\r\n b\r\n\r\n"),
+            // S27 versions.
+            "GET / HTTP/2.0\r\nHost: h\r\n\r\n".to_string(),
+            "GET / HTTP/1.2\r\nHost: h\r\n\r\n".to_string(),
+            "GET / HTTP/1.1x\r\nHost: h\r\n\r\n".to_string(),
+            // S28b NUL in the target, two spaces.
+            "GET /a\0b HTTP/1.1\r\nHost: h\r\n\r\n".to_string(),
+            "GET  / HTTP/1.1\r\nHost: h\r\n\r\n".to_string(),
+            // S25 no Host, S26 two.
+            "GET / HTTP/1.1\r\n\r\n".to_string(),
+            "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n".to_string(),
+            // A chunk size with a sign, a chunk longer than its size.
+            h("Transfer-Encoding: chunked\r\n\r\n+3\r\nabc\r\n0\r\n\r\n"),
+            h("Transfer-Encoding: chunked\r\n\r\n3\r\nabcdef\r\n0\r\n\r\n"),
+        ];
+        for raw in &bad {
+            assert_eq!(refused(raw.as_bytes()), 400, "{raw:?}");
+        }
+        // S11 an unknown coding before chunked.
+        assert_eq!(
+            refused(h("Transfer-Encoding: gzip, chunked\r\n\r\n").as_bytes()),
+            501
+        );
+        // Still right: an HTTP/1.0 request without Host, OWS around a
+        // value, any case, a bare LF.
+        let ok = [
+            "GET / HTTP/1.0\r\n\r\n",
+            "GET / HTTP/1.1\r\nhOsT:  h\t\r\n\r\n",
+            "GET / HTTP/1.1\nHost: h\n\n",
+            "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: Chunked\r\n\r\n1\r\na\r\n0\r\n\r\n",
+        ];
+        for raw in ok {
+            assert_eq!(refused(raw.as_bytes()), 0, "{raw:?}");
+        }
+    }
+
+    /// A head over 64 KiB is 431 whether or not it is whole, and a body
+    /// over 16 MiB is 413 before it is read (B-2026-11-17-50).
+    #[test]
+    fn heads_and_bodies_have_limits() {
+        let big = format!(
+            "GET / HTTP/1.1\r\nHost: h\r\nX-L: {}\r\n",
+            "a".repeat(HEAD_LIMIT)
+        );
+        assert_eq!(refused(big.as_bytes()), 431);
+        assert_eq!(refused(format!("{big}\r\n").as_bytes()), 431);
+        let target = format!("GET /{} HTTP/1.1\r\n", "a".repeat(HEAD_LIMIT));
+        assert_eq!(refused(target.as_bytes()), 431);
+        let just = format!(
+            "GET / HTTP/1.1\r\nHost: h\r\nX-L: {}\r\n\r\n",
+            "a".repeat(60_000)
+        );
+        assert_eq!(refused(just.as_bytes()), 0);
+        let cl = |n: usize| format!("POST / HTTP/1.1\r\nHost: h\r\nContent-Length: {n}\r\n\r\n");
+        assert_eq!(refused(cl(BODY_LIMIT + 1).as_bytes()), 413);
+        assert_eq!(refused(cl(BODY_LIMIT).as_bytes()), 1);
+        assert_eq!(
+            refused(format!("{}0", cl(99_999_999_999_999_999)).as_bytes()),
+            413
+        );
+        let chunk = format!(
+            "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+            BODY_LIMIT + 1
+        );
+        assert_eq!(refused(chunk.as_bytes()), 413);
+    }
+
+    /// A body is waited for whole: `need` names its end, so the server
+    /// does not parse again after every read (B-2026-11-17-51); a client
+    /// that asks for `100-continue` is told so (B-2026-11-17-53).
+    #[test]
+    fn a_pending_body_names_what_it_needs() {
+        let head = "POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 10\r\n\r\n";
+        let Parse::More(p) = parse_request(format!("{head}abc").as_bytes(), false) else {
+            panic!("a body that is not whole")
+        };
+        assert_eq!(
+            (p.need, p.in_body, p.expect_continue),
+            (head.len() + 10, true, false)
+        );
+        let asks =
+            "POST / HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 5\r\n\r\n";
+        let mut progress = Progress::default();
+        assert_eq!(progress.install(asks.as_bytes(), false).0, -100);
+        assert!(progress.wait_ms() < 0);
+        let (used, req) = progress.install(format!("{asks}hello").as_bytes(), false);
+        assert_eq!(
+            (used as usize, req.unwrap().body_text()),
+            (asks.len() + 5, "hello".to_string())
+        );
+        assert_eq!(progress.wait_ms(), IDLE_TIMEOUT_MS);
+        // A head in progress waits what is left of 30 s; nothing yet, 60.
+        assert_eq!(progress.install(b"\r\n", false).0, 0);
+        assert_eq!(progress.wait_ms(), IDLE_TIMEOUT_MS);
+        assert_eq!(progress.install(b"GET / HT", false).0, 0);
+        let w = progress.wait_ms();
+        assert!((-HEAD_TIMEOUT_MS..0).contains(&w), "{w}");
+        assert_eq!(progress.install(b"GET / HTTP/1.1\r\n\r\n", false).0, -400);
+    }
+
+    /// `Connection` is a token list (B-2026-11-17-52).
+    #[test]
+    fn connection_is_a_list() {
+        assert!(
+            !parse("GET / HTTP/1.1\r\nHost: h\r\nConnection: keep-alive, close\r\n\r\n").keep_alive
+        );
+        assert!(!parse("GET / HTTP/1.1\r\nHost: h\r\nConnection: CLOSE\r\n\r\n").keep_alive);
+        assert!(parse("GET / HTTP/1.0\r\nConnection: Keep-Alive, TE\r\n\r\n").keep_alive);
+        assert!(parse("GET / HTTP/1.1\r\nHost: h\r\nConnection: Upgrade\r\n\r\n").keep_alive);
+    }
+
+    fn wire(method: &str, status: i64, body: &str, headers: &[(&str, &str)]) -> (String, bool) {
+        let mut req = parse(&format!("{method} / HTTP/1.1\r\nHost: h\r\n\r\n"));
+        let headers: Vec<(String, String)> = headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let bytes = response_bytes(status, body.as_bytes(), &headers, &mut req);
+        (String::from_utf8(bytes).unwrap(), req.keep_alive)
+    }
+
+    /// What a handler returns is checked and framed by the server
+    /// (B-2026-11-17-45, -47, -48).
+    #[test]
+    fn a_response_is_framed_by_the_server() {
+        let server_error = "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: 0\r\n\r\n";
+        for h in [
+            ("X-I", "a\r\nSet-Cookie: evil=1"),
+            ("X-I: z\r\nX-J", "b"),
+            ("X-I", "a\0b"),
+            ("X I", "b"),
+            ("", "b"),
+        ] {
+            assert_eq!(wire("GET", 200, "x", &[h]).0, server_error, "{h:?}");
+        }
+        for status in [99, 1000, -1] {
+            assert_eq!(wire("GET", status, "x", &[]).0, server_error, "{status}");
+        }
+        let (head, _) = wire("HEAD", 200, "hello", &[]);
+        assert!(head.ends_with("content-length: 5\r\n\r\n"), "{head:?}");
+        for status in [204, 304, 101] {
+            let (w, keep) = wire("GET", status, "nobody", &[]);
+            assert!(
+                w.ends_with("\r\n\r\n") && !w.contains("content-length"),
+                "{w:?}"
+            );
+            assert_eq!(keep, status != 101);
+        }
+        let (w, keep) = wire(
+            "GET",
+            200,
+            "hello",
+            &[("Transfer-Encoding", "chunked"), ("Connection", "close")],
+        );
+        assert!(!keep);
+        assert_eq!(
+            w,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello"
+        );
     }
 }

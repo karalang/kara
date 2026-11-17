@@ -133,9 +133,18 @@ impl WebSocket {
             Some(v) => v.to_lowercase().contains("websocket"),
             None => false,
         };
-        let key = WebSocket.header(head, "sec-websocket-key");
-        match key {
-            Some(k) if upgrade and head.starts_with("GET ") => {
+        let method = match head.split_once(" ") {
+            Some((m, _)) => m.to_string(),
+            None => String.new(),
+        };
+        let checked = WebSocket.__handshake(
+            method,
+            WebSocket.header(head, "upgrade"),
+            WebSocket.header(head, "sec-websocket-version"),
+            WebSocket.header(head, "sec-websocket-key"),
+        );
+        match checked {
+            Ok(k) => {
                 let accept = WebSocket.__accept_key(k);
                 let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
                 match conn.write_all(reply.bytes()) {
@@ -153,11 +162,64 @@ impl WebSocket {
                     close_sent: false,
                 })
             }
-            _ => {
+            Err(426) => {
+                let _ = conn.write_all("HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".bytes());
+                Err(NetError.Protocol)
+            }
+            Err(_) => {
                 let _ = conn.write_all("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".bytes());
                 Err(NetError.Protocol)
             }
         }
+    }
+
+    // The client's key when a request with `method` and these headers is
+    // an opening handshake (RFC 6455 §4.2.1): a GET asking to upgrade to
+    // `websocket`, version 13, with a key that is the base64 of 16 bytes;
+    // else the status the server refuses it with: 426 (with
+    // `Sec-WebSocket-Version: 13`) for another version or none, 400 for
+    // anything else (B-2026-11-17-57); 0 for a request that does not ask
+    // to upgrade at all.
+    fn __handshake(method: Str, upgrade: Option[String], version: Option[String], key: Option[String]) -> Result[String, i64] {
+        let upgrades = match upgrade {
+            Some(v) => v.to_lowercase().contains("websocket"),
+            None => false,
+        };
+        if not upgrades {
+            return Err(0);
+        }
+        if method != "GET" {
+            return Err(400);
+        }
+        let k = match key {
+            Some(k) => k,
+            None => return Err(400),
+        };
+        if not WebSocket.__key_ok(k) {
+            return Err(400);
+        }
+        match version {
+            Some(v) if v.trim() == "13" => Ok(k.to_string()),
+            _ => Err(426),
+        }
+    }
+
+    // Whether `k` is base64 for 16 bytes: 22 base64 digits and `==`.
+    fn __key_ok(k: Str) -> bool {
+        let b = k.bytes();
+        if b.len() != 24 or b[22] != 61u8 or b[23] != 61u8 {
+            return false;
+        }
+        let mut i = 0;
+        while i < 22 {
+            let c = b[i];
+            let digit = (c >= 65u8 and c <= 90u8) or (c >= 97u8 and c <= 122u8) or (c >= 48u8 and c <= 57u8) or c == 43u8 or c == 47u8;
+            if not digit {
+                return false;
+            }
+            i = i + 1;
+        }
+        true
     }
 
     // Where the request head in `b` ends (its blank line), or -1.
@@ -264,6 +326,23 @@ impl WebSocket {
             } else {
                 None
             };
+            // A code a peer may not send fails the connection (RFC 6455
+            // §7.4: 1005, 1006 and 1015 are never on the wire, below 1000
+            // and 1016..2999 are unassigned, 5000 and up undefined), and a
+            // reason that is not UTF-8 is 1007 (§8.1, B-2026-11-17-57).
+            match code {
+                Some(c) => {
+                    let allowed = (c >= 1000u16 and c <= 1003u16) or (c >= 1007u16 and c <= 1014u16) or (c >= 3000u16 and c <= 4999u16);
+                    if not allowed {
+                        return Err(self.fail(1002u16));
+                    }
+                    match String.from_utf8(payload[2..payload.len()].to_vec()) {
+                        Ok(_) => {}
+                        Err(_) => return Err(self.fail(1007u16)),
+                    }
+                }
+                None => {}
+            }
             if not self.close_sent {
                 self.close_sent = true;
                 let echo = match code {

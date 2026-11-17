@@ -1137,7 +1137,7 @@ fn closure_requests(port: u16) -> String {
     let mut t = String::new();
     round_trip(
         &mut connect(port),
-        "GET /p HTTP/1.1\r\nConnection: close\r\n\r\n",
+        "GET /p HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
         true,
         &mut t,
     );
