@@ -735,15 +735,14 @@ pub(crate) fn min_first_cap(size: usize) -> usize {
 /// `v` is a live `String` or `Vec` of `size`-byte elements.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: u64, size: u64) {
-    let more = more as usize;
+    let more = count(more);
     let size = size as usize;
     // SAFETY: the caller's contract.
     let v = unsafe { &mut *v };
     let Some(want) = v.len.checked_add(more) else {
         // Not `expect`: a panic here keeps std's panic hook and backtrace
         // symbolizer in every binary that grows a vector (B-2026-10-28-36).
-        crate::fatal::write_stderr(b"panic: capacity overflow\n");
-        std::process::abort()
+        alloc_failure("capacity overflow")
     };
     if want <= v.cap || size == 0 {
         if size == 0 {
@@ -751,7 +750,16 @@ pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: u64, size: 
         }
         return;
     }
-    let cap = want.max(v.cap.saturating_mul(2)).max(min_first_cap(size));
+    // The growth, unless only `want` fits; a `want` no buffer can hold
+    // panics, never a wrapped byte count (B-2026-11-16-310).
+    let grown = want.max(v.cap.saturating_mul(2)).max(min_first_cap(size));
+    let cap = if capacity_bytes(grown, size).is_some() {
+        grown
+    } else if capacity_bytes(want, size).is_some() {
+        want
+    } else {
+        alloc_failure("capacity overflow")
+    };
     let old = if v.cap == 0 && v.len > 0 {
         // A borrowed literal: copy it out before growing.
         let p = karac_realloc_or_panic(std::ptr::null_mut(), cap * size);
@@ -774,8 +782,34 @@ pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: u64, size: 
 /// the capacity cannot be represented. The MIR interpreter uses the same
 /// bound for its `CapacityOverflow`.
 fn capacity_bytes(n: usize, size: usize) -> Option<usize> {
-    n.checked_mul(size)
-        .filter(|&b| b as u64 <= crate::alloc::KARAC_MAX_ALLOC_BYTES)
+    n.checked_mul(size).filter(|&b| b as u64 <= MAX_BUF_BYTES)
+}
+
+/// The most bytes one buffer may hold: the allocation ceiling, and on a
+/// 32-bit target `isize::MAX`, the bound Rust's `Layout` sets
+/// (B-2026-11-16-310). The backend's own checks use the same bound.
+pub(crate) const MAX_BUF_BYTES: u64 = if (isize::MAX as u64) < crate::alloc::KARAC_MAX_ALLOC_BYTES {
+    isize::MAX as u64
+} else {
+    crate::alloc::KARAC_MAX_ALLOC_BYTES
+};
+
+/// An element count compiled code passes as a `u64`, as a `usize`. On a
+/// 32-bit target a count past `usize::MAX` saturates, so the capacity
+/// checks after it see a count no buffer can hold and report capacity
+/// overflow, where a plain `as usize` kept its low 32 bits and made room
+/// for that few (B-2026-11-16-310: `try_reserve(2^32 + 1)` gave capacity
+/// 4 on wasm).
+pub(crate) fn count(n: u64) -> usize {
+    usize::try_from(n).unwrap_or(usize::MAX)
+}
+
+/// A Kāra count (a replacement limit, a channel capacity) as a `usize`:
+/// negative is 0, and past `usize::MAX` saturates rather than wrapping
+/// (B-2026-11-16-310), so on a 32-bit target `2^32` still means "more than
+/// there are", as it does natively.
+pub(crate) fn sat_usize(n: i64) -> usize {
+    usize::try_from(n.max(0)).unwrap_or(usize::MAX)
 }
 
 /// `reserve` for the fallible twins (`try_reserve`, `try_reserve_exact`):
@@ -787,7 +821,7 @@ fn capacity_bytes(n: usize, size: usize) -> Option<usize> {
 /// `v` is a live `String` or `Vec` of `size`-byte elements.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_vec_try_reserve(v: *mut RawVec, more: u64, size: u64) -> i64 {
-    let more = more as usize;
+    let more = count(more);
     let size = size as usize;
     // SAFETY: the caller's contract.
     let v = unsafe { &mut *v };
@@ -838,7 +872,7 @@ pub unsafe extern "C" fn karac_mir_vec_try_reserve(v: *mut RawVec, more: u64, si
 /// `out` is writable for a `Vec`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_vec_try_alloc(out: *mut RawVec, n: u64, size: u64) -> i64 {
-    let n = n as usize;
+    let n = count(n);
     let size = size as usize;
     let Some(bytes) = capacity_bytes(n, size) else {
         return -2;
@@ -861,7 +895,7 @@ pub unsafe extern "C" fn karac_mir_vec_try_alloc(out: *mut RawVec, n: u64, size:
 /// the check of `VecDeque.try_with_capacity`, which allocates nothing.
 #[no_mangle]
 pub extern "C" fn karac_mir_capacity_fits(n: u64, size: u64) -> i64 {
-    let n = n as usize;
+    let n = count(n);
     let size = size as usize;
     if capacity_bytes(n, size).is_some() {
         -1
@@ -877,12 +911,11 @@ pub extern "C" fn karac_mir_capacity_fits(n: u64, size: u64) -> i64 {
 /// `out` is writable for a `Vec`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_vec_alloc(out: *mut RawVec, n: u64, size: u64) {
-    let n = n as usize;
+    let n = count(n);
     let size = size as usize;
-    let Some(bytes) = n.checked_mul(size) else {
+    let Some(bytes) = capacity_bytes(n, size) else {
         // Not `expect`, as in `karac_mir_vec_reserve` (B-2026-11-02-24).
-        crate::fatal::write_stderr(b"panic: capacity overflow\n");
-        std::process::abort()
+        alloc_failure("capacity overflow")
     };
     let ptr = if bytes == 0 {
         std::ptr::null_mut()
@@ -1628,7 +1661,7 @@ pub unsafe extern "C" fn karac_mir_str_replacen(
     let an = an as usize;
     let bn = bn as usize;
     // SAFETY: the caller's contract.
-    let t = unsafe { text(s, sn).replacen(text(a, an), text(b, bn), n.max(0) as usize) };
+    let t = unsafe { text(s, sn).replacen(text(a, an), text(b, bn), sat_usize(n)) };
     // SAFETY: as above.
     unsafe { string_of(out, t.as_bytes()) };
 }
@@ -2273,12 +2306,11 @@ pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn
     // repeats a string (B-2026-11-04-31).
     let total = match usize::try_from(n.max(0)) {
         _ if sn == 0 => Some(0),
-        Ok(n) => sn.checked_mul(n),
+        Ok(n) => capacity_bytes(sn, n),
         Err(_) => None,
     };
     let Some(total) = total else {
-        crate::fatal::write_stderr(b"panic: capacity overflow\n");
-        std::process::abort()
+        alloc_failure("capacity overflow")
     };
     let ptr = if total == 0 {
         std::ptr::null_mut()
@@ -2746,7 +2778,7 @@ impl RawDeque {
 /// `out` is writable for a deque.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_deque_alloc(out: *mut RawDeque, n: u64, size: u64) {
-    let n = n as usize;
+    let n = count(n);
     let size = size as usize;
     let mut v = RawVec::new(std::ptr::null_mut(), 0, 0);
     // SAFETY: `v` is a writable vector.
@@ -3247,6 +3279,8 @@ fn panic_record(message_set: bool, reason_text: &[u8]) {
             b"integer overflow" | b"shift amount out of range" => 2,
             b"division by zero" => 3,
             b"entered unreachable code" => 8,
+            // The backend's own checks before an allocation.
+            b"out of memory" | b"capacity overflow" => 7,
             _ => 0,
         }
     };
@@ -3613,6 +3647,17 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: u64) -> ! {
     panic_record(message_set, reason);
     run_panic_handler(&msg, "");
     karac_mir_exit(101)
+}
+
+/// An allocation that failed, or a capacity no buffer can hold: a panic
+/// of kind `alloc_failure` (core semantics §10.1), reported and ended as
+/// every other is, with exit code 101 on every target, where a raw
+/// `abort` exited 134 natively and trapped on wasm (B-2026-11-16-317).
+#[cold]
+pub(crate) fn alloc_failure(reason: &'static str) -> ! {
+    PANIC_KIND.store(7, std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: both texts are readable for their lengths.
+    unsafe { karac_mir_abort_at(reason.as_ptr(), reason.len() as u64, b"".as_ptr(), 0) }
 }
 
 /// A runtime error at a place in the source: the message, then `at`
@@ -4384,7 +4429,7 @@ pub extern "C" fn karac_mir_chan_new(
             receivers: 1,
         }),
         size,
-        cap: cap.max(0) as usize,
+        cap: sat_usize(cap),
         bounded: bounded != 0,
         drop,
     }))

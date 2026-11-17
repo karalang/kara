@@ -1984,7 +1984,7 @@ fn eval_ops(source: &[FrameCol], ops: &[PlanOp]) -> Result<Vec<FrameCol>, String
             PlanOp::Select(cols) => projection = Some(cols.clone()),
             PlanOp::Limit(n) => {
                 row_ops = true;
-                indices.truncate((*n).max(0) as usize);
+                indices.truncate(usize::try_from((*n).max(0)).unwrap_or(usize::MAX));
             }
             PlanOp::Filter(e) => {
                 row_ops = true;

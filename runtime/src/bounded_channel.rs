@@ -67,7 +67,7 @@ pub extern "C" fn karac_runtime_bounded_channel_new(
     _on_full: u8,
 ) -> *mut KaracBoundedChannel {
     let bc = Box::new(KaracBoundedChannel {
-        capacity: capacity.max(0) as usize,
+        capacity: usize::try_from(capacity.max(0)).unwrap_or(usize::MAX),
         queue: Mutex::new(VecDeque::new()),
     });
     Box::into_raw(bc)

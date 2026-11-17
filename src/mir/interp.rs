@@ -2762,6 +2762,12 @@ impl<'a> Interp<'a> {
                         return Ok(Value::Int(len as i128 + n));
                     }
                     (_, [Value::Int(n)]) if *n > 0 => {
+                        // A capacity no buffer can hold panics, as compiled
+                        // code's does (B-2026-11-16-316).
+                        let vec = self.deref_ty(arg_tys.first().copied(), method)?;
+                        if self.over_max_alloc(len as u128 + *n as u128, vec) {
+                            return self.capacity_overflow();
+                        }
                         self.caps.insert(id, cap.max(len + *n as usize));
                     }
                     _ => {}
@@ -2820,12 +2826,29 @@ impl<'a> Interp<'a> {
                 }
                 self.option(ret, found)
             }
+            // A hint, except that a capacity no buffer can hold panics, as
+            // compiled code's does (B-2026-11-16-316). The text's own
+            // length, far below the bound, is left out.
+            ("String", "reserve" | "reserve_exact") => {
+                if let [_, Value::Int(n)] = args.as_slice() {
+                    if *n > 0 && self.over_max_alloc(*n as u128, self.tys.unit()) {
+                        return self.capacity_overflow();
+                    }
+                }
+                Ok(Value::Unit)
+            }
             // `String.presize` is `mir::presize`'s capacity hint.
-            ("String", "reserve" | "reserve_exact") => Ok(Value::Unit),
             // Its result is the room's reach, which only a `Vec`'s fill
             // reads.
             ("String", "presize") => Ok(Value::Int(0)),
-            ("String", "with_capacity") => Ok(self.alloc_box("String", Value::Str(String::new()))),
+            ("String", "with_capacity") => {
+                if let [Value::Int(n)] = args.as_slice() {
+                    if *n >= 0 && self.over_max_alloc(*n as u128, self.tys.unit()) {
+                        return self.capacity_overflow();
+                    }
+                }
+                Ok(self.alloc_box("String", Value::Str(String::new())))
+            }
             // `Array.from_fn(n, f)` builds its elements the same way, in
             // place; `n` must be the array's length (B-2026-10-21-30).
             ("Vec" | "Array", "from_fn") => {
@@ -3586,10 +3609,7 @@ impl<'a> Interp<'a> {
                 // panics when the allocation fails; runtime/src/alloc.rs's
                 // `KARAC_MAX_ALLOC_BYTES` is the compiled backend's bound).
                 // A negative one counts as 0 (B-2026-11-03-15).
-                if self.trace {
-                    self.events.push(Event::Abort(AbortReason::Panic));
-                }
-                Err(Stop::Abort(AbortReason::Panic))
+                self.capacity_overflow()
             }
             (true, "new" | "with_capacity", _) => {
                 let v = self.alloc_box(ty_name, Value::Agg(vec![]));
@@ -12936,6 +12956,17 @@ impl<'a> Interp<'a> {
             Value::Agg(fs) => Ok(fs),
             other => err(format!("a Vec allocation holds {other:?}")),
         }
+    }
+
+    /// The panic of a capacity no buffer can hold: kind `alloc_failure`,
+    /// "capacity overflow", as the compiled runtime's (B-2026-11-16-317).
+    fn capacity_overflow(&mut self) -> R<Value> {
+        self.panic_message = Some("capacity overflow".to_string());
+        self.panic_kind = Some(crate::mir::syntax::panic_kind_code("alloc_failure"));
+        if self.trace {
+            self.events.push(Event::Abort(AbortReason::Panic));
+        }
+        Err(Stop::Abort(AbortReason::Panic))
     }
 
     /// Whether `n` elements of the `Vec[T]` type `vec` need more bytes

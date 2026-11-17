@@ -147,7 +147,7 @@ pub unsafe extern "C" fn karac_regex_mir(
             let s = unsafe { text(s, s_len) };
             let rep = unsafe { text(rep, rep_len) };
             let replaced = match compiled(pattern) {
-                Some(r) => r.replacen(s, a.max(0) as usize, rep).into_owned(),
+                Some(r) => r.replacen(s, crate::mir::sat_usize(a), rep).into_owned(),
                 None => s.to_string(),
             };
             unsafe { string_of(out, replaced.as_bytes()) };

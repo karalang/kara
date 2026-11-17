@@ -1601,8 +1601,7 @@ pub unsafe extern "C" fn karac_map_sorted_keys(
         m.ord_ensure(cmp_fn);
         let buf = alloc(Layout::array::<u8>(n * ks).unwrap());
         if buf.is_null() {
-            crate::fatal::write_stderr(b"panic: out of memory\n");
-            std::process::abort();
+            crate::mir::alloc_failure("out of memory")
         }
         for (i, k) in m.ord.iter().enumerate() {
             ptr::copy_nonoverlapping(k.bytes.as_ptr(), buf.add(i * ks), ks);
@@ -1773,8 +1772,7 @@ pub unsafe extern "C" fn karac_map_reserve(map: *mut c_void, additional: i64) {
             // Same abort path the byte allocators take (`karac_alloc_or_panic`):
             // the default profile's contract is that OOM aborts, and the
             // fallible twin below is how a caller opts out of it.
-            crate::fatal::write_stderr(b"panic: out of memory\n");
-            std::process::abort();
+            crate::mir::alloc_failure("out of memory")
         }
     }
 }

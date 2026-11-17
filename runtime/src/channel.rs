@@ -229,7 +229,7 @@ pub extern "C" fn karac_runtime_channel_new() -> *mut KaracChannel {
 /// FFI entry point. Same release contract as `karac_runtime_channel_new`.
 #[no_mangle]
 pub extern "C" fn karac_runtime_channel_new_bounded(cap: i64) -> *mut KaracChannel {
-    KaracChannel::with_capacity(cap.max(1) as usize)
+    KaracChannel::with_capacity(usize::try_from(cap.max(1)).unwrap_or(usize::MAX))
 }
 
 /// `karac_runtime_channel_clone(ch) -> *mut KaracChannel` — second `Sender`

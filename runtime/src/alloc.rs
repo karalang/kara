@@ -303,8 +303,7 @@ pub extern "C" fn karac_alloc_or_panic(size: usize) -> *mut u8 {
         // Lean raw-`write(2)` diagnostic (see `fatal` / B-2026-06-11-8) — NOT
         // `std::io::stderr()`, which would anchor ~250 KB of std-IO onto every
         // Vec-using binary through this force-kept, hot-path symbol.
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
+        crate::mir::alloc_failure("out of memory")
     }
     p
 }
@@ -345,8 +344,7 @@ pub extern "C" fn karac_alloc_aligned_or_panic(size: usize, align: usize) -> *mu
         return karac_alloc_or_panic(size);
     }
     if size as u64 > KARAC_MAX_ALLOC_BYTES {
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
+        crate::mir::alloc_failure("out of memory")
     }
     // `posix_memalign` requires a power-of-two multiple of `sizeof(void*)`, and
     // that the SIZE be a multiple of the alignment is NOT required by POSIX
@@ -371,8 +369,7 @@ fn over_aligned_from_system_allocator(n: usize, align: usize) -> *mut u8 {
     let mut out: *mut u8 = std::ptr::null_mut();
     let rc = unsafe { posix_memalign(&mut out as *mut *mut u8, align, n) };
     if rc != 0 || out.is_null() {
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
+        crate::mir::alloc_failure("out of memory")
     }
     out
 }
@@ -504,8 +501,7 @@ pub extern "C" fn karac_realloc_or_panic(ptr: *mut u8, size: usize) -> *mut u8 {
     // path must uphold the identical `cap * elem_size` bound or the codegen
     // `!range` len-load invariant breaks on the first oversized grow.
     if size as u64 > KARAC_MAX_ALLOC_BYTES {
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
+        crate::mir::alloc_failure("out of memory")
     }
     let n = if size == 0 { 1 } else { size };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -517,8 +513,7 @@ pub extern "C" fn karac_realloc_or_panic(ptr: *mut u8, size: usize) -> *mut u8 {
     }
     let p = unsafe { realloc(ptr, n) };
     if p.is_null() {
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
+        crate::mir::alloc_failure("out of memory")
     }
     p
 }
@@ -577,8 +572,7 @@ fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
         kept
     };
     if fresh.is_null() {
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
+        crate::mir::alloc_failure("out of memory")
     }
     let copy = if old < new { old } else { new };
     // Safety: `copy <= old` bytes are owned by `ptr` (allocator ground truth)
@@ -621,10 +615,7 @@ pub extern "C" fn karac_alloc_zeroed_or_panic(count: usize, size: usize) -> *mut
     // way, not reach the allocator.
     let total = match (count as u64).checked_mul(size as u64) {
         Some(total) if total <= KARAC_MAX_ALLOC_BYTES => total as usize,
-        _ => {
-            crate::fatal::write_stderr(b"panic: out of memory\n");
-            std::process::abort();
-        }
+        _ => crate::mir::alloc_failure("out of memory"),
     };
     // A large zeroed buffer is served from the recycling cache too, zeroed by
     // hand (B-2026-10-03-48). `karac_free_buf` parks every large Vec buffer it can,
@@ -648,8 +639,7 @@ pub extern "C" fn karac_alloc_zeroed_or_panic(count: usize, size: usize) -> *mut
     let _ = total; // no cache on this platform
     let p = unsafe { calloc(count, size) };
     if p.is_null() {
-        crate::fatal::write_stderr(b"panic: out of memory\n");
-        std::process::abort();
+        crate::mir::alloc_failure("out of memory")
     }
     p
 }

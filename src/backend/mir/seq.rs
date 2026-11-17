@@ -1201,6 +1201,17 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store_ordering(d, dty, o)?;
             }
+            // A hint, except that a capacity no buffer can hold panics
+            // (B-2026-11-16-316); the text's own length, far below the
+            // bound, is left out, as the interpreter leaves it.
+            ("reserve" | "reserve_exact", [_, k]) => {
+                let k = self.int_arg(k)?;
+                let fits = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLE, k, self.i64(Self::max_buf_bytes()), "")
+                    .map_err(e)?;
+                self.abort_unless(fits, "capacity overflow")?;
+            }
             ("reserve" | "reserve_exact" | "shrink_to_fit", _) => {}
             ("slice", [s, lo, hi]) => {
                 // Saturating, as the interpreter's: a start out of range is

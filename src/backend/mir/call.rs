@@ -2267,8 +2267,8 @@ impl<'ctx> Cx<'ctx, '_> {
         let got = self.llcx.append_basic_block(f, "alloc.got");
         let slow = self.llcx.append_basic_block(f, "alloc.slow");
         let done = self.llcx.append_basic_block(f, "alloc.done");
-        // The runtime's ceiling, `KARAC_MAX_ALLOC_BYTES`.
-        let limit = self.i64(((1u64 << 61) - 1) / size);
+        // The runtime's ceiling for one buffer, `MAX_BUF_BYTES`.
+        let limit = self.i64(Self::max_buf_bytes() / size);
         let fits = self
             .builder
             .build_int_compare(IntPredicate::ULE, n, limit, "")

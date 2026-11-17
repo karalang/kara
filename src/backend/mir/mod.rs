@@ -570,6 +570,18 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.narrow_shim(name, ty, &[0, 1][..arity])
     }
 
+    /// The most bytes one buffer may hold, as the runtime's `MAX_BUF_BYTES`
+    /// bounds it: `KARAC_MAX_ALLOC_BYTES` (2^61 - 1), and on wasm32
+    /// `isize::MAX` (B-2026-11-16-310). A count past it goes to the
+    /// runtime, which reports capacity overflow.
+    pub(super) fn max_buf_bytes() -> u64 {
+        if crate::target::active_target_is_wasm() {
+            (1u64 << 31) - 1
+        } else {
+            (1u64 << 61) - 1
+        }
+    }
+
     /// The `usize` parameters of the runtime entry points shared with the
     /// legacy backend, which keep their pointer-width C types (the
     /// `karac_mir_*` ones take `u64` instead).
@@ -588,8 +600,11 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     }
 
     /// `name` called with the `i64` arguments of `ty`, through a private
-    /// shim that truncates the `narrow` ones to `i32`: on a 32-bit target
-    /// they are `usize` on the C side, and MIR sizes are always `i64`.
+    /// shim that narrows the `narrow` ones to `i32`: on a 32-bit target
+    /// they are `usize` on the C side, and MIR sizes are always `i64`. A
+    /// size past `u32::MAX` saturates there rather than keeping its low
+    /// bits, so an allocator asked for it fails instead of handing back a
+    /// small buffer (B-2026-11-16-310).
     fn narrow_shim(
         &self,
         name: &str,
@@ -630,6 +645,16 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .map(|(i, v)| {
                 if narrow.contains(&(i as u32)) {
                     let v = v.into_int_value();
+                    let max = v.get_type().const_int(u32::MAX as u64, false);
+                    let over = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::UGT, v, max, "")
+                        .unwrap();
+                    let v = self
+                        .builder
+                        .build_select(over, max, v, "")
+                        .unwrap()
+                        .into_int_value();
                     self.builder.build_int_truncate(v, i32t, "").unwrap().into()
                 } else {
                     v.into()
