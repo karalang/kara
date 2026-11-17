@@ -81,7 +81,7 @@ fn env.var(name: Str) -> Result[String, VarError] with reads(Env)
 fn env.set(name: Str, value: Str) with writes(Env)
 ```
 
-`env.args()` returns the command-line arguments, the program name first. `env.set(name, value)` sets a variable for the rest of the process and for the children it starts. `env.var(name)` returns `Err(VarError.NotPresent)` when the variable is unset and `Err(VarError.NotUnicode)` when its value is not valid UTF-8. `VarError` and its conversion into `IoError` are in [io.md](io.md#errors).
+`env.args()` returns the command-line arguments, the program name first. `env.set(name, value)` sets a variable for the rest of the process and for the children it starts. A `name` that is empty or contains `=` or NUL, or a `value` that contains NUL, can name no variable: `env.set` panics with `env.set: invalid variable name or value`, as any other panic does (B-2026-11-17-59). An argument that is not valid UTF-8 reaches `env.args()` with each invalid sequence replaced by U+FFFD, under `karac run` as in a built program (B-2026-11-17-60). `env.var(name)` returns `Err(VarError.NotPresent)` when the variable is unset and `Err(VarError.NotUnicode)` when its value is not valid UTF-8. `VarError` and its conversion into `IoError` are in [io.md](io.md#errors).
 
 ```kara
 fn port() -> i64 {

@@ -527,7 +527,7 @@ A URL is `http://` or `https://`. The client follows up to five redirects, and a
 fn exit(code: i32) -> Never
 ```
 
-`exit` is imported by name, `import std.process.{exit};`. It flushes standard output and standard error, then ends the process with `code`. No `Drop` body, `defer` or `errdefer` runs, in any frame. It declares no effects, since ending the process is not a resource access, and it exists on every target. It may be called anywhere, a `Drop` body and the panic handler included.
+`exit` is imported by name, `import std.process.{exit};`. It flushes standard output and standard error, then ends the process with `code`. On Unix an exit status is one byte, so a `code` outside `0..=255` ends the process with `1`: a failure never wraps round to a success, as `256` would (B-2026-11-17-63). No `Drop` body, `defer` or `errdefer` runs, in any frame. It declares no effects, since ending the process is not a resource access, and it exists on every target. It may be called anywhere, a `Drop` body and the panic handler included.
 
 Exit codes and `main`'s return value are in [design.md §10](../design.md#the-main-function-and-exit-codes).
 
@@ -554,7 +554,7 @@ impl Command {
 struct Output { status: ExitStatus, stdout: Vec[u8], stderr: Vec[u8] }
 ```
 
-A `Command` describes a program to run. Building one touches nothing; `spawn` starts the program and returns a `Child`, `status` runs it to the end, and `output` runs it to the end and collects everything it wrote. There is no shell: each argument reaches the program as it was given, with no splitting, quoting or globbing. A program name without a `/` is looked up on the parent's `PATH` when the command starts, and `current_dir` does not change that lookup. The environment is inherited, changed by `env`, `env_remove` and `env_clear` in the order they were called. On Windows, arguments are quoted by the MSVC C runtime's convention, so a program that parses its command line differently may see different arguments.
+A `Command` describes a program to run. Building one touches nothing; `spawn` starts the program and returns a `Child`, `status` runs it to the end, and `output` runs it to the end and collects everything it wrote. There is no shell: each argument reaches the program as it was given, with no splitting, quoting or globbing. A program name without a `/` is looked up on `PATH` when the command starts: the `PATH` the command's own `env` sets, if it sets one, and otherwise the parent's. `current_dir` does not change that lookup (B-2026-11-17-62). An `env` name that is empty or contains `=` or NUL, or a value or argument that contains NUL, cannot reach a program: `spawn`, `status` and `output` return `Err` with kind `InvalidInput` and start nothing (B-2026-11-17-61). The environment is inherited, changed by `env`, `env_remove` and `env_clear` in the order they were called. On Windows, arguments are quoted by the MSVC C runtime's convention, so a program that parses its command line differently may see different arguments.
 
 `args` takes a `Slice[Str]`, such as `["-l", "-a"]`. To pass a `Vec[String]`, call `arg` for each element:
 
