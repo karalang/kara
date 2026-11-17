@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 475 |
-| false-positive | 251 |
+| diagnostics | 477 |
+| false-positive | 252 |
 | missing-feature | 193 |
 | perf | 186 |
 | other | 113 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 597 |
+| typecheck | 599 |
 | mir-llvm | 284 |
 | mir | 248 |
-| cli | 192 |
+| cli | 193 |
 | parser | 109 |
 | ownership | 103 |
 | interp | 87 |
@@ -125,6 +125,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-124 | 2026-11-17 | mir-llvm | low | Kata 220 runs 14.01G Ir against Rust's 9.16G with the same SipHash: the gap is the table's insert/remove runtime calls (3.6G) and an out-of-line get probe (about 70 Ir a call against hashbrown's about 23) | — |
 | B-2026-11-17-125 | 2026-11-17 | resolver | low | A top-level `let my_count` beside `fn main` gets E_MODULE_BINDING_NAMING, whose machine rename to `MY_COUNT` only leads to E_MODULE_LET; it should say directly that a module-level value is a `const` | — |
 | B-2026-11-17-127 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a function value's environment, a OnceCell / OnceLock / LazyLock, or a channel's queue, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: the remainder of B-2026-11-17-101, which lowered the shared, dyn, Map/Set/sorted/VecDeque and Mutex routes | — |
+| B-2026-11-17-129 | 2026-11-17 | typecheck | low | A `fold` seed settled to `i64` by a method on the accumulator (`v.iter().map(|x| 1).fold(0, |a, b| a.max(b))` returned as `i32`) is refused with advice to truncate by `as i32` and no fix, where the same literal in a `let` is named and given a `: i32` fix | — |
+| B-2026-11-17-130 | 2026-11-17 | typecheck | medium | A literal handed on as a `mut` argument is not fixed by the parameter: `let mut best = 0; bump(mut best); best` with `bump(x: mut ref i32)`, returned as `i32`, is refused as an `i64`, where `let best = 0; take(best)` into an `i32` checks | — |
 
 ### Relocated
 
@@ -1646,6 +1648,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-122 | resolver+parser | medium | `Arc` in `use std::sync::{Arc, Mutex};` is "`std.sync` has no item `Arc`" with no fix, and `Arc::new(Mutex::new(s))` / `server.clone()` have none eit… | 9848aac48d |
 | B-2026-11-17-123 | typecheck | low | `Duration::from_nanos(x)` with `x: u64` mends to `Duration.ns(x)` and then has a narrowing error with no fix | 9848aac48d |
 | B-2026-11-17-126 | mir | low | An iterator adaptor or terminal called straight on a Set, SortedSet, Map or SortedMap (`s.difference(t).cloned()`, `sorted.map(..)`) got no machine f… | 85459908b12962ac0dcccbc6e464861568361a42 |
+| B-2026-11-17-128 | cli | high | `karac fix` applies `redundant_suffix` and `lossless_cast` in one pass and narrows an `i64` table: `vec![vec![0i64; n]; m]` with `t[i][j] = x as i64`… | d3c2716a19 |
 
 </details>
 
