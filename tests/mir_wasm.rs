@@ -84,6 +84,7 @@ fn build_and_run(name: &str, src: &str) -> Option<(String, i32)> {
     );
     let run = Command::new("node")
         .arg("--no-warnings")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm)
         .output()
@@ -272,6 +273,7 @@ fn wasm_package_build() {
     std::fs::write(&runner, RUNNER).unwrap();
     let run = Command::new("node")
         .arg("--no-warnings")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm)
         .output()

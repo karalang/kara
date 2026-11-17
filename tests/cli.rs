@@ -20591,6 +20591,7 @@ fn main() {
     )
     .unwrap();
     let node = std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm_path)
         .current_dir(&tmp)
@@ -20685,6 +20686,7 @@ fn main() {
     )
     .unwrap();
     let node = std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm_path)
         .current_dir(&tmp)
@@ -20809,6 +20811,7 @@ fn main() {
     )
     .unwrap();
     let node = std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm_path)
         .current_dir(&tmp)
@@ -20956,6 +20959,7 @@ fn main() {
     )
     .unwrap();
     let node = std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm_path)
         .current_dir(&tmp)
@@ -21084,6 +21088,7 @@ fn main() {
     )
     .unwrap();
     let node = std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm_path)
         .current_dir(&tmp)
@@ -21179,6 +21184,7 @@ fn main() {
     )
     .unwrap();
     let node = std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm_path)
         .current_dir(&tmp)
@@ -21814,6 +21820,7 @@ fn run_wasm_under_node(
     )
     .unwrap();
     std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(wasm)
         .current_dir(tmp)
@@ -22213,6 +22220,7 @@ exit(wasi.start(instance));
     )
     .unwrap();
     let node = std::process::Command::new("node")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&wasm_path)
         .current_dir(&tmp)

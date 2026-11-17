@@ -6855,6 +6855,8 @@ Kāra v1 has a **closed set** of compilation targets:
 
 The set is closed so that the effect checker's target-to-resource table is finite and `karac check` has a bounded number of configurations. The [web track](deferred.md#web) adds `wasm_browser` and the [GPU track](deferred.md#gpu) adds `gpu`. Opening the set to user-defined targets is additive.
 
+Under node, run a `wasm_wasi` module with `node --no-turbo-fast-api-calls`. In node 22 a garbage collection that starts inside a WASI `fd_write` fast-API call can crash V8 itself with SIGSEGV, outside the module's memory; the flag routes those calls the slow way (B-2026-11-17-68).
+
 An item that exists on some targets only is marked with `#[cfg(target: ...)]` ([§4](#4-modules-and-packages)). There is no runtime `if target == ...` form.
 
 #### Resources each target provides

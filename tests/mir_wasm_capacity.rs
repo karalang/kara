@@ -91,6 +91,7 @@ fn wasm(name: &str, body: &str) -> Option<(String, String)> {
     );
     let run = Command::new("node")
         .arg("--no-warnings")
+        .arg("--no-turbo-fast-api-calls")
         .arg(&runner)
         .arg(&out)
         .output()

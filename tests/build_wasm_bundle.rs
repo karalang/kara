@@ -142,7 +142,12 @@ fn wasm_build_links_the_bundled_wasi_libc() {
         "the link did not take the bundle's runtime:\n{args}"
     );
     let run = Command::new("node")
-        .args(["--no-warnings", "run.mjs", "hello.wasm"])
+        .args([
+            "--no-warnings",
+            "--no-turbo-fast-api-calls",
+            "run.mjs",
+            "hello.wasm",
+        ])
         .current_dir(&work)
         .output()
         .unwrap();
