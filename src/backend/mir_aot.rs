@@ -476,6 +476,20 @@ fn route_heap(module: &Module<'_>) {
 /// verification loop keeps asking `knows(cand, j)` after `cand` is the
 /// planted celebrity (3.19G against 1.08G; B-2026-11-08-3).
 /// `KARAC_MIR_UNSWITCH=0` leaves it to LLVM's level.
+///
+/// A function the builder hints inline (a short MIR body) is inlined up to
+/// a cost of 350 rather than LLVM's 325. A small function around a table
+/// lookup, such as kata 220's `near_value(m, b, ..)` over `m.get(b)`, costs
+/// just over 325 with its inline probe. Kept out of line, each call paid a
+/// prologue and hashed a key that its caller then hashed again for
+/// `insert(b, ..)`. Inlined, the two hashes are one: kata 220 ran 14.01G
+/// instructions, 11.72G at 350 (Rust's twin: 9.16G). Over the 1,196 kata
+/// bench programs on x86, 13 build differently at 350, every output is
+/// unchanged, instructions fall by up to 0.78x (kata 772) and rise by at
+/// most 1.007x (kata 778), with size and build time flat. At 500, kata
+/// 505's search loop took a library call inline and ran 1.16x the
+/// instructions (B-2026-11-17-124). `KARAC_MIR_INLINEHINT_THRESHOLD=<n>`
+/// sets another; 325 is LLVM's.
 fn unroll_threshold() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -514,6 +528,13 @@ fn unroll_threshold() {
         args.push(
             std::ffi::CString::new(format!("-two-entry-phi-node-folding-threshold={fold}"))
                 .unwrap_or_default(),
+        );
+        let hint = std::env::var("KARAC_MIR_INLINEHINT_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(350);
+        args.push(
+            std::ffi::CString::new(format!("-inlinehint-threshold={hint}")).unwrap_or_default(),
         );
         let argv: Vec<*const std::ffi::c_char> = args.iter().map(|a| a.as_ptr()).collect();
         // SAFETY: NUL-terminated strings that outlive the call; LLVM
