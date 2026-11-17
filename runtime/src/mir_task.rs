@@ -147,7 +147,14 @@ struct Group {
     /// none.
     id: u64,
     limit: i64,
+    /// Its tasks still running, plus the slots reserved for spawns that
+    /// passed [`karac_mir_ready_group`] and have not been queued yet.
     live: i64,
+    /// Of `live`, the slots reserved and not yet taken by a spawn: the
+    /// check and the count are one step under the lock, so two tasks that
+    /// spawn into the group at once cannot both pass on the last free slot
+    /// (B-2026-11-16-273).
+    reserved: i64,
     dropped: bool,
     /// The task that made it (0: none), whose teardown cancels it first
     /// (core-semantics §11.9).
@@ -1086,6 +1093,7 @@ fn group_new(limit: i64, isolating: bool, site: Option<ParSite>) -> *mut u8 {
             id: e.group_ids,
             limit,
             live: 0,
+            reserved: 0,
             dropped: false,
             owner: e.cur().map_or(0, |c| c.id),
             deadline: None,
@@ -1254,13 +1262,18 @@ pub unsafe extern "C" fn karac_mir_group_drop(g: *mut u8) {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
     let ready = EXEC.with(|e| {
-        let _held = e.borrow();
+        let _held = e.borrow_mut();
         // SAFETY: the caller's contract, under the executor's lock.
-        let g = unsafe { &*(g as *const Group) };
+        let g = unsafe { &mut *(g as *mut Group) };
         if end != 0 {
             g.live == 0
+        } else if g.live < g.limit {
+            // The spawn this admits takes the slot (`spawn`).
+            g.live += 1;
+            g.reserved += 1;
+            true
         } else {
-            g.live < g.limit
+            false
         }
     });
     note(ready, Wait::Task(0))
@@ -1750,7 +1763,15 @@ unsafe fn spawn(group: *mut u8, poll: TaskPoll, a: *mut u8, b: *mut u8, site: Op
         let mut e = e.borrow_mut();
         if !group.is_null() {
             // SAFETY: the caller's contract, under the executor's lock.
-            unsafe { (*group).live += 1 };
+            // A spawn admitted by `karac_mir_ready_group` takes the slot it
+            // reserved; one that was not asked about counts itself.
+            unsafe {
+                if (*group).reserved > 0 {
+                    (*group).reserved -= 1;
+                } else {
+                    (*group).live += 1;
+                }
+            }
         }
         e.ids += 1;
         let id = e.ids;
