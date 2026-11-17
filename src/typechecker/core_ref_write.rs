@@ -36,7 +36,7 @@ use super::*;
 use crate::index_disjoint::{for_each_child_public, Child};
 
 /// Builtin collection methods that write their receiver.
-const MUTATING_BUILTINS: &[&str] = &[
+pub(super) const MUTATING_BUILTINS: &[&str] = &[
     "push",
     "pop",
     "insert",

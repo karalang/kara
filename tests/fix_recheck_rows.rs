@@ -113,3 +113,57 @@ fn fresh_ref_return_of_an_owned_value_is_still_fixed() {
         "fn mk() -> P",
     );
 }
+
+/// B-2026-11-16-293: weakening `mut ref self` to the trait's `self` while the
+/// body writes `self.n` only moves the refusal, so E0288 carries no fix.
+#[test]
+fn stronger_receiver_written_by_the_body_gets_no_fix() {
+    refused_and_left_alone(
+        "e0288-self-write",
+        "trait T { fn look(self) -> i64; }\n\
+         struct S { n: i64 }\n\
+         impl T for S { fn look(mut ref self) -> i64 { self.n += 1; self.n } }\n\
+         fn main() { let mut s = S { n: 1 }; println(s.look()); }\n",
+        "The body writes through `self`",
+    );
+}
+
+/// B-2026-11-16-293: a mutating builtin on a field counts as a write.
+#[test]
+fn stronger_receiver_pushed_through_gets_no_fix() {
+    refused_and_left_alone(
+        "e0288-self-push",
+        "trait T { fn look(self) -> i64; }\n\
+         struct S { v: Vec[i64] }\n\
+         impl T for S { fn look(mut ref self) -> i64 { self.v.push(1); self.v.len() } }\n\
+         fn main() { let mut s = S { v: [] }; println(s.look()); }\n",
+        "The body writes through `self`",
+    );
+}
+
+/// B-2026-11-16-293: the same for a `mut ref` parameter the body writes.
+#[test]
+fn stronger_parameter_written_by_the_body_gets_no_fix() {
+    refused_and_left_alone(
+        "e0288-param-write",
+        "trait T { fn put(self, v: Vec[i64]) -> i64; }\n\
+         struct S { n: i64 }\n\
+         impl T for S { fn put(self, v: mut ref Vec[i64]) -> i64 { v.push(1); v.len() } }\n\
+         fn main() { let s = S { n: 1 }; let mut v: Vec[i64] = []; println(s.put(mut v)); }\n",
+        "takes 'v' as `mut ref`",
+    );
+}
+
+/// B-2026-11-16-293 control: a receiver the body only reads is still fixed.
+#[test]
+fn stronger_receiver_only_read_is_still_fixed() {
+    refused_then_fixed(
+        "e0288-self-read",
+        "trait T { fn look(self) -> i64; }\n\
+         struct S { n: i64 }\n\
+         impl T for S { fn look(mut ref self) -> i64 { self.n } }\n\
+         fn main() { let s = S { n: 1 }; println(s.look()); }\n",
+        "Declare `self`",
+        "fn look(self) -> i64",
+    );
+}

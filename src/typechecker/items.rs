@@ -5150,6 +5150,18 @@ impl<'a> super::TypeChecker<'a> {
             TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
             _ => String::new(),
         };
+        // This impl's own methods that write their receiver: a call of one
+        // on `self` is a write through it.
+        let mut_self_methods: HashSet<String> = imp
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                ImplItem::Method(m) if matches!(m.self_param, Some(SelfParam::MutRef)) => {
+                    Some(m.name.clone())
+                }
+                _ => None,
+            })
+            .collect();
         let mut found = Vec::new();
         for item in &imp.items {
             let ImplItem::Method(method) = item else {
@@ -5169,16 +5181,33 @@ impl<'a> super::TypeChecker<'a> {
                 let (ir, iw) = self_rank(i);
                 if ir < tr {
                     let span = method.self_span.unwrap_or(method.span);
-                    let fix = method.self_span.map(|span| FixIt {
+                    // A body that writes through `self` would be refused once
+                    // the receiver is weakened (B-2026-11-16-293): no fix then.
+                    let writes = matches!(i, SelfParam::MutRef)
+                        && body_writes_through(
+                            &method.body,
+                            &|e| matches!(e.kind, ExprKind::SelfValue),
+                            &mut_self_methods,
+                        );
+                    let fix = method.self_span.filter(|_| !writes).map(|span| FixIt {
                         span,
                         replacement: tw.to_string(),
                     });
+                    let advice = if writes {
+                        format!(
+                            ". The body writes through `self`, so declaring `{tw}` alone \
+                             does not compile: move the write out of this method, or \
+                             give the trait method a `mut ref self` receiver"
+                        )
+                    } else {
+                        format!(". Declare `{tw}`")
+                    };
                     found.push((
                         format!(
                             "impl method '{type_name}.{name}' takes its receiver as `{iw}`, but \
                              '{trait_name}.{name}' declares `{tw}`: an impl's mode may be \
                              weaker than the trait's, never stronger (core-semantics.md \
-                             §4.7). Declare `{tw}`",
+                             §4.7){advice}",
                             name = method.name,
                         ),
                         span,
@@ -5211,6 +5240,14 @@ impl<'a> super::TypeChecker<'a> {
                     continue;
                 }
                 let pname = ip.name().unwrap_or("_").to_string();
+                // A `mut ref` parameter the body writes through keeps the
+                // write's refusal after the rewrite (B-2026-11-16-293).
+                let writes = matches!(ip.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_))
+                    && body_writes_through(
+                        &method.body,
+                        &|e| matches!(&e.kind, ExprKind::Identifier(n) if *n == pname),
+                        &mut_self_methods,
+                    );
                 // Rewrite only the mode prefix: the span from the impl type's
                 // start up to its inner type, or an insertion when the impl
                 // parameter is owned.
@@ -5247,7 +5284,8 @@ impl<'a> super::TypeChecker<'a> {
                         replacement: prefix.to_string(),
                     }),
                     (_, None) => None,
-                };
+                }
+                .filter(|_| !writes);
                 // A bare parameter borrows, and reads as `ref` here.
                 let show = |m: &str, it: &str| match m {
                     "owned" => format!("takes {it} by value (`own`)"),
@@ -14332,4 +14370,65 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
     }
+}
+
+/// Whether `body` writes through the binding `is_root` recognizes: an
+/// assignment to a place projected from it (`self.n += 1`, `v[0] = x`), a
+/// `mut ref` borrow of one, a `mut`-marked argument rooted at it, or a call
+/// of a receiver-writing method on it (a collection's mutating builtin, or
+/// one of `mut_self_methods`). Syntactic and conservative: a write it cannot
+/// see by name is a method this impl does not declare.
+fn body_writes_through(
+    body: &Block,
+    is_root: &dyn Fn(&Expr) -> bool,
+    mut_self_methods: &HashSet<String>,
+) -> bool {
+    fn rooted(e: &Expr, is_root: &dyn Fn(&Expr) -> bool) -> bool {
+        let mut t = e;
+        loop {
+            match &t.kind {
+                ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. }
+                | ExprKind::Index { object, .. } => t = object,
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } => t = operand,
+                _ => return is_root(t),
+            }
+        }
+    }
+    let mut found = false;
+    crate::span_visitor::for_each_stmt_in_block(body, &mut |s| {
+        if let StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } = &s.kind {
+            found |= rooted(target, is_root);
+        }
+    });
+    crate::span_visitor::for_each_expr_in_block(body, &mut |e| match &e.kind {
+        ExprKind::Unary {
+            op: UnaryOp::MutRef,
+            operand,
+        } => found |= rooted(operand, is_root),
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            found |= rooted(object, is_root)
+                && (super::core_ref_write::MUTATING_BUILTINS.contains(&method.as_str())
+                    || crate::ast::is_mutating_collection_method(method)
+                    || mut_self_methods.contains(method));
+            found |= args
+                .iter()
+                .any(|a| a.mut_marker && rooted(&a.value, is_root));
+        }
+        ExprKind::Call { args, .. } => {
+            found |= args
+                .iter()
+                .any(|a| a.mut_marker && rooted(&a.value, is_root));
+        }
+        _ => {}
+    });
+    found
 }
