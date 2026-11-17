@@ -199,6 +199,14 @@ pub enum WalkerError {
     /// A `mod.kara` filename was found. Kāra does not recognize `mod.kara`
     /// (module structure is derived from the directory tree).
     ModFileRejected { path: PathBuf },
+    /// A file or directory under `src/` names a module with a name that is
+    /// not Value class (design.md CN-2: `src/DbClient.kara` is a compile
+    /// error; B-2026-11-16-258). `rename_to` is the path it should have.
+    ModuleNameNotValueClass {
+        path: PathBuf,
+        name: String,
+        rename_to: PathBuf,
+    },
     /// Two shared files (or a shared and a same-platform file via different
     /// parent paths) claim the same module path. Only triggers when the
     /// walker can't unambiguously pick one for the current target.
@@ -247,6 +255,17 @@ impl std::fmt::Display for WalkerError {
                 f,
                 "`{}` is not a recognized filename — Kāra derives module structure from the directory tree. Rename to the parent module's name (e.g. `db/mod.kara` → delete it and keep `db.kara` at the sibling level).",
                 path.display(),
+            ),
+            WalkerError::ModuleNameNotValueClass {
+                path,
+                name,
+                rename_to,
+            } => write!(
+                f,
+                "`{}` names the module `{}`, and a module name is a value name, written in snake_case (design.md CN-2); rename it `{}`",
+                path.display(),
+                name,
+                rename_to.display(),
             ),
             WalkerError::DuplicateModule {
                 path,
@@ -580,6 +599,9 @@ fn classify_file(rel: &Path, file: PathBuf) -> Result<Classified, WalkerError> {
             segs.push(base_stem.to_string());
             segs
         };
+    if let Some(err) = module_name_class_error(rel, &file, &module_path) {
+        return Err(err);
+    }
 
     let kind = if is_test {
         ClassifiedKind::Test
@@ -592,6 +614,42 @@ fn classify_file(rel: &Path, file: PathBuf) -> Result<Classified, WalkerError> {
         module_path,
         platform,
         kind,
+    })
+}
+
+/// The CN-2 refusal for the first segment of `module_path` that is not a
+/// Value-class name: a directory names its segment, the file the last one.
+/// The rename keeps the platform and test suffixes of the file's stem.
+fn module_name_class_error(rel: &Path, file: &Path, module_path: &[String]) -> Option<WalkerError> {
+    use crate::lexer::{classify_ident, suggest_value_name, IdentClass};
+    let (at, name) = module_path
+        .iter()
+        .enumerate()
+        .find(|(_, seg)| classify_ident(seg) != IdentClass::Value)?;
+    let new = suggest_value_name(name);
+    let depth = rel.components().count();
+    let src_dir = file.ancestors().nth(depth)?;
+    let mut parts: Vec<String> = rel
+        .components()
+        .filter_map(|c| c.as_os_str().to_str().map(str::to_string))
+        .collect();
+    // Both paths read from the project root (`src/Db.kara`), as a person
+    // types them.
+    let src = PathBuf::from(src_dir.file_name()?);
+    let path = if at + 1 < parts.len() {
+        parts[at] = new;
+        parts.truncate(at + 1);
+        src.join(rel.iter().take(at + 1).collect::<PathBuf>())
+    } else {
+        let last = parts.last_mut()?;
+        *last = last.replacen(name.as_str(), &new, 1);
+        src.join(rel)
+    };
+    let rename_to = parts.iter().fold(src, |p, s| p.join(s));
+    Some(WalkerError::ModuleNameNotValueClass {
+        path,
+        name: name.clone(),
+        rename_to,
     })
 }
 

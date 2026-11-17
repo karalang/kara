@@ -20,6 +20,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A module file or directory under `src/` whose name is not snake_case
+  (`src/Db.kara`, `src/Net/`) is refused, as design.md CN-2 says; the error
+  names the path to rename it to (`src/db.kara`), keeping a platform or
+  test suffix (B-2026-11-16-258).
 - A return-position `impl Iterator[Item = u8]` (or any inline associated-type
   binding) is no longer met by a witness of another integer width: an `i64`
   iterator let callers read `u8`s (B-2026-11-16-329).
@@ -584,6 +588,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `impl From[VarError] for IoError` no longer disappears beside the
+  library's `From[NetError]`: `?` on `env.var` and on a socket in one
+  function returning `IoError` compiles, as io.md promises (B-2026-11-17-7).
+- A program's own `struct Option` or `struct Result` no longer breaks the
+  library code built with it: `karac run` and `karac build` failed with an
+  internal typecheck error on a `Some(..)` pattern (B-2026-11-17-37).
 - `Json.deserialize` reads JSON's grammar as `Json.parse` does. A
   surrogate-pair escape (`"\ud83d\ude00"`, what Python's `json.dumps`
   writes for an emoji) reads as its one character where it was refused
