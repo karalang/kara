@@ -5,7 +5,6 @@
 //! builds for the buffer, with the Kāra library appended, so a library
 //! method's definition is found in the library source it was checked from.
 
-use super::Pipeline;
 use crate::ast::{Expr, ExprKind, ImplItem, Item, Pattern, PatternKind, TypeKind};
 use crate::ids::NodeId;
 use crate::resolver::SpanKey;
@@ -15,11 +14,20 @@ use crate::typechecker::types::Type;
 
 /// One buffer checked as `karac check` checks it, kept for a position query.
 pub(crate) struct Nav {
-    pipeline: Pipeline,
-    /// The checked text: the buffer, then the library.
+    program: crate::ast::Program,
+    resolved: crate::resolver::ResolveResult,
+    typed: crate::typechecker::TypeCheckResult,
+    effects: crate::effectchecker::EffectCheckResult,
+    /// The checked text: the buffer, then (in a package) the other modules,
+    /// then the library.
     text: String,
-    /// Where the library starts in `text`.
+    /// Where the buffer ends in `text`.
     user_len: usize,
+    /// Where the library starts in `text`.
+    lib_start: usize,
+    /// The package's other modules: each one's file, and where its text is
+    /// in `text` (B-2026-11-17-71).
+    modules: Vec<(std::path::PathBuf, usize, usize)>,
 }
 
 /// Where a definition is: in the buffer, or in one file of the library
@@ -33,6 +41,13 @@ pub(crate) enum NavSite {
     Library {
         file: &'static str,
         text: &'static str,
+        offset: usize,
+        length: usize,
+    },
+    /// In another module of the buffer's package, with the offsets in its
+    /// file (B-2026-11-17-71).
+    Module {
+        file: std::path::PathBuf,
         offset: usize,
         length: usize,
     },
@@ -64,8 +79,49 @@ pub(crate) struct FieldSite {
     pub(crate) shorthand: bool,
 }
 
+std::thread_local! {
+    /// The file the buffer being queried is, while [`with_path`] runs.
+    static BUFFER_PATH: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with the buffer known to be the file at `path`, so every
+/// [`analyze`] inside checks it as a module of its package.
+pub(crate) fn with_path<R>(path: &std::path::Path, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<std::path::PathBuf>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BUFFER_PATH.with(|p| *p.borrow_mut() = self.0.take());
+        }
+    }
+    let _reset = Reset(BUFFER_PATH.with(|p| p.borrow_mut().replace(path.to_path_buf())));
+    f()
+}
+
 /// Check `source` for a position query; `None` when it does not parse.
+/// Under [`with_path`], a module of a package is checked against the
+/// package's other modules, so the names it imports resolve
+/// (B-2026-11-17-71).
 pub(crate) fn analyze(source: &str) -> Option<Nav> {
+    let path = BUFFER_PATH.with(|p| p.borrow().clone());
+    analyze_at(source, path.as_deref())
+}
+
+/// [`analyze`] for the buffer of the file at `path`: a module of a package
+/// with other modules is checked against them; any other file alone.
+pub(crate) fn analyze_at(source: &str, path: Option<&std::path::Path>) -> Option<Nav> {
+    if let Some(t) = path.and_then(|p| super::build_cmds::editor_module_tables(p, source)) {
+        return Some(Nav {
+            program: t.program,
+            resolved: t.resolved,
+            typed: t.typed,
+            effects: t.effects,
+            text: t.text,
+            user_len: t.user_len,
+            lib_start: t.lib_start,
+            modules: t.modules,
+        });
+    }
     nav_of(super::editor::checked(source), source)
 }
 
@@ -85,51 +141,139 @@ pub(crate) fn whole_library() -> Option<&'static Nav> {
         .as_ref()
 }
 
-fn nav_of(pipeline: super::Pipeline, source: &str) -> Option<Nav> {
-    pipeline.typed.as_ref()?;
-    pipeline.resolved.as_ref()?;
-    pipeline.effects.as_ref()?;
-    let text = pipeline
-        .source
-        .clone()
-        .unwrap_or_else(|| source.to_string());
+fn nav_of(mut pipeline: super::Pipeline, source: &str) -> Option<Nav> {
+    let typed = pipeline.typed.take()?;
+    let resolved = pipeline.resolved.take()?;
+    let effects = pipeline.effects.take()?;
+    let text = pipeline.source.take().unwrap_or_else(|| source.to_string());
     let user_len = pipeline.library_len.unwrap_or(text.len()).min(text.len());
     Some(Nav {
-        pipeline,
+        program: std::mem::take(&mut pipeline.parsed.program),
+        resolved,
+        typed,
+        effects,
         text,
         user_len,
+        lib_start: user_len,
+        modules: Vec::new(),
     })
 }
 
 impl Nav {
     pub(crate) fn resolved(&self) -> &crate::resolver::ResolveResult {
-        self.pipeline.resolved.as_ref().expect("checked in analyze")
+        &self.resolved
     }
 
     pub(crate) fn typed(&self) -> &crate::typechecker::TypeCheckResult {
-        self.pipeline.typed.as_ref().expect("checked in analyze")
+        &self.typed
     }
 
     pub(crate) fn effects(&self) -> &crate::effectchecker::EffectCheckResult {
-        self.pipeline.effects.as_ref().expect("checked in analyze")
+        &self.effects
     }
 
-    /// The checked program: the buffer's items, then the library's.
+    /// The checked program: the buffer's items, then (in a package) the
+    /// other modules', then the library's.
     pub(crate) fn program(&self) -> &crate::ast::Program {
-        &self.pipeline.parsed.program
+        &self.program
+    }
+
+    /// Whether the buffer was checked as a module of its package, beside
+    /// other modules (B-2026-11-17-71).
+    pub(crate) fn in_package(&self) -> bool {
+        !self.modules.is_empty()
+    }
+
+    /// The definition of the name under `at` the resolver resolved: in the
+    /// buffer, another module of the package or the library.
+    pub(crate) fn resolved_def(&self, at: usize) -> Option<NavSite> {
+        let resolved = self.resolved();
+        let mut best: Option<(usize, crate::resolver::SymbolId)> = None;
+        for (key, sym) in &resolved.resolutions {
+            if at < key.0 || at >= key.0.saturating_add(key.1) {
+                continue;
+            }
+            if best.is_none_or(|(len, _)| key.1 < len) {
+                best = Some((key.1, *sym));
+            }
+        }
+        let sym = resolved.symbol_table.get_symbol(best?.1);
+        let span = sym.span;
+        if span.length == 0 {
+            return None;
+        }
+        let span = self.follow_import(span, &sym.name);
+        self.site(span.offset, span.length)
+    }
+
+    /// The declaration of the symbol `name` declared at `span`: a name the
+    /// buffer imports is declared at its import, and its declaration is
+    /// the exporting module's (B-2026-11-17-71); any other, `span`.
+    pub(crate) fn follow_import(&self, span: Span, name: &str) -> Span {
+        let at_import = span.offset < self.user_len
+            && self.user_items().any(|item| {
+                matches!(item, Item::Import(_)) && span_contains(item.span(), span.offset)
+            });
+        if !at_import {
+            return span;
+        }
+        self.exported_decl(name)
+            .map_or(span, |(offset, length)| Span {
+                offset,
+                length,
+                ..span
+            })
+    }
+
+    /// The name of the `pub` item `name` another module of the package
+    /// declares, in the checked text.
+    fn exported_decl(&self, name: &str) -> Option<(usize, usize)> {
+        let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        self.program.items.iter().find_map(|item| {
+            let (decl, is_pub) = match item {
+                Item::Function(f) => (&f.name, f.is_pub),
+                Item::StructDef(d) => (&d.name, d.is_pub),
+                Item::EnumDef(d) => (&d.name, d.is_pub),
+                Item::TraitDef(d) => (&d.name, d.is_pub),
+                _ => return None,
+            };
+            let span = item.span();
+            if decl != name
+                || !is_pub
+                || !self
+                    .modules
+                    .iter()
+                    .any(|(_, base, len)| span.offset >= *base && span.offset < base + len)
+            {
+                return None;
+            }
+            // The name's first whole-word occurrence after the keyword.
+            let end = (span.offset + span.length).min(self.text.len());
+            let text = self.text.get(span.offset..end)?;
+            let bytes = text.as_bytes();
+            let mut from = 0;
+            while let Some(k) = text[from..].find(name) {
+                let at = from + k;
+                let before = at == 0 || !ident(bytes[at - 1]);
+                let after = !bytes.get(at + name.len()).is_some_and(|b| ident(*b));
+                if before && after && at > 0 {
+                    return Some((span.offset + at, name.len()));
+                }
+                from = at + name.len();
+            }
+            None
+        })
     }
 
     /// The checked text (the buffer, then the library) and where the
-    /// library starts in it.
+    /// buffer ends in it.
     pub(crate) fn text(&self) -> (&str, usize) {
         (&self.text, self.user_len)
     }
 
     pub(crate) fn user_items(&self) -> impl Iterator<Item = &Item> {
         let user_len = self.user_len;
-        self.pipeline
-            .parsed
-            .program
+        self.program
             .items
             .iter()
             .filter(move |item| item.span().offset < user_len)
@@ -342,7 +486,7 @@ impl Nav {
         impl_at: Option<&SpanKey>,
     ) -> Option<(NavSite, String)> {
         let mut found = None;
-        for item in &self.pipeline.parsed.program.items {
+        for item in &self.program.items {
             let Item::ImplBlock(ib) = item else {
                 continue;
             };
@@ -379,9 +523,7 @@ impl Nav {
 
     /// The definition of field `field` of struct `ty`.
     fn field_def(&self, ty: &str, field: &str) -> Option<NavSite> {
-        self.pipeline
-            .parsed
-            .program
+        self.program
             .items
             .iter()
             .find_map(|item| match item {
@@ -398,11 +540,20 @@ impl Nav {
     /// `offset` in the checked text as a buffer or library-file position.
     /// `None` past the always-appended library sources (the baked modules
     /// after them are rewritten as they are appended).
-    fn site(&self, offset: usize, length: usize) -> Option<NavSite> {
+    pub(crate) fn site(&self, offset: usize, length: usize) -> Option<NavSite> {
         if offset < self.user_len {
             return Some(NavSite::Buffer { offset, length });
         }
-        let mut start = self.user_len;
+        for (file, base, len) in &self.modules {
+            if offset >= *base && offset + length <= base + len {
+                return Some(NavSite::Module {
+                    file: file.clone(),
+                    offset: offset - base,
+                    length,
+                });
+            }
+        }
+        let mut start = self.lib_start;
         for (file, text) in crate::prelude::LIBRARY_SOURCES {
             let begin = start + 1;
             if offset >= begin && offset + length <= begin + text.len() {

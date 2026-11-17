@@ -102,9 +102,19 @@ impl<'a> LineIndex<'a> {
 /// `catch_unwind`-guarded for the same reason as [`diagnostics`] — a phase
 /// panic on half-typed source must not drop the connection.
 pub fn hover(text: &str, position: Position) -> Option<Hover> {
+    hover_in(text, None, position)
+}
+
+/// [`hover`] for the document at `path`: a module of a package is checked
+/// with its package, so the names it imports have types (B-2026-11-17-71).
+pub fn hover_in(text: &str, path: Option<&std::path::Path>, position: Position) -> Option<Hover> {
     let index = LineIndex::new(text);
     let offset = index.offset(position);
-    let info = match std::panic::catch_unwind(AssertUnwindSafe(|| karac::hover_at(text, offset))) {
+    let query = || match path {
+        Some(p) => karac::hover_at_in(text, offset, p),
+        None => karac::hover_at(text, offset),
+    };
+    let info = match std::panic::catch_unwind(AssertUnwindSafe(query)) {
         Ok(info) => info?,
         Err(_) => {
             eprintln!("kara-lsp: hover analysis panicked; returning no hover");
@@ -175,11 +185,23 @@ pub fn definition(text: &str, position: Position) -> Option<Range> {
 /// its library file, written under the system temp directory once per
 /// compiler version; `None` means the same document.
 pub fn definition_site(text: &str, position: Position) -> Option<(Option<Uri>, Range)> {
+    definition_site_in(text, None, position)
+}
+
+/// [`definition_site`] for the document at `path`: a name a module imports
+/// goes to the module that declares it (B-2026-11-17-71).
+pub fn definition_site_in(
+    text: &str,
+    path: Option<&std::path::Path>,
+    position: Position,
+) -> Option<(Option<Uri>, Range)> {
     let index = LineIndex::new(text);
     let offset = index.offset(position);
-    let def = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-        karac::goto_definition_site(text, offset)
-    })) {
+    let query = || match path {
+        Some(p) => karac::goto_definition_site_in(text, offset, p),
+        None => karac::goto_definition_site(text, offset),
+    };
+    let def = match std::panic::catch_unwind(AssertUnwindSafe(query)) {
         Ok(def) => def?,
         Err(_) => {
             eprintln!("kara-lsp: definition analysis panicked; returning no definition");
@@ -200,6 +222,17 @@ pub fn definition_site(text: &str, position: Position) -> Option<(Option<Uri>, R
                 LineIndex::new(lib).range(span_offset, span_length),
             ))
         }
+        karac::DefSite::Module {
+            file,
+            span_offset,
+            span_length,
+        } => {
+            let text = std::fs::read_to_string(&file).ok()?;
+            Some((
+                Some(path_uri(&file)?),
+                LineIndex::new(&text).range(span_offset, span_length),
+            ))
+        }
     }
 }
 
@@ -212,6 +245,11 @@ fn library_file_uri(file: &str, text: &str) -> Option<Uri> {
         std::fs::create_dir_all(path.parent()?).ok()?;
         std::fs::write(&path, text).ok()?;
     }
+    path_uri(&path)
+}
+
+/// The `file:` URI of a local path.
+fn path_uri(path: &std::path::Path) -> Option<Uri> {
     let mut uri = String::from("file://");
     for b in path.to_str()?.replace('\\', "/").bytes() {
         if b.is_ascii_alphanumeric() || b"/-._~:".contains(&b) {
@@ -252,15 +290,27 @@ pub fn references(text: &str, position: Position, include_declaration: bool) -> 
 /// locals, parameters and items in scope. `catch_unwind`-guarded like
 /// [`diagnostics`].
 pub fn completion(text: &str, position: Position) -> Vec<CompletionItem> {
+    completion_in(text, None, position)
+}
+
+/// [`completion`] for the document at `path` (B-2026-11-17-71).
+pub fn completion_in(
+    text: &str,
+    path: Option<&std::path::Path>,
+    position: Position,
+) -> Vec<CompletionItem> {
     let offset = LineIndex::new(text).offset(position);
-    let entries =
-        match std::panic::catch_unwind(AssertUnwindSafe(|| karac::completions_at(text, offset))) {
-            Ok(entries) => entries,
-            Err(_) => {
-                eprintln!("kara-lsp: completion analysis panicked; returning none");
-                return Vec::new();
-            }
-        };
+    let query = || match path {
+        Some(p) => karac::completions_at_in(text, offset, p),
+        None => karac::completions_at(text, offset),
+    };
+    let entries = match std::panic::catch_unwind(AssertUnwindSafe(query)) {
+        Ok(entries) => entries,
+        Err(_) => {
+            eprintln!("kara-lsp: completion analysis panicked; returning none");
+            return Vec::new();
+        }
+    };
     entries
         .into_iter()
         .map(|e| CompletionItem {
@@ -289,16 +339,27 @@ pub fn completion(text: &str, position: Position) -> Vec<CompletionItem> {
 /// outside a call, or for a builtin method with no Kāra declaration.
 /// `catch_unwind`-guarded like [`diagnostics`].
 pub fn signature_help(text: &str, position: Position) -> Option<SignatureHelp> {
+    signature_help_in(text, None, position)
+}
+
+/// [`signature_help`] for the document at `path` (B-2026-11-17-71).
+pub fn signature_help_in(
+    text: &str,
+    path: Option<&std::path::Path>,
+    position: Position,
+) -> Option<SignatureHelp> {
     let offset = LineIndex::new(text).offset(position);
-    let help =
-        match std::panic::catch_unwind(AssertUnwindSafe(|| karac::signature_help_at(text, offset)))
-        {
-            Ok(help) => help?,
-            Err(_) => {
-                eprintln!("kara-lsp: signature help panicked; returning none");
-                return None;
-            }
-        };
+    let query = || match path {
+        Some(p) => karac::signature_help_at_in(text, offset, p),
+        None => karac::signature_help_at(text, offset),
+    };
+    let help = match std::panic::catch_unwind(AssertUnwindSafe(query)) {
+        Ok(help) => help?,
+        Err(_) => {
+            eprintln!("kara-lsp: signature help panicked; returning none");
+            return None;
+        }
+    };
     let utf16 = |b: usize| help.label[..b].encode_utf16().count() as u32;
     let markdown = |value: String| {
         Documentation::MarkupContent(MarkupContent {

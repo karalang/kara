@@ -1996,6 +1996,7 @@ fn merged_tree(root: &Path) -> karac::module::BuildTreeOk {
         &w,
         karac::module::BuildTreeOpts {
             merge_test_companions: true,
+            overlay_first: false,
         },
     )
     .expect("build tree")

@@ -688,13 +688,27 @@ fn borrow_bare_params_of(tree: &mut ProgramTree, lib: Option<&PackageLibrary>) {
 pub(super) struct PackageLibrary {
     items: Vec<Item>,
     start: usize,
+    /// The library's text, from `start` on, for an editor query that maps
+    /// a library span back to its file (B-2026-11-17-71).
+    text: String,
 }
 
 impl PackageLibrary {
     pub(super) fn of(tree: &ProgramTree) -> Option<Self> {
+        Self::of_with(tree, None)
+    }
+
+    /// [`Self::of`] with the editor's buffer in place of its file on disk.
+    pub(super) fn of_with(
+        tree: &ProgramTree,
+        overlay: Option<(&std::path::Path, &str)>,
+    ) -> Option<Self> {
         let mut src = String::new();
         for m in tree.modules.iter().filter(|m| !m.is_synthetic) {
-            src.push_str(&std::fs::read_to_string(&m.file).ok()?);
+            match overlay.filter(|(p, _)| same_file(p, &m.file)) {
+                Some((_, text)) => src.push_str(text),
+                None => src.push_str(&std::fs::read_to_string(&m.file).ok()?),
+            }
             src.push('\n');
         }
         // The `_test.kara` companions `karac test` merges into their
@@ -731,7 +745,8 @@ impl PackageLibrary {
                 crate::ast::TypeKind::Path(p) if p.segments.last().is_some_and(|n| ours.contains(n))),
             _ => type_item_name(it).is_none_or(|n| !ours.contains(&n)),
         });
-        Some(PackageLibrary { items, start })
+        let text = text.get(start..).unwrap_or("").to_string();
+        Some(PackageLibrary { items, start, text })
     }
 
     /// One module's items with the library after them.
@@ -1147,6 +1162,162 @@ pub(super) fn typecheck_modules(
     }
 }
 
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    canon(a) == canon(b)
+}
+
+/// One module of a package, checked for an editor position query with the
+/// buffer in place of its file (B-2026-11-17-71): the tables of the module
+/// against the rest of the package and the library, over one text in which
+/// every offset of those tables lands where its source is.
+pub(crate) struct ModuleTables {
+    /// The module's items, the package's other modules' items (for their
+    /// declarations), then the library's.
+    pub(crate) program: Program,
+    pub(crate) resolved: ResolveResult,
+    pub(crate) typed: TypeCheckResult,
+    pub(crate) effects: EffectCheckResult,
+    /// The buffer at 0, each other module at its span base, the library
+    /// from `lib_start`.
+    pub(crate) text: String,
+    pub(crate) user_len: usize,
+    pub(crate) lib_start: usize,
+    /// Each other module's file, span base and length in `text`.
+    pub(crate) modules: Vec<(std::path::PathBuf, usize, usize)>,
+}
+
+/// [`ModuleTables`] of the buffer `source` of the file at `path`, when the
+/// file is a module of a package that has other modules; `None` otherwise,
+/// and when the package does not parse, so the caller checks the buffer
+/// alone.
+pub(crate) fn editor_module_tables(path: &std::path::Path, source: &str) -> Option<ModuleTables> {
+    let root = super::run_check_cmds::package_root_of_member(&path.to_string_lossy())?;
+    let walk_opts = WalkerOpts {
+        target: walk_platform_for_target(crate::target::active_target()),
+        ..WalkerOpts::default()
+    };
+    let walked = walker::walk_project(&root, walk_opts).ok()?;
+    let dep_walks = super::run_check_cmds::quiet_dep_package_walks(&root);
+    let BuildTreeOk {
+        mut tree,
+        parse_errors,
+    } = module::build_program_tree_with_overlay(
+        &walked,
+        &dep_walks,
+        module::BuildTreeOpts {
+            merge_test_companions: false,
+            overlay_first: true,
+        },
+        Some((path, source)),
+    )
+    .ok()?;
+    if !parse_errors.is_empty() {
+        return None;
+    }
+    let users: Vec<usize> = (0..tree.modules.len())
+        .filter(|&i| !tree.modules[i].is_synthetic)
+        .collect();
+    let id = *users
+        .iter()
+        .find(|&&i| same_file(&tree.modules[i].file, path))?;
+    // A lone module is a file: the buffer's own check answers it.
+    if users.len() < 2 || tree.modules[id].span_base != 0 {
+        return None;
+    }
+    let lib = PackageLibrary::of_with(&tree, Some((path, source)));
+    borrow_bare_params_of(&mut tree, lib.as_ref());
+    let mut program = PackageLibrary::program(lib.as_ref(), &tree.modules[id].items);
+    crate::desugar::desugar_multi_assigns(&mut program.items);
+    let resolved = Resolver::new(&program)
+        .with_tree(&tree, id as ModuleId)
+        .with_user_operator_impls(true)
+        .resolve();
+    let typed = crate::typechecker::TypeChecker::new(&program, &resolved)
+        .with_tree(&tree, id as ModuleId)
+        .with_cli_lint_overrides(crate::lints::CliLintOverrides {
+            core_places: true,
+            strict_core: true,
+            ..Default::default()
+        })
+        .check();
+    let effects = crate::effectcheck_with_typecheck_tables(
+        &program,
+        crate::effectchecker::PublicEffectsPolicy::default(),
+        crate::manifest::ProfileConfig::default(),
+        typed.method_callee_types.clone(),
+        typed.call_type_subs.clone(),
+        typed.node_call_subs.clone(),
+        crate::typeparam_value_nodes(&typed),
+        typed.user_operator_calls.clone(),
+        crate::dyn_tables(&typed),
+        crate::node_type_facts(&typed),
+    );
+    // The text: each module's source where its spans say it is.
+    let user_len = source.len();
+    let mut others: Vec<(std::path::PathBuf, usize, String)> = users
+        .iter()
+        .filter(|&&i| i != id)
+        .filter_map(|&i| {
+            let m = &tree.modules[i];
+            Some((
+                m.file.clone(),
+                m.span_base,
+                std::fs::read_to_string(&m.file).ok()?,
+            ))
+        })
+        .collect();
+    others.sort_by_key(|(_, base, _)| *base);
+    let lib_start = lib.as_ref().map_or(usize::MAX, |l| l.start);
+    let mut bytes = source.as_bytes().to_vec();
+    let mut modules = Vec::new();
+    for (k, (file, base, text)) in others.iter().enumerate() {
+        let room = others
+            .get(k + 1)
+            .map_or(lib_start, |(_, next, _)| *next)
+            .saturating_sub(*base);
+        let mut take = text.len().min(room);
+        while !text.is_char_boundary(take) {
+            take -= 1;
+        }
+        if bytes.len() < *base {
+            bytes.resize(*base, b' ');
+        }
+        bytes.truncate(*base);
+        bytes.extend_from_slice(&text.as_bytes()[..take]);
+        modules.push((file.clone(), *base, take));
+    }
+    let mut item_extra: Vec<Item> = users
+        .iter()
+        .filter(|&&i| i != id)
+        .flat_map(|&i| tree.modules[i].items.iter().cloned())
+        .collect();
+    if let Some(lib) = &lib {
+        if bytes.len() < lib.start {
+            bytes.resize(lib.start, b' ');
+        }
+        bytes.truncate(lib.start);
+        bytes.extend_from_slice(lib.text.as_bytes());
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    // The other modules' declarations sit between the module's items and
+    // the library's.
+    let own = tree.modules[id].items.len();
+    let tail = program.items.split_off(own);
+    program.items.append(&mut item_extra);
+    program.items.extend(tail);
+    Some(ModuleTables {
+        program,
+        resolved,
+        typed,
+        effects,
+        text,
+        user_len,
+        lib_start: lib.as_ref().map_or(user_len, |l| l.start),
+        modules,
+    })
+}
+
 /// Each module's typecheck result in the package at `root`, keyed by its
 /// file, every module checked with its imports resolved as [`package_check`]
 /// checks it. `None` when the package cannot be walked or does not parse.
@@ -1166,6 +1337,7 @@ pub(super) fn package_module_type_results(
         &dep_walks,
         module::BuildTreeOpts {
             merge_test_companions: false,
+            overlay_first: false,
         },
         None,
     )
@@ -1833,6 +2005,7 @@ fn package_check_of_walk(
         &dep_walks,
         module::BuildTreeOpts {
             merge_test_companions,
+            overlay_first: false,
         },
         buffer,
     )

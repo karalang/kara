@@ -2289,6 +2289,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `karac check <file>` and the editor no longer report "expected 'Counter',
   found 'Counter'" in a module that imports a `shared struct` and names it in
   a signature (B-2026-11-17-114).
+- The language server answers hover, go-to-definition, completion and
+  signature help in a module that imports a sibling module, where every one
+  of them answered null: the document is checked as a module of its package,
+  and a definition in the sibling module opens that file (B-2026-11-17-71).
 - `karac run --output=json` prints one JSON document (B-2026-11-16-283).
 - `karac build --output=jsonl` skips `codegen` with its blocking diagnostics
   on a failing build, and `program_effects` is `null` when effect analysis

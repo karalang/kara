@@ -202,7 +202,11 @@ fn handle_request(
                 // Hover the last-known revision of the document. `None` (no
                 // typed expression under the cursor) serializes to a null
                 // result, which the LSP spec accepts as "no hover".
-                let hover = docs.get(&uri).and_then(|text| analysis::hover(text, pos));
+                let path = p.text_document_position_params.text_document.uri.clone();
+                let path = analysis::file_path(&path);
+                let hover = docs
+                    .get(&uri)
+                    .and_then(|text| analysis::hover_in(text, path.as_deref(), pos));
                 lsp_server::Response::new_ok(id, hover)
             }
             Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
@@ -212,13 +216,16 @@ fn handle_request(
                 Ok(p) => {
                     let pos = p.text_document_position_params.position;
                     let uri = p.text_document_position_params.text_document.uri;
+                    let path = analysis::file_path(&uri);
                     let resp = docs.get(&uri.to_string()).and_then(|text| {
-                        analysis::definition_site(text, pos).map(|(at, range)| {
-                            GotoDefinitionResponse::Scalar(Location {
-                                uri: at.unwrap_or_else(|| uri.clone()),
-                                range,
-                            })
-                        })
+                        analysis::definition_site_in(text, path.as_deref(), pos).map(
+                            |(at, range)| {
+                                GotoDefinitionResponse::Scalar(Location {
+                                    uri: at.unwrap_or_else(|| uri.clone()),
+                                    range,
+                                })
+                            },
+                        )
                     });
                     lsp_server::Response::new_ok(id, resp)
                 }
@@ -249,10 +256,11 @@ fn handle_request(
         Completion::METHOD => match serde_json::from_value::<lsp_types::CompletionParams>(params) {
             Ok(p) => {
                 let pos = p.text_document_position.position;
+                let path = analysis::file_path(&p.text_document_position.text_document.uri);
                 let uri = p.text_document_position.text_document.uri.to_string();
                 let items = docs
                     .get(&uri)
-                    .map(|text| analysis::completion(text, pos))
+                    .map(|text| analysis::completion_in(text, path.as_deref(), pos))
                     .unwrap_or_default();
                 lsp_server::Response::new_ok(id, lsp_types::CompletionResponse::Array(items))
             }
@@ -267,10 +275,12 @@ fn handle_request(
                         .text_document
                         .uri
                         .to_string();
+                    let path =
+                        analysis::file_path(&p.text_document_position_params.text_document.uri);
                     // `None` (not inside a call) → null: no signature to show.
                     let help = docs
                         .get(&uri)
-                        .and_then(|text| analysis::signature_help(text, pos));
+                        .and_then(|text| analysis::signature_help_in(text, path.as_deref(), pos));
                     lsp_server::Response::new_ok(id, help)
                 }
                 Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),

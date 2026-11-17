@@ -1692,7 +1692,7 @@ pub struct DefLocation {
 pub fn goto_definition(source: &str, byte_offset: usize) -> Option<DefLocation> {
     match goto_definition_site(source, byte_offset)? {
         DefSite::Buffer(loc) => Some(loc),
-        DefSite::Library { .. } => None,
+        DefSite::Library { .. } | DefSite::Module { .. } => None,
     }
 }
 
@@ -1709,6 +1709,94 @@ pub enum DefSite {
         span_offset: usize,
         span_length: usize,
     },
+    /// In another module of the buffer's package (B-2026-11-17-71), with
+    /// the offsets in that file.
+    Module {
+        file: std::path::PathBuf,
+        span_offset: usize,
+        span_length: usize,
+    },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn def_site_of(site: cli::editor_nav::NavSite) -> DefSite {
+    use cli::editor_nav::NavSite;
+    match site {
+        NavSite::Buffer { offset, length } => DefSite::Buffer(DefLocation {
+            span_offset: offset,
+            span_length: length,
+        }),
+        NavSite::Library {
+            file,
+            text,
+            offset,
+            length,
+        } => DefSite::Library {
+            file,
+            text,
+            span_offset: offset,
+            span_length: length,
+        },
+        NavSite::Module {
+            file,
+            offset,
+            length,
+        } => DefSite::Module {
+            file,
+            span_offset: offset,
+            span_length: length,
+        },
+    }
+}
+
+/// [`goto_definition_site`] for the buffer of the file at `path`: in a
+/// module of a package, a name it imports goes to its declaration in the
+/// module that declares it (B-2026-11-17-71).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn goto_definition_site_in(
+    source: &str,
+    byte_offset: usize,
+    path: &std::path::Path,
+) -> Option<DefSite> {
+    let nav = cli::editor_nav::analyze_at(source, Some(path));
+    match nav {
+        Some(nav) if nav.in_package() => nav
+            .member_at(byte_offset)
+            .and_then(|m| m.def)
+            .or_else(|| nav.resolved_def(byte_offset))
+            .map(def_site_of),
+        _ => goto_definition_site(source, byte_offset),
+    }
+}
+
+/// [`hover_at`] for the buffer of the file at `path`: a module of a package
+/// is checked with its package, so what it imports has a type
+/// (B-2026-11-17-71).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hover_at_in(source: &str, byte_offset: usize, path: &std::path::Path) -> Option<HoverInfo> {
+    cli::editor_nav::with_path(path, || hover_at(source, byte_offset))
+}
+
+/// [`completions_at`] for the buffer of the file at `path`
+/// (B-2026-11-17-71).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn completions_at_in(
+    source: &str,
+    byte_offset: usize,
+    path: &std::path::Path,
+) -> Vec<CompletionEntry> {
+    cli::editor_nav::with_path(path, || completions_at(source, byte_offset))
+}
+
+/// [`signature_help_at`] for the buffer of the file at `path`
+/// (B-2026-11-17-71).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn signature_help_at_in(
+    source: &str,
+    byte_offset: usize,
+    path: &std::path::Path,
+) -> Option<SignatureHelp> {
+    cli::editor_nav::with_path(path, || signature_help_at(source, byte_offset))
 }
 
 /// [`goto_definition`], and also a method call's or field access's name,
@@ -1721,25 +1809,7 @@ pub fn goto_definition_site(source: &str, byte_offset: usize) -> Option<DefSite>
     #[cfg(not(target_arch = "wasm32"))]
     {
         let nav = cli::editor_nav::analyze(source)?;
-        match nav.member_at(byte_offset)?.def? {
-            cli::editor_nav::NavSite::Buffer { offset, length } => {
-                Some(DefSite::Buffer(DefLocation {
-                    span_offset: offset,
-                    span_length: length,
-                }))
-            }
-            cli::editor_nav::NavSite::Library {
-                file,
-                text,
-                offset,
-                length,
-            } => Some(DefSite::Library {
-                file,
-                text,
-                span_offset: offset,
-                span_length: length,
-            }),
-        }
+        nav.member_at(byte_offset)?.def.map(def_site_of)
     }
     #[cfg(target_arch = "wasm32")]
     {

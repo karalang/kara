@@ -1394,6 +1394,7 @@ pub(super) fn package_tree_at(
         &dep_walks,
         module::BuildTreeOpts {
             merge_test_companions: with_tests,
+            overlay_first: false,
         },
     )
     .ok()?;

@@ -255,6 +255,10 @@ pub struct BuildTreeOpts {
     /// invoked with `WalkerOpts::include_tests = true`; if both are false
     /// no test files appear at all.
     pub merge_test_companions: bool,
+    /// Give the overlay's module span base 0, the others theirs after it,
+    /// so the editor's buffer offsets are the tree's own for that module
+    /// (B-2026-11-17-71). The order is otherwise the walk's.
+    pub overlay_first: bool,
 }
 
 /// Fatal errors that stop tree construction entirely.
@@ -862,7 +866,20 @@ pub fn build_program_tree_with_overlay(
     // build has one user module → base 0 → a no-op. Done after target-item
     // stripping so only the live item set is walked.
     let mut span_base: usize = 0;
-    for m in &mut modules {
+    let first = overlay
+        .as_ref()
+        .filter(|_| opts.overlay_first)
+        .and_then(|(p, _)| {
+            modules.iter().position(|m| {
+                !m.is_synthetic && fs::canonicalize(&m.file).as_ref().unwrap_or(&m.file) == p
+            })
+        });
+    let order: Vec<usize> = first
+        .into_iter()
+        .chain((0..modules.len()).filter(|i| Some(*i) != first))
+        .collect();
+    for i in order {
+        let m = &mut modules[i];
         if m.is_synthetic {
             continue;
         }
@@ -877,6 +894,14 @@ pub fn build_program_tree_with_overlay(
         // Next module starts past this one's highest used offset (+1 so
         // adjacent ranges never touch). The gap is irrelevant — post-parse,
         // offsets are opaque keys; only global uniqueness matters.
+        // The overlay's buffer ends past its last span when it ends in a
+        // comment; the next module starts past its text, so an offset
+        // into the buffer is never another module's.
+        if Some(i) == first {
+            if let Some((_, text)) = &overlay {
+                max_end = max_end.max(text.len());
+            }
+        }
         span_base = max_end + 1;
     }
 

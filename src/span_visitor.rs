@@ -55,6 +55,10 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
             }
             for field in &s.fields {
                 visit(&field.span);
+                // The field's name, which the editor's go-to-definition and
+                // the `mut ` strip edit read: left behind by the multi-module
+                // rebase, it pointed into the first module (B-2026-11-17-71).
+                visit(&field.name_span);
                 if let Some(m) = &field.mut_keyword_span {
                     visit(m);
                 }
@@ -1456,6 +1460,7 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
             }
             for field in &mut s.fields {
                 visit.span(&mut field.span);
+                visit.span(&mut field.name_span);
                 if let Some(m) = &mut field.mut_keyword_span {
                     visit.span(m);
                 }

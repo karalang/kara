@@ -515,7 +515,9 @@ fn callee<'a>(nav: &'a Nav, found: &FoundCall) -> Option<FnLike<'a>> {
         .resolved()
         .resolutions
         .get(&SpanKey::from_span(&callee.span))?;
-    let def = nav.resolved().symbol_table.get_symbol(sym).span;
+    let sym = nav.resolved().symbol_table.get_symbol(sym);
+    // A name the buffer imports: the exporting module's declaration.
+    let def = nav.follow_import(sym.span, &sym.name);
     // A prelude name (`println`) has a synthetic span at offset 0, which is
     // no declaration in the buffer: matched against the item that starts
     // there, it showed the buffer's first function (B-2026-11-15-121).

@@ -571,6 +571,7 @@ pub(super) fn test_front_checked(
         &dep_walks,
         BuildTreeOpts {
             merge_test_companions: true,
+            overlay_first: false,
         },
     ) {
         Ok(ok) => ok,
