@@ -48,7 +48,7 @@ struct Response {
 // A JSON answer says so: a response without a Content-Type is sent as
 // text/plain (docs/library/io.md, kara B-2026-11-16-275).
 fn json(status: i64, body: own String) -> Response {
-    Response { status: status, body: body, headers: Vec[("Content-Type".to_string(), "application/json".to_string())] }
+    Response { status: status, body: body, headers: [("Content-Type".to_string(), "application/json".to_string())] }
 }
 
 fn text(status: i64, body: own String) -> Response {
