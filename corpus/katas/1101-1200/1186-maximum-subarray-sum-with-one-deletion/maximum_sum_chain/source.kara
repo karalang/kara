@@ -1,0 +1,57 @@
+// LeetCode #1186: Maximum Subarray Sum with One Deletion -- another Rust
+// solution, one iterator chain: `iter().skip(1).fold` over a `(i32, i32,
+// i32)` of the best ending here whole, the best ending here with one
+// deletion (starting at 0, the first element deleted) and the best so far,
+// with `|(keep, del, best), &x|` destructuring and `.2` taking the answer;
+// carried to Kāra by `karac fix`. O(n) time.
+
+struct Solution {}
+
+impl Solution {
+    pub fn maximum_sum(arr: Vec[i32]) -> i32 {
+        arr.iter()
+            .skip(1)
+            .fold((arr[0], 0i32, arr[0]), |(keep, del, best), x| {
+                let del = (del + x).max(keep);
+                let keep = (keep + x).max(x);
+                (keep, del, best.max(keep).max(del))
+            })
+            .2
+    }
+}
+
+fn maximum_sum(arr: Vec[i64]) -> i64 {
+    Solution.maximum_sum(arr.iter().map(|v| v as i32).collect())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` values in `-span..=span`, each drawn afresh.
+fn values(seed: mut ref i64, n: i64, span: i64) -> Vec[i64] {
+    (0..n).map(|_| next_random(mut seed) % (2 * span + 1) - span).collect()
+}
+
+fn main() {
+    println(f"example 1: {maximum_sum([1, -2, 0, 3])}");
+    println(f"example 2: {maximum_sum([1, -2, -2, 3])}");
+    println(f"example 3: {maximum_sum([-1, -1, -1, -1])}");
+    println(f"small 1: {maximum_sum([-7])}");
+    println(f"small 2: {maximum_sum([5, -100, 6])}");
+    println(f"small 3: {maximum_sum([-3, -9])}");
+    println(f"small 4: {maximum_sum([2, -1, -1, 2])}");
+    let mut seed: i64 = 1182;
+    let mut checksum: i64 = 0;
+    for t in 0..2000 {
+        let n = 1 + next_random(mut seed) % 12;
+        let arr = values(mut seed, n, 10);
+        checksum = (checksum * 31 + maximum_sum(arr) + 1000 + t) % 1000000007;
+    }
+    println(f"2000 random arrays: checksum {checksum}");
+    let big = values(mut seed, 100000, 10000);
+    println(f"100000 values: {maximum_sum(big)}");
+}

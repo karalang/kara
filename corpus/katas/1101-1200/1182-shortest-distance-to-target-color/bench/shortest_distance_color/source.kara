@@ -1,0 +1,70 @@
+// LeetCode #1182: Shortest Distance to Target Color -- the ★ arm benched: a
+// nearest-distance table per colour, filled from each side, then a lookup a
+// query.
+
+fn shortest_distance_color(colors: Vec[i64], queries: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = colors.len();
+    let far = n + 1;
+    let mut nearest: Vec[Vec[i64]] = Vec.new();
+    for c in 1..=3 {
+        let mut dist = Vec.filled(n, far);
+        let mut last = -1;
+        for i in 0..n {
+            if colors[i] == c {
+                last = i;
+            }
+            if last >= 0 {
+                dist[i] = i - last;
+            }
+        }
+        last = -1;
+        for i in (0..n).rev() {
+            if colors[i] == c {
+                last = i;
+            }
+            if last >= 0 and last - i < dist[i] {
+                dist[i] = last - i;
+            }
+        }
+        nearest.push(dist);
+    }
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let d = nearest[q[1] - 1][q[0]];
+        answer.push(if d == far { -1 } else { d });
+    }
+    answer
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 4 arrays of 50000 colours and 50000 queries each, the constraints'
+    // most, built once (the third colour rare: one index in 997); then 40
+    // rounds answering every array's queries, each answer folded into a
+    // checksum
+    let mut seed: i64 = 1182;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut asks: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..4 {
+        let colors: Vec[i64] = (0..50000).map(|_| if next_random(mut seed) % 997 == 0 { 3 } else { 1 + next_random(mut seed) % 2 }).collect();
+        arrays.push(colors);
+        let queries: Vec[Vec[i64]] = (0..50000).map(|_| [next_random(mut seed) % 50000, 1 + next_random(mut seed) % 3]).collect();
+        asks.push(queries);
+    }
+    let rounds = 40;
+    let mut check = 0;
+    for round in 0..rounds {
+        for a in 0..4 {
+            for d in shortest_distance_color(arrays[a], asks[a]) {
+                check = (check * 131 + d + 2 + round) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds of 4 arrays of 50000 queries: checksum {check}");
+}

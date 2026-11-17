@@ -1,0 +1,55 @@
+// LeetCode #1185: Day of the Week -- the ★ arm benched: the days from
+// 1 January 1971, a Friday, to the date, and that many days on from Friday.
+
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+}
+
+fn day_of_the_week(day: i64, month: i64, year: i64) -> String {
+    let names = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
+    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut days = 0;
+    for y in 1971..year {
+        days += if is_leap(y) { 366 } else { 365 };
+    }
+    for m in 1..month {
+        days += month_days[m - 1];
+    }
+    if month > 2 and is_leap(year) {
+        days += 1;
+    }
+    days += day - 1;
+    names[days % 7].to_string()
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 10000 random dates from 1971 to 2100, built once; then 100 rounds
+    // naming every one, each name's length and first letter folded into a
+    // checksum
+    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut seed: i64 = 1185;
+    let mut dates: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..10000 {
+        let year = 1971 + next_random(mut seed) % 130;
+        let month = 1 + next_random(mut seed) % 12;
+        let length = if month == 2 and is_leap(year) { 29 } else { month_days[month - 1] };
+        let day = 1 + next_random(mut seed) % length;
+        dates.push((day, month, year));
+    }
+    let rounds = 100;
+    let mut check = 0;
+    for r in 0..rounds {
+        for (day, month, year) in dates.iter() {
+            let name = day_of_the_week(day, month, year);
+            check = (check * 131 + name.len() * 7 + name.bytes()[0] + r) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 10000 dates: checksum {check}");
+}

@@ -1,0 +1,182 @@
+// LeetCode #1184: Distance Between Bus Stops -- the differential: the five
+// arms against the statement read literally, and six properties of what
+// they return.
+
+// ---- distance_between_bus_stops.kara ----
+
+fn a0_distance_between_bus_stops(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    let (from, to) = (start.min(destination), start.max(destination));
+    let total: i64 = distance.iter().sum();
+    let one_way: i64 = distance[from..to].iter().sum();
+    one_way.min(total - one_way)
+}
+
+// ---- distance_between_bus_stops_walk.kara ----
+
+fn a1_distance_between_bus_stops(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    let n = distance.len();
+    let mut clockwise = 0;
+    let mut at = start;
+    while at != destination {
+        clockwise += distance[at];
+        at = (at + 1) % n;
+    }
+    let mut counter = 0;
+    at = start;
+    while at != destination {
+        at = (at + n - 1) % n;
+        counter += distance[at];
+    }
+    clockwise.min(counter)
+}
+
+// ---- distance_between_bus_stops_prefix.kara ----
+
+fn a2_distance_between_bus_stops(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    let mut reach: Vec[i64] = [0];
+    for d in distance.iter() {
+        reach.push(reach[reach.len() - 1] + d);
+    }
+    let arc = (reach[destination] - reach[start]).abs();
+    arc.min(reach[distance.len()] - arc)
+}
+
+// ---- distance_between_bus_stops_solution.kara ----
+
+struct Solution3 {}
+
+impl Solution3 {
+    pub fn distance_between_bus_stops(distance: Vec[i32], start: i32, destination: i32) -> i32 {
+        let (s, d) = (start.min(destination) as usize, start.max(destination) as usize);
+        let total: i32 = distance.iter().sum();
+        let clockwise: i32 = distance[s..d].iter().sum();
+        clockwise.min(total - clockwise)
+    }
+}
+
+fn a3_distance_between_bus_stops(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    Solution3.distance_between_bus_stops(distance.iter().map(|v| v as i32).collect(), start as i32, destination as i32)
+}
+
+// ---- distance_between_bus_stops_chain.kara ----
+
+struct Solution4 {}
+
+impl Solution4 {
+    pub fn distance_between_bus_stops(distance: Vec[i32], start: i32, destination: i32) -> i32 {
+        let (s, d) = if start < destination { (start as i64, destination as i64) } else { (destination as i64, start as i64) };
+        let (inside, outside) = distance
+            .iter()
+            .enumerate()
+            .fold((0i32, 0i32), |(a, b), (i, x)| if (s..d).contains(i) { (a + x, b) } else { (a, b + x) });
+        inside.min(outside)
+    }
+}
+
+fn a4_distance_between_bus_stops(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    Solution4.distance_between_bus_stops(distance.iter().map(|v| v as i32).collect(), start as i32, destination as i32)
+}
+
+// ---- the statement read literally ----
+
+// Ride the bus from `start` to `destination` one stop at a time, clockwise
+// (leg `i` takes stop `i` to stop `i + 1`) and then counterclockwise, and
+// take the shorter ride.
+fn literal(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    let n = distance.len();
+    let mut best = -1;
+    for back in [false, true] {
+        let mut at = start;
+        let mut ridden = 0;
+        while at != destination {
+            if back {
+                at = (at + n - 1) % n;
+                ridden += distance[at];
+            } else {
+                ridden += distance[at];
+                at = (at + 1) % n;
+            }
+        }
+        if best < 0 or ridden < best {
+            best = ridden;
+        }
+    }
+    best
+}
+
+fn arm(w: i64, distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    match w {
+        0 => a0_distance_between_bus_stops(distance, start, destination),
+        1 => a1_distance_between_bus_stops(distance, start, destination),
+        2 => a2_distance_between_bus_stops(distance, start, destination),
+        3 => a3_distance_between_bus_stops(distance, start, destination),
+        _ => a4_distance_between_bus_stops(distance, start, destination),
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: i64, want: i64) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 600 rings of 1 to 12 stops, each leg 0 to `span`, the span 0 to 20;
+    // the first ten have one stop and the next ten ask from a stop to itself
+    let mut seed = 11840;
+    for plan in 0..600 {
+        let n = if plan < 10 { 1 } else { 1 + next_random(mut seed) % 12 };
+        let span = next_random(mut seed) % 21;
+        let distance: Vec[i64] = (0..n).map(|_| next_random(mut seed) % (span + 1)).collect();
+        let start = next_random(mut seed) % n;
+        let destination = if plan >= 10 and plan < 20 { start } else { next_random(mut seed) % n };
+        let shift = next_random(mut seed) % n;
+        let want = literal(distance, start, destination);
+        let star = a0_distance_between_bus_stops(distance, start, destination);
+        t.check = (t.check * 31 + star + 1) % 1000000007;
+        let total: i64 = distance.iter().sum();
+        // the ring renumbered so that stop `shift` is stop 0
+        let turned: Vec[i64] = (0..n).map(|i| distance[(i + shift) % n]).collect();
+        let doubled: Vec[i64] = distance.iter().map(|d| d * 2).collect();
+        for w in 0..5 {
+            let a = arm(w, distance, start, destination);
+            // P1: the statement read literally
+            expect(mut t, w, 1, plan, a, want);
+            // P2: the way back is as long
+            expect(mut t, w, 2, plan, arm(w, distance, destination, start), a);
+            // P3: the ring renumbered from another stop has the same answer
+            expect(mut t, w, 3, plan, arm(w, turned, (start + n - shift) % n, (destination + n - shift) % n), a);
+            // P4: the shorter way is at most half the ring
+            expect(mut t, w, 4, plan, (2 * a).min(total), 2 * a);
+            // P5: every leg doubled doubles the answer
+            expect(mut t, w, 5, plan, arm(w, doubled, start, destination), 2 * a);
+            // P6: the ★ arm's answer
+            expect(mut t, w, 6, plan, a, star);
+        }
+    }
+    println(f"600 rings: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

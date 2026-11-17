@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1186-maximum-subarray-sum-with-one-deletion/bench/maximum_sum.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1186 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "6dc93c9e5"
+extracted_src = "b796fd51"

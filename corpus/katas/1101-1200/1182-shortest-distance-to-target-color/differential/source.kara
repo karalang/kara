@@ -1,0 +1,277 @@
+// LeetCode #1182: Shortest Distance to Target Color -- the differential:
+// the five arms against the statement read literally, and six properties of
+// what they return.
+
+// ---- shortest_distance_color.kara ----
+
+fn a0_shortest_distance_color(colors: Vec[i64], queries: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = colors.len();
+    let far = n + 1;
+    let mut nearest: Vec[Vec[i64]] = Vec.new();
+    for c in 1..=3 {
+        let mut dist = Vec.filled(n, far);
+        let mut last = -1;
+        for i in 0..n {
+            if colors[i] == c {
+                last = i;
+            }
+            if last >= 0 {
+                dist[i] = i - last;
+            }
+        }
+        last = -1;
+        for i in (0..n).rev() {
+            if colors[i] == c {
+                last = i;
+            }
+            if last >= 0 and last - i < dist[i] {
+                dist[i] = last - i;
+            }
+        }
+        nearest.push(dist);
+    }
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let d = nearest[q[1] - 1][q[0]];
+        answer.push(if d == far { -1 } else { d });
+    }
+    answer
+}
+
+// ---- shortest_distance_color_search.kara ----
+
+fn a1_shortest_distance_color(colors: Vec[i64], queries: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut at: Vec[Vec[i64]] = Vec.filled(3, Vec.new());
+    for (i, c) in colors.iter().enumerate() {
+        at[c - 1].push(i);
+    }
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let (i, spots) = (q[0], ref at[q[1] - 1]);
+        if spots.is_empty() {
+            answer.push(-1);
+            continue;
+        }
+        let p = spots.partition_point(|j| j < i);
+        let mut best = i64.MAX;
+        if p < spots.len() {
+            best = spots[p] - i;
+        }
+        if p > 0 {
+            best = best.min(i - spots[p - 1]);
+        }
+        answer.push(best);
+    }
+    answer
+}
+
+// ---- shortest_distance_color_expand.kara ----
+
+fn a2_shortest_distance_color(colors: Vec[i64], queries: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = colors.len();
+    let mut answer = Vec.new();
+    for q in queries.iter() {
+        let (i, c) = (q[0], q[1]);
+        let mut found = -1;
+        let mut d = 0;
+        while i - d >= 0 or i + d < n {
+            if (i - d >= 0 and colors[i - d] == c) or (i + d < n and colors[i + d] == c) {
+                found = d;
+                break;
+            }
+            d += 1;
+        }
+        answer.push(found);
+    }
+    answer
+}
+
+// ---- shortest_distance_color_solution.kara ----
+
+struct Solution3 {}
+
+impl Solution3 {
+    pub fn shortest_distance_color(colors: Vec[i32], queries: Vec[Vec[i32]]) -> Vec[i32] {
+        let mut pos: Vec[Vec[i64]] = Vec.filled(4, Vec.new());
+        for (i, c) in colors.iter().enumerate() {
+            pos[c].push(i);
+        }
+        let mut res = Vec.with_capacity(queries.len());
+        for q in queries.iter() {
+            let (i, c) = (q[0] as i64, q[1] as i64);
+            let p = ref pos[c];
+            if p.is_empty() {
+                res.push(-1);
+                continue;
+            }
+            let k = {
+                let k = p.partition_point(|y| y < i);
+                if k < p.len() and p[k] == i {
+                    res.push(0);
+                    continue;
+                } else {
+                    k
+                }
+            };
+            let mut best = i64.MAX;
+            if k < p.len() {
+                best = p[k] - i;
+            }
+            if k > 0 {
+                best = best.min(i - p[k - 1]);
+            }
+            res.push(best as i32);
+        }
+        res
+    }
+}
+
+fn a3_shortest_distance_color(colors: Vec[i64], queries: Vec[Vec[i64]]) -> Vec[i64] {
+    let colors: Vec[i32] = colors.iter().map(|c| c as i32).collect();
+    let queries: Vec[Vec[i32]] = queries.iter().map(|q| q.iter().map(|x| x as i32).collect()).collect();
+    Solution3.shortest_distance_color(colors, queries).iter().map(|d| d as i64).collect()
+}
+
+// ---- shortest_distance_color_chain.kara ----
+
+struct Solution4 {}
+
+impl Solution4 {
+    pub fn shortest_distance_color(colors: Vec[i32], queries: Vec[Vec[i32]]) -> Vec[i32] {
+        let left: Vec[Array[Option[i64], 4]] = colors
+            .iter()
+            .enumerate()
+            .scan([None; 4], |last, (i, c)| { let mut last = last; last[c] = Some(i); Some((last.clone(), last)) })
+            .collect();
+        let mut right: Vec[Array[Option[i64], 4]] = colors
+            .iter()
+            .enumerate()
+            .rev()
+            .scan([None; 4], |next, (i, c)| { let mut next = next; next[c] = Some(i); Some((next.clone(), next)) })
+            .collect();
+        right.reverse();
+        queries
+            .iter()
+            .map(|q| {
+                let (i, c) = (q[0] as i64, q[1] as i64);
+                let before = left[i][c].map(|j| i - j);
+                let after = right[i][c].map(|j| j - i);
+                match (before, after) {
+                    (Some(x), Some(y)) => x.min(y) as i32,
+                    (Some(x), None) | (None, Some(x)) => x as i32,
+                    (None, None) => -1,
+                }
+            })
+            .collect()
+    }
+}
+
+fn a4_shortest_distance_color(colors: Vec[i64], queries: Vec[Vec[i64]]) -> Vec[i64] {
+    let colors: Vec[i32] = colors.iter().map(|c| c as i32).collect();
+    let queries: Vec[Vec[i32]] = queries.iter().map(|q| q.iter().map(|x| x as i32).collect()).collect();
+    Solution4.shortest_distance_color(colors, queries).iter().map(|d| d as i64).collect()
+}
+
+// ---- the statement, read literally ----------------------------------------
+
+// the least |i - j| over every index j holding colour c, or -1 when none does
+fn literal(colors: Vec[i64], i: i64, c: i64) -> i64 {
+    let mut best = -1;
+    for j in 0..colors.len() {
+        let d = (i - j).abs();
+        if colors[j] == c and (best < 0 or d < best) {
+            best = d;
+        }
+    }
+    best
+}
+
+fn arm(w: i64, colors: Vec[i64], queries: Vec[Vec[i64]]) -> Vec[i64] {
+    match w {
+        0 => a0_shortest_distance_color(colors, queries),
+        1 => a1_shortest_distance_color(colors, queries),
+        2 => a2_shortest_distance_color(colors, queries),
+        3 => a3_shortest_distance_color(colors, queries),
+        _ => a4_shortest_distance_color(colors, queries),
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: i64, want: i64) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 300 arrays of 1 to 15 colours drawn from the first 1 to 3, every index
+    // asked for every colour; the first ten hold one colour, the next ten
+    // one colour repeated
+    let mut seed = 11820;
+    for plan in 0..300 {
+        let n = if plan < 10 { 1 } else { 1 + next_random(mut seed) % 15 };
+        let palette = if plan < 20 { 1 } else { 1 + next_random(mut seed) % 3 };
+        let first = 1 + next_random(mut seed) % 3;
+        let colors: Vec[i64] = (0..n).map(|_| if palette == 1 { first } else { 1 + next_random(mut seed) % palette }).collect();
+        let mut queries: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            for c in 1..=3 {
+                queries.push([i, c]);
+            }
+        }
+        // the array reversed, each query asked from the mirrored index
+        let flipped: Vec[i64] = (0..n).map(|i| colors[n - 1 - i]).collect();
+        let mirrored: Vec[Vec[i64]] = queries.iter().map(|q| [n - 1 - q[0], q[1]]).collect();
+        let star = a0_shortest_distance_color(colors, queries);
+        for d in star.iter() {
+            t.check = (t.check * 31 + d + 2) % 1000000007;
+        }
+        for w in 0..5 {
+            let got = arm(w, colors, queries);
+            let back = arm(w, flipped, mirrored);
+            for k in 0..queries.len() {
+                let (i, c, d) = (queries[k][0], queries[k][1], got[k]);
+                // P1: the statement read literally
+                expect(mut t, w, 1, plan, d, literal(colors, i, c));
+                // P2: -1 exactly when the colour is absent
+                expect(mut t, w, 2, plan, if d == -1 { 0 } else { 1 }, if colors.contains(c) { 1 } else { 0 });
+                // P3: the colour is that far away, on one side or the other
+                let there = d >= 0 and ((i - d >= 0 and colors[i - d] == c) or (i + d < n and colors[i + d] == c));
+                expect(mut t, w, 3, plan, if d == -1 or there { 1 } else { 0 }, 1);
+                // P4: the array reversed, asked from the mirrored index
+                expect(mut t, w, 4, plan, back[k], d);
+                // P5: the next index is at most one further or nearer
+                if i + 1 < n {
+                    let e = got[k + 3];
+                    expect(mut t, w, 5, plan, if d == -1 or (e - d).abs() <= 1 { 1 } else { 0 }, 1);
+                }
+                // P6: the ★ arm's answer
+                expect(mut t, w, 6, plan, d, star[k]);
+            }
+        }
+    }
+    println(f"300 arrays: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

@@ -1,0 +1,49 @@
+// LeetCode #1184: Distance Between Bus Stops -- a Rust solution as
+// LeetCode's Rust users write it: the stops ordered with `min`/`max` and
+// cast to `usize`, the ring and the arc summed with `iter().sum()` into
+// annotated `i32`s, inside `impl Solution`; carried to Kāra by
+// `karac fix`.
+
+struct Solution {}
+
+impl Solution {
+    pub fn distance_between_bus_stops(distance: Vec[i32], start: i32, destination: i32) -> i32 {
+        let (s, d) = (start.min(destination) as usize, start.max(destination) as usize);
+        let total: i32 = distance.iter().sum();
+        let clockwise: i32 = distance[s..d].iter().sum();
+        clockwise.min(total - clockwise)
+    }
+}
+
+fn distance_between_bus_stops(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    Solution.distance_between_bus_stops(distance.iter().map(|v| v as i32).collect(), start as i32, destination as i32)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"example 1: {distance_between_bus_stops([1, 2, 3, 4], 0, 1)}");
+    println(f"example 2: {distance_between_bus_stops([1, 2, 3, 4], 0, 2)}");
+    println(f"example 3: {distance_between_bus_stops([1, 2, 3, 4], 0, 3)}");
+    println(f"small 1: {distance_between_bus_stops([7], 0, 0)}");
+    println(f"small 2: {distance_between_bus_stops([5, 9], 1, 0)}");
+    println(f"small 3: {distance_between_bus_stops([3, 0, 0, 3], 3, 1)}");
+    println(f"small 4: {distance_between_bus_stops([7, 10, 1, 12, 11, 14, 5, 0], 7, 2)}");
+    let mut seed: i64 = 1184;
+    let mut checksum: i64 = 0;
+    for t in 0..3000 {
+        let n = 1 + next_random(mut seed) % 12;
+        let distance: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 21).collect();
+        let start = next_random(mut seed) % n;
+        let destination = next_random(mut seed) % n;
+        checksum = (checksum * 31 + distance_between_bus_stops(distance, start, destination) + t) % 1000000007;
+    }
+    println(f"3000 random rings: checksum {checksum}");
+    let ring: Vec[i64] = (0..10000).map(|_| next_random(mut seed) % 10001).collect();
+    println(f"10000 stops: {distance_between_bus_stops(ring, 1234, 8765)}");
+}

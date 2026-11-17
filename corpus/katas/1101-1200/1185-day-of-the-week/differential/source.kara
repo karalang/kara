@@ -1,0 +1,216 @@
+// LeetCode #1185: Day of the Week -- the differential: the five
+// arms against the statement read literally, and six properties of what
+// they return.
+
+// ---- day_of_the_week.kara ----
+
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+}
+
+fn a0_day_of_the_week(day: i64, month: i64, year: i64) -> String {
+    let names = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
+    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut days = 0;
+    for y in 1971..year {
+        days += if is_leap(y) { 366 } else { 365 };
+    }
+    for m in 1..month {
+        days += month_days[m - 1];
+    }
+    if month > 2 and is_leap(year) {
+        days += 1;
+    }
+    days += day - 1;
+    names[days % 7].to_string()
+}
+
+// ---- day_of_the_week_zeller.kara ----
+
+fn a1_day_of_the_week(day: i64, month: i64, year: i64) -> String {
+    let names = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    let (m, y) = if month < 3 { (month + 12, year - 1) } else { (month, year) };
+    let (k, j) = (y % 100, y / 100);
+    let h = (day + 13 * (m + 1) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;
+    names[h].to_string()
+}
+
+// ---- day_of_the_week_sakamoto.kara ----
+
+fn a2_day_of_the_week(day: i64, month: i64, year: i64) -> String {
+    let names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    let offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if month < 3 { year - 1 } else { year };
+    names[(y + y / 4 - y / 100 + y / 400 + offsets[month - 1] + day) % 7].to_string()
+}
+
+// ---- day_of_the_week_solution.kara ----
+
+struct Solution3 {}
+
+impl Solution3 {
+    pub fn day_of_the_week(day: i32, month: i32, year: i32) -> String {
+        let days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let is_leap = |y: i32| (y % 4 == 0 and y % 100 != 0) or y % 400 == 0;
+        let mut total = 0;
+        for y in 1971..year {
+            total += if is_leap(y) { 366 } else { 365 };
+        }
+        for m in 0..(month - 1) as usize {
+            total += month_days[m];
+            if m == 1 and is_leap(year) {
+                total += 1;
+            }
+        }
+        total += day;
+        days[((total + 4) % 7) as usize].to_string()
+    }
+}
+
+fn a3_day_of_the_week(day: i64, month: i64, year: i64) -> String {
+    Solution3.day_of_the_week(day as i32, month as i32, year as i32)
+}
+
+// ---- day_of_the_week_chain.kara ----
+
+struct Solution4 {}
+
+impl Solution4 {
+    pub fn day_of_the_week(day: i32, month: i32, year: i32) -> String {
+        let leap = |y: i32| y % 4 == 0 and (y % 100 != 0 or y % 400 == 0);
+        let days: i32 = (1971..year).map(|y| if leap(y) { 366i32 } else { 365 }).sum()
+            + [31i32, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31].iter().take(month as i64 - 1).sum()
+            + if month > 2 and leap(year) { 1 } else { 0 }
+            + day;
+        ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"][days % 7].to_string()
+    }
+}
+
+fn a4_day_of_the_week(day: i64, month: i64, year: i64) -> String {
+    Solution4.day_of_the_week(day as i32, month as i32, year as i32)
+}
+
+// ---- the statement read literally ----
+
+const WEEK: Array[Str, 7] = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
+
+fn month_length(month: i64, year: i64) -> i64 {
+    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if month == 2 and is_leap(year) { 29 } else { month_days[month - 1] }
+}
+
+// Turn the calendar a day at a time from 1 January 1971, a Friday, until
+// it shows the date, naming each day after the one before.
+fn literal(day: i64, month: i64, year: i64) -> String {
+    let mut (d, m, y) = (1, 1, 1971);
+    let mut name = 0;
+    while (d, m, y) != (day, month, year) {
+        d += 1;
+        if d > month_length(m, y) {
+            d = 1;
+            m += 1;
+            if m > 12 {
+                m = 1;
+                y += 1;
+            }
+        }
+        name = (name + 1) % 7;
+    }
+    WEEK[name].to_string()
+}
+
+// Where `name` falls in the week, Friday first; 7 for no day's name.
+fn place(name: String) -> i64 {
+    match WEEK.iter().position(|w| w == name) {
+        Some(i) => i,
+        None => 7,
+    }
+}
+
+fn arm(w: i64, day: i64, month: i64, year: i64) -> String {
+    match w {
+        0 => a0_day_of_the_week(day, month, year),
+        1 => a1_day_of_the_week(day, month, year),
+        2 => a2_day_of_the_week(day, month, year),
+        3 => a3_day_of_the_week(day, month, year),
+        _ => a4_day_of_the_week(day, month, year),
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, plan: i64, got: i64, want: i64) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, plan {plan}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 300 random dates from 1971 to 2100; the first ten are 29 February of
+    // a leap year and the next ten the last day of a month
+    let mut seed = 11850;
+    for plan in 0..300 {
+        let mut year = 1971 + next_random(mut seed) % 130;
+        let month = if plan < 10 { 2 } else { 1 + next_random(mut seed) % 12 };
+        if plan < 10 {
+            while not is_leap(year) {
+                year += 1;
+            }
+        }
+        let length = month_length(month, year);
+        let day = if plan < 20 { length } else { 1 + next_random(mut seed) % length };
+        let want = place(literal(day, month, year));
+        let star = place(a0_day_of_the_week(day, month, year));
+        t.check = (t.check * 31 + star + 1) % 1000000007;
+        for w in 0..5 {
+            let a = place(arm(w, day, month, year));
+            // P1: the statement read literally
+            expect(mut t, w, 1, plan, a, want);
+            // P2: an answer names a day of the week
+            expect(mut t, w, 2, plan, a.min(7), a.min(6));
+            // P3: a week later is the same day, a day later the next
+            if day + 7 <= length {
+                expect(mut t, w, 3, plan, place(arm(w, day + 7, month, year)), a);
+            }
+            if day < length {
+                expect(mut t, w, 3, plan, place(arm(w, day + 1, month, year)), (a + 1) % 7);
+            }
+            // P4: the first of the next month is the month's length on
+            if month < 12 {
+                expect(mut t, w, 4, plan, place(arm(w, 1, month + 1, year)), (a + length - day + 1) % 7);
+            }
+            // P5: a year on is 365 days on, or 366 past a 29 February
+            if year < 2100 and not (month == 2 and day == 29) {
+                let past = if month > 2 { is_leap(year + 1) } else { is_leap(year) };
+                let shift = if past { 2 } else { 1 };
+                expect(mut t, w, 5, plan, place(arm(w, day, month, year + 1)), (a + shift) % 7);
+            }
+            // P6: the ★ arm's answer
+            expect(mut t, w, 6, plan, a, star);
+        }
+    }
+    println(f"300 dates: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

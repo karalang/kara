@@ -1,0 +1,45 @@
+// LeetCode #1184: Distance Between Bus Stops -- the ★ arm benched: the arc
+// from the lower stop to the higher, against the whole ring less it.
+
+fn distance_between_bus_stops(distance: Vec[i64], start: i64, destination: i64) -> i64 {
+    let (from, to) = (start.min(destination), start.max(destination));
+    let total: i64 = distance.iter().sum();
+    let one_way: i64 = distance[from..to].iter().sum();
+    one_way.min(total - one_way)
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 50 rings of 10000 stops, the constraints' most, each leg 0 to 10000,
+    // and 200 pairs of stops a ring, built once; then 10 rounds asking
+    // every pair, each answer folded into a checksum
+    let mut seed: i64 = 1184;
+    let mut rings: Vec[Vec[i64]] = Vec.new();
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..50 {
+        let ring: Vec[i64] = (0..10000).map(|_| next_random(mut seed) % 10001).collect();
+        rings.push(ring);
+        for _ in 0..200 {
+            let start = next_random(mut seed) % 10000;
+            let destination = next_random(mut seed) % 10000;
+            pairs.push((start, destination));
+        }
+    }
+    let rounds = 10;
+    let mut check = 0;
+    for round in 0..rounds {
+        for (r, ring) in rings.iter().enumerate() {
+            for k in 0..200 {
+                let (start, destination) = pairs[r * 200 + k];
+                check = (check * 131 + distance_between_bus_stops(ring, start, destination) + round) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds of 10000 queries over 50 rings: checksum {check}");
+}

@@ -1,0 +1,233 @@
+// LeetCode #1183: Maximum Number of Ones -- the differential: the five
+// arms against the statement read literally, and six properties of what
+// they return.
+
+// ---- maximum_number_of_ones.kara ----
+
+fn a0_maximum_number_of_ones(width: i64, height: i64, side_length: i64, max_ones: i64) -> i64 {
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..side_length {
+        for j in 0..side_length {
+            let across = (width - i - 1) / side_length + 1;
+            let down = (height - j - 1) / side_length + 1;
+            counts.push(across * down);
+        }
+    }
+    counts.sort_by(|a, b| b.cmp(a));
+    counts.iter().take(max_ones).sum()
+}
+
+// ---- maximum_number_of_ones_classes.kara ----
+
+fn a1_maximum_number_of_ones(width: i64, height: i64, side_length: i64, max_ones: i64) -> i64 {
+    let (across, extra_across) = (width / side_length, width % side_length);
+    let (down, extra_down) = (height / side_length, height % side_length);
+    // (cells on each position of the class, positions in the class)
+    let mut classes = [
+        ((across + 1) * (down + 1), extra_across * extra_down),
+        ((across + 1) * down, extra_across * (side_length - extra_down)),
+        (across * (down + 1), (side_length - extra_across) * extra_down),
+        (across * down, (side_length - extra_across) * (side_length - extra_down)),
+    ];
+    classes.sort_by(|a, b| b.0.cmp(a.0));
+    let mut left = max_ones;
+    let mut total = 0;
+    for (cells, positions) in classes.iter() {
+        let take = left.min(positions);
+        total += take * cells;
+        left -= take;
+    }
+    total
+}
+
+// ---- maximum_number_of_ones_heap.kara ----
+
+fn a2_maximum_number_of_ones(width: i64, height: i64, side_length: i64, max_ones: i64) -> i64 {
+    let mut queue: PriorityQueue[i64] = PriorityQueue.max_first();
+    for i in 0..side_length {
+        for j in 0..side_length {
+            queue.push(((width - i - 1) / side_length + 1) * ((height - j - 1) / side_length + 1));
+        }
+    }
+    let mut total = 0;
+    for _ in 0..max_ones {
+        total += queue.pop().unwrap();
+    }
+    total
+}
+
+// ---- maximum_number_of_ones_solution.kara ----
+
+struct Solution3 {}
+
+impl Solution3 {
+    pub fn maximum_number_of_ones(width: i32, height: i32, side_length: i32, max_ones: i32) -> i32 {
+        let mut cnt = Vec.new();
+        for i in 0..side_length {
+            for j in 0..side_length {
+                let x = (width - i - 1) / side_length + 1;
+                let y = (height - j - 1) / side_length + 1;
+                cnt.push(x * y);
+            }
+        }
+        cnt.sort_by(|a, b| b.cmp(a));
+        cnt.iter().take(max_ones).sum()
+    }
+}
+
+fn a3_maximum_number_of_ones(width: i64, height: i64, side_length: i64, max_ones: i64) -> i64 {
+    Solution3.maximum_number_of_ones(width as i32, height as i32, side_length as i32, max_ones as i32)
+}
+
+// ---- maximum_number_of_ones_chain.kara ----
+
+struct Solution4 {}
+
+impl Solution4 {
+    pub fn maximum_number_of_ones(width: i32, height: i32, side_length: i32, max_ones: i32) -> i32 {
+        let mut counts: Vec[i32] = (0..side_length * side_length)
+            .map(|k| {
+                let (i, j) = (k / side_length, k % side_length);
+                ((width - i - 1) / side_length + 1) * ((height - j - 1) / side_length + 1)
+            })
+            .collect();
+        counts.sort();
+        counts.iter().rev().take(max_ones).sum()
+    }
+}
+
+fn a4_maximum_number_of_ones(width: i64, height: i64, side_length: i64, max_ones: i64) -> i64 {
+    Solution4.maximum_number_of_ones(width as i32, height as i32, side_length as i32, max_ones as i32)
+}
+
+// ---- the statement read literally ----
+
+// The most ones of any `width * height` 0/1 matrix whose every `side *
+// side` square holds at most `max_ones`, by trying every matrix; bit `r *
+// width + c` of `mask` is the cell at row `r`, column `c`.
+fn literal(width: i64, height: i64, side: i64, max_ones: i64) -> i64 {
+    let mut best = 0;
+    for mask in 0..(1 << (width * height)) {
+        let ones = mask.count_ones();
+        if ones <= best {
+            continue;
+        }
+        let mut fits = true;
+        for r in 0..height - side + 1 {
+            for c in 0..width - side + 1 {
+                let mut n = 0;
+                for dr in 0..side {
+                    for dc in 0..side {
+                        n += (mask >> ((r + dr) * width + c + dc)) & 1;
+                    }
+                }
+                if n > max_ones {
+                    fits = false;
+                }
+            }
+        }
+        if fits {
+            best = ones;
+        }
+    }
+    best
+}
+
+fn arm(w: i64, width: i64, height: i64, side: i64, max_ones: i64) -> i64 {
+    match w {
+        0 => a0_maximum_number_of_ones(width, height, side, max_ones),
+        1 => a1_maximum_number_of_ones(width, height, side, max_ones),
+        2 => a2_maximum_number_of_ones(width, height, side, max_ones),
+        3 => a3_maximum_number_of_ones(width, height, side, max_ones),
+        _ => a4_maximum_number_of_ones(width, height, side, max_ones),
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, w: i64, p: i64, case: (i64, i64, i64, i64), got: i64, want: i64) {
+    t.checks += 1;
+    if got != want {
+        t.failures += 1;
+        t.by[p] += 1;
+        if t.failures <= 5 {
+            println(f"arm {w}, P{p}, case {case}: got {got}, want {want}");
+        }
+    }
+}
+
+// The six properties of every arm's answer on one case; `want` is the
+// literal reading's answer when the case is small enough to try.
+fn judge(t: mut ref Tally, case: (i64, i64, i64, i64), want: Option[i64]) {
+    let (width, height, side, max_ones) = case;
+    let star = a0_maximum_number_of_ones(width, height, side, max_ones);
+    t.check = (t.check * 31 + star + 1) % 1000000007;
+    let (lo, hi) = ((width / side) * (height / side), ((width + side - 1) / side) * ((height + side - 1) / side));
+    for w in 0..5 {
+        let a = arm(w, width, height, side, max_ones);
+        // P1: the statement read literally
+        if let Some(v) = want {
+            expect(mut t, w, 1, case, a, v);
+        }
+        // P2: the matrix turned on its side has the same answer
+        expect(mut t, w, 2, case, arm(w, height, width, side, max_ones), a);
+        // P3: one more one allowed in a square never lowers the answer, and
+        // as many as the square has fills the matrix
+        if max_ones < side * side {
+            expect(mut t, w, 3, case, arm(w, width, height, side, max_ones + 1).max(a), arm(w, width, height, side, max_ones + 1));
+        } else {
+            expect(mut t, w, 3, case, a, width * height);
+        }
+        // P4: every position is on between `lo` and `hi` cells
+        expect(mut t, w, 4, case, a.clamp(max_ones * lo, max_ones * hi), a);
+        // P5: a matrix of whole squares holds `max_ones` per square
+        expect(mut t, w, 5, case, arm(w, width / side * side, height / side * side, side, max_ones), max_ones * lo);
+        // P6: the ★ arm's answer
+        expect(mut t, w, 6, case, a, star);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // every case of at most 12 cells, against the literal reading
+    let mut small = 0;
+    for width in 1..13 {
+        for height in 1..13 {
+            if width * height > 12 {
+                continue;
+            }
+            for side in 1..width.min(height) + 1 {
+                for max_ones in 0..side * side + 1 {
+                    judge(mut t, (width, height, side, max_ones), Some(literal(width, height, side, max_ones)));
+                    small += 1;
+                }
+            }
+        }
+    }
+    // 400 random cases over the constraints' whole range
+    let mut seed = 11830;
+    for _ in 0..400 {
+        let width = 1 + next_random(mut seed) % 100;
+        let height = 1 + next_random(mut seed) % 100;
+        let side = 1 + next_random(mut seed) % width.min(height);
+        let max_ones = next_random(mut seed) % (side * side + 1);
+        judge(mut t, (width, height, side, max_ones), None);
+    }
+    println(f"{small} small and 400 random cases: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}
