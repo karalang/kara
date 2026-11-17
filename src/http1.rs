@@ -8,13 +8,19 @@
 //!
 //! The semantics follow the legacy runtime's server (`serve_request` in
 //! `runtime/src/lib.rs`): the query is split on `&` and each part on its
-//! first `=`, form-decoded; a response without a `content-type` gets
-//! `application/json`. A connection is kept for the next request until the
+//! first `=`, form-decoded. A response without a `content-type` gets
+//! [`DEFAULT_CONTENT_TYPE`]: its body is a `String` (review-thread ruling
+//! 2026-11-17 in docs/library/io.md, B-2026-11-16-275). A connection is kept for the next request until the
 //! client closes it or asks to (`Connection: close`, or HTTP/1.0 without
 //! `keep-alive`).
 
 /// Header (or query) pairs, in the order they came.
 pub type Headers = Vec<(String, String)>;
+
+/// The `Content-Type` of a response whose handler sets none: its body is
+/// a `String`, so text; a JSON API sets `application/json` itself
+/// (B-2026-11-16-275).
+pub const DEFAULT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 
 /// One request, as read off the wire.
 /// A request target in origin form: an absolute URL's path and query, `/`
@@ -211,7 +217,7 @@ pub fn response_bytes(
         req.keep_alive = false;
     }
     if !typed && !bodiless {
-        head.push_str("content-type: application/json\r\n");
+        head.push_str(&format!("content-type: {DEFAULT_CONTENT_TYPE}\r\n"));
     }
     // A HEAD response's length is the one a GET would get (RFC 9110
     // §9.3.2); a 1xx, 204 or 304 has none.
@@ -1174,7 +1180,7 @@ mod tests {
     /// (B-2026-11-17-45, -47, -48).
     #[test]
     fn a_response_is_framed_by_the_server() {
-        let server_error = "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: 0\r\n\r\n";
+        let server_error = "HTTP/1.1 500 Internal Server Error\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: 0\r\n\r\n";
         for h in [
             ("X-I", "a\r\nSet-Cookie: evil=1"),
             ("X-I: z\r\nX-J", "b"),
@@ -1206,7 +1212,7 @@ mod tests {
         assert!(!keep);
         assert_eq!(
             w,
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello"
+            "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello"
         );
     }
 }

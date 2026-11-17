@@ -1396,7 +1396,7 @@ mod http_server_tests {
     /// call per pair; the runtime drains the thread-local stage into
     /// hyper's response builder. Asserts the custom headers come back
     /// in the response. Also verifies that a user-set `Content-Type`
-    /// overrides the smoke-path default `application/json`.
+    /// overrides the default `text/plain; charset=utf-8`.
     #[test]
     #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_sets_response_headers() {
@@ -1500,7 +1500,7 @@ mod http_server_tests {
         // User-set Content-Type should win over the smoke-path default.
         assert!(
             has("Content-Type", "text/plain"),
-            "expected user Content-Type to override default `application/json`; \
+            "expected user Content-Type to override default `text/plain; charset=utf-8`; \
              got headers: {headers:?}"
         );
     }
@@ -3459,10 +3459,11 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
             if loc != "https://example.com/one" {
                 return Err(format!("location mismatch: {loc:?}"));
             }
-            // The documented default: `content-type` stays JSON unless a pair
-            // overrides it, so setting `location` must not have displaced it.
+            // The documented default: `content-type` is text unless a pair
+            // sets it (B-2026-11-16-275), so setting `location` must not
+            // have displaced it.
             if !headers.iter().any(|(k, v)| {
-                k.eq_ignore_ascii_case("content-type") && v.contains("application/json")
+                k.eq_ignore_ascii_case("content-type") && v == "text/plain; charset=utf-8"
             }) {
                 return Err(format!("content-type default lost; got {headers:?}"));
             }

@@ -1183,7 +1183,8 @@ fn http_server_natives_match_the_interpreter() {
         reply("404 Not Found", "GET /missing [] no x-a hosts=0", true),
     ]
     .concat();
-    let closure_want = "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 8\n\
+    let closure_want =
+        "HTTP/1.1 200 OK\ncontent-type: text/plain; charset=utf-8\ncontent-length: 8\n\
                         connection: close\n\nhello /p\nclosed after 0 more bytes\n";
     for (name, src, requests, want) in [
         (
@@ -1275,13 +1276,13 @@ fn serve_static_and_lowercased_header_names_match_on_both_backends() {
         (
             "static",
             SERVE_STATIC,
-            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 2\n\
+            "HTTP/1.1 200 OK\ncontent-type: text/plain; charset=utf-8\ncontent-length: 2\n\
              connection: close\n\n{}\nclosed after 0 more bytes\n",
         ),
         (
             "names",
             HEADER_NAMES,
-            "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 48\n\
+            "HTTP/1.1 200 OK\ncontent-type: text/plain; charset=utf-8\ncontent-length: 48\n\
              connection: close\n\nhost=h;x-test-echo=hi;connection=close; found hi\n\
              closed after 0 more bytes\n",
         ),

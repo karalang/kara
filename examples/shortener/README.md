@@ -43,8 +43,8 @@ struct Response {
 
 Codegen detects the third field and lowers each pair through
 `karac_runtime_http_response_set_header` (`src/codegen/http.rs`). Pairs
-are applied in order; `content-type` defaults to `application/json`
-unless a pair overrides it. The two-field form keeps working unchanged.
+are applied in order; `content-type` defaults to `text/plain;
+charset=utf-8` unless a pair sets it (B-2026-11-16-275). The two-field form keeps working unchanged.
 
 ## Oracle
 

@@ -167,7 +167,7 @@ fn http10_keep_alive_is_answered(mode: &str) {
     assert_eq!(
         kept,
         (
-            "http/1.1 200 ok|content-type: application/json|content-length: 2|connection: keep-alive"
+            "http/1.1 200 ok|content-type: text/plain; charset=utf-8|content-length: 2|connection: keep-alive"
                 .to_string(),
             false
         ),
@@ -176,7 +176,7 @@ fn http10_keep_alive_is_answered(mode: &str) {
     assert_eq!(
         plain,
         (
-            "http/1.1 200 ok|content-type: application/json|content-length: 2|connection: close"
+            "http/1.1 200 ok|content-type: text/plain; charset=utf-8|content-length: 2|connection: close"
                 .to_string(),
             true
         ),
@@ -185,7 +185,7 @@ fn http10_keep_alive_is_answered(mode: &str) {
     assert_eq!(
         v11,
         (
-            "http/1.1 200 ok|content-type: application/json|content-length: 2".to_string(),
+            "http/1.1 200 ok|content-type: text/plain; charset=utf-8|content-length: 2".to_string(),
             false
         ),
         "{mode}"

@@ -8935,7 +8935,7 @@ pub unsafe extern "C" fn karac_runtime_serve_https(
 /// for free fns lands (a follow-up — see Slice B's close-out).
 ///
 /// Behavior: every incoming request returns `200 OK` with the supplied
-/// body bytes and `content-type: application/json`. A `BOUND_PORT=<n>\n`
+/// body bytes and `content-type: text/plain; charset=utf-8`. A `BOUND_PORT=<n>\n`
 /// line is emitted to stdout before the accept loop starts so test
 /// harnesses can read the bound port from a `127.0.0.1:0` bind.
 ///
@@ -9017,7 +9017,7 @@ pub unsafe extern "C" fn karac_runtime_serve_http_static(
                             async move {
                                 let resp = hyper::Response::builder()
                                     .status(200)
-                                    .header("content-type", "application/json")
+                                    .header("content-type", "text/plain; charset=utf-8")
                                     .body(http_body_util::Full::new(body))
                                     .unwrap();
                                 Ok::<_, std::convert::Infallible>(resp)
@@ -9334,9 +9334,8 @@ async fn serve_request(
 
     // Phase-8 line 14 — apply user-set response headers (via
     // `karac_runtime_http_response_set_header`). If the user set
-    // their own `content-type` it overrides the smoke-path default;
-    // otherwise the default keeps the existing JSON-friendly behavior
-    // for `serve(handler)` cases that don't touch headers.
+    // their own `content-type` it overrides the default, text (the
+    // body is a `String`; B-2026-11-16-275).
     let user_set_content_type = user_headers
         .iter()
         .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
@@ -9345,7 +9344,7 @@ async fn serve_request(
         builder = builder.header(k.as_str(), v.as_str());
     }
     if !user_set_content_type {
-        builder = builder.header("content-type", "application/json");
+        builder = builder.header("content-type", "text/plain; charset=utf-8");
     }
     let response = builder
         .body(http_body_util::Full::new(body_out))

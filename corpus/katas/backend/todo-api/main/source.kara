@@ -42,6 +42,17 @@ import std.json.{Json};
 struct Response {
     status: i64,
     body: String,
+    headers: Vec[(String, String)],
+}
+
+// A JSON answer says so: a response without a Content-Type is sent as
+// text/plain (docs/library/io.md, kara B-2026-11-16-275).
+fn json(status: i64, body: own String) -> Response {
+    Response { status: status, body: body, headers: Vec[("Content-Type".to_string(), "application/json".to_string())] }
+}
+
+fn text(status: i64, body: own String) -> Response {
+    Response { status: status, body: body, headers: Vec.new() }
 }
 
 struct Todo {
@@ -140,11 +151,11 @@ fn extract_completed(j: own Json) -> bool {
 }
 
 fn not_found() -> Response {
-    Response { status: 404, body: "not found" }
+    text(404, "not found".to_string())
 }
 
 fn bad_request(msg: own String) -> Response {
-    Response { status: 400, body: msg }
+    text(400, msg)
 }
 
 fn handle(store: Store, req: Request) -> Response {
@@ -175,7 +186,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
             }
             let arr: Json = Json.Array(items);
             let body: String = arr.stringify();
-            return Response { status: 200, body: body };
+            return json(200, body);
         }
         // GET /todos/:id
         if p.starts_with("/todos/") {
@@ -191,7 +202,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
                                 ("completed", Json.Bool(t.completed)),
                             ]);
                             let body: String = obj.stringify();
-                            return Response { status: 200, body: body };
+                            return json(200, body);
                         }
                         None => return not_found(),
                     }
@@ -236,7 +247,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
                         ("completed", Json.Bool(completed)),
                     ]);
                     let body: String = obj.stringify();
-                    return Response { status: 201, body: body };
+                    return json(201, body);
                 }
             }
         }
@@ -271,7 +282,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
                                         ("completed", Json.Bool(completed)),
                                     ]);
                                     let body: String = obj.stringify();
-                                    return Response { status: 200, body: body };
+                                    return json(200, body);
                                 }
                             }
                         }
@@ -295,7 +306,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
                     match find_index_by_id(s, id) {
                         Some(idx) => {
                             let _ = s.todos.remove(idx);
-                            return Response { status: 204, body: "" };
+                            return text(204, String.new());
                         }
                         None => return not_found(),
                     }
@@ -306,7 +317,7 @@ fn route(s: mut ref Todos, req: Request) -> Response {
         return not_found();
     }
 
-    Response { status: 405, body: "method not allowed" }
+    text(405, "method not allowed".to_string())
 }
 
 fn main() {

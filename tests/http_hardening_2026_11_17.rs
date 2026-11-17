@@ -172,7 +172,7 @@ fn ok(body: &str) -> String {
     )
 }
 
-const SERVER_ERROR: &str = "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: 0\r\n\r\n";
+const SERVER_ERROR: &str = "HTTP/1.1 500 Internal Server Error\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: 0\r\n\r\n";
 
 fn server_refuses_and_frames(mode: &str) {
     let s = serve(mode, "cells", ECHO, None);
@@ -249,13 +249,13 @@ fn server_refuses_and_frames(mode: &str) {
         (
             "S38 handler TE",
             "GET /te HTTP/1.1\r\nHost: h\r\n\r\n".into(),
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 5\r\n\r\nhello".into(),
+            "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: 5\r\n\r\nhello".into(),
             false,
         ),
         (
             "S39 handler close",
             "GET /conn HTTP/1.1\r\nHost: h\r\n\r\n".into(),
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 1\r\nconnection: close\r\n\r\nc".into(),
+            "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: 1\r\nconnection: close\r\n\r\nc".into(),
             true,
         ),
         (
