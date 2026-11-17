@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 191 |
 | perf | 184 |
 | other | 113 |
-| soundness | 83 |
+| soundness | 84 |
 | miscompile | 81 |
 | run-vs-build | 55 |
 | crash | 47 |
@@ -85,7 +85,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 87 |
 | runtime | 87 |
 | resolver | 40 |
-| effect | 39 |
+| effect | 40 |
 | other | 33 |
 | codegen | 22 |
 | autopar | 7 |
@@ -140,7 +140,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-313 | 2026-11-16 | cli | low | `karac build --target=wasm32-wasip1` (or -threads) is taken as a native triple and fails at link with `wasm-ld: cannot open crt1.o`, `unable to find library -lpthread`, instead of mapping to wasm_wasi or pointing at it | — |
 | B-2026-11-16-314 | 2026-11-16 | cli | low | `karac build --help` describes `--target=wasm_browser` as emitting `.wasm` + `.js` glue + `.d.ts` with no 'Not in 0.8' mark, but the build refuses it ('builds the browser wasm bindings, which is not in 0.8') | — |
 | B-2026-11-16-315 | 2026-11-16 | other | low | [doc-only] design.md's resource table marks `Env` on wasm_wasi as '(limited)' without saying what is limited, and §16 names `libkarac_runtime_wasm_threads_{unicode,regex}.a` although no 0.8 build can link a threaded wasm module | — |
-| B-2026-11-16-273 | 2026-11-16 | runtime+mir-llvm | medium | A `TaskGroup.new(limit: 2)` group ran up to four of its tasks at once on the ASan lane, where `spawn` blocks while `n` of its tasks are running (design.md §13 `TaskGroup`) | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
 | B-2026-11-16-340 | 2026-11-16 | typecheck | low | An unsuffixed float literal that a context types as `f32`/`f16`/`bf16` is not range-checked there: `let a: f32 = 1e39;` is accepted as an f32 infinity | — |
 | B-2026-11-16-341 | 2026-11-16 | parser | low | `|>` is a token the parser accepts and the typechecker refuses late, so its stage's own type errors are reported first: `1 |> f` with a 2-parameter `f` gives `expected 2 argument(s), found 1` before `there is no pipe operator` | — |
@@ -167,11 +166,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
-| B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
 | B-2026-11-17-93 | 2026-11-17 | runtime | low | The HTTP/1 server re-parses a chunked request from its first byte at each chunk: a body of k chunks costs O(k x request size) | — |
 | B-2026-11-17-95 | 2026-11-17 | ownership | low | The ownership-cycle diagnostic names a cycle from a different start on each run (`B → A → B` or `A → B → A`), so tests/fmt_round_trip.rs fails at random on corpus/diagnostics/e0501 | — |
 | B-2026-11-17-98 | 2026-11-17 | typecheck | low | A name bound from a fold's result gets no reason and no suffix fix: `let (inside, outside) = distance.iter().enumerate().fold((0, 0), ..)` over `i32` legs, then `inside.min(outside)` returned as `i32`, is refused with only "implicit coercion from 'i64' to 'i32' would narrow or change sign" | — |
 | B-2026-11-17-99 | 2026-11-17 | typecheck | low | A sum over literals gets no reason and no fix: `let days: i32 = (1971..year).map(|y| if leap(y) { 366 } else { 365 }).sum() + [31, 28, ..].iter().take(..).sum() + day`, once `karac fix` drops Rust's `sum::<i32>()` turbofishes, is refused with only "would narrow or change sign" | — |
+| B-2026-11-17-100 | 2026-11-17 | effect | low | A match / if let / while let arm binding taken by value from an owned scrutinee is not charged its Drop body's effects when the arm only reads it: the typechecker records no node type for the binding, so the drop walk sees no owned value | — |
 
 ### Relocated
 
@@ -1543,6 +1542,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-324 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while… | 2d8e3c77c1 |
 | B-2026-11-16-325 | other | low | [doc-only] core-types.md § Parsing does not say which spellings of the special float values `f64.parse` accepts; every lane accepts `inf`, `-inf`, `i… | ada66fb83f |
 | B-2026-11-16-272 | mir | low | When a `par` branch or `par for` iteration leaves early (`?`, `return`), the block's other values dropped in source order, where core-semantics §11.7… | a04638fd9e |
+| B-2026-11-16-273 | runtime+mir-llvm | medium | A `TaskGroup.new(limit: 2)` group ran up to four of its tasks at once on the ASan lane, where `spawn` blocks while `n` of its tasks are running (desi… | cdd1832edd |
 | B-2026-11-16-326 | mir | high | `<` on a type whose derived ordering reaches itself (`#[derive(PartialEq, PartialOrd)] enum Tree { Leaf(i64), Node(Vec[Tree]) }`) overflows the stack… | a8c99e46a9 |
 | B-2026-11-16-327 | mir | high | A NaN pair that decides a derived ordering makes `<=` and `>=` true: `P { x: NaN } <= P { x: 1.0 }`, `(NaN, 1) >= (1.0, 1)` and `[NaN] >= [1.0]` all… | a8c99e46a9 |
 | B-2026-11-16-328 | typecheck | medium | `fn f() -> impl Iterator[Item = i64] { 0..3 }` is refused with `body type Range[i64] declares Item = i64` (E_IMPL_TRAIT_ASSOC_MISMATCH): a witness wh… | a8c99e46a9 |
@@ -1611,6 +1611,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-69 | typecheck | low | A bare `ref String` arm beside a `Str` arm is refused with no fix: `match p.split_once(" ") { Some((w, _)) => w, None => p }` over `p` from `phrases.… | cf35bf7d49 |
 | B-2026-11-17-70 | parser | low | `karac fix` opens `from_iter(` inside a parenthesized receiver: `(0..n).flat_map(..).collect::<BTreeSet<_>>().into_iter()` becomes `(SortedSet.from_i… | cf35bf7d49 |
 | B-2026-11-17-73 | typecheck | low | E0252 on assigning a module-level binding suggests declaring it `let mut`, which E_MODULE_LET refuses: the fix it names is itself an error | 1a718ba8ca |
+| B-2026-11-17-76 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts a… | 2f2b64d135 |
 | B-2026-11-17-77 | typecheck | medium | `Point.make()` where two traits `Point` implements each declare `make` (no self) is accepted and silently runs the first impl; design.md § Associated… | ba28831243 |
 | B-2026-11-17-80 | typecheck+mir | medium | Iterators have no `cycle` (`backends.iter().cycle()`, `(0..n).cycle().take(k)`): it is refused as "no method 'cycle' on type 'VecIter'", and 11 legac… | 050b42435e |
 | B-2026-11-17-85 | typecheck+mir | medium | core-semantics §3-§7 refusals that do not name both places or carry the fix the doc implies: E0516 live-borrow conflicts give no borrow or use positi… | 6610db8471 |
