@@ -700,6 +700,16 @@ fn self_test() {
 
 // ------------------------------------------------------------------- live
 
+// The client answers a final status outside 2xx with an Err that keeps the
+// response (io.md § HTTP client). A 3xx it did not follow, such as a 304,
+// is an answer here, not a failure.
+fn answered(e: own HttpError) -> Result[Response, HttpError] {
+    match e.status() {
+        Some(s) if s < 400 => Ok(Response { status: s, body: e.body() ?? "", headers: e.headers() }),
+        _ => Err(e),
+    }
+}
+
 fn call(c: Client, method: Str, path: Str, headers: Slice[(Str, Str)], body: Str) {
     let mut b = c.request(method.to_string(), f"http://{ADDR}{path}").timeout(3000);
     for (k, v) in headers.iter() {
@@ -709,10 +719,14 @@ fn call(c: Client, method: Str, path: Str, headers: Slice[(Str, Str)], body: Str
         b = b.body(body.to_string());
     }
     let shown: Vec[String] = headers.iter().map(|(k, v)| f" {k}: {v}").collect();
-    match b.send() {
+    let sent = match b.send() {
+        Ok(r) => Ok(r),
+        Err(e) => answered(e),
+    };
+    match sent {
         Ok(r) => {
-            let tag = r.header("ETag") ?? "-";
-            let range = r.header("Content-Range") ?? "-";
+            let tag = header_of(r.headers, "ETag") ?? "-";
+            let range = header_of(r.headers, "Content-Range") ?? "-";
             let text = r.body.replace("\n", " | ");
             println(f"  {method} {path}{shown.join("")} -> {r.status} {tag} {range} {text}");
         }

@@ -837,7 +837,7 @@ fn http_client_natives_match_the_interpreter() {
 }
 
 /// An `HttpError` for a status of 400 or more keeps its response: its
-/// status, a header by name without case, and the body. A refused
+/// status, a header by name without case, every header, and the body. A refused
 /// connection, an error the program built and one whose message was
 /// copied keep none (io.md § HTTP client, B-2026-11-09-44).
 const HTTP_ERROR_RESPONSE: &str = r#"
@@ -858,7 +858,11 @@ fn show(e: HttpError) {
         Some(b) => f"[{b}]",
         None => "none".to_string(),
     };
-    println(f"{e.message()} | {status} {header} {absent} {body}");
+    let mut all = "".to_string();
+    for (k, v) in e.headers() {
+        all.push_str(f"{k}={v};");
+    }
+    println(f"{e.message()} | {status} {header} {absent} {body} <{all}>");
 }
 
 fn main() {
@@ -894,11 +898,11 @@ fn http_error_keeps_the_response_of_an_error_status() {
     assert_eq!(
         interp,
         format!(
-            "http://127.0.0.1:{port}/missing: status code 404 | 404 yes none [nope]\n\
-             http://127.0.0.1:{port}/missing: status code 404 | none none none none\n\
-             http://127.0.0.1:{port}/gone: status code 404 | 404 yes none [nope]\n\
+            "http://127.0.0.1:{port}/missing: status code 404 | 404 yes none [nope] <content-length=4;x-kara=yes;>\n\
+             http://127.0.0.1:{port}/missing: status code 404 | none none none none <>\n\
+             http://127.0.0.1:{port}/gone: status code 404 | 404 yes none [nope] <content-length=4;x-kara=yes;>\n\
              refused true true\n\
-             built | none none none none\n"
+             built | none none none none <>\n"
         )
     );
     if let Some(built) = built {

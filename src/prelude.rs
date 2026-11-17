@@ -3924,7 +3924,7 @@ mod tests {
         assert_inherent_impl_compiler_builtin(
             "http.kara",
             "HttpError",
-            &["message", "status", "header", "body"],
+            &["message", "status", "header", "body", "headers"],
         );
         // Slice B (2026-05-09): server surface. `serve` is the Slice B
         // follow-up handler-dispatch entry (codegen + thin stdlib

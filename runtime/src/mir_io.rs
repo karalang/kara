@@ -1390,8 +1390,22 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_header(
 #[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_http_client_mir_headers(body: *const u8, out: *mut RawVec) {
-    let h = mir_response_headers(body);
-    let n = usize::try_from(crate::karac_runtime_http_response_headers_count(h)).unwrap_or(0);
+    // SAFETY: the caller's contract.
+    unsafe { response_header_pairs(mir_response_headers(body), out) };
+}
+
+/// The headers of the runtime's header handle `h` (0 for none) as a fresh
+/// `Vec[(String, String)]` at `out`, in the order they came.
+///
+/// # Safety
+///
+/// `out` is writable for a `Vec`.
+unsafe fn response_header_pairs(h: i64, out: *mut RawVec) {
+    let n = if h == 0 {
+        0
+    } else {
+        usize::try_from(crate::karac_runtime_http_response_headers_count(h)).unwrap_or(0)
+    };
     let pair = 2 * std::mem::size_of::<RawVec>();
     let items = if n == 0 {
         std::ptr::null_mut()
@@ -1462,6 +1476,24 @@ pub unsafe extern "C" fn karac_runtime_http_error_mir_header(
         string_of(out, std::ffi::CStr::from_ptr(v).to_bytes());
     }
     1
+}
+
+/// `HttpError.headers()`: the kept response's headers as a fresh
+/// `Vec[(String, String)]` at `out`, in the order they came; empty when the
+/// error keeps no response.
+///
+/// # Safety
+///
+/// `msg` describes `len` readable bytes, and `out` is writable for a `Vec`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_error_mir_headers(
+    msg: *const u8,
+    len: u64,
+    out: *mut RawVec,
+) {
+    let h = mir_error_response(msg, len, |e| e.headers).unwrap_or(0);
+    // SAFETY: the caller's contract.
+    unsafe { response_header_pairs(h, out) };
 }
 
 /// `HttpError.body()`: 1 with the kept response's body as a `String` at

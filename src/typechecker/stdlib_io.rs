@@ -419,10 +419,24 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 }
             }
+            // Every header of the kept response; empty without one.
+            "headers" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "HttpError.headers() takes no arguments".to_string(),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::Tuple(vec![Type::Str, Type::Str])],
+                }
+            }
             _ => self.require_known_method(
                 "HttpError",
                 method,
-                &["body", "header", "message", "status"],
+                &["body", "header", "headers", "message", "status"],
                 args,
                 span,
             ),

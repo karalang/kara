@@ -178,15 +178,16 @@ impl WebSocket {
     // `websocket`, version 13, with a key that is the base64 of 16 bytes;
     // else the status the server refuses it with: 426 (with
     // `Sec-WebSocket-Version: 13`) for another version or none, 400 for
-    // anything else (B-2026-11-17-57); 0 for a request that does not ask
-    // to upgrade at all.
+    // anything else (B-2026-11-17-57); 500 for a request that does not
+    // ask to upgrade at all, whose 101 is the handler's error (`accept`
+    // answers it 400 as any other request that is no handshake).
     fn __handshake(method: Str, upgrade: Option[String], version: Option[String], key: Option[String]) -> Result[String, i64] {
         let upgrades = match upgrade {
             Some(v) => v.to_lowercase().contains("websocket"),
             None => false,
         };
         if not upgrades {
-            return Err(0);
+            return Err(500);
         }
         if method != "GET" {
             return Err(400);

@@ -707,6 +707,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(
         mir_io::karac_runtime_http_error_mir_status,
         mir_io::karac_runtime_http_error_mir_header,
+        mir_io::karac_runtime_http_error_mir_headers,
         mir_io::karac_runtime_http_error_mir_body,
         mir_io::karac_runtime_http_client_mir_bytes,
     );

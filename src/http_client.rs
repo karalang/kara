@@ -218,8 +218,12 @@ async fn http_fetch_redirects(
                 }
                 // The caller's credentials go no further once a hop leaves
                 // the first request's origin (docs/library/io.md).
+                // A program's Host named the first origin's server too.
                 if !crate::http_proxy::redirect_keeps_credentials(&first, &url) {
-                    headers.retain(|(k, _)| !crate::http_proxy::is_credential_header(k));
+                    headers.retain(|(k, _)| {
+                        !crate::http_proxy::is_credential_header(k)
+                            && !k.eq_ignore_ascii_case("host")
+                    });
                 }
                 continue;
             }
@@ -510,13 +514,20 @@ fn http_build_request(
     let method = hyper::Method::from_bytes(method.as_bytes())
         .map_err(|e| format!("{url}: bad method: {e}"))?;
     let mut builder = hyper::Request::builder().method(method).uri(target);
+    // One Host: the program's own when it sets one (a virtual host
+    // reached by address, `curl -H 'Host: ..'`), else the URL's. HTTP/2
+    // has none (its `:authority` is the URL's).
+    let own_host = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("host"))
+        .map(|(_, v)| v.as_str());
     if let Some(host) = host_header {
-        builder = builder.header(hyper::header::HOST, host);
+        builder = builder.header(hyper::header::HOST, own_host.unwrap_or(host));
     }
-    // The body's length and the URL's host are the client's to send: a
-    // program's own `Content-Length` or `Host` (one copied from a request
-    // it received, say) would mis-frame the body or send a second Host
-    // (docs/library/io.md § HTTP client, B-2026-11-17-54).
+    // The body's length is the client's to send: a program's own
+    // `Content-Length` (one copied from a request it received, say) would
+    // mis-frame the body; its `Host` is sent once, above, in place of the
+    // URL's (docs/library/io.md § HTTP client, B-2026-11-17-54).
     for (k, v) in headers {
         if k.eq_ignore_ascii_case("content-length") || k.eq_ignore_ascii_case("host") {
             continue;

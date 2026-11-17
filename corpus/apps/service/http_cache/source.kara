@@ -290,7 +290,20 @@ fn fetch(cache: Cache, req: Request, key: Str, extra: Vec[(String, String)]) -> 
     }
     match b.send() {
         Ok(r) => Ok(r),
-        Err(e) => Err(e.message()),
+        Err(e) => match answered(e) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(e.message()),
+        },
+    }
+}
+
+// The client answers a final status outside 2xx with an Err that keeps the
+// response (io.md § HTTP client). A 3xx it did not follow, such as a 304,
+// is an answer here, not a failure.
+fn answered(e: own HttpError) -> Result[Response, HttpError] {
+    match e.status() {
+        Some(s) if s < 400 => Ok(Response { status: s, body: e.body() ?? "", headers: e.headers() }),
+        _ => Err(e),
     }
 }
 
@@ -758,9 +771,13 @@ fn call(c: Client, method: Str, path: Str, headers: Slice[(Str, Str)]) {
     }
     let pairs: Vec[String] = headers.iter().map(|(k, v)| f" {k}: {v}").collect();
     let shown = pairs.join("");
-    match b.send() {
+    let sent = match b.send() {
+        Ok(r) => Ok(r),
+        Err(e) => answered(e),
+    };
+    match sent {
         Ok(r) => {
-            let label = r.header("X-Cache") ?? "?";
+            let label = header_of(r.headers, "X-Cache") ?? "?";
             println(f"  {method} {path}{shown} -> {r.status} {label} {r.body}");
         }
         Err(e) => println(f"  {method} {path}{shown} -> error: {e.message()}"),

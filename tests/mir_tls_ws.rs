@@ -781,7 +781,7 @@ const SERVE_WS_OUT: &str = "request /chat\nrequest /chat\nrequest /health\ntext 
 
 const SERVE_WS_TRANSCRIPT: &str = "accept true\naccept true\nHTTP/1.1 200 OK [ok]\n\
      text echo two\ntext echo one\nclose 1001\n\
-     HTTP/1.1 101 Switching Protocols []\nHTTP/1.1 404 Not Found [nope]\nclose 1000\n";
+     HTTP/1.1 500 Internal Server Error []\nHTTP/1.1 404 Not Found [nope]\nclose 1000\n";
 
 #[test]
 fn mir_serve_ws_upgrades_while_serving() {

@@ -49,10 +49,13 @@ another deleted.
 
 Oracle: `object_store.py`, the same store with `http.server` and
 `http.client`. `expected.out` is its output. The Kāra client turns a
-status of 400 or more into an `Err` carrying only "<url>: status code
-<n>" (B-2026-11-09-44), so the live run's 412, 416 and 404 print that
-message; the mirror's client does the same. A 304 comes back as a
-response.
+final status outside 2xx into an `Err` that keeps the response
+(B-2026-11-09-44, B-2026-11-15-134). The live client prints a status of
+400 or more as that error's "<url>: status code <n>", so the run's 412,
+416 and 404 print that message. A 3xx the client did not follow, the 304
+above all, is an answer: `answered` rebuilds the `Response` from the
+error's `status`, `body` and `headers` (B-2026-11-17-94). The mirror's
+client does the same.
 
 ## Edits from object_store.orig.kara to object_store.kara
 

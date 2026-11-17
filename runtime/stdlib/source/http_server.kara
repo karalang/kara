@@ -180,7 +180,9 @@ impl Server {
             // valid opening handshake; one that asks to upgrade but is not
             // valid is answered 400, or 426 for a version other than 13
             // (RFC 6455 §4.2.2, B-2026-11-17-57). A 101 to a request that
-            // does not ask to upgrade is sent as the handler's response.
+            // does not ask to upgrade is a handler error, answered 500: the
+            // client cannot follow a switch it did not ask for
+            // (review-thread ruling 2026-11-17).
             if upgrades and resp.status == 101 {
                 match Server.__handshake_key(req) {
                     Ok(key) => {
@@ -202,7 +204,6 @@ impl Server {
                         });
                         return;
                     }
-                    Err(0) => {}
                     Err(status) => {
                         let refusal = Server.__refusal(status);
                         let _ = conn.write_all(refusal.bytes());
@@ -318,6 +319,7 @@ impl Server {
     // connection.
     fn __refusal(status: i64) -> String {
         let reason = match status {
+            500 => "Internal Server Error",
             408 => "Request Timeout",
             413 => "Content Too Large",
             426 => "Upgrade Required",

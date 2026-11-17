@@ -1754,6 +1754,23 @@ impl<'ctx> Cx<'ctx, '_> {
             // The response an error for a status of 400 or more keeps,
             // by its message's buffer (`karac_runtime_http_error_mir_*`,
             // B-2026-11-09-44); one the program built keeps none.
+            ("HttpError", "headers") => {
+                let (at, ty) = self.behind_refs(&args[0])?;
+                let msg = self.offset(at, self.field_offset(ty, None, 0)?)?;
+                let mp = self.load_ptr(msg)?;
+                let mn = self.load_len(self.offset(msg, 8)?)?;
+                let d = self.place_ptr(dest)?;
+                let f = self.extern_fn(
+                    "karac_runtime_http_error_mir_headers",
+                    self.llcx.void_type().fn_type(
+                        &[ptr.into(), self.llcx.i64_type().into(), ptr.into()],
+                        false,
+                    ),
+                );
+                self.builder
+                    .build_call(f, &[mp.into(), mn.into(), d.into()], "")
+                    .map_err(e)?;
+            }
             ("HttpError", "status" | "header" | "body") => {
                 let (at, ty) = self.behind_refs(&args[0])?;
                 let msg = self.offset(at, self.field_offset(ty, None, 0)?)?;

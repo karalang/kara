@@ -28,7 +28,18 @@ class Response:
 
 
 class HttpError(Exception):
-    pass
+    """The Kara client's error: a final status outside 2xx keeps its
+    response (status, body, headers); a failure without one keeps None."""
+    def __init__(self, message, response=None):
+        super().__init__(message)
+        self.response = response
+
+
+def answered(e):
+    """A 3xx the client did not follow, such as a 304, is an answer, not a
+    failure: the response the error keeps, or None."""
+    r = e.response
+    return r if r is not None and r.status < 400 else None
 
 
 def header_of(headers, name):
@@ -263,7 +274,8 @@ def fetch(cache, req, key, extra):
     try:
         return cache.send(req.method(), f"{cache.origin}{key}", headers, body, 1000), None
     except HttpError as e:
-        return None, str(e)
+        r = answered(e)
+        return (r, None) if r is not None else (None, str(e))
 
 
 STORABLE = [200, 203, 301, 404, 410]
@@ -592,7 +604,8 @@ def self_test():
 # ---------------------------------------------------------------- network
 
 def real_send(method, url, headers, body, timeout_ms):
-    """The Kara client: a status of 400 or more is an error."""
+    """The Kara client: a final status outside 2xx is an error that keeps
+    its response."""
     rest = url[len("http://"):]
     hostport, _, path = rest.partition("/")
     host, _, port = hostport.partition(":")
@@ -613,8 +626,8 @@ def real_send(method, url, headers, body, timeout_ms):
         raise HttpError(f"{url}: {e}")
     finally:
         conn.close()
-    if status >= 400:
-        raise HttpError(f"{url}: status code {status}")
+    if not 200 <= status < 300:
+        raise HttpError(f"{url}: status code {status}", Response(status, text, hs))
     return Response(status, text, hs)
 
 
@@ -735,10 +748,13 @@ def call(method, path, headers):
     shown = "".join(f" {k}: {v}" for k, v in headers)
     try:
         r = real_send(method, f"http://{CACHE_ADDR[0]}:{CACHE_ADDR[1]}{path}", headers, None, 3000)
-        label = header_of(r.headers, "X-Cache") or "?"
-        print(f"  {method} {path}{shown} -> {r.status} {label} {r.body}")
     except HttpError as e:
-        print(f"  {method} {path}{shown} -> error: {e}")
+        r = answered(e)
+        if r is None:
+            print(f"  {method} {path}{shown} -> error: {e}")
+            return
+    label = header_of(r.headers, "X-Cache") or "?"
+    print(f"  {method} {path}{shown} -> {r.status} {label} {r.body}")
 
 
 def main():

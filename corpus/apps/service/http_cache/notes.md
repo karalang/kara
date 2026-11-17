@@ -44,12 +44,16 @@ the cache's entries, its event log and each origin path's hit count.
 
 Oracle: `http_cache.py`, the same proxy with `http.server` and
 `http.client`. `expected.out` is its output. The Kāra client turns a
-status of 400 or more into an `Err` carrying only "<url>: status code
-<n>" (B-2026-11-09-44), so on the real network an origin's 404 is an
-origin failure (the cache answers 502) and so is a 503 (which is what
-`stale-if-error` answers); the mirror's client does the same. A 304 comes
-back as a response. Under the fake `Network` every status comes back as
-it is, so the self-test stores a 404.
+final status outside 2xx into an `Err` that keeps the response
+(B-2026-11-09-44, B-2026-11-15-134). The cache treats a status of 400 or
+more as a failure carrying "<url>: status code <n>", so on the real
+network an origin's 404 is an origin failure (the cache answers 502) and
+so is a 503 (which is what `stale-if-error` answers). A 3xx the client did
+not follow, the origin's 304 above all, is an answer: `answered` rebuilds
+the `Response` from the error's `status`, `body` and `headers`
+(B-2026-11-17-94). The mirror's client does the same. Under the fake
+`Network` every status comes back as it is, so the self-test stores a
+404.
 
 ## Edits from http_cache.orig.kara to http_cache.kara
 

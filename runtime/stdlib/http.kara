@@ -206,6 +206,11 @@ impl HttpError {
 
     #[compiler_builtin]
     fn body(ref self) -> Option[String] { None }
+
+    // Every header of the kept response, as `Response.headers()` gives
+    // them; empty when the error keeps no response.
+    #[compiler_builtin]
+    fn headers(ref self) -> Vec[(String, String)] { Vec.new() }
 }
 
 // ── Server surface (Slice B, 2026-05-09) ──────────────────────────────

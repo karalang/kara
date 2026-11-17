@@ -12,10 +12,11 @@
 //!   answered (-53);
 //! - a failed `accept` is retried, so running out of descriptors does not
 //!   stop the server (-49);
-//! - the client sends the body's length and the URL's host whatever the
-//!   program's headers say (-54), refuses an empty method on both backends
-//!   (-55), and reads an IPv6 literal, a port over 65535 and a query with
-//!   no path as RFC 3986 does (-56);
+//! - the client sends the body's length whatever the program's headers say,
+//!   and one Host, the program's own when it sets one (-54); it
+//!   refuses an empty method on both backends (-55), and reads an IPv6
+//!   literal, a port over 65535 and a query with no path as RFC 3986
+//!   does (-56);
 //! - the WebSocket server refuses close codes a peer may not send and a
 //!   handshake that is not version 13 or whose key is not 16 bytes (-57).
 
@@ -516,7 +517,7 @@ fn client_sends_its_own_framing(mode: &str) {
         vec![
             format!("POST /cl HTTP/1.1|{hp}|content-length: 5|hello"),
             format!("POST /cl2 HTTP/1.1|{hp}|content-length: 5|hello"),
-            format!("GET /h HTTP/1.1|{hp}"),
+            "GET /h HTTP/1.1|host: evil.example".to_string(),
             format!("GET /?x=1 HTTP/1.1|{hp}"),
         ],
         "{mode}"

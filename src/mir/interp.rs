@@ -17412,6 +17412,17 @@ impl<'a> Interp<'a> {
                 };
                 self.option(ret, found)
             }
+            ("HttpError", "headers") => {
+                let headers = match field(0) {
+                    Some(Value::Box(id)) => self
+                        .http_error_responses
+                        .get(&id)
+                        .map(|a| a.headers.clone())
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                Ok(self.header_pairs(headers))
+            }
             ("Response" | "HttpError", "body" | "message") => {
                 let text = match field(if base == "Response" { body_k } else { 0 }) {
                     Some(v) => self.string_at(&v)?,

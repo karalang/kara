@@ -32,7 +32,18 @@ class Response:
 
 
 class HttpError(Exception):
-    pass
+    """The Kara client's error: a final status outside 2xx keeps its
+    response (status, body, headers); a failure without one keeps None."""
+    def __init__(self, message, response=None):
+        super().__init__(message)
+        self.response = response
+
+
+def answered(e):
+    """A 3xx the client did not follow, such as a 304, is an answer, not a
+    failure: the response the error keeps, or None."""
+    r = e.response
+    return r if r is not None and r.status < 400 else None
 
 
 def header_of(headers, name):
@@ -650,7 +661,8 @@ def self_test():
 # ------------------------------------------------------------------- live
 
 def real_send(method, url, headers, body, timeout_ms):
-    """The Kara client: a status of 400 or more is an error."""
+    """The Kara client: a final status outside 2xx is an error that keeps
+    its response."""
     rest = url[len("http://"):]
     hostport, _, path = rest.partition("/")
     host, _, port = hostport.partition(":")
@@ -671,8 +683,8 @@ def real_send(method, url, headers, body, timeout_ms):
         raise HttpError(f"{url}: {e}")
     finally:
         conn.close()
-    if status >= 400:
-        raise HttpError(f"{url}: status code {status}")
+    if not 200 <= status < 300:
+        raise HttpError(f"{url}: status code {status}", Response(status, text, hs))
     return Response(status, text, hs)
 
 
@@ -713,12 +725,15 @@ def call(method, path, headers, body):
     shown = "".join(f" {k}: {v}" for k, v in headers)
     try:
         r = real_send(method, f"http://{ADDR[0]}:{ADDR[1]}{path}", headers, body, 3000)
-        tag = header_of(r.headers, "ETag") or "-"
-        rng = header_of(r.headers, "Content-Range") or "-"
-        text = r.body.replace("\n", " | ")
-        print(f"  {method} {path}{shown} -> {r.status} {tag} {rng} {text}")
     except HttpError as e:
-        print(f"  {method} {path}{shown} -> error: {e}")
+        r = answered(e)
+        if r is None:
+            print(f"  {method} {path}{shown} -> error: {e}")
+            return
+    tag = header_of(r.headers, "ETag") or "-"
+    rng = header_of(r.headers, "Content-Range") or "-"
+    text = r.body.replace("\n", " | ")
+    print(f"  {method} {path}{shown} -> {r.status} {tag} {rng} {text}")
 
 
 def dump(store):
