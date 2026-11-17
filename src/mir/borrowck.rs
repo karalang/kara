@@ -326,6 +326,26 @@ pub fn borrow_errors_with(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
     closure_sig: &ClosureSig<'_>,
 ) -> Vec<BorrowError> {
+    borrow_errors_in(body, tys, has_receiver, closure_sig, &|_| false)
+}
+
+/// The functions whose result carries a view one of their parameters
+/// holds, by name: [`view_results`]. A call of one hands back a value
+/// that holds what its arguments view, as a closure made in the caller
+/// would.
+pub type ViewResults<'a> = dyn Fn(&str) -> bool + 'a;
+
+/// [`borrow_errors_with`], told which functions hand back a value holding
+/// a view of what their arguments view ([`view_results`]): a closure such
+/// a call returns, passed on to be stored where no borrow is kept, is
+/// refused as one made in the body is (B-2026-11-17-92).
+pub fn borrow_errors_in(
+    body: &Body,
+    tys: &TyInterner,
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
+    closure_sig: &ClosureSig<'_>,
+    view_results: &ViewResults<'_>,
+) -> Vec<BorrowError> {
     let mut errs = read_only_errors(body, tys);
     errs.extend(view_into_shared_errors(body, tys));
     let loans = collect_loans(body, tys);
@@ -335,6 +355,7 @@ pub fn borrow_errors_with(
         &loans,
         has_receiver,
         closure_sig,
+        view_results,
     ));
     if loans.is_empty() {
         return errs;
@@ -348,7 +369,7 @@ pub fn borrow_errors_with(
         closure_sig,
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
-        made_here: closures_made_here(body),
+        made_here: closures_made_here(body, view_results),
     };
     let origins = origins_dataflow(&cx, entry);
     let scopes = scope_dataflow(body, &loans);
@@ -560,30 +581,12 @@ fn view_param_escape_errors(
     body_loans: &[Loan],
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
     closure_sig: &ClosureSig<'_>,
+    view_results: &ViewResults<'_>,
 ) -> Vec<BorrowError> {
-    let params: Vec<Local> = (1..=body.arg_count)
-        .map(|i| Local(i as u32))
-        .filter(|l| holds_view(tys, body.local(*l).ty))
-        .collect();
+    let (params, loans) = view_param_loans(body, tys);
     if params.is_empty() {
         return Vec::new();
     }
-    // Reached through a reference, as what a caller lends is: the body
-    // can neither end it nor store into it.
-    let loans: Vec<Loan> = params
-        .iter()
-        .enumerate()
-        .map(|(i, &p)| Loan {
-            kind: BorrowKind::Shared,
-            place: Place {
-                local: p,
-                projection: vec![ProjElem::Deref],
-            },
-            through_shared_ref: true,
-            through_mut_ref: false,
-            at: (usize::MAX, i),
-        })
-        .collect();
     let cx = Cx {
         body,
         tys,
@@ -592,7 +595,7 @@ fn view_param_escape_errors(
         closure_sig,
         writes_slices: writes_slices(body, tys, body_loans),
         pred_captures: LoanSet::default(),
-        made_here: closures_made_here(body),
+        made_here: closures_made_here(body, view_results),
     };
     let mut entry = Origins::default();
     for (i, &p) in params.iter().enumerate() {
@@ -646,6 +649,92 @@ fn view_param_escape_errors(
     errs
 }
 
+/// The parameters of `body` that hold a view, and for each one loan
+/// standing for what it views, taken before the body runs: reached
+/// through a reference, as what a caller lends is, so the body can
+/// neither end it nor store into it.
+fn view_param_loans(body: &Body, tys: &TyInterner) -> (Vec<Local>, Vec<Loan>) {
+    let params: Vec<Local> = (1..=body.arg_count)
+        .map(|i| Local(i as u32))
+        .filter(|l| holds_view(tys, body.local(*l).ty))
+        .collect();
+    let loans = params
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| Loan {
+            kind: BorrowKind::Shared,
+            place: Place {
+                local: p,
+                projection: vec![ProjElem::Deref],
+            },
+            through_shared_ref: true,
+            through_mut_ref: false,
+            at: (usize::MAX, i),
+        })
+        .collect();
+    (params, loans)
+}
+
+/// The bodies whose result holds a function value or a `dyn` that may
+/// carry a view one of their parameters holds: at some `return`, the
+/// result's origins include a parameter's ([`view_param_loans`]). A
+/// closure made in the body and returned, capturing a view parameter, is
+/// one (`mk(v: Slice[D]) -> Fn() -> i64 { || v[0].n }`); a function
+/// choosing among closures that capture nothing is not (`op(name) ->
+/// Fn(..)`). A call in the body counts as §5.4 has it, holding what its
+/// arguments hold, so a factory that returns another's result is one too.
+pub fn view_results<'b>(
+    bodies: impl IntoIterator<Item = &'b Body>,
+    tys: &TyInterner,
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
+    closure_sig: &ClosureSig<'_>,
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for body in bodies {
+        let mut erased = Vec::new();
+        erased_parts(tys, body.return_ty(), &mut erased);
+        if erased.is_empty() {
+            continue;
+        }
+        let (params, loans) = view_param_loans(body, tys);
+        if params.is_empty() {
+            continue;
+        }
+        let body_loans = collect_loans(body, tys);
+        let cx = Cx {
+            body,
+            tys,
+            loans: &loans,
+            has_receiver,
+            closure_sig,
+            writes_slices: writes_slices(body, tys, &body_loans),
+            pred_captures: LoanSet::default(),
+            made_here: std::collections::HashSet::new(),
+        };
+        let mut entry = Origins::default();
+        for (i, &p) in params.iter().enumerate() {
+            entry.insert(p, i);
+        }
+        let origins = origins_dataflow(&cx, entry);
+        let returns_view = body.blocks.iter().enumerate().any(|(bi, block)| {
+            if !matches!(block.terminator.kind, TerminatorKind::Return) {
+                return false;
+            }
+            let Some(mut o) = origins[bi].clone() else {
+                return false;
+            };
+            for (si, s) in block.statements.iter().enumerate() {
+                cx.transfer(&mut o, &s.kind, (bi, si));
+            }
+            !o.get(Local::RETURN_PLACE).is_empty()
+        });
+        if returns_view {
+            out.insert(body.instance.name.clone());
+        }
+    }
+    out
+}
+
 /// A loan as the flag pass sees it: kind, place and `Ref` site.
 pub(super) type LoanSite = (BorrowKind, Place, (usize, usize));
 
@@ -676,7 +765,7 @@ pub(super) fn loan_liveness(
         closure_sig: &|_| None,
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
-        made_here: closures_made_here(body),
+        made_here: closures_made_here(body, &|_| false),
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
@@ -1166,13 +1255,33 @@ struct Cx<'a> {
 
 /// The locals that hold, whole or in a part, a closure the body itself
 /// makes: the closure, its erased value, and an array, tuple or struct
-/// built from one. A function value
-/// a call hands back is not among them:
-/// whether it captured its arguments' views is the callee's to say, and
-/// §5.4 can only suppose it did (`op(name) -> Fn(..)` choosing among
-/// closures that capture nothing).
-fn closures_made_here(body: &Body) -> std::collections::HashSet<Local> {
-    let mut made = std::collections::HashSet::new();
+/// built from one. A function value a call hands back is among them only
+/// when the callee is one of `view_results`: whether it captured its
+/// arguments' views is the callee's to say, and §5.4 alone can only
+/// suppose it did (`op(name) -> Fn(..)` choosing among closures that
+/// capture nothing; B-2026-11-17-92).
+fn closures_made_here(
+    body: &Body,
+    view_results: &ViewResults<'_>,
+) -> std::collections::HashSet<Local> {
+    let mut made: std::collections::HashSet<Local> = body
+        .blocks
+        .iter()
+        .filter_map(|b| match &b.terminator.kind {
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(callee),
+                        ..
+                    }),
+                destination,
+                ..
+            } if destination.projection.is_empty() && view_results(&callee.name) => {
+                Some(destination.local)
+            }
+            _ => None,
+        })
+        .collect();
     let mut changed = true;
     while changed {
         changed = false;
@@ -2226,7 +2335,8 @@ fn erased_parts(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>) {
                 go(tys, k, out, seen);
                 go(tys, v, out, seen);
             }
-            TyKind::Adt(a) => {
+            // A `shared` value's fields are parts of it too (B-2026-11-17-92).
+            TyKind::Adt(a) | TyKind::Shared(a) => {
                 let adt = tys.adt(a);
                 let is_enum = adt.is_enum;
                 let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
@@ -2247,7 +2357,14 @@ fn erased_parts(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>) {
 /// Whether a value of type `holder` has, by value, a slot the erased value
 /// `e` (a closure, function or `dyn` type) can go in: a function type of
 /// its signature, or a `dyn` of its trait.
+///
+/// A `dyn` holder is a slot for anything: the value it owns may be of any
+/// type, holding `e` in a field (`boxit(f) -> dyn G { W { f: f } }`,
+/// B-2026-11-17-92).
 fn has_erased_slot(tys: &TyInterner, holder: Ty, e: Ty, closure_sig: &ClosureSig<'_>) -> bool {
+    if matches!(tys.kind(holder), TyKind::Dyn { .. }) {
+        return true;
+    }
     let sig = match tys.kind(e) {
         TyKind::Closure(def, _) => closure_sig(def),
         TyKind::Fn { params, ret, .. } => Some((params.to_vec(), ret)),

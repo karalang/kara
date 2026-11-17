@@ -31468,6 +31468,24 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
     let sigs = closure_sigs(&lowered);
     let closure_sig = |d: crate::ids::DefId| sigs.get(&d).cloned().flatten();
+    let has_receiver = |i: &InstanceId| {
+        result_borrows(
+            &names,
+            &lowered.receivers,
+            &lowered.views,
+            &lowered.pointee_views,
+            &lowered.view_args,
+            &lowered.closure_results,
+            i,
+        )
+    };
+    let views = crate::mir::view_results(
+        lowered.program.bodies.values(),
+        &lowered.tys,
+        &has_receiver,
+        &closure_sig,
+    );
+    let view_results = |n: &str| views.contains(n);
     let mut out: Vec<SourceBorrowError> = Vec::new();
     let mut push = |e: SourceBorrowError| {
         if !out
@@ -31490,19 +31508,13 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
         if !borrowck {
             continue;
         }
-        let has_receiver = |i: &InstanceId| {
-            result_borrows(
-                &names,
-                &lowered.receivers,
-                &lowered.views,
-                &lowered.pointee_views,
-                &lowered.view_args,
-                &lowered.closure_results,
-                i,
-            )
-        };
-        for mut e in crate::mir::borrow_errors_with(body, &lowered.tys, &has_receiver, &closure_sig)
-        {
+        for mut e in crate::mir::borrow_errors_in(
+            body,
+            &lowered.tys,
+            &has_receiver,
+            &closure_sig,
+            &view_results,
+        ) {
             if !in_program(e.at) {
                 continue;
             }
@@ -32298,6 +32310,28 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         crate::mir::flags::written_payloads(lowered.program.bodies.values(), &lowered.tys);
     let sigs = closure_sigs(&lowered);
     let closure_sig = |d: crate::ids::DefId| sigs.get(&d).cloned().flatten();
+    let views = if borrowck {
+        let has_receiver = |i: &InstanceId| {
+            result_borrows(
+                &names,
+                &lowered.receivers,
+                &lowered.views,
+                &lowered.pointee_views,
+                &lowered.view_args,
+                &lowered.closure_results,
+                i,
+            )
+        };
+        crate::mir::view_results(
+            lowered.program.bodies.values(),
+            &lowered.tys,
+            &has_receiver,
+            &closure_sig,
+        )
+    } else {
+        Default::default()
+    };
+    let view_results = |n: &str| views.contains(n);
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
@@ -32322,8 +32356,13 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             )
         };
         if borrowck {
-            let errs =
-                crate::mir::borrow_errors_with(body, &lowered.tys, &has_receiver, &closure_sig);
+            let errs = crate::mir::borrow_errors_in(
+                body,
+                &lowered.tys,
+                &has_receiver,
+                &closure_sig,
+                &view_results,
+            );
             if !errs.is_empty() {
                 let e: Vec<String> = errs.into_iter().map(|e| e.text).collect();
                 return Err(format!(

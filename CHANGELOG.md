@@ -69,6 +69,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (B-2026-11-17-36).
 - A `pub fn` bounded on a package-private trait is E0221, as any other
   private item in a public signature (B-2026-11-17-39).
+- A closure a function returns holding a view of its argument, passed on
+  to an `escaping` parameter that stores it in a struct, a `shared` value
+  or a `dyn`, is refused (E0509) as a closure written at the call is; it
+  was called after what it viewed was freed (B-2026-11-17-92). A function
+  whose returned closures capture no view (`op(name) -> Fn(..)` choosing
+  among closures) is unaffected.
 - `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
   as `"0.1.0"`), as design.md § 4 says; any string was accepted
   (B-2026-11-16-220).
