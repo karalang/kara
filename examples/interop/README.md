@@ -1,5 +1,14 @@
 # Additive interop — a Kāra kernel in a C and a Rust program
 
+> **Not buildable on 0.8.** `--crate-type staticlib` / `cdylib` build the
+> exported C ABI, which is scheduled after v1
+> ([deferred.md § Exported C ABI](../../docs/deferred.md#exported-c-abi)); on
+> 0.8 `karac build` answers "`--crate-type` builds the exported C ABI, which is
+> not in 0.8", and `karac check` refuses each `pub extern "C" fn` with
+> E_ARCHIVED. This README describes the walkthrough as it ran on the pre-M3
+> backend. Calling C *from* Kāra works on 0.8: see
+> [interop-zlib](../interop-zlib/).
+
 The adoption pitch for a language with no ecosystem yet: **be additive, not
 a replacement.** Write the hot / parallel kernel in Kāra, build it as a
 linkable library with a C ABI, and drop it into an existing C or Rust

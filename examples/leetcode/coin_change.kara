@@ -9,12 +9,12 @@
 
 // ─── Top-down: recursive + memoization ───────────────────────────────────────
 
-fn coin_change_memo(amount: i64, coins: ref Vec[i64]) -> i64 {
+fn coin_change_memo(amount: i64, coins: Vec[i64]) -> i64 {
     let mut memo: Map[i64, i64] = Map.new();
     dp(amount, coins, mut memo)
 }
 
-fn dp(amount: i64, coins: ref Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
+fn dp(amount: i64, coins: Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
     if amount == 0 { return 0; }
     if amount < 0  { return -1; }
 
@@ -23,7 +23,7 @@ fn dp(amount: i64, coins: ref Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
         None => {}
     }
 
-    let mut best = -1i64;
+    let mut best = -1;
     for coin in coins.iter() {
         let sub = dp(amount - coin, coins, mut memo);
         if sub != -1 {
@@ -40,7 +40,7 @@ fn dp(amount: i64, coins: ref Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
 
 // ─── Bottom-up: tabulation ────────────────────────────────────────────────────
 
-fn coin_change_bottom_up(amount: i64, coins: ref Vec[i64]) -> i64 {
+fn coin_change_bottom_up(amount: i64, coins: Vec[i64]) -> i64 {
     // Sentinel: amount+1 is unreachable (worst case is `amount` coins of 1)
     let sentinel = amount + 1;
     let mut table: Vec[i64] = Vec.new();

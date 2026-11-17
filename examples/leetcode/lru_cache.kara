@@ -13,13 +13,13 @@ struct LruEntry {
 }
 
 struct LruCache {
-    capacity: u64,
+    capacity: i64,
     entries: Vec[LruEntry],     // ordered: most recent at the end
-    index: Map[i64, u64],   // key → position in entries
+    index: Map[i64, i64],   // key → position in entries
 }
 
 impl LruCache {
-    fn new(capacity: u64) -> LruCache {
+    fn new(capacity: i64) -> LruCache {
         LruCache {
             capacity,
             entries: Vec.new(),

@@ -3,12 +3,12 @@
 // LeetCode #21: Merge Two Sorted Lists
 // Merge two sorted linked lists into one sorted list.
 //
-// Demonstrates: enum (linked list), recursive pattern matching,
+// Demonstrates: a recursive struct (linked list), tuple pattern matching,
 //               Option, ownership (move semantics)
 
-enum ListNode {
-    Cons { val: i64, next: Option[ListNode] },
-    Nil,
+struct ListNode {
+    val: i64,
+    next: Option[ListNode],
 }
 
 fn merge(list1: own Option[ListNode], list2: own Option[ListNode]) -> Option[ListNode] {
@@ -16,12 +16,12 @@ fn merge(list1: own Option[ListNode], list2: own Option[ListNode]) -> Option[Lis
         (None, other) | (other, None) => other,
         (Some(n1), Some(n2)) => {
             if n1.val <= n2.val {
-                Some(ListNode.Cons {
+                Some(ListNode {
                     val: n1.val,
                     next: merge(n1.next, Some(n2)),
                 })
             } else {
-                Some(ListNode.Cons {
+                Some(ListNode {
                     val: n2.val,
                     next: merge(Some(n1), n2.next),
                 })
@@ -30,33 +30,35 @@ fn merge(list1: own Option[ListNode], list2: own Option[ListNode]) -> Option[Lis
     }
 }
 
-// Iterative approach: build result by appending to a dummy head
+// Iterative approach: collect the merged values, then rebuild the list
 fn merge_iterative(list1: own Option[ListNode], list2: own Option[ListNode]) -> Option[ListNode] {
-    let dummy = ListNode.Cons { val: 0, next: None };
-    let tail_val = 0;
-    let tail_next = None;
-    let result_head = None;
     let mut l1 = list1;
     let mut l2 = list2;
     let mut result = Vec.new();
 
+    // The match moves both lists into the tuple, so every arm that loops
+    // again gives both of them a value.
     loop {
         match (l1, l2) {
             (None, None) => break,
             (Some(n1), None) => {
                 result.push(n1.val);
                 l1 = n1.next;
+                l2 = None;
             }
             (None, Some(n2)) => {
                 result.push(n2.val);
+                l1 = None;
                 l2 = n2.next;
             }
             (Some(n1), Some(n2)) => {
                 if n1.val <= n2.val {
                     result.push(n1.val);
                     l1 = n1.next;
+                    l2 = Some(n2);
                 } else {
                     result.push(n2.val);
+                    l1 = Some(n1);
                     l2 = n2.next;
                 }
             }
@@ -66,7 +68,7 @@ fn merge_iterative(list1: own Option[ListNode], list2: own Option[ListNode]) -> 
     // Rebuild linked list from collected values
     let mut out = None;
     for val in result.iter().rev() {
-        out = Some(ListNode.Cons { val, next: out });
+        out = Some(ListNode { val, next: out });
     }
     out
 }
@@ -75,7 +77,7 @@ fn merge_iterative(list1: own Option[ListNode], list2: own Option[ListNode]) -> 
 fn from_array(arr: ref Vec[i64]) -> Option[ListNode] {
     let mut result = None;
     for val in arr.iter().rev() {
-        result = Some(ListNode.Cons { val, next: result });
+        result = Some(ListNode { val, next: result });
     }
     result
 }
@@ -87,11 +89,11 @@ fn to_string(list: ref Option[ListNode]) -> String {
 
     loop {
         match current {
-            Some(ListNode.Cons { val, next }) => {
+            Some(ListNode { val, next }) => {
                 parts.push(val.to_string());
                 current = next;
             }
-            _ => break,
+            None => break,
         }
     }
 

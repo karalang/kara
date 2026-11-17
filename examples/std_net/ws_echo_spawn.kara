@@ -28,7 +28,7 @@ fn echo(ws: own WebSocket) {
 
 fn main() {
     let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
-    let mut tg: TaskGroup = TaskGroup.new();
+    let tg: TaskGroup = TaskGroup.new();
     loop {
         match WebSocket.accept(listener) {
             Result.Ok(ws) => { tg.spawn(|| echo(ws)); }

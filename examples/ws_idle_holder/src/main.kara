@@ -99,7 +99,7 @@ fn main() {
     // A single failed accept (bad TLS handshake, transient error) must not
     // kill the accept loop, so it's matched and skipped.
     let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", cert_pem, key_pem).unwrap();
-    let mut tg: TaskGroup = TaskGroup.new();
+    let tg: TaskGroup = TaskGroup.new();
     loop {
         match WebSocket.accept_tls(listener) {
             Result.Ok(ws) => {

@@ -19,9 +19,9 @@ import resources.{InMemoryMetrics, MetricsA, MetricsB, MetricsC};
 import workload.process_request;
 
 fn main() {
-    let mut pa = InMemoryMetrics.new();
-    let mut pb = InMemoryMetrics.new();
-    let mut pc = InMemoryMetrics.new();
+    let pa = InMemoryMetrics.new();
+    let pb = InMemoryMetrics.new();
+    let pc = InMemoryMetrics.new();
     with_provider[MetricsA](pa, || {
         with_provider[MetricsB](pb, || {
             with_provider[MetricsC](pc, || {

@@ -22,14 +22,16 @@ Spec: [`docs/design.md` § FFI](../../docs/design.md#15-unsafe-ffi-and-layout-co
 - **Effect annotations are the Kāra-specific part of a binding.** Foreign
   declarations can't be effect-inferred (no body), so the programmer declares
   the effects and the compiler trusts them at the boundary:
-  - `#[noblock]` on the pure-CPU entry points (`crc32`, `compressBound`,
-    `compress2`, `uncompress`) removes the safe `{blocks}` default, so calls
-    never pessimize scheduler placement.
+  A foreign function has exactly the effects it declares, none if it is
+  `pure`, and every effect (`blocks` included) if it declares nothing
+  ([design.md § 15](../../docs/design.md#15-unsafe-ffi-and-layout-control)).
+  - `pure` on the pure-CPU entry points (`compressBound`, `crc32`): no
+    effects, so calls never pessimize scheduler placement.
   - `allocates(Heap)` on `compress2`/`uncompress` records that zlib's default
     allocator mallocs internally — which matters under profiles where heap
     allocation is forbidden, and the `karac` FFI lint suggests it for
-    known-allocating symbols.
-  - `malloc`/`free` keep the `{blocks}` default — the "when in doubt,
+    known-allocating symbols. `malloc` declares it too.
+  - `free` declares nothing, so it has every effect — the "when in doubt,
     over-declare" rule: a too-liberal effect set costs a little scheduling
     freedom; a too-narrow one is unsound.
 - **zlib's in-out length parameter** (`uLongf *destLen`) maps to
@@ -40,8 +42,8 @@ Spec: [`docs/design.md` § FFI](../../docs/design.md#15-unsafe-ffi-and-layout-co
 
 ```
 cd examples/interop-zlib
-karac build          # → ./zpipe (links -lz via the manifest)
-./zpipe
+karac build          # → dist/native/zpipe (links -lz via the manifest)
+./dist/native/zpipe
 ```
 
 Expected output (byte-stable across zlib versions — CRC32 is specified

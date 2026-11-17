@@ -96,7 +96,7 @@ fn archive(log: own Vec[String]) -> i64 {
 }
 
 fn main() {
-    let log = ["boot".to_string(), "ready".to_string()];
+    let log = ["boot", "ready"];
     let n = archive(log);
     println(f"{n} archived, last was {log[1]}");
 }
@@ -107,7 +107,7 @@ $ karac check archive.kara --output=json      # trimmed to the diagnostic
 {"diagnostics":[{"severity":"error","phase":"ownership","code":"E0500",
   "class":"OWNERSHIP_MOVE_AFTER_USE","line":8,"column":39,
   "message":"value 'log' moved here, used again here (moved at line 7:21)",
-  "replacement":{"offset":151,"length":0,"text":".clone()"}}]}
+  "replacement":{"offset":127,"length":0,"text":".clone()"}}]}
 
 $ karac fix archive.kara
 applied 1 fix(es) to archive.kara
@@ -157,8 +157,8 @@ fn longer(a: String, b: String) -> ref String {
 Moving a value while a view of it is alive is caught at compile time:
 
 ```
-error[ownership]: cannot move `u` while a borrow into it (a returned reference
-  still points at it) is still live
+error[E_SLICE_BORROW_CONFLICT]: cannot move `u` while a borrow into it (a returned
+  reference still points at it) is still live (borrowed at line 7:21)
 ```
 
 The rule is conservative: when a result may borrow from several parameters, it borrows from all of them. Kāra may reject a program a finer analysis would accept, but never accepts one that dangles. Types that need shared ownership say so with `shared struct` and `shared enum`, which are reference-counted. The full model is [docs/core-semantics.md](docs/core-semantics.md).
@@ -184,15 +184,15 @@ More in [`examples/std_net`](examples/std_net).
 
 ## Performance
 
-The compiler is held to measured bars before each release: run time and build time against the earlier compiler, binary size, an automatic-parallelism speedup floor, and a load test of 100,000 idle connections with tail-latency limits. Cross-language benchmarks against Rust, C and Go live in **[kara-katas](https://github.com/karalang/kara-katas)**, with the data and chart generator versioned beside the code. Measured on the current compiler: 444 single-file algorithm programs on an Apple M5 ([BENCHMARKS.md](https://github.com/karalang/kara-katas/blob/main/BENCHMARKS.md)), as Kāra's run time divided by the other language's, median:
+The compiler is held to measured bars before each release: run time and build time against the earlier compiler, binary size, an automatic-parallelism speedup floor, and a load test of 100,000 idle connections with tail-latency limits. Cross-language benchmarks against Rust, C and Go live in **[kara-katas](https://github.com/karalang/kara-katas)**, with the data and chart generator versioned beside the code. From kara-katas' feed (`bench-results.json`, generated 2026-11-09 on an Apple M5 Pro; [BENCHMARKS.md](https://github.com/karalang/kara-katas/blob/main/BENCHMARKS.md)), 744 single-file algorithm programs, as Kāra's run time divided by the other language's, median:
 
 | Lane | vs | Median |
 |---|---|---|
 | Sequential | Rust with overflow checks (Kāra always checks) | 1.00× |
-| Sequential | Rust / C / Go | 1.03× / 1.15× / 0.93× |
-| Automatic parallelism | Rust + rayon, 40 programs | 1.08× (Kāra faster on 14) |
+| Sequential | Rust / C / Go | 1.03× / 1.17× / 0.92× |
+| Automatic parallelism | Rust + rayon, 43 programs | 1.09× (Kāra faster on 15) |
 
-The spread matters as much as the median: 21 programs run over 2× Rust's time (the worst, #163, at 10.2×), and the slowest parallel program is 2.41× rayon's. Builds take about 1.3× `rustc`'s time. These are single-file kernels on one shared laptop, not application benchmarks.
+The spread matters as much as the median: 40 of the 744 programs run over 2× Rust's time, the worst being #676 at 19.6×, and the slowest parallel program (#171) is 2.41× rayon's. These are single-file kernels on one laptop, not application benchmarks. `scripts/readme-perf-headline.py <bench-results.json> <kara-katas/scripts>` regenerates every number in this section from the feed.
 
 ## Targets
 

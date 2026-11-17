@@ -1,5 +1,32 @@
 # Hello, Kāra
 
+## Installing `karac`
+
+`karac` is the compiler, the interpreter and the tools in one binary.
+Prebuilt releases for Linux x86_64, Linux aarch64 and Apple-silicon macOS are
+on the [releases page](https://github.com/karalang/kara/releases). Pick your
+platform's tarball (`x86_64-linux`, `aarch64-linux` or `aarch64-macos`), check
+it, unpack it anywhere and put its `bin/` on your `PATH`:
+
+```bash
+V=0.8.1; P=x86_64-linux
+curl -LO https://github.com/karalang/kara/releases/download/v$V/karac-$V-$P.tar.gz
+curl -LO https://github.com/karalang/kara/releases/download/v$V/karac-$V-$P.tar.gz.sha256
+sha256sum -c karac-$V-$P.tar.gz.sha256     # macOS: shasum -a 256 -c
+tar xzf karac-$V-$P.tar.gz
+xattr -dr com.apple.quarantine karac-$V-$P     # macOS only: clear Gatekeeper's quarantine
+export PATH="$PWD/karac-$V-$P/bin:$PATH"
+karac --version
+```
+
+The Linux binaries need glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and
+later). `karac build` also needs a C linker (`build-essential`, or the Xcode
+command-line tools on macOS); `karac run` does not. To build from source
+instead, or to set up an editor, see the repository's
+[README](https://github.com/karalang/kara#install).
+
+## Your first program
+
 Every journey starts with a first program. Here's yours:
 
 ```kara,run
@@ -7,6 +34,17 @@ fn main() {
     println("Hello, world!");
 }
 ```
+
+Save it as `hello.kara` and run it:
+
+```bash
+karac run hello.kara      # interpret it: prints Hello, world!
+karac build hello.kara    # compile a native binary, ./hello
+./hello
+```
+
+`karac run` starts at once and is the fast way to iterate; `karac build`
+produces an optimized executable. The two print the same thing.
 
 Let's break it down:
 

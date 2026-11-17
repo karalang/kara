@@ -47,18 +47,18 @@ sync struct Metrics {
 }
 impl Metrics {
     fn record(ref self, tier: i64) {
-        let _ = self.total.fetch_add(1, MemoryOrdering.Relaxed);
+        let _ = self.total.fetch_add(1);
         match tier {
-            0 => { let _ = self.api.fetch_add(1, MemoryOrdering.Relaxed); }
-            1 => { let _ = self.assets.fetch_add(1, MemoryOrdering.Relaxed); }
-            _ => { let _ = self.app.fetch_add(1, MemoryOrdering.Relaxed); }
+            0 => { let _ = self.api.fetch_add(1); }
+            1 => { let _ = self.assets.fetch_add(1); }
+            _ => { let _ = self.app.fetch_add(1); }
         }
     }
     fn report(ref self) {
-        let t = self.total.load(MemoryOrdering.Relaxed);
-        let a = self.api.load(MemoryOrdering.Relaxed);
-        let s = self.assets.load(MemoryOrdering.Relaxed);
-        let p = self.app.load(MemoryOrdering.Relaxed);
+        let t = self.total.load();
+        let a = self.api.load();
+        let s = self.assets.load();
+        let p = self.app.load();
         println(f"[metrics] total={t} api={a} static={s} app={p}");
     }
 }
@@ -83,15 +83,15 @@ fn request_path(bytes: own Vec[u8]) -> String {
 
 // Layer-7 routing policy: classify a path to an upstream tier (0=api,
 // 1=static, 2=app), and map a tier to its upstream address.
-fn classify(path: ref String) -> i64 {
+fn classify(path: String) -> i64 {
     if path.starts_with("/api") { return 0; }
     if path.starts_with("/static") { return 1; }
-    return 2;
+    2
 }
 fn upstream_for(tier: i64) -> String {
     if tier == 0 { return "127.0.0.1:9000"; }
     if tier == 1 { return "127.0.0.1:9001"; }
-    return "127.0.0.1:9002";
+    "127.0.0.1:9002"
 }
 
 // Service one connection: peek the request line, classify + record the tier,
@@ -140,7 +140,7 @@ fn main() {
         app: Atomic.new(0),
     };
     let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
-    let mut tg: TaskGroup = TaskGroup.new();
+    let tg: TaskGroup = TaskGroup.new();
     let mut count: i64 = 0;
     loop {
         match listener.accept() {
@@ -149,7 +149,7 @@ fn main() {
                 // the cross-task capture safe); the accept loop keeps its own
                 // reference and reports the running totals every 10 requests.
                 tg.spawn(|| handle(client, metrics));
-                count = count + 1;
+                count += 1;
                 if count % 10 == 0 {
                     metrics.report();
                 }

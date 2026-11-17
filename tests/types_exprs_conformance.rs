@@ -234,3 +234,13 @@ fn types_exprs_default_naming_a_parameter_is_one_error() {
         );
     }
 }
+
+#[test]
+fn types_exprs_a_pipe_chain_is_refused_once() {
+    let (ok, out) = check(
+        "pipechain",
+        "fn f(x: i64) -> i64 { x }\nfn g(x: i64) -> i64 { x }\nfn main() {\n    let r = 4 |> f |> g;\n    println(r);\n}\n",
+    );
+    assert!(!ok, "{out}");
+    assert_eq!(out.matches("there is no pipe operator").count(), 1, "{out}");
+}

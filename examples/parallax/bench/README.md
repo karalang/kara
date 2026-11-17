@@ -97,6 +97,12 @@ regression gate.
 
 ## Throughput results
 
+> **Pre-M3 numbers.** Every table below was measured in 2026-07 with the
+> pre-M3 backend, which was deleted at M3 (2026-10-24). They have not been
+> re-measured on 0.8, so read them as history, not as a claim about the
+> current compiler. On 0.8 the sibling [`examples/parallax`](../README.md)
+> program gets no auto-par speedup; see its README.
+
 ### Canonical — Graviton EC2 (v8, 2026-07-11)
 
 **Measured on 2026-07-11.** AWS `c7g.4xlarge` (16 vCPU Graviton3),

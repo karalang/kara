@@ -239,8 +239,8 @@ it (Extensions view, "Install from VSIX...", or
   Debian/Ubuntu, Xcode CLT on macOS). \`karac run\` needs nothing extra.
 - Common system libraries LLVM links dynamically (zlib, zstd, terminfo)
   — present by default on mainstream distros and macOS.
-- WASM targets (\`--target=wasm_wasi\` / \`wasm_browser\`) link with the
-  bundled runtime and wasi-libc, and need a wasm linker: the \`rust-lld\`
+- The WASM target (\`--target=wasm_wasi\`; the browser target is not in
+  0.8) links with the bundled runtime and wasi-libc, and needs a wasm linker: the \`rust-lld\`
   of any rustup toolchain (no wasm target needed), or LLVM's \`wasm-ld\`
   20 or newer on PATH, or \`KARAC_WASM_LD=<path>\`.
 

@@ -1,5 +1,12 @@
 # Slipstream — an interactive wind tunnel in one Kāra source
 
+> **The browser build is not in 0.8.** `--target=wasm_browser
+> --features wasm-threads` is scheduled after v1
+> ([deferred.md § Web](../../docs/deferred.md#web)); on 0.8 `karac build`
+> answers "`--target=wasm_browser` builds the browser wasm bindings, which is
+> not in 0.8". This README describes the demo as it ran on the pre-M3
+> backend. The native build and its checksum oracle work on 0.8.
+
 A real-time 2D **Lattice-Boltzmann (D2Q9)** fluid solver. Air streams
 left-to-right past a tilted wing; the colour is vorticity, so the von Kármán
 wake lights up red/blue. Rotate the wing and watch the flow separate into

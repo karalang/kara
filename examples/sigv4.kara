@@ -94,7 +94,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
     let mut i: i64 = 7;
     while i >= 0 {
         data.push(((bitlen >> ((i as u64) * 8u64)) & 255u64) as u8);
-        i = i - 1;
+        i -= 1;
     }
 
     // Initial state: first 32 bits of the fractional parts of the square
@@ -117,7 +117,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
             let b2 = (data[o + 2] as u64) << 8u64;
             let b3 = data[o + 3] as u64;
             w.push(b0 | b1 | b2 | b3);
-            t = t + 1;
+            t += 1;
         }
         while t < 64 {
             let x15 = w[t - 15];
@@ -125,7 +125,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
             let s0 = rotr32(x15, 7u64) ^ rotr32(x15, 18u64) ^ shr32(x15, 3u64);
             let s1 = rotr32(x2, 17u64) ^ rotr32(x2, 19u64) ^ shr32(x2, 10u64);
             w.push(m32(w[t - 16] + s0 + w[t - 7] + s1));
-            t = t + 1;
+            t += 1;
         }
 
         let mut a = h[0];
@@ -153,7 +153,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
             c = b;
             b = a;
             a = m32(temp1 + temp2);
-            r = r + 1;
+            r += 1;
         }
 
         h[0] = m32(h[0] + a);
@@ -164,7 +164,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
         h[5] = m32(h[5] + f);
         h[6] = m32(h[6] + g);
         h[7] = m32(h[7] + hh);
-        pos = pos + 64;
+        pos += 64;
     }
 
     // Serialize the eight words big-endian.
@@ -176,7 +176,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
         out.push(((word >> 16u64) & 255u64) as u8);
         out.push(((word >> 8u64) & 255u64) as u8);
         out.push((word & 255u64) as u8);
-        j = j + 1;
+        j += 1;
     }
     out
 }
@@ -212,7 +212,7 @@ fn hmac_sha256(key: own Vec[u8], msg: Vec[u8]) -> Vec[u8] {
         let kb = block_key[i] as u64;
         inner.push((kb ^ 54u64) as u8);
         outer.push((kb ^ 92u64) as u8);
-        i = i + 1;
+        i += 1;
     }
     for b in msg {
         inner.push(b);
@@ -334,7 +334,7 @@ fn uri_encode(s: String, keep_slash: bool) -> String {
 fn sort_headers(headers: own Vec[Header]) -> Vec[Header] {
     let mut out: Vec[Header] = Vec.new();
     for h in headers.into_iter() {
-        let key = lower(h.name.clone());
+        let key = lower(h.name);
         let mut at = out.len();
         let mut i = 0;
         while i < out.len() {
@@ -342,7 +342,7 @@ fn sort_headers(headers: own Vec[Header]) -> Vec[Header] {
                 at = i;
                 i = out.len();
             } else {
-                i = i + 1;
+                i += 1;
             }
         }
         out.insert(at, h);
@@ -353,7 +353,7 @@ fn sort_headers(headers: own Vec[Header]) -> Vec[Header] {
 fn sort_params(params: own Vec[QueryParam]) -> Vec[QueryParam] {
     let mut out: Vec[QueryParam] = Vec.new();
     for p in params.into_iter() {
-        let key = uri_encode(p.key.clone(), false);
+        let key = uri_encode(p.key, false);
         let mut at = out.len();
         let mut i = 0;
         while i < out.len() {
@@ -361,7 +361,7 @@ fn sort_params(params: own Vec[QueryParam]) -> Vec[QueryParam] {
                 at = i;
                 i = out.len();
             } else {
-                i = i + 1;
+                i += 1;
             }
         }
         out.insert(at, p);
@@ -375,7 +375,7 @@ fn canonical_query(params: own Vec[QueryParam]) -> String {
     let mut first = true;
     for p in sorted.into_iter() {
         if not first {
-            out = out + "&";
+            out += "&";
         }
         out = out + uri_encode(p.key, false) + "=" + uri_encode(p.value, false);
         first = false;
@@ -399,9 +399,9 @@ fn canonical_request(
         let name = lower(h.name);
         canon_headers = canon_headers + name.clone() + ":" + trimall(h.value) + "\n";
         if not first {
-            signed = signed + ";";
+            signed += ";";
         }
-        signed = signed + name;
+        signed += name;
         first = false;
     }
     method + "\n" + uri_encode(path, true) + "\n" + canonical_query(params) + "\n"
@@ -471,12 +471,12 @@ fn main() {
     let creq1 = canonical_request("GET", "/", Vec.new(), h1, empty_hash.clone());
     check(
         "get-vanilla creq",
-        to_hex(sha256(bytes_of(creq1.clone()))),
+        to_hex(sha256(bytes_of(creq1))),
         "bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63",
     );
     check(
         "get-vanilla signature",
-        sign_request(secret.clone(), date.clone(), region.clone(), service.clone(), stamp.clone(), creq1),
+        sign_request(secret.clone(), date, region, service, stamp.clone(), creq1),
         "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
     );
 

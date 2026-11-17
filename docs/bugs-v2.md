@@ -58,30 +58,30 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 435 |
-| false-positive | 239 |
+| diagnostics | 436 |
+| false-positive | 243 |
 | missing-feature | 182 |
 | perf | 181 |
 | other | 91 |
 | soundness | 79 |
 | miscompile | 76 |
 | run-vs-build | 53 |
-| crash | 39 |
+| crash | 40 |
 | codegen-gap | 33 |
+| use-after-free | 9 |
 | leak | 4 |
-| use-after-free | 3 |
 | double-free | 2 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| typecheck | 560 |
+| typecheck | 563 |
 | mir-llvm | 278 |
-| mir | 232 |
+| mir | 233 |
 | cli | 185 |
+| ownership | 99 |
 | parser | 96 |
-| ownership | 91 |
 | interp | 86 |
 | runtime | 59 |
 | resolver | 38 |
@@ -182,6 +182,18 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-20 | 2026-11-17 | typecheck | low | `impl PartialEq[i64] for M { fn eq(self, other: i64) -> bool }` is refused E0288 ("takes other by value, but PartialEq.eq takes it as ref") for a Copy Rhs; PartialEq[String] and PartialEq[N] are accepted; the interpreter, which skips check, evaluates `m == 3` as false | — |
 | B-2026-11-17-21 | 2026-11-17 | mir | low | A second `Err` held in the scope a `?` leaves keeps its frames ahead of the error going out: `let r1 = work(false); step(false)?` prints r1's `step(b)?` frame first in the trace of `step(false)?` | — |
 | B-2026-11-17-22 | 2026-11-17 | mir-llvm | low | A `Map`/`Set` insert or removal probes the index twice: compiled code finds the key, then `karac_mir_map_insert_hv` / `remove_entry` probe again for the cell (kata 220 still 1.51x Rust's wall time, 391 1.87x) | — |
+| B-2026-11-17-23 | 2026-11-17 | ownership | high | A closure that captures a view, stored in a struct field and returned (`fn mk(v: Slice[D]) -> H { H { f: || v[0].n } }`), outlives the view's origin: check passes, interp reports use after free, ASan heap-use-after-free; the bare and tuple returns are refused E0516 | — |
+| B-2026-11-17-24 | 2026-11-17 | ownership | high | Beyond B-2026-11-17-23: a closure capturing a view also loses its origin in a nested struct, enum payload, tuple-in-struct or Vec element, through an identity generic, a Self-returning method, a builder method or a mut-ref push; a Vec of such closures escapes even inside a block. Check passes, interp reports use after free, ASan heap-use-after-free | — |
+| B-2026-11-17-25 | 2026-11-17 | ownership | high | Coercing a value that holds a view to `dyn Trait` erases its origin, even inside one block: `let r: dyn Get = { let x: Vec[D] = ..; Vh { v: x[0..2] } }` passes check, interp reports use after free, ASan heap-use-after-free; the same Vh without dyn is refused E0516 | — |
+| B-2026-11-17-26 | 2026-11-17 | ownership | high | A borrow projected through a handle-typed `mut` field of a shared value (`ref a.child.items`, `child: C` with C shared) holds no borrow flag and no count on the child, so replacing the field through another handle (`b.child = C {..}` with a and b the same object) frees the child under the live reference: check passes, interp use after free, ASan heap-use-after-free, llvm prints stale or garbage values | — |
+| B-2026-11-17-27 | 2026-11-17 | ownership | low | `freeze` refuses a value that is plainly unique with E0512 "has mutable state, so it cannot be frozen yet": `freeze mkroot()` on a call result, and `let r = leaf(1); r.kids.push(leaf(2)); let g = freeze r;` after building it in place; `freeze` is also a parse error as a block tail or `if` arm | — |
+| B-2026-11-17-28 | 2026-11-17 | ownership | high | Matching a shared value's handle-typed field (`match a.s { S.One(v) => .. }`, s a `shared enum`) does not count the handle, so assigning the field through another handle in the arm (`b.s = S.Two(1)`, a and b the same object) frees the payload under `v`: check passes, interp use after free, ASan heap-use-after-free, llvm prints a stale value | — |
+| B-2026-11-17-29 | 2026-11-17 | typecheck | medium | Or-pattern alternatives that bind one name at different types or modes pass check (`Ok(x) | Err(x)` on `Result[i64, String]`, `T.L(ref d) | T.R(d)`, `E2.P(a) | E2.Q(a)` with D vs i64) and then fail in MIR on every lane: 'assigning String to _4 of type i64' | — |
+| B-2026-11-17-30 | 2026-11-17 | ownership | medium | Slice and array patterns do not follow design.md's binding rules: a plain element binding over a `Vec[String]` moves the vector (`match v { [s, ..] => .. }` then `v.len()` is E0500); destructuring an owned `Array[D, N]` is refused E0516 'move out of a borrowed place' in `let` and `match`; a named rest over non-Copy elements is 'not lowered yet'; `..mut ref rest` does not parse | — |
+| B-2026-11-17-31 | 2026-11-17 | typecheck | low | `match x { }` on a `Never` scrutinee is refused E0205 "pattern `_` not covered", though design.md calls it the one well-formed empty match; also E0514's partial-move message still cites the removed "RC fallback" | — |
+| B-2026-11-17-32 | 2026-11-17 | ownership | high | Full matrix for B-2026-11-17-26/-28: any borrow reached through a handle-typed field (direct, nested shared-in-shared at either level, or a shared enum) is freed when the field is replaced through another handle; 37 of 99 cells use after free on interp and ASan, across ref, element ref, for, iter, slice match, if let, while let, bare Vec/element arguments, closure ref capture, a receiver or dyn param inside a replaced parent, and replacement via a local alias, a method, a closure or an upgraded weak | — |
+| B-2026-11-17-33 | 2026-11-17 | mir | medium | A struct pattern on a shared struct with a Drop body (`match a.child { C { items } => .. }`) passes `karac check`, then MIR typecheck refuses it on every lane ('this pattern moves `items` out of `C`, which has its own impl Drop'); a shared scrutinee's part bindings are refs, so nothing moves | — |
+| B-2026-11-17-34 | 2026-11-17 | typecheck | low | A chained pipe `4 |> f |> g` reports E0520 'there is no pipe operator' twice, once per `|>`, where one error for the chain is enough | — |
 
 ### Relocated
 

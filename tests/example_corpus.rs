@@ -128,17 +128,10 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
          cause as fathom/mandelbrot.kara).",
     ),
     (
-        "leetcode/lru_cache.kara",
-        "typecheck: implicit i64 -> u64 coercion would narrow or change sign.",
-    ),
-    (
-        "leetcode/merge_sorted_lists.kara",
-        "typecheck: cannot infer type parameter 'T' without an annotation.",
-    ),
-    (
         "tests/user_db_test.kara",
-        "parse: 'mut' is a reserved keyword and cannot be used as an \
-         identifier — predates the keyword reservation.",
+        "parse: `mut self` is Rust syntax (now `mut ref self`). The file is \
+         a pre-D5 syntax sketch of provider injection, and its header says \
+         it is not a 0.8 program.",
     ),
     (
         "std_net/ws_echo_freespawn.kara",

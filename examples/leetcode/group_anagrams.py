@@ -12,7 +12,8 @@ def group_anagrams(strs):
         key = "".join(sorted(s))
         groups[key].append(s)
 
-    return list(groups.values())
+    # In key order, as the Kāra version's SortedMap walks them.
+    return [groups[k] for k in sorted(groups)]
 
 
 # Test 1

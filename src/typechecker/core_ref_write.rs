@@ -1303,13 +1303,20 @@ impl Walk<'_, '_> {
         ) {
             self.check_borrowed_read(e);
         }
+        // One refusal per chain: `a |> f |> g` nests the inner pipe in the
+        // outer one's left operand, which the outer refusal already covers
+        // (B-2026-11-17-34).
+        const NO_PIPE: &str = "there is no pipe operator `|>` (design.md § Function values): \
+             write `f(x)` for `x |> f`, or a method chain";
         if let ExprKind::Pipe { .. } = &e.kind {
-            self.removed_calls.push((
-                e.span,
-                "there is no pipe operator `|>` (design.md § Function values): write \
-                 `f(x)` for `x |> f`, or a method chain"
-                    .to_string(),
-            ));
+            let inside_reported = self.removed_calls.iter().any(|(s, m)| {
+                m == NO_PIPE
+                    && s.offset <= e.span.offset
+                    && e.span.offset + e.span.length <= s.offset + s.length
+            });
+            if !inside_reported {
+                self.removed_calls.push((e.span, NO_PIPE.to_string()));
+            }
         }
         match &e.kind {
             // Nothing after a `return` runs once its value is computed.

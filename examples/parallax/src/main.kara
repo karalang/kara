@@ -25,10 +25,10 @@ import resources.{UserDB, OrderDB, NotifDB, RecommendDB};
 import workload.get_dashboard;
 
 fn main() {
-    let mut u = InMemoryUserDB.new();
-    let mut o = InMemoryOrderDB.new();
-    let mut n = InMemoryNotifDB.new();
-    let mut r = InMemoryRecommendDB.new();
+    let u = InMemoryUserDB.new();
+    let o = InMemoryOrderDB.new();
+    let n = InMemoryNotifDB.new();
+    let r = InMemoryRecommendDB.new();
     with_provider[UserDB](u, || {
         with_provider[OrderDB](o, || {
             with_provider[NotifDB](n, || {

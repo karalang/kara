@@ -1,17 +1,23 @@
 # Parallax-lite
 
-First demo-shaped consumer of the Kāra auto-concurrency codegen track
-(slices 1 + 2 of the Debugger Contract phase). A compact, self-contained
-Kāra workload that exercises auto-par lowering on three independent
-effect-annotated calls and pins the IR shape, the analyzer's grouping
-decision, and the cost-summary surface against regressions.
+A compact auto-concurrency workload: three calls on three disjoint effect
+resources, with no written `par`. It was the first measurement workload for
+auto-par on the pre-M3 backend.
+
+> **What holds on 0.8.** The package builds and runs (`karac build` from this
+> directory, then `./dist/native/parallax_lite`), but **auto-par declines this
+> workload today**, so a default build and a `KARAC_AUTO_PAR=0` build run in
+> the same time. The speedup tables this README used to carry (2.81x, and a
+> 15.88x scaling run) were measured on the pre-M3 backend, which was deleted
+> at M3; they do not reproduce and have been removed. The decline is ledger
+> row B-2026-11-16-274.
 
 ## What it demonstrates
 
-`workload.kara::process_request` is three top-level call statements,
-each carrying a distinct `writes(R_i)` effect on a disjoint resource:
+`src/workload.kara`'s `process_request` is three top-level call statements,
+each writing a different resource:
 
-```kara
+```kara,ignore
 pub fn process_request() with writes(MetricsA) writes(MetricsB) writes(MetricsC) {
     record_a();
     record_b();
@@ -19,272 +25,61 @@ pub fn process_request() with writes(MetricsA) writes(MetricsB) writes(MetricsC)
 }
 ```
 
-The analyzer (`src/concurrency.rs`) sees no conflict edges between the
-three statements (`writes(MetricsA)` vs `writes(MetricsB)` is safe — the
-conflict table only triggers on same-resource, same-category pairs), so
-it groups all three into a single `parallel_group`. The codegen path
-(`compile_function_body` in `src/codegen.rs`) sees a non-trivial group
-(non-empty effect set), no binding-leak (no `let` introduced in the
-group), and dispatches the trio through a single `karac_par_run` call
-that fans out three branch fns to the runtime's worker pool.
+Each `record_*` calls its resource's provider, whose `record(mut ref self,
+value)` runs a 50-million-iteration loop (`src/resources.kara`). `main` binds
+one provider per resource with nested `with_provider[R](...)` scopes.
 
-End result: `process_request` runs three CPU-bound branches concurrently
-without any explicit `par {}` block in the source — the auto-par codegen
-infers the parallel structure purely from effect annotations.
+The effect analysis groups the three statements (no two touch the same
+resource). The auto-par verdict is computed for a program with a `main`, and
+`karac query` reads one file, so flatten the package first:
 
-## The demo-shape gap
+```sh
+cat src/resources.kara <(grep -v '^import ' src/workload.kara) \
+    <(grep -v '^import ' src/main.kara) > /tmp/parallax_lite.kara
+karac query concurrency /tmp/parallax_lite.kara.process_request
+```
 
-The canonical Parallax demo (per `docs/dogfooding.md § Parallax`) is
-*fan-out + join* — multiple parallel reads whose results are joined
-into a result struct (`build_dashboard(profile, orders, notif,
-recommended)`). Slice 2's `group_defines_binding_used_outside` gate
-blocks that exact pattern today: bindings introduced inside a parallel
-group that are read by statements *outside* the group cannot
-auto-parallelize, because `karac_par_run`'s branch fns capture *into*
-their env struct but do not propagate let-bindings *out*.
-
-Lifting the gate requires the still-open
-`docs/implementation_checklist/phase-7-codegen.md:182` entry **"Par
-codegen: return values"**, which extends the runtime ABI with per-branch
-return slots. Until that lands, Parallax-lite ships *effect-only
-fan-out* — three independent calls with no joined return — as the v1
-auto-par measurement workload. The canonical fan-out + join demo lights
-up additively when the return-values entry lands, with no source change
-to slice 6's workload required (the analyzer already grouped that
-pattern correctly; only the codegen is gappy).
+It reports the parallel group `[0, 1, 2]` ("independent effects on different
+resources"), then an `auto_par` entry with `tasks: false`: auto-par refuses to
+run them as tasks, with the reason "`mutable borrow of provider of MetricsA`
+and `mutable borrow of provider of MetricsB` must keep their order". The same three calls written as
+`par { record_a(), record_b(), record_c() }` check clean and run in parallel,
+so the two checks disagree; that disagreement is what B-2026-11-16-274 tracks.
 
 ## How to run
 
-The example uses the multi-file project shape (`kara.toml` + `src/*.kara`).
-v1 project-mode build (`karac build` from inside `examples/parallax_lite/`)
-runs the multi-file pipeline through cross-module typechecking; full
-codegen across modules is a CR-24 follow-up. To exercise the auto-par
-path end-to-end today, concatenate the workload into a single file and
-build it with `karac build <path>.kara`:
-
 ```sh
-# concat the canonical workload + a tiny main into a single .kara file
-cat examples/parallax_lite/src/resources.kara                                 \
-    <(grep -v '^import ' examples/parallax_lite/src/workload.kara)            \
-    <(echo 'fn main() { process_request(); println("done"); }')               \
-  > /tmp/parallax_lite.kara
+cd examples/parallax_lite
 
-# auto-par on (default)
-karac build /tmp/parallax_lite.kara
-./parallax_lite
+# Auto-par on (the default)
+karac build && time ./dist/native/parallax_lite
 
-# sequential baseline (the slice 6 codegen gate)
-KARAC_AUTO_PAR=0 karac build /tmp/parallax_lite.kara
-./parallax_lite
+# Sequential lane
+KARAC_AUTO_PAR=0 karac build && time ./dist/native/parallax_lite
 ```
 
-The `KARAC_AUTO_PAR=0` env var flips the slice 6 codegen gate in
-`src/codegen.rs` (`Codegen::auto_par_disabled`), short-circuiting all
-parallel-group dispatch back to plain sequential `compile_block`
-without changing the source. Default is auto-par on; the user-facing
-`--sequential` CLI flag is a Phase 8.5 Track 2 deliverable when the
-profile system ships (slice 6 stays inside the codegen entry-point
-arg budget — adding a CLI flag would push `compile_to_object_with_options`
-past 6 positional args, the slice 3 deviation threshold).
+## Measured on 0.8
 
-## Wall-clock measurement (locally observed)
+The examples probe, 2026-11-16, on a 4-core Linux x86_64 container with a
+release karac (`--features llvm`) at 236666ac41, best of 5:
 
-Three CPU-bound branches across at least two cores should clear ~1.5x
-speedup; perfect 3x is the target with three available cores and zero
-overhead. Locally measured on a typical laptop after warmup:
-
-| Mode       | Wall-clock | CPU usage |
-|------------|------------|-----------|
-| Auto-par   | ~0.087s    | ~292%     |
-| Sequential | ~0.244s    | ~99%      |
-| **Speedup**| **~2.81x** | —         |
-
-The 2.81x ratio sits in the upper quartile of the expected band — the
-auto-par mechanism is working as designed. A regression below ~1.5x
-would be signal for v1.x cost-model tuning (per-call cost heuristic,
-fork threshold, loop-body parallelization rule); below ~1.3x would
-suggest thread-spawn / RC-fallback / env-struct-alloc overhead is
-dominating and the cost model needs a rebalance. The wall-clock test
-in `tests/parallax_lite.rs` is `#[ignore]`-gated (single-run timing
-is too flaky for default CI) and asserts a relaxed 1.3x threshold.
-
-
-## Multicore scaling (18-core machine ground-truth, 2026-05-08)
-
-Synthesized variants of the workload with N=3..24 effect-disjoint
-branches were generated, compiled (auto-par on / off via the slice-6
-`KARAC_AUTO_PAR=0` codegen-time gate), and benchmarked best-of-5 on an
-18-core development machine. The data is the first end-to-end
-validation that auto-par delivers near-linear scaling to the core-count
-ceiling on commodity hardware:
-
-| N branches | auto-par (s) | sequential (s) | speedup  | scaling efficiency |
-|------------|--------------|----------------|----------|--------------------|
-| 3          | 0.08         | 0.24           | 3.00x    | 100%               |
-| 6          | 0.08         | 0.49           | 6.12x    | ~102% (variance)   |
-| 9          | 0.08         | 0.73           | 9.12x    | ~101% (variance)   |
-| 12         | 0.09         | 0.95           | 10.55x   | 88%                |
-| 18         | 0.09         | 1.43           | **15.88x** | 88%              |
-| 24         | 0.17         | 1.97           | 11.58x   | 48% (oversub.)     |
-
-**Three findings.**
-
-1. **15.88x speedup at N=18 on the 18-core machine** — just under 90%
-   scaling efficiency at the core-count sweet spot. The "missing" ~2.1x
-   is thread-spawn overhead, OS scheduling, branch start/end
-   synchronization. First end-to-end validation that auto-par delivers
-   on multicore hardware.
-
-2. **Auto-par wall-clock is essentially flat from N=3 to N=18**
-   (0.08s → 0.09s). The runtime adds **negligible per-branch overhead**
-   as long as `branch_count ≤ available_parallelism()`. Slice 4's
-   `Mutex<Vec<FramePtr>>` registry — 1 push + 1 retain per spawn —
-   doesn't bottleneck even at 18 concurrent active frames. Validates
-   the slice 4 design choice of `Mutex<Vec>` over
-   `RwLock<HashMap<ThreadId, _>>` empirically.
-
-3. **Sharp oversubscription cliff at N=24**. Wall-clock jumps from
-   0.09s → 0.17s; speedup drops from 15.88x → 11.58x. The runtime spawns
-   one OS thread per branch up to `available_parallelism()`, and beyond
-   that the OS has to time-slice software threads onto fewer hardware
-   cores. Per-branch latency increases. **Actionable signal for v1.x
-   cost-model tuning**: the natural fork threshold is
-   `branch_count ≤ available_parallelism()`; beyond that, either
-   work-stealing or branch-batching is needed.
-
-**Sequential wall-clock scales linearly** at ~80ms per branch
-(`sequential_time ≈ 0.08 × N` matches observed). The single-branch
-busy-compute kernel is consistent across N. The N=6/9 superlinear
-speedup is best-of-5 sequential variance — auto-par numbers are
-rock-solid.
-
-**How this data was collected.** `/tmp/scale_test/gen.sh` synthesizes
-single-file workloads with N independent `effect resource R_i;` + N
-busy-compute drivers + an aggregator. `bench.sh` builds each twice
-(default + `KARAC_AUTO_PAR=0` for sequential), runs best-of-5, computes
-speedup. Reproducible on any machine; the 15.88x peak depends on
-core count.
-
-
-### High-N stress test (N=50..500)
-
-Pushing further: synthesized variants with N=50, 100, 200, 500 effect-disjoint
-branches on the same 18-core machine. The runtime caps worker threads at
-`available_parallelism()`, so beyond N=18 each worker handles
-`ceil(N / 18)` branches sequentially via the `next_idx.fetch_add` work-stealing
-counter. Best-of-1 timing (variance is small at high N):
-
-| N    | auto-par (s) | sequential (s) | speedup  | efficiency |
-|------|--------------|----------------|----------|------------|
-| 50   | 0.60         | 4.31           | 7.18x    | 43%        |
-| 100  | 0.78         | 8.21           | 10.52x   | 63%        |
-| 200  | 1.30         | 16.24          | 12.49x   | 75%        |
-| 500  | 2.77         | 41.01          | 14.80x   | 83%        |
-
-**Compile time scales linearly.** N=500 compiles in 0.26s (auto-par) /
-0.15s (sequential). Per-branch compile cost is ~0.5ms. **No quadratic-time
-analyzer pass** — v1.x compiler perf can rely on this; the conflict-matrix
-construction in `concurrency.rs` and effect-set unification in
-`effectchecker.rs` both stay O(N) or near-linear at 500-element scale.
-
-**Speedup recovers at high N.** At N=500, efficiency rises to 83% (vs 43% at
-N=50). Verified by an N=50 variant with 10x larger busy-compute (500M
-iterations): **speedup *dropped* to 5.51x**, ruling out the initial stdout
-contention hypothesis. The real cost is **per-branch dispatch overhead**
-(~100ms per branch on this laptop), which is dominated by:
-
-- **Thermal throttling on sustained all-cores load.** Laptop CPUs clock down
-  when all 18 cores run at 100% for hundreds of milliseconds. Sequential
-  keeps one core hot only — far less aggressive. Auto-par hammers all cores
-  simultaneously → 2-3x effective per-core throughput drop.
-- **L3 cache / memory bandwidth contention** at 18-core saturation.
-
-At small N (≤18), each worker runs one branch and finishes before thermal
-throttling fully engages → ~88% efficiency. At medium N (50-100), workers
-sustain all-cores load just long enough to trigger throttling but not long
-enough for busy-compute to dwarf the per-branch dispatch cost → efficiency
-dips. At large N (200-500), busy-compute (28 branches/worker × 80ms) dwarfs
-per-branch overhead → efficiency recovers.
-
-**Implication: the 17x ceiling on this hardware is a laptop-thermal artifact,
-not a runtime design limitation.** Server-class hardware with proper
-cooling would push the curve closer to ideal across all N. Worth re-running
-this benchmark on Linux server hardware once available; expected efficiency
-band there is 90%+ across the full N range.
-
-## Cumulative Cost Surface validation
-
-`design.md § Performance Diagnostics > Cumulative Cost Surface` lists
-five categories the `karac query cost-summary` JSON renderer reports
-per-function and as totals: `rc_ops` (with `rc` / `arc` breakdown),
-`arc_provider_wraps`, `borrow_flag_fields`, `partition_guard_sites`,
-`auto_clone_insertions`. Observed counts on the Parallax-lite workload
-(after `karac query cost-summary <concatenated workload>`):
-
-| Category                | Per-function       | Total |
-|-------------------------|--------------------|-------|
-| `rc_ops.count`          | 0 (every fn)       | 0     |
-| `rc_ops.rc`             | 0 (every fn)       | 0     |
-| `rc_ops.arc`            | 0 (every fn)       | 0     |
-| `arc_provider_wraps`    | 0 (every fn)       | 0     |
-| `borrow_flag_fields`    | 0 (struct-level)   | 0     |
-| `partition_guard_sites` | 0 (every fn)       | 0     |
-| `auto_clone_insertions` | 0 (every fn)       | 0     |
-| `perf_notes`            | (none)             | 0     |
-| `by_function`           | (empty)            | (n/a) |
-
-All zeros. The surface is empty because the workload does not exercise
-RC types (no `shared struct`), does not call `with_provider[R](...)`
-in the entry point (deviation — see below), does not declare `mut`
-fields on struct types (no borrow flags), does not partition Vec/Slice
-in any flow (no partition guards), and has no auto-clone candidates
-(no shared values consumed across multiple use sites). The structural
-*shape* of the cost-summary output (totals object with the five
-categories, `by_function` list, `perf_notes` list) matches the spec
-table — `tests/parallax_lite.rs::test_parallax_lite_query_cost_summary_structural`
-pins the shape against future regressions.
-
-For v1.x cost-model tuning ground-truth this row of zeros is the
-baseline: a workload that is purely auto-par-driven incurs no
-cost-surface debt. Workloads that combine auto-par with RC/Arc
-provider injection (the future canonical demo, once "Par codegen:
-return values" closes the join-shape gap) will populate non-zero
-counts and make the cost-model trade-offs visible.
+| Build | Wall-clock |
+|---|---|
+| default (auto-par on) | 0.049 s |
+| `KARAC_AUTO_PAR=0` | 0.049 s |
+| the same calls in a written `par { ... }` | 0.018 s |
 
 ## Files
 
-- `kara.toml` — project manifest (`name = "parallax_lite"`, `edition =
-  "2026"`, no dependencies).
-- `src/resources.kara` — `MetricsRecorder` trait, three trait-bound
-  effect resources (`MetricsA / MetricsB / MetricsC`), `InMemoryMetrics`
-  provider impl with a CPU-bound busy-compute kernel.
-- `src/workload.kara` — three driver functions (`record_a / record_b /
-  record_c`) each carrying a distinct `writes(R_i)` effect, and the
-  `process_request` aggregator whose three-statement body is the
-  slice's load-bearing code.
-- `src/main.kara` — entry point. Currently calls `process_request()`
-  directly without the canonical nested `with_provider` dance, because
-  v1 codegen does not yet wire trait-method dispatch inside a provider
-  scope to the concrete impl (`db_pipeline/src/db.kara` GAP-N) — a
-  `MetricsA.record(...)` call inside `with_provider[MetricsA](...)` is
-  a no-op at runtime today. Auto-par lowering keys off the *effect
-  annotations*, not provider availability, so the demo-shape's
-  load-bearing piece (the analyzer's group decision and the codegen's
-  `karac_par_run` dispatch) is unaffected by the deviation. Once
-  GAP-N closes, `main.kara` can grow back the canonical
-  `with_provider[MetricsA] -> with_provider[MetricsB] ->
-  with_provider[MetricsC] -> process_request()` nesting.
+- `kara.toml`: the package manifest.
+- `src/resources.kara`: the `MetricsRecorder` trait, the three resources
+  `MetricsA`, `MetricsB`, `MetricsC`, and the `InMemoryMetrics` provider with
+  the busy-compute kernel.
+- `src/workload.kara`: the three drivers and `process_request`.
+- `src/main.kara`: binds the three providers and calls `process_request`.
 
 ## See also
 
-- `docs/implementation_checklist/phase-8-stdlib-floor.md § Auto-Concurrency
-  Codegen — Parallax-lite Workload` — the slice 6 plan and close-out.
-- `docs/design.md § Performance Diagnostics > Cumulative Cost Surface`
-  — the spec for the cost-summary table this workload validates against.
-- `docs/roadmap.md § Phase 8 § Parallax-lite — first ground-truth
-  measurement workload` — the v1.x cost-model tuning follow-on this
-  workload is the prerequisite for.
-- `tests/parallax_lite.rs` — IR-shape, concurrency, cost-summary, gate,
-  and (`#[ignore]`-gated) wall-clock benchmark coverage.
-- `examples/db_pipeline/` — sister project, same multi-file shape, with
-  the with_provider mechanism exercised against a richer effect surface.
+- [Chapter 14](../../docs/book/src/ch14-concurrency.md): `par` blocks and
+  auto-par.
+- [`examples/parallax`](../parallax/): the larger sibling.

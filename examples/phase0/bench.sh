@@ -2,8 +2,9 @@
 #
 # examples/phase0/bench.sh
 #
-# Benchmarks sequential vs auto-parallelized versions of dashboard.kara.
-# Demonstrates the speedup from effect-driven auto-concurrency.
+# Times two HAND-WRITTEN Rust models of dashboard.kara: sequential.rs and
+# parallel.rs (the design-phase model of what auto-concurrency would produce).
+# It does not run karac; see README.md for what the 0.8 compiler decides.
 
 set -euo pipefail
 
@@ -43,7 +44,7 @@ echo "  Average: ${seq_avg}ms"
 echo ""
 
 # Benchmark parallel
-echo "--- Parallel (compiler auto-parallelized) ---"
+echo "--- Parallel (parallel.rs, three threads) ---"
 par_total=0
 for i in $(seq 1 $RUNS); do
     elapsed=$("$PAR_BIN" 2>&1 >/dev/null | grep -o '[0-9]*ms' | grep -o '[0-9]*')
@@ -65,5 +66,5 @@ else
     echo "=== Result: parallel completed too fast to measure ==="
 fi
 echo ""
-echo "The programmer wrote sequential-looking code with effect annotations."
-echo "The compiler parallelized it automatically. Zero effort. ${speedup_whole:-3}.${speedup_frac:-0}x faster."
+echo "This times two hand-written Rust programs, sequential.rs and parallel.rs."
+echo "It models the transformation; it does not run karac."

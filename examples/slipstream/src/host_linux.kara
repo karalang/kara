@@ -30,7 +30,7 @@ fn checksum(buf: ref Vec[u8]) -> i64 {
     let n = buf.len();
     let mut i = 0;
     while i < n {
-        h = (h ^ (buf[i] as i64)).wrapping_mul(16777619);
+        h = (h ^ buf[i]).wrapping_mul(16777619);
         h = h % 4294967296;
         if h < 0 { h = h + 4294967296; }
         i = i + 1;

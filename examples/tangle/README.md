@@ -65,7 +65,8 @@ each restoring the value by writing *through the shared cell handle* held by the
 history command. In Rust this is `Rc<RefCell<Cell>>` (shared ownership +
 interior mutability); in Kāra it is a `shared struct` with a `mut` field — and
 `karac query ownership .../undo_redo.kara.Editor.set` shows the `cell` parameter
-as `mut_ref` + `representation:"shared (Rc)"`.
+as `own` (its declared mode: the command it builds keeps the handle) +
+`representation:"shared (Rc)"`.
 
 > **Bug found *and fixed* by this structure.** undo/redo first read stale
 > values: a write to a `shared struct` field through a projection receiver

@@ -358,7 +358,7 @@ pub fn default_workers() -> i64 { 8 }
 fn fan_collide(grid: ref Vec[LbmNode], workers: i64) -> Vec[LbmNode] {
     let h = grid_h();
     let band = (h + workers - 1) / workers;
-    let mut pool: TaskGroup = TaskGroup.new();
+    let pool: TaskGroup = TaskGroup.new();
     let mut handles: Vec[TaskHandle[Vec[LbmNode]]] = Vec.new();
     let mut k = 0;
     while k < workers {
@@ -386,7 +386,7 @@ fn fan_collide(grid: ref Vec[LbmNode], workers: i64) -> Vec[LbmNode] {
 fn fan_stream(coll: ref Vec[LbmNode], workers: i64, u0: f64, s: f64) -> Vec[LbmNode] {
     let h = grid_h();
     let band = (h + workers - 1) / workers;
-    let mut pool: TaskGroup = TaskGroup.new();
+    let pool: TaskGroup = TaskGroup.new();
     let mut handles: Vec[TaskHandle[Vec[LbmNode]]] = Vec.new();
     let mut k = 0;
     while k < workers {

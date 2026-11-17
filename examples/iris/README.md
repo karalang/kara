@@ -1,5 +1,12 @@
 # Iris — one Kāra source, image filters native *and* in the browser
 
+> **The browser build is not in 0.8.** `--target=wasm_browser
+> --features wasm-threads` is scheduled after v1
+> ([deferred.md § Web](../../docs/deferred.md#web)); on 0.8 `karac build`
+> answers "`--target=wasm_browser` builds the browser wasm bindings, which is
+> not in 0.8". This README describes the demo as it ran on the pre-M3
+> backend. The native build and its checksum oracle work on 0.8.
+
 Iris is the cross-target demo: **one Kāra package** of image-processing kernels,
 compiled with no change to a **native binary** and to **browser WASM**. The same
 `karac build` on the same source tree produces both — only `--target` differs.

@@ -33,9 +33,9 @@ impl GraphNode {
 // `d` is stored into `b.edges`, then used again to store into `c.edges`.
 // That second use after the container store is what forces RC on `d`.
 fn build_diamond() -> GraphNode {
-    let mut a = GraphNode { val: 1, edges: Vec.new() };
-    let mut b = GraphNode { val: 2, edges: Vec.new() };
-    let mut c = GraphNode { val: 3, edges: Vec.new() };
+    let a = GraphNode { val: 1, edges: Vec.new() };
+    let b = GraphNode { val: 2, edges: Vec.new() };
+    let c = GraphNode { val: 3, edges: Vec.new() };
     let d = GraphNode { val: 4, edges: Vec.new() };
 
     b.add_edge(d);   // a handle to d stored in b.edges
@@ -50,10 +50,10 @@ fn build_diamond() -> GraphNode {
 // 1 + (2 + 4) + (3 + 4) = 14, with d's 4 counted on both paths. That
 // double-count is the observable proof the cross-edge is real (one shared d,
 // not two copies).
-fn sum_vals(node: ref GraphNode) -> i64 {
+fn sum_vals(node: GraphNode) -> i64 {
     let mut total = node.val;
     for child in node.edges {
-        total = total + sum_vals(child);
+        total += sum_vals(child);
     }
     total
 }

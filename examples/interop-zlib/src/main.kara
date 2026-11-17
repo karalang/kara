@@ -5,14 +5,17 @@
 // into the system's zlib through an `unsafe extern "C" { }` block, linked by
 // the manifest's `[link] libs = ["z"]`.
 //
-// The declarations carry the effect story at the boundary:
-//   - `#[noblock]` on pure-CPU entry points opts out of the safe `{blocks}`
-//     default, so calls to them never pessimize scheduler placement.
-//   - `allocates(Heap)` is declared where zlib's default allocator mallocs
-//     internally (compress2/uncompress build their deflate/inflate state on
-//     the heap). Trusted at the boundary, per design.md § Effect defaults
-//     for `extern` functions.
-//   - `malloc`/`free` keep the `{blocks}` default: when in doubt, over-declare.
+// The declarations carry the effect story at the boundary. A foreign
+// function has exactly the effects it declares, none if it is `pure`, and
+// every effect (`blocks` included) if it declares nothing (design.md § 15,
+// core-semantics.md § 12):
+//   - `pure` on the pure-CPU entry points (`compressBound`, `crc32`): no
+//     effects, so calls to them never pessimize scheduler placement.
+//   - `allocates(Heap)` where zlib's default allocator mallocs internally
+//     (compress2/uncompress build their deflate/inflate state on the heap),
+//     and on `malloc`. Trusted at the boundary.
+//   - `free` declares nothing, so it has every effect: when in doubt,
+//     over-declare.
 
 // Effect resources are user-defined names; declare the one the annotations use.
 effect resource Heap;
@@ -28,9 +31,7 @@ effect resource Heap;
 /// default allocator). Callers must pass `dest` buffers at least as large
 /// as the value behind `dest_len`, which zlib updates in place.
 unsafe extern "C" {
-    #[noblock]
-    fn compressBound(source_len: usize) -> usize;
-    #[noblock]
+    pure fn compressBound(source_len: usize) -> usize;
     fn compress2(
         dest: *mut u8,
         dest_len: *mut usize,
@@ -38,15 +39,13 @@ unsafe extern "C" {
         source_len: usize,
         level: i32,
     ) -> i32 with allocates(Heap);
-    #[noblock]
     fn uncompress(
         dest: *mut u8,
         dest_len: *mut usize,
         source: *const u8,
         source_len: usize,
     ) -> i32 with allocates(Heap);
-    #[noblock]
-    fn crc32(crc: usize, buf: *const u8, len: u32) -> usize;
+    pure fn crc32(crc: usize, buf: *const u8, len: u32) -> usize;
     fn malloc(n: usize) -> *mut u8 with allocates(Heap);
     fn free(p: *mut u8);
 }

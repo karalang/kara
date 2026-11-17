@@ -1,7 +1,7 @@
 {
   "note": "Non-conforming library-doc blocks and examples. Shrink me. `reason` says why each is here; UNTRIAGED means nobody has decided yet.",
   "blocks": {
-    "f81e6a2e51be": {
+    "903e9b2c64b0": {
       "where": "README.md:94",
       "heading": "What makes Kāra different > An AI-first compiler interface",
       "outcome": "REJECTED",

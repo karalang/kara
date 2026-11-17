@@ -1,6 +1,23 @@
 # Phase 0: Proof of Value
 
-**Effect types + auto-concurrency, demonstrated end-to-end.**
+**Effect types + auto-concurrency: the design-phase pitch.**
+
+> **What this is today.** This directory predates the compiler. `parallel.rs`
+> and `sequential.rs` are hand-written Rust models of the transformation, and
+> `bench.sh` compiles and times those two Rust files: it never runs `karac`, so
+> its speedup is a property of the model, not a measurement of Kāra.
+> `compiler_output.json` is a hand-written mockup of the report the design
+> called for (its `karac_version` is `0.1.0-dev`).
+>
+> On 0.8, `dashboard.kara` checks and runs (`karac run dashboard.kara`), and
+> the compiler's real verdict comes from
+> `karac query concurrency dashboard.kara.load_dashboard`: it **declines** to
+> run the three fetches as tasks, with the reason "statement 1 may stop before
+> statement 2 does `panics`". Each fetch ends in `?`, so the first can return
+> early, and running the later ones anyway would perform effects the
+> sequential program never reaches. Writing the three fetches as a
+> `par { ... }` block is the explicit form
+> ([Chapter 14](../../docs/book/src/ch14-concurrency.md)).
 
 ## The Pitch (5 minutes)
 
@@ -8,26 +25,22 @@
 
 See [`dashboard.kara`](dashboard.kara). A function loads a user dashboard by fetching from three data sources and assembling the results:
 
-```
-fn main() {
-    let user_id = env.args().get(1).unwrap_or("1").parse_u64()?;
+```kara,ignore
+fn load_dashboard(user_id: u64) -> Result[Dashboard, DbError] {
+    let profile = fetch_profile(user_id)?;          // reads(UserDB)
+    let orders = fetch_orders(user_id)?;            // reads(OrderDB)
+    let notifs = fetch_notifications(user_id)?;     // reads(NotifDB)
 
-    let profile = fetch_profile(user_id)?;       // reads(UserDB)
-    let orders = fetch_orders(user_id)?;          // reads(OrderDB)
-    let notifs = fetch_notifications(user_id)?;   // reads(NotifDB)
-
-    let dashboard = build_dashboard(profile, orders, notifs);
-    println(dashboard.greeting);
-    println(dashboard.order_summary);
-    println(dashboard.alert);
+    // Sync point: build_dashboard needs all three results.
+    Ok(build_dashboard(profile, orders, notifs))
 }
 ```
 
-No `async fn`. No colored functions. No channels. No thread pools. Just sequential code with effect annotations declaring *what* each function touches.
+No `async fn`. No colored functions. No channels. No thread pools. Just sequential code: the compiler infers *what* each function touches.
 
-### 2. The compiler parallelizes it
+### 2. The effect analysis
 
-The compiler analyzes effects:
+The design's analysis of the effects:
 
 | Pair | Same resource? | Verdict |
 |------|---------------|---------|
@@ -35,13 +48,13 @@ The compiler analyzes effects:
 | `reads(UserDB)` + `reads(NotifDB)` | No | **Safe** |
 | `reads(OrderDB)` + `reads(NotifDB)` | No | **Safe** |
 
-No conflicts. No data dependencies between the three fetches. The compiler spawns three concurrent tasks and inserts a sync point before `build_dashboard`, which consumes all three results.
+No resource conflicts and no data dependencies between the three fetches, so the design spawns three concurrent tasks and inserts a sync point before `build_dashboard`, which consumes all three results. (The 0.8 compiler also weighs the early return of each `?`; see the note above.)
 
-Compare the generated code:
-- [`sequential.rs`](sequential.rs) — what a naive translation produces (~600ms)
-- [`parallel.rs`](parallel.rs) — what the Kāra compiler generates (~200ms)
+The two hand-written Rust models of that transformation:
+- [`sequential.rs`](sequential.rs) — the fetches one after another (~600ms of simulated latency)
+- [`parallel.rs`](parallel.rs) — the fetches on three threads (~200ms)
 
-### 3. The benchmark proves it
+### 3. The model's benchmark
 
 ```bash
 $ bash bench.sh
@@ -51,18 +64,18 @@ $ bash bench.sh
 --- Sequential (no concurrency) ---
   Average: ~600ms
 
---- Parallel (compiler auto-parallelized) ---
+--- Parallel (parallel.rs, three threads) ---
   Average: ~200ms
 
 === Result: 3.0x speedup ===
 
-The programmer wrote sequential-looking code with effect annotations.
-The compiler parallelized it automatically. Zero effort. 3.0x faster.
+This times two hand-written Rust programs, sequential.rs and parallel.rs.
+It models the transformation; it does not run karac.
 ```
 
-### 4. The compiler explains its decisions
+### 4. The report the design called for
 
-See [`compiler_output.json`](compiler_output.json) for the full structured output. Key excerpts:
+[`compiler_output.json`](compiler_output.json) is a hand-written mockup of the structured report. The 0.8 compiler's real report is `karac query concurrency`. Key excerpts from the mockup:
 
 **Effect query** — what effects does `main` have?
 ```json
@@ -84,11 +97,15 @@ See [`compiler_output.json`](compiler_output.json) for the full structured outpu
 ## Running the demo
 
 ```bash
-# Compile and run both versions
+# The Kāra program itself
+karac run examples/phase0/dashboard.kara
+karac query concurrency examples/phase0/dashboard.kara.load_dashboard
+
+# The two hand-written Rust models
 rustc examples/phase0/sequential.rs -o /tmp/kara_seq && /tmp/kara_seq
 rustc examples/phase0/parallel.rs   -o /tmp/kara_par && /tmp/kara_par
 
-# Run the benchmark
+# Time the two Rust models
 bash examples/phase0/bench.sh
 ```
 
@@ -100,4 +117,8 @@ In other languages, getting that 3x speedup requires the programmer to:
 3. Restructure code to be concurrent (non-trivial refactor)
 4. Handle cancellation, error ordering, synchronization (error-prone)
 
-In Kāra, effect annotations provide all the information the compiler needs. The programmer writes the obvious sequential code. The compiler does the rest.
+In Kāra, inferred effects give the compiler the information it needs. On 0.8 it takes the parallel step itself only when no early return can skip a later effect; otherwise one line says it explicitly, and the compiler checks that the branches are independent:
+
+```kara,ignore
+let (p, o, n) = par { fetch_profile(user_id), fetch_orders(user_id), fetch_notifications(user_id) };
+```

@@ -1,5 +1,12 @@
 # Fathom — a Mandelbrot explorer across every core, in a browser tab
 
+> **Not buildable on 0.8.** The browser build (`--target=wasm_browser
+> --features wasm-threads`) is scheduled after v1
+> ([deferred.md § Web](../../docs/deferred.md#web)); on 0.8 `karac build`
+> answers "`--target=wasm_browser` builds the browser wasm bindings, which is
+> not in 0.8". This README describes the demo as it ran on the pre-M3
+> backend.
+
 Fathom is the front-end half of Kāra's "auto-concurrency without coloring"
 thesis: a real-time fractal renderer where **one Kāra source** drives a render
 loop whose per-frame compute fans out across a Web Worker pool — with no

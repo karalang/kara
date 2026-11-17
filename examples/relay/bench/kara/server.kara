@@ -82,7 +82,7 @@ fn bind_addr() -> String {
 // itself rather than through `split` and `parse`, whose types differ between
 // the frozen legacy pipeline this file's smoke test builds on (`Vec[String]`,
 // `Option`) and the library's (`Str` views, `Result`).
-fn clen_for(headers: ref String, needle: String) -> i64 {
+fn clen_for(headers: String, needle: String) -> i64 {
     let mlen = needle.len();
     match headers.find(needle) {
         Some(pos) => {
@@ -107,10 +107,10 @@ fn clen_for(headers: ref String, needle: String) -> i64 {
 // Content-Length under either the canonical or lowercase spelling, or -1.
 // A fully case-insensitive scan would want `String.to_lowercase()`; these two
 // spellings cover the bench upstream (Go net/http) and typical origins.
-fn content_length(headers: ref String) -> i64 {
+fn content_length(headers: String) -> i64 {
     let v = clen_for(headers, "Content-Length:");
     if v >= 0 { return v; }
-    return clen_for(headers, "content-length:");
+    clen_for(headers, "content-length:")
 }
 
 // Total byte length of one HTTP response (header block + body) given the first
@@ -187,7 +187,7 @@ fn handle(client: own TcpStream, upstream_addr: own String) {
                                         Ok(_) => {}
                                         Err(_) => { return; }
                                     }
-                                    total = total + m;
+                                    total += m;
                                     if expected < 0 {
                                         expected = response_len(Vec.from_slice(buf[0..m]));
                                     }
@@ -210,7 +210,7 @@ fn handle(client: own TcpStream, upstream_addr: own String) {
 fn main() {
     let addr = upstream_addr();
     let listener = TcpListener.bind(bind_addr()).unwrap();
-    let mut tg: TaskGroup = TaskGroup.new();
+    let tg: TaskGroup = TaskGroup.new();
     loop {
         match listener.accept() {
             Ok(client) => {

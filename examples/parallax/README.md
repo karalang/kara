@@ -3,6 +3,18 @@
 A worked example of Kāra's auto-parallelization: write straight-line
 sequential code, the compiler runs it concurrently.
 
+> **What holds on 0.8.** The package builds and runs, but **auto-par runs
+> the four fetches in order** in this version of the example: each provider's
+> `fetch_*` prints a "loaded ..." line, and two statements that both write
+> `Stdout` must keep their order, or the output would change from run to run.
+> `karac query concurrency` (on the flattened package, as in
+> [parallax_lite](../parallax_lite/README.md#what-it-demonstrates)) reports
+> the four `let`s as one parallel group, then `tasks: false` with the reason
+> "`writes(Stdout)` and `writes(Stdout)` must keep their order". A default
+> build and a `KARAC_AUTO_PAR=0` build both ran in 0.027 s (examples probe,
+> 2026-11-16, 4-core Linux x86_64 container). The description below is the
+> design the example was written for, on the pre-M3 backend.
+
 ## What it demonstrates
 
 The canonical fan-out + join shape (`docs/dogfooding.md § Parallax`) —
@@ -11,15 +23,20 @@ four typed effect resources, four provider implementations, and a
 compiler auto-parallelizes into a single concurrent group, joined
 into a `Dashboard` aggregate.
 
-```kara
+```kara,ignore
 pub fn get_dashboard(user_id: i64) -> Dashboard
     with reads(UserDB) reads(OrderDB) reads(NotifDB) reads(RecommendDB)
 {
     let profile = fetch_profile(user_id);
-    let latest_order = fetch_latest_order(user_id);
+    let latest_orders = fetch_latest_orders(user_id);
     let top_notification = fetch_top_notification(user_id);
     let top_recommendation = fetch_top_recommendation(user_id);
-    Dashboard { profile, latest_order, top_notification, top_recommendation }
+    Dashboard {
+        profile: profile,
+        latest_orders: latest_orders,
+        top_notification: top_notification,
+        top_recommendation: top_recommendation,
+    }
 }
 ```
 
@@ -51,31 +68,24 @@ This one adds:
 
 ## How to run
 
-The project uses the multi-file layout (`kara.toml` + `src/*.kara`).
-Multi-file codegen ships in Theme 4 (2026-05-10) — `karac build` from
-the project root drives all six modules through resolve / typecheck
-per-module, then concatenates the items in topological order and
-runs effect / ownership / concurrency / codegen / link end-to-end:
+The project uses the package layout (`kara.toml` + `src/*.kara`);
+`karac build` from the package root builds it to `dist/native/parallax`:
 
 ```sh
 cd examples/parallax/
 
 # auto-parallelized (default)
 karac build
-./parallax
+./dist/native/parallax
 
 # sequential baseline — same source, same binary, opt-out via env var
 KARAC_AUTO_PAR=0 karac build
-./parallax
+./dist/native/parallax
 ```
 
-`KARAC_AUTO_PAR=0` short-circuits parallel-group dispatch back to
-plain sequential execution at codegen time. A user-facing
-`--sequential` CLI flag is planned.
+`KARAC_AUTO_PAR=0` turns auto-par off for that build.
 
-`karac build --concurrency-report` prints a storyboard of what auto-
-parallelized and why — the four-call group on `get_dashboard` is the
-headline output.
+`karac build --concurrency-report` prints what auto-par did and why.
 
 ## Files
 
@@ -102,29 +112,11 @@ headline output.
 
 - [`examples/parallax_lite/`](../parallax_lite/) — sister demo;
   three-resource fan-out without join.
-- `tests/parallax.rs` — IR-shape, concurrency, end-to-end, and
-  (ignore-gated) wall-clock benchmark coverage.
 - `docs/dogfooding.md § Parallax` — the demo's design storyboard.
 
 ## Implementation notes
 
-Tracker references for contributors digging into the implementation:
-
-- Auto-parallelization analyzer: `src/concurrency.rs`.
-- Per-branch return-slot ABI:
-  `__karac_ParGroup_<id>_Returns` synthesis in `src/codegen.rs`
-  (Slice A, commit `ab611d3`).
-- `with_provider[R]` lowering: Theme 6 sub-steps 3+4+5
-  (parallax-lite's three-deep nest, extended to four-deep here).
-- Slice plan and close-out:
-  `docs/implementation_checklist/phase-8-stdlib-floor.md §
-  Provider Implementations` (Slice C, commit `f5c7b31`).
-- The originally-planned `Vec[Order]` return for `fetch_latest_order`
-  is now wired end-to-end. Three codegen bugs were uncovered and
-  fixed during the path reconstruction (2026-05-09): the analyzer's
-  non-contiguous parallel grouping; `SelfValue` missing from the
-  auto-par capture-set walk; and the slot rebind's unconditional
-  scope-exit free that corrupted moved Vec values. The other three
-  fetches still return single-element struct shapes (`Profile`,
-  `Notification`, `Recommendation`) — those match their natural
-  domain semantics and the storyboard.
+The auto-par decision is made in `src/mir/effects/auto_par.rs`; the effect
+analysis that forms the groups is `src/concurrency.rs`. The pre-M3 backend
+this example was first built on (`src/codegen.rs`, its return-slot ABI and
+`with_provider` lowering) was deleted at M3.
