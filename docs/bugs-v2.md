@@ -132,11 +132,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-97 | 2026-11-17 | typecheck | low | A library trait's default method cannot carry its own `where Self: Clone` bound, so `Iterator.cycle` is an inherent method on each Clone-able adaptor instead of one default method on `Iterator` | — |
 | B-2026-11-17-115 | 2026-11-17 | typecheck | medium | A constructor seed's numbers are fixed at the call: `it.fold(SortedMap.from([(-1, 0)]), |dp, a| ..)` over `i32` items is refused (expected 'SortedMap[i64, i64]', found 'SortedMap[i32, i32]') with no fix, where `fold(0, ..)` and `fold([0], ..)` take the closure's type | — |
 | B-2026-11-17-116 | 2026-11-17 | mir-llvm | low | Hashing a `Map`/`Set` key costs about 135 Ir per word (SipHash13 over a byte stream): `karac.hash.word` is 38% of kata 220's instructions | — |
-| B-2026-11-17-119 | 2026-11-17 | parser | medium | Rust's turbofish after a function name (`with_provider::<Clock, _>(p, || ..)`, `first::<i64>(xs)`) stops the parse at the `::` with "Expected `;`, found `::`" and no fix | — |
-| B-2026-11-17-120 | 2026-11-17 | typecheck | medium | `Atomic[i64].new(0)` and `Mutex[i64].new(x)`, the qualified constructors, are refused with "no method 'new' on `Atomic[i64]`" although `Vec[i64].new()` works | — |
-| B-2026-11-17-121 | 2026-11-17 | resolver+parser | medium | `use std::sync::atomic::{AtomicI64, Ordering};` is "unknown module `std.sync.atomic`" with no fix, and `AtomicI64` everywhere after it unknown | — |
-| B-2026-11-17-122 | 2026-11-17 | resolver+parser | medium | `Arc` in `use std::sync::{Arc, Mutex};` is "`std.sync` has no item `Arc`" with no fix, and `Arc::new(Mutex::new(s))` / `server.clone()` have none either | — |
-| B-2026-11-17-123 | 2026-11-17 | typecheck | low | `Duration::from_nanos(x)` with `x: u64` mends to `Duration.ns(x)` and then has a narrowing error with no fix | — |
 
 ### Relocated
 
@@ -1643,6 +1638,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-114 | typecheck+cli | medium | `karac check <file>`, the editor and the LSP refuse a module that imports a `shared struct` and names it in a function signature: "expected 'Counter'… | e09d8559a3 |
 | B-2026-11-17-117 | mir-llvm | low | Dropping a deep `shared` chain or tree whose nodes also hold a `weak` back link (or a `String`) still recursed once per level, so on wasm_wasi node's… | da73243d47 |
 | B-2026-11-17-118 | parser | low | A `vec![..]` inside a format macro's argument has no fix: `println!("{}", g(vec![1, 2]))` stays refused, so the Mend loop on a LeetCode harness ends… | 7893339013 |
+| B-2026-11-17-119 | parser | medium | Rust's turbofish after a function name (`with_provider::<Clock, _>(p, \|\| ..)`, `first::<i64>(xs)`) stops the parse at the `::` with "Expected `;`, fo… | 9848aac48d |
+| B-2026-11-17-120 | typecheck | medium | `Atomic[i64].new(0)` and `Mutex[i64].new(x)`, the qualified constructors, are refused with "no method 'new' on `Atomic[i64]`" although `Vec[i64].new(… | 9848aac48d |
+| B-2026-11-17-121 | resolver+parser | medium | `use std::sync::atomic::{AtomicI64, Ordering};` is "unknown module `std.sync.atomic`" with no fix, and `AtomicI64` everywhere after it unknown | 9848aac48d |
+| B-2026-11-17-122 | resolver+parser | medium | `Arc` in `use std::sync::{Arc, Mutex};` is "`std.sync` has no item `Arc`" with no fix, and `Arc::new(Mutex::new(s))` / `server.clone()` have none eit… | 9848aac48d |
+| B-2026-11-17-123 | typecheck | low | `Duration::from_nanos(x)` with `x: u64` mends to `Duration.ns(x)` and then has a narrowing error with no fix | 9848aac48d |
 
 </details>
 
