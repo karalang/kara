@@ -84,13 +84,11 @@ fn build(dir: &Path, on: bool) -> Option<PathBuf> {
     // which this program has at x86-64-v3, where the check was measured; a
     // plain build is x86-64-v2 since B-2026-11-16-201 and lays the loops out
     // with none crossing.
+    c.args(["build", file.to_str().unwrap(), "-o", exe.to_str().unwrap()]);
     if cfg!(target_arch = "x86_64") {
         c.arg("--target-cpu=x86-64-v3");
     }
-    let built = c
-        .args(["build", file.to_str().unwrap(), "-o", exe.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let built = c.output().unwrap();
     let why = String::from_utf8_lossy(&built.stderr).to_string();
     common::link_or_skip(if built.status.success() {
         Ok(())
