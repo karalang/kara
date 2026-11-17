@@ -4,9 +4,10 @@ fn down(n: i64) -> i64 {
         return 0;
     }
     let sub = down(n - 1);
-    return sub + n;
+    return sub % 1000003 + n % 7;
 }
 fn main() {
     println("before");
-    println(f"{down(50000000i64)}");
+    stdout.flush();
+    println(f"{down(200000000)}");
 }

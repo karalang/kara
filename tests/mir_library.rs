@@ -1266,7 +1266,11 @@ fn main() {
 
 /// Recursion past the interpreter's depth aborts as a compiled program's
 /// stack overflow does: the runtime's message on stderr, exit 134
-/// (B-2026-10-22-38).
+/// (B-2026-10-22-38). A compiled `main` runs on a 1 GiB stack, which held
+/// the 50M frames this pin once asked for (so the program printed its sum);
+/// 200M cannot fit, and `sub % P + n % 7` is no accumulator an optimiser
+/// could turn into a loop. The flush keeps `before`, which an abort would
+/// otherwise lose on a pipe (core-semantics §10.1, B-2026-11-16-319).
 #[test]
 fn deep_recursion_aborts_as_a_stack_overflow() {
     let src = r#"
@@ -1275,11 +1279,12 @@ fn down(n: i64) -> i64 {
         return 0;
     }
     let sub = down(n - 1);
-    return sub + n;
+    return sub % 1000003 + n % 7;
 }
 fn main() {
     println("before");
-    println(f"{down(50000000i64)}");
+    stdout.flush();
+    println(f"{down(200000000)}");
 }
 "#;
     let r = karac::mir::lower::run_source(src).expect("builds");
