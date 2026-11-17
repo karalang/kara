@@ -16,8 +16,26 @@ pub(super) fn cmd_run_example(
     // Try single-file form first, then project-style directory form.
     let single_file = format!("examples/{name}.kara");
     let dir_entry = format!("examples/{name}/src/main.kara");
+    // A project example (`examples/NAME/kara.toml`) is a package: it is run
+    // as `karac run` runs it in its own directory, every module and
+    // dependency included, not as a lone file (B-2026-11-16-282).
+    let package_root = std::path::Path::new("examples").join(name);
+    let is_package = !std::path::Path::new(&single_file).exists()
+        && package_root
+            .join(crate::manifest::MANIFEST_FILENAME)
+            .is_file();
     let path = if std::path::Path::new(&single_file).exists() {
         single_file
+    } else if is_package {
+        let entry = walker::bin_entry_path(&package_root, walker::Platform::host());
+        if !entry.is_file() {
+            eprintln!(
+                "error: example '{name}' is a library package: `{}` has no src/main.kara to run",
+                package_root.display()
+            );
+            process::exit(1);
+        }
+        entry.to_string_lossy().into_owned()
     } else if std::path::Path::new(&dir_entry).exists() {
         dir_entry
     } else {
@@ -27,19 +45,18 @@ pub(super) fn cmd_run_example(
         list_available_examples();
         process::exit(1);
     };
-    // `karac run --example NAME` runs an example file out of the
-    // examples/ directory; it has no `kara.toml`-style project root,
-    // so manifest discovery is intentionally skipped.
+    // A single-file example has no project root, so manifest discovery is
+    // skipped for it; a project example is found from its own kara.toml.
     // `interp = false`: `run --example` uses the JIT-default backend too (6c),
     // with the same `--interp`/`KARAC_RUN_JIT=0` escape hatches honored inside.
-    // `run --example` takes no trailing program arguments — the examples it
+    // `run --example` takes no trailing program arguments: the examples it
     // runs are self-contained demos, so the program argv is just the script.
     super::run_v2::cmd_run_either(
         &path,
         output,
         sequential,
         None,
-        true,
+        !is_package,
         lint_overrides,
         None,
         false,
