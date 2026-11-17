@@ -1,0 +1,12 @@
+// design.md §5 Or-patterns: `ref d` in one alternative and `d` in the other
+// would make `d` a borrow or the value depending on which matched.
+struct D { n: i64 }
+
+enum T { L(D), R(D) }
+
+fn main() {
+    let t = T.R(D { n: 2 });
+    match t {
+        T.L(ref d) | T.R(d) => println(d.n),
+    }
+}

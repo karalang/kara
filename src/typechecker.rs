@@ -100,6 +100,7 @@ mod method_ufcs;
 mod method_user_impl;
 mod method_vec_mutation;
 mod old_read_to_string;
+mod package_coherence;
 mod patterns;
 mod refinement_elision;
 mod rust_binary_search;
@@ -1522,6 +1523,10 @@ pub enum TypeErrorKind {
     /// specialization is post-v1). Theme-4 slice — see
     /// `phase-4-interpreter.md` § `impl Option[Ordering]` deferred entry.
     ConflictingImpl,
+    /// A package's impl the orphan, blanket or inherent-impl rule refuses
+    /// against the other packages of the build (design.md § Coherence;
+    /// B-2026-11-17-36). Checked per module, at the package boundary.
+    OrphanImpl,
     /// `#[non_exhaustive]` slice 4 — a cross-package consumer wrote a
     /// struct literal `Foo { ... }` (or an exhaustive struct pattern
     /// without `..`) against a `pub struct` defined in another package
@@ -1880,6 +1885,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::PrivateTypeInPublicSignature
         | TypeErrorKind::PrivateFieldAccess
         | TypeErrorKind::ConflictingImpl
+        | TypeErrorKind::OrphanImpl
         | TypeErrorKind::NonExhaustiveCrossPackageLiteral
         | TypeErrorKind::NonExhaustiveCrossPackageMatch
         | TypeErrorKind::NonExhaustiveCrossPackagePattern
@@ -4392,6 +4398,10 @@ pub struct TypeChecker<'a> {
     /// Indices into `env.impls` of the baked stdlib's impls, which a library
     /// source's re-statement replaces (redesign A2).
     pub(super) baked_impls: FxHashSet<usize>,
+    /// Each source impl's `Self` type as lowered at registration, by its
+    /// index in `env.impls`: the blanket-overlap check asks whether it
+    /// meets a blanket impl's bounds (B-2026-11-17-17).
+    pub(super) impl_self_types: FxHashMap<usize, Type>,
     /// While the baked library's impls register: their spans are the baked
     /// text's, not past `library_start`, so they cannot be told from a
     /// program's by offset.
@@ -4867,6 +4877,7 @@ impl<'a> TypeChecker<'a> {
             weak_store_actual: None,
             retyped_int_literal: None,
             baked_impls: FxHashSet::default(),
+            impl_self_types: FxHashMap::default(),
             registering_baked: false,
             overlap_from_program: false,
             reported_uninferrable_empty_literal: false,
@@ -4996,6 +5007,7 @@ impl<'a> TypeChecker<'a> {
         self.validate_derive_arithmetic();
         self.check_signature_visibility();
         self.check_inherent_impl_locality();
+        self.check_package_coherence();
         // Phase 6 line 218 slice 2 — reject ScopeLocal-marked types
         // (e.g. `TaskHandle[T]`) appearing in escape positions:
         // function/method return type, struct/enum field type. The
@@ -5047,6 +5059,7 @@ impl<'a> TypeChecker<'a> {
         // check` accepted the program. Refusing it is the only honest answer
         // available, and it is what keeps `Array` — newly dispatchable in this
         // row — from joining that class.
+        self.reject_blanket_impl_overlaps();
         self.reject_unqualifiable_impl_collisions();
         self.check_declared_table_keys();
         self.check_items();

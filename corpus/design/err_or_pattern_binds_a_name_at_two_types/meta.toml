@@ -1,0 +1,9 @@
+source = "B-2026-11-17-29"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "patterns"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-29: design.md §5 Or-patterns: every alternative binds the same names with the same types. Ok(x) | Err(x) on a Result[i64, String] passed check and failed in MIR on every lane. The expected.out wording of an error pin is guidance, not a byte oracle."

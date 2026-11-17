@@ -1,0 +1,9 @@
+source = "B-2026-11-17-20"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "operators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-20: design.md § Operator traits: impl PartialEq[i64] for M writes fn eq(self, other: i64); a bare parameter borrows (D5), which for a Copy Rhs is a copy, no stronger than the trait's ref Rhs. It was refused E0288, and the interpreter, which skips check, evaluated m == 3 as false (the call lent a reference where eq takes the value)."

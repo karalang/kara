@@ -3265,6 +3265,7 @@ pub(crate) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
         crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "E0290",
         crate::typechecker::TypeErrorKind::LaterTrack => "E0292",
         crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
+        crate::typechecker::TypeErrorKind::OrphanImpl => "E0246",
         crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
         crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
         crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackagePattern => "E0243",

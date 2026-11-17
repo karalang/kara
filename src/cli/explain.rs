@@ -468,6 +468,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0241", ty("NonExhaustiveCrossPackageLiteral", None)),
     ("E0242", ty("NonExhaustiveCrossPackageMatch", None)),
     ("E0243", ty("NonExhaustiveCrossPackagePattern", None)),
+    ("E0246", ty("OrphanImpl", None)),
     (
         "W0244",
         ty("UnknownLint", Some(DiagnosticClass::LintWarning)),
@@ -4158,9 +4159,10 @@ fn concept_for_kind(kind: &str) -> Option<&'static str> {
         "UnsupportedNumericSuffix" | "RedundantSuffix" => "types/numeric-semantics",
         "StringNotIndexable" | "IteratorNotIndexable" | "TypeNotIndexable" => "types/indexing",
         "CannotInferTypeParam" | "CannotInferAssocFn" => "types/inference",
-        "OperatorTraitImplRestricted" | "IntoTraitImplNotAllowed" | "ConflictingImpl" => {
-            "traits/coherence"
-        }
+        "OperatorTraitImplRestricted"
+        | "IntoTraitImplNotAllowed"
+        | "ConflictingImpl"
+        | "OrphanImpl" => "traits/coherence",
         "DropBodyMayPanic" => "traits/drop",
         "MainReturnType" | "MainErrNotDisplay" | "MainSignature" => "programs/main",
         "ReassignToImmutable"

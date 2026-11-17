@@ -1,0 +1,1 @@
+ERROR E0200 at line 15: trait bound `T: Display` is not satisfied

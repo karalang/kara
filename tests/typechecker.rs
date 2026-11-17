@@ -46924,9 +46924,12 @@ fn main() {
 /// could be put in one.
 #[test]
 fn derived_ord_struct_is_accepted_by_priority_queue() {
+    // `Clone` too: this checker's baked `PriorityQueue.peek` copies the root
+    // and says `where T: Clone`, which a call now checks (B-2026-11-17-18);
+    // the library source's `peek` returns `Option[ref T]` and needs none.
     typecheck_ok(
         r#"
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 struct Task { pri: i64, id: i64 }
 fn main() {
     let mut q: PriorityQueue[Task] = PriorityQueue.new();

@@ -56,19 +56,19 @@ fn design_effects_ceiling_admits_default_permitted_effects() {
 
 #[test]
 fn design_effects_pub_generic_fn_is_charged_its_bound_ceiling() {
-    let src = "effect resource Data;\ntrait Storage { fn load(self, k: i64) -> i64 with reads(Data); }\npub fn use_it[S: Storage](s: S) -> i64 { s.load(1) }\nfn main() {}\n";
+    let src = "effect resource Data;\npub trait Storage { fn load(self, k: i64) -> i64 with reads(Data); }\npub fn use_it[S: Storage](s: S) -> i64 { s.load(1) }\nfn main() {}\n";
     refused(
         "bound-uncalled",
         src,
         "public function 'use_it' performs effects [reads(Data)] but has no effect declaration",
     );
     // Through a private generic helper too.
-    let src = "effect resource Data;\ntrait Storage { fn load(self, k: i64) -> i64 with reads(Data); }\nfn helper[S: Storage](s: S) -> i64 { s.load(2) }\npub fn outer[S: Storage](s: S) -> i64 { helper(s) }\nfn main() {}\n";
+    let src = "effect resource Data;\npub trait Storage { fn load(self, k: i64) -> i64 with reads(Data); }\nfn helper[S: Storage](s: S) -> i64 { s.load(2) }\npub fn outer[S: Storage](s: S) -> i64 { helper(s) }\nfn main() {}\n";
     refused(
         "bound-helper",
         src,
         "public function 'outer' performs effects [reads(Data)] but has no effect declaration",
     );
-    let src = "effect resource Data;\ntrait Storage { fn load(self, k: i64) -> i64 with reads(Data); }\npub fn use_it[S: Storage](s: S) -> i64 with reads(Data) { s.load(1) }\nfn main() {}\n";
+    let src = "effect resource Data;\npub trait Storage { fn load(self, k: i64) -> i64 with reads(Data); }\npub fn use_it[S: Storage](s: S) -> i64 with reads(Data) { s.load(1) }\nfn main() {}\n";
     clean("bound-declared", src);
 }

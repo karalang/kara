@@ -10975,7 +10975,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         match self.partial_eq_with_rhs(lt, rt)? {
             Some((d, args)) if lt != rt => {
                 let lo = self.ref_to(lp, lt);
-                let ro = self.ref_to(rp, rt);
+                // A bare `Copy` `other` (`fn eq(self, other: i64)`) takes the
+                // value; lent a reference, the body compared its address and
+                // `m == 3` was false (B-2026-11-17-20).
+                let by_value = self
+                    .lcx
+                    .fns
+                    .get(&d)
+                    .and_then(|f| f.f.params.first())
+                    .and_then(|p| self.callee_param_ty(p, &args).ok())
+                    .is_some_and(|pt| {
+                        !matches!(self.tys().tcx().kind(pt), HK::Ref(_) | HK::MutRef(_))
+                            && self.is_copy(pt)
+                    });
+                let ro = if by_value {
+                    Operand::Copy(rp)
+                } else {
+                    self.ref_to(rp, rt)
+                };
                 let name = self.lcx.instance(d, args.clone());
                 let func = self.fn_operand(&name, d, args);
                 let next = self.b.new_block();

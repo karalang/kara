@@ -1,0 +1,16 @@
+// design.md §8: a method's `where` clause holds at every call. `show` needs
+// `T: Display`, and `W[N]` has an `N` without one.
+struct W[T] { v: T }
+
+impl[T] W[T] {
+    fn show(self) -> String where T: Display {
+        f"[{self.v}]"
+    }
+}
+
+struct N {}
+
+fn main() {
+    let b = W { v: N {} };
+    println(b.show());
+}

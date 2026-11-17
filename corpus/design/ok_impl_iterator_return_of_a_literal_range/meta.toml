@@ -1,0 +1,9 @@
+source = "B-2026-11-17-19"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "impl-trait"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-19: design.md § impl Trait: a body's literal takes the type the inline Item binding promises, so 0..2 returned as impl Iterator[Item = i64] is a Range[i64] (it was refused E_IMPL_TRAIT_ASSOC_MISMATCH 'promising i64, found i64'), also through a trait's RPITIT method."

@@ -1,0 +1,9 @@
+source = "B-2026-11-17-17"
+dedup_of = []
+expect = "error:E0240"
+exit = 1
+tags = ["traits", "coherence"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-17: a blanket impl over its own parameter and an impl for a type that meets its bounds are two impls for that type; design.md § Coherence makes the overlap an error and § No specialization rules out the concrete one winning. It was accepted and 5.t() ran the concrete body. The expected.out wording of an error pin is guidance, not a byte oracle."

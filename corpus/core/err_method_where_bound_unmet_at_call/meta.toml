@@ -1,0 +1,9 @@
+source = "B-2026-11-17-18"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["traits", "generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-18: a where clause on an inherent method that bounds the impl's parameter is checked at each call, against the receiver's type argument (design.md §8 where clauses). It was not, and the instance printed a Display nobody wrote. The expected.out wording of an error pin is guidance, not a byte oracle."

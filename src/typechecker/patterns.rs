@@ -2172,10 +2172,42 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             PatternKind::Or(alternatives) => {
+                // Each alternative's bindings as it typed them: one name is
+                // one variable whichever alternative matched, so it has one
+                // type and one mode (design.md §5 Or-patterns). The arm's
+                // body was checked against the last alternative's, and the
+                // MIR builder stored every alternative's value into one
+                // local (B-2026-11-17-29).
+                let mut typed: Vec<Vec<(String, Type, bool)>> = Vec::new();
                 for alt in alternatives {
                     self.check_pattern_against(alt, expected, mode);
+                    let names = alt.binding_names();
+                    typed.push(
+                        names
+                            .into_iter()
+                            .filter(|n| {
+                                n != "_" && !n.contains('.') && !self.is_known_unit_variant(n)
+                            })
+                            .filter_map(|n| {
+                                let t = self
+                                    .local_scope
+                                    .scopes
+                                    .iter()
+                                    .rev()
+                                    .find_map(|m| m.get(&n))?
+                                    .clone();
+                                // A `ref d` over an owned scrutinee is
+                                // typed `D` and marked; it still borrows.
+                                let borrows = self.local_scope.is_ref_pattern(&n)
+                                    || matches!(t, Type::Ref(_) | Type::MutRef(_));
+                                Some((n, self.resolved_now(&t), borrows))
+                            })
+                            .collect(),
+                    );
                 }
-                self.check_or_pattern_names(alternatives);
+                if !self.check_or_pattern_names(alternatives) {
+                    self.check_or_pattern_types(alternatives, &typed);
+                }
             }
             PatternKind::Slice {
                 prefix,
@@ -2491,7 +2523,72 @@ impl<'a> super::TypeChecker<'a> {
     /// design.md §5 Or-patterns: "Every alternative must bind the same names
     /// with the same types. `A(x) | B(y)` is an error" (B-2026-11-04-60; it
     /// was accepted, and an arm reading `y` after matching `A` reads nothing).
-    fn check_or_pattern_names(&mut self, alternatives: &[Pattern]) {
+    /// [`Self::check_or_pattern_names`]'s twin for types: a name bound by
+    /// every alternative has one type across them, its mode included
+    /// (`T.L(ref d) | T.R(d)` binds a `ref D` and a `D`). A literal still
+    /// being inferred takes the other alternative's type.
+    fn check_or_pattern_types(
+        &mut self,
+        alternatives: &[Pattern],
+        typed: &[Vec<(String, Type, bool)>],
+    ) {
+        let Some(first) = typed.first() else {
+            return;
+        };
+        for (alt, binds) in alternatives.iter().zip(typed).skip(1) {
+            for (name, ty, borrows) in binds {
+                let Some((_, want, want_borrows)) = first.iter().find(|(n, _, _)| n == name) else {
+                    continue;
+                };
+                if borrows != want_borrows {
+                    self.type_error(
+                        format!(
+                            "`{name}` borrows in one alternative of this or-pattern and takes \
+                             the value in another (`ref {name}` beside `{name}`); every \
+                             alternative binds each name in the same mode, since the arm reads \
+                             one `{name}` whichever matched (design.md §5 Or-patterns). Write \
+                             `ref {name}` in every alternative, or in none"
+                        ),
+                        alt.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return;
+                }
+                if matches!(want, Type::Error) || matches!(ty, Type::Error) {
+                    continue;
+                }
+                if super::exprs::contains_type_var(want) || super::exprs::contains_type_var(ty) {
+                    if super::inference::unify_types(
+                        want,
+                        ty,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    ) {
+                        continue;
+                    }
+                } else if want == ty {
+                    continue;
+                }
+                let span = alt.span;
+                self.type_error(
+                    format!(
+                        "`{name}` is `{}` in one alternative of this or-pattern and `{}` in \
+                         another; every alternative binds each name with the same type and \
+                         the same mode, since the arm reads one `{name}` whichever matched \
+                         (design.md §5 Or-patterns). Match the alternatives in separate arms",
+                        type_display(want),
+                        type_display(ty),
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return;
+            }
+        }
+    }
+
+    /// Whether it reported.
+    fn check_or_pattern_names(&mut self, alternatives: &[Pattern]) -> bool {
         let names = |p: &Pattern| -> std::collections::BTreeSet<String> {
             p.binding_names()
                 .into_iter()
@@ -2501,7 +2598,7 @@ impl<'a> super::TypeChecker<'a> {
                 .collect()
         };
         let Some(first) = alternatives.first() else {
-            return;
+            return false;
         };
         let want = names(first);
         for alt in &alternatives[1..] {
@@ -2523,8 +2620,9 @@ impl<'a> super::TypeChecker<'a> {
                 alt.span,
                 TypeErrorKind::TypeMismatch,
             );
-            return;
+            return true;
         }
+        false
     }
 
     /// `Name(a, b)` as the pattern of a struct `Name` of two named fields,

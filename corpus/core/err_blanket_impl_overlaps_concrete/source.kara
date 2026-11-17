@@ -1,0 +1,13 @@
+// design.md § Coherence: two impls of one trait overlap when their headers
+// unify. `impl[T: Display] Tr for T` covers i64, so `impl Tr for i64` is a
+// second impl for i64, and no most-specific impl wins (§ No specialization).
+trait Tr { fn t(self) -> i64; }
+
+impl[T: Display] Tr for T { fn t(self) -> i64 { 1 } }
+
+// Refused here.
+impl Tr for i64 { fn t(self) -> i64 { 2 } }
+
+fn main() {
+    println(f"{5.t()}");
+}

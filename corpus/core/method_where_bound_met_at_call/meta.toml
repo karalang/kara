@@ -1,0 +1,9 @@
+source = "B-2026-11-17-18"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits", "generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-18 control: W[i64] meets the method's where T: Display, so the call checks and runs."

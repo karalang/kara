@@ -1,0 +1,9 @@
+source = "B-2026-11-17-17"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits", "coherence"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-17 control: S does not implement Display, so the blanket impl[T: Display] Tr for T does not cover it and impl Tr for S is the only impl for S (as the library's impl[I: Iterator] IntoIterator for I sits beside impl IntoIterator for Vec[T])."

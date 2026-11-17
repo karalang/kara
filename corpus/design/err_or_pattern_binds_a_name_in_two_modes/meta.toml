@@ -1,0 +1,9 @@
+source = "B-2026-11-17-29"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "patterns"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-29: an or-pattern binds each name in one mode: T.L(ref d) | T.R(d) over an owned scrutinee borrows in one alternative and moves in the other. It passed check and failed in MIR ('assigning D to _4 of type ref D'). The expected.out wording of an error pin is guidance, not a byte oracle."

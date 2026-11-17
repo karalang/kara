@@ -6023,6 +6023,15 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_call_site_marker(arg, param_ty, &arg_ty);
                 }
             }
+            // A method whose own signature is not generic may still bound
+            // its impl's parameter (`impl[T] W[T] { fn show(self) where T:
+            // Display }`): the receiver binds it, so it is checked here, at
+            // the call (B-2026-11-17-18).
+            if let Some(wc) = where_clause {
+                if self.call_bound_receiver_subs.is_some() {
+                    self.discharge_type_bounds(wc, &HashMap::new(), &[], discharge_span);
+                }
+            }
             return return_type.clone();
         }
         // Generic case: types-first / effects-second per design.md
@@ -9026,7 +9035,17 @@ impl<'a> super::TypeChecker<'a> {
             else {
                 continue;
             };
-            let Some(concrete_ty) = solutions.get(type_name) else {
+            // A method's `where` may bound its impl's parameter (`impl[T]
+            // W[T] { fn show(self) where T: Display }`), which the receiver
+            // binds rather than the call's arguments (B-2026-11-17-18).
+            let from_receiver = match self.call_bound_receiver_subs.as_ref() {
+                Some(subs) if !solutions.contains_key(type_name) => match subs.get(type_name) {
+                    Some(SubstValue::Type(t)) => Some(self.resolved_now(t)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(concrete_ty) = solutions.get(type_name).or(from_receiver.as_ref()) else {
                 // Param unbound at this call site — the unsolved-T
                 // diagnostic (slice 2a) handles this; don't double-report.
                 continue;

@@ -1654,6 +1654,7 @@ fn type_error_is_a_module_boundary_rule(kind: &crate::typechecker::TypeErrorKind
         kind,
         K::PrivateTypeInPublicSignature
             | K::PrivateFieldAccess
+            | K::OrphanImpl
             | K::NonExhaustiveCrossPackageLiteral
             | K::NonExhaustiveCrossPackageMatch
             | K::NonExhaustiveCrossPackagePattern

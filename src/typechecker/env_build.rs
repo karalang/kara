@@ -3493,12 +3493,136 @@ impl<'a> super::TypeChecker<'a> {
             }) {
                 self.env.impls[i] = info;
                 self.env.impl_own_assoc_types.insert(i, own_assoc);
+                self.impl_self_types.insert(i, lowered_target);
                 return;
             }
         }
         let i = self.env.add_impl(info);
         if !own_assoc.is_empty() {
             self.env.impl_own_assoc_types.insert(i, own_assoc);
+        }
+        self.impl_self_types.insert(i, lowered_target);
+    }
+
+    /// A blanket impl over its own parameter (`impl[T: Display] Tr for T`)
+    /// overlaps every other impl of its trait whose `Self` could meet its
+    /// bounds: `impl Tr for i64` beside it is a second impl for `i64`, and
+    /// letting the concrete one win is the specialization design.md rules
+    /// out (§ Coherence, § No specialization; B-2026-11-17-17). The
+    /// name-keyed check in `env_add_impl` never compares the two, since the
+    /// blanket registers under its parameter's name. Two blankets of one
+    /// trait always overlap, their bounds ignored. A `Self` that cannot meet
+    /// the blanket's bounds (`Vec[T]` against the library's `impl[I:
+    /// Iterator] IntoIterator for I`) is disjoint from it, as in Rust; that
+    /// is the reading that lets a collection implement `IntoIterator` at all.
+    ///
+    /// Runs once every impl is registered, so the answer does not depend on
+    /// the order impls appear in: `impl Display for S` written after `impl
+    /// Tr for S` still makes `S` meet the blanket's `T: Display`. Reported
+    /// at the program's impl of the pair (the later one when both are the
+    /// program's); two library impls are the library's business.
+    pub(super) fn reject_blanket_impl_overlaps(&mut self) {
+        let library_start = self.program.library_start.unwrap_or(usize::MAX);
+        let is_program = |c: &Self, i: usize| {
+            !c.baked_impls.contains(&i)
+                && c.env.impls[i]
+                    .target_span
+                    .is_some_and(|s| s.offset < library_start)
+        };
+        let blanket_param = |imp: &ImplInfo| -> Option<String> {
+            imp.trait_name.as_ref()?;
+            let gp = imp.generic_params.as_ref()?;
+            gp.params
+                .iter()
+                .any(|p| p.name == imp.target_type)
+                .then(|| imp.target_type.clone())
+        };
+        let mut reports: Vec<(crate::token::Span, String)> = Vec::new();
+        let mut reported: HashSet<usize> = HashSet::new();
+        for b in 0..self.env.impls.len() {
+            let Some(param) = blanket_param(&self.env.impls[b]) else {
+                continue;
+            };
+            for o in 0..self.env.impls.len() {
+                if o == b || reported.contains(&o) || reported.contains(&b) {
+                    continue;
+                }
+                let (bi, oi) = (&self.env.impls[b], &self.env.impls[o]);
+                if oi.trait_name != bi.trait_name {
+                    continue;
+                }
+                let (b_prog, o_prog) = (is_program(self, b), is_program(self, o));
+                if !b_prog && !o_prog {
+                    continue;
+                }
+                let other_blanket = blanket_param(oi).is_some();
+                // Two blankets are visited twice; take the pair once.
+                if other_blanket && o < b {
+                    continue;
+                }
+                // `From[A]` and `From[B]` are two traits.
+                let params_of = |imp: &ImplInfo| -> Vec<String> {
+                    imp.generic_params
+                        .as_ref()
+                        .map(|gp| gp.params.iter().map(|p| p.name.clone()).collect())
+                        .unwrap_or_default()
+                };
+                let (bp, op) = (params_of(bi), params_of(oi));
+                if bi.trait_args.len() == oi.trait_args.len()
+                    && !bi
+                        .trait_args
+                        .iter()
+                        .zip(&oi.trait_args)
+                        .all(|(x, y)| types_could_unify(x, y, &bp, &op))
+                {
+                    continue;
+                }
+                let self_ty = if other_blanket {
+                    Type::TypeParam(oi.target_type.clone())
+                } else {
+                    match self.impl_self_types.get(&o) {
+                        Some(t) => t.clone(),
+                        None => continue,
+                    }
+                };
+                if !other_blanket && !self.env.blanket_bounds_hold(bi, &param, &self_ty) {
+                    continue;
+                }
+                // The impl at fault: the program's, the later when both are.
+                let (bspan, ospan) = (bi.target_span, oi.target_span);
+                let blame_other = match (b_prog, o_prog) {
+                    (true, true) => match (bspan, ospan) {
+                        (Some(x), Some(y)) => y.offset > x.offset,
+                        _ => true,
+                    },
+                    (_, o_prog) => o_prog,
+                };
+                let (at, span) = if blame_other { (o, ospan) } else { (b, bspan) };
+                let Some(span) = span else { continue };
+                let tr = bi.trait_name.clone().unwrap_or_default();
+                let bounds = blanket_bounds_display(bi, &param);
+                let shown = if other_blanket {
+                    format!(
+                        "two blanket impls of `{tr}` overlap: each covers every type its \
+                         bounds admit, and their bounds are ignored when deciding overlap"
+                    )
+                } else {
+                    let ty = type_display(&self_ty);
+                    format!(
+                        "conflicting impl: `impl[{param}{bounds}] {tr} for {param}` already \
+                         covers `{ty}`, which meets its bounds, so `impl {tr} for {ty}` is a \
+                         second impl of `{tr}` for `{ty}`. A type implements a trait once and \
+                         no most-specific impl wins (design.md § Coherence, § No \
+                         specialization); remove one, or narrow the blanket's bounds so \
+                         `{ty}` does not meet them"
+                    )
+                };
+                reported.insert(at);
+                reports.push((span, shown));
+            }
+        }
+        for (span, message) in reports {
+            self.type_error(message, span, TypeErrorKind::ConflictingImpl);
         }
     }
 
@@ -4410,6 +4534,67 @@ fn resolve_type_origin_in_module(
 /// unify, each impl's own parameters standing for any type. Conservative:
 /// a parameter used twice is not required to bind one type, and a form it
 /// cannot compare (a projection) unifies, so a doubtful pair still overlaps.
+/// Whether `a` (generic over `ours`) and `b` (generic over `theirs`) could
+/// name one type: a parameter unifies with anything.
+fn types_could_unify(a: &Type, b: &Type, ours: &[String], theirs: &[String]) -> bool {
+    match (a, b) {
+        (Type::TypeParam(p), _) if ours.contains(p) => true,
+        (_, Type::TypeParam(p)) if theirs.contains(p) => true,
+        (Type::Named { name: an, args: aa }, Type::Named { name: bn, args: ba }) => {
+            an == bn
+                && aa.len() == ba.len()
+                && aa
+                    .iter()
+                    .zip(ba)
+                    .all(|(x, y)| types_could_unify(x, y, ours, theirs))
+        }
+        (Type::Ref(x), Type::Ref(y))
+        | (Type::MutRef(x), Type::MutRef(y))
+        | (Type::Weak(x), Type::Weak(y)) => types_could_unify(x, y, ours, theirs),
+        (Type::Tuple(xs), Type::Tuple(ys)) => {
+            xs.len() == ys.len()
+                && xs
+                    .iter()
+                    .zip(ys)
+                    .all(|(x, y)| types_could_unify(x, y, ours, theirs))
+        }
+        (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+        | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+            types_could_unify(x, y, ours, theirs)
+        }
+        (Type::AssocProjection { .. }, _) | (_, Type::AssocProjection { .. }) => true,
+        _ => a == b,
+    }
+}
+
+/// `: Display + Clone` for a blanket impl's parameter, from its inline
+/// bounds and its `where` clause; empty when it has none.
+fn blanket_bounds_display(imp: &ImplInfo, param: &str) -> String {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(gp) = &imp.generic_params {
+        for p in gp.params.iter().filter(|p| p.name == param) {
+            names.extend(p.bounds.iter().filter_map(|b| b.path.last().cloned()));
+        }
+    }
+    if let Some(wc) = &imp.where_clause {
+        for c in &wc.constraints {
+            if let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = c
+            {
+                if type_name == param {
+                    names.extend(bounds.iter().filter_map(|b| b.path.last().cloned()));
+                }
+            }
+        }
+    }
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", names.join(" + "))
+    }
+}
+
 fn headers_unify(existing: &ImplInfo, written: &[Type], params: &[String]) -> bool {
     let theirs: Vec<&str> = existing
         .generic_params

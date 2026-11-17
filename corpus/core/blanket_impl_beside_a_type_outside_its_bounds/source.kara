@@ -1,0 +1,14 @@
+// A type the blanket's bounds do not admit is disjoint from it: S is not
+// Display, so `impl Tr for S` is its one impl of Tr.
+trait Tr { fn t(self) -> i64; }
+
+impl[T: Display] Tr for T { fn t(self) -> i64 { 1 } }
+
+struct S {}
+
+impl Tr for S { fn t(self) -> i64 { 2 } }
+
+fn main() {
+    let s = S {};
+    println(f"{s.t()} {5.t()}");
+}

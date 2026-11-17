@@ -1,0 +1,8 @@
+// design.md §5 Or-patterns: one name, one type, whichever alternative
+// matched.
+fn main() {
+    let v: Result[i64, String] = Err("hello");
+    match v {
+        Ok(x) | Err(x) => println(x),
+    }
+}

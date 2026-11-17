@@ -1085,6 +1085,16 @@ impl TypeEnv {
         subs
     }
 
+    /// Whether a blanket impl's bounds (`impl[T: Display] Tr for T`) hold
+    /// with its parameter `param` standing for `ty`. A `ty` still generic
+    /// over another impl's parameters passes where the bound cannot be
+    /// decided, so two impls that might cover one type overlap.
+    pub(super) fn blanket_bounds_hold(&self, imp: &ImplInfo, param: &str, ty: &Type) -> bool {
+        let mut subs = HashMap::new();
+        subs.insert(param.to_string(), ty.clone());
+        self.impl_bounds_discharge_with(imp, &subs, &|t, b| self.bound_satisfied(t, b))
+    }
+
     /// [`Self::impl_bounds_discharge_by`] over the substitution `subs`.
     fn impl_bounds_discharge_with(
         &self,

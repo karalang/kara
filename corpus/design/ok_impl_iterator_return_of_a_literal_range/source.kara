@@ -1,0 +1,21 @@
+// design.md § impl Trait: `0..2` returned as `impl Iterator[Item = i64]` is
+// a `Range[i64]`; the literal takes the promised `Item`.
+fn mk() -> impl Iterator[Item = i64] { 0..2 }
+
+trait It { fn it(self) -> impl Iterator[Item = i64]; }
+
+struct S {}
+
+impl It for S {
+    fn it(self) -> impl Iterator[Item = i64] { (10..12).map(|x| x) }
+}
+
+fn main() {
+    for x in mk() {
+        println(x);
+    }
+    let s = S {};
+    for x in s.it() {
+        println(x);
+    }
+}

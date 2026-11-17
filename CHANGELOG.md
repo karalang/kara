@@ -52,6 +52,23 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   B-2026-11-17-23, -24, -25). A let-bound closure later placed in
   `Vec[..]`, `vec![..]` or `[f; n]`, or passed to an `escaping` parameter,
   now captures by move, as one placed in `[f]` did.
+- A blanket impl over its own parameter (`impl[T: Display] Tr for T`)
+  beside an impl for a type that meets its bounds (`impl Tr for i64`) is an
+  overlap, E0240; the concrete impl used to win silently, which is the
+  specialization design.md rules out (B-2026-11-17-17).
+- A method's `where` clause on its impl's parameter (`fn show(self) where
+  T: Display`) is checked at each call (B-2026-11-17-18).
+- An or-pattern whose alternatives bind one name at two types or in two
+  modes (`Ok(x) | Err(x)` on `Result[i64, String]`, `L(ref d) | R(d)`) is
+  refused; it passed check and failed in MIR (B-2026-11-17-29).
+- Between the packages of one build, the orphan, blanket-impl and
+  inherent-impl rules of design.md § Coherence are enforced, E0246: a
+  library may not implement another package's trait for a type it does not
+  own, write a blanket impl of a trait it does not define, or add inherent
+  methods to another package's type (the application neither)
+  (B-2026-11-17-36).
+- A `pub fn` bounded on a package-private trait is E0221, as any other
+  private item in a public signature (B-2026-11-17-39).
 - `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
   as `"0.1.0"`), as design.md § 4 says; any string was accepted
   (B-2026-11-16-220).
@@ -648,6 +665,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   further or misleading errors; a token spanning lines is reported
   where it starts; and the rename advice for `r#Async` is `r#async`, not
   the reserved `async` (B-2026-11-16-337, -262, -266, -267).
+- `impl PartialEq[i64] for M { fn eq(self, other: i64) }` checks (a bare
+  `Copy` parameter is no stronger than the trait's `ref Rhs`), and `m == 3`
+  calls it with the value; the interpreter evaluated it as false
+  (B-2026-11-17-20).
+
 - A compiled program that printed to standard output and then announced
   its port under `KARAC_ANNOUNCE_PORT` wrote `BOUND_PORT=<n>` to stderr
   while its stdout still held what it had printed, so a harness that waited

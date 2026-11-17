@@ -964,6 +964,53 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A `pub fn`'s bounds are part of its signature: a caller must name
+    /// the trait to satisfy it, so `pub fn f[T: Hid](t: T)` over a private
+    /// `trait Hid` is the same leak as a private parameter type (review
+    /// ruling on B-2026-11-17-39).
+    fn check_bounds_visibility(
+        &mut self,
+        generic_params: &Option<GenericParams>,
+        where_clause: &Option<WhereClause>,
+        generic_scope: &[String],
+        type_vis: &HashMap<String, bool>,
+        owner: &str,
+    ) {
+        let mut bounds: Vec<&TraitBound> = Vec::new();
+        if let Some(gp) = generic_params {
+            for p in &gp.params {
+                bounds.extend(p.bounds.iter());
+            }
+        }
+        if let Some(wc) = where_clause {
+            for c in &wc.constraints {
+                if let WhereConstraint::TypeBound { bounds: bs, .. } = c {
+                    bounds.extend(bs.iter());
+                }
+            }
+        }
+        for b in bounds {
+            if let Some(last) = b.path.last() {
+                if type_vis.get(last).copied() == Some(false) {
+                    self.type_error(
+                        format!(
+                            "private trait '{last}' leaks through a bound of '{owner}': a \
+                             caller must implement it to call '{owner}' and cannot name it; \
+                             mark the trait `pub` or remove the bound from the public surface"
+                        ),
+                        b.span,
+                        TypeErrorKind::PrivateTypeInPublicSignature,
+                    );
+                }
+            }
+            for a in b.generic_args.iter().flatten() {
+                if let GenericArg::Type(t) = a {
+                    self.check_type_expr_visibility(t, generic_scope, type_vis, "a bound", owner);
+                }
+            }
+        }
+    }
+
     fn check_type_expr_visibility(
         &mut self,
         ty: &TypeExpr,
@@ -1215,6 +1262,13 @@ impl<'a> super::TypeChecker<'a> {
             match item {
                 Item::Function(f) if f.is_pub => {
                     let scope = Self::generic_param_names(&f.generic_params);
+                    self.check_bounds_visibility(
+                        &f.generic_params,
+                        &f.where_clause,
+                        &scope,
+                        &type_vis,
+                        &f.name,
+                    );
                     for p in &f.params {
                         self.check_type_expr_visibility(
                             &p.ty,
@@ -4947,8 +5001,23 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             };
             for (tp, ip) in tm.params.iter().zip(&method.params) {
-                let (tr, tw) = param_rank(&tp.ty);
-                let (ir, iw) = param_rank(&ip.ty);
+                // A bare parameter borrows (D5, core-semantics.md §4.1; a
+                // `Copy` one is a copy, which is no stronger), so it ranks
+                // with `ref`; only `own` takes the value. Read by its type
+                // alone, a bare `other: i64` against `PartialEq`'s `other:
+                // ref Rhs` was refused as by-value (B-2026-11-17-20).
+                let rank = |p: &Param| {
+                    if p.is_own {
+                        (0, "owned")
+                    } else {
+                        match param_rank(&p.ty) {
+                            (0, _) => (2, "ref"),
+                            r => r,
+                        }
+                    }
+                };
+                let (tr, tw) = rank(tp);
+                let (ir, iw) = rank(ip);
                 if ir >= tr {
                     continue;
                 }
