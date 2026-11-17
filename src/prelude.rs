@@ -2538,6 +2538,8 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "BuildHasher",
             "SipHash13BuildHasher",
             "FxBuildHasher",
+            "SipHash13Hasher",
+            "FxHasher",
             "StableHash",
         ],
         &[],

@@ -9094,6 +9094,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             if matches!(concrete_ty, Type::TypeVar(_) | Type::Error)
                 || self.type_param_name(concrete_ty).is_some()
+                || self.projection_declares_all(concrete_ty, bounds)
             {
                 // Unresolved metavar / propagating-param / already-error —
                 // upstream diagnostics handle. Avoid noise.
@@ -9998,6 +9999,34 @@ impl<'a> super::TypeChecker<'a> {
         renders.sort();
         renders.dedup();
         renders
+    }
+
+    /// Whether `ty` is a projection `P.A` whose trait declares `type A` with
+    /// every bound in `bounds` (or a supertrait of one): `b.build()` under
+    /// `B: BuildHasher` is a `B.Hasher`, which `type Hasher: Hasher` makes a
+    /// `Hasher` wherever `B` is (B-2026-11-17-66).
+    fn projection_declares_all(&self, ty: &Type, bounds: &[crate::ast::TraitBound]) -> bool {
+        let Type::AssocProjection {
+            assoc, trait_name, ..
+        } = ty
+        else {
+            return false;
+        };
+        let declared: Vec<String> = self
+            .env
+            .traits
+            .iter()
+            .filter(|(t, _)| trait_name.as_ref().is_none_or(|n| n == *t))
+            .flat_map(|(_, info)| info.assoc_type_decls.iter())
+            .filter(|d| &d.name == assoc)
+            .flat_map(|d| d.bounds.iter())
+            .filter_map(|b| b.path.last())
+            .flat_map(|b| self.env.supertrait_closure_traits(b))
+            .collect();
+        !bounds.is_empty()
+            && bounds
+                .iter()
+                .all(|b| b.path.last().is_some_and(|t| declared.contains(t)))
     }
 
     /// GAT slice 8a — discharge `WhereConstraint::ProjectionBound`

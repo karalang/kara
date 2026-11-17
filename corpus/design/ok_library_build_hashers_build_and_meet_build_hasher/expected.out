@@ -1,0 +1,4 @@
+fx abc: 9978286816121330849
+fx generic: 13100439413269507158 13100439413269507158
+sip same key agrees: true, other key differs: true
+write_u64 == write of its bytes: true

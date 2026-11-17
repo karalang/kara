@@ -127,10 +127,18 @@ pub fn seed_override_from_env() -> Option<u64> {
     parse_seed(core::str::from_utf8(raw).ok()?)
 }
 
-/// `no_std` builds (embedded, and the wasm archives that drop `std::env`) have
-/// no environment to read, so the override is compiled out and the seed is
-/// always the random one.
-#[cfg(not(feature = "std"))]
+/// The wasm archives build this crate without `std`, but WASI has an
+/// environment: read the override through `environ_get`, so a pinned run
+/// reproduces on `wasm_wasi` as it does natively (B-2026-11-17-64).
+#[cfg(all(not(feature = "std"), target_os = "wasi"))]
+pub fn seed_override_from_env() -> Option<u64> {
+    let raw = wasi::env_var(b"KARAC_HASH_SEED")?;
+    parse_seed(core::str::from_utf8(&raw).ok()?)
+}
+
+/// An embedded `no_std` build has no environment to read, so the override is
+/// compiled out there.
+#[cfg(all(not(feature = "std"), not(target_os = "wasi")))]
 pub fn seed_override_from_env() -> Option<u64> {
     None
 }
@@ -140,7 +148,7 @@ pub fn seed_override_from_env() -> Option<u64> {
 /// --no-default-features` says so. Gated on `std` OR `test` rather than
 /// deleted, because the parsing rules (hex, decimal, whitespace, and `0` as a
 /// legal pin) are exactly the part worth unit-testing.
-#[cfg(any(feature = "std", test))]
+#[cfg(any(feature = "std", test, target_os = "wasi"))]
 fn parse_seed(raw: &str) -> Option<u64> {
     let t = raw.trim();
     if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
@@ -183,6 +191,12 @@ fn splitmix64(mut x: u64) -> u64 {
 /// Cortex-M target matrix.
 #[cfg(feature = "std")]
 fn random_pair() -> (u64, u64) {
+    // The operating system's random source first (`getentropy` on Unix,
+    // WASI's `random_get`), as collections.md's "a random value" reads
+    // (B-2026-11-17-64); the mix below where it is not available.
+    if let Some(pair) = os_entropy() {
+        return pair;
+    }
     let (addr, nanos) = heap_address_and_clock();
     // The process id differs between processes, and the address of a stack
     // local carries the stack's ASLR offset, which is independent of the
@@ -287,11 +301,94 @@ mod lean {
 
 #[cfg(not(feature = "std"))]
 fn random_pair() -> (u64, u64) {
-    // No clock and no allocator to mine for entropy. A fixed key is the honest
-    // answer on these targets: it is what the platform can support, and the
-    // hash-flooding threat model (a network service taking adversarial keys)
-    // does not describe a Cortex-M build.
-    (0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908)
+    // WASI's `random_get` on `wasm_wasi`, whose archives build this crate
+    // without `std`: a wasm service hashing request keys needs the same
+    // flooding protection a native one has (B-2026-11-17-64). An embedded
+    // build has no clock and no allocator to mine for entropy, and a fixed
+    // key is the honest answer there: the hash-flooding threat model (a
+    // network service taking adversarial keys) does not describe a Cortex-M
+    // build.
+    os_entropy().unwrap_or((0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908))
+}
+
+/// 16 bytes from the operating system's random source, as the two key
+/// halves; `None` where there is none or it failed.
+#[cfg(all(unix, feature = "std"))]
+fn os_entropy() -> Option<(u64, u64)> {
+    extern "C" {
+        fn getentropy(buf: *mut u8, len: usize) -> i32;
+    }
+    let mut b = [0u8; 16];
+    // SAFETY: `b` is 16 writable bytes; `getentropy` takes up to 256.
+    if unsafe { getentropy(b.as_mut_ptr(), b.len()) } != 0 {
+        return None;
+    }
+    Some(halves(&b))
+}
+
+#[cfg(target_os = "wasi")]
+fn os_entropy() -> Option<(u64, u64)> {
+    let mut b = [0u8; 16];
+    wasi::random(&mut b).then(|| halves(&b))
+}
+
+#[cfg(not(any(all(unix, feature = "std"), target_os = "wasi")))]
+fn os_entropy() -> Option<(u64, u64)> {
+    None
+}
+
+#[cfg(any(all(unix, feature = "std"), target_os = "wasi"))]
+fn halves(b: &[u8; 16]) -> (u64, u64) {
+    let mut lo = [0u8; 8];
+    let mut hi = [0u8; 8];
+    lo.copy_from_slice(&b[..8]);
+    hi.copy_from_slice(&b[8..]);
+    (u64::from_le_bytes(lo), u64::from_le_bytes(hi))
+}
+
+/// The two WASI preview 1 calls the seed needs, imported directly so the
+/// `no_std` wasm build has them.
+#[cfg(target_os = "wasi")]
+mod wasi {
+    use crate::alloc_vec::Vec;
+
+    #[link(wasm_import_module = "wasi_snapshot_preview1")]
+    extern "C" {
+        fn random_get(buf: *mut u8, len: usize) -> i32;
+        fn environ_sizes_get(count: *mut usize, size: *mut usize) -> i32;
+        fn environ_get(environ: *mut *mut u8, buf: *mut u8) -> i32;
+    }
+
+    /// Fill `b` from `random_get`; `false` when it failed.
+    pub(super) fn random(b: &mut [u8]) -> bool {
+        // SAFETY: `b` is `b.len()` writable bytes.
+        unsafe { random_get(b.as_mut_ptr(), b.len()) == 0 }
+    }
+
+    /// The value of the environment variable `name`.
+    pub(super) fn env_var(name: &[u8]) -> Option<Vec<u8>> {
+        let (mut count, mut size) = (0usize, 0usize);
+        // SAFETY: two writable out-parameters.
+        if unsafe { environ_sizes_get(&mut count, &mut size) } != 0 {
+            return None;
+        }
+        let mut ptrs: Vec<*mut u8> = Vec::with_capacity(count);
+        let mut buf: Vec<u8> = Vec::with_capacity(size);
+        // SAFETY: `count` pointer slots and `size` bytes, as
+        // `environ_sizes_get` asked for; both are filled by the call.
+        unsafe {
+            if environ_get(ptrs.as_mut_ptr(), buf.as_mut_ptr()) != 0 {
+                return None;
+            }
+            ptrs.set_len(count);
+            buf.set_len(size);
+        }
+        // Each entry is `NAME=value` and NUL-terminated, laid end to end.
+        buf.split(|&c| c == 0)
+            .filter_map(|e| e.strip_prefix(name)?.strip_prefix(b"="))
+            .map(|v| v.to_vec())
+            .next()
+    }
 }
 
 #[cfg(test)]

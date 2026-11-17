@@ -1940,6 +1940,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Cpu", "supports") | ("Secret" | "StableHash", _) | ("mem", "replace" | "swap") => {
             vec![]
         }
+        // A library hasher's digest of its bytes (B-2026-11-17-66).
+        ("SipHash13BuildHasher" | "FxBuildHasher", "digest") => vec![],
         ("ref_eq", "") => vec![],
         ("Vector", _) => vec![PANICS],
         ("compiler", "error") => vec![PANICS],

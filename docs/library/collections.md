@@ -451,10 +451,10 @@ trait BuildHasher {
 The split lets the hash algorithm be a property of the table, not of the key: `Map[K, V, FxBuildHasher]` and `Map[K, V, SipHash13BuildHasher]` use the same `Hash` impls for `K`. A `BuildHasher` makes a fresh `Hasher` for each hash, so per-hash state (the `Hasher`) stays separate from per-table configuration (the builder).
 
 **Hashers the library provides.**
-- `SipHash13BuildHasher` is the default for `Map[K, V]` and `Set[T]`. It is resistant to hash flooding and keyed from a random value chosen once per process. The default may change in a future Kāra version if a better algorithm of the same kind becomes standard.
+- `SipHash13BuildHasher` is the default for `Map[K, V]` and `Set[T]`. It is resistant to hash flooding and keyed from a random value chosen once per process: the operating system's random source (`getentropy` on Unix, `random_get` on `wasm_wasi`). An embedded build, which has none, uses a fixed key. The default may change in a future Kāra version if a better algorithm of the same kind becomes standard.
 - `FxBuildHasher` is fast and unkeyed. A table that names it gives up the protection against hash flooding.
 
-Both are ordinary `BuildHasher` types written in Kāra, like a user hasher, and every backend runs the same implementation. (Today both are native fast paths inside the table rather than Kāra `impl BuildHasher` types, kept until moving them to Kāra is measured; the digests are the same either way, and a user hasher runs as Kāra. B-2026-10-25-31.)
+Both are ordinary `BuildHasher` types: `build()` makes a `SipHash13Hasher` or an `FxHasher` (`std.hash`), whose `finish` digests the bytes written with the same function a table of that hasher uses, and either meets a `B: BuildHasher` bound. A `Map` or `Set` that names one still hashes through a native fast path inside the table rather than through these types; the digests are the same either way (B-2026-10-25-31, B-2026-11-17-66).
 
 **A user hasher** is any type that implements `BuildHasher`, named in the table's last type parameter: `Map[K, V, MyBuildHasher]`, `Set[T, MyBuildHasher]`. The builder must be a struct with no fields, because the table names its builder as a type and constructs it itself; a seed belongs inside `build()`. A field-carrying builder is a compile error.
 
@@ -469,7 +469,7 @@ Both are ordinary `BuildHasher` types written in Kāra, like a user hasher, and 
 - a tuple, and a `derive(Hash)` struct: each field in order; a `derive(Hash)` enum: `write_u32` of the variant's index, then its payload's fields in order;
 - `Option[T]` and `Result[T, E]` as the enums they are.
 
-**Stability policy.** The default hasher's values are not stable across runs, across Kāra versions or across targets. This matches Python and modern Java: the common use is in-memory keying, and the common attack is hash flooding from adversarial input. Iteration order changes with them (see [`Map`](#mapk-v-h)). For testing, the environment variable `KARAC_HASH_SEED` pins the per-process key so that a run can be reproduced. It is a testing aid only: a deployment must not set it, since a known key gives up the protection the default exists for.
+**Stability policy.** The default hasher's values are not stable across runs, across Kāra versions or across targets. This matches Python and modern Java: the common use is in-memory keying, and the common attack is hash flooding from adversarial input. Iteration order changes with them (see [`Map`](#mapk-v-h)). For testing, the environment variable `KARAC_HASH_SEED` pins the per-process key so that a run can be reproduced, on `wasm_wasi` too (read from the WASI environment), where a pin gives the order the same pin gives natively. It is a testing aid only: a deployment must not set it, since a known key gives up the protection the default exists for.
 
 **Stable digests use `StableHash`, not `Hash`.** Content addressing, on-disk indexes, snapshot tests and sharding need a digest that never changes. `StableHash` provides explicit, versioned functions for this. They take bytes, name the algorithm in the function name, take the key as an argument, and are versioned separately from the `Hash` trait. `karac explain --concept=stable-hash` points users who reach for `Hash` here.
 

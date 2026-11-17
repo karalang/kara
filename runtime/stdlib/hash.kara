@@ -32,6 +32,8 @@ trait Hasher {
     fn write_i32(mut ref self, n: i32) { self.write(n.to_ne_bytes()) }
     fn write_i64(mut ref self, n: i64) { self.write(n.to_ne_bytes()) }
     fn write_isize(mut ref self, n: isize) { self.write(n.to_ne_bytes()) }
+    fn write_i128(mut ref self, n: i128) { self.write(n.to_ne_bytes()) }
+    fn write_u128(mut ref self, n: u128) { self.write(n.to_ne_bytes()) }
 }
 
 // Per-table configuration, separate from per-hash state: the `BuildHasher` is
@@ -144,4 +146,6 @@ impl Hasher for KeyByteSink {
     fn write_i32(mut ref self, n: i32) { self.write(n.to_ne_bytes()) }
     fn write_i64(mut ref self, n: i64) { self.write(n.to_ne_bytes()) }
     fn write_isize(mut ref self, n: isize) { self.write(n.to_ne_bytes()) }
+    fn write_i128(mut ref self, n: i128) { self.write(n.to_ne_bytes()) }
+    fn write_u128(mut ref self, n: u128) { self.write(n.to_ne_bytes()) }
 }

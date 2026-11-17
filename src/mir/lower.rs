@@ -845,7 +845,7 @@ fn lower_program_inner<'a>(
 /// The `Hasher` methods a table's hash glue calls on a user hasher's
 /// state: `write`, `finish`, and the `write_<width>` the built-in types
 /// feed through (collections.md § "What the built-in types feed").
-const HASHER_METHODS: [&str; 12] = [
+const HASHER_METHODS: [&str; 14] = [
     "write",
     "finish",
     "write_u8",
@@ -858,6 +858,8 @@ const HASHER_METHODS: [&str; 12] = [
     "write_i32",
     "write_i64",
     "write_isize",
+    "write_i128",
+    "write_u128",
 ];
 
 /// Whether a method's result, of declared type `t`, can hold a reference
@@ -12415,6 +12417,29 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let m = format!("write_{}", self.tys().display(t));
                 self.hasher_call(span, hp, ht, &m, Operand::Copy(p))
             }
+            // `i128` / `u128`: `write_i128` / `write_u128`, whose default
+            // body writes the 16 native-endian bytes, as a table's glue feeds
+            // them (B-2026-11-17-65).
+            HK::Int(_) | HK::UInt(_) => {
+                let m = format!("write_{}", self.tys().display(t));
+                self.hasher_call(span, hp, ht, &m, Operand::Copy(p))
+            }
+            // `F32` / `F64` reach here through their one field: the bits,
+            // `write_u32` / `write_u64`, as collections.md § Hashing says
+            // and a table's glue feeds them (B-2026-11-17-65).
+            HK::Float(w @ (FloatSize::F32 | FloatSize::F64)) => {
+                let (native, wide, m) = if w == FloatSize::F32 {
+                    ("f32.to_bits32", UIntSize::U32, "write_u32")
+                } else {
+                    ("f64.to_bits", UIntSize::U64, "write_u64")
+                };
+                let wt = self.tys().tcx().intern(HK::UInt(wide));
+                let n = self.temp(wt);
+                self.call_native(native, vec![Operand::Copy(p)], Place::local(n));
+                self.hasher_call(span, hp, ht, m, Operand::Move(Place::local(n)))
+            }
+            // `()` feeds nothing, as a table's glue does.
+            HK::Unit => Ok(()),
             HK::Bool | HK::Char => {
                 let (wide, cast, m) = match kind {
                     HK::Bool => (UIntSize::U8, CastKind::BoolToInt, "write_u8"),

@@ -24,3 +24,57 @@ impl Hasher for TableKeyBytes {
 fn table_key_bytes() -> TableKeyBytes {
     return TableKeyBytes { bytes: [] };
 }
+
+// The `Hasher` `SipHash13BuildHasher.build()` makes (B-2026-11-17-66): it collects what
+// is written and digests the bytes on `finish` with SipHash-1-3 under the per-process key, the function a
+// table of `SipHash13BuildHasher` runs over the same bytes, so a program's own digest of a
+// key and the table's agree. A table does not use this type: naming the
+// selector in a `Map` / `Set` still routes it to the native fast path.
+struct SipHash13Hasher { mut bytes: Vec[u8] }
+
+impl Hasher for SipHash13Hasher {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        for b in bytes {
+            self.bytes.push(b);
+        }
+    }
+    fn finish(ref self) -> u64 { SipHash13BuildHasher.digest(self.bytes.as_slice()) }
+}
+
+impl BuildHasher for SipHash13BuildHasher {
+    type Hasher = SipHash13Hasher;
+    fn build(ref self) -> SipHash13Hasher { SipHash13Hasher { bytes: Vec.new() } }
+}
+
+impl SipHash13BuildHasher {
+    // The digest itself, native on every backend (`karac-hash`).
+    #[compiler_builtin]
+    fn digest(bytes: Slice[u8]) -> u64 { 0 }
+}
+
+// The `Hasher` `FxBuildHasher.build()` makes (B-2026-11-17-66): it collects what
+// is written and digests the bytes on `finish` with FxHash, the function a
+// table of `FxBuildHasher` runs over the same bytes, so a program's own digest of a
+// key and the table's agree. A table does not use this type: naming the
+// selector in a `Map` / `Set` still routes it to the native fast path.
+struct FxHasher { mut bytes: Vec[u8] }
+
+impl Hasher for FxHasher {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        for b in bytes {
+            self.bytes.push(b);
+        }
+    }
+    fn finish(ref self) -> u64 { FxBuildHasher.digest(self.bytes.as_slice()) }
+}
+
+impl BuildHasher for FxBuildHasher {
+    type Hasher = FxHasher;
+    fn build(ref self) -> FxHasher { FxHasher { bytes: Vec.new() } }
+}
+
+impl FxBuildHasher {
+    // The digest itself, native on every backend (`karac-hash`).
+    #[compiler_builtin]
+    fn digest(bytes: Slice[u8]) -> u64 { 0 }
+}

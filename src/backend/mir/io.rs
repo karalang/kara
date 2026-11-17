@@ -116,6 +116,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("RegexEngine", _) => self.regex_native(method, args, dest),
             ("StableHash", "siphash24") => self.siphash_native(args, dest).map(Some),
+            ("SipHash13BuildHasher" | "FxBuildHasher", "digest") => {
+                self.hasher_digest_native(base, args, dest).map(Some)
+            }
             ("String" | "str", "normalize") => self.normalize_native(args, dest).map(Some),
             ("CryptoSha2" | "CryptoHmac" | "CryptoLegacy" | "CryptoCt", _) => {
                 self.crypto_native(base, method, args, dest)
@@ -2192,6 +2195,22 @@ impl<'ctx> Cx<'ctx, '_> {
             &[p.into(), n.into(), k0.into(), k1.into()],
             64,
         )?;
+        self.drop_moved(args)?;
+        let d = self.place_ptr(dest)?;
+        self.store(d, h.into())
+    }
+
+    /// `SipHash13BuildHasher.digest(bytes)` / `FxBuildHasher.digest(bytes)`:
+    /// the digest a table of that hasher computes, through the same
+    /// `karac_hash_bytes` / `karac_hash_bytes_fx` (B-2026-11-17-66).
+    fn hasher_digest_native(&mut self, base: &str, args: &[Operand], dest: &Place) -> R<()> {
+        let (p, n) = self.view_of(&args[0])?;
+        let f = if base == "FxBuildHasher" {
+            "karac_hash_bytes_fx"
+        } else {
+            "karac_hash_bytes"
+        };
+        let h = self.rt_named(f, &[p.into(), n.into()], 64)?;
         self.drop_moved(args)?;
         let d = self.place_ptr(dest)?;
         self.store(d, h.into())

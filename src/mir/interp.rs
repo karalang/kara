@@ -3264,6 +3264,20 @@ impl<'a> Interp<'a> {
             // `icu_normalizer` through `karac_unicode_normalize`.
             // The `karac-hash` crate the compiled backend reaches through
             // `karac_stable_siphash24`.
+            // The two library hashers' digests (B-2026-11-17-66): the
+            // process-keyed SipHash-1-3 and Fx a table of each computes.
+            ("SipHash13BuildHasher" | "FxBuildHasher", "digest") => match args.as_slice() {
+                [bytes] => {
+                    let bytes = self.bytes_of_view(bytes, name)?;
+                    let h = if base == "FxBuildHasher" {
+                        karac_hash::fx_hash_bytes(&bytes)
+                    } else {
+                        karac_hash::hash_bytes(&bytes)
+                    };
+                    Ok(Value::Int(i128::from(h)))
+                }
+                _ => err(format!("{name} takes bytes")),
+            },
             ("StableHash", "siphash24") => match args.as_slice() {
                 [bytes, Value::Int(k0), Value::Int(k1)] => {
                     let bytes = self.bytes_of_view(bytes, name)?;

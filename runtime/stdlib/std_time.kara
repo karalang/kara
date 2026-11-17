@@ -92,6 +92,75 @@ impl Div[i64] for Duration {
     }
 }
 
+impl Display for Duration {
+    /// Go's `time.Duration` text (review ruling on B-2026-11-17-67): under
+    /// a second, the largest of `ns`, `µs` and `ms` that keeps a whole part
+    /// (`250ms`, `1.5µs`, `999ns`); from a second up, hours, minutes and
+    /// seconds with the leading zero units left out (`1.5s`, `1m30s`,
+    /// `2h0m0s`). The fraction keeps no trailing zeros, a negative span
+    /// leads with `-`, and zero is `0s`.
+    fn to_string(ref self) -> String {
+        // The magnitude as a `u64`, which holds `i64.MIN`'s too.
+        let u: u64 = if self.ns < 0 {
+            ((0 - (self.ns + 1)) as u64) + 1
+        } else {
+            self.ns as u64
+        };
+        let mut out = String.new();
+        if u == 0 {
+            return "0s";
+        }
+        if u < 1000000000 {
+            let mut scale: u64 = 1000000;
+            let mut unit = "ms";
+            if u < 1000 {
+                scale = 1;
+                unit = "ns";
+            } else if u < 1000000 {
+                scale = 1000;
+                unit = "µs";
+            }
+            out.push_str(f"{u / scale}");
+            out.push_str(duration_fraction(u % scale, scale));
+            out.push_str(unit);
+        } else {
+            let secs = u / 1000000000;
+            let h = secs / 3600;
+            let m = secs / 60 % 60;
+            if h > 0 {
+                out.push_str(f"{h}h");
+            }
+            if h > 0 or m > 0 {
+                out.push_str(f"{m}m");
+            }
+            out.push_str(f"{secs % 60}");
+            out.push_str(duration_fraction(u % 1000000000, 1000000000));
+            out.push_str("s");
+        }
+        if self.ns < 0 {
+            return f"-{out}";
+        }
+        out
+    }
+}
+
+// `rem / scale` as a decimal fraction, `scale` a power of ten: `""` for none,
+// otherwise `.` and its digits without trailing zeros (`.5`, `.0625`).
+fn duration_fraction(rem: u64, scale: u64) -> String {
+    if rem == 0 {
+        return "";
+    }
+    let mut digits = String.new();
+    let mut place = scale / 10;
+    let mut r = rem;
+    while place > 0 and r > 0 {
+        digits.push_str(f"{r / place}");
+        r = r % place;
+        place = place / 10;
+    }
+    f".{digits}"
+}
+
 /// Wall-clock time, which can jump when the system clock is set. Use an
 /// `Instant` to measure how long something takes.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]

@@ -1,0 +1,9 @@
+source = "B-2026-11-17-66"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "hash"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-66: collections.md § Hashing calls SipHash13BuildHasher and FxBuildHasher ordinary BuildHasher types. build() makes a Hasher whose finish digests the bytes written with the table's own function (karac-hash's hash_bytes / fx_hash_bytes), and either meets a B: BuildHasher bound, including B.Hasher: Hasher through the trait's declared `type Hasher: Hasher`. The Fx digest of b\"abc\" is fx_hash_bytes's value, unkeyed and the same on every backend; the keyed default is printed only as agreement with itself."

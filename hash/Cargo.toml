@@ -14,10 +14,11 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 
 [features]
-# `std` is what the environment override and the entropy source need. ON by
-# default for the compiler and the native runtime; the runtime's wasm and
-# embedded archives turn it off, and the seed falls back to a fixed key there
-# (see `seed.rs` — the flooding threat model does not describe those targets).
+# `std` is what the native environment override and entropy fallback need. ON
+# by default for the compiler and the native runtime; the runtime's wasm and
+# embedded archives turn it off. On WASI the seed still comes from
+# `random_get` and the override from `environ_get` (B-2026-11-17-64); only an
+# embedded build falls back to a fixed key (see `seed.rs`).
 default = ["std"]
 std = []
 

@@ -1,0 +1,9 @@
+source = "B-2026-11-17-67"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "time"]
+expected_from = "oracle"
+backends = []
+env = {}
+note = "B-2026-11-17-67: Duration has Display, in Go's time.Duration format (review ruling): ns/µs/ms under a second, h/m/s from a second up with leading zero units left out, no trailing fraction zeros, 0s for zero, i64.MIN printed whole. expected.out is the output of Go 1.21+'s fmt.Println over the same spans."

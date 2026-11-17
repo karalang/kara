@@ -1,0 +1,7 @@
+F64 1.5: 8 bytes, bits true
+F32: 4
+unit: 0
+i128 -1: 16 bytes, all ff true
+(1, 2u8): 9
+manual == derived: true (24 bytes)
+generic: 8 16 0

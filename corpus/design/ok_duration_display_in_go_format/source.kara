@@ -1,0 +1,10 @@
+// B-2026-11-17-67: a Duration prints in Go's time.Duration format (review
+// ruling); the expected output is Go's own for the same spans.
+import std.time.{Duration};
+fn main() {
+    let ds = [Duration.ns(0), Duration.ns(1), Duration.ns(999), Duration.ns(1500), Duration.us(250), Duration.ms(250), Duration.ms(1500), Duration.secs(1), Duration.secs(90), Duration.secs(3600), Duration.secs(3661) + Duration.ms(500), Duration.us(-3), Duration.ms(-1500), Duration.ns(1000000001), Duration.ns(i64.MAX), Duration.ns(i64.MIN), Duration.ns(1062500)];
+    for d in ds {
+        println(f"{d}");
+    }
+    println(f"took {Duration.ms(1500)} / {Duration.secs(2).to_string()}");
+}

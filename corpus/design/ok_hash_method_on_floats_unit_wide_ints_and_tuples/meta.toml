@@ -1,0 +1,9 @@
+source = "B-2026-11-17-65"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "hash"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-17-65: collections.md § What the built-in types feed: F64/F32 write_u64/write_u32 of the bits, i128/u128 their 16 native-endian bytes (write_i128/write_u128), () nothing, a tuple each part. An explicit x.hash(mut h) was refused for F64, F32, () (E0516) and for i128, u128 and a tuple local (E0236), so a hand-written impl Hash could not delegate to a float field; it now feeds the bytes the derive does."

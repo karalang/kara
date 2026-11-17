@@ -53,6 +53,10 @@ const ALWAYS_KEPT: &[&str] = &[
     // A table's hash glue calls its hasher's (B-2026-10-25-31).
     "write",
     "finish",
+    // A user hasher's table calls its builder's `build`; a library
+    // hasher's `finish` reaches its native `digest` (B-2026-11-17-66).
+    "build",
+    "digest",
     "clone",
     "cloned",
     "drop",

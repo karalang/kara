@@ -3040,7 +3040,10 @@ impl<'a> super::TypeChecker<'a> {
         // part (collections.md § Hashing, B-2026-10-31-25). A hand-written
         // impl's `hash` resolves through the impl table instead.
         if let ("hash", [h]) = (method, args) {
-            if self.env.hash_is_builtin(&obj_ty_for_named) {
+            if self
+                .env
+                .hash_is_builtin(&self.resolved_now(&obj_ty_for_named))
+            {
                 let ht = self.infer_expr(&h.value);
                 let base = match &ht {
                     Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),

@@ -1,0 +1,64 @@
+// B-2026-11-17-65: `x.hash(mut h)` written in a program feeds the bytes
+// collections.md § "What the built-in types feed" lists, for every type that
+// works as a `Map` / `Set` key: `F64` / `F32` their bits, `()` nothing,
+// `i128` / `u128` their 16 bytes, a tuple each part. A hand-written
+// `impl Hash` can delegate to a float field, and it feeds the same bytes the
+// derive does.
+import std.hash.{Hasher};
+
+struct Rec { mut b: Vec[u8] }
+
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        for x in bytes {
+            self.b.push(x);
+        }
+    }
+    fn finish(ref self) -> u64 {
+        self.b.len() as u64
+    }
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct Derived { f: F64, n: i128 }
+
+struct Manual { f: F64, n: i128 }
+
+impl Hash for Manual {
+    fn hash[H: Hasher](self, h: mut ref H) {
+        self.f.hash(mut h);
+        self.n.hash(mut h);
+    }
+}
+
+fn count[T: Hash](v: ref T) -> i64 {
+    let mut r = Rec { b: Vec.new() };
+    v.hash(mut r);
+    r.b.len()
+}
+
+fn main() {
+    let mut r = Rec { b: Vec.new() };
+    F64.from(1.5).hash(mut r);
+    println(f"F64 1.5: {r.b.len()} bytes, bits {F64.from(1.5).value.to_bits() == 4609434218613702656}");
+    let mut r = Rec { b: Vec.new() };
+    F32.from(1.5).hash(mut r);
+    println(f"F32: {r.b.len()}");
+    let mut r = Rec { b: Vec.new() };
+    ().hash(mut r);
+    println(f"unit: {r.b.len()}");
+    let mut r = Rec { b: Vec.new() };
+    let w = -1i128;
+    w.hash(mut r);
+    println(f"i128 -1: {r.b.len()} bytes, all ff {r.b.iter().all(|x| x == 255u8)}");
+    let mut r = Rec { b: Vec.new() };
+    let t = (1, 2u8);
+    t.hash(mut r);
+    println(f"(1, 2u8): {r.b.len()}");
+    let mut a = Rec { b: Vec.new() };
+    let mut b = Rec { b: Vec.new() };
+    Derived { f: F64.from(-0.0), n: 7 }.hash(mut a);
+    Manual { f: F64.from(-0.0), n: 7 }.hash(mut b);
+    println(f"manual == derived: {a.b == b.b} ({a.b.len()} bytes)");
+    println(f"generic: {count(F64.from(2.0))} {count(1u128)} {count(())}");
+}

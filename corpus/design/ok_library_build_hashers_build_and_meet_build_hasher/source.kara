@@ -1,0 +1,28 @@
+// B-2026-11-17-66: `SipHash13BuildHasher` and `FxBuildHasher` are ordinary
+// `BuildHasher` types (collections.md § Hashing): `build()` makes a `Hasher`,
+// and either can be handed to code generic over `B: BuildHasher`. Fx is
+// unkeyed, so its digest is the same in every process; the default is keyed
+// per process, so only its agreement with itself is printed.
+import std.hash.{Hasher, BuildHasher, SipHash13BuildHasher, FxBuildHasher, FxHasher};
+
+fn digest[B: BuildHasher, T: Hash](b: B, v: ref T) -> u64 {
+    let mut h = b.build();
+    v.hash(mut h);
+    h.finish()
+}
+
+fn main() {
+    let mut h: FxHasher = FxBuildHasher {}.build();
+    h.write("abc".bytes());
+    println(f"fx abc: {h.finish()}");
+    println(f"fx generic: {digest(FxBuildHasher {}, 42)} {digest(FxBuildHasher {}, 42)}");
+    let a = digest(SipHash13BuildHasher {}, "key");
+    let b = digest(SipHash13BuildHasher {}, "key");
+    let c = digest(SipHash13BuildHasher {}, "other");
+    println(f"sip same key agrees: {a == b}, other key differs: {a != c}");
+    let mut s = SipHash13BuildHasher {}.build();
+    s.write_u64(7u64);
+    let mut t = SipHash13BuildHasher {}.build();
+    t.write(7u64.to_ne_bytes());
+    println(f"write_u64 == write of its bytes: {s.finish() == t.finish()}");
+}

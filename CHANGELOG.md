@@ -258,6 +258,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `x.hash(mut h)` written in a program works for `F64`, `F32`, `()`,
+  `i128`, `u128` and tuples, feeding the bytes a table feeds (the float's
+  bits, nothing, 16 bytes, each part), so a hand-written `impl Hash` can
+  delegate to a float field; `Hasher` gains `write_i128` and `write_u128`
+  (B-2026-11-17-65).
+- `SipHash13BuildHasher {}.build()` and `FxBuildHasher {}.build()` make a
+  `SipHash13Hasher` / `FxHasher` whose digest is the table's, and both meet a
+  `B: BuildHasher` bound; a projection such as `B.Hasher` meets the bounds
+  its trait declares on it (`type Hasher: Hasher`) (B-2026-11-17-66).
+- `Duration` is `Display`, in Go's format (`250ms`, `1.5s`, `1m30s`,
+  `2h0m0s`, `-3µs`, `0s`) (B-2026-11-17-67).
 - `let p: P = Make.name()` calls `P`'s impl of the trait `Make`, taking
   `Self` from the expected type through the return type (`Self`,
   `Option[Self]`), even where `P` has an inherent `name` (B-2026-11-16-331).
@@ -629,6 +640,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- On `wasm_wasi` the default hasher's key is random per process (WASI
+  `random_get`) and `KARAC_HASH_SEED` pins it, giving the order the same pin
+  gives natively; every wasm run used one fixed key and ignored the pin.
+  Natively the key now comes from `getentropy` (B-2026-11-17-64).
 - `impl From[VarError] for IoError` no longer disappears beside the
   library's `From[NetError]`: `?` on `env.var` and on a socket in one
   function returning `IoError` compiles, as io.md promises (B-2026-11-17-7).

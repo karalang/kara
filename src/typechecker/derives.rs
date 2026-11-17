@@ -3145,8 +3145,15 @@ impl super::env::TypeEnv {
     pub(super) fn hash_is_builtin(&self, ty: &Type) -> bool {
         let fed = |t: &Type| self.hash_is_builtin(t) || self.hash_has_own(t);
         match ty {
-            Type::Int(w) => !matches!(w, super::types::IntSize::I128),
-            Type::UInt(w) => !matches!(w, super::types::UIntSize::U128),
+            // `i128` / `u128` feed `write_i128` / `write_u128`
+            // (B-2026-11-17-65).
+            Type::Int(_) | Type::UInt(_) => true,
+            // An integer literal not fixed yet (`(1, 2).hash(mut h)`) is an
+            // integer whichever width it settles on.
+            Type::TypeVar(id) => matches!(
+                super::inference::literal_var_kind(*id),
+                Some(super::inference::LiteralKind::Int)
+            ),
             Type::Bool | Type::Char | Type::Str | Type::Unit => true,
             Type::Tuple(elems) => elems.iter().all(fed),
             Type::Array { element, .. } | Type::Slice { element, .. } => fed(element),
