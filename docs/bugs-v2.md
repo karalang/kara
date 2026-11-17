@@ -109,11 +109,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
-| B-2026-11-16-283 | 2026-11-16 | cli | medium | `karac run --output=json` on a program whose `main` returns `Err` prints two separate JSON objects on stdout (`{"error":"boom"}` then `{"error_return_trace":[...]}`), so the output is not one JSON document, and neither matches design.md §17's error-return-trace shape | — |
-| B-2026-11-16-285 | 2026-11-16 | cli | medium | `karac migrate shared-to-par` writes code that does not parse: it wraps uses in `lock self.n { ... }` blocks (`lock` is not a v1 keyword, design.md line 279) and renames a free function's parameter `c` to `self` | — |
-| B-2026-11-16-286 | 2026-11-16 | cli | low | `karac build --output=jsonl` on a failing build never emits `phase_skipped` for `codegen`, and a program whose effect phase reported an error gets `program_effects: []`, which is neither its effect set nor the `null` design.md §17 reserves for an unreached effect phase | — |
-| B-2026-11-16-287 | 2026-11-16 | cli | low | `karac help` and flags drift from behaviour: `--sequential` is listed as 'Disable parallel execution in par blocks' but `run` refuses it and `build` calls it unknown; `install` documents `path = ...` but only `path=...` parses; `cache key --pkg x` is refused (only `--pkg=x`); `fix` exits 0 on a file that still has an error; `debug` renders crash files nothing writes | — |
-| B-2026-11-16-289 | 2026-11-16 | other | low | [doc-only] design.md describes `karac explain --edition <NEXT>` and `karac fix --edition <NEXT>` in the present tense (§4 editions, §3 `r#name`), but both are 'unknown flag'; with one edition (2026) there is nothing to migrate yet, so the text should say they arrive with the first edition boundary | — |
 | B-2026-11-16-290 | 2026-11-16 | resolver+cli | medium | The value-position did-you-mean offers the built-in `print` (`prnt`, `point` -> `print`) as a machine fix, and `karac fix` applies it into a fresh E0100 'print is a built-in function and cannot be used as a value'; `format` gets 'did you mean forget' | — |
 | B-2026-11-16-291 | 2026-11-16 | ownership+cli | medium | E0213's machine fix rewrites `fn bad() -> ref Holder` to `-> Holder`, and the fixed file fails with E0516 x2 | — |
 | B-2026-11-16-292 | 2026-11-16 | typecheck+cli | medium | E0254 (not CrossTask) fix adds `+ CrossTask` to `-> dyn Bump` on a function whose concrete type holds a non-CrossTask `S`, and the fixed file fails with E0200 'D is not CrossTask: it holds S' | — |
@@ -144,7 +139,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-109 | 2026-11-17 | ownership | low | A `scan` state seeded with `[None; 4]` reads as not `Copy`: `Some((last, last))` is refused as a use after a move and `karac fix` writes `Some((last.clone(), last))` | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-17-113 | 2026-11-17 | other | low | `karac query`'s layout_choice query proposes a `layout` block, which the compiler now refuses as deferred (E_DEFERRED_LAYOUT_BLOCK, B-2026-11-16-257) | — |
-| B-2026-11-17-114 | 2026-11-17 | typecheck+cli | medium | `karac check <file>`, the editor and the LSP refuse a module that imports a `shared struct` and names it in a function signature: "expected 'Counter', found 'Counter'" at every call passing one, while `karac check`, `build` and `run` accept the package | — |
 | B-2026-11-17-97 | 2026-11-17 | typecheck | low | A library trait's default method cannot carry its own `where Self: Clone` bound, so `Iterator.cycle` is an inherent method on each Clone-able adaptor instead of one default method on `Iterator` | — |
 
 ### Relocated
@@ -1504,8 +1498,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-280 | other | low | [doc-only] Smaller example README drift: tangle says `Editor.set`'s `cell` reports `mut_ref` (it reports `own`); interop-zlib says `./zpipe` (the bin… | 614211f7ff |
 | B-2026-11-16-281 | other | low | [doc-only] First-run docs gaps: the book has no install section (ch00/ch01 never say how to get karac), the release tarball README lists `--target=wa… | 614211f7ff |
 | B-2026-11-16-282 | cli | medium | `karac run --example <NAME>` compiles a project example's src/main.kara as a lone file, so 6 of the 9 project examples fail (E0207, E0200, E0516 'a t… | 68b46298df |
+| B-2026-11-16-283 | cli | medium | `karac run --output=json` on a program whose `main` returns `Err` prints two separate JSON objects on stdout (`{"error":"boom"}` then `{"error_return… | e09d8559a3 |
 | B-2026-11-16-284 | typecheck+cli | low | `#[test(requires: [UserDB])]` on a resource that is not program-rooted is reported as E0419 'no provider for UserDB' at `<generated>:47:30` inside th… | 4ce2e4fb86 |
+| B-2026-11-16-285 | cli | medium | `karac migrate shared-to-par` writes code that does not parse: it wraps uses in `lock self.n { .. | e09d8559a3 |
+| B-2026-11-16-286 | cli | low | `karac build --output=jsonl` on a failing build never emits `phase_skipped` for `codegen`, and a program whose effect phase reported an error gets `p… | e09d8559a3 |
+| B-2026-11-16-287 | cli | low | `karac help` and flags drift from behaviour: `--sequential` is listed as 'Disable parallel execution in par blocks' but `run` refuses it and `build`… | e09d8559a3 |
 | B-2026-11-16-288 | cli | low | Malformed values of KARAC_HASH_SEED and KARAC_THREADS are ignored silently (`KARAC_HASH_SEED=abc` gives a fresh order each run; `KARAC_THREADS=0` run… | 116ba83ed6 |
+| B-2026-11-16-289 | other | low | [doc-only] design.md describes `karac explain --edition <NEXT>` and `karac fix --edition <NEXT>` in the present tense (§4 editions, §3 `r#name`), but… | e09d8559a3 |
 | B-2026-11-16-296 | cli | medium | 275 of the 491 codes `karac explain` knows have no prose of their own: their entry prints only phase/kind and either the class's generic paragraph or… | 1a718ba8ca |
 | B-2026-11-16-297 | cli | medium | Class-level prose mis-describes the code: deferred-feature, archived and lint codes inherit the paragraph of an unrelated class (E_TAIT_NOT_IMPLEMENT… | 1a718ba8ca |
 | B-2026-11-16-298 | typecheck+cli | medium | Trait-alias and TAIT declarations pass check silently though both are deferred: an unused `trait B = A;` and `type T = impl A;` give no diagnostic an… | 116ba83ed6 |
@@ -1635,6 +1634,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-108 | typecheck | low | The `binary_search` rewrite through `partition_point` indents its later lines to the `match`'s column, not the statement's: `let k = match p.binary_s… | 71e40ab8ed |
 | B-2026-11-17-110 | lexer | low | Number literals design.md §3 does not allow are accepted: a `_` that is not between two digits (`1__0`, `1_`, `0x_FF`, `1_000_.5`) and a point not fo… | 116ba83ed6 |
 | B-2026-11-17-111 | parser | low | E0003 on `priv` as a name offers no fix but reads like every reserved word's, though `priv` is also a structural marker and `r#priv` is E0004, so the… | 116ba83ed6 |
+| B-2026-11-17-114 | typecheck+cli | medium | `karac check <file>`, the editor and the LSP refuse a module that imports a `shared struct` and names it in a function signature: "expected 'Counter'… | e09d8559a3 |
 
 </details>
 
