@@ -809,9 +809,12 @@ impl<'a> super::TypeChecker<'a> {
             other => other,
         };
         match (&expr.kind, ctx) {
-            (ExprKind::Float(_, None), Type::Float(size))
+            (ExprKind::Float(v, None), Type::Float(size))
                 if !matches!(size, crate::typechecker::types::FloatSize::F64) =>
             {
+                if v.abs() > 65504.0 {
+                    self.narrow_float_literals.push((expr.span, *v));
+                }
                 self.record_expr_type(&expr.span, ctx);
             }
             // Arithmetic over unsuffixed float literals alone (`1.0 / 3.0`,
@@ -15301,9 +15304,14 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 ty
             }
-            ExprKind::Float(_, sfx) => {
+            ExprKind::Float(v, sfx) => {
                 if matches!(sfx, Some(crate::token::FloatSuffix::F64)) {
                     self.warn_redundant_suffix("f64", expr.span);
+                }
+                // Past `f16`'s range: a narrower type its context gives it
+                // is range-checked once types are final (B-2026-11-16-340).
+                if sfx.is_none() && v.abs() > 65504.0 {
+                    self.narrow_float_literals.push((expr.span, *v));
                 }
                 if sfx.is_none() {
                     if let Some(var) = self.literal_var(expr, None) {

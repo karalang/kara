@@ -2320,7 +2320,7 @@ struct TripleLayout {
 
 /// Whether the float literal `v` rounds to infinity in the type its
 /// suffix names (`f64` without one).
-fn float_literal_overflows(v: f64, suffix: Option<FloatSuffix>) -> bool {
+pub(crate) fn float_literal_overflows(v: f64, suffix: Option<FloatSuffix>) -> bool {
     match suffix {
         Some(FloatSuffix::F32) => (v as f32).is_infinite(),
         // (2 - 2^-11) * 2^15 and (2 - 2^-8) * 2^127: the midpoints past each

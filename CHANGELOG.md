@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- An unsuffixed float literal is range-checked against the type its
+  context gives it, as a suffixed one already was: `let a: f32 = 1e39;`,
+  an `f32` argument `1e39`, `let e: f16 = 70000.0;` and the same literal
+  through a variable or a `Vec[f32]` element were infinities with no
+  diagnostic, and are now `float literal `1e39` is out of range for 'f32',
+  the type its context gives it` (design.md §3, B-2026-11-16-340).
 - `karac build --target=wasm32-wasip1` builds the `wasm_wasi` module, which
   is that triple; it was linked as a native triple and failed in `wasm-ld`
   on `crt1.o` and `-lpthread`. Any other wasm triple, `wasm32-wasip1-threads`

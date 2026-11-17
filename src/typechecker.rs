@@ -3600,6 +3600,12 @@ pub struct TypeChecker<'a> {
     /// checks each one against the type recorded at its span after
     /// `check_items`.
     pub(super) wide_int_literals: Vec<(Span, i128)>,
+    /// B-2026-11-16-340 — unsuffixed float literals past `f16`'s range,
+    /// with their values. The lexer range-checks a literal against `f64` or
+    /// its suffix's type; a context gives an unsuffixed one a narrower type
+    /// only later, so `check` range-checks each against the type recorded
+    /// at its span after `check_items`.
+    pub(super) narrow_float_literals: Vec<(Span, f64)>,
     /// B-2026-11-07-3 — the literal variables of the bodies being checked,
     /// innermost body last: each body defaults its own when it ends
     /// ([`Self::default_literal_vars`]).
@@ -4714,6 +4720,7 @@ impl<'a> TypeChecker<'a> {
             in_ensures: false,
             neg_validated_suffixed_literal: None,
             wide_int_literals: Vec::new(),
+            narrow_float_literals: Vec::new(),
             body_literal_vars: Vec::new(),
             literal_typed_spans: Vec::new(),
             deferred_literal_compares: Vec::new(),
@@ -5112,6 +5119,7 @@ impl<'a> TypeChecker<'a> {
         // Literals outside any function body (a `const`, a `static`).
         self.default_literal_vars(0);
         self.check_wide_int_literals();
+        self.check_narrow_float_literals();
         self.finalize_typevar_pattern_bindings();
         self.finalize_pattern_binding_inner_types();
         self.finalize_closure_expr_types();
@@ -10912,6 +10920,49 @@ impl<'a> TypeChecker<'a> {
                 }
                 self.check_int_literal_fits(value, &Type::Int(IntSize::I64), &span, None);
             }
+        }
+    }
+
+    /// B-2026-11-16-340: an unsuffixed float literal is range-checked
+    /// against the type its context gave it, as `1e39f32` is in the lexer
+    /// (design.md §3), where `let a: f32 = 1e39;` was an `f32` infinity.
+    fn check_narrow_float_literals(&mut self) {
+        let pending = std::mem::take(&mut self.narrow_float_literals);
+        let mut judged = FxHashSet::default();
+        for (span, value) in pending {
+            let key = SpanKey::from_span(&span);
+            if !judged.insert(key) {
+                continue;
+            }
+            let (suffix, name, max) = match self.expr_types.get(&key) {
+                Some(Type::Float(FloatSize::F32)) => {
+                    (crate::token::FloatSuffix::F32, "f32", "3.4028235e38")
+                }
+                Some(Type::Float(FloatSize::F16)) => {
+                    (crate::token::FloatSuffix::F16, "f16", "65504.0")
+                }
+                Some(Type::Float(FloatSize::BF16)) => {
+                    (crate::token::FloatSuffix::BF16, "bf16", "3.3895314e38")
+                }
+                _ => continue,
+            };
+            if !crate::lexer::float_literal_overflows(value, Some(suffix)) {
+                continue;
+            }
+            let shown = if value.abs() >= 1e16 {
+                format!("{value:e}")
+            } else {
+                format!("{value:?}")
+            };
+            self.type_error(
+                format!(
+                    "float literal `{shown}` is out of range for '{name}', the type its \
+                     context gives it (the largest finite value is {max}); write \
+                     `{name}.INFINITY` for infinity"
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
         }
     }
 
