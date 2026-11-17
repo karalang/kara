@@ -1,0 +1,17 @@
+effect resource Log;
+
+fn note() with writes(Log) {}
+
+trait Show {
+    fn show(self) with reads(Log);
+}
+
+struct Point { x: i64 }
+
+impl Show for Point {
+    fn show(self) with reads(Log) {
+        note();
+    }
+}
+
+fn main() {}

@@ -5220,7 +5220,7 @@ Every function has an **effect set**: what it does to the world besides computin
 2. **Safe concurrency.** Two `par` branches that conflict on a resource are a compile error ([§13](#13-concurrency)).
 3. **Explanation.** `karac explain` and `karac query effects` show every function's effect set and why it has each effect.
 
-Private functions infer their effects; public functions declare them, and the compiler checks the declaration against the body. The defaults that keep the system sound (unknown callees, `extern` functions, drops, recursion and value-keyed resources) are normative in [core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10).
+Private functions infer their effects; public functions declare them, and the compiler checks the declaration against the body: the body may not exceed it, but it may declare effects the body does not yet perform, which leaves the API room to grow without a breaking change (`E0401`, which once refused that, is retired; review-thread ruling 2026-11-17). The defaults that keep the system sound (unknown callees, `extern` functions, drops, recursion and value-keyed resources) are normative in [core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10).
 
 ```kara
 effect resource UserDb;

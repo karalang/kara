@@ -2714,6 +2714,60 @@ const CODE_PROSE: &[(&str, &str)] = &[
          enum takes `C`, an integer type from `u8` to `u64` or `i8` to \
          `i64`, or `transparent`. Fix the spelling, as the message lists.",
     ),
+    // B-2026-11-16-303: E0230 is reachable through the effect checker.
+    (
+        "E0230",
+        "An impl's method performs an effect that its trait method's `with` \
+         clause does not admit (design.md § Trait methods and generic \
+         calls). The clause is a ceiling every implementation stays under, \
+         so that a call through a bound has the clause's effects and no \
+         more. Narrow the impl, for instance by moving the extra work out \
+         of the method, or widen the trait's clause if every implementation \
+         may need it.",
+    ),
+    // B-2026-11-16-303: codes that need a package of several files;
+    // tests/diagnostics_corpus.rs builds each package and checks it.
+    (
+        "E0111",
+        "An item is used from a module that cannot see it (design.md § \
+         Visibility). `private` limits an item to the files of its own \
+         directory; an item without a marker is visible across the package \
+         but not to its users; `pub` is visible everywhere. Mark the item \
+         with the visibility its users need, or move the caller next to it.",
+    ),
+    (
+        "E0113",
+        "An `import` names an item that the module does not declare, or \
+         does not declare for this target (design.md § Imports). The \
+         message lists the names the module does have and suggests the \
+         closest. Fix the name, or add the item to the module with the \
+         visibility the importer needs.",
+    ),
+    (
+        "E0124",
+        "A name used in this module is supplied by two wildcard imports \
+         (`import alpha.*;` and `import beta.*;` both bring `dup`), so the \
+         compiler cannot tell which is meant (design.md § Imports). Two \
+         wildcards that overlap are not an error until the name is used. \
+         Import the one you mean explicitly, `import alpha.dup;`, or call \
+         it by its module, `alpha.dup()`.",
+    ),
+    (
+        "E0223",
+        "The modules' imports form a cycle (`a` imports `b`, which imports \
+         `a`), which the compiler rejects before name resolution (design.md \
+         § Modules, No circular module dependencies). A cycle means neither \
+         module can be understood or compiled first. Move the items both \
+         depend on into a lower module that both import.",
+    ),
+    (
+        "E0227",
+        "A command that works on a package (`karac check` or `karac build` \
+         with no file, `karac test`) found no `kara.toml` in the current \
+         directory or any parent (design.md § Packages and manifests). Run \
+         it from inside the package, create one with `karac init`, or name \
+         a single file: `karac check main.kara`.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
@@ -2811,11 +2865,82 @@ const SCOPE_PROSE: &str = "This code marks a construct that is not in the langua
      `karac explain --concept=scope/later-tracks` gives the scope of v1.";
 
 /// A code marks a later-track or removed construct: its kind says so, or its
-/// name does (`E_TRY_BLOCK_NOT_IMPLEMENTED_YET`).
+/// name does (`E_TRY_BLOCK_NOT_IMPLEMENTED_YET`), or it is one of
+/// [`DEFERRED_CODES`].
 fn is_scope_code(code: &str, entry: &CodeEntry) -> bool {
     concept_for_kind(entry.kind) == Some("scope/later-tracks")
         || code.ends_with("_NOT_IMPLEMENTED_YET")
         || code.ends_with("_NOT_YET")
+        || deferred_section(code).is_some()
+}
+
+/// Codes that check a deferred feature's syntax, which the front end still
+/// parses, and where the spec says so. They print [`SCOPE_PROSE`] and that
+/// pointer, and have no corpus pin
+/// (review-thread ruling 2026-11-17 on B-2026-11-16-303).
+const DEFERRED_CODES: &[(&str, &str)] = &[
+    (
+        "E0217",
+        "The pipe operator is not in the language (design.md § Symbols: \
+         punctuation: \"There is no `?.` and no `|>`\"); B-2026-11-16-341 tracks the \
+         parser still accepting `|>`.",
+    ),
+    (
+        "E0260",
+        "The `lock` block belongs to a later track (design.md § Keywords lists `lock` \
+         among deferred features' words); in 0.8 a `Mutex[T]` is locked with \
+         `m.lock()` (design.md § Locks and atomics).",
+    ),
+    (
+        "E0402",
+        "Effect groups are deferred (docs/deferred.md § Effect Groups and Composition).",
+    ),
+    (
+        "E0405",
+        "Profiles are deferred (docs/deferred.md § Project Profiles).",
+    ),
+    (
+        "E0407",
+        "Profiles are deferred (docs/deferred.md § Project Profiles).",
+    ),
+    (
+        "E0409",
+        "Module-level mutable state is deferred (docs/deferred.md § Module-Level \
+         Mutable State); a module `let mut` is E_MODULE_LET.",
+    ),
+    (
+        "E0800",
+        "GPU kernels are deferred (docs/deferred.md § GPU).",
+    ),
+];
+
+fn deferred_section(code: &str) -> Option<&'static str> {
+    DEFERRED_CODES
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, section)| *section)
+}
+
+/// Codes no diagnostic emits any more. The number stays reserved so it is
+/// never reused for another error; `explain` says it is retired and, where
+/// one does, which code reports the case now (review-thread ruling
+/// 2026-11-17 on B-2026-11-16-303).
+const RETIRED_CODES: &[(&str, &str)] = &[
+    ("E0103", "Access to an item the caller cannot see is E0111 PrivateItemAccess."),
+    ("E0105", "A variant the enum does not declare is reported as E0236, no associated function of that name on the type."),
+    ("E0220", "An unknown suffix on a number literal is a parse error, E0002."),
+    ("E0274", "Indexing an iterator is E0275, which suggests `.collect()` into a `Vec`."),
+    ("E0277", "`?.` is not in the language: `x?.f` is `(x?).f` (design.md § Results and propagation)."),
+    ("E0401", "A public function may declare effects it does not perform; the extra effects are room for the API to grow (design.md § 12, Effects, the declaration paragraph)."),
+    ("E0417", "A `Drop` body may panic; the panic ends the process (core-semantics.md § 7.11)."),
+    ("E0508", "A closure that would outlive a value it borrows is E0515."),
+];
+
+fn retired_note(code: &str) -> Option<&'static str> {
+    RETIRED_CODES
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, note)| *note)
 }
 
 /// What `karac explain` says a code means, or `None` when there is nothing
@@ -2825,11 +2950,21 @@ fn is_scope_code(code: &str, entry: &CodeEntry) -> bool {
 /// misfit its own prose alone, and a symbolic code with no prose of its own
 /// says that the class paragraph is general. `sep` joins two paragraphs.
 fn code_description(code: &str, entry: &CodeEntry, sep: &str) -> Option<String> {
+    if let Some(note) = retired_note(code) {
+        return Some(format!(
+            "This code is retired: no diagnostic emits it any more, and its number \
+             stays reserved so it is never reused.{sep}{note}"
+        ));
+    }
     let prose = code_prose(code);
     if is_scope_code(code, entry) {
-        return Some(match prose {
-            Some(p) => format!("{SCOPE_PROSE}{sep}{p}"),
+        let scope = match deferred_section(code) {
+            Some(pointer) => format!("{SCOPE_PROSE}{sep}{pointer}"),
             None => SCOPE_PROSE.to_string(),
+        };
+        return Some(match prose {
+            Some(p) => format!("{scope}{sep}{p}"),
+            None => scope,
         });
     }
     match (entry.class, prose) {
@@ -5163,7 +5298,12 @@ mod tests {
     fn unclassified_code_says_so_rather_than_printing_other() {
         let (code, entry) = CODE_TABLE
             .iter()
-            .find(|(c, e)| e.class.is_none() && code_prose(c).is_none() && !is_scope_code(c, e))
+            .find(|(c, e)| {
+                e.class.is_none()
+                    && code_prose(c).is_none()
+                    && !is_scope_code(c, e)
+                    && retired_note(c).is_none()
+            })
             .expect("an unclassified code with no prose");
         let text = render_code_text(code, vec![*entry]);
         assert!(text.contains(entry.kind), "{text}");

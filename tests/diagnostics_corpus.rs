@@ -47,7 +47,7 @@ fn diagnostics_corpus_programs_produce_their_code_and_are_explained() {
     }
     // A void run (the directory moved, nothing matched) must not pass.
     assert!(
-        dirs.len() >= 80,
+        dirs.len() >= 81,
         "only {} entries under {root:?}",
         dirs.len()
     );
@@ -131,4 +131,120 @@ fn tempfile_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("karac_diag_{name}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// Review-thread ruling 2026-11-17 on B-2026-11-16-303: codes with no
+/// reachable trigger are retired (the number stays reserved and `explain`
+/// names what reports the case now), and codes for deferred features print
+/// the scope paragraph with a pointer to where the spec says so.
+#[test]
+fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (code, now) in [
+        ("E0103", "E0111"),
+        ("E0105", "E0236"),
+        ("E0220", "E0002"),
+        ("E0274", "E0275"),
+        ("E0277", "?."),
+        ("E0401", "may declare effects"),
+        ("E0417", "may panic"),
+        ("E0508", "E0515"),
+    ] {
+        let out = karac(dir, &["explain", code]);
+        assert!(out.contains("This code is retired"), "{code}: {out}");
+        assert!(out.contains(now), "{code}: {out}");
+        let json = karac(dir, &["explain", "--format=json", code]);
+        assert!(json.contains("This code is retired"), "{code}: {json}");
+    }
+    for (code, pointer) in [
+        ("E0217", "no `|>`"),
+        ("E0260", "m.lock()"),
+        ("E0402", "Effect Groups and Composition"),
+        ("E0405", "Project Profiles"),
+        ("E0407", "Project Profiles"),
+        ("E0409", "Module-Level Mutable State"),
+        ("E0800", "deferred.md § GPU"),
+    ] {
+        let out = karac(dir, &["explain", code]);
+        assert!(
+            out.contains("not in the language this compiler implements") && out.contains(pointer),
+            "{code}: {out}"
+        );
+    }
+}
+
+/// B-2026-11-16-303: the codes that need a package of several files, which a
+/// one-file corpus entry cannot hold. Each package is written to a scratch
+/// directory and checked as a package.
+#[test]
+fn diagnostics_corpus_package_codes_are_produced_and_explained() {
+    let cases: &[(&str, &[(&str, &str)])] = &[
+        (
+            "E0111",
+            &[
+                ("src/main.kara", "import db.helper.secret;\nfn main() {}\n"),
+                ("src/db/helper.kara", "private fn secret() {}\n"),
+            ],
+        ),
+        (
+            "E0113",
+            &[
+                ("src/main.kara", "import geometry.volume;\nfn main() {}\n"),
+                ("src/geometry.kara", "pub fn area() -> i64 { 1 }\n"),
+            ],
+        ),
+        (
+            "E0124",
+            &[
+                (
+                    "src/main.kara",
+                    "import alpha.*;\nimport beta.*;\nfn main() { println(dup()); }\n",
+                ),
+                ("src/alpha.kara", "pub fn dup() -> i64 { 1 }\n"),
+                ("src/beta.kara", "pub fn dup() -> i64 { 2 }\n"),
+            ],
+        ),
+        (
+            "E0223",
+            &[
+                ("src/main.kara", "import a;\nfn main() { a.f(); }\n"),
+                ("src/a.kara", "import b;\npub fn f() { b.g(); }\n"),
+                ("src/b.kara", "import a;\npub fn g() { a.f(); }\n"),
+            ],
+        ),
+    ];
+    let mut bad = Vec::new();
+    for (code, files) in cases {
+        let dir = tempfile_dir(&format!("pkg_{}", code.to_lowercase()));
+        std::fs::write(
+            dir.join("kara.toml"),
+            format!("[package]\nname = \"{}\"\n", code.to_lowercase()),
+        )
+        .unwrap();
+        for (path, text) in *files {
+            let p = dir.join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let json = karac(&dir, &["check", "--output=json"]);
+        if !json.contains(&format!("\"code\":\"{code}\"")) {
+            bad.push(format!("{code}: not reported:\n{json}"));
+        }
+        let explained = karac(&dir, &["explain", code]);
+        if explained.contains("no class page yet") {
+            bad.push(format!("{code}: no description:\n{explained}"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    // E0227: a package command run where there is no `kara.toml`.
+    let dir = tempfile_dir("no_manifest");
+    std::fs::write(dir.join("main.kara"), "fn main() {}\n").unwrap();
+    let json = karac(&dir, &["check", "--output=json"]);
+    if !json.contains("\"code\":\"E0227\"") {
+        bad.push(format!("E0227: not reported:\n{json}"));
+    }
+    if karac(&dir, &["explain", "E0227"]).contains("no class page yet") {
+        bad.push("E0227: no description".to_string());
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n\n"));
 }

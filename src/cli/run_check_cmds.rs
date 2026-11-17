@@ -764,7 +764,9 @@ pub(super) fn cmd_check_project(
     let (root, mf) = match manifest::load_from_cwd(&cwd) {
         Ok(ok) => ok,
         Err(e) => {
-            emit_manifest_error(&e, OutputMode::Text);
+            // `--output=json` holds here too: a missing manifest is E0227 as
+            // a JSON record, as `karac build` reports it.
+            emit_manifest_error(&e, output);
             process::exit(1);
         }
     };
