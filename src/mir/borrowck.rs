@@ -3641,6 +3641,10 @@ fn main() -> () {
             // (B-2026-11-17-101).
             "drop_body_suspends_in_a_mutex",
             "drop_body_suspends_while_a_weak_handle_outlives",
+            // A channel's `recv` and `OnceCell.set` are the library's
+            // (B-2026-11-17-127).
+            "drop_body_suspends_in_a_channel_queue",
+            "drop_body_suspends_in_a_once_cell",
             // `ref a.child.items`, a `ref` of a field path: this check's
             // plain typecheck takes only `ref v[i]` (E_REF_OPERAND_UNSUPPORTED)
             // and the library build reads core places, so these run there

@@ -120,7 +120,7 @@ pub(super) struct Glue<'ctx> {
 
 /// The abort of a drop that reaches a suspending `Drop` body where it
 /// cannot wait (B-2026-11-17-35).
-const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a drop that cannot wait (inside a function value, a OnceCell, OnceLock or LazyLock, or a channel's queue; B-2026-11-17-127)";
+const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a drop that cannot wait (inside a function value's environment; B-2026-11-18-1)";
 
 /// How the release of a `shared` struct reaches the handles of its own type
 /// held in its body ([`Cx::drain_plan`]): each part at its offset in the

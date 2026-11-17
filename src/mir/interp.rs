@@ -5226,6 +5226,16 @@ impl<'a> Interp<'a> {
             other => return err(format!("{name} of {other:?}")),
         };
         match (method, &args[1..]) {
+            // The value, if set, moved out into a `Vec`, the cell left
+            // empty (`suspending_drop`'s glue, B-2026-11-17-127).
+            ("drain_entries", []) => {
+                let held = std::mem::replace(self.slot_mut(&at)?, Value::Agg(Vec::new()));
+                let Value::Agg(out) = held else {
+                    return err(format!("{name} of {held:?}"));
+                };
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
             ("is_set", []) => Ok(Value::Bool(set)),
             ("get", []) => {
                 let v = set.then(|| Value::Ref(at.child(0)));
@@ -6021,6 +6031,30 @@ impl<'a> Interp<'a> {
                 let id = self.new_chan(elem, (*n).max(0) as usize, 1, 1);
                 self.chan_mut(id, name)?.bounded = true;
                 Ok(Value::Agg(vec![Value::Int(id)]))
+            }
+            // At the channel's last end, what is still queued moved out
+            // into a `Vec`, oldest first; at any other end, nothing. The
+            // end itself goes by its plain drop after (`suspending_drop`'s
+            // glue, B-2026-11-17-127).
+            (_, "drain_entries") => {
+                let id = self.chan_id(args.first(), name)?;
+                let out: Vec<Value> = if hand_rolled(id) {
+                    Vec::new()
+                } else {
+                    let c = self.chan_mut(id, name)?;
+                    let last = match base {
+                        "Sender" => c.senders == 1 && c.receivers == 0,
+                        "Receiver" => c.receivers == 1 && c.senders == 0,
+                        _ => c.senders == 1 && c.receivers == 1,
+                    };
+                    if last {
+                        c.queue.drain(..).collect()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
             }
             (_, "drop") => {
                 // `BoundedChannel.drop`, registered by the builder for the
@@ -16197,7 +16231,7 @@ impl<'a> Interp<'a> {
                     .contains_key(&coroutine::resume_name(&f))
             {
                 return err(format!(
-                    "the `Drop` body of {} suspends, and a value of it is dropped where the drop cannot wait: inside a function value, a OnceCell, OnceLock or LazyLock, or a channel's queue (B-2026-11-17-127)",
+                    "the `Drop` body of {} suspends, and a value of it is dropped where the drop cannot wait: inside a function value's environment (B-2026-11-18-1)",
                     adt.name
                 ));
             }

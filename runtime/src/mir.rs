@@ -4696,6 +4696,50 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
     }
 }
 
+/// How many values are queued when the end `h` of the kind `kind` names
+/// (1 a sender, 0 a receiver, 2 a `BoundedChannel`, which is one of each)
+/// is the channel's last; 0 at any other end. A null `h` holds nothing.
+///
+/// # Safety
+/// `h` is null or a live channel.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_last_len(h: *mut MirChan, kind: u8) -> i64 {
+    if h.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller's contract.
+    let c = unsafe { &*h };
+    let s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+    let last = match kind {
+        1 => s.senders == 1 && s.receivers == 0,
+        0 => s.receivers == 1 && s.senders == 0,
+        _ => s.senders == 1 && s.receivers == 1,
+    };
+    if last {
+        s.queue.len() as i64
+    } else {
+        0
+    }
+}
+
+/// Moves every queued value of `h` to `out`, oldest first, the queue left
+/// empty: the glue of a last end whose values' drop may suspend drops them
+/// from there (`suspending_drop`, B-2026-11-17-127).
+///
+/// # Safety
+/// `h` is a live channel; `out` is writable for the queued values'
+/// bytes, as [`karac_mir_chan_last_len`] counted them.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_drain_into(h: *mut MirChan, out: *mut u8) {
+    // SAFETY: the caller's contract.
+    let c = unsafe { &*h };
+    let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+    for (i, b) in s.queue.drain(..).enumerate() {
+        // SAFETY: as above.
+        unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out.add(i * c.size), c.size) };
+    }
+}
+
 /// A dropped `Sender`.
 ///
 /// # Safety

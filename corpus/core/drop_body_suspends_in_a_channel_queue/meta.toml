@@ -1,0 +1,9 @@
+source = "B-2026-11-17-127"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Drop, 'A drop body may suspend' (B-2026-11-17-127): values still queued drop through their glue, oldest first, when the channel's last end goes (a Sender, a Receiver or a BoundedChannel), and not before."

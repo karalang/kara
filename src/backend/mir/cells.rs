@@ -602,6 +602,30 @@ impl<'ctx> Cx<'ctx, '_> {
         let size = self.layout(t)?.size;
         let h = self.load_ptr(cell)?;
         match (method, &args[1..]) {
+            // The value, if set, moved out into a `Vec`, the cell left
+            // empty (`suspending_drop`'s glue, B-2026-11-17-127).
+            ("drain_entries", []) => {
+                let s = self.rt_int_named("karac_runtime_once_is_set", &[h.into()], 8)?;
+                let n = self
+                    .builder
+                    .build_int_z_extend(s, self.llcx.i64_type(), "")
+                    .map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.vec_alloc(d, n, size)?;
+                let set = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, n, self.i64(0), "")
+                    .map_err(e)?;
+                self.if_then(set, |cx| {
+                    let buf = cx.load_ptr(d)?;
+                    cx.rt_int_named(
+                        "karac_runtime_once_take",
+                        &[h.into(), buf.into(), cx.i64(size).into()],
+                        8,
+                    )?;
+                    Ok(())
+                })?;
+            }
             ("is_set", []) => {
                 let s = self.rt_int_named("karac_runtime_once_is_set", &[h.into()], 8)?;
                 let s = self
@@ -1057,6 +1081,33 @@ impl<'ctx> Cx<'ctx, '_> {
                 for s in [1, 0] {
                     self.rt("chan_end", &[h.into(), i8t.const_int(s, false).into()])?;
                 }
+            }
+            // At the channel's last end, what is still queued moved out
+            // into a `Vec`, oldest first; at any other end, nothing. The end
+            // itself goes by its plain drop after (`suspending_drop`'s glue,
+            // B-2026-11-17-127).
+            (_, "drain_entries", [recv]) => {
+                let h = self.chan_handle(recv)?;
+                let (_, t) = self.cell_arg(recv)?;
+                let el = elem_of(self, t)?;
+                let size = self.layout(el)?.size;
+                let kind = match base {
+                    "Sender" => 1,
+                    "Receiver" => 0,
+                    _ => 2,
+                };
+                let kind = self.llcx.i8_type().const_int(kind, false);
+                let n = self.rt_int("chan_last_len", &[h.into(), kind.into()], 64)?;
+                let d = self.place_ptr(dest)?;
+                self.vec_alloc(d, n, size)?;
+                let any = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, n, self.i64(0), "")
+                    .map_err(e)?;
+                self.if_then(any, |cx| {
+                    let buf = cx.load_ptr(d)?;
+                    cx.rt("chan_drain_into", &[h.into(), buf.into()])
+                })?;
             }
             ("Sender" | "Receiver", "clone", [recv]) => {
                 let h = self.chan_handle(recv)?;

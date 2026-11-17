@@ -1,0 +1,27 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+fn main() {
+    {
+        let (tx, rx) = channel(4);
+        let tx2 = tx.clone();
+        let _ = tx.send(Slow { n: 1 });
+        let _ = tx2.send(Slow { n: 2 });
+        let _ = tx.send(Slow { n: 3 });
+        match rx.recv() {
+            Some(s) => println(f"got {s.n}"),
+            None => {}
+        }
+        drop(rx);
+        println("receiver gone");
+        drop(tx);
+        println("one sender gone");
+    }
+    {
+        let b: BoundedChannel[Slow] = BoundedChannel.new(4, OnFull.FailFast);
+        let _ = b.send(Slow { n: 4 });
+        let _ = b.send(Slow { n: 5 });
+        println("bounded");
+    }
+    println("end");
+}

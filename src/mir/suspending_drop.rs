@@ -28,12 +28,19 @@
 //! - a `Map`, `Set`, `SortedMap`, `SortedSet` or `VecDeque`: its entries
 //!   move out into a `Vec` (`drain_entries`) and drop from there, a map
 //!   entry's key before its value;
-//! - a `Mutex[T]`: its `T` drops in place, through `get_mut`.
+//! - a `Mutex[T]`: its `T` drops in place, through `get_mut`;
+//! - a `OnceCell[T]` / `OnceLock[T]`: its value, if set, moves out into a
+//!   `Vec` (`drain_entries`) and drops from there, then the emptied cell
+//!   is freed (B-2026-11-17-127);
+//! - a `Sender[T]`, `Receiver[T]` or `BoundedChannel[T]`: when it is the
+//!   channel's last end, the values still queued move out into a `Vec`
+//!   (`drain_entries`) and drop from there, oldest first; then the end
+//!   goes as before (B-2026-11-17-127).
 //!
 //! A drop that reaches a suspending body only through anything else (a
-//! function value's environment, a `OnceCell` / `OnceLock` / `LazyLock`,
-//! a channel's queue) keeps the backends' glue, which reports that the
-//! drop cannot wait there (B-2026-11-17-127).
+//! function value's environment) keeps the backends' glue, which reports
+//! that the drop cannot wait there (B-2026-11-18-1). A `LazyLock` is
+//! only ever a module-level binding, which is never dropped.
 //!
 //! In a cancelled task's teardown the drop runs to completion: its waits
 //! are not cancellation points. The teardown's own calls are not
@@ -258,6 +265,9 @@ impl Pass<'_, '_> {
         let tys = self.tys;
         match tys.kind(ty) {
             TyKind::Adt(_) if mutex_held(tys, ty).is_some() => mutex_held(tys, ty).map(|h| vec![h]),
+            TyKind::Adt(_) if drained_cell(tys, ty).is_some() => {
+                drained_cell(tys, ty).map(|h| vec![h])
+            }
             TyKind::Adt(a) | TyKind::Shared(a) => {
                 let adt = tys.adt(a);
                 if coroutine::is_frame(&adt.name)
@@ -553,6 +563,13 @@ impl Pass<'_, '_> {
                         unwind: UnwindAction::Abort,
                     },
                 )
+            }
+            // A once cell's value, or a channel's queue at its last end,
+            // moved out into a `Vec` and dropped from there; then the
+            // emptied cell or the end by a plain `Drop`.
+            TyKind::Adt(_) if drained_cell(tys, ty).is_some() => {
+                let held = drained_cell(tys, ty).unwrap_or(ty);
+                g.drain_then(this.clone(), ty, held, false, ret)
             }
             TyKind::Adt(a) | TyKind::Shared(a) => {
                 let adt = tys.adt(a);
@@ -974,6 +991,24 @@ impl Glue<'_> {
         }
         start
     }
+}
+
+/// The type a library cell whose glue drains it holds, `T`, when `ty` is
+/// a `OnceCell[T]`, `OnceLock[T]`, `Sender[T]`, `Receiver[T]` or
+/// `BoundedChannel[T]` (B-2026-11-17-127).
+fn drained_cell(tys: &TyInterner, ty: Ty) -> Option<Ty> {
+    let TyKind::Adt(a) = tys.kind(ty) else {
+        return None;
+    };
+    if !matches!(
+        tys.adt(a).library_name(),
+        Some("OnceCell" | "OnceLock" | "Sender" | "Receiver" | "BoundedChannel")
+    ) {
+        return None;
+    }
+    tys.tcx()
+        .adt_of(ty)
+        .and_then(|(_, args)| args.first().copied())
 }
 
 /// The type a library `Mutex[T]` holds in place, `T`, when `ty` is one.

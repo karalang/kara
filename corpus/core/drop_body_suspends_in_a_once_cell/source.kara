@@ -1,0 +1,14 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+fn main() {
+    {
+        let c: OnceCell[Slow] = OnceCell.new();
+        let _ = c.set(Slow { n: 1 });
+        let empty: OnceLock[Slow] = OnceLock.new();
+        let l: OnceLock[Slow] = OnceLock.new();
+        let _ = l.set(Slow { n: 2 });
+        println(f"set {c.is_set()} {empty.is_set()} {l.is_set()}");
+    }
+    println("end");
+}

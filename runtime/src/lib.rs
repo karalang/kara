@@ -295,6 +295,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_chan_clone,
         mir::karac_mir_chan_end,
         mir::karac_mir_chan_drop_sender,
+        mir::karac_mir_chan_last_len,
+        mir::karac_mir_chan_drain_into,
         mir::karac_mir_chan_drop_receiver,
         mir::karac_mir_char_at_byte,
         mir::karac_mir_char_before_byte,
@@ -804,6 +806,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         once::karac_runtime_once_get,
         once::karac_runtime_once_is_set,
         once::karac_runtime_once_free,
+        once::karac_runtime_once_take,
     );
     // String interner runtime (`runtime/src/interner.rs`). Backs
     // `Interner.new` / `.intern` / `.resolve` / `.len` + the local binding's

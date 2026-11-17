@@ -167,6 +167,40 @@ pub unsafe extern "C" fn karac_runtime_once_is_set(handle: *mut KaracOnce) -> u8
     }
 }
 
+/// Moves the sealed value, if any, to `dst` (`value_size` bytes) and
+/// leaves the cell empty, its buffer freed but not dropped: the caller
+/// owns the value now. Returns 1 when there was a value. The glue of a
+/// cell whose value's drop may suspend drops it from there
+/// (`suspending_drop`, B-2026-11-17-127).
+///
+/// # Safety
+/// `handle` must be null or a live `*mut KaracOnce`; `dst` must be
+/// writable for the value's `value_size` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_once_take(
+    handle: *mut KaracOnce,
+    dst: *mut u8,
+    value_size: i64,
+) -> u8 {
+    unsafe {
+        if handle.is_null() {
+            return 0;
+        }
+        let cell = &*handle;
+        let mut inner = cell.inner.lock().unwrap();
+        let Some((p, size)) = inner.value.take() else {
+            return 0;
+        };
+        cell.state.store(0, Ordering::Release);
+        if size != 0 {
+            ptr::copy_nonoverlapping(p, dst, (value_size as usize).min(size));
+            let layout = Layout::from_size_align(size, 8).expect("once value layout");
+            dealloc(p, layout);
+        }
+        1
+    }
+}
+
 /// Free a write-once cell and its sealed value buffer. Called by codegen's
 /// scope-exit `FreeOnceHandle` cleanup for a local binding; a module-level
 /// binding lives for the whole process and is never freed. Null-handle is a
