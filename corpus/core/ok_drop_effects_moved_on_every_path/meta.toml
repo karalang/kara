@@ -1,0 +1,11 @@
+source = "core-semantics §12 default 3; design.md §12 Inference and declarations"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "declarations", "drops"]
+class = "a"
+expected_from = "pin"
+rules = ["12"]
+backends = []
+env = {}
+note = "Moved on every path, a value runs no drop in the function, which needs no writes(Stdout) for it: wrap's two arms each move l (one by a let), route's diverging arm leaves no path, and keep_last moves l before the loop (B-2026-11-17-76). main declares writes(Stdout) for its own prints and the drops at its end."

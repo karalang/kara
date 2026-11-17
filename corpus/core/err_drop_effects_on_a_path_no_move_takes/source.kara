@@ -1,0 +1,24 @@
+// A drop's effects are charged where the drop runs (core semantics §12
+// default 3), on each path: a value moved on one path and left on another
+// drops on the other, so the function runs its drop (B-2026-11-17-76).
+pub struct L { n: i64 }
+
+impl Drop for L {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+
+pub fn maybe(l: own L, keep: bool) -> Option[L] {
+    if keep { return Some(l); }
+    None
+}
+
+pub fn checked(l: own L, r: own Result[i64, String]) -> Result[L, String] {
+    let n = r?;
+    let _ = n + 1;
+    Ok(l)
+}
+
+fn main() {
+    let a = maybe(L { n: 1 }, false);
+    println(f"{a.is_some()}");
+}

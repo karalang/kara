@@ -1,0 +1,2 @@
+ERROR at line 10: public function 'maybe' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature
+ERROR at line 15: public function 'checked' performs effects [writes(Stdout)] but has no effect declaration. Add: with writes(Stdout) to the function signature

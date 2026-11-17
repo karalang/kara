@@ -1,0 +1,38 @@
+// A value every path moves runs no drop in the function that moves it, so
+// the function declares nothing for it (core semantics §12 default 3,
+// B-2026-11-17-76): both arms move it, a diverging arm leaves no path, and
+// a loop's move is taken as made.
+pub struct L { n: i64 }
+
+impl Drop for L {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+
+pub fn wrap(l: own L, keep: bool) -> Option[L] {
+    if keep { Some(l) } else { let m = l; Some(m) }
+}
+
+pub fn route(l: own L, k: i64) -> L {
+    match k {
+        0 => l,
+        _ => { return l; }
+    }
+}
+
+pub fn keep_last(l: own L, n: i64) -> Vec[L] {
+    let mut out: Vec[L] = Vec.new();
+    out.push(l);
+    for i in 0..n {
+        if i > 100 { break; }
+    }
+    out
+}
+
+fn main() with writes(Stdout) {
+    let a = wrap(L { n: 1 }, true);
+    println(f"{a.is_some()}");
+    let b = route(L { n: 2 }, 1);
+    println(f"{b.n}");
+    let v = keep_last(L { n: 3 }, 2);
+    println(f"{v.len()}");
+}

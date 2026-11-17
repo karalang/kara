@@ -3597,6 +3597,7 @@ fn main() -> () {
             // (core semantics §12 default 3, B-2026-11-17-13).
             "err_drop_effects_need_declaring",
             "err_no_effect_counts_drops",
+            "err_drop_effects_on_a_path_no_move_takes",
             "err_dyn_view_unmarked_spawned",
             "err_dyn_view_unmarked_par",
             "err_fn_vec_call_result_marked",
