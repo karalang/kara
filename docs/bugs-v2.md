@@ -222,8 +222,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-66 | 2026-11-17 | typecheck+runtime | low | `SipHash13BuildHasher` and `FxBuildHasher` have no `build()` and do not satisfy a `B: BuildHasher` bound, though collections.md calls both 'ordinary BuildHasher types', so a program cannot compute the default hasher's digest or hand either hasher to generic code | — |
 | B-2026-11-17-67 | 2026-11-17 | typecheck | low | `Duration` and `Instant` have no text form: `println(f"took {t.elapsed()}")` is refused E0232 (no Display), Debug is not implemented yet, and time-random-env.md gives no format, so every timing message is written as `{d.as_ms()} ms` by hand | — |
 | B-2026-11-17-68 | 2026-11-17 | runtime | medium | On wasm_wasi, once `Regex.compile` has returned its size-limit error ('Compiled regex exceeds size limit of 10485760 bytes'), the program's next print kills the host: node exits by SIGSEGV (139), though the same program runs to the end on interp, llvm and asan | — |
-| B-2026-11-17-69 | 2026-11-17 | typecheck | low | A bare `ref String` arm beside a `Str` arm is refused with no fix: `match p.split_once(" ") { Some((w, _)) => w, None => p }` over `p` from `phrases.iter()` (the `.as_str()` edit covered only an arm that reads `ref x`), and `if let` / `else` had neither the fix nor the hint | — |
-| B-2026-11-17-70 | 2026-11-17 | parser | low | `karac fix` opens `from_iter(` inside a parenthesized receiver: `(0..n).flat_map(..).collect::<BTreeSet<_>>().into_iter()` becomes `(SortedSet.from_iter(0..n).flat_map(..))`, refused as no `flat_map` on `SortedSet`; the `parse::<T>()` fix took the same span | — |
 
 ### Relocated
 
@@ -1602,6 +1600,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-5 | other | low | [doc-only] collections.md and iterators.md leave negative counts unspecified: Vec/VecDeque.truncate(-1) clears, take(-1) is empty, skip(-1) yields al… | 038ed5c65d |
 | B-2026-11-17-10 | other | low | [doc-only] io.md says read_lines "drops a trailing \r from each line", but a final line "a\r" (and a lone "\r") keeps it on all three lanes, as Rust'… | bf357e8030 |
 | B-2026-11-17-34 | typecheck | low | A chained pipe `4 \|> f \|> g` reports E0520 'there is no pipe operator' twice, once per `\|>`, where one error for the chain is enough | 614211f7ff |
+| B-2026-11-17-69 | typecheck | low | A bare `ref String` arm beside a `Str` arm is refused with no fix: `match p.split_once(" ") { Some((w, _)) => w, None => p }` over `p` from `phrases.… | cf35bf7d49 |
+| B-2026-11-17-70 | parser | low | `karac fix` opens `from_iter(` inside a parenthesized receiver: `(0..n).flat_map(..).collect::<BTreeSet<_>>().into_iter()` becomes `(SortedSet.from_i… | cf35bf7d49 |
 
 </details>
 
