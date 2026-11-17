@@ -6483,7 +6483,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                     args.iter().any(|a| is_sym(&a.value))
                 }
                 ExprKind::Return(Some(v)) => is_sym(v),
-                ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => es.iter().any(is_sym),
+                ExprKind::Tuple(es)
+                | ExprKind::ArrayLiteral(es)
+                | ExprKind::PrefixCollectionLiteral { items: es, .. } => es.iter().any(is_sym),
+                // `Vec[f, g]`, `vec![f]` and `[f; 3]` store as `[f, g]` does
+                // (B-2026-11-17-24).
+                ExprKind::RepeatLiteral { value, .. } => is_sym(value),
                 // An `E.V(..)` payload is a positional field, so a closure
                 // stored there escapes as in a struct field (§9.3,
                 // B-2026-11-07-5); `core_escape` reads it the same way.
@@ -6495,6 +6500,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                         ) =>
                 {
                     args.iter().any(|a| is_sym(&a.value))
+                }
+                // An argument for an `escaping` parameter (B-2026-11-17-24):
+                // `keep(f)` with `fn keep(f: escaping Fn(..)) -> Vec[..]`.
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                    let params = match self.lcx.calls.get(&e.id).map(|rc| &rc.callee) {
+                        Some(Callee::Def(d)) => self.lcx.fns.get(d).map(|item| &item.f.params),
+                        _ => None,
+                    };
+                    params.is_some_and(|ps| {
+                        args.iter()
+                            .zip(ps.iter())
+                            .any(|(a, p)| is_sym(&a.value) && self.fn_param_owned(p))
+                    })
                 }
                 _ => false,
             };

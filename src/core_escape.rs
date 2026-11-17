@@ -426,10 +426,16 @@ impl Walker<'_> {
                     self.walk_expr(s, Pos::Other);
                 }
             }
-            ExprKind::ArrayLiteral(es) => {
+            // `Vec[f, g]` and `[f; 3]` store their elements as `[f, g]`
+            // does (B-2026-11-17-24).
+            ExprKind::ArrayLiteral(es) | ExprKind::PrefixCollectionLiteral { items: es, .. } => {
                 for x in es {
                     self.walk_expr(x, Pos::Escape("stored in a collection"));
                 }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.walk_expr(value, Pos::Escape("stored in a collection"));
+                self.walk_expr(count, Pos::Other);
             }
             // A tuple element is a positional field, so a closure in one
             // escapes as in a struct field (§9.3, B-2026-11-02-39).

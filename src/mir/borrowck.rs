@@ -329,6 +329,13 @@ pub fn borrow_errors_with(
     let mut errs = read_only_errors(body, tys);
     errs.extend(view_into_shared_errors(body, tys));
     let loans = collect_loans(body, tys);
+    errs.extend(view_param_escape_errors(
+        body,
+        tys,
+        &loans,
+        has_receiver,
+        closure_sig,
+    ));
     if loans.is_empty() {
         return errs;
     }
@@ -341,6 +348,7 @@ pub fn borrow_errors_with(
         closure_sig,
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
+        made_here: closures_made_here(body),
     };
     let origins = origins_dataflow(&cx, entry);
     let scopes = scope_dataflow(body, &loans);
@@ -462,15 +470,21 @@ pub fn borrow_errors_with(
             // what it views unchecked.
             let unkept = if si < n {
                 cx.unkept_loans(&o, &block.statements[si].kind)
-            } else if let TerminatorKind::Call { func, args, .. } = &block.terminator.kind {
-                cx.unkept_call_loans(&o, func, args)
+            } else if let TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } = &block.terminator.kind
+            {
+                cx.unkept_call_loans(&o, func, args, destination)
             } else {
                 LoanSet::default()
             };
             for li in unkept.iter() {
                 let loan = &loans[li];
                 let text = format!(
-                        "{}: a view of {} is stored in an escaping closure, a `shared` value or a channel, where its borrow is not kept (borrow at {}); store an owned copy instead (core semantics §5.7, §9.3) [E0509]",
+                        "{}: a view of {} is stored in an escaping closure, a `dyn` value, a `shared` value or a channel, where its borrow is not kept (borrow at {}); store an owned copy instead (core semantics §5.7, §9.3) [E0509]",
                         site(body, at, Some(loan.at)),
                         show_place(body, tys, &loan.place),
                         borrow_site(body, loan.at),
@@ -533,6 +547,105 @@ pub fn borrow_errors_with(
     errs
 }
 
+/// A view a parameter holds, stored where no borrow is kept (§5.7, §9.3):
+/// in an escaping closure that is not the result itself (one in a field,
+/// an enum payload or a collection), a `dyn` value, a `shared`
+/// value or a channel. The body takes no loan of what a parameter views,
+/// so the by-loan check finds nothing to name; here each view parameter
+/// stands for one loan taken before the body runs, and only the stores are
+/// checked (B-2026-11-17-23).
+fn view_param_escape_errors(
+    body: &Body,
+    tys: &TyInterner,
+    body_loans: &[Loan],
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
+    closure_sig: &ClosureSig<'_>,
+) -> Vec<BorrowError> {
+    let params: Vec<Local> = (1..=body.arg_count)
+        .map(|i| Local(i as u32))
+        .filter(|l| holds_view(tys, body.local(*l).ty))
+        .collect();
+    if params.is_empty() {
+        return Vec::new();
+    }
+    // Reached through a reference, as what a caller lends is: the body
+    // can neither end it nor store into it.
+    let loans: Vec<Loan> = params
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| Loan {
+            kind: BorrowKind::Shared,
+            place: Place {
+                local: p,
+                projection: vec![ProjElem::Deref],
+            },
+            through_shared_ref: true,
+            through_mut_ref: false,
+            at: (usize::MAX, i),
+        })
+        .collect();
+    let cx = Cx {
+        body,
+        tys,
+        loans: &loans,
+        has_receiver,
+        closure_sig,
+        writes_slices: writes_slices(body, tys, body_loans),
+        pred_captures: LoanSet::default(),
+        made_here: closures_made_here(body),
+    };
+    let mut entry = Origins::default();
+    for (i, &p) in params.iter().enumerate() {
+        entry.insert(p, i);
+    }
+    let origins = origins_dataflow(&cx, entry);
+    let mut errs = Vec::new();
+    for (bi, block) in body.blocks.iter().enumerate() {
+        let Some(mut o) = origins[bi].clone() else {
+            continue;
+        };
+        let n = block.statements.len();
+        for si in 0..=n {
+            let unkept = if si < n {
+                cx.unkept_loans(&o, &block.statements[si].kind)
+            } else if let TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } = &block.terminator.kind
+            {
+                cx.unkept_call_loans(&o, func, args, destination)
+            } else {
+                LoanSet::default()
+            };
+            for li in unkept.iter() {
+                let p = Place::local(params[li]);
+                let holder = local_name(body, params[li])
+                    .filter(|n| !n.is_empty() && !n.starts_with('_'))
+                    .map_or_else(
+                        || "a captured value".to_string(),
+                        |n| format!("the parameter `{n}`"),
+                    );
+                let text = format!(
+                    "{}: a view {} holds is stored in an escaping closure, a `dyn` value, a `shared` value or a channel, where its borrow is not kept; store an owned copy instead, or make the closure the result itself (core semantics §5.7, §9.3) [E0509]",
+                    site(body, (bi, si), None),
+                    holder,
+                );
+                errs.push(BorrowError {
+                    place: source_place(body, tys, &p),
+                    ..BorrowError::new(text, "E0509", site_at(body, (bi, si), None))
+                });
+            }
+            if si < n {
+                cx.transfer(&mut o, &block.statements[si].kind, (bi, si));
+            }
+        }
+    }
+    errs.dedup_by(|a, b| a.text == b.text);
+    errs
+}
+
 /// A loan as the flag pass sees it: kind, place and `Ref` site.
 pub(super) type LoanSite = (BorrowKind, Place, (usize, usize));
 
@@ -563,6 +676,7 @@ pub(super) fn loan_liveness(
         closure_sig: &|_| None,
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
+        made_here: closures_made_here(body),
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
@@ -1045,6 +1159,44 @@ struct Cx<'a> {
     /// The loans a call result with no place for a closure does not hold:
     /// see [`predicate_captures`].
     pred_captures: LoanSet,
+    /// The locals holding a closure this body makes: see
+    /// [`closures_made_here`].
+    made_here: std::collections::HashSet<Local>,
+}
+
+/// The locals that hold, whole or in a part, a closure the body itself
+/// makes: the closure, its erased value, and an array, tuple or struct
+/// built from one. A function value
+/// a call hands back is not among them:
+/// whether it captured its arguments' views is the callee's to say, and
+/// §5.4 can only suppose it did (`op(name) -> Fn(..)` choosing among
+/// closures that capture nothing).
+fn closures_made_here(body: &Body) -> std::collections::HashSet<Local> {
+    let mut made = std::collections::HashSet::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for s in body.blocks.iter().flat_map(|b| &b.statements) {
+            let StatementKind::Assign(d, rv) = &s.kind else {
+                continue;
+            };
+            if !d.projection.is_empty() || made.contains(&d.local) {
+                continue;
+            }
+            let from = |op: &Operand| op.place().is_some_and(|p| made.contains(&p.local));
+            let is = match rv {
+                Rvalue::Aggregate(AggregateKind::Closure { .. }, _) => true,
+                Rvalue::Aggregate(_, ops) => ops.iter().any(from),
+                Rvalue::Use(op) | Rvalue::Cast(_, op, _) => from(op),
+                _ => false,
+            };
+            if is {
+                made.insert(d.local);
+                changed = true;
+            }
+        }
+    }
+    made
 }
 
 /// The loans only a function that returns no borrow holds: a capture
@@ -1331,9 +1483,11 @@ impl Cx<'_> {
             return val;
         }
         match rv {
-            Rvalue::Use(op) | Rvalue::Cast(CastKind::Erase, op, _) => {
-                self.operand_origins(o, op, &mut val)
-            }
+            // A `dyn` value owns its value (design.md § `dyn Trait`) and
+            // keeps no borrow, so a view may not go in one (B-2026-11-17-25).
+            Rvalue::Use(op)
+            | Rvalue::Cast(CastKind::Erase, op, _)
+            | Rvalue::Cast(CastKind::ToDyn(_), op, _) => self.operand_origins(o, op, &mut val),
             Rvalue::Aggregate(_, ops) => {
                 for op in ops {
                     self.operand_origins(o, op, &mut val);
@@ -1352,8 +1506,42 @@ impl Cx<'_> {
     /// borrow but can hold that function type, as `v.push(f)` stores `f`
     /// in a `Vec[Fn() -> i64]` (§9.3). A closure passed down, as to
     /// `retain`, is not of a type its receiver holds, so is not stored.
-    fn unkept_call_loans(&self, o: &Origins, func: &Operand, args: &[Operand]) -> LoanSet {
+    ///
+    /// And a closure the body makes, holding a borrow, passed by value to
+    /// a call whose result holds none but has a slot for it, as
+    /// `Vec.from_array([f])` or a builder's `add(f) -> Self` keep `f` in a
+    /// result that keeps no borrow (B-2026-11-17-24).
+    fn unkept_call_loans(
+        &self,
+        o: &Origins,
+        func: &Operand,
+        args: &[Operand],
+        dest: &Place,
+    ) -> LoanSet {
         let mut val = LoanSet::default();
+        if dest.projection.is_empty() && !self.holds(dest) {
+            if let Ok(dt) = place_ty(self.body, self.tys, dest) {
+                for a in args {
+                    let Some(p) = a.place().filter(|p| self.made_here.contains(&p.local)) else {
+                        continue;
+                    };
+                    let Ok(at) = place_ty(self.body, self.tys, p) else {
+                        continue;
+                    };
+                    if matches!(self.tys.kind(at.ty), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                        continue;
+                    }
+                    let mut erased = Vec::new();
+                    erased_parts(self.tys, at.ty, &mut erased);
+                    if erased
+                        .iter()
+                        .any(|e| has_erased_slot(self.tys, dt.ty, *e, self.closure_sig))
+                    {
+                        self.operand_origins(o, a, &mut val);
+                    }
+                }
+            }
+        }
         // A view sent through a channel (§5.7) is kept by nothing.
         if let Operand::Const(Const {
             kind: ConstKind::FnDef(callee),
@@ -2014,6 +2202,67 @@ fn contains_ty(tys: &TyInterner, outer: Ty, inner: Ty) -> bool {
         }
     }
     go(tys, outer, inner, &mut Vec::new())
+}
+
+/// The closures, function values and `dyn` values a value of type `ty`
+/// carries by value: itself, or in its elements or fields.
+fn erased_parts(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>) {
+    fn go(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>, seen: &mut Vec<Ty>) {
+        if seen.contains(&ty) {
+            return;
+        }
+        seen.push(ty);
+        match tys.kind(ty) {
+            TyKind::Closure(..) | TyKind::Fn { .. } | TyKind::Dyn { .. } => out.push(ty),
+            TyKind::Tuple(ts) => ts.iter().for_each(|t| go(tys, *t, out, seen)),
+            TyKind::Array(t, _)
+            | TyKind::Intrinsic(
+                IntrinsicTy::Vec(t)
+                | IntrinsicTy::Set(t)
+                | IntrinsicTy::VecDeque(t)
+                | IntrinsicTy::SortedSet(t),
+            ) => go(tys, t, out, seen),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                go(tys, k, out, seen);
+                go(tys, v, out, seen);
+            }
+            TyKind::Adt(a) => {
+                let adt = tys.adt(a);
+                let is_enum = adt.is_enum;
+                let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
+                for (v, n) in counts.iter().enumerate() {
+                    for f in 0..*n as u32 {
+                        if let Some(t) = tys.field_ty(ty, is_enum.then_some(v as u32), f) {
+                            go(tys, t, out, seen);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    go(tys, ty, out, &mut Vec::new());
+}
+
+/// Whether a value of type `holder` has, by value, a slot the erased value
+/// `e` (a closure, function or `dyn` type) can go in: a function type of
+/// its signature, or a `dyn` of its trait.
+fn has_erased_slot(tys: &TyInterner, holder: Ty, e: Ty, closure_sig: &ClosureSig<'_>) -> bool {
+    let sig = match tys.kind(e) {
+        TyKind::Closure(def, _) => closure_sig(def),
+        TyKind::Fn { params, ret, .. } => Some((params.to_vec(), ret)),
+        _ => None,
+    };
+    let fits = |t: Ty| match (tys.kind(e), tys.kind(t)) {
+        (TyKind::Closure(..) | TyKind::Fn { .. }, TyKind::Fn { params, ret, .. }) => sig
+            .as_ref()
+            .is_none_or(|(ps, r)| params.as_slice() == ps.as_slice() && ret == *r),
+        (TyKind::Dyn { trait_: a, .. }, TyKind::Dyn { trait_: b, .. }) => a == b,
+        _ => false,
+    };
+    let mut parts = Vec::new();
+    erased_parts(tys, holder, &mut parts);
+    parts.into_iter().any(fits)
 }
 
 /// `TaskGroup` holds its tasks' closures outside its declared fields and

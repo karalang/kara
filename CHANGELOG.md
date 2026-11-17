@@ -42,6 +42,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - A format spec's width or precision over 65535 (Rust's limit) is a
   compile error at the hole; `{n:4294967296}` compiled and the program
   ended with "out of memory" (B-2026-11-17-1).
+- A view that reached an escaping closure or a `dyn` value by a route the
+  borrow check did not follow is refused (E0509, or E0516 where the value
+  keeps the borrow): a closure capturing a view parameter stored in a struct
+  field, an enum payload, a nested struct or a collection, a closure stored
+  through `Vec[..]` / `vec![..]` or a builder's `escaping` parameter, and a
+  view-holding value cast to `dyn`, which owns its value and keeps no
+  borrow. Each read freed memory at run time (core semantics §5.7, §9.3;
+  B-2026-11-17-23, -24, -25). A let-bound closure later placed in
+  `Vec[..]`, `vec![..]` or `[f; n]`, or passed to an `escaping` parameter,
+  now captures by move, as one placed in `[f]` did.
 - `[package].version` must be a semver version (`MAJOR.MINOR.PATCH`, such
   as `"0.1.0"`), as design.md § 4 says; any string was accepted
   (B-2026-11-16-220).
