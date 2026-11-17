@@ -724,6 +724,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A literal lent to a `ref` or `mut ref` parameter is fixed by it, as any
+  argument fixes a literal (design.md §8): `let mut best = 0;
+  bump(mut best); best` with `bump(x: mut ref i32)` is an `i32`, where it
+  was refused as an `i64` (B-2026-11-17-130).
 - `Json.deserialize`'s errors for a sequence of the wrong length (`{"Tup":[1]}`
   into a two-field tuple variant, `[1,2,3]` into a pair) say where:
   `too few values in a variant's payload at line 1 column 10`, at the `]`
@@ -1658,6 +1662,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   have, and its derivations name an index, `unwrap`, `expect`, `/` or `%`
   and a refinement check in words rather than the internal
   `__builtin_*` names (B-2026-11-17-16).
+- A `fold` whose seed a method on the accumulator leaves at `i64`
+  (`v.iter().map(|x| 1).fold(0, |a, b| a.max(b))` returned as `i32`) names
+  the seed and the literals the `map` yields, and `karac fix` gives each the
+  target's suffix (`0i32`, `1i32`); the advice was a truncating `as i32`
+  (B-2026-11-17-129).
 - `rev` on an iterator that is not double-ended says `rev` needs a
   `DoubleEndedIterator`, and for an open range that it has no back; other
   iterators get the collect-then-reverse rewrite (B-2026-11-17-6).

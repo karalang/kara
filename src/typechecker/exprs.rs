@@ -5703,7 +5703,18 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         if let Type::TypeVar(v) = self.resolved_now(&t) {
-            if inference::literal_var_kind(v).is_none() {
+            // An open literal lent to a `ref i32` / `mut ref i32` parameter
+            // is fixed by it, as a by-value argument fixes one (design.md §8
+            // Literals: an argument fixes a literal's type): `let mut best =
+            // 0; bump(mut best);` is an `i32` (B-2026-11-17-130).
+            let literal_fits = match inference::literal_var_kind(v) {
+                None => true,
+                Some(inference::LiteralKind::Int) => {
+                    matches!(&**inner, Type::Int(_) | Type::UInt(_))
+                }
+                Some(inference::LiteralKind::Float) => matches!(&**inner, Type::Float(_)),
+            };
+            if literal_fits {
                 unify_types(
                     &Type::TypeVar(v),
                     inner,
@@ -14254,6 +14265,140 @@ impl<'a> super::TypeChecker<'a> {
     /// (`32 - x.leading_zeros()`, where the literal then takes `T`). The
     /// edits put `as T` after each call; `None` when any part is
     /// something else, or a count might not fit `T`.
+    /// B-2026-11-17-129: `it.fold(0, |a, b| a.max(b))` used where an `i32`
+    /// is wanted. A method on the accumulator does not fix the seed literal
+    /// (design.md §8 Literals), so it kept the default `i64`, and so did any
+    /// literal a `map` earlier in the chain yields. The repair names the
+    /// seed and those literals and gives each the target's suffix, where a
+    /// truncating `as` would change what the program means.
+    pub(super) fn fold_seed_literals(
+        expr: &Expr,
+        source: &Type,
+        target: &Type,
+    ) -> Option<(Vec<crate::resolver::TextEdit>, String)> {
+        if *source != Type::Int(IntSize::I64) || !matches!(target, Type::Int(_) | Type::UInt(_)) {
+            return None;
+        }
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return None;
+        };
+        if method != "fold" || args.len() != 2 {
+            return None;
+        }
+        /// The unsuffixed integer literal `e` is (`-1` included).
+        fn literal(e: &Expr) -> Option<(&Expr, i128)> {
+            match &e.kind {
+                ExprKind::Integer(v, None) => Some((e, *v)),
+                ExprKind::Unary { operand, .. } => match &operand.kind {
+                    ExprKind::Integer(v, None) => Some((operand.as_ref(), -*v)),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        /// The literals a closure body yields, when every value it can
+        /// yield is one (`1`, `if c { -1 } else { 0 }`).
+        fn yields<'e>(e: &'e Expr, out: &mut Vec<(&'e Expr, i128)>) -> bool {
+            match &e.kind {
+                ExprKind::Block(b) => b.final_expr.as_ref().is_some_and(|f| yields(f, out)),
+                ExprKind::If {
+                    then_block,
+                    else_branch: Some(other),
+                    ..
+                } => {
+                    then_block
+                        .final_expr
+                        .as_ref()
+                        .is_some_and(|f| yields(f, out))
+                        && yields(other, out)
+                }
+                _ => match literal(e) {
+                    Some(l) => {
+                        out.push(l);
+                        true
+                    }
+                    None => false,
+                },
+            }
+        }
+        let (seed, seed_value) = literal(&args[0].value)?;
+        let t = type_display(target);
+        let (lo, hi) = Self::int_literal_range(target)?;
+        let suffix = |e: &Expr| crate::resolver::TextEdit {
+            offset: e.span.offset + e.span.length,
+            length: 0,
+            replacement: t.clone(),
+        };
+        let mut edits = vec![suffix(seed)];
+        let mut items = Vec::new();
+        let mut at = object.as_ref();
+        while let ExprKind::MethodCall {
+            object: inner,
+            method,
+            args: margs,
+            ..
+        } = &at.kind
+        {
+            if method == "map" && margs.len() == 1 {
+                if let ExprKind::Closure { body, .. } = &margs[0].value.kind {
+                    let mut found = Vec::new();
+                    if yields(body, &mut found) {
+                        items.extend(found);
+                    }
+                }
+            }
+            at = inner;
+        }
+        // With no literal items, the seed is to blame only where the fold
+        // never combines an item into the accumulator: `|a, b| a.max(b)`
+        // over `i64` items is an `i64` fold whatever the seed.
+        if items.is_empty() {
+            let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
+                return None;
+            };
+            let item = params.get(1).map(|p| &p.pattern.kind);
+            match item {
+                Some(crate::ast::PatternKind::Wildcard) => {}
+                Some(crate::ast::PatternKind::Binding(n)) => {
+                    let mut used = false;
+                    crate::provider_escape::walk_expr_exprs(body, &mut |e| {
+                        used |= matches!(&e.kind, ExprKind::Identifier(m) if m == n);
+                    });
+                    if used {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+        let values = std::iter::once(seed_value).chain(items.iter().map(|(_, v)| *v));
+        if values.into_iter().any(|v| v < lo || v > hi) {
+            return None;
+        }
+        edits.extend(items.iter().map(|(e, _)| suffix(e)));
+        let why = if items.is_empty() {
+            format!(
+                "the `fold` seed `{seed_value}` kept the default 'i64', since a method on the \
+                 accumulator does not fix a literal's type (design.md §8 Literals); write \
+                 `{seed_value}{t}`"
+            )
+        } else {
+            format!(
+                "the `fold` seed `{seed_value}` and the literals the `map` yields kept the \
+                 default 'i64', since a method on the accumulator does not fix a literal's \
+                 type (design.md §8 Literals); write each with the suffix `{t}`"
+            )
+        };
+        edits.sort_by_key(|e| e.offset);
+        Some((edits, why))
+    }
+
     pub(super) fn bit_count_casts(
         &self,
         expr: &Expr,
@@ -14606,6 +14751,20 @@ impl<'a> super::TypeChecker<'a> {
                 expr.span,
                 TypeErrorKind::TypeMismatch,
                 fix,
+            );
+            return;
+        }
+        if let Some((edits, why)) = Self::fold_seed_literals(expr, &source, &target) {
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&expr.span), edits);
+            self.type_error(
+                format!(
+                    "implicit coercion from '{}' to '{}' would narrow or change sign: {why}",
+                    type_display(&source),
+                    type_display(&target),
+                ),
+                expr.span,
+                TypeErrorKind::TypeMismatch,
             );
             return;
         }
