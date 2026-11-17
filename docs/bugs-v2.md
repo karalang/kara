@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 453 |
 | false-positive | 246 |
-| missing-feature | 190 |
+| missing-feature | 191 |
 | perf | 183 |
 | other | 112 |
 | soundness | 83 |
@@ -83,7 +83,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 103 |
 | ownership | 99 |
 | interp | 87 |
-| runtime | 84 |
+| runtime | 85 |
 | resolver | 40 |
 | effect | 39 |
 | other | 33 |
@@ -145,7 +145,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-319 | 2026-11-16 | mir-llvm+interp | medium | Stack overflow is not a specified outcome and differs per lane: the interpreter exits 134 with 'fatal runtime error: stack overflow', the -O2 native build turns the recursion into a loop and exits 0 with the answer, and wasm traps with exit 1; the corpus pins 134 | — |
 | B-2026-11-16-322 | 2026-11-16 | mir-llvm | medium | A shift whose amount is an i128 at or above 2^64 does not trap on llvm or wasm: `x << a` with `a: i128 = 1 << 64` returns x unchanged (the amount is cut to its low 64 bits, 0), while the interpreter panics 'shift amount out of range' | — |
 | B-2026-11-16-323 | 2026-11-16 | typecheck+mir | medium | A constant shift whose amount is at least the width (`let y: i8 = 1 << 8;`, `let y: i32 = 1 << 32;`, `let y: u8 = 255 >> 8;`) passes `karac check` and evaluates to 0 on every lane, though the same shift through a variable traps and constant arithmetic out of range is a compile error | — |
-| B-2026-11-16-324 | 2026-11-16 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while design.md §5 says their width is the target's pointer width (32 on wasm32) | — |
 | B-2026-11-16-273 | 2026-11-16 | runtime+mir-llvm | medium | A `TaskGroup.new(limit: 2)` group ran up to four of its tasks at once on the ASan lane, where `spawn` blocks while `n` of its tasks are running (design.md §13 `TaskGroup`) | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
 | B-2026-11-16-340 | 2026-11-16 | typecheck | low | An unsuffixed float literal that a context types as `f32`/`f16`/`bf16` is not range-checked there: `let a: f32 = 1e39;` is accepted as an f32 infinity | — |
@@ -181,11 +180,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-65 | 2026-11-17 | typecheck+mir | medium | A `.hash(mut h)` call written in a program is refused for `F64`, `F32` and `()` (E0516 'hashing this type is not lowered yet') and for `i128`, `u128` and a tuple held in a local (E0236 'no method hash'), though all of them work as Map and Set keys and collections.md lists the bytes F64 feeds; so a hand-written `impl Hash` for a struct with an F64 field cannot delegate to it | — |
 | B-2026-11-17-66 | 2026-11-17 | typecheck+runtime | low | `SipHash13BuildHasher` and `FxBuildHasher` have no `build()` and do not satisfy a `B: BuildHasher` bound, though collections.md calls both 'ordinary BuildHasher types', so a program cannot compute the default hasher's digest or hand either hasher to generic code | — |
 | B-2026-11-17-67 | 2026-11-17 | typecheck | low | `Duration` and `Instant` have no text form: `println(f"took {t.elapsed()}")` is refused E0232 (no Display), Debug is not implemented yet, and time-random-env.md gives no format, so every timing message is written as `{d.as_ms()} ms` by hand | — |
-| B-2026-11-17-68 | 2026-11-17 | runtime | medium | On wasm_wasi, once `Regex.compile` has returned its size-limit error ('Compiled regex exceeds size limit of 10485760 bytes'), the program's next print kills the host: node exits by SIGSEGV (139), though the same program runs to the end on interp, llvm and asan | — |
 | B-2026-11-17-71 | 2026-11-17 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a package or a plain directory, while the same code in one file is fully served; definition of an imported name stops at the import line instead of util.kara | — |
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
 | B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
+| B-2026-11-17-86 | 2026-11-17 | runtime | low | An allocation failure inside a task of an isolating TaskGroup is not contained: it ends the process with exit 101 like any top-level alloc_failure, where core-semantics §11.12 contains a task's panic to its group | — |
 
 ### Relocated
 
@@ -223,6 +222,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-4 | 2026-11-11 | interp | low | The MIR interpreter keeps a `SortedMap` / `SortedSet` as one sorted vector of values, so 100000 inserts of falling keys take 12.7 s under `__mir-run` against 0.32 s rising; the compiled backend moved to a B+-tree at c5303d91b3 |
 | B-2026-11-14-62 | 2026-11-14 | interp | low | `karac __mir-run` runs an iterator chain several times slower than the loop it stands for: a `flat_map` over an inner `map` costs about 2.6 us an item, 7 to 10 times the nested loop, and a `bytes().iter().map(..).collect()` about 1.2 us a byte over an indexed loop; kata 2151's iterator arm takes 94 s against the corpus's 60 s cap |
 | B-2026-11-17-12 | 2026-11-17 | mir-llvm | low | Buffered stdout is lost on a native stack overflow (deliberate: stack exhaustion aborts without flushing, core-semantics §10.1) |
+| B-2026-11-17-68 | 2026-11-17 | runtime | medium | On wasm_wasi under node v22.23.4, a print after `Regex.compile` returned its size-limit error crashed node with SIGSEGV (139): a V8 fast-API GC bug in node's uvwasi fd_write, not ours; the module's memory was verified intact, and `node --no-turbo-fast-api-calls` avoids it |
 
 </details>
 
@@ -1548,6 +1548,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-317 | runtime+mir-llvm+interp | medium | Allocation failure is not a panic: natively it prints `panic: out of memory` / `panic: capacity overflow` and aborts with SIGABRT (exit 134, no `runt… | 268f63b699 |
 | B-2026-11-16-320 | runtime+mir | low | The string-slicing panic text carries a diagnostic-style code (`runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..2 does not fall on… | 1a718ba8ca |
 | B-2026-11-16-321 | other | medium | [doc-only] The library docs give the panic text for only windows, chunks, step_by and the provider-default methods; every other panic message the lan… | 1a718ba8ca |
+| B-2026-11-16-324 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while… | 2d8e3c77c1 |
 | B-2026-11-16-325 | other | low | [doc-only] core-types.md § Parsing does not say which spellings of the special float values `f64.parse` accepts; every lane accepts `inf`, `-inf`, `i… | ada66fb83f |
 | B-2026-11-16-272 | mir | low | When a `par` branch or `par for` iteration leaves early (`?`, `return`), the block's other values dropped in source order, where core-semantics §11.7… | a04638fd9e |
 | B-2026-11-16-326 | mir | high | `<` on a type whose derived ordering reaches itself (`#[derive(PartialEq, PartialOrd)] enum Tree { Leaf(i64), Node(Vec[Tree]) }`) overflows the stack… | a8c99e46a9 |
