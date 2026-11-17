@@ -1,0 +1,1 @@
+ERROR at line 2: `#[derive]` cannot apply to a statement — only the lint-level attributes `#[allow]`, `#[warn]`, `#[deny]` and `#[expect]` are recognised here. Move it onto the enclosing item if it belongs there.

@@ -1,0 +1,5 @@
+fn value() -> i64 { 1 }
+
+fn main() {
+    value() = 2;
+}

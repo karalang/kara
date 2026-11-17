@@ -1,0 +1,9 @@
+#[derive(Default)]
+enum Mode {
+    #[default]
+    Idle,
+    #[default]
+    Busy,
+}
+
+fn main() {}

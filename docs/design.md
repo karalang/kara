@@ -1118,7 +1118,7 @@ let z: f64 = a;       // OK: a binding widens i32 to f64
 | `f32` / `f64` | `iN` / `uN` | **`as` required. Saturates**; see [Float to integer conversion](#float-to-integer-conversion). |
 | `bool` | `iN` / `uN` | **`as` required.** `false` is `0`, `true` is `1`. The reverse (`iN as bool`) is rejected; write `n != 0`. |
 | `char` | `u32` / `i32` and wider (`i64`, `u64`, `i128`, `u128`, `usize`) | **`as` required.** The Unicode scalar value (at most `0x10FFFF`, which fits any of these targets). |
-| `char` | `u8` / `u16` / `i8` / `i16` | **Rejected**: `error[E_CHAR_AS_NARROW_INT]: 'char as uN/iN' for N < 32 is rejected because it truncates the Unicode scalar value's low bits, which is not a meaningful operation; write 'c as u32 as uN' for explicit two-step truncation, or 'c.encode_utf8(buf)' for proper UTF-8 encoding`. The fix offers both. |
+| `char` | `u8` / `u16` / `i8` / `i16` | **Rejected**: `error[E_CHAR_AS_NARROW_INT]: 'char as uN/iN' for N < 32 is rejected because it truncates the Unicode scalar value's low bits, which is not a meaningful operation; write 'c as u32 as uN' for explicit two-step truncation, or 'c.to_string().bytes()' for its UTF-8 bytes`. The fix offers both. |
 | `u8` | `char` | **Allowed**, lossless: every byte value `0..=255` is a Unicode scalar, so `b as char` is the character with that code point, as in Rust (review-thread ruling 2026-11-16). |
 | other `iN` / `uN` | `char` | **Rejected**: `error[E_INT_AS_CHAR]: cannot cast integer to char via 'as': not every integer is a Unicode scalar value (range '0..=0xD7FF \| 0xE000..=0x10FFFF'); use 'char.try_from(n) -> Result[char, CharError]'`. |
 | `f32` / `f64` | `bool` | **Rejected**: meaningless. |
@@ -7174,6 +7174,8 @@ $ karac build --output=json
 **One fix shape.** A machine-applicable fix is a hint whose `diff` names the source lines the fix touches, from `line`: `old` is those lines as they are and `new` is them after the fix, so a fix that edits two lines has one diff over both. Beside the hints, a diagnostic carries the byte-level edits the diffs summarize, the form `karac fix` applies and an editor applies in place: `replacement` `{offset, length, text}` for a fix of one edit, `fix_diff` `[{offset, length, text}, ...]` for a fix of several. Offsets are bytes of the diagnostic's `file`. Every phase, and a package as well as a file, reports a fix in this shape and no other.
 
 Diagnostic codes come from per-phase bands, and every code is catalogued for `karac explain` ([§2](#2-specification-layers)).
+
+**`code` is the most specific code.** Some diagnostics belong to a numbered family and also have a symbolic code of their own: a `char` cast to `u8` is in the cast family `E0210` and is `E_CHAR_AS_NARROW_INT`. Such a record's `code` is the symbolic code, and `parent_code` is the family's number; a record with one code has no `parent_code`. The message does not repeat the code. The text renderer's header names the same code. A tool that groups diagnostics by family reads `parent_code` when it is there and `code` otherwise (review-thread ruling 2026-11-17, B-2026-11-16-303).
 
 #### Diagnostic quality commitments
 

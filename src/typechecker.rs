@@ -6836,7 +6836,7 @@ impl<'a> TypeChecker<'a> {
                      `{}` directly because the Unicode scalar range \
                      (`0..=0x10FFFF`) does not fit in {width} bits; \
                      help: `c as u32 as {}` for explicit truncation, or \
-                     `c.encode_utf8(buf)` for proper UTF-8 encoding",
+                     `c.to_string().bytes()` for its UTF-8 bytes",
                     type_display(to_ty),
                     type_display(to_ty)
                 );

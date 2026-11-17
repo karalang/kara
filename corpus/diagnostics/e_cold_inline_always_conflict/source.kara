@@ -1,0 +1,5 @@
+#[cold]
+#[inline(always)]
+fn rare() {}
+
+fn main() { rare(); }

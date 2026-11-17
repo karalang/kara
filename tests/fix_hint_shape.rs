@@ -55,7 +55,9 @@ fn diagnostics(dir: &Path, mode: &str, args: &[&str]) -> Vec<serde_json::Value> 
 fn the(diags: &[serde_json::Value], code: &str) -> serde_json::Value {
     diags
         .iter()
-        .find(|d| d["code"] == code)
+        // `code` is the most specific code; a numeric one may be its
+        // `parent_code` (design.md §17).
+        .find(|d| d["code"] == code || d["parent_code"] == code)
         .unwrap_or_else(|| panic!("no {code} in {diags:?}"))
         .clone()
 }

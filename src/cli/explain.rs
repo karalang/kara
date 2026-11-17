@@ -2768,6 +2768,147 @@ const CODE_PROSE: &[(&str, &str)] = &[
          it from inside the package, create one with `karac init`, or name \
          a single file: `karac check main.kara`.",
     ),
+    // B-2026-11-16-303: symbolic codes reported as their own JSON code.
+    (
+        "E_DEFAULT_ATTRIBUTE_INVALID_POSITION",
+        "`#[default]` is on something other than an enum variant (design.md \
+         § `Default` and `#[default]`). The attribute picks which unit \
+         variant `#[derive(Default)]` returns, so it means nothing on a \
+         function, struct or field. Remove it; for a struct, \
+         `#[derive(Default)]` builds each field's default.",
+    ),
+    (
+        "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE",
+        "A variant is marked `#[default]`, but its enum does not derive \
+         `Default` (design.md § `Default` and `#[default]`). The marker \
+         only tells the derive which variant to return, so without the \
+         derive it does nothing. Add `#[derive(Default)]` to the enum, as \
+         the message suggests, or remove the marker.",
+    ),
+    // B-2026-11-16-303: symbolic codes of the attribute, Default-derive, cast
+    // and place families, each pinned under corpus/diagnostics.
+    (
+        "E_AMBIGUOUS_ASSOC_TYPE",
+        "A projection `T.Name` names one associated type, but two traits \
+         bounding `T` each declare `Name` (`T: Add + Mul` and `T.Output`), \
+         so the compiler cannot tell which trait's type is meant (design.md \
+         § Associated types). Fix the type on each bound instead, `T: \
+         Add[Output = T]`, or, when it must stay open, name it with a \
+         generic parameter: `fn f[T: Add[Output = A] + Mul[Output = M], A, \
+         M](...)` and write `A` or `M` where `T.Output` was.",
+    ),
+    (
+        "E_ASSIGN_TARGET_NOT_PLACE",
+        "The left side of `=` (or of a compound assignment such as `+=`) \
+         must name a place that holds a value: a binding, a field `p.x`, an \
+         index `v[i]`, a tuple element `t.0`, or a dereference `*r`. A \
+         function call, a literal or any other computed value is a \
+         temporary with nowhere to store the result. Bind the value first \
+         (`let mut x = value(); x = 2;`), or assign to the place the call \
+         was meant to reach.",
+    ),
+    (
+        "E_ATTR_ON_ASSOC_TYPE_DECL",
+        "An associated-type declaration in a trait (`type Item;`) takes no \
+         attributes in 0.8: none of the attributes the language defines \
+         applies to it, so one written there would be silently ignored. \
+         Remove the attribute; a `///` doc comment above the declaration is \
+         the way to document it.",
+    ),
+    (
+        "E_ATTRIBUTE_NOT_VALID_ON_STATEMENT",
+        "Inside a function body only the lint-level attributes \
+         (`#[allow(...)]`, `#[warn(...)]`, `#[deny(...)]`, \
+         `#[expect(...)]`) apply to a statement; they change the lint level \
+         for that statement alone. Every other attribute (`#[derive]`, \
+         `#[test]`, `#[repr]`, ...) belongs on an item, so move it onto the \
+         declaration it was meant for. A loop's own attribute, \
+         `#[par_order_free]`, goes directly before `for`, `while` or \
+         `loop`.",
+    ),
+    (
+        "E_BARE_TRAIT_TYPE",
+        "A trait's name is not a type. A value of some type that implements \
+         the trait, chosen at run time, is written `dyn Shape` (design.md § \
+         `dyn Trait`); a parameter whose type is known at the call site \
+         takes `impl Shape` or a generic `[T: Shape]` and is compiled once \
+         per type with no indirection. Pick `dyn` when values of different \
+         types share one collection or field, and a generic otherwise.",
+    ),
+    (
+        "E_CHAR_AS_NARROW_INT",
+        "`as` from `char` to an integer narrower than 32 bits (`u8`, `u16`, \
+         `i8`, `i16`) is refused, because a Unicode scalar value runs to \
+         0x10FFFF and the cast would keep only its low bits, which names no \
+         meaningful character (design.md § `as` casts). Write `c as u32 as u8` \
+         when the low bits are really what you want; for an ASCII literal \
+         write the byte literal (`b'#'`), which `karac fix` does for you; \
+         for the character's UTF-8 encoding use `c.to_string().bytes()`.",
+    ),
+    (
+        "E_CODEGEN_HINT_INVALID_POSITION",
+        "The codegen hints `#[inline]`, `#[inline(always)]`, \
+         `#[inline(never)]` and `#[cold]` shape how a function is compiled, \
+         so they go only on a named function: a free `fn`, an \
+         inherent or trait-impl method, a trait method \
+         declaration, an `extern \"C\" fn` \
+         definition, or a `Drop` destructor. On a struct, enum, impl block, \
+         const or any other item there is no function to apply it to. To \
+         hint every method of an `impl`, annotate each method; a \
+         block-level shorthand is not in 0.8.",
+    ),
+    (
+        "E_CODEGEN_HINT_ON_CLOSURE",
+        "A codegen hint (`#[inline]`, `#[inline(always)]`, \
+         `#[inline(never)]`, `#[cold]`) cannot be written on a closure: the \
+         hints attach to named functions. A closure passed to a \
+         closure-typed parameter is already inlined by the dispatch \
+         lowering, so the hint would add nothing. If you need control over \
+         a closure's body, move it into a named `fn` and put the hint \
+         there.",
+    ),
+    (
+        "E_CODEGEN_HINT_ON_EXTERN_DECL",
+        "A foreign-function declaration inside an `unsafe extern \"C\" { \
+         ... }` block has no Kāra body, only a symbol the linker finds \
+         elsewhere, so there is nothing to inline or to mark cold. Remove \
+         the hint. A Kāra function exported to C, written `extern \"C\" fn \
+         name(...) { ... }` with a body, does take one.",
+    ),
+    (
+        "E_COLD_INLINE_ALWAYS_CONFLICT",
+        "`#[cold]` says a function rarely runs and should be kept out of \
+         the hot path; `#[inline(always)]` says to copy its body into every \
+         caller. The two contradict each other, so the pair is refused \
+         rather than one silently winning. Keep `#[cold]` alone (optionally \
+         with `#[inline(never)]`, which agrees with it), or drop `#[cold]` \
+         if the function is on a hot path after all.",
+    ),
+    (
+        "E_DEFAULT_MULTIPLE_VARIANTS",
+        "`#[derive(Default)]` on an enum makes `Mode.default()` return the \
+         variant marked `#[default]`, so exactly one variant may carry the \
+         marker; here several do, and the compiler will not guess which you \
+         meant. Keep the marker on the variant that is the starting state \
+         and remove the others.",
+    ),
+    (
+        "E_DEFAULT_NO_VARIANT_MARKED",
+        "`#[derive(Default)]` on an enum needs to know which variant \
+         `default()` returns, and nothing about an enum makes one variant \
+         the obvious start. Mark exactly one field-less variant with \
+         `#[default]`; for a struct the derive needs no marker, since each \
+         field takes its own type's default.",
+    ),
+    (
+        "E_DEFAULT_VARIANT_HAS_PAYLOAD",
+        "The variant marked `#[default]` must have no fields: the derive \
+         builds it with no inputs, and choosing a value for a payload \
+         (`Busy(0)`? `Busy(-1)`?) is a decision the program should state. \
+         Mark a field-less variant instead, or drop the derive and write \
+         `impl Mode { fn default() -> Mode { Mode.Busy(0) } }` with the \
+         starting value you want.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the

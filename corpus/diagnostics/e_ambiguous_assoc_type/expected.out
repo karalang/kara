@@ -1,0 +1,1 @@
+ERROR at line 1: `T.Output` is ambiguous: `Add` and `Mul` on 'T' each declare `Output`, and a projection names one trait's type (design.md § Associated types). Fix each on its bound instead, `Add[Output = A0]`; when the type must stay open, name it with a type parameter: `T: Add[Output = A0] + Mul[Output = A1]` with `A0, A1` among the generic parameters

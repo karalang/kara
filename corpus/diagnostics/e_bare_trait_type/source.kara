@@ -1,0 +1,5 @@
+trait Shape { fn area(self) -> f64; }
+
+fn total(s: Shape) -> f64 { s.area() }
+
+fn main() {}

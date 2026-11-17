@@ -93,7 +93,7 @@ def code_only(src: str) -> str:
 
 def tags_for(src: str, diags: list[dict], legacy_exit) -> list[str]:
     tags = [name for name, rx in SYNTAX_TAGS if rx.search(src)]
-    codes = {d.get("code") for d in diags}
+    codes = {d.get("code") for d in diags} | {d.get("parent_code") for d in diags}
     if legacy_exit == 101:
         tags.append("panic")
     if codes & {"E0500", "N0503"}:

@@ -1,0 +1,1 @@
+ERROR at line 3: `Shape` is a trait, not a type; a value of any type that implements it is written `dyn Shape` (design.md § `dyn Trait`), and a parameter can also take `impl Shape` or a generic `[T: Shape]`

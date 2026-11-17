@@ -485,6 +485,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- A diagnostic record's `code` is now its most specific code. When the
+  message opens with a symbolic code (`error[E_CHAR_AS_NARROW_INT]: ...`),
+  that code is `code`, the tag leaves the message, and the kind's numeric
+  code moves to a new `parent_code` field, present only when the two
+  differ. The `symbol` field that carried the tag is gone. A tool that
+  keys on `code` sees new values for these diagnostics; match `code` or
+  `parent_code` to accept either (design.md § 17, B-2026-11-16-303).
 - A plain `karac build` targets `x86-64-v2` on x86_64 (Linux and macOS),
   `generic` `+v8a,+outline-atomics` on aarch64 Linux and `apple-m1` on
   aarch64 macOS, as design.md § CPU baseline's table says. 0.8.1 defaulted

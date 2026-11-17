@@ -1,0 +1,1 @@
+ERROR at line 2: `#[default]` on variant `Idle` requires the enclosing enum `Mode` to carry `#[derive(Default)]` — add `#[derive(Default)]` to enum `Mode`.

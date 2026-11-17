@@ -308,7 +308,7 @@ def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template,
         fixed, legacy_interp = None, None
         if expect.startswith("error"):
             want = expect.split(":", 1)[1] if ":" in expect else ""
-            codes = [e.get("code") for e in errs]
+            codes = [e.get("code") for e in errs] + [e.get("parent_code") for e in errs]
             if errs and (want in ("", "codegen") or want in codes):
                 return {**out, "class": "a", "bucket": "a:refused"}
             # A refusal under another code is not the recorded rule: run.py

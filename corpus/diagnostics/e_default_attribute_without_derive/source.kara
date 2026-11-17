@@ -1,0 +1,7 @@
+enum Mode {
+    #[default]
+    Idle,
+    Busy,
+}
+
+fn main() {}

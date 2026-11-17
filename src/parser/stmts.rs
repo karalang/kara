@@ -879,9 +879,13 @@ impl super::Parser {
         let defer_to_expression_path = matches!(
             self.peek_token_ref(),
             Token::While | Token::For | Token::Loop
-        ) || attributes
-            .iter()
-            .any(|a| a.is_par_order_free() || a.codegen_hint_name().is_some());
+        ) || attributes.iter().any(|a| a.is_par_order_free())
+            // A codegen hint before a closure keeps its own message; before
+            // a `let` or another statement it is a misplaced attribute like
+            // any other (B-2026-11-16-303: `#[inline] let` was told it was
+            // on a loop expression).
+            || (attributes.iter().any(|a| a.codegen_hint_name().is_some())
+                && !self.is_statement_start());
         if defer_to_expression_path {
             self.pos = saved;
             return self.parse_expression_statement();

@@ -87,7 +87,10 @@ fn a_duplicate_lint_level_has_its_own_code() {
     let src = "#[allow(deprecated, deprecated)]\nfn f() {}\nfn main() { f(); }\n";
     let (code, out, _) = karac(&["check", "--output=json"], "dup", src);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("\"code\":\"E0006\""), "{out}");
+    assert!(
+        out.contains("\"code\":\"E_DUPLICATE_LINT_LEVEL\",\"parent_code\":\"E0006\""),
+        "{out}"
+    );
 }
 
 #[test]

@@ -951,16 +951,20 @@ pub(super) fn late_failure_json(f: &MultiFileLateFailure) -> Vec<String> {
     f.diags
         .iter()
         .map(|d| {
+            let (code, parent_code, message) = super::specific_code(d.code, &d.message);
+            let parent = parent_code
+                .map(|p| format!("\"parent_code\":{},", json_string(p)))
+                .unwrap_or_default();
             format!(
-                "{{\"severity\":{},\"code\":{},\"phase\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+                "{{\"severity\":{},\"code\":{},{parent}\"phase\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
                 json_string(d.severity),
-                json_string(d.code),
+                json_string(code),
                 json_string(&f.phase),
                 json_string(super::explain::concept_for(&f.phase, "", None, None)),
                 json_string(d.file.as_deref().unwrap_or("")),
                 d.line,
                 d.column,
-                json_string(&d.message),
+                json_string(message),
             )
         })
         .collect()

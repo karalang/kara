@@ -161,7 +161,11 @@ def check_codes(entry: Path, args) -> list:
     r = subprocess.run([args.karac, "check", "--output=json", "source.kara"], cwd=entry,
                        capture_output=True, timeout=args.timeout, stdin=subprocess.DEVNULL)
     try:
-        return [d.get("code") or d.get("phase") for d in json.loads(r.stdout).get("diagnostics", [])]
+        # A record's `parent_code` is the numeric code of its kind when `code`
+        # is a more specific symbolic one; an entry may expect either.
+        diags = json.loads(r.stdout).get("diagnostics", [])
+        return [d.get("code") or d.get("phase") for d in diags] + [
+            d["parent_code"] for d in diags if d.get("parent_code")]
     except json.JSONDecodeError:
         return []
 

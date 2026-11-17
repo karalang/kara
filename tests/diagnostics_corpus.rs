@@ -33,7 +33,10 @@ fn diagnostics_corpus_programs_produce_their_code_and_are_explained() {
     for dir in &dirs {
         let code = dir.file_name().unwrap().to_str().unwrap().to_uppercase();
         let json = karac(dir, &["check", "--output=json", "source.kara"]);
-        if !json.contains(&format!("\"code\":\"{code}\"")) {
+        // A numeric code may be the `parent_code` of a more specific one.
+        if !json.contains(&format!("\"code\":\"{code}\""))
+            && !json.contains(&format!("\"parent_code\":\"{code}\""))
+        {
             bad.push(format!(
                 "{code}: `karac check` no longer reports it:\n{json}"
             ));

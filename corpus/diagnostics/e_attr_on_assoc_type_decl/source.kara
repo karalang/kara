@@ -1,0 +1,6 @@
+trait Container {
+    #[doc(hidden)]
+    type Item;
+}
+
+fn main() {}

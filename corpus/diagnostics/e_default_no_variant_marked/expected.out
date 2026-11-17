@@ -1,0 +1,1 @@
+ERROR at line 2: #[derive(Default)] on enum 'Mode' requires exactly one variant to be marked with #[default]; add it to the variant that represents the starting state

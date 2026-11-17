@@ -1,0 +1,1 @@
+ERROR at line 2: attributes are not supported on associated-type declarations in 0.8; remove the attribute

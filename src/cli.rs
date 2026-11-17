@@ -3867,6 +3867,21 @@ fn split_embedded_code_line(line: &str) -> Option<(&str, &str, &str)> {
 /// A diagnostic message without the `error[E_NAME]: ` it opens with, and
 /// that code: the JSON carries the code in `symbol` and the message
 /// without it (B-2026-11-08-41).
+/// The code a diagnostic record carries, its `parent_code` and its message:
+/// a message that opens with a symbolic code (`error[E_X]: ...`) gives `E_X`
+/// as the code, without the tag, and the kind's own code as the parent when
+/// the two differ. Otherwise the kind's code, no parent, the message as is.
+pub(crate) fn specific_code<'a>(
+    kind_code: &'a str,
+    message: &'a str,
+) -> (&'a str, Option<&'a str>, &'a str) {
+    match strip_embedded_code(message) {
+        (Some(symbol), rest) if symbol != kind_code => (symbol, Some(kind_code), rest),
+        (Some(_), rest) => (kind_code, None, rest),
+        (None, _) => (kind_code, None, message),
+    }
+}
+
 pub(crate) fn strip_embedded_code(message: &str) -> (Option<&str>, &str) {
     if let Some(after) = message.strip_prefix("error[E_") {
         if let Some(close) = after.find("]: ") {

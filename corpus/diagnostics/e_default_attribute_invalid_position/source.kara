@@ -1,0 +1,4 @@
+#[default]
+fn helper() {}
+
+fn main() { helper(); }

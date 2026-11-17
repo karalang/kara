@@ -1,0 +1,1 @@
+ERROR at line 2: #[derive(Default)] on enum 'Mode' requires exactly one variant marked with #[default]; found markers on 'Idle' and 'Busy'

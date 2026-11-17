@@ -1,0 +1,5 @@
+fn combine[T: Add + Mul](a: own T, b: own T) -> T.Output {
+    a + b
+}
+
+fn main() {}

@@ -1,0 +1,1 @@
+ERROR at line 3: cannot cast `char` to `u8` directly because the Unicode scalar range (`0..=0x10FFFF`) does not fit in 8 bits; help: `c as u32 as u8` for explicit truncation, or `c.to_string().bytes()` for its UTF-8 bytes

@@ -1479,18 +1479,21 @@ impl DiagnosticJson {
     }
 
     fn add(&mut self, d: DiagEntry<'_>) {
-        // The spec's symbolic code a message opens with goes in `symbol`,
-        // and the message without it (B-2026-11-08-41).
-        let (symbol, message) = super::strip_embedded_code(d.message);
-        let symbol = symbol
-            .map(|s| format!("\"symbol\":{},", json_string(s)))
+        // `code` is the most specific code the diagnostic has: the spec's
+        // symbolic code a message opens with (`error[E_X]: ...`), which
+        // leaves the message, and the kind's numeric code then goes in
+        // `parent_code` (design.md § 17; review-thread ruling 2026-11-17 on
+        // B-2026-11-16-303).
+        let (code, parent_code, message) = super::specific_code(d.code, d.message);
+        let parent = parent_code
+            .map(|p| format!("\"parent_code\":{},", json_string(p)))
             .unwrap_or_default();
         let mut entry = format!(
-            "{{\"id\":{},\"severity\":{},\"primary\":true,\"phase\":{},\"code\":{},{symbol}\"category\":{},\"concept\":{},{},\"message\":{}",
+            "{{\"id\":{},\"severity\":{},\"primary\":true,\"phase\":{},\"code\":{},{parent}\"category\":{},\"concept\":{},{},\"message\":{}",
             json_string(d.id),
             json_string(d.severity),
             json_string(d.phase),
-            json_string(d.code),
+            json_string(code),
             json_string(d.category),
             json_string(super::explain::concept_for(
                 d.phase,
