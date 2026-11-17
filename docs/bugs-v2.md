@@ -185,8 +185,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-74 | 2026-11-17 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike every other typed-reader error | — |
 | B-2026-11-17-76 | 2026-11-17 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts any move as taking the value, so `pub fn maybe(l: own L, keep: bool) -> Option[L] { if keep { return Some(l); } None }` needs no `with writes(Stdout)` though it prints `drop 1` when keep is false | — |
 | B-2026-11-17-86 | 2026-11-17 | runtime | low | An allocation failure inside a task of an isolating TaskGroup is not contained: it ends the process with exit 101 like any top-level alloc_failure, where core-semantics §11.12 contains a task's panic to its group | — |
-| B-2026-11-17-90 | 2026-11-17 | typecheck | medium | A method's argument does not widen into its parameter's type: `best.max(a)` with `best: i64` and `a: i32` is refused ("`max` expects an argument of type `i64`, got `i32`"), though a free function's argument widens | — |
-| B-2026-11-17-91 | 2026-11-17 | typecheck | low | A fold seed's literal gets no reason and no suffix fix: in `fold((arr[0], 0, arr[0]), |(keep, del, best), x| ..)` over `i32`s, `best.max(keep).max(del)` is refused with only "expects `i32`, got `i64`" | — |
 
 ### Relocated
 
@@ -1613,6 +1611,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-77 | typecheck | medium | `Point.make()` where two traits `Point` implements each declare `make` (no self) is accepted and silently runs the first impl; design.md § Associated… | ba28831243 |
 | B-2026-11-17-80 | typecheck+mir | medium | Iterators have no `cycle` (`backends.iter().cycle()`, `(0..n).cycle().take(k)`): it is refused as "no method 'cycle' on type 'VecIter'", and 11 legac… | 050b42435e |
 | B-2026-11-17-85 | typecheck+mir | medium | core-semantics §3-§7 refusals that do not name both places or carry the fix the doc implies: E0516 live-borrow conflicts give no borrow or use positi… | 6610db8471 |
+| B-2026-11-17-90 | typecheck | medium | A method's argument does not widen into its parameter's type: `best.max(a)` with `best: i64` and `a: i32` is refused ("`max` expects an argument of t… | 06cb75e7f0 |
+| B-2026-11-17-91 | typecheck | low | A fold seed's literal gets no reason and no suffix fix: in `fold((arr[0], 0, arr[0]), \|(keep, del, best), x\| ..)` over `i32`s, `best.max(keep).max(de… | 06cb75e7f0 |
 
 </details>
 
