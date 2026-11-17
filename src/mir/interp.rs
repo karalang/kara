@@ -1108,6 +1108,15 @@ impl From<String> for Stop {
 
 type R<T> = Result<T, Stop>;
 
+/// `env.set`'s panic for a name or value no environment can hold.
+const ENV_SET_INVALID: &str = "env.set: invalid variable name or value";
+
+/// Can the environment hold `name=value`? Not with an empty name, an `=` in
+/// the name, or a NUL in either: Rust's `set_var` panics on each.
+fn env_settable(name: &str, value: &str) -> bool {
+    !name.is_empty() && !name.contains(['=', '\0']) && !value.contains('\0')
+}
+
 fn err<T>(msg: impl Into<String>) -> R<T> {
     Err(Stop::Error(msg.into()))
 }
@@ -2063,12 +2072,22 @@ impl<'a> Interp<'a> {
                     return err(format!("{name} takes a name and a value"));
                 };
                 let (n, v) = (self.string_at(n)?, self.string_at(v)?);
-                std::env::set_var(n, v);
-                // Owned `String`s given by value drop here.
+                // A name or value no environment can hold panics as a
+                // program's panic, where Rust's `set_var` would abort
+                // karac itself (time-random-env.md § env, B-2026-11-17-59).
+                let settable = env_settable(&n, &v);
+                if settable {
+                    std::env::set_var(n, v);
+                }
+                // Owned `String`s given by value drop here, before a panic too.
                 for (a, t) in args.iter().zip(arg_tys) {
                     if matches!(a, Value::Box(_)) {
                         self.drop_value(a.clone(), *t)?;
                     }
+                }
+                if !settable {
+                    self.panic_message = Some(ENV_SET_INVALID.to_string());
+                    return self.native_panic();
                 }
                 Ok(Value::Unit)
             }

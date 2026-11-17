@@ -1412,6 +1412,11 @@ pub unsafe extern "C" fn karac_runtime_env_set(
         } else {
             std::slice::from_raw_parts(val_ptr, val_len)
         };
+        // A name or value no environment can hold sets nothing, where
+        // `set_var` would panic (B-2026-11-17-59).
+        if name.is_empty() || name.contains(&b'=') || name.contains(&0) || val.contains(&0) {
+            return;
+        }
         let name = std::str::from_utf8_unchecked(name);
         let val = std::str::from_utf8_unchecked(val);
         std::env::set_var(name, val);

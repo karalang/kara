@@ -1989,21 +1989,29 @@ pub extern "C" fn karac_mir_rand_next() -> u64 {
     })
 }
 
-/// `Env.set(name, value)`.
+/// `Env.set(name, value)`: 1 once set, 0 (setting nothing) for a name or
+/// value no environment can hold, an empty name, an `=` in the name or a
+/// NUL in either, on which the caller panics with `env.set: invalid
+/// variable name or value` (time-random-env.md § env, B-2026-11-17-59):
+/// Rust's `set_var` panicked there, outside any Kāra panic.
 ///
 /// # Safety
 /// `p` and `v` are readable for `n` and `vn` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_env_set(p: *const u8, n: u64, v: *const u8, vn: u64) {
+pub unsafe extern "C" fn karac_mir_env_set(p: *const u8, n: u64, v: *const u8, vn: u64) -> u8 {
     let n = n as usize;
     let vn = vn as usize;
     // SAFETY: the caller's contract.
     let (name, val) = unsafe { (bytes(p, n), bytes(v, vn)) };
+    if name.is_empty() || name.contains(&b'=') || name.contains(&0) || val.contains(&0) {
+        return 0;
+    }
     if let (Ok(name), Ok(val)) = (std::str::from_utf8(name), std::str::from_utf8(val)) {
         // SAFETY: the program runs its environment edits on one thread,
         // as the interpreter does.
         unsafe { std::env::set_var(name, val) };
     }
+    1
 }
 
 /// `f64.total_cmp` (`f32` when `narrow`): -1, 0 or 1. Every NaN orders

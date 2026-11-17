@@ -1359,8 +1359,15 @@ impl<'ctx> Cx<'ctx, '_> {
             ("Env", "set") if args.len() == 2 => {
                 let (p, n) = self.str_parts(&args[0])?;
                 let (v, vn) = self.str_parts(&args[1])?;
-                self.rt("env_set", &[p.into(), n.into(), v.into(), vn.into()])?;
-                self.drop_moved(args)
+                let set = self.rt_u8("env_set", &[p.into(), n.into(), v.into(), vn.into()])?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, set, set.get_type().const_zero(), "")
+                    .map_err(e)?;
+                // The runtime keeps neither text, so they drop before the
+                // panic as after the set.
+                self.drop_moved(args)?;
+                self.abort_unless(ok, "env.set: invalid variable name or value")
             }
             ("f64" | "f32", "total_cmp") if args.len() == 2 => {
                 // `Less`, `Equal` or `Greater` by the IEEE total order.

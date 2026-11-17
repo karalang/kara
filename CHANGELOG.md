@@ -597,6 +597,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   other multi-byte character in column 1 past what it read, as serde_json
   does, and a bare variant name for a variant with a payload says which
   shape it expected (B-2026-11-17-43).
+- `env.set` with an empty name, an `=` in the name or a NUL in either
+  argument panics with `env.set: invalid variable name or value`; it
+  aborted karac itself under `karac run`, and a built program died by
+  SIGSEGV with its buffered output lost (B-2026-11-17-59).
 - `<` on a type whose derived ordering reaches itself
   (`enum Tree { Leaf(i64), Node(Vec[Tree]) }`) overflowed the stack in
   `karac check` and every backend (B-2026-11-16-326).
