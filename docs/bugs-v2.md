@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 477 |
+| diagnostics | 480 |
 | false-positive | 253 |
 | missing-feature | 194 |
 | perf | 187 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 601 |
+| typecheck | 602 |
 | mir-llvm | 285 |
 | mir | 249 |
 | cli | 193 |
-| parser | 109 |
-| ownership | 103 |
+| parser | 110 |
+| ownership | 104 |
 | interp | 87 |
 | runtime | 87 |
 | resolver | 43 |
@@ -126,6 +126,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-132 | 2026-11-17 | mir | high | A view stored through a `Mutex` in a field is accepted, and later reads see whatever the place holds then: a `Holder[ref i64]` (or a generic `sync struct BoundedBlockingQueue[T: CrossTask]` whose `T` is inferred as `ref i64`) filled by `h.put(v)` over `mine.iter()` in an inner scope prints `3 3` for the first two values, not `1 0` | — |
 | B-2026-11-17-133 | 2026-11-17 | typecheck | medium | A struct's type parameter left open inside `Mutex.new(..)` is never fixed by a later call: `let h = Holder { values: Mutex.new(VecDeque.new()) }; h.put(5)` stops at lowering with "an expression whose type does not lower (Type(UnknownParam(\"T\"))) is not lowered yet" [E0516], where `Holder { values: VecDeque.new() }` takes `T = i64` from the same `put` | — |
 | B-2026-11-17-134 | 2026-11-17 | mir-llvm | low | A `Map` insert or remove is a runtime call of about 110 to 130 Ir (kata 220: mir_map::insert 1.45G, remove_slot 1.72G over 13M each) where hashbrown's inline insert and erase take about 75; kata 220 still runs 11.71G Ir against Rust's 9.15G | — |
+| B-2026-11-17-135 | 2026-11-17 | ownership | low | Moving a field out of an `own` `shared struct` parameter reports borrow_projection_copy ("`h` ... does not own it") instead of E_SHARED_FIELD_MOVE, so the message blames a borrow the program does not have | — |
+| B-2026-11-17-136 | 2026-11-17 | parser | low | A range-pattern bound that is an expression (`0..=(1 + 2) =>`) gets E_RANGE_PATTERN_BOUND_NOT_SIMPLE and then a spurious E0002 "Expected expression" at the end of the `match` | — |
+| B-2026-11-17-137 | 2026-11-17 | typecheck | low | Two `impl Grid[3]` blocks defining one method render the const-generic target as `Grid[Array[(), 3]]` in E0240, a type the program never wrote | — |
 
 ### Relocated
 
