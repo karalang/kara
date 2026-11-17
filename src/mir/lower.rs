@@ -30559,6 +30559,12 @@ const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
     "Env",
     "Clock",
     "RandomSource",
+    // The prelude's enums, which library bodies match on (`Some(..)`,
+    // `Ok(..)`) and the compiler spells for `?` and `get`: a program's own
+    // `struct Option` shadows the prelude's for the program alone
+    // (design.md § The prelude), never for the library (B-2026-11-17-37).
+    "Option",
+    "Result",
 ];
 
 /// `src` with each of its own top-level types named like one the compiler
