@@ -3207,6 +3207,10 @@ pub(crate) fn resolve_error_code(kind: &crate::resolver::ResolveErrorKind) -> &'
         crate::resolver::ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
         crate::resolver::ResolveErrorKind::TestOutsideTestFile => "E_TEST_OUTSIDE_TEST_FILE",
         crate::resolver::ResolveErrorKind::MalformedAttributeArgs => "E_MALFORMED_ATTRIBUTE_ARGS",
+        crate::resolver::ResolveErrorKind::TestAttributeInvalidTarget => {
+            "E_TEST_ATTR_INVALID_TARGET"
+        }
+        crate::resolver::ResolveErrorKind::TestRequiresInvalid => "E_TEST_REQUIRES",
     }
 }
 

@@ -1004,6 +1004,13 @@ pub enum ResolveErrorKind {
     /// attribute accepts no arguments. Mapped to
     /// `E_MALFORMED_ATTRIBUTE_ARGS`.
     MalformedAttributeArgs,
+    /// `#[test(...)]` on a `fn` rather than a `test` block (design.md §14
+    /// Testing; B-2026-11-17-15). Mapped to `E_TEST_ATTR_INVALID_TARGET`.
+    TestAttributeInvalidTarget,
+    /// An `R` of `#[test(requires: [R, ..])]` that is not a program-rooted
+    /// resource: provider-rooted, or not a resource at all (core-semantics
+    /// §14.13; B-2026-11-16-284). Mapped to `E_TEST_REQUIRES`.
+    TestRequiresInvalid,
 }
 
 /// True for NOTE-severity resolve diagnostics — rendered `warning[resolve]`,
@@ -1573,6 +1580,136 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// `#[test(...)]` belongs on a `test` block (design.md §14 Testing),
+    /// and each `R` of its `requires: [..]` must be program-rooted
+    /// (core-semantics §14.13, "an error otherwise, naming R"). Both are
+    /// reported at the user's attribute: before this, a provider-rooted `R`
+    /// surfaced as `E0419` inside the generated test harness, an undeclared
+    /// one skipped the case as `unsatisfied_requires`, and the attribute on a
+    /// plain `fn` passed silently (B-2026-11-16-284, B-2026-11-17-15). A
+    /// package's test blocks reach here lowered to `__test_*` functions that
+    /// keep their attributes.
+    fn check_test_attributes(&mut self) {
+        let program = self.program;
+        for item in &program.items {
+            let (attrs, is_test) = match item {
+                Item::TestCase(tc) => (&tc.attributes, true),
+                Item::Function(f) => (&f.attributes, f.name.starts_with("__test_")),
+                _ => continue,
+            };
+            for attr in attrs.iter().filter(|a| a.is_bare("test")) {
+                if !is_test {
+                    self.errors.push(ResolveError {
+                        message: "error[E_TEST_ATTR_INVALID_TARGET]: `#[test(...)]` is not valid \
+                                  on a `fn`: it configures a `test \"name\" { .. }` block, the \
+                                  only form `karac test` runs (design.md §14 Testing)"
+                            .to_string(),
+                        span: attr.span,
+                        kind: ResolveErrorKind::TestAttributeInvalidTarget,
+                        suggestion: Some(
+                            "write the test as a `test \"name\" { .. }` block in a `_test.kara` \
+                             file, with the attribute on it"
+                                .to_string(),
+                        ),
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                    continue;
+                }
+                for arg in &attr.args {
+                    if arg.name.as_deref() != Some("requires") {
+                        continue;
+                    }
+                    let Some(ExprKind::ArrayLiteral(elems)) = arg.value.as_ref().map(|v| &v.kind)
+                    else {
+                        continue;
+                    };
+                    for elem in elems {
+                        let Some(path) = attribute_dotted_path(elem) else {
+                            continue;
+                        };
+                        self.check_test_requirement(&path, elem.span);
+                    }
+                }
+            }
+        }
+    }
+
+    /// One `R` of `#[test(requires: [..])]`: `db.UserDB` names the resource
+    /// `UserDB` of the module `db`; a bare `UserDB` is looked up in this
+    /// module, then in the package's other modules, then in the library.
+    fn check_test_requirement(&mut self, path: &[String], span: Span) {
+        let (name, prefix) = path.split_last().expect("a path has a segment");
+        let shown = path.join(".");
+        let find = |items: &[Item]| {
+            items.iter().find_map(|i| match i {
+                Item::EffectResource(r) if r.name == *name => Some(r.default.is_some()),
+                _ => None,
+            })
+        };
+        let mut rooted = None;
+        if prefix.is_empty() {
+            rooted = find(&self.program.items);
+            if rooted.is_none() {
+                if let Some(tree) = self.tree {
+                    rooted = tree
+                        .modules
+                        .iter()
+                        .filter(|m| !m.is_synthetic)
+                        .find_map(|m| find(&m.items));
+                }
+            }
+            if rooted.is_none() && crate::typechecker::library_provider_trait(name).is_some() {
+                rooted = Some(true);
+            }
+        } else if let Some(tree) = self.tree {
+            rooted = tree
+                .modules
+                .iter()
+                .filter(|m| !m.is_synthetic && m.path.as_slice() == prefix)
+                .find_map(|m| find(&m.items));
+        }
+        let (message, suggestion) = match rooted {
+            Some(true) => return,
+            Some(false) => (
+                format!(
+                    "error[E_TEST_REQUIRES]: `#[test(requires: [{shown}])]` names `{shown}`, \
+                     which is provider-rooted: it has no default provider, so a test that ran \
+                     would have nothing to use for it (core-semantics §14.13 requires a \
+                     program-rooted resource)"
+                ),
+                format!(
+                    "bind a fake with `#[with_provider({shown}, ..)]` instead, or give \
+                     `{name}` a default provider (`effect resource {name}: .. = ..;`) if the \
+                     test should use the real one"
+                ),
+            ),
+            None => (
+                format!(
+                    "error[E_TEST_REQUIRES]: `#[test(requires: [{shown}])]` names `{shown}`, \
+                     which is not a resource: no `effect resource {name}` is declared{}",
+                    if prefix.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" in the module `{}`", prefix.join("."))
+                    }
+                ),
+                "name a program-rooted resource: one declared with a default provider, \
+                 or one of the library's (`Env`, `Clock`, `RandomSource`, `FileSystem`, \
+                 `Network`, `Stdout`, `Stderr`, `Stdin`)"
+                    .to_string(),
+            ),
+        };
+        self.errors.push(ResolveError {
+            message,
+            span,
+            kind: ResolveErrorKind::TestRequiresInvalid,
+            suggestion: Some(suggestion),
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+
     /// See [`Self::user_operator_impls`].
     pub fn with_user_operator_impls(mut self, on: bool) -> Self {
         self.user_operator_impls = on;
@@ -1615,6 +1752,9 @@ impl<'a> Resolver<'a> {
             ));
         // Pass 1.9: `test` blocks outside a `_test.kara` file.
         self.report_misplaced_tests();
+        // Pass 1.10: `#[test(...)]` on a non-test item, and every `R` of a
+        // `#[test(requires: [R, ..])]` naming a program-rooted resource.
+        self.check_test_attributes();
         // Pass 2: resolve all bodies
         self.resolve_items();
         // Pass 3: now that every reference has resolved, decide which of
@@ -2881,3 +3021,17 @@ const RC_REFCELL_HELP: &str = "`Rc` and `RefCell` are Rust's: Kāra has neither.
      is reference counted, and its `mut` fields can be written through any handle (design.md \
      §11), so `Rc<RefCell<T>>` is a `T` declared `shared struct` with `mut` fields, \
      `Rc::new(RefCell::new(x))` is `x`, and `.borrow()` / `.borrow_mut()` are the handle itself";
+
+/// `db.UserDB` or `UserDB` as written in an attribute argument.
+fn attribute_dotted_path(expr: &Expr) -> Option<Vec<String>> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(vec![name.clone()]),
+        ExprKind::Path { segments, .. } if !segments.is_empty() => Some(segments.clone()),
+        ExprKind::FieldAccess { object, field } => {
+            let mut path = attribute_dotted_path(object)?;
+            path.push(field.clone());
+            Some(path)
+        }
+        _ => None,
+    }
+}

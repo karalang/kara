@@ -210,6 +210,15 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::TestCase(t) => {
             visit(&t.span);
             visit(&t.name_span);
+            for a in &t.attributes {
+                visit(&a.span);
+                for arg in &a.args {
+                    visit(&arg.span);
+                    if let Some(v) = &arg.value {
+                        visit_expr(v, visit);
+                    }
+                }
+            }
             visit_block(&t.body, visit);
         }
         Item::AliasDecl(a) => visit(&a.span),
@@ -1604,6 +1613,18 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
         Item::TestCase(t) => {
             visit.span(&mut t.span);
             visit.span(&mut t.name_span);
+            // A case's `#[test(requires: [R])]` is checked, and reported at
+            // `R` (B-2026-11-16-284): its spans move with the case when a
+            // test companion is merged past its sibling.
+            for a in &mut t.attributes {
+                visit.span(&mut a.span);
+                for arg in &mut a.args {
+                    visit.span(&mut arg.span);
+                    if let Some(v) = &mut arg.value {
+                        walk_expr_mut(v, visit);
+                    }
+                }
+            }
             visit_block_spans_mut(&mut t.body, visit);
         }
         Item::AliasDecl(a) => visit.span(&mut a.span),

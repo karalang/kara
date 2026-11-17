@@ -8917,6 +8917,21 @@ fn test_test_helpers_alongside_test_cases_in_same_file() {
     assert!(pass[0].contains("\"test\":\"helpers compose\""));
 }
 
+/// `src/<module>.kara` declaring each name as a program-rooted resource
+/// (one with a default provider), which is what `#[test(requires: [R])]`
+/// must name (core-semantics §14.13, B-2026-11-16-284).
+fn write_rooted_resources(tmp: &std::path::Path, module: &str, names: &[&str]) {
+    let mut src = String::from(
+        "pub trait Probe {\n    fn up(ref self) -> bool;\n}\n\
+         pub struct Real {}\n\
+         impl Probe for Real {\n    fn up(ref self) -> bool { true }\n}\n",
+    );
+    for name in names {
+        src.push_str(&format!("pub effect resource {name}: Probe = Real {{}};\n"));
+    }
+    write(&tmp.join(format!("src/{module}.kara")), &src);
+}
+
 #[test]
 fn test_test_block_form_requires_skips_when_env_var_unset() {
     // Slice 4 lifts `#[test(requires=[...])]` extraction onto
@@ -8927,16 +8942,17 @@ fn test_test_block_form_requires_skips_when_env_var_unset() {
     let tmp = scratch_project("test-block-requires-skip");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write_rooted_resources(&tmp, "karac_blockreq_skipcase", &["FakeDb"]);
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires: [karac_blockreq_skipcase.fake_db])]\n\
+        "#[test(requires: [karac_blockreq_skipcase.FakeDb])]\n\
          test \"needs db\" { assert(false); }\n",
     );
 
     let out = karac_bin()
         .current_dir(&tmp)
         .arg("test")
-        .env_remove("KARA_RESOURCE_KARAC_BLOCKREQ_SKIPCASE_FAKE_DB")
+        .env_remove("KARA_RESOURCE_KARAC_BLOCKREQ_SKIPCASE_FAKEDB")
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -8994,18 +9010,19 @@ fn test_test_requires_skips_when_resource_unavailable() {
     let tmp = scratch_project("test-requires-skip");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write_rooted_resources(&tmp, "karac_slice2_skipcase", &["FakeDb"]);
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires: [karac_slice2_skipcase.fake_db])]\ntest \"needs db\" { assert(false); }\n",
+        "#[test(requires: [karac_slice2_skipcase.FakeDb])]\ntest \"needs db\" { assert(false); }\n",
     );
 
-    // Env var KARA_RESOURCE_KARAC_SLICE2_SKIPCASE_FAKE_DB is unset; the
+    // Env var KARA_RESOURCE_KARAC_SLICE2_SKIPCASE_FAKEDB is unset; the
     // assertion in the body is unreachable because the test must be
     // skipped before execution. Exit 0 since skips don't fail by default.
     let out = karac_bin()
         .current_dir(&tmp)
         .arg("test")
-        .env_remove("KARA_RESOURCE_KARAC_SLICE2_SKIPCASE_FAKE_DB")
+        .env_remove("KARA_RESOURCE_KARAC_SLICE2_SKIPCASE_FAKEDB")
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -9017,7 +9034,7 @@ fn test_test_requires_skips_when_resource_unavailable() {
         .find(|l| event_kind(l) == Some("test_skip"))
         .unwrap_or_else(|| panic!("expected a test_skip line; got: {lines:?}"));
     assert!(skip.contains("\"reason\":\"unsatisfied_requires\""));
-    assert!(skip.contains("\"resources\":[\"karac_slice2_skipcase.fake_db\"]"));
+    assert!(skip.contains("\"resources\":[\"karac_slice2_skipcase.FakeDb\"]"));
     assert!(skip.contains("\"test\":\"needs db\""));
     let summary = lines.last().unwrap();
     assert!(summary.contains("\"skipped\":1"));
@@ -9030,15 +9047,16 @@ fn test_test_requires_runs_when_env_var_set() {
     let tmp = scratch_project("test-requires-runs");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write_rooted_resources(&tmp, "karac_slice2_runcase", &["FakeDb"]);
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires: [karac_slice2_runcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_runcase.FakeDb])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     let out = karac_bin()
         .current_dir(&tmp)
         .arg("test")
-        .env("KARA_RESOURCE_KARAC_SLICE2_RUNCASE_FAKE_DB", "1")
+        .env("KARA_RESOURCE_KARAC_SLICE2_RUNCASE_FAKEDB", "1")
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -9064,19 +9082,20 @@ fn test_test_requires_health_check_overrides_env_var() {
     let tmp = scratch_project("test-requires-healthcheck");
     write(
         &tmp.join("kara.toml"),
-        "[package]\nname = \"demo\"\n\n[test.resources]\n\"karac_slice2_healthcase.fake_db\" = \"false\"\n",
+        "[package]\nname = \"demo\"\n\n[test.resources]\n\"karac_slice2_healthcase.FakeDb\" = \"false\"\n",
     );
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write_rooted_resources(&tmp, "karac_slice2_healthcase", &["FakeDb"]);
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires: [karac_slice2_healthcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_healthcase.FakeDb])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     // env var IS set — but the failing health-check should take precedence.
     let out = karac_bin()
         .current_dir(&tmp)
         .arg("test")
-        .env("KARA_RESOURCE_KARAC_SLICE2_HEALTHCASE_FAKE_DB", "1")
+        .env("KARA_RESOURCE_KARAC_SLICE2_HEALTHCASE_FAKEDB", "1")
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -9094,19 +9113,20 @@ fn test_test_requires_health_check_success_runs_test() {
     let tmp = scratch_project("test-requires-healthok");
     write(
         &tmp.join("kara.toml"),
-        "[package]\nname = \"demo\"\n\n[test.resources]\n\"karac_slice2_healthok.fake_db\" = \"true\"\n",
+        "[package]\nname = \"demo\"\n\n[test.resources]\n\"karac_slice2_healthok.FakeDb\" = \"true\"\n",
     );
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write_rooted_resources(&tmp, "karac_slice2_healthok", &["FakeDb"]);
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires: [karac_slice2_healthok.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_healthok.FakeDb])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     // No env var set — only the (passing) health check matters.
     let out = karac_bin()
         .current_dir(&tmp)
         .arg("test")
-        .env_remove("KARA_RESOURCE_KARAC_SLICE2_HEALTHOK_FAKE_DB")
+        .env_remove("KARA_RESOURCE_KARAC_SLICE2_HEALTHOK_FAKEDB")
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -9124,17 +9144,18 @@ fn test_test_requires_partial_satisfied_lists_only_missing() {
     let tmp = scratch_project("test-requires-partial");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write_rooted_resources(&tmp, "karac_slice2_partial", &["HaveA", "MissB"]);
     // Two requires; A is set in env, B is not. Skip event must list only B.
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires: [karac_slice2_partial.have_a, karac_slice2_partial.miss_b])]\ntest \"needs both\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_partial.HaveA, karac_slice2_partial.MissB])]\ntest \"needs both\" { assert(true); }\n",
     );
 
     let out = karac_bin()
         .current_dir(&tmp)
         .arg("test")
-        .env("KARA_RESOURCE_KARAC_SLICE2_PARTIAL_HAVE_A", "1")
-        .env_remove("KARA_RESOURCE_KARAC_SLICE2_PARTIAL_MISS_B")
+        .env("KARA_RESOURCE_KARAC_SLICE2_PARTIAL_HAVEA", "1")
+        .env_remove("KARA_RESOURCE_KARAC_SLICE2_PARTIAL_MISSB")
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -9145,11 +9166,11 @@ fn test_test_requires_partial_satisfied_lists_only_missing() {
         .find(|l| event_kind(l) == Some("test_skip"))
         .unwrap_or_else(|| panic!("expected test_skip; got: {lines:?}"));
     assert!(
-        skip.contains("\"resources\":[\"karac_slice2_partial.miss_b\"]"),
-        "missing-only list should contain only miss_b; got: {skip}",
+        skip.contains("\"resources\":[\"karac_slice2_partial.MissB\"]"),
+        "missing-only list should contain only MissB; got: {skip}",
     );
     assert!(
-        !skip.contains("have_a"),
+        !skip.contains("HaveA"),
         "satisfied resource should not appear in missing list; got: {skip}",
     );
 }
@@ -9159,15 +9180,16 @@ fn test_test_all_promotes_skip_to_failure() {
     let tmp = scratch_project("test-all-flag");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write_rooted_resources(&tmp, "karac_slice2_allcase", &["FakeDb"]);
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires: [karac_slice2_allcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
+        "#[test(requires: [karac_slice2_allcase.FakeDb])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     let out = karac_bin()
         .current_dir(&tmp)
         .args(["test", "--all"])
-        .env_remove("KARA_RESOURCE_KARAC_SLICE2_ALLCASE_FAKE_DB")
+        .env_remove("KARA_RESOURCE_KARAC_SLICE2_ALLCASE_FAKEDB")
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -9182,7 +9204,7 @@ fn test_test_all_promotes_skip_to_failure() {
         .find(|l| event_kind(l) == Some("test_fail"))
         .unwrap_or_else(|| panic!("expected test_fail under --all; got: {lines:?}"));
     assert!(fail.contains("\"reason\":\"unsatisfied_requires\""));
-    assert!(fail.contains("\"resources\":[\"karac_slice2_allcase.fake_db\"]"));
+    assert!(fail.contains("\"resources\":[\"karac_slice2_allcase.FakeDb\"]"));
     assert!(
         lines.iter().all(|l| event_kind(l) != Some("test_skip")),
         "no test_skip events should be emitted under --all; got: {lines:?}",

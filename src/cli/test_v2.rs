@@ -306,9 +306,12 @@ fn combine(tree: &ProgramTree, tests: &[DiscoveredTest]) -> Result<Amalgam, Stri
         let name = ident(&t.fn_name);
         let texts = ctors.get(&name).cloned().unwrap_or_default();
         let mut body = String::new();
+        // `with_provider` takes its provider by move (core-semantics
+        // §14.4), so the binding is not `mut`: a `mut` one drew
+        // `unused_mut` at `<generated>` (B-2026-11-16-284).
         for (i, text) in texts.iter().enumerate() {
             body.push_str(&format!(
-                "    let mut __karac_p{i} = {text};\n    eprintln(\"{PROVIDER_READY}\");\n"
+                "    let __karac_p{i} = {text};\n    eprintln(\"{PROVIDER_READY}\");\n"
             ));
         }
         let mut call = format!("{name}();");

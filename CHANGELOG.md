@@ -20,6 +20,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- Each `R` of `#[test(requires: [R])]` must be a program-rooted resource
+  (core-semantics §14.13), and the error is `E_TEST_REQUIRES` at `R` in the
+  test file. A provider-rooted `R` failed with E0419 at `<generated>` inside
+  the test harness, and an undeclared one silently skipped the case as
+  `unsatisfied_requires`. `#[test(...)]` on a plain `fn` is
+  `E_TEST_ATTR_INVALID_TARGET`; it passed and did nothing. The harness's own
+  `#[with_provider]` binding no longer draws `unused_mut` (B-2026-11-16-284,
+  B-2026-11-17-15).
 - A package that imports a dependency of one of its dependencies without
   declaring it (`app` depends on `mid`, `mid` on `lib`, and `app` writes
   `import lib.f;`) is refused, E0112, naming the manifest to add it to; a

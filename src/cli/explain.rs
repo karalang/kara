@@ -1054,6 +1054,11 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E_MALFORMED_ATTRIBUTE_ARGS",
         res("MalformedAttributeArgs", None),
     ),
+    (
+        "E_TEST_ATTR_INVALID_TARGET",
+        res("TestAttributeInvalidTarget", None),
+    ),
+    ("E_TEST_REQUIRES", res("TestRequiresInvalid", None)),
     ("E_EXTERN_REF_PARAM", ty("ExternSignatureInvalid", None)),
     ("E_EXTERN_REF_RETURN", ty("ExternSignatureInvalid", None)),
     (
