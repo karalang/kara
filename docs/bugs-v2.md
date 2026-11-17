@@ -59,13 +59,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 432 |
-| false-positive | 235 |
+| false-positive | 236 |
 | missing-feature | 182 |
 | perf | 180 |
-| other | 88 |
+| other | 91 |
 | miscompile | 76 |
 | soundness | 76 |
-| run-vs-build | 51 |
+| run-vs-build | 53 |
 | crash | 39 |
 | codegen-gap | 33 |
 | leak | 4 |
@@ -76,17 +76,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 554 |
-| mir-llvm | 275 |
+| typecheck | 555 |
+| mir-llvm | 277 |
 | mir | 231 |
 | cli | 184 |
 | parser | 96 |
 | ownership | 91 |
-| interp | 85 |
-| runtime | 58 |
+| interp | 86 |
+| runtime | 59 |
 | resolver | 38 |
 | effect | 36 |
-| other | 31 |
+| other | 33 |
 | codegen | 22 |
 | autopar | 6 |
 | lexer | 1 |
@@ -169,6 +169,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-3 | 2026-11-17 | other | low | [doc-only] strings.md does not say what the empty pattern does for find, contains, starts_with, ends_with, split, splitn, split_once, rsplit_once, strip_prefix/suffix and replace, nor design.md §3 what `+` and `0` do to NaN and inf; all lanes follow Rust (`"ab".split("")` is ["", "a", "b", ""], `split_once("")` is ("", s), `replace("", x)` inserts at every char boundary, `{nan:+}` is `NaN`, `{inf:08.2}` is `00000inf`) | — |
 | B-2026-11-17-4 | 2026-11-17 | mir | medium | VecDeque.with_capacity(n) and try_with_capacity(n) with n < 0 panic "explicit panic" on all three lanes; collections.md says cap < 0 counts as 0, as for Vec | — |
 | B-2026-11-17-6 | 2026-11-17 | typecheck | low | rev on a chain, flat_map or open range says only "no method 'rev' on type 'IterChain'" (or IterFlatMap, RangeFrom); skip-over-range rev explains the missing bound | — |
+| B-2026-11-17-7 | 2026-11-17 | typecheck | medium | impl From[VarError] for IoError disappears from a program that also uses From[NetError] for IoError: `?` on env.var inside a function that also `?`s a socket is refused, the case io.md names as the reason both impls exist | — |
+| B-2026-11-17-8 | 2026-11-17 | runtime | low | wasm_wasi: an empty path "" names the preopened directory: fs.exists("") is true, read_to_string("") fails EBADF and fs.write("", ..) fails EISDIR, where native and interp say not found / false | — |
+| B-2026-11-17-9 | 2026-11-17 | other | low | [doc-only] io.md is silent on wasm_wasi file behaviour: set_permissions and symlink return Unsupported, metadata.mode is 0o444 for a file the program just wrote, and Other messages carry WASI errno numbers | — |
+| B-2026-11-17-11 | 2026-11-17 | interp+mir-llvm | low | stdin.lines() goes on past an invalid-UTF-8 line (yields Err, then the next line) while BufReader.lines() ends at its first error by the 11-16 ruling; io.md gives stdin.lines no rule | — |
+| B-2026-11-17-12 | 2026-11-17 | mir-llvm | low | Buffered stdout is lost on a native stack overflow: `print("s")` then unbounded recursion prints s under the interpreter but nothing from the llvm build (stdout to a pipe); follow-up to B-2026-11-16-319 | — |
 
 ### Relocated
 
@@ -1514,6 +1519,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-309 | typecheck | low | A default naming an earlier parameter gets a duplicate 'not a known const' error, or only 'undefined name' once the function is called | b31d77e15a |
 | B-2026-11-16-325 | other | low | [doc-only] core-types.md § Parsing does not say which spellings of the special float values `f64.parse` accepts; every lane accepts `inf`, `-inf`, `i… | ada66fb83f |
 | B-2026-11-17-5 | other | low | [doc-only] collections.md and iterators.md leave negative counts unspecified: Vec/VecDeque.truncate(-1) clears, take(-1) is empty, skip(-1) yields al… | 038ed5c65d |
+| B-2026-11-17-10 | other | low | [doc-only] io.md says read_lines "drops a trailing \r from each line", but a final line "a\r" (and a lone "\r") keeps it on all three lanes, as Rust'… | bf357e8030 |
 
 </details>
 
