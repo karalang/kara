@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 85 |
 | miscompile | 81 |
 | run-vs-build | 55 |
-| crash | 48 |
+| crash | 49 |
 | codegen-gap | 35 |
 | use-after-free | 10 |
 | leak | 4 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 602 |
-| mir-llvm | 285 |
+| mir-llvm | 286 |
 | mir | 249 |
 | cli | 193 |
 | parser | 110 |
@@ -1656,6 +1656,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-124 | mir-llvm | low | FIXED for the get side (a lookup helper inlines, kata 220 13.98G to 11.71G Ir); insert/remove and probe width remain as B-2026-11-17-134 | a6581f8672 |
 | B-2026-11-17-126 | mir | low | An iterator adaptor or terminal called straight on a Set, SortedSet, Map or SortedMap (`s.difference(t).cloned()`, `sorted.map(..)`) got no machine f… | 85459908b12962ac0dcccbc6e464861568361a42 |
 | B-2026-11-17-128 | cli | high | `karac fix` applies `redundant_suffix` and `lossless_cast` in one pass and narrows an `i64` table: `vec![vec![0i64; n]; m]` with `t[i][j] = x as i64`… | d3c2716a19 |
+| B-2026-11-17-138 | mir-llvm | low | Dropping a deep `shared` n-ary tree (`kids: Vec[N]`), a trie (`kids: Map[K, N]`) or a node whose handles sit inside a plain struct field (`items: Vec… | 7606280ba7 |
 
 </details>
 
