@@ -63,10 +63,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 182 |
 | perf | 181 |
 | other | 91 |
-| soundness | 79 |
-| miscompile | 76 |
+| soundness | 80 |
+| miscompile | 77 |
 | run-vs-build | 53 |
-| crash | 40 |
+| crash | 41 |
 | codegen-gap | 33 |
 | use-after-free | 9 |
 | leak | 4 |
@@ -77,13 +77,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 563 |
-| mir-llvm | 278 |
-| mir | 233 |
+| mir-llvm | 279 |
+| mir | 235 |
 | cli | 185 |
 | ownership | 99 |
 | parser | 96 |
 | interp | 86 |
-| runtime | 59 |
+| runtime | 60 |
 | resolver | 38 |
 | effect | 38 |
 | other | 33 |
@@ -110,7 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-16-201 | 2026-11-16 | mir-llvm | high | A plain karac build targets x86-64-v3 (AVX2) on x86_64 and +v8.4a on aarch64 Linux, against design.md § CPU baseline's table (x86-64; generic +v8a,+outline-atomics) and its contract that a default build runs on every CPU the triple promises | — |
-| B-2026-11-16-254 | 2026-11-16 | typecheck | medium | `drop(x)` of a captured outer value inside a `par` branch is refused as a move out of a borrowed place, while passing it to an `own` parameter or moving it with `let` in the same branch is accepted | — |
 | B-2026-11-16-255 | 2026-11-16 | typecheck | medium | Prefix collection literals `Vec[1, 2]`, `Set[1, 2]`, `Map["a": 1]`, `Array[0; 4]` are accepted with no diagnostic, though design.md §5 says there is no `Vec[...]` or `Set[...]` prefix literal; book ch09 teaches all four | — |
 | B-2026-11-16-256 | 2026-11-16 | typecheck | low | `effect group io = reads(FileSystem) + writes(FileSystem) + reads(Env);` checks with no diagnostic, though effect groups are deferred (design.md scope list, deferred.md §Effect Groups); book ch11 teaches it as current | — |
 | B-2026-11-16-257 | 2026-11-16 | parser | medium | A module-level `layout swarm: Vec[Particle] { group hot { x, y } cold { name } }` is accepted but binds nothing (`swarm` in main is E0100 undefined), and inside a function it is a parse error; layout blocks are deferred and `layout` is not a keyword in v1 (design.md line 279), yet book ch15 teaches them as working | — |
@@ -118,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-260 | 2026-11-16 | typecheck | low | `struct HTTPClient` checks with no diagnostic; design.md CN-4 says Type names treat acronyms as words (`HttpClient`, not `HTTPClient`) but does not say whether that is an error or a lint, and book ch02 lists it among the compile errors | — |
 | B-2026-11-16-261 | 2026-11-16 | typecheck | low | `#[noblock]` and `@noblock` on an extern fn are accepted, though neither is in design.md's attribute table (an unknown bare attribute is E_UNKNOWN_ATTRIBUTE and `@` is not attribute syntax), and the attribute no longer does what appendix D says since an extern with no `with` clause has every effect | — |
 | B-2026-11-16-262 | 2026-11-16 | typecheck | low | `#[derive(Display(...))]` accepts any argument silently: `Display(bogus_arg)` and appendix C's `Display(all_fields)` check and change nothing, while design.md names only the casing argument (`Display(snake_case)`, enums) | — |
-| B-2026-11-16-274 | 2026-11-16 | autopar | medium | Auto-par refuses to run parallax_lite's three provider writes (`record_a(); record_b(); record_c();`, writes(MetricsA/B/C)) as tasks, calling the provider borrows conflicting, while a written `par { record_a(), record_b(), record_c() }` over the same calls checks and runs 2.7x faster | — |
 | B-2026-11-16-275 | 2026-11-16 | runtime | low | The HTTP server labels every response `content-type: application/json` whatever the body: the README's own `Server.serve` example answers `/hello` as JSON, and the shortener's 302 and plain-text usage page carry it too; library/io.md does not say so | — |
 | B-2026-11-16-282 | 2026-11-16 | cli | medium | `karac run --example <NAME>` compiles a project example's src/main.kara as a lone file, so 6 of the 9 project examples fail (E0207, E0200, E0516 'a type that failed to check is not lowered yet') although `karac run` inside each package works | — |
 | B-2026-11-16-283 | 2026-11-16 | cli | medium | `karac run --output=json` on a program whose `main` returns `Err` prints two separate JSON objects on stdout (`{"error":"boom"}` then `{"error_return_trace":[...]}`), so the output is not one JSON document, and neither matches design.md §17's error-return-trace shape | — |
@@ -157,6 +155,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-322 | 2026-11-16 | mir-llvm | medium | A shift whose amount is an i128 at or above 2^64 does not trap on llvm or wasm: `x << a` with `a: i128 = 1 << 64` returns x unchanged (the amount is cut to its low 64 bits, 0), while the interpreter panics 'shift amount out of range' | — |
 | B-2026-11-16-323 | 2026-11-16 | typecheck+mir | medium | A constant shift whose amount is at least the width (`let y: i8 = 1 << 8;`, `let y: i32 = 1 << 32;`, `let y: u8 = 255 >> 8;`) passes `karac check` and evaluates to 0 on every lane, though the same shift through a variable traps and constant arithmetic out of range is a compile error | — |
 | B-2026-11-16-324 | 2026-11-16 | mir-llvm+runtime | medium | On wasm_wasi `isize` and `usize` are 64-bit (`usize.MAX` is 18446744073709551615, `(-1i32) as usize` is 2^64-1, shifts by 32..63 are in range), while design.md §5 says their width is the target's pointer width (32 on wasm32) | — |
+| B-2026-11-16-273 | 2026-11-16 | runtime+mir-llvm | medium | A `TaskGroup.new(limit: 2)` group ran up to four of its tasks at once on the ASan lane, where `spawn` blocks while `n` of its tasks are running (design.md §13 `TaskGroup`) | — |
 | B-2026-11-17-1 | 2026-11-17 | typecheck+runtime | medium | An f-string width has no upper bound below 2^64: `f"{n:10000000000000000000}"` passes `karac check`; the native build then grows memory until the OOM killer ends it (or aborts 'panic: out of memory', exit 134, at width 4294967296), and the interpreter aborts with Rust's 'memory allocation of N bytes failed' and a backtrace | — |
 | B-2026-11-17-2 | 2026-11-17 | parser | low | A `#` flag in a format spec (`{n:#x}`, `{n:#b}`) is refused as 'unsupported type `#` (expected one of x, X, o, b, d)', and `{n:+-5}` as 'unsupported type `-`', though neither is a type: the message should say the alternate form (`#`) is not in v1, or name the misplaced flag | — |
 | B-2026-11-17-3 | 2026-11-17 | other | low | [doc-only] strings.md does not say what the empty pattern does for find, contains, starts_with, ends_with, split, splitn, split_once, rsplit_once, strip_prefix/suffix and replace, nor design.md §3 what `+` and `0` do to NaN and inf; all lanes follow Rust (`"ab".split("")` is ["", "a", "b", ""], `split_once("")` is ("", s), `replace("", x)` inserts at every char boundary, `{nan:+}` is `NaN`, `{inf:08.2}` is `00000inf`) | — |
@@ -187,6 +186,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-31 | 2026-11-17 | typecheck | low | `match x { }` on a `Never` scrutinee is refused E0205 "pattern `_` not covered", though design.md calls it the one well-formed empty match; also E0514's partial-move message still cites the removed "RC fallback" | — |
 | B-2026-11-17-32 | 2026-11-17 | ownership | high | Full matrix for B-2026-11-17-26/-28: any borrow reached through a handle-typed field (direct, nested shared-in-shared at either level, or a shared enum) is freed when the field is replaced through another handle; 37 of 99 cells use after free on interp and ASan, across ref, element ref, for, iter, slice match, if let, while let, bare Vec/element arguments, closure ref capture, a receiver or dyn param inside a replaced parent, and replacement via a local alias, a method, a closure or an upgraded weak | — |
 | B-2026-11-17-33 | 2026-11-17 | mir | medium | A struct pattern on a shared struct with a Drop body (`match a.child { C { items } => .. }`) passes `karac check`, then MIR typecheck refuses it on every lane ('this pattern moves `items` out of `C`, which has its own impl Drop'); a shared scrutinee's part bindings are refs, so nothing moves | — |
+| B-2026-11-17-35 | 2026-11-17 | mir | high | A `Drop` body that reaches a suspension point (`sleep`, a channel `recv`, a `Mutex.lock`) passes check, then every lane fails: interp 'call of unknown function Slow.drop', build 'error[mir]: llvm: no body named `Slow.drop`'. This holds in plain `main`, in a task, in a Vec's elements, and in a cancellation teardown | — |
 
 ### Relocated
 
@@ -1516,6 +1516,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-251 | typecheck | low | Text where bytes are wanted (`fn f(b: Slice[u8])` called with a `String` or `Str`, a child process's `stdin.write(text)`) is refused with "expected '… | 84c49b5431 |
 | B-2026-11-16-252 | typecheck+cli | medium | A `par` block written as statements whose tail computes from its `let`s (`let total = par { let a = f(); let b = g(); a + b };`) is refused (core-sem… | 84c49b5431 |
 | B-2026-11-16-253 | interp | medium | On AArch64 (macOS CI) the MIR interpreter refused an `extern "C"` call whose arguments fill more than six integer registers ("8 integer and 0 float a… | 54a14fdd6b |
+| B-2026-11-16-254 | typecheck | medium | `drop(x)` of a captured outer value inside a `par` branch is refused as a move out of a borrowed place, while passing it to an `own` parameter or mov… | a04638fd9e |
 | B-2026-11-16-259 | typecheck | low | [doc-only] `b as char` with `b: u8` is accepted and gives the character, while design.md §5's cast table rejected every integer to char cast and book… | af808ebfb9 |
 | B-2026-11-16-263 | other | medium | [doc-only] Book ch01, ch03 and appendix A still teach pre-D5 parameter modes: `name: String` 'owned by default', `karac explain greet` suggesting `re… | af808ebfb9 |
 | B-2026-11-16-264 | other | medium | [doc-only] Book ch04, ch10 and appendix B teach a pipe operator `\|>`, which design.md line 369 says does not exist (the compiler refuses it with E052… | af808ebfb9 |
@@ -1526,6 +1527,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-269 | other | low | [doc-only] Book ch18 says `#[repr(C)]` structs do not cross an import yet, but a libc `div` returning `#[repr(C)] struct DivT { quot: i32, rem: i32 }… | af808ebfb9 |
 | B-2026-11-16-270 | other | low | [doc-only] Appendix A and C are stale: `use` listed as a keyword (it is not one), `dyn` 'not yet implemented' (it works), `defer` '(success path)' (i… | af808ebfb9 |
 | B-2026-11-16-271 | other | low | [doc-only] Book code blocks that emit warnings on `karac check`: undocumented_unsafe (appendix D lines 63 and 114), redundant_suffix (ch02 line 79 `0… | af808ebfb9 |
+| B-2026-11-16-274 | autopar | medium | Auto-par refuses to run parallax_lite's three provider writes (`record_a(); record_b(); record_c();`, writes(MetricsA/B/C)) as tasks, calling the pro… | ec237045da |
 | B-2026-11-16-276 | other | low | [doc-only] README's `karac fix archive.kara` transcript says 'applied 1 fix(es)', but the fix applies 3 (the example's two `.to_string()` calls are r… | 614211f7ff |
 | B-2026-11-16-277 | other | medium | [doc-only] README's Performance section is stale against the kara-katas feed it cites: it says 444 programs, 21 over 2x Rust and worst #163 at 10.2x;… | 614211f7ff |
 | B-2026-11-16-278 | other | medium | [doc-only] Eight examples a visitor will try do not build on 0.8 and their READMEs do not say so: interop/ (exported C ABI), fathom, plume, iris and… | 614211f7ff |
@@ -1539,6 +1541,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-308 | parser | low | A float range pattern `0.0..=1.0` is a parse error at `..=`, not the spec's 'float ranges are not supported' | b31d77e15a |
 | B-2026-11-16-309 | typecheck | low | A default naming an earlier parameter gets a duplicate 'not a known const' error, or only 'undefined name' once the function is called | b31d77e15a |
 | B-2026-11-16-325 | other | low | [doc-only] core-types.md § Parsing does not say which spellings of the special float values `f64.parse` accepts; every lane accepts `inf`, `-inf`, `i… | ada66fb83f |
+| B-2026-11-16-272 | mir | low | When a `par` branch or `par for` iteration leaves early (`?`, `return`), the block's other values dropped in source order, where core-semantics §11.7… | a04638fd9e |
 | B-2026-11-17-5 | other | low | [doc-only] collections.md and iterators.md leave negative counts unspecified: Vec/VecDeque.truncate(-1) clears, take(-1) is empty, skip(-1) yields al… | 038ed5c65d |
 | B-2026-11-17-10 | other | low | [doc-only] io.md says read_lines "drops a trailing \r from each line", but a final line "a\r" (and a lone "\r") keeps it on all three lanes, as Rust'… | bf357e8030 |
 | B-2026-11-17-34 | typecheck | low | A chained pipe `4 \|> f \|> g` reports E0520 'there is no pipe operator' twice, once per `\|>`, where one error for the chain is enough | 614211f7ff |
