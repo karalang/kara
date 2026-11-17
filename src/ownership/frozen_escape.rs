@@ -186,7 +186,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{types::Type, TypeCheckResult};
 
-use super::frozen_freeze_site::FreezeSite;
+use super::frozen_freeze_site::{FreezeSite, NotUnique};
 use super::{OwnershipError, OwnershipErrorKind};
 
 /// Why a particular use was rejected. Selects the diagnostic wording; each
@@ -274,6 +274,10 @@ struct Cx<'a, 't> {
     /// user has extended is not treated as a builtin by the `len`/`is_empty`
     /// exception, so no user body can receive the handle through it.
     user_impl_types: HashSet<String>,
+    /// The program declares a provider-rooted resource (`effect resource R:
+    /// Tr;`): a function may then return a handle its provider holds, which
+    /// no argument shows, so no call result is fresh ([`fresh_call`]).
+    user_providers: bool,
     /// True while walking a closure body. A reference to a frozen parameter
     /// there is a CAPTURE into an environment that can outlive the call, so
     /// the two permitted positions are suppressed — reading a scalar field
@@ -972,6 +976,10 @@ fn collect_frozen_escapes<'a>(
         used_names: HashSet::new(),
         place_bound: HashSet::new(),
         user_impl_types: collect_user_impl_types(program),
+        user_providers: program.items.iter().any(|i| {
+            matches!(i, Item::EffectResource(r)
+                if !r.provider_bounds.is_empty() && r.default.is_none())
+        }),
         in_closure: false,
         aliases: HashSet::new(),
         sources: HashSet::new(),
@@ -1352,7 +1360,7 @@ fn walk_fresh_insert_into_field<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) -> bool {
     }
     if !args
         .iter()
-        .all(|a| !a.mut_marker && holds_no_handle(&a.value, cx.tc))
+        .all(|a| !a.mut_marker && holds_no_handle(&a.value, cx.tc, !cx.user_providers))
     {
         return false;
     }
@@ -1364,7 +1372,7 @@ fn walk_fresh_insert_into_field<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) -> bool {
 
 /// An expression that can hold no handle to an existing value: a literal, a
 /// composite literal of such, arithmetic on them, or a `Copy` local.
-fn holds_no_handle(e: &Expr, tc: &TypeCheckResult) -> bool {
+fn holds_no_handle(e: &Expr, tc: &TypeCheckResult, calls: bool) -> bool {
     match &e.kind {
         ExprKind::Integer(..)
         | ExprKind::Float(..)
@@ -1374,16 +1382,28 @@ fn holds_no_handle(e: &Expr, tc: &TypeCheckResult) -> bool {
         | ExprKind::Bool(_) => true,
         ExprKind::Identifier(_) => tc.expr_type(e).is_some_and(super::is_copy_type_basic),
         ExprKind::Binary { left, right, .. } => {
-            holds_no_handle(left, tc) && holds_no_handle(right, tc)
+            holds_no_handle(left, tc, calls) && holds_no_handle(right, tc, calls)
         }
-        ExprKind::Unary { operand, .. } => holds_no_handle(operand, tc),
+        ExprKind::Unary { operand, .. } => holds_no_handle(operand, tc, calls),
         ExprKind::Tuple(es)
         | ExprKind::ArrayLiteral(es)
         | ExprKind::PrefixCollectionLiteral { items: es, .. } => {
-            es.iter().all(|x| holds_no_handle(x, tc))
+            es.iter().all(|x| holds_no_handle(x, tc, calls))
         }
         ExprKind::StructLiteral { fields, spread, .. } => {
-            spread.is_none() && fields.iter().all(|f| holds_no_handle(&f.value, tc))
+            spread.is_none() && fields.iter().all(|f| holds_no_handle(&f.value, tc, calls))
+        }
+        // A function item called with only such arguments: everything its
+        // result reaches was made by the call (`r.kids.push(leaf(2))`,
+        // B-2026-11-17-27). Not in a program with a provider-rooted
+        // resource, whose provider may hand a function a handle (`calls`).
+        ExprKind::Call { callee, args } => {
+            calls
+                && matches!(callee.kind, ExprKind::Identifier(_))
+                && tc.fn_item_spans.contains(&SpanKey::from_span(&callee.span))
+                && args
+                    .iter()
+                    .all(|a| !a.mut_marker && holds_no_handle(&a.value, tc, calls))
         }
         _ => false,
     }
@@ -1676,15 +1696,32 @@ fn try_admit_frozen_freeze<'a>(
     // (`freeze holder.node`) is never unique — the owner `holder` is a second
     // live handle to the instance's container by construction, and proving
     // otherwise is the interprocedural analysis this stage exists to avoid.
-    let uniquely_bound = matches!(&value.kind, ExprKind::Identifier(n)
-        if !cx.used_names.contains(n.as_str()) && !cx.place_bound.contains(n.as_str()));
+    //
+    // A direct call of a function item whose arguments hold no handle
+    // (`freeze mkroot()`, `freeze build(n)`) is unique too: nothing it is
+    // given reaches a handle, so every object its result reaches was made
+    // by the call, and the result has no other name (B-2026-11-17-27). It
+    // needs no owner of its own: the frozen binding holds the value.
+    let fresh_call = fresh_call(value, cx);
+    let not_unique = match &value.kind {
+        _ if fresh_call => None,
+        ExprKind::Identifier(n) if cx.used_names.contains(n.as_str()) => {
+            Some(NotUnique::UsedBefore)
+        }
+        ExprKind::Identifier(n) if cx.place_bound.contains(n.as_str()) => {
+            Some(NotUnique::BoundFromPlace)
+        }
+        ExprKind::Identifier(_) => None,
+        _ if place_root_name(value).is_some() => Some(NotUnique::Projection),
+        _ => Some(NotUnique::MayShare),
+    };
     // Recorded BEFORE the admission decision, so a source this pass declines
     // to freeze still gets classified and reported rather than silently
     // becoming an ordinary binding.
     cx.freeze_sites.push((
         raw.as_ref().and_then(head_type_name).map(str::to_string),
         value.span,
-        FreezeSite::Statement { uniquely_bound },
+        FreezeSite::Statement { not_unique },
     ));
     let Some(ty) = raw.and_then(|t| cx.as_shared_handle(t)) else {
         return false;
@@ -1693,6 +1730,13 @@ fn try_admit_frozen_freeze<'a>(
     // that no binding holds, so there is nothing whose lifetime dominates the
     // frozen handle's. REPORTED rather than declined: falling through would
     // make the `freeze` a silent no-op, which is worse than a refusal.
+    if fresh_call {
+        walk_expr(value, cx);
+        cx.frozen.insert(name.as_str(), ty);
+        cx.frozen_owner_path
+            .insert(name.as_str(), cx.block_path.clone());
+        return true;
+    }
     let Some(root) = place_root_name(value) else {
         cx.flag(
             name.as_str(),
@@ -1726,6 +1770,12 @@ fn try_admit_frozen_freeze<'a>(
 /// short: `self` and a bare identifier are roots, a projection recurses, and
 /// everything else (a call, a literal, a struct expression) is not a place and
 /// yields `None`.
+/// Whether `e` is a direct call of a function item whose arguments hold no
+/// handle ([`holds_no_handle`]): a value nothing outside the call can name.
+fn fresh_call(e: &Expr, cx: &Cx<'_, '_>) -> bool {
+    !cx.user_providers && matches!(e.kind, ExprKind::Call { .. }) && holds_no_handle(e, cx.tc, true)
+}
+
 fn place_root_name(e: &Expr) -> Option<&str> {
     match &e.kind {
         ExprKind::Identifier(name) => Some(name.as_str()),

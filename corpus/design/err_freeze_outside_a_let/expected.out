@@ -1,0 +1,1 @@
+ERROR at line 5: `freeze` is written only as a `let` initializer

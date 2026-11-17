@@ -88,5 +88,5 @@ fn freeze_after_pushing_an_existing_handle_is_refused() {
         ),
     );
     assert!(!ok, "{diag}");
-    assert!(diag.contains("cannot be frozen yet"), "{diag}");
+    assert!(diag.contains("needs the only live name"), "{diag}");
 }

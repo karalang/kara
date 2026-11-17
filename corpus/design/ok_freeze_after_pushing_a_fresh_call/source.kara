@@ -1,0 +1,8 @@
+shared struct Node { val: i64, mut kids: Vec[Node] }
+fn leaf(v: i64) -> Node { Node { val: v, kids: Vec.new() } }
+fn main() {
+    let r = leaf(1);
+    r.kids.push(leaf(2));
+    let g = freeze r;
+    println(f"{g.kids.len()} {g.kids[0].val}");
+}

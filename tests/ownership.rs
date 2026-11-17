@@ -11818,7 +11818,7 @@ fn freeze_statement_is_subject_to_the_freeze_site_check() {
             "a type with mutable state, NOT uniquely bound: refused at the freeze",
             "shared struct M { mut n: i64 }\n\
              fn f() -> i64 { let m = M { n: 1 }; let a = m; let g = freeze m; g.n + a.n }",
-            "has mutable state",
+            "needs the only live name",
         ),
     ];
     for (label, body, expected) in cases {
@@ -11887,19 +11887,19 @@ fn freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source() {
             "an alias made BEFORE the freeze",
             "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let a = t; \
              let g = freeze t; g.val + a.val }",
-            "has mutable state",
+            "needs the only live name",
         ),
         (
             "the source is ITSELF bound from another place",
             "fn f() -> i64 { let a = Node { val: 1, neighbors: [] }; let t = a; \
              let g = freeze t; g.val }",
-            "has mutable state",
+            "needs the only live name",
         ),
         (
             "the source consumed by a call before the freeze",
             "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let n = take(t); \
              let g = freeze t; g.val + n }",
-            "has mutable state",
+            "needs the only live name",
         ),
         (
             // Step 3 landed, so READING the `mut` field is now permitted —

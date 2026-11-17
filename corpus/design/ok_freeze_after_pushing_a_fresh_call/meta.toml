@@ -1,0 +1,9 @@
+source = "B-2026-11-17-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "shared", "frozen"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Frozen handles, the freeze site: `r.kids.push(leaf(2))` pushes a value a call made from literals, which makes no second name for `r` or its kids, so `freeze r` stays unique, as pushing a literal already did (B-2026-11-05-6). Refused with E0512 before (B-2026-11-17-27)."

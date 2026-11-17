@@ -258,7 +258,7 @@ Kāra keeps its hard keywords few, so that common words stay usable as names.
 | `marker` | comes directly before `trait` |
 | `shared`, `sync` | come directly before `struct` or `enum` ([§11](#11-ownership-and-sharing)) |
 | `weak`, `frozen` | prefix a type or a receiver ([§11](#11-ownership-and-sharing)) |
-| `freeze` | prefixes an expression ([§11](#11-ownership-and-sharing)) |
+| `freeze` | prefixes a `let` initializer, `let g = freeze root;` ([§11](#11-ownership-and-sharing)) |
 | `escaping` | prefixes a function type or a `dyn` type ([§7](#7-functions-and-closures), [§9](#dyn-trait)) |
 | `own` | comes directly before a parameter's type, before `self`, or before an argument type in a function type (`Fn(own T) -> R`); it marks an owned parameter ([§7](#parameter-modes)) |
 | `host` | comes directly before `fn` at item position ([§15](#15-unsafe-ffi-and-layout-control)) |
@@ -5056,7 +5056,7 @@ fn main() {
 
 Dropping any one of them brings back the hazard the other three remove.
 
-**Two spellings, and nothing is inferred.** `frozen T` is a parameter mode beside bare `T`, `own T` and `mut ref T` (`fn sum(n: frozen Node)`, and `frozen self` for a receiver). `freeze` is an expression that produces a frozen binding (`let g = freeze root;`). A value never becomes frozen by inference: the author writes one of the two, which keeps the cost model readable and keeps the compiler from changing a type's representation program-wide.
+**Two spellings, and nothing is inferred.** `frozen T` is a parameter mode beside bare `T`, `own T` and `mut ref T` (`fn sum(n: frozen Node)`, and `frozen self` for a receiver). `freeze` is written as a `let` initializer and produces a frozen binding (`let g = freeze root;`); it is not an expression elsewhere, such as a block's tail or an `if` arm. Its source is a local with no other live name, or a call of a function whose arguments hold no handle (literals, `Copy` values, and such calls: `let g = freeze build(3);`), whose result nothing else can name. Pushing such a value into a field of the source (`r.kids.push(leaf(2))`) leaves the source unique. A value never becomes frozen by inference: the author writes one of the two, which keeps the cost model readable and keeps the compiler from changing a type's representation program-wide.
 
 **What a frozen place permits.** Frozen-ness belongs to a *place*: the parameter, and any chain of `.field`, `[i]` or `.0` rooted at it.
 

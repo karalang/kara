@@ -67,8 +67,25 @@ use super::{OwnershipError, OwnershipErrorKind};
 pub(crate) enum FreezeSite {
     /// A `frozen T` parameter or `frozen self` receiver.
     Param,
-    /// A `let g = freeze <place>;` statement.
-    Statement { uniquely_bound: bool },
+    /// A `let g = freeze <place>;` statement: `None` when its source is the
+    /// only live name for the value, else why it may not be.
+    Statement { not_unique: Option<NotUnique> },
+}
+
+/// Why a `freeze` statement's source may have a second live name
+/// (B-2026-11-17-27: the refusal says which, not that the type "has mutable
+/// state").
+#[derive(Clone, Copy)]
+pub(crate) enum NotUnique {
+    /// The source local was named before the `freeze`.
+    UsedBefore,
+    /// The source local was itself bound from another place (`let t = a;`).
+    BoundFromPlace,
+    /// The source is a field or element, which its container still holds.
+    Projection,
+    /// The source is a call or other expression whose result may share an
+    /// object with a handle its operands reach.
+    MayShare,
 }
 
 /// Why a `frozen` parameter's type was refused. Each variant names the specific
@@ -80,9 +97,9 @@ enum Refusal {
     NotShared,
     /// A `sync struct`: already atomic, already shareable, nothing to freeze.
     AlreadyPar,
-    /// A `shared` type with a `mut` field somewhere in its reachable closure.
-    /// Stage 1 has no per-instance immutability check to justify freezing it.
-    MutableState,
+    /// A `shared` type with a `mut` field somewhere in its reachable closure,
+    /// frozen by a statement whose source may have another live name.
+    MutableState(NotUnique),
 }
 
 impl super::OwnershipChecker<'_> {
@@ -156,18 +173,36 @@ impl super::OwnershipChecker<'_> {
                 // refusal that can no longer happen. A suggestion for an
                 // unreachable state is worse than none; this row already
                 // records an ownership `suggestion` that reached nobody at all.
-                Refusal::MutableState => (
-                    format!("`{shown}` has mutable state, so it cannot be frozen yet"),
-                    format!(
-                        "freezing claims the value is deeply immutable for the region. For a \
-                         `mut`-bearing type like `{shown}` that claim rests on this being the \
-                         ONLY live name for the instance, and something else here names it too \
-                         — an earlier use of the source, or a source that is itself bound from \
-                         another place. Move or remove that other binding so the `freeze` is \
-                         the first thing to touch the value, or remove `mut` from the fields \
-                         reachable from `{shown}`"
-                    ),
-                ),
+                Refusal::MutableState(why) => {
+                    let why = match why {
+                        NotUnique::UsedBefore => {
+                            "its source is used before the `freeze`, and a use can make a \
+                             second name for the value or for something it holds"
+                        }
+                        NotUnique::BoundFromPlace => {
+                            "its source is bound from another place, which still names the value"
+                        }
+                        NotUnique::Projection => {
+                            "its source is a field or element, which the value holding it \
+                             still names"
+                        }
+                        NotUnique::MayShare => {
+                            "its source is a call or expression whose operands may hold a handle \
+                             the result shares"
+                        }
+                    };
+                    (
+                        format!("`freeze` needs the only live name for this `{shown}`: {why}"),
+                        format!(
+                            "freezing claims the value is deeply immutable for the region, and \
+                             `{shown}` has `mut` fields, so the claim rests on the `freeze` \
+                             holding the ONLY live name for it. Freeze a local before any other \
+                             use of it (`let r = build(); let g = freeze r;`), or a call whose \
+                             arguments hold no handle (`let g = freeze build();`), or remove \
+                             `mut` from the fields reachable from `{shown}`"
+                        ),
+                    )
+                }
             };
             self.errors.push(OwnershipError {
                 message,
@@ -270,8 +305,8 @@ impl super::OwnershipChecker<'_> {
             // a hole.
             None => match site {
                 FreezeSite::Statement {
-                    uniquely_bound: false,
-                } => Some(Refusal::MutableState),
+                    not_unique: Some(why),
+                } => Some(Refusal::MutableState(why)),
                 _ => None,
             },
         }

@@ -1,0 +1,7 @@
+shared struct N { v: i64 }
+fn main() {
+    let r = N { v: 1 };
+    let x = { let g = freeze r; g.v };
+    let y = if x > 0 { freeze r } else { freeze r };
+    println(x);
+}

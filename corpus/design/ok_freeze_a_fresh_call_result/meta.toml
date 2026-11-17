@@ -1,0 +1,9 @@
+source = "B-2026-11-17-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "shared", "frozen"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Frozen handles, the freeze site: a call of a function item whose arguments hold no handle returns a value nothing else can name, so `freeze mkroot()` is a unique source and needs no owner but the frozen binding; two `par` branches read it. Refused with E0512 before (B-2026-11-17-27)."

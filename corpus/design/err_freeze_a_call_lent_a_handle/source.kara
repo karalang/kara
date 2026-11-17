@@ -1,0 +1,8 @@
+shared struct Node { val: i64, mut count: i64 }
+fn same(n: Node) -> Node { n }
+fn main() {
+    let a = Node { val: 1, count: 0 };
+    let g = freeze same(a);
+    a.count = 3;
+    println(g.count);
+}

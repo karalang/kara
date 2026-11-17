@@ -1,0 +1,9 @@
+source = "B-2026-11-17-27"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "shared", "frozen"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Frozen handles, the freeze site: `same(a)` returns the handle it is lent, so its result is not unique and `freeze same(a)` is refused; the program would otherwise write `a.count` under a frozen alias (B-2026-11-17-27). The expected.out wording of an error pin is guidance, not a byte oracle."

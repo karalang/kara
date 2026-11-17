@@ -1,0 +1,9 @@
+source = "B-2026-11-17-27"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "shared", "frozen"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Frozen handles: `freeze` is written as a `let` initializer, not as a block's tail or an `if` arm; the parser says so rather than asking for a `;` (B-2026-11-17-27). The expected.out wording of an error pin is guidance, not a byte oracle."

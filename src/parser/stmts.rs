@@ -561,6 +561,24 @@ impl super::Parser {
         {
             return;
         }
+        // `freeze r` anywhere but a `let` initializer (a block's tail, an
+        // `if` arm): `freeze` is a contextual keyword there only, so the
+        // statement reads as the name `freeze` and a missing `;`. Say what
+        // the form is instead (B-2026-11-17-27).
+        if matches!(&expr.kind, ExprKind::Identifier(n) if n == "freeze")
+            && matches!(
+                self.peek_token_ref(),
+                Token::Identifier { .. } | Token::SelfValue
+            )
+        {
+            self.error_at(
+                "`freeze` is written only as a `let` initializer: `let g = freeze r;` \
+                 binds the frozen handle, which lives as long as that binding. Bind it \
+                 first and use `g` here",
+                expr.span,
+            );
+            return;
+        }
         self.error_at("expected `;` after this expression statement", expr.span);
         self.fix_edits.insert(
             crate::resolver::SpanKey::from_span(&expr.span),

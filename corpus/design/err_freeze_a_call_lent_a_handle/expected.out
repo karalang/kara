@@ -1,0 +1,1 @@
+ERROR at line 5: `freeze` needs the only live name for this `Node`

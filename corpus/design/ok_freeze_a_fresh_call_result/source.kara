@@ -1,0 +1,9 @@
+shared struct Node { val: i64, mut kids: Vec[Node] }
+fn leaf(v: i64) -> Node { Node { val: v, kids: Vec.new() } }
+fn mkroot() -> Node { let r = leaf(1); r.kids.push(leaf(2)); r }
+fn sum(n: frozen Node) -> i64 { let mut t = n.val; for k in n.kids { t += sum(k); } t }
+fn main() {
+    let g = freeze mkroot();
+    let (a, b) = par { sum(g), sum(g) };
+    println(f"{a} {b} {g.kids.len()}");
+}
