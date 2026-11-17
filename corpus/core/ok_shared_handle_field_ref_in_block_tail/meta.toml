@@ -1,0 +1,10 @@
+source = "B-2026-11-17-32"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+expected_from = "spec"
+rules = ["6.2", "5.5"]
+backends = []
+env = {}
+note = "B-2026-11-17-32 follow-up: a `ref a.child.items` as a block's tail that a `let` binds. Core semantics §6.2: the handle field is read as a counted copy; a borrow the binding keeps holds that count until the binding's block ends (§5.5), so replacing the field through another handle runs the old child's Drop late, never under the borrow. Before, check refused it with E0516 (the count dropped at the arm's end). Expected output worked by hand from the rule."

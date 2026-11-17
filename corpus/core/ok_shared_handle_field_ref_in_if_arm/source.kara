@@ -1,0 +1,10 @@
+shared struct C { mut items: Vec[String] }
+impl Drop for C { fn drop(mut ref self) { println("drop C"); } }
+shared struct Pp { mut child: C }
+fn g(a: Pp, b: Pp, c: bool) {
+    let e: Vec[String] = Vec.new();
+    let r = if c { ref a.child.items } else { ref e };
+    b.child = C { items: Vec.new() };
+    println(f"{r.len()}");
+}
+fn main() { let p = Pp { child: C { items: ["x", "y"] } }; println("start"); g(p, p, true); g(p, p, false); println("end"); }

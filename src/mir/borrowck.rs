@@ -707,7 +707,7 @@ fn in_shared_field(body: &Body, tys: &TyInterner, place: &Place) -> bool {
 /// slice, or a collection, tuple or struct with one in it. A `shared`
 /// handle is not a view, and a function value's captures are the by-loan
 /// check's (§9.3).
-fn holds_view(tys: &TyInterner, ty: Ty) -> bool {
+pub(crate) fn holds_view(tys: &TyInterner, ty: Ty) -> bool {
     fn go(tys: &TyInterner, ty: Ty, seen: &mut Vec<Ty>) -> bool {
         if seen.contains(&ty) {
             return false;
@@ -3252,6 +3252,8 @@ fn main() -> () {
             "ok_shared_handle_field_local_alias",
             "ok_shared_handle_field_plain_struct_inside",
             "ok_shared_handle_field_ref",
+            "ok_shared_handle_field_ref_in_block_tail",
+            "ok_shared_handle_field_ref_in_if_arm",
             "ok_shared_handle_field_scalar_ref",
             "ok_shared_handle_field_two_levels",
             "ok_shared_handle_field_via_weak",

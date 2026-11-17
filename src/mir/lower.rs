@@ -3979,11 +3979,11 @@ struct Bx<'l, 'a> {
     /// (B-2026-10-18-53).
     let_scope: Option<usize>,
     /// The scope of the block a `let` or `let ... else` being lowered
-    /// binds into, while its initializer is lowered in the statement's own
-    /// scope just inside it: a handle field pinned there
-    /// ([`Self::pin_handle_field`]) lives as long as the bindings
-    /// (B-2026-11-17-32).
-    pin_scope: Option<usize>,
+    /// binds into, and how many loops were open then, while its initializer
+    /// is lowered: a handle field pinned in the initializer, at any depth
+    /// outside a loop and a nested statement, lives as long as the bindings
+    /// ([`Self::pin_handle_field`], B-2026-11-17-32).
+    pin_scope: Option<(usize, usize)>,
     /// The closure being lowered is a library sort's key function.
     closure_key: bool,
     /// The closure being lowered is a task handed to `TaskGroup.spawn`,
@@ -6609,11 +6609,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             .wide_acc
             .and_then(|w| Some((w, *w.sums.iter().find(|x| std::ptr::eq(x.stmt, s))?)));
         let window = self.window_acc.filter(|w| std::ptr::eq(w.push.stmt, s));
+        // A statement inside a `let`'s initializer (`let n = { f(a.child); 3 };`)
+        // keeps its pins to itself: only the value the binding takes reaches
+        // past it.
+        let pin = self.pin_scope.take();
         let r = match (site, window) {
             (Some((w, sum)), _) => self.wide_add(w, sum),
             (None, Some(w)) => self.window_put(w),
             (None, None) => self.stmt_here(s),
         };
+        self.pin_scope = pin;
         self.b.set_source_info(outer);
         r
     }
@@ -6911,7 +6916,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.note_declared_effects(l, (pattern.id, name), ty.as_ref(), value);
                     self.note_frozen(value, l);
                     let outer = self.let_scope.replace(self.scopes.len() - 1);
-                    let outer_pin = self.pin_scope.replace(self.scopes.len() - 1);
+                    // Only a binding that can hold a view keeps what its
+                    // initializer pins; any other drops it at the `;`.
+                    let pin_at = crate::mir::borrowck::holds_view(self.tys(), t)
+                        .then(|| (self.scopes.len() - 1, self.loops.len()));
+                    let outer_pin = std::mem::replace(&mut self.pin_scope, pin_at);
                     self.push_scope();
                     // `let idx: i64 = m.get(k).unwrap()` reads the `ref i64`
                     // (core semantics §5.10), as does `let mut t = since` of a
@@ -6950,7 +6959,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 {
                     return Ok(());
                 }
-                let outer_pin = self.pin_scope.replace(self.scopes.len() - 1);
+                let outer_pin = self
+                    .pin_scope
+                    .replace((self.scopes.len() - 1, self.loops.len()));
                 self.push_scope();
                 // An owned place is destructured where it is (§4.6): the
                 // parts it keeps live on in it. Anything else is evaluated
@@ -7064,7 +7075,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // `let P = v else { diverge };`: the bindings belong to the
                 // enclosing block; the scrutinee's temporaries are the
                 // statement's, dropped on either path.
-                let outer_pin = self.pin_scope.replace(self.scopes.len() - 1);
+                let outer_pin = self
+                    .pin_scope
+                    .replace((self.scopes.len() - 1, self.loops.len()));
                 self.push_scope();
                 let scrutinee = self.scrutinee(value, self.binds_mut_ref([pattern]));
                 self.pin_scope = outer_pin;
@@ -8901,8 +8914,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// block a `let` binds into while its initializer is lowered, else in
     /// the innermost scope.
     fn schedule_pin(&mut self, l: Local) {
+        // Any depth inside the initializer (`let r = if c { ref a.child.items }
+        // else { .. }`), so long as no loop opened since: a pin made each
+        // round of a loop is dropped by that round's scope.
         let at = match self.pin_scope {
-            Some(s) if s + 2 == self.scopes.len() => s,
+            Some((s, loops)) if loops == self.loops.len() && s + 1 < self.scopes.len() => s,
             _ => self.scopes.len() - 1,
         };
         self.scopes[at].push(ScopeEntry::Drop(Place::local(l)));
