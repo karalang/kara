@@ -1,0 +1,7 @@
+import std.time.{Duration, sleep, timeout};
+struct N { s: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.s}"); } }
+fn nn(s: Str) -> N { N { s: s.to_string() } }
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(5)); println(f"slow drop {self.n}"); } }
+fn main() { { let v = [Slow { n: 1 }, Slow { n: 2 }]; } println("end"); }

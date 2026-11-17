@@ -117,6 +117,10 @@ pub(super) struct Glue<'ctx> {
     todo: Vec<(Ty, FunctionValue<'ctx>, bool)>,
 }
 
+/// The abort of a drop that reaches a suspending `Drop` body where it
+/// cannot wait (B-2026-11-17-35).
+const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a drop that cannot wait (inside a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a function value; B-2026-11-17-101)";
+
 fn err<T>(e: impl ToString) -> R<T> {
     Err(e.to_string())
 }
@@ -645,6 +649,19 @@ impl<'ctx> Cx<'ctx, '_> {
         if !program.bodies.contains_key(name)
             && self.io_drop(&self.tys.adt(a).name.clone(), slot)?
         {
+            return Ok(());
+        }
+        if !program.bodies.contains_key(name)
+            && program.bodies.contains_key(&coroutine::resume_name(name))
+        {
+            // A `Drop` body that suspends, reached from glue that cannot
+            // wait: `suspending_drop` lowers every drop MIR can reach to a
+            // suspending call, and the rest stop here (B-2026-11-17-35).
+            self.abort_with(SUSPENDING_DROP)?;
+            let after = self
+                .llcx
+                .append_basic_block(self.cur_fn()?, "drop.unreached");
+            self.builder.position_at_end(after);
             return Ok(());
         }
         let f = self.function(name)?;

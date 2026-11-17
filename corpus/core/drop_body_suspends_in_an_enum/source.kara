@@ -1,0 +1,7 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+struct N { s: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.s}"); } }
+enum E { A(Slow), B(N), C }
+fn main() { { let x = E.A(Slow { n: 1 }); let y = E.B(N { s: "y".to_string() }); let z = E.C; } println("end"); }

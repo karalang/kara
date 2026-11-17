@@ -1111,6 +1111,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 let again = self.rt_flag("io_again", &[])?;
                 self.store_bool(dest, again)
             }
+            // A value `suspending_drop`'s glue dropped part by part: its
+            // memory holds nothing to free.
+            ("__dropped", "") => Ok(()),
             // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`).
             ("__cancelled" | "__unwinding", "") => {
                 let name = &base[2..];

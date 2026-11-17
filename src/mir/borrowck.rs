@@ -3632,6 +3632,10 @@ fn main() -> () {
         // The build in `built_core_pins_match_their_expected_output` runs
         // them with the library, through the same move and borrow checks.
         let needs_library = [
+            // A channel's `recv` gives an `Option` only with the library
+            // (B-2026-11-17-35).
+            "drop_body_suspends_in_a_cancelled_teardown",
+            "drop_body_suspends_waits_on_a_channel",
             // `ref a.child.items`, a `ref` of a field path: this check's
             // plain typecheck takes only `ref v[i]` (E_REF_OPERAND_UNSUPPORTED)
             // and the library build reads core places, so these run there

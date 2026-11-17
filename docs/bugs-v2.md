@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 81 |
 | run-vs-build | 55 |
 | crash | 47 |
-| codegen-gap | 33 |
+| codegen-gap | 34 |
 | use-after-free | 10 |
 | leak | 4 |
 | double-free | 2 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 587 |
 | mir-llvm | 281 |
-| mir | 245 |
+| mir | 246 |
 | cli | 191 |
 | parser | 103 |
 | ownership | 101 |
@@ -165,6 +165,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-98 | 2026-11-17 | typecheck | low | A name bound from a fold's result gets no reason and no suffix fix: `let (inside, outside) = distance.iter().enumerate().fold((0, 0), ..)` over `i32` legs, then `inside.min(outside)` returned as `i32`, is refused with only "implicit coercion from 'i64' to 'i32' would narrow or change sign" | — |
 | B-2026-11-17-99 | 2026-11-17 | typecheck | low | A sum over literals gets no reason and no fix: `let days: i32 = (1971..year).map(|y| if leap(y) { 366 } else { 365 }).sum() + [31, 28, ..].iter().take(..).sum() + day`, once `karac fix` drops Rust's `sum::<i32>()` turbofishes, is refused with only "would narrow or change sign" | — |
 | B-2026-11-17-100 | 2026-11-17 | effect | low | A match / if let / while let arm binding taken by value from an owned scrutinee is not charged its Drop body's effects when the arm only reads it: the typechecker records no node type for the binding, so the drop walk sees no owned value | — |
+| B-2026-11-17-101 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a `shared` value's last handle, a Map, Set, VecDeque or sorted collection, a library cell (Mutex, OnceLock, ...), a `dyn` or an erased function value, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: -35 lowers only the drops MIR reaches part by part (structs, enums, tuples, closures, arrays, Vec) | — |
 
 ### Relocated
 

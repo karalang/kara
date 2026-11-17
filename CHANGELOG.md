@@ -73,6 +73,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (B-2026-11-17-36).
 - A `pub fn` bounded on a package-private trait is E0221, as any other
   private item in a public signature (B-2026-11-17-39).
+- A `Drop` body may suspend (sleep, wait on a channel, take a lock), as
+  design.md § Drop says: dropping such a value is a suspending call in the
+  task that destroys it, other tasks run while it waits, and in a
+  cancelled task's teardown it runs to completion. Every lane failed on
+  it ('call of unknown function', 'no body named'; B-2026-11-17-35). Inside
+  a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a
+  function value it is not lowered yet and stops with a message
+  (B-2026-11-17-101).
 - A closure a function returns holding a view of its argument, passed on
   to an `escaping` parameter that stores it in a struct, a `shared` value
   or a `dyn`, is refused (E0509) as a closure written at the call is; it

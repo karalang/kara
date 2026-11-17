@@ -1,0 +1,5 @@
+import std.time.{Duration, sleep};
+struct Slow { n: i64 }
+impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
+struct Tree { kids: Vec[Tree], s: Slow }
+fn main() { { let t = Tree { kids: [Tree { kids: Vec.new(), s: Slow { n: 2 } }, Tree { kids: Vec.new(), s: Slow { n: 3 } }], s: Slow { n: 1 } }; } println("end"); }

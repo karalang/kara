@@ -1,0 +1,7 @@
+import std.time.{Duration, sleep, timeout};
+struct N { s: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.s}"); } }
+fn nn(s: Str) -> N { N { s: s.to_string() } }
+struct Q { rx: Receiver[i64] }
+impl Drop for Q { fn drop(mut ref self) { println(f"q drop {self.rx.recv().unwrap_or(-1)}"); } }
+fn main() { let (tx, rx) = channel(1); let _ = tx.send(9); { let q = Q { rx: rx }; } println("end"); }

@@ -43,6 +43,7 @@ pub mod range_bounds;
 pub mod rare_exits;
 pub mod rc_borrow;
 pub mod rc_pairs;
+pub mod suspending_drop;
 pub mod syntax;
 pub mod trace_drops;
 pub mod ty;

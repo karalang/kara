@@ -755,8 +755,19 @@ pub fn coroutines_flag() -> bool {
 /// `program` with each coroutine replaced by its `resume` and `drop_frame`
 /// bodies (`coroutine::transform`).
 pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, String> {
-    let bodies: Vec<Body> = program.bodies.values().cloned().collect();
+    let mut bodies: Vec<Body> = program.bodies.values().cloned().collect();
     let seed = program.suspending.clone().unwrap_or_default();
+    // A drop that reaches a `Drop` body that suspends is a suspending call
+    // (B-2026-11-17-35).
+    let drop_body = |t: Ty| match tys.kind(t) {
+        TyKind::Adt(a) => program
+            .drop_impls
+            .get(&a)
+            .or_else(|| program.drop_by_ty.get(&t))
+            .cloned(),
+        _ => None,
+    };
+    super::suspending_drop::lower(&mut bodies, tys, &seed, &drop_body)?;
     let mut vtables = program.vtables.clone();
     let (bodies, _) = coroutine::transform_with_tables(
         &bodies,
@@ -2311,6 +2322,13 @@ impl<'a> Interp<'a> {
                 _ => false,
             })),
             ("__unwinding", "") => Ok(Value::Bool(*self.unwind_flag())),
+            // A value `suspending_drop`'s glue dropped part by part.
+            ("__dropped", "") => {
+                if let [Value::Ref(a)] = args.as_slice() {
+                    *self.slot_mut(a)? = Value::Uninit;
+                }
+                Ok(Value::Unit)
+            }
             ("__unwind", "") => {
                 if let [Value::Bool(on)] = args.as_slice() {
                     *self.unwind_flag() = *on;
@@ -16045,6 +16063,17 @@ impl<'a> Interp<'a> {
                 self.events.push(Event::DropBody(adt.name.clone()));
             }
             let f = f.clone();
+            if !self.program.bodies.contains_key(&f)
+                && self
+                    .program
+                    .bodies
+                    .contains_key(&coroutine::resume_name(&f))
+            {
+                return err(format!(
+                    "the `Drop` body of {} suspends, and a value of it is dropped where the drop cannot wait: inside a `shared` value, a map, a set, a deque, a library cell, a `dyn` or a function value (B-2026-11-17-101)",
+                    adt.name
+                ));
+            }
             match (self.tys.kind(ty), &addr.root) {
                 // `fn T.drop(mut ref self)` on a `shared` type takes a
                 // reference to a handle, as every field read through a

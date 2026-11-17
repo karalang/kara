@@ -1,0 +1,5 @@
+p drop
+slow drop 3
+drop b
+slow drop 1
+end
