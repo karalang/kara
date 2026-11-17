@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 455 |
+| diagnostics | 456 |
 | false-positive | 247 |
 | missing-feature | 191 |
 | perf | 184 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 245 |
 | cli | 191 |
 | parser | 103 |
-| ownership | 100 |
+| ownership | 101 |
 | interp | 87 |
 | runtime | 87 |
 | resolver | 40 |
@@ -176,6 +176,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-92 | 2026-11-17 | mir | high | A closure a factory call returns, holding a view of a local, passes check when it goes straight into an `escaping` parameter, a `shared` value or a `dyn`, and is then called after the local is freed (interp 'use of a0 after it was freed', ASan heap-use-after-free); the -24 call rule follows only closures made in the same body | — |
 | B-2026-11-17-93 | 2026-11-17 | runtime | low | The HTTP/1 server re-parses a chunked request from its first byte at each chunk: a body of k chunks costs O(k x request size) | — |
 | B-2026-11-17-95 | 2026-11-17 | ownership | low | The ownership-cycle diagnostic names a cycle from a different start on each run (`B → A → B` or `A → B → A`), so tests/fmt_round_trip.rs fails at random on corpus/diagnostics/e0501 | — |
+| B-2026-11-17-96 | 2026-11-17 | ownership | low | An ownership cycle's message names the cycle from a random type: `struct A { b: B } struct B { a: A }` reports `A → B → A` (line 2) or `B → A → B` (line 1) run to run, so the e0501 pin and fmt_round_trip flake | — |
 
 ### Relocated
 
