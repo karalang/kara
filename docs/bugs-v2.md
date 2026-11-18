@@ -60,13 +60,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 491 |
 | false-positive | 259 |
-| missing-feature | 199 |
+| missing-feature | 200 |
 | perf | 187 |
 | other | 113 |
 | soundness | 86 |
 | miscompile | 81 |
 | run-vs-build | 56 |
-| crash | 50 |
+| crash | 51 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
 | leak | 4 |
@@ -77,9 +77,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 621 |
-| mir-llvm | 288 |
+| mir-llvm | 289 |
 | mir | 253 |
-| cli | 195 |
+| cli | 196 |
 | parser | 114 |
 | ownership | 105 |
 | interp | 87 |
@@ -136,6 +136,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
 | B-2026-11-18-26 | 2026-11-18 | typecheck | low | `#[deprecated]` on an enum, a trait or a type alias never fires: uses of the enum's variants and type, `impl T1 for S` and `T: T1` bounds, and the alias in a signature all check clean | — |
 | B-2026-11-18-27 | 2026-11-18 | parser | medium | A parameter's pattern uses a reduced grammar: `ref name` (which §7 Destructuring parameters names), fixed-array patterns, `@` bindings and a distinct-type constructor are refused in fn and closure parameters, though each is irrefutable | — |
+| B-2026-11-18-28 | 2026-11-18 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum with a `Drop` impl, a boxed field, a library container (VecDeque, SortedMap, Set, Mutex and the rest) or more than 8 levels of nesting within one node; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
+| B-2026-11-18-29 | 2026-11-18 | cli | medium | `karac build --offline` in a workspace member fails: the workspace's own members are looked up in `vendor/` (E_OFFLINE_VENDOR_ENTRY_MISSING for the member itself), and an offline joint solve would rewrite the workspace's shared kara.lock | — |
 
 ### Relocated
 
