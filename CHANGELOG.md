@@ -744,6 +744,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Bag { items: Some(Vec.new()) }`) is solved by a later use, as it is for
   a field holding the value directly; it stopped with E0516 "an expression
   whose type does not lower" (B-2026-11-17-133).
+- A literal used as a `for` range's bound, or printed, is not settled to
+  `i64` there; it defaults only at the end of the body, as design.md §8
+  says, so `let n = 100; for a in 0..n { println(a); } take_i32(n)` makes
+  `n` an `i32`, where the call was refused as a narrowing (B-2026-11-18-13).
+- An inline list indexed where its result's type is known takes that type:
+  `let c: i32 = [0, 45, 90][k]` makes the list a `Vec[i32]`, as binding the
+  list first does, where it was refused as a narrowing from `i64`
+  (B-2026-11-18-12).
 - A literal lent to a `ref` or `mut ref` parameter is fixed by it, as any
   argument fixes a literal (design.md §8): `let mut best = 0;
   bump(mut best); best` with `bump(x: mut ref i32)` is an `i32`, where it
@@ -1680,6 +1688,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   are not allowed", and a module `let` in any module after the first no
   longer panics `karac check` (subtract with overflow in that fix)
   (B-2026-11-18-15).
+- An unannotated `collect()` handed to a generic function's bare `T` that
+  nothing else carries (`show(it.collect())` with `fn show[T: Display](x: T)`)
+  is refused by `karac check` as E0238, asking for an annotation, where it
+  reached the MIR builder as E0516 "does not lower" (B-2026-11-18-14).
 - A module-level `let` whose name is not SCREAMING_SNAKE_CASE (`let my_count`
   beside `fn main`) is reported as E_MODULE_LET, whose fix declares it
   `const MY_COUNT` and renames its uses in one edit; it was

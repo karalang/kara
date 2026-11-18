@@ -117,11 +117,23 @@ fn kata_2024_vec_filled_literal_under_max_gets_its_suffix() {
     assert!(text.contains("let mut pre = Vec.filled(n, 0);"), "{text}");
     assert!(clean, "{text}");
     assert_eq!(out, "9\n");
-    // A print before the store reads the literal at its default, so `max`
-    // meets an `i64` and the fill gets its suffix.
-    let src = src.replace(
+    // A print before the store fixes nothing, so the store still types the
+    // fill (design.md §8; this pin read the print as settling it until
+    // B-2026-11-18-13).
+    let printed = src.replace(
         "    pre[0] = nums[0];",
         "    println(pre[0] + 0);\n    pre[0] = nums[0];",
+    );
+    let (first, text, clean, out) = mend(&scratch("vec_filled_printed"), &printed);
+    assert!(!first.contains("error"), "{first}");
+    assert!(text.contains("let mut pre = Vec.filled(n, 0);"), "{text}");
+    assert!(clean, "{text}");
+    assert_eq!(out, "0\n9\n");
+    // A method called on an element before the store reads the literal at
+    // its default, so `max` meets an `i64` and the fill gets its suffix.
+    let src = src.replace(
+        "    pre[0] = nums[0];",
+        "    println(pre[0].abs());\n    pre[0] = nums[0];",
     );
     let (first, text, clean, out) = mend(&scratch("vec_filled"), &src);
     assert!(first.contains("write that literal `0i32`"), "{first}");

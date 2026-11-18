@@ -10928,6 +10928,13 @@ impl<'a> TypeChecker<'a> {
                 continue;
             }
             if let (Some(value), Type::Int(_) | Type::UInt(_)) = (site.value, &ty) {
+                // A literal only `u128` holds, left at the default, is
+                // judged by `check_wide_int_literals`, which says to write
+                // its `u128` suffix (B-2026-11-14-40); a printed one stays
+                // open to here since B-2026-11-18-13.
+                if ty == Type::Int(IntSize::I64) && self.is_unsuffixed_u128_literal(&span) {
+                    continue;
+                }
                 self.wide_int_literals_judged
                     .insert(SpanKey::from_span(&span));
                 self.check_int_literal_fits(value, &ty, &span, None);

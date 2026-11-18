@@ -3047,8 +3047,16 @@ impl<'a> super::TypeChecker<'a> {
                 match args.len() {
                     0 => {}
                     1 => {
-                        let arg_ty = self.infer_expr(&args[0].value);
-                        if arg_ty != Type::Error && !self.type_supports_display(&arg_ty) {
+                        // A printed number is a use that fixes nothing: a
+                        // binding whose literal no use has fixed yet stays
+                        // open for a later argument (`let n = 100;
+                        // println(n); take_i32(n)`), and defaults last
+                        // (design.md §8 Literals, B-2026-11-18-13).
+                        let arg_ty = self.infer_expr_open(&args[0].value);
+                        if arg_ty != Type::Error
+                            && self.unbound_literal_var(&arg_ty).is_none()
+                            && !self.type_supports_display(&arg_ty)
+                        {
                             self.type_error(
                                 format!(
                                     "{}() argument must implement Display, \

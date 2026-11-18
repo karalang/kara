@@ -16332,7 +16332,19 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(msg, expr.span, TypeErrorKind::TypeMismatch);
                     return Type::Error;
                 }
-                let obj_ty = super::types::strip_refinement_through_ref(&self.infer_expr(object));
+                // An inline list's literals are open for the read's own use
+                // to fix, as a bound one's are (`let a = [0, 45]; let c: i32
+                // = a[k]`): `let c: i32 = [0, 45, 90][k]` makes the list a
+                // `Vec[i32]` (design.md §8 Literals, B-2026-11-18-12).
+                let obj_ty = if matches!(object.kind, ExprKind::ArrayLiteral(_)) {
+                    let saved = self.open_collection_let.replace(object.id);
+                    let t = self.infer_expr_open(object);
+                    self.open_collection_let = saved;
+                    t
+                } else {
+                    self.infer_expr(object)
+                };
+                let obj_ty = super::types::strip_refinement_through_ref(&obj_ty);
                 self.mut_through_param_arg = false;
                 // The index is read, never the target of the write: `v[n.val]
                 // = x` writes `v`, so `n.val` is not checked as an assignment
@@ -18446,29 +18458,82 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                     (Some(s), Some(e)) if is_lit(start) && !is_lit(end) => {
-                        let et = self.infer_expr(e);
+                        let et = self.infer_expr_open(e);
                         let bound = super::expr_ops::deref_integer_scalar(et.clone());
                         let st = if is_integer(&bound) {
                             self.promote_range_literal(s, &bound)
                         } else {
-                            self.infer_expr(s)
+                            self.infer_expr_open(s)
                         };
                         (Some(st), Some(et))
                     }
                     (Some(s), Some(e)) if is_lit(end) && !is_lit(start) => {
-                        let st = self.infer_expr(s);
+                        let st = self.infer_expr_open(s);
                         let bound = super::expr_ops::deref_integer_scalar(st.clone());
                         let et = if is_integer(&bound) {
                             self.promote_range_literal(e, &bound)
                         } else {
-                            self.infer_expr(e)
+                            self.infer_expr_open(e)
                         };
                         (Some(st), Some(et))
                     }
                     _ => (
-                        start.as_deref().map(|e| self.infer_expr(e)),
-                        end.as_deref().map(|e| self.infer_expr(e)),
+                        start.as_deref().map(|e| self.infer_expr_open(e)),
+                        end.as_deref().map(|e| self.infer_expr_open(e)),
                     ),
+                };
+                // A bound is a use that fixes nothing by itself: a binding
+                // whose literal no use has fixed yet (`let n = 100`) stays
+                // open, and meets the other bound as one number does another
+                // (design.md §8 Literals, B-2026-11-18-13). So `0..n` is a
+                // range of `n`'s type, which a later argument fixes; beside
+                // a typed bound the literal takes that bound's type, as a
+                // bare literal bound does (B-2026-09-23-7).
+                let (start_ty, end_ty) = match (start_ty, end_ty) {
+                    (Some(s), Some(e))
+                        if self.unbound_literal_var(&s).is_some()
+                            || self.unbound_literal_var(&e).is_some() =>
+                    {
+                        let (ds, de) = (
+                            super::expr_ops::deref_integer_scalar(s.clone()),
+                            super::expr_ops::deref_integer_scalar(e.clone()),
+                        );
+                        let joins = |this: &Self, a: &Type, b: &Type| {
+                            this.unbound_literal_var(a).is_some_and(|(_, k)| {
+                                k == inference::LiteralKind::Int
+                                    && (is_integer(b)
+                                        || this
+                                            .unbound_literal_var(b)
+                                            .is_some_and(|(_, k2)| k2 == k))
+                            })
+                        };
+                        if (joins(self, &ds, &de) || joins(self, &de, &ds))
+                            && unify_types(
+                                &ds,
+                                &de,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            )
+                        {
+                            let t = self.resolved_now(&ds);
+                            (Some(t.clone()), Some(t))
+                        } else {
+                            (
+                                Some(self.settle_literals(&s)),
+                                Some(self.settle_literals(&e)),
+                            )
+                        }
+                    }
+                    (s, e) => {
+                        let open = |this: &mut Self, t: Option<Type>| {
+                            t.map(|t| match this.unbound_literal_var(&t) {
+                                Some((_, inference::LiteralKind::Int)) => t,
+                                Some(_) => this.settle_literals(&t),
+                                None => t,
+                            })
+                        };
+                        (open(self, s), open(self, e))
+                    }
                 };
                 // A bound that borrows an integer reads it, as an operator's
                 // operand does: `other..other + len` with `other` an

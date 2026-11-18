@@ -58,10 +58,12 @@ fn main() {
 
 #[test]
 fn kata_2050_max_of_a_filled_vec_returned_narrower_gets_the_fill_suffix() {
-    // A print before the store reads the literal at its default.
+    // A method called on an element before the store reads the literal at
+    // its default (a print fixes nothing since B-2026-11-18-13, so this pin
+    // read `println(dist[0] + 0)` until then).
     let src = "fn latest(n: i64, time: Vec[i32]) -> i32 {
     let mut dist = Vec.filled(n, 0);
-    println(dist[0] + 0);
+    println(dist[0].abs());
     for i in 0..n {
         dist[i] = time[i] * 2;
     }

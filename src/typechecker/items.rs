@@ -8259,6 +8259,57 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     (args.iter().map(|a| &a.value).collect(), true)
                 }
+                // An argument whose parameter is the callee's own bare `T`,
+                // which no other parameter and not the result carries
+                // (`show[T: Display](x: T)`): the call fixes nothing there,
+                // and nothing else reaches the temporary, so it is final
+                // (B-2026-11-18-14). A parameter of a fixed type, or a `T`
+                // the result carries (`Some(..)`, `id(..)`), is left alone.
+                ExprKind::Call { callee, args, .. } => {
+                    let ExprKind::Identifier(n) = &callee.kind else {
+                        return;
+                    };
+                    let Some(sig) = self.env.functions.get(n.as_str()) else {
+                        return;
+                    };
+                    if sig.generic_params.is_empty() || sig.params.len() != args.len() {
+                        return;
+                    }
+                    let mentions = |t: &Type, p: &str| {
+                        let others: HashSet<&str> = sig
+                            .generic_params
+                            .iter()
+                            .map(|g| g.as_str())
+                            .filter(|g| *g != p)
+                            .chain(["Self"])
+                            .collect();
+                        find_unbound_type_param(t, &others).is_some()
+                    };
+                    let lone = args
+                        .iter()
+                        .zip(&sig.params)
+                        .enumerate()
+                        .filter(|(i, (_, pt))| {
+                            // A bare parameter borrows: `x: T` is a `ref T`.
+                            let pt = match pt {
+                                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                                t => t,
+                            };
+                            let Type::TypeParam(p) = pt else {
+                                return false;
+                            };
+                            sig.generic_params.contains(p)
+                                && !mentions(&sig.return_type, p)
+                                && !sig
+                                    .params
+                                    .iter()
+                                    .enumerate()
+                                    .any(|(j, o)| j != *i && mentions(o, p))
+                        })
+                        .map(|(_, (a, _))| &a.value)
+                        .collect();
+                    (lone, true)
+                }
                 _ => return,
             };
             for operand in operands {
