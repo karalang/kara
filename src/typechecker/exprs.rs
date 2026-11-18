@@ -15433,6 +15433,61 @@ impl<'a> super::TypeChecker<'a> {
     /// open, for a use a later one may fix: a `let`'s value, an operand,
     /// an expression checked against a slot (B-2026-11-07-3).
     /// A tuple literal of unsuffixed integer literals: `(-1, 0)`.
+    /// A list literal of unsuffixed numbers, or of such lists: its numbers
+    /// stay open in an open list as a flat list's do (B-2026-11-18-34).
+    pub(super) fn literal_list(e: &Expr) -> bool {
+        let ExprKind::ArrayLiteral(items) = &e.kind else {
+            return false;
+        };
+        let float = |e: &Expr| match &e.kind {
+            ExprKind::Float(_, None) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => matches!(operand.kind, ExprKind::Float(_, None)),
+            _ => false,
+        };
+        !items.is_empty()
+            && (items
+                .iter()
+                .all(|i| Self::unsuffixed_int_literal_value(i).is_some())
+                || items.iter().all(float)
+                || items.iter().all(Self::literal_list))
+    }
+
+    /// The read of an inline list of literals (`[0, 45, 90][k]`) that `e`
+    /// is or ends a block with: a branch whose value the join's other side
+    /// fixes (B-2026-11-18-35).
+    pub(super) fn indexed_literal_list_tail(e: &Expr) -> Option<&Expr> {
+        match &e.kind {
+            ExprKind::Index { object, .. }
+                if !e.id.is_dummy()
+                    && (Self::literal_list(object)
+                        || (matches!(object.kind, ExprKind::Index { .. })
+                            && Self::indexed_literal_list_tail(object).is_some())) =>
+            {
+                Some(e)
+            }
+            ExprKind::Block(b) => b
+                .final_expr
+                .as_deref()
+                .and_then(Self::indexed_literal_list_tail),
+            _ => None,
+        }
+    }
+
+    /// [`Self::infer_element_open`], and for an element that is itself a
+    /// list of literals, that list opened too (B-2026-11-18-34).
+    fn infer_nested_element_open(&mut self, e: &Expr) -> Type {
+        if !Self::literal_list(e) || e.id.is_dummy() {
+            return self.infer_element_open(e);
+        }
+        let saved = self.open_collection_let.replace(e.id);
+        let t = self.infer_element_open(e);
+        self.open_collection_let = saved;
+        t
+    }
+
     pub(super) fn literal_tuple(e: &Expr) -> bool {
         matches!(&e.kind, ExprKind::Tuple(items)
             if !items.is_empty()
@@ -16573,6 +16628,12 @@ impl<'a> super::TypeChecker<'a> {
                     let t = self.infer_expr_open(object);
                     self.open_collection_let = saved;
                     t
+                } else if matches!(object.kind, ExprKind::Index { .. })
+                    && Self::indexed_literal_list_tail(object).is_some()
+                {
+                    // `[[1, 2], [3, 4]][1][k]`: the inner read leaves the
+                    // list's literals open for this one (B-2026-11-18-34).
+                    self.infer_expr_open(object)
                 } else {
                     self.infer_expr(object)
                 };
@@ -17301,10 +17362,14 @@ impl<'a> super::TypeChecker<'a> {
                 // A block of literals left open is its tail's literal
                 // (design.md §8 "A join of literals is a literal",
                 // B-2026-11-10-49).
-                let tail = block
-                    .final_expr
-                    .as_deref()
-                    .filter(|_| self.open_literal_join(expr));
+                // So is an open block ending in a read of an inline list of
+                // literals, a branch the join fixes (B-2026-11-18-35).
+                let tail = block.final_expr.as_deref().filter(|t| {
+                    self.open_literal_join(expr)
+                        || (self.open_literal_expr == Some(expr.id)
+                            && !expr.id.is_dummy()
+                            && Self::indexed_literal_list_tail(t).is_some())
+                });
                 let saved = tail.map(|t| self.open_literal_expr.replace(t.id));
                 let ty = self.infer_block(block);
                 if let Some(saved) = saved {
@@ -17381,7 +17446,17 @@ impl<'a> super::TypeChecker<'a> {
                 // into one, which later uses fix (design.md §8 "A join of
                 // literals is a literal", B-2026-11-10-49).
                 let open_join = self.open_literal_join(expr);
-                let then_tail = then_block.final_expr.as_deref().filter(|_| open_join);
+                // A branch that reads an inline list of literals
+                // (`[0, 45, 90][k]`) leaves the list's element open for the
+                // join, as a bare literal branch is: the other branch's type
+                // fixes it (design.md §8, B-2026-11-18-35).
+                let then_tail = then_block.final_expr.as_deref().and_then(|t| {
+                    if open_join {
+                        Some(t)
+                    } else {
+                        Self::indexed_literal_list_tail(t)
+                    }
+                });
                 let saved_open = then_tail.map(|t| self.open_literal_expr.replace(t.id));
                 let then_ty = match &early_else {
                     Some(t) if *t != Type::Never && expectation_is_concrete(t) => {
@@ -17393,8 +17468,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.open_literal_expr = saved;
                 }
                 if let Some(ref else_expr) = else_branch {
-                    let saved_open =
-                        open_join.then(|| self.open_literal_expr.replace(else_expr.id));
+                    let else_open = if open_join {
+                        Some(else_expr.as_ref())
+                    } else {
+                        Self::indexed_literal_list_tail(else_expr).map(|_| else_expr.as_ref())
+                    };
+                    let saved_open = else_open.map(|t| self.open_literal_expr.replace(t.id));
                     let else_ty = match (early_else, sibling_array_expectation(else_expr, &then_ty))
                     {
                         (Some(t), _) => t,
@@ -19179,14 +19258,17 @@ impl<'a> super::TypeChecker<'a> {
                                         | ExprKind::Match { .. }
                                 ) && Self::is_literal_tree(e, &Type::Int(IntSize::I64)))
                         }) || elements.iter().all(unsuffixed_float)
-                            || elements.iter().all(Self::literal_tuple));
+                            || elements.iter().all(Self::literal_tuple)
+                            || elements.iter().all(Self::literal_list));
                     // So do the numbers of a list of tuples of them (`let
                     // m = [(-1, 0)]`, `SortedMap.from([(-1, 0)])` as a fold's
-                    // seed, kata 1187's Rust arm, B-2026-11-17-115).
+                    // seed, kata 1187's Rust arm, B-2026-11-17-115), and of
+                    // a list of lists of them (`let g = [[1, 2], [3, 4]];
+                    // let c: i32 = g[1][0];`, B-2026-11-18-34).
                     let first_ty = if open {
-                        let first = self.infer_element_open(&elements[0]);
+                        let first = self.infer_nested_element_open(&elements[0]);
                         for e in &elements[1..] {
-                            let t = self.infer_element_open(e);
+                            let t = self.infer_nested_element_open(e);
                             unify_types(
                                 &first,
                                 &t,

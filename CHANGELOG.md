@@ -799,7 +799,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - An inline list indexed where its result's type is known takes that type:
   `let c: i32 = [0, 45, 90][k]` makes the list a `Vec[i32]`, as binding the
   list first does, where it was refused as a narrowing from `i64`
-  (B-2026-11-18-12).
+  (B-2026-11-18-12). So does a list of lists, bound or inline
+  (`let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]`, B-2026-11-18-34), and
+  an indexed inline list as an `if` branch takes the other branch's type
+  (`if b { [0, 45, 90][k] } else { x }` with `x: i32`, B-2026-11-18-35).
 - A literal lent to a `ref` or `mut ref` parameter is fixed by it, as any
   argument fixes a literal (design.md §8): `let mut best = 0;
   bump(mut best); best` with `bump(x: mut ref i32)` is an `i32`, where it
