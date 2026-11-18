@@ -54,8 +54,8 @@ impl<'a> super::TypeChecker<'a> {
         // methods fall through to the generic impl search below; if none
         // matches, the bottom-of-function `NoMethodFound` fires (distinct
         // names are folded into `is_user_defined` there).
-        if let Type::Named { name, .. } = receiver_for_lookup {
-            if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+        if let Type::Named { .. } = receiver_for_lookup {
+            if let Some(base) = self.env.distinct_base_of(receiver_for_lookup) {
                 if method == "raw" {
                     if !args.is_empty() {
                         self.type_error(

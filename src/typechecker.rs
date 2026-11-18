@@ -2186,6 +2186,9 @@ pub struct TypeCheckResult {
     pub distinct_type_traits: FxHashMap<String, FxHashSet<String>>,
     /// The base type of each `distinct type Name = Base`, by name.
     pub distinct_bases: FxHashMap<String, Type>,
+    /// The type parameters of each generic distinct type, in order
+    /// (B-2026-11-18-43).
+    pub distinct_params: FxHashMap<String, Vec<String>>,
     /// For each `?` expression that requires cross-error-type conversion via
     /// `From`, the target error type's name. Interpreter / codegen consult
     /// this side-table to know whether to call `<target>.from(err)` on the
@@ -5312,6 +5315,7 @@ impl<'a> TypeChecker<'a> {
         self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();
+        let distinct_params = self.env.distinct_params.clone();
         let impl_trait_assoc_types = self.impl_trait_assoc_types();
         let node_dyn_coercions = self.dyn_coercion_nodes();
         let trait_rpit_origins = self.trait_rpit_origins();
@@ -5442,6 +5446,7 @@ impl<'a> TypeChecker<'a> {
             union_info: self.env.unions,
             distinct_type_traits,
             distinct_bases,
+            distinct_params,
             question_conversions: self.question_conversions,
             assoc_conversion_dispatch: self.assoc_conversion_dispatch,
             question_ok_payload_types: self.question_ok_payload_types,

@@ -1770,7 +1770,7 @@ impl<'a> super::TypeChecker<'a> {
                 // (design.md § Distinct Types; B-2026-11-18-19).
                 if let Type::Named { name, .. } = peeled {
                     if *name == variant_name && patterns.len() == 1 {
-                        if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+                        if let Some(base) = self.env.distinct_base_of(peeled) {
                             self.check_pattern_against(&patterns[0], &base, mode);
                             return;
                         }
@@ -3020,9 +3020,9 @@ impl<'a> super::TypeChecker<'a> {
         let peeled;
         let expected = match expected {
             Type::Refinement { base, .. } => base.as_ref(),
-            Type::Named { name, .. } => match self.env.distinct_bases.get(name) {
+            Type::Named { .. } => match self.env.distinct_base_of(expected) {
                 Some(base) => {
-                    peeled = base.clone();
+                    peeled = base;
                     &peeled
                 }
                 None => expected,
@@ -4526,7 +4526,7 @@ impl<'a> super::TypeChecker<'a> {
                 // its base value (B-2026-11-18-19).
                 if let (Type::Named { name, .. }, [sub]) = (&peeled, patterns.as_slice()) {
                     if path.last() == Some(name) {
-                        if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+                        if let Some(base) = self.env.distinct_base_of(&peeled) {
                             self.bind_pattern_types(sub, &base);
                             return;
                         }

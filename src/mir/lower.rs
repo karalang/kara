@@ -3473,7 +3473,7 @@ impl<'a> Lcx<'a> {
                 // `distinct type UserId = i64`: a struct of one field, the
                 // base value (`UserId(7)` builds it, `.raw()` reads it).
                 (
-                    Vec::new(),
+                    tc.distinct_params.get(&name).cloned().unwrap_or_default(),
                     vec![(name.clone(), vec![("0".to_string(), base.clone())])],
                     false,
                     tc.distinct_type_traits

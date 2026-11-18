@@ -13819,7 +13819,11 @@ impl<'a> Interp<'a> {
             (TyKind::Adt(a), Value::Agg(fs))
                 if self.program.display_styles.get(&a) == Some(&DisplayStyle::Transparent) =>
             {
-                let ft = self.tys.adt(a).variants[0].fields[0].1;
+                // Substituted for a generic distinct type (B-2026-11-18-43).
+                let ft = self
+                    .tys
+                    .field_ty(ty, None, 0)
+                    .unwrap_or(self.tys.adt(a).variants[0].fields[0].1);
                 self.display_typed(&fs[0], ft)?
             }
             (TyKind::Shared(_), Value::Shared(id)) => {

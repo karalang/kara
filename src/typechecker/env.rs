@@ -481,6 +481,10 @@ pub struct TypeEnv {
     /// rule (a distinct type does not inherit its base's methods). Populated
     /// by `env_add_distinct_type`. See design.md § Distinct Types (Newtypes).
     pub distinct_bases: FxHashMap<String, Type>,
+    /// The type parameters of a generic distinct type, in order:
+    /// `distinct type Ids[T] = Vec[T]` maps `Ids` to `["T"]`, and its base in
+    /// `distinct_bases` is written over `TypeParam("T")` (B-2026-11-18-43).
+    pub distinct_params: FxHashMap<String, Vec<String>>,
     /// Names of opaque foreign types declared inside `unsafe extern "ABI" { ... }`
     /// blocks (`type Foo;`). Consulted by `lower_type_expr_inner` for
     /// `E_OPAQUE_TYPE_REQUIRES_INDIRECTION`, by `infer_field_access` for
@@ -657,6 +661,7 @@ impl TypeEnv {
             unions: FxHashMap::default(),
             distinct_types: FxHashMap::default(),
             distinct_bases: FxHashMap::default(),
+            distinct_params: FxHashMap::default(),
             opaque_foreign_types: FxHashSet::default(),
             functions: FxHashMap::default(),
             fn_default_arg_counts: FxHashMap::default(),
@@ -1766,6 +1771,25 @@ impl TypeEnv {
                         .and_then(|sig| sig.params.first())
                         .is_some_and(|p| conversion_param_takes(p, source))
             })
+    }
+
+    /// The base of the distinct type `ty` names, with its type arguments
+    /// substituted: `Vec[i64]` for `Ids[i64]` of `distinct type Ids[T] =
+    /// Vec[T]` (B-2026-11-18-43). `None` when `ty` is not a distinct type.
+    pub(crate) fn distinct_base_of(&self, ty: &Type) -> Option<Type> {
+        let Type::Named { name, args } = ty else {
+            return None;
+        };
+        let base = self.distinct_bases.get(name)?;
+        let Some(params) = self.distinct_params.get(name) else {
+            return Some(base.clone());
+        };
+        let subs: HashMap<String, super::types::SubstValue> = params
+            .iter()
+            .zip(args)
+            .map(|(p, a)| (p.clone(), super::types::SubstValue::Type(a.clone())))
+            .collect();
+        Some(super::inference::substitute_type_params(base, &subs))
     }
 
     pub(super) fn fresh_type_var(&mut self) -> Type {

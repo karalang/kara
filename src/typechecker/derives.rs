@@ -1159,15 +1159,22 @@ impl<'a> super::TypeChecker<'a> {
                 if let Item::DistinctType(d) = item {
                     let traits = extract_derived_traits(&d.attributes);
                     if traits.contains("Copy") {
-                        return Some((d.name.clone(), d.span, d.base_type.clone()));
+                        return Some((
+                            d.name.clone(),
+                            d.span,
+                            d.base_type.clone(),
+                            distinct_scope(d),
+                        ));
                     }
                 }
                 None
             })
             .collect();
-        for (name, span, base_ty_expr) in distinct_items {
-            let base_ty = self.lower_type_expr(&base_ty_expr, &[]);
-            if !self.is_type_copy(&base_ty) {
+        for (name, span, base_ty_expr, scope) in distinct_items {
+            let base_ty = self.lower_type_expr(&base_ty_expr, &scope);
+            // A type parameter is conditional, as a generic struct's field
+            // is: `Wrap[T]` copies when its `T` does (B-2026-11-18-43).
+            if !self.is_type_copy(&base_ty) && !matches!(base_ty, Type::TypeParam(_)) {
                 self.type_error(
                     format!(
                         "distinct type '{}' derives Copy but its base type '{}' is not Copy",

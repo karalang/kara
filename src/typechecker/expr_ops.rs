@@ -1088,15 +1088,28 @@ impl<'a> super::TypeChecker<'a> {
         // type and types the result as the (nominal) distinct type. The base
         // is recovered from `env.distinct_bases`. design.md § Distinct Types —
         // "Wrap: `UserId(42)` — constructor syntax".
-        if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+        if self.env.distinct_bases.contains_key(name) {
             self.check_deprecated_use_at(span, name);
             self.check_unstable_use_at(span, name);
+            // A generic distinct type's constructor is generic as a
+            // tuple variant's is (`user_variant_value_type`): `fn(Vec[T]) ->
+            // Ids[T]`, its `T` solved per call from the base value, so
+            // `Ids([1])` is an `Ids[i64]` (B-2026-11-18-43).
+            let args: Vec<Type> = self
+                .env
+                .distinct_params
+                .get(name)
+                .into_iter()
+                .flatten()
+                .map(|p| Type::TypeParam(p.clone()))
+                .collect();
+            let base = self.env.distinct_bases[name].clone();
             return Type::Function {
                 cross_task: Default::default(),
                 params: vec![base],
                 return_type: Box::new(Type::Named {
                     name: name.to_string(),
-                    args: Vec::new(),
+                    args,
                 }),
             };
         }

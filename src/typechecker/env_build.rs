@@ -4084,6 +4084,11 @@ impl<'a> super::TypeChecker<'a> {
         let generics = Self::generic_param_names(&d.generic_params);
         let base = self.lower_type_expr(&d.base_type, &generics);
         self.env.distinct_bases.insert(d.name.clone(), base.clone());
+        if !generics.is_empty() {
+            self.env
+                .distinct_params
+                .insert(d.name.clone(), generics.clone());
+        }
 
         // Combined form: `distinct type T = Base where <pred>` layers a
         // refinement predicate over the distinct wrapper (design.md

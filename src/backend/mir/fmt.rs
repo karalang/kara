@@ -515,7 +515,12 @@ impl<'ctx> Cx<'ctx, '_> {
         };
         let adt = self.tys.adt(a);
         if style == Some(DisplayStyle::Transparent) {
-            let ft = adt.variants[0].fields[0].1;
+            // Substituted: the base of a generic distinct type is its
+            // argument's (`Wrap[i64]` shows its `i64`, B-2026-11-18-43).
+            let ft = self
+                .tys
+                .field_ty(ty, None, 0)
+                .unwrap_or(adt.variants[0].fields[0].1);
             let q = self.offset(p, self.field_offset(ty, None, 0)?)?;
             return self.fmt_call(q, ft);
         }

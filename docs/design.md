@@ -1572,6 +1572,8 @@ distinct type FloorNum = i64;  // + - * / % and unary - work, but only FloorNum 
 
 A distinct type does not inherit `Copy` from its base either ([core-semantics.md §1.1](core-semantics.md#1-values)); derive it when wanted.
 
+A distinct type may be generic: over `distinct type Ids[T] = Vec[T]`, `Ids([1])` is an `Ids[i64]`, and its `.raw()` is a `Vec[i64]`.
+
 A derive on a distinct type requires its base type to have the trait, as a struct's derive does of each field: `#[derive(Eq)] distinct type M = f64` is refused. `Default` is derivable, and `Count.default()` is `Count(i64.default())`; a distinct type with a `where` refinement cannot derive it, since its base's default may violate the predicate.
 
 **Conversion:**

@@ -1328,7 +1328,7 @@ fn synthesize_default_impls(program: &mut Program) {
             }
             Item::DistinctType(d)
                 if d.refinement.is_none()
-                    && d.generic_params.is_none()
+                    && derivable_params(&d.generic_params)
                     && derives_default(&d.attributes) =>
             {
                 defaultable.insert(d.name.clone());
@@ -1410,15 +1410,21 @@ fn synthesize_default_impls(program: &mut Program) {
             // i64` is `Count(i64.default())` (B-2026-11-18-23). A refined
             // distinct type is refused by the typechecker instead: its base's
             // default need not satisfy the `where` predicate.
-            // A generic distinct type is left out: `Ids([1])` of `distinct type
-            // Ids[T] = Vec[T]` does not check yet either.
+            // A generic one is `impl[T: Default] Ids[T]`, as a struct's is.
             Item::DistinctType(d)
                 if d.refinement.is_none()
-                    && d.generic_params.is_none()
+                    && derivable_params(&d.generic_params)
                     && derives_default(&d.attributes)
                     && !has_user_default.contains(&d.name) =>
             {
-                if let Some(base) = default_field_expr(&d.base_type, &defaultable) {
+                let mut in_scope = defaultable.clone();
+                in_scope.extend(
+                    d.generic_params
+                        .iter()
+                        .flat_map(|g| &g.params)
+                        .map(|p| p.name.clone()),
+                );
+                if let Some(base) = default_field_expr(&d.base_type, &in_scope) {
                     let span = d.span;
                     let body = Expr {
                         id: crate::ids::NodeId::DUMMY,
