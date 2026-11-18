@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 506 |
-| false-positive | 264 |
+| false-positive | 265 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 113 |
@@ -84,7 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 108 |
 | runtime | 88 |
 | interp | 87 |
-| resolver | 44 |
+| resolver | 45 |
 | effect | 41 |
 | other | 34 |
 | codegen | 22 |
@@ -1711,6 +1711,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-31 | ownership | low | A bare parameter consumed by a by-value method gets `.clone()` from `karac fix` and no mention of `own`, even when it was Rust's by-value `Vec<T>`: `… | 80b56895ef |
 | B-2026-11-18-32 | typecheck | medium | A module-level `let` in any package module after the first panics `karac check` (subtract with overflow in E_MODULE_LET's fix): the module tree does… | 391a146bcc |
 | B-2026-11-18-36 | cli | low | The `ffi_float_eq` lint (W0318) never fired in `karac check`: it walks the lowered tree, where every `==` is already a trait call | abbd3d4aac |
+| B-2026-11-18-42 | resolver | medium | An argument-position `ref impl Trait` was not desugared like a bare `impl Trait`: forwarding `x: ref impl Shape` to another `ref impl Shape` paramete… | f949423e35 |
 
 </details>
 
