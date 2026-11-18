@@ -122,7 +122,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
 | B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
-| B-2026-11-18-37 | 2026-11-18 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit inside a library cell (`Mutex`, `RwLock`, `OnceLock`, channels and the rest) or a `Set`; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
 | B-2026-11-18-39 | 2026-11-18 | mir-llvm | low | Kata 1197's bench (a breadth-first search over a `VecDeque` and a `Vec[bool]`) executes 1.49x checked Rust's instructions and runs 1.67x its time on x86: `VecDeque` push/pop and `for (dx, dy) in MOVES` over a const `Array` account for about two thirds of the gap | — |
 | B-2026-11-18-40 | 2026-11-18 | typecheck | medium | An associated function or enum variant reached through `Self` (`Self.gcd(a, b)` in an impl, `Self.one()` in a trait's default body, `Self.B(3)` in an enum's impl) is typed as an error with no diagnostic, and `karac check` prints MIR's "a type that failed to check is not lowered yet" (E0516); the pattern `Self.A =>` is refused as "'Self' is a reserved keyword" | — |
 | B-2026-11-18-44 | 2026-11-18 | typecheck | low | A `fold` whose seed takes an `i32` from a field (`fold((vals[0], 1), |(s, c), k| (s + k, c + 1))` over `i64` items) is refused at `s + k` with the advice to write `as i32`, which would truncate the sum; the seed is not named and nothing offers to widen it (`vals[0] as i64`) | — |
@@ -130,7 +129,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-48 | 2026-11-18 | cli | low | Six lints ignore an item-level `#[allow]` / `#[deny]`, and `map_value_clone_reinsert` ignores `-D` too (W0312 stays a warning) | — |
 | B-2026-11-18-49 | 2026-11-18 | cli | low | Two catalogued codes never reach the user: L0001 (FfiLintHint) is built but never surfaced, and the char-boundary panic omits E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY | — |
 | B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
-| B-2026-11-18-53 | 2026-11-18 | mir-llvm | medium | On mir-llvm a `shared` type used as a `Set` or `Map` key is hashed field by field, never by its own `Hash` impl: a set of keys its `Eq` calls equal keeps duplicates (50 entries where the interpreter has 5), and a key with a `Set` field fails to build ("feeding a `Set[shared M]` to a hasher is not lowered yet") | — |
 
 ### Relocated
 
@@ -1715,6 +1713,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-32 | typecheck | medium | A module-level `let` in any package module after the first panics `karac check` (subtract with overflow in E_MODULE_LET's fix): the module tree does… | 391a146bcc |
 | B-2026-11-18-33 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-e… | f452630364 |
 | B-2026-11-18-36 | cli | low | The `ffi_float_eq` lint (W0318) never fired in `karac check`: it walks the lowered tree, where every `==` is already a trait call | abbd3d4aac |
+| B-2026-11-18-37 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit inside a library cell (`Mutex`, `RwLock`, `OnceLock`, channels… | 59d6b19b98 |
 | B-2026-11-18-38 | typecheck | low | Hand-written `impl PartialEq` + `impl Eq`, `impl Ord` or `impl Hash` on a distinct type is ignored by `==`, `T: Eq` / `T: Ord` bounds, `Vec.sort()` a… | 26e646ac02 |
 | B-2026-11-18-41 | typecheck | low | A `#[deprecated]` trait named in a bound on a struct's, enum's or trait's own generic parameter (`struct W[T: T1]`) does not warn | 8265792719 |
 | B-2026-11-18-42 | resolver | medium | An argument-position `ref impl Trait` was not desugared like a bare `impl Trait`: forwarding `x: ref impl Shape` to another `ref impl Shape` paramete… | f949423e35 |
@@ -1723,6 +1722,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-46 | typecheck | high | `karac fix` rewrites Rust's `or_default()` on a map of `BinaryHeap`s to `or_insert(PriorityQueue.new())`, a smallest-first queue, where every other `… | 275ab3ae7f |
 | B-2026-11-18-50 | typecheck | medium | A generic struct literal or enum variant put where its type is already fixed kept a borrowed number as `ref i32`: `Reverse { value: x }` into a `Prio… | 9691a6290e |
 | B-2026-11-18-51 | typecheck | low | A range of literals feeding an `i32` was offered only `as i32`: with `x` from `for x in 0..=50`, `ans = vec![x, y]` into a `Vec<i32>` (LeetCode's Rus… | 9691a6290e |
+| B-2026-11-18-53 | mir-llvm | medium | On mir-llvm a `shared` type used as a `Set` or `Map` key is hashed field by field, never by its own `Hash` impl: a set of keys its `Eq` calls equal k… | 59d6b19b98 |
 
 </details>
 
