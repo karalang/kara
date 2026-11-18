@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 491 |
+| diagnostics | 493 |
 | false-positive | 259 |
 | missing-feature | 200 |
 | perf | 187 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 621 |
+| typecheck | 622 |
 | mir-llvm | 289 |
 | mir | 253 |
 | cli | 196 |
 | parser | 114 |
-| ownership | 105 |
+| ownership | 106 |
 | interp | 87 |
 | runtime | 87 |
 | resolver | 43 |
@@ -116,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-17-134 | 2026-11-17 | mir-llvm | low | A `Map` insert or remove is a runtime call of about 110 to 130 Ir (kata 220: mir_map::insert 1.45G, remove_slot 1.72G over 13M each) where hashbrown's inline insert and erase take about 75; kata 220 still runs 11.71G Ir against Rust's 9.15G | — |
 | B-2026-11-18-1 | 2026-11-18 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both backends) | — |
-| B-2026-11-18-2 | 2026-11-18 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; .. let b = cnt[1]; .. b.min(a)` returned as `i32` is refused with the generic "Write an explicit 'as i32'" and no edit, where `cnt[1].min(cnt[0])` gets the `0i32` suffix | — |
 | B-2026-11-18-3 | 2026-11-18 | typecheck | low | A bare `size_of()` (no type named) type-checks and runs, printing `0`, the placeholder body of the intrinsic, instead of E_LAYOUT_QUERY_TYPE_ARG_REQUIRED | — |
 | B-2026-11-18-11 | 2026-11-18 | typecheck | medium | `Option` has no `iter`/`into_iter`, and `flatten` refuses `Option` items: `root.into_iter().collect()` and `.flatten()` over `[node.left, node.right]` are refused | — |
 | B-2026-11-18-12 | 2026-11-18 | typecheck | medium | An inline array literal indexed under an annotation keeps `i64`: `let c: i32 = [0, 45, 90][k]` is refused, though `let a: Vec[i32] = [0, 45, 90]; let c: i32 = a[k]` checks | — |
@@ -137,6 +136,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-27 | 2026-11-18 | parser | medium | A parameter's pattern uses a reduced grammar: `ref name` (which §7 Destructuring parameters names), fixed-array patterns, `@` bindings and a distinct-type constructor are refused in fn and closure parameters, though each is irrefutable | — |
 | B-2026-11-18-28 | 2026-11-18 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum with a `Drop` impl, a boxed field, a library container (VecDeque, SortedMap, Set, Mutex and the rest) or more than 8 levels of nesting within one node; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
 | B-2026-11-18-29 | 2026-11-18 | cli | medium | `karac build --offline` in a workspace member fails: the workspace's own members are looked up in `vendor/` (E_OFFLINE_VENDOR_ENTRY_MISSING for the member itself), and an offline joint solve would rewrite the workspace's shared kara.lock | — |
+| B-2026-11-18-30 | 2026-11-18 | typecheck | low | `karac fix` rewrites a write through `v.last_mut().unwrap()` to an index, but not a method call, field or element reached through it: `v.last_mut().unwrap().push(c)` (a Rust stack of groups) is refused with no fix | — |
+| B-2026-11-18-31 | 2026-11-18 | ownership | low | A bare parameter consumed by a by-value method gets `.clone()` from `karac fix` and no mention of `own`, even when it was Rust's by-value `Vec<T>`: `blocks.into_iter()` becomes `blocks.clone().into_iter()`, an O(n) copy the Rust never made | — |
 
 ### Relocated
 
@@ -1680,6 +1681,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-137 | typecheck | low | Two `impl Grid[3]` blocks defining one method render the const-generic target as `Grid[Array[(), 3]]` in E0240, a type the program never wrote | a41a371f79 |
 | B-2026-11-17-138 | mir-llvm | low | Dropping a deep `shared` n-ary tree (`kids: Vec[N]`), a trie (`kids: Map[K, N]`) or a node whose handles sit inside a plain struct field (`items: Vec… | 7606280ba7 |
 | B-2026-11-17-139 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum other than Option, a boxed field, a struct with its… | efd6029d27 |
+| B-2026-11-18-2 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; . | ab7613763c |
 | B-2026-11-18-4 | cli | medium | `karac vendor` and `karac update` fetch no git or registry dependency: each is a warning (E_GIT_DEP_UNSUPPORTED / E_REGISTRY_DEP_UNSUPPORTED) and is… | 96df1ac40f |
 | B-2026-11-18-5 | cli | medium | `karac fix` had no fix for `Rc::ptr_eq(&a, &b)`: the `Rc<RefCell<T>>` rewrite left `Rc.ptr_eq(a, b)` behind with no fix and no word of `ref_eq` | 5bb1708545 |
 | B-2026-11-18-6 | mir-llvm | medium | `n.min(v[0])` with `n: i64` and `v: Vec[i32]` runs in the interpreter and is refused by the LLVM backend: ``native `i64.min` is not lowered yet`` | 5bb1708545 |
