@@ -2585,9 +2585,16 @@ impl super::env::TypeEnv {
     /// default"). This is the gate that makes `a == b` / `a < b` / hashing /
     /// `Display` require the corresponding derive on a distinct type.
     fn distinct_derive_supported(&self, ty: &Type, wanted: &[&str]) -> Option<bool> {
-        if let Type::Named { name, .. } = ty {
+        if let Type::Named { name, args } = ty {
             if let Some(traits) = self.distinct_types.get(name) {
-                return Some(wanted.iter().any(|w| traits.contains(*w)));
+                // A hand-written `impl Eq for` the distinct type is its own,
+                // as a derive is: design.md §9's newtype escape hatch
+                // (B-2026-11-18-20, B-2026-11-18-38).
+                return Some(
+                    wanted
+                        .iter()
+                        .any(|w| traits.contains(*w) || self.has_impl(w, name, args)),
+                );
             }
         }
         None
