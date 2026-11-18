@@ -123,8 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-16 | 2026-11-18 | typecheck+mir | medium | Compound assignment (`+=`, `-=`, `*=`) on a `#[derive(Arithmetic)]` distinct type passes check and is then refused by both backends; the plain `a = a + b` form works | — |
 | B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
 | B-2026-11-18-18 | 2026-11-18 | typecheck | low | A match covering `Flag(true)` and `Flag(false)` on a distinct `bool` is E0205 non-exhaustive, though a distinct type has exactly its base's constructor space | — |
-| B-2026-11-18-19 | 2026-11-18 | typecheck | medium | A binding inside a distinct-type pattern (`UserId(n) => n * 2`) is typed `ref <error>`: E0208 "type 'ref <error>' does not implement trait Mul" | — |
-| B-2026-11-18-20 | 2026-11-18 | typecheck | medium | A hand-written `impl Display for` a distinct type is ignored by f-strings, `println` and `T: Display` bounds (design.md's newtype escape-hatch example fails); the same impl on a struct works | — |
 | B-2026-11-18-21 | 2026-11-18 | typecheck+mir | medium | `#[derive(Serialize, Deserialize)]` on a distinct type generates nothing: a struct field of that type checks clean and then fails at run with "no method 'serialize' on type 'UserId'" | — |
 | B-2026-11-18-22 | 2026-11-18 | typecheck | low | Derive requirement rules skip distinct types: `#[derive(Eq)]` without `PartialEq` gets no deprecation warning, and `#[derive(Eq, PartialEq)]` on a distinct `f64` is accepted (NaN == NaN prints false) | — |
 | B-2026-11-18-23 | 2026-11-18 | typecheck | low | `#[derive(Default)]` on a distinct type is accepted, but `Count.default()` is E0202 "expected 1 argument(s), found 0" | — |
@@ -1688,6 +1686,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-9 | typecheck | medium | The integer types had `MAX` and `MIN` but not Rust's `BITS`: `i32.BITS - n.leading_zeros()` was refused, "no associated constant `BITS` on `i32`" | 5bb1708545 |
 | B-2026-11-18-10 | typecheck | medium | An unannotated `collect()` in an f-string hole or a `println` argument reached the MIR builder as E0516 "type does not lower (UnsolvedParam("C")) is… | 5bb1708545 |
 | B-2026-11-18-15 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const`… | 391a146bcc |
+| B-2026-11-18-19 | typecheck | medium | A binding inside a distinct-type pattern (`UserId(n) => n * 2`) is typed `ref <error>`: E0208 "type 'ref <error>' does not implement trait Mul" | 9617e5a664 |
+| B-2026-11-18-20 | typecheck | medium | A hand-written `impl Display for` a distinct type is ignored by f-strings, `println` and `T: Display` bounds (design.md's newtype escape-hatch exampl… | 9617e5a664 |
 | B-2026-11-18-29 | cli | medium | `karac build --offline` in a workspace member fails: the workspace's own members are looked up in `vendor/` (E_OFFLINE_VENDOR_ENTRY_MISSING for the m… | 0b0eb1ead5 |
 | B-2026-11-18-32 | typecheck | medium | A module-level `let` in any package module after the first panics `karac check` (subtract with overflow in E_MODULE_LET's fix): the module tree does… | 391a146bcc |
 
