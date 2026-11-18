@@ -1338,6 +1338,7 @@ impl Parser {
             rust_heap_ctor_sides: self.rust_heap_ctor_sides(),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             rust_heap_collect: std::mem::take(&mut self.rust_heap_collect),
+            rust_heap_or_defaults: self.rust_heap_or_defaults(),
             rust_reverse_wraps: if self.rust_reverse_stays() {
                 rustc_hash::FxHashMap::default()
             } else {
@@ -3597,6 +3598,107 @@ impl Parser {
         self.rust_reverse_stays_in_text()
             || (self.imports_std_cmp_reverse()
                 && self.rust_heap_ctor_sides_told().unsure.is_empty())
+    }
+
+    /// Rust's `m.entry(k).or_default()` where `m` is declared (a `let`, a
+    /// field or a parameter, `m: HashMap<K, BinaryHeap<T>>`, `&mut` allowed)
+    /// as a map of heaps ([`crate::ast::Program::rust_heap_or_defaults`]).
+    fn rust_heap_or_defaults(&self) -> Vec<crate::ast::RustHeapOrDefault> {
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let name_at = |i: usize| match tok(i) {
+            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+        let opens = |i: usize| matches!(tok(i), Some(Token::LeftBracket | Token::LessThan));
+        let mut maps: FxHashMap<&str, (usize, bool)> = FxHashMap::default();
+        for i in 2..self.tokens.len() {
+            if !matches!(name_at(i), Some("HashMap" | "BTreeMap")) || !opens(i + 1) {
+                continue;
+            }
+            let mut j = i;
+            while j > 2 && matches!(tok(j - 1), Some(Token::Amp | Token::Mut)) {
+                j -= 1;
+            }
+            if !matches!(tok(j - 1), Some(Token::Colon)) {
+                continue;
+            }
+            let Some(declared) = name_at(j - 2) else {
+                continue;
+            };
+            // The value type follows the first `,` inside the map's brackets.
+            let mut depth = 0i32;
+            let mut value = None;
+            for k in i + 1..self.tokens.len() {
+                match &self.tokens[k].token {
+                    Token::LessThan | Token::LeftBracket | Token::LeftParen => depth += 1,
+                    Token::GreaterThan | Token::RightBracket | Token::RightParen => depth -= 1,
+                    Token::GreaterGreater => depth -= 2,
+                    Token::Comma if depth == 1 => {
+                        value = Some(k + 1);
+                        break;
+                    }
+                    Token::Semicolon => break,
+                    _ => {}
+                }
+                if depth <= 0 {
+                    break;
+                }
+            }
+            if let Some(v) = value.filter(|&v| name_at(v) == Some("BinaryHeap") && opens(v + 1)) {
+                let reversed = name_at(v + 2) == Some("Reverse");
+                maps.insert(declared, (self.tokens[v].span.offset, reversed));
+            }
+        }
+        let mut calls = Vec::new();
+        if maps.is_empty() {
+            return calls;
+        }
+        for i in 4..self.tokens.len() {
+            if name_at(i) != Some("or_default")
+                || !matches!(tok(i - 1), Some(Token::Dot))
+                || !matches!(tok(i + 1), Some(Token::LeftParen))
+                || !matches!(tok(i + 2), Some(Token::RightParen))
+                || !matches!(tok(i - 2), Some(Token::RightParen))
+            {
+                continue;
+            }
+            // Back from the `)` of `entry(..)` to its `(`.
+            let mut depth = 0i32;
+            let mut open = None;
+            for k in (0..i - 1).rev() {
+                match &self.tokens[k].token {
+                    Token::RightParen => depth += 1,
+                    Token::LeftParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            open = Some(k);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(open) = open.filter(|&o| o >= 3) else {
+                continue;
+            };
+            if name_at(open - 1) != Some("entry") || !matches!(tok(open - 2), Some(Token::Dot)) {
+                continue;
+            }
+            let Some(&(heap, reversed)) = name_at(open - 3).and_then(|m| maps.get(m)) else {
+                continue;
+            };
+            let start = self.tokens[i].span;
+            let end = self.tokens[i + 2].span;
+            calls.push(crate::ast::RustHeapOrDefault {
+                span: crate::token::Span {
+                    length: end.offset + end.length - start.offset,
+                    ..start
+                },
+                heap,
+                reversed,
+            });
+        }
+        calls
     }
 
     /// Whether the program imports Kāra's `std.cmp.Reverse`.

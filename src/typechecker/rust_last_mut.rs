@@ -5,10 +5,12 @@
 //! `if let Some(x) = v.last_mut() { body } else { other }` grow-or-extend a
 //! run in Rust. Kāra has no `last_mut` (B-2026-11-06-39): a write goes
 //! through an index. The rewrite is mechanical when `x` names the element
-//! and nothing in the guard or the body names `v` itself: `if v.len() > 0
-//! and g' { body' } else { other }`, where `'` reads `v[v.len() - 1]` (or
-//! `v[0]`) for `x`. The `match`/`if let` is noted when it is checked, and
-//! the refusal of `last_mut` on it carries the rewrite.
+//! and the guard and the body name `v` itself only after `x`'s last use, as
+//! Rust's borrow checker requires: `if v.len() > 0 and g' { body' } else {
+//! other }`, where `'` reads `v[v.len() - 1]` (or `v[0]`) for `x`. A pattern
+//! `Some((a, b))` over a vector of tuples reads the element's fields for
+//! `a` and `b`. The `match`/`if let` is noted when it is checked, and the
+//! refusal of `last_mut` on it carries the rewrite.
 //!
 //! `let x = v.last_mut().unwrap();` (or `.expect(..)`) is the third shape
 //! (B-2026-11-10-51): the `let` goes, and every `x` the statements after it
@@ -23,19 +25,33 @@ use crate::token::Span;
 
 use super::TypeChecker;
 
-/// `Some(name)`.
-fn some_binding(p: &Pattern) -> Option<&str> {
+/// `Some(x)`, or `Some((a, b, ..))` whose parts are names or `_` (Rust's
+/// `if let Some((c, n)) = st.last_mut()` over a stack of pairs, kata 1209):
+/// each name bound, with the tuple field it reads, `None` for the whole
+/// element.
+fn some_bindings(p: &Pattern) -> Option<Vec<(&str, Option<usize>)>> {
     let PatternKind::TupleVariant { path, patterns } = &p.kind else {
         return None;
     };
     if path.last().map(String::as_str) != Some("Some") {
         return None;
     }
-    match patterns.as_slice() {
-        [Pattern {
-            kind: PatternKind::Binding(n),
-            ..
-        }] => Some(n),
+    let [inner] = patterns.as_slice() else {
+        return None;
+    };
+    match &inner.kind {
+        PatternKind::Binding(n) => Some(vec![(n.as_str(), None)]),
+        PatternKind::Tuple(parts) => {
+            let mut out = Vec::new();
+            for (i, part) in parts.iter().enumerate() {
+                match &part.kind {
+                    PatternKind::Binding(n) => out.push((n.as_str(), Some(i))),
+                    PatternKind::Wildcard => {}
+                    _ => return None,
+                }
+            }
+            (!out.is_empty()).then_some(out)
+        }
         _ => None,
     }
 }
@@ -88,6 +104,50 @@ fn rebinds(e: &Expr, name: &str) -> bool {
     b.1
 }
 
+/// Whether every place `parts` name `root` comes after every use of the
+/// bound names, and no loop or closure holds both. Rust's borrow of the
+/// element ends at its last use, so a body may grow or shrink the vector
+/// after it (`top.1 += 1; if top.1 == k { stack.pop(); }`, kata 1209); read
+/// through an index, each use still reads the element it did.
+fn root_after_uses(parts: &[&Expr], root: &str, bound: &[&str]) -> bool {
+    let is_root = |x: &Expr| match &x.kind {
+        ExprKind::Identifier(n) => n == root,
+        ExprKind::SelfValue => root == "self",
+        _ => false,
+    };
+    let is_bound =
+        |x: &Expr| matches!(&x.kind, ExprKind::Identifier(n) if bound.contains(&n.as_str()));
+    let mut first_root = usize::MAX;
+    let mut last_use = 0;
+    let mut tangled = false;
+    for part in parts {
+        crate::span_visitor::for_each_expr(part, &mut |x| {
+            if is_root(x) {
+                first_root = first_root.min(x.span.offset);
+            }
+            if is_bound(x) {
+                last_use = last_use.max(x.span.offset + 1);
+            }
+            if matches!(
+                x.kind,
+                ExprKind::While { .. }
+                    | ExprKind::WhileLet { .. }
+                    | ExprKind::For { .. }
+                    | ExprKind::Loop { .. }
+                    | ExprKind::Closure { .. }
+            ) {
+                let (mut r, mut b) = (false, false);
+                crate::span_visitor::for_each_expr(x, &mut |y| {
+                    r |= is_root(y);
+                    b |= is_bound(y);
+                });
+                tangled |= r && b;
+            }
+        });
+    }
+    !tangled && last_use <= first_root
+}
+
 /// Every `name` read as `with`.
 struct Subst<'a> {
     name: &'a str,
@@ -129,47 +189,60 @@ fn end_mut_call(e: &Expr) -> Option<(&Expr, bool)> {
 /// The rewrite of a `match`/`if let` over `v.last_mut()`, keyed by the
 /// receiver's span: the whole expression's span and its replacement.
 fn rewrite(e: &Expr) -> Option<(Span, Span, String)> {
-    let (call, bound, guard, body, other): (&Expr, &str, Option<&Expr>, Expr, Option<Expr>) =
-        match &e.kind {
-            ExprKind::Match { scrutinee, arms } => {
-                let [first, rest] = arms.as_slice() else {
-                    return None;
-                };
-                if !matches!(rest.pattern.kind, PatternKind::Wildcard) || rest.guard.is_some() {
-                    return None;
-                }
-                (
-                    scrutinee,
-                    some_binding(&first.pattern)?,
-                    first.guard.as_ref(),
-                    first.body.clone(),
-                    Some(rest.body.clone()),
-                )
+    type Parts<'e> = (
+        &'e Expr,
+        Vec<(&'e str, Option<usize>)>,
+        Option<&'e Expr>,
+        Expr,
+        Option<Expr>,
+    );
+    let (call, bound, guard, body, other): Parts = match &e.kind {
+        ExprKind::Match { scrutinee, arms } => {
+            let [first, rest] = arms.as_slice() else {
+                return None;
+            };
+            if !matches!(rest.pattern.kind, PatternKind::Wildcard) || rest.guard.is_some() {
+                return None;
             }
-            ExprKind::IfLet {
-                pattern,
-                value,
-                then_block,
-                else_branch,
-            } => (
-                value,
-                some_binding(pattern)?,
-                None,
-                Expr {
-                    kind: ExprKind::Block(then_block.clone()),
-                    span: then_block.span,
-                    id: crate::ids::NodeId::DUMMY,
-                },
-                else_branch.as_deref().cloned(),
-            ),
-            _ => return None,
-        };
+            (
+                scrutinee,
+                some_bindings(&first.pattern)?,
+                first.guard.as_ref(),
+                first.body.clone(),
+                Some(rest.body.clone()),
+            )
+        }
+        ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } => (
+            value,
+            some_bindings(pattern)?,
+            None,
+            Expr {
+                kind: ExprKind::Block(then_block.clone()),
+                span: then_block.span,
+                id: crate::ids::NodeId::DUMMY,
+            },
+            else_branch.as_deref().cloned(),
+        ),
+        _ => return None,
+    };
     let (recv, last) = end_mut_call(call)?;
     let recv_root = root(recv)?;
-    for part in guard.into_iter().chain(std::iter::once(&body)) {
-        if names(part, recv_root) || rebinds(part, bound) {
-            return None;
-        }
+    let parts: Vec<&Expr> = guard.into_iter().chain(std::iter::once(&body)).collect();
+    let names_only: Vec<&str> = bound.iter().map(|(n, _)| *n).collect();
+    if parts
+        .iter()
+        .any(|p| names_only.iter().any(|n| rebinds(p, n)))
+    {
+        return None;
+    }
+    if parts.iter().any(|p| names(p, recv_root)) && !root_after_uses(&parts, recv_root, &names_only)
+    {
+        return None;
     }
     let r = crate::formatter::render_expr(recv);
     let at = if last {
@@ -177,22 +250,28 @@ fn rewrite(e: &Expr) -> Option<(Span, Span, String)> {
     } else {
         format!("{r}[0]")
     };
-    // The element's text stands in for the binding: the rewrite is
-    // rendered, never checked as it stands.
-    let elem = Expr {
-        kind: ExprKind::Identifier(at),
-        span: recv.span,
-        id: crate::ids::NodeId::DUMMY,
-    };
+    // The element's text (or its field's) stands in for each binding: the
+    // rewrite is rendered, never checked as it stands.
+    let elems: Vec<(&str, Expr)> = bound
+        .iter()
+        .map(|(n, field)| {
+            let text = match field {
+                Some(i) => format!("{at}.{i}"),
+                None => at.clone(),
+            };
+            let e = Expr {
+                kind: ExprKind::Identifier(text),
+                span: recv.span,
+                id: crate::ids::NodeId::DUMMY,
+            };
+            (*n, e)
+        })
+        .collect();
     let sub = |x: &Expr| {
         let mut x = x.clone();
-        crate::span_visitor::walk_expr_mut_with(
-            &mut x,
-            &mut Subst {
-                name: bound,
-                with: &elem,
-            },
-        );
+        for (name, with) in &elems {
+            crate::span_visitor::walk_expr_mut_with(&mut x, &mut Subst { name, with });
+        }
         crate::formatter::render_expr(&x)
     };
     let mut cond = format!("{r}.len() > 0");

@@ -791,6 +791,17 @@ pub type DropMethodKeysTable = std::collections::HashMap<String, String>;
 /// The Rust heap constructors ([`Program::rust_heap_ctor`]) whose heap pops
 /// the smallest first, its items wrapped in `Reverse`, and those whose side
 /// cannot be told; the rest pop the largest first (kata 2034).
+/// One [`Program::rust_heap_or_defaults`] call.
+#[derive(Debug, Clone)]
+pub struct RustHeapOrDefault {
+    /// From `or_default` through its `)`.
+    pub span: crate::token::Span,
+    /// The offset of the map's annotation's `BinaryHeap`.
+    pub heap: usize,
+    /// Whether the heap's items are `Reverse`s, `BinaryHeap<Reverse<T>>`.
+    pub reversed: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RustHeapSides {
     /// Offsets of `BinaryHeap` whose fix is `PriorityQueue.new()` / `from`.
@@ -983,6 +994,14 @@ pub struct Program {
     /// queue too, unless the program's other heaps drop `Reverse`
     /// (B-2026-11-15-86).
     pub rust_heap_collect: rustc_hash::FxHashMap<usize, (crate::resolver::TextEdit, bool)>,
+    /// Rust's `m.entry(k).or_default()` on a map declared as one of
+    /// `BinaryHeap`s, `m: HashMap<K, BinaryHeap<T>>`. Set by the PARSER from
+    /// the tokens; the resolver reports each beside the `BinaryHeap` it
+    /// names. Kāra's `Entry` has no `or_default`, and the heap it puts in
+    /// must be Rust's largest-first one, `PriorityQueue.max_first()`, not the
+    /// smallest-first `PriorityQueue.new()` the typechecker's fix writes once
+    /// the type reads `PriorityQueue` (B-2026-11-18-46, kata 1202).
+    pub rust_heap_or_defaults: Vec<RustHeapOrDefault>,
     /// Rust's `std::cmp::Reverse` around a heap's item, `heap.push(Reverse(x))`
     /// or `Some(Reverse(p))`, keyed by the offset of `Reverse`, with the edit
     /// that writes `x` in its place. Set by the PARSER from the

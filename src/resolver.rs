@@ -2901,6 +2901,41 @@ impl<'a> Resolver<'a> {
             replacement,
             stub_hint: None,
         });
+        // Rust's `or_default()` on a map of these heaps: Kāra's `Entry`
+        // puts in the heap it is given, and Rust's was largest-first,
+        // unless the program drops its items' `Reverse` (B-2026-11-18-46).
+        if name == "BinaryHeap" && self.program.rust_heap_ctor_sides.unsure.is_empty() {
+            let calls: Vec<_> = self
+                .program
+                .rust_heap_or_defaults
+                .iter()
+                .filter(|c| c.heap == span.offset)
+                .cloned()
+                .collect();
+            for call in calls {
+                let heap = if call.reversed && self.rust_heaps_pop_smallest() {
+                    "PriorityQueue.new()"
+                } else {
+                    "PriorityQueue.max_first()"
+                };
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "no method 'or_default' on Kāra's `Entry`, which puts in the value it is \
+                         given: Rust's `BinaryHeap` pops the largest first and Kāra's \
+                         `PriorityQueue.new()` the smallest, so the heap is `or_insert({heap})`"
+                    ),
+                    span: call.span,
+                    kind: ResolveErrorKind::UndefinedName,
+                    suggestion: None,
+                    replacement: Some(Box::new(TextEdit {
+                        offset: call.span.offset,
+                        length: call.span.length,
+                        replacement: format!("or_insert({heap})"),
+                    })),
+                    stub_hint: None,
+                });
+            }
+        }
         if let Some(edit) = collected {
             self.errors.push(ResolveError {
                 message: "this `BinaryHeap` is filled by `collect`, and Rust's heap pops the \

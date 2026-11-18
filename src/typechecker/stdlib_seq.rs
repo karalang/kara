@@ -609,6 +609,15 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
                     if !is_integer_argument(&arg_ty) {
+                        // A Rust `usize` count (`c.to_string().repeat(n)` over
+                        // a `Vec<(char, usize)>`, kata 1209) meets Kāra's
+                        // `i64` counts: the program's written `usize`s are
+                        // fixed to `i64` (pointer_ints.rs).
+                        let count = match &arg_ty {
+                            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                            other => other,
+                        };
+                        self.note_pointer_int_mix(count, &Type::Int(IntSize::I64));
                         self.type_error(
                             format!(
                                 "'repeat' expects an integer count, found '{}'",
