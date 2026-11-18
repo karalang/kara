@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 493 |
-| false-positive | 262 |
-| missing-feature | 200 |
+| diagnostics | 503 |
+| false-positive | 263 |
+| missing-feature | 201 |
 | perf | 187 |
 | other | 113 |
 | soundness | 86 |
-| miscompile | 81 |
+| miscompile | 82 |
 | run-vs-build | 56 |
 | crash | 52 |
 | codegen-gap | 38 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 626 |
+| typecheck | 631 |
 | mir-llvm | 289 |
 | mir | 253 |
-| cli | 196 |
-| parser | 114 |
-| ownership | 106 |
+| cli | 197 |
+| parser | 117 |
+| ownership | 108 |
+| runtime | 88 |
 | interp | 87 |
-| runtime | 87 |
-| resolver | 43 |
+| resolver | 44 |
 | effect | 41 |
 | other | 34 |
 | codegen | 22 |
@@ -114,6 +114,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-17-134 | 2026-11-17 | mir-llvm | low | A `Map` insert or remove is a runtime call of about 110 to 130 Ir (kata 220: mir_map::insert 1.45G, remove_slot 1.72G over 13M each) where hashbrown's inline insert and erase take about 75; kata 220 still runs 11.71G Ir against Rust's 9.15G | — |
+| B-2026-11-17-143 | 2026-11-17 | typecheck | low | An integer array literal iterated against an i32 accumulator (`for step in [60, 15, 5, 1].iter() { ops += diff / step; diff %= step }` with `diff: i32`) gets E0200 narrowing twice and no machine fix | — |
+| B-2026-11-17-144 | 2026-11-17 | typecheck | low | A closure whose parameter has no type and whose body calls a method on it (`let digits = |time| { time.chars()..count() }; digits(a)`) reports only E0516 "a type that failed to check is not lowered yet", naming no cause | — |
+| B-2026-11-17-145 | 2026-11-17 | ownership | low | When a later argument reads a value that an earlier argument moves into an `own` parameter (`push(acc, acc.len() + i)`), the fix clones the moved value; in a `fold` that is a copy per step, where hoisting the read into a `let` is the fix | — |
+| B-2026-11-17-149 | 2026-11-17 | resolver | low | Importing a prelude name by its module, `import std.iter.once;` (from Rust's `use std::iter::once;`) or `import std.collections.VecDeque;`, is refused (E0113 "`std.iter` has no item `once`", E0112 "unknown module `std.collections`") with no fix and no word that the name is in the prelude; docs/syntax.md's own import examples use `std.collections` | — |
+| B-2026-11-17-150 | 2026-11-17 | ownership | low | E0235's fix `let best = ref best;` shadows `best` for the rest of a loop body, so a later write `best[next][w] = ..` in that body is refused next round (E0517 through a shared ref); and E0500's "used again here" points at a use before the capture | — |
+| B-2026-11-17-152 | 2026-11-17 | typecheck | medium | Under `mut ref self`, `match self.slots[i] { Some(v) => v.n += 1, .. }` binds `v` as a `ref` and the write is E0517 "reached through a shared ref", though core-semantics §4.6 makes a place reached through a `mut ref` and no `ref` a `mut ref` scrutinee; the field place `match self.one` is accepted, and E0517 offers no fix | — |
 | B-2026-11-18-1 | 2026-11-18 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both backends) | — |
 | B-2026-11-18-3 | 2026-11-18 | typecheck | low | A bare `size_of()` (no type named) type-checks and runs, printing `0`, the placeholder body of the intrinsic, instead of E_LAYOUT_QUERY_TYPE_ARG_REQUIRED | — |
 | B-2026-11-18-11 | 2026-11-18 | typecheck | medium | `Option` has no `iter`/`into_iter`, and `flatten` refuses `Option` items: `root.into_iter().collect()` and `.flatten()` over `[node.left, node.right]` are refused | — |
@@ -1677,6 +1683,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-137 | typecheck | low | Two `impl Grid[3]` blocks defining one method render the const-generic target as `Grid[Array[(), 3]]` in E0240, a type the program never wrote | a41a371f79 |
 | B-2026-11-17-138 | mir-llvm | low | Dropping a deep `shared` n-ary tree (`kids: Vec[N]`), a trie (`kids: Map[K, N]`) or a node whose handles sit inside a plain struct field (`items: Vec… | 7606280ba7 |
 | B-2026-11-17-139 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum other than Option, a boxed field, a struct with its… | efd6029d27 |
+| B-2026-11-17-140 | cli | medium | `karac fix` applied a `redundant_cast` fix in the same pass as an error's fix that retyped its operand, so `(c / mid) as i64` lost its cast just as `… | 03a6125579 |
+| B-2026-11-17-141 | parser | low | The fix that moves a closure's Rust return type onto its `let` binding wrote `Fn(String) -> ..` for a bare parameter, which borrows: the closure is `… | 03a6125579 |
+| B-2026-11-17-142 | parser | low | A Rust typed receiver naming the impl's own type (`self: ref Tournament`, `self: mut ref Tournament`) had no machine fix; only the `Self` spelling did | 03a6125579 |
+| B-2026-11-17-146 | typecheck | low | `let mut s = s; . | 03a6125579 |
+| B-2026-11-17-147 | typecheck | low | `(end_minute as usize).min(v.len() - 1)` with `end_minute: i32` is refused "`min` expects an argument of type `usize`, got `i64`" with no machine fix… | 03a6125579 |
+| B-2026-11-17-151 | runtime | low | `Set` has no `retain`, while `Map`, `SortedMap`, `SortedSet`, `Vec` and `VecDeque` all have one; Rust's `HashSet::retain` gets only "no method 'retai… | 03a6125579 |
 | B-2026-11-18-2 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; . | ab7613763c |
 | B-2026-11-18-4 | cli | medium | `karac vendor` and `karac update` fetch no git or registry dependency: each is a warning (E_GIT_DEP_UNSUPPORTED / E_REGISTRY_DEP_UNSUPPORTED) and is… | 96df1ac40f |
 | B-2026-11-18-5 | cli | medium | `karac fix` had no fix for `Rc::ptr_eq(&a, &b)`: the `Rc<RefCell<T>>` rewrite left `Rc.ptr_eq(a, b)` behind with no fix and no word of `ref_eq` | 5bb1708545 |
