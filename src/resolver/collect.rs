@@ -1263,6 +1263,38 @@ impl<'a> super::Resolver<'a> {
             suggest_similar(&wanted, &candidates)
         };
         let mut message = format!("unknown module `{wanted}`");
+        // `std.data` / `std.data.{DataFrame}`: the data types are the post-v1
+        // `kara-data` package, not `std` and not the prelude, so neither the
+        // near module nor "delete the import" is an answer.
+        let data_items: Vec<String> = imp
+            .items
+            .iter()
+            .filter(|it| crate::prelude::REMOVED_LIBRARY_TYPES.contains(&it.name.as_str()))
+            .map(|it| format!("`{}`", it.name))
+            .collect();
+        let data_pkg = wanted == "std.data" || wanted.starts_with("std.data.");
+        if !data_items.is_empty() || data_pkg {
+            let what = if data_items.is_empty() {
+                "data frames and columns come".to_string()
+            } else if data_items.len() == 1 {
+                format!("{} comes", data_items[0])
+            } else {
+                format!("{} come", data_items.join(", "))
+            };
+            message.push_str(&format!(
+                ": {what} with the `kara-data` package, which is not in 0.8 and is not \
+                 `std` or the prelude (docs/library/data.md, docs/deferred.md § M4c data)"
+            ));
+            self.errors.push(ResolveError {
+                message,
+                span: imp.span,
+                kind: ResolveErrorKind::UnknownModule,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
         if rust_rc {
             message.push_str(
                 ": `Rc` and `RefCell` are Rust's, and Kāra has neither; a `shared struct` is \

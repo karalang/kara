@@ -7985,6 +7985,16 @@ impl<'a> super::TypeChecker<'a> {
                     )
                 })
                 .filter(|t| !matches!(t, Type::TypeParam(_)));
+            // `Tensor.zeros([2, 2])`: the call is refused as not in 0.8
+            // (E0520, `kara-data`), so a parameter nothing fixes is that
+            // refusal's echo, not a second thing to annotate.
+            if let Some(Type::Named { name: ty_name, .. }) = &ty {
+                if crate::prelude::REMOVED_LIBRARY_TYPES.contains(&ty_name.as_str())
+                    && !self.program_declares_type(ty_name)
+                {
+                    continue;
+                }
+            }
             let of = ty
                 .map(|t| format!(" of `{}`", type_display(&t)))
                 .unwrap_or_default();
