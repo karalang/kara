@@ -580,7 +580,15 @@ impl<'a> super::TypeChecker<'a> {
         // Lower the target with `parent_is_ref = true` so the slice-1b
         // walker doesn't fire E_OPAQUE_TYPE_REQUIRES_INDIRECTION; this
         // intrinsic emits E_OFFSET_OF_OPAQUE_TYPE instead.
-        let resolved = self.lower_type_expr_inner(ty, &[], true);
+        // The enclosing function's generic parameters are in scope, so a
+        // parameter target lowers to `TypeParam` and is refused as one below
+        // rather than as a non-struct name (B-2026-11-16-303's sweep).
+        let scope = self
+            .node_generic_frames
+            .get(self.current_generic_frame as usize)
+            .cloned()
+            .unwrap_or_default();
+        let resolved = self.lower_type_expr_inner(ty, &scope, true);
         let (mut current_struct_name, _initial_args) = match &resolved {
             Type::Named { name, args } => (name.clone(), args.clone()),
             // Per design.md, generic type-parameter targets are rejected:
