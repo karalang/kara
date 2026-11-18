@@ -1530,7 +1530,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   two-word entry is moved out as one value rather than through `memcpy`,
   a removal finds a power-of-two entry's slot by a shift, and growth and
   rebuilds are out of line. Kata 220 went from 11.71G instructions to
-  11.11G (B-2026-11-17-134).
+  11.11G (B-2026-11-17-134). A removal by a scalar key frees the index
+  cell the in-line probe found rather than probing for it again: kata 220
+  to 10.30G, 146 0.94x, 340 0.95x, 349 0.96x; of the 1,215 kata benches 9
+  build differently, all faster, none printing differently.
 - A read-only walk over a `shared` value's `mut` vector field
   (`for child in node.children.iter()`) in a body that writes nothing
   through a `shared` handle checks the field's borrow flag once instead of

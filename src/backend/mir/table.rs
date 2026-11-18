@@ -206,6 +206,23 @@ impl<'ctx> Cx<'ctx, '_> {
         key: PointerValue<'ctx>,
         t: Table,
     ) -> R<(PointerValue<'ctx>, Option<IntValue<'ctx>>)> {
+        self.lookup_cell(h, key, t).map(|(at, hv, _)| (at, hv))
+    }
+
+    /// [`Self::lookup`], with the index cell an in-line probe found the
+    /// entry in (`None` where the runtime searched): a removal then frees
+    /// that cell without probing for it again (B-2026-11-17-134).
+    #[allow(clippy::type_complexity)]
+    fn lookup_cell(
+        &mut self,
+        h: PointerValue<'ctx>,
+        key: PointerValue<'ctx>,
+        t: Table,
+    ) -> R<(
+        PointerValue<'ctx>,
+        Option<IntValue<'ctx>>,
+        Option<IntValue<'ctx>>,
+    )> {
         let [hf, ef, cf] = self.glue_ptrs(t);
         let (args, hv): (Vec<BasicMetadataValueEnum<'ctx>>, _) = if t.sorted {
             (
@@ -215,7 +232,8 @@ impl<'ctx> Cx<'ctx, '_> {
         } else {
             let hv = self.table_hash(key, t)?;
             if self.probe_in_line(t.key) {
-                return Ok((self.probe(h, key, hv, t)?, Some(hv)));
+                let (at, cell) = self.probe(h, key, hv, t)?;
+                return Ok((at, Some(hv), Some(cell)));
             }
             (vec![h.into(), key.into(), hv.into(), ef.into()], Some(hv))
         };
@@ -236,7 +254,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        Ok((at, hv))
+        Ok((at, hv, None))
     }
 
     /// The grouped probe of `MirMap::find_slot` for the scalar `key` (hash
@@ -244,14 +262,15 @@ impl<'ctx> Cx<'ctx, '_> {
     /// is control bytes (the top seven bits of a live slot's hash) read
     /// eight at a time as a word, then 4-byte slots; a slot and its entry
     /// are read only where a byte matches the key's tag, and a group with
-    /// an empty byte ends the probe (B-2026-11-08-8).
+    /// an empty byte ends the probe (B-2026-11-08-8). With the entry, the
+    /// index cell it was found in (undefined on a miss).
     fn probe(
         &mut self,
         h: PointerValue<'ctx>,
         key: PointerValue<'ctx>,
         hv: IntValue<'ctx>,
         t: Table,
-    ) -> R<PointerValue<'ctx>> {
+    ) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
         const LSB: u64 = 0x0101_0101_0101_0101;
         const MSB: u64 = 0x8080_8080_8080_8080;
         let i64t = self.llcx.i64_type();
@@ -394,7 +413,12 @@ impl<'ctx> Cx<'ctx, '_> {
         b.position_at_end(done);
         let phi = b.build_phi(self.ptr_ty(), "").map_err(e)?;
         phi.add_incoming(&[(&at, cand), (&self.ptr_ty().const_null(), miss)]);
-        Ok(phi.as_basic_value().into_pointer_value())
+        let cell = b.build_phi(i64t, "").map_err(e)?;
+        cell.add_incoming(&[(&i, cand), (&i64t.get_undef(), miss)]);
+        Ok((
+            phi.as_basic_value().into_pointer_value(),
+            cell.as_basic_value().into_int_value(),
+        ))
     }
 
     /// Adds the entry at `entry` to the table whose handle is at `hp`.
@@ -1127,7 +1151,12 @@ impl<'ctx> Cx<'ctx, '_> {
             ("remove", [k]) => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let (at, _) = self.lookup(h, kp, t)?;
+                let (at, _, cell) = self.lookup_cell(h, kp, t)?;
+                // The probe's cell when it probed in line.
+                let take = move |cx: &mut Self, out: PointerValue<'ctx>| match cell {
+                    Some(c) => cx.rt("map_remove_cell", &[h.into(), c.into(), out.into()]),
+                    None => cx.rt("map_remove_entry", &[h.into(), at.into(), out.into()]),
+                };
                 let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 let d = self.place_ptr(dest)?;
                 let tmp = self.temp(t.entry, "removed")?;
@@ -1137,7 +1166,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     let voff = self.val_off(t)?;
                     let v = t.val.unwrap_or(t.key);
                     self.if_then(found, |cx| {
-                        cx.rt("map_remove_entry", &[h.into(), at.into(), tmp.into()])?;
+                        take(cx, tmp)?;
                         if cx.tys.needs_drop(t.key) {
                             cx.call_glue(tmp, t.key)?;
                         }
@@ -1149,7 +1178,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 } else {
                     self.store_bool(dest, found)?;
                     self.if_then(found, |cx| {
-                        cx.rt("map_remove_entry", &[h.into(), at.into(), tmp.into()])?;
+                        take(cx, tmp)?;
                         if cx.tys.needs_drop(t.key) {
                             cx.call_glue(tmp, t.key)?;
                         }

@@ -409,16 +409,7 @@ impl MirMap {
                 let i = first_cell(pos, m, mask);
                 // SAFETY: `i < ncells`.
                 if unsafe { *self.cells.add(i) } == tag && self.slot_in(i) == sl {
-                    // The taken cells just before `i`, and from `i` on.
-                    let before = match_empty(self.group(i.wrapping_sub(GROUP) & mask));
-                    let after = match_empty(self.group(i));
-                    let run = (before.leading_zeros() / 8 + after.trailing_zeros() / 8) as usize;
-                    if run < GROUP {
-                        self.set_ctrl(i, CTRL_EMPTY);
-                        self.index_used -= 1;
-                    } else {
-                        self.set_ctrl(i, CTRL_DELETED);
-                    }
+                    self.index_clear(i);
                     return;
                 }
                 m &= m - 1;
@@ -426,6 +417,23 @@ impl MirMap {
             debug_assert!(match_empty(g) == 0, "a live slot is missing from the index");
             stride += GROUP;
             pos = (pos + stride) & mask;
+        }
+    }
+
+    /// Frees index cell `i`, which holds a live slot: [`CTRL_EMPTY`] when
+    /// no probe can have passed it, else [`CTRL_DELETED`] (see
+    /// [`Self::index_take`]).
+    fn index_clear(&mut self, i: usize) {
+        let mask = self.ncells - 1;
+        // The taken cells just before `i`, and from `i` on.
+        let before = match_empty(self.group(i.wrapping_sub(GROUP) & mask));
+        let after = match_empty(self.group(i));
+        let run = (before.leading_zeros() / 8 + after.trailing_zeros() / 8) as usize;
+        if run < GROUP {
+            self.set_ctrl(i, CTRL_EMPTY);
+            self.index_used -= 1;
+        } else {
+            self.set_ctrl(i, CTRL_DELETED);
         }
     }
 
@@ -1263,7 +1271,7 @@ pub unsafe extern "C" fn karac_mir_map_remove(h: *mut MirMap, i: i64, out: *mut 
     }
     let s = m.slot_of(i as usize);
     // SAFETY: as above.
-    unsafe { remove_slot(m, s, out) }
+    unsafe { remove_slot(m, s, None, out) }
 }
 
 /// Moves the entry at index `i` of a table in a tree to `out`, and the
@@ -1307,16 +1315,35 @@ pub unsafe extern "C" fn karac_mir_map_remove_entry(h: *mut MirMap, at: *const u
         off / es
     };
     // SAFETY: as above.
-    unsafe { remove_slot(m, s, out) }
+    unsafe { remove_slot(m, s, None, out) }
 }
 
-/// Moves the live entry in slot `s` to `out`, as [`karac_mir_map_remove`].
-/// In line in its two callers, as [`insert`] is.
+/// [`karac_mir_map_remove_entry`] of the entry index cell `cell` of the
+/// hashed table at `h` holds, which compiled code's in-line probe found:
+/// the cell is freed where it is, with no second probe for it
+/// (B-2026-11-17-134).
+///
+/// # Safety
+/// `h` is a live hashed table and `cell` one of its index cells holding a
+/// live slot; `out` is writable for an entry.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_remove_cell(h: *mut MirMap, cell: u64, out: *mut u8) {
+    // SAFETY: the caller's contract.
+    let m = unsafe { &mut *h };
+    let cell = cell as usize;
+    let s = m.slot_in(cell);
+    // SAFETY: as above.
+    unsafe { remove_slot(m, s, Some(cell), out) }
+}
+
+/// Moves the live entry in slot `s` to `out`, as [`karac_mir_map_remove`];
+/// `cell`, when known, is the index cell holding `s`. In line in its
+/// callers, as [`insert`] is.
 ///
 /// # Safety
 /// As [`karac_mir_map_remove`], with `s` a live slot.
 #[inline(always)]
-unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
+unsafe fn remove_slot(m: &mut MirMap, s: usize, cell: Option<usize>, out: *mut u8) {
     let es = m.entry_size;
     m.forget();
     // SAFETY: as above. A word or two-word entry as one move, as `insert`
@@ -1344,8 +1371,13 @@ unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
         m.slots -= 1;
         return;
     }
-    let hv = m.hash_at(s);
-    m.index_take(hv, s);
+    match cell {
+        Some(i) => m.index_clear(i),
+        None => {
+            let hv = m.hash_at(s);
+            m.index_take(hv, s);
+        }
+    }
     if s + 1 == m.slots && m.holes == 0 {
         m.slots -= 1;
         return;
