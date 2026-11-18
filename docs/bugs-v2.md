@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 507 |
+| diagnostics | 508 |
 | false-positive | 265 |
 | missing-feature | 201 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 635 |
+| typecheck | 636 |
 | mir-llvm | 291 |
 | mir | 253 |
 | cli | 198 |
@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-143 | 2026-11-17 | typecheck | low | An integer array literal iterated against an i32 accumulator (`for step in [60, 15, 5, 1].iter() { ops += diff / step; diff %= step }` with `diff: i32`) gets E0200 narrowing twice and no machine fix | — |
 | B-2026-11-17-144 | 2026-11-17 | typecheck | low | A closure whose parameter has no type and whose body calls a method on it (`let digits = |time| { time.chars()..count() }; digits(a)`) reports only E0516 "a type that failed to check is not lowered yet", naming no cause | — |
 | B-2026-11-17-145 | 2026-11-17 | ownership | low | When a later argument reads a value that an earlier argument moves into an `own` parameter (`push(acc, acc.len() + i)`), the fix clones the moved value; in a `fold` that is a copy per step, where hoisting the read into a `let` is the fix | — |
-| B-2026-11-17-149 | 2026-11-17 | resolver | low | Importing a prelude name by its module, `import std.iter.once;` (from Rust's `use std::iter::once;`) or `import std.collections.VecDeque;`, is refused (E0113 "`std.iter` has no item `once`", E0112 "unknown module `std.collections`") with no fix and no word that the name is in the prelude; docs/syntax.md's own import examples use `std.collections` | — |
 | B-2026-11-17-150 | 2026-11-17 | ownership | low | E0235's fix `let best = ref best;` shadows `best` for the rest of a loop body, so a later write `best[next][w] = ..` in that body is refused next round (E0517 through a shared ref); and E0500's "used again here" points at a use before the capture | — |
 | B-2026-11-17-152 | 2026-11-17 | typecheck | medium | Under `mut ref self`, `match self.slots[i] { Some(v) => v.n += 1, .. }` binds `v` as a `ref` and the write is E0517 "reached through a shared ref", though core-semantics §4.6 makes a place reached through a `mut ref` and no `ref` a `mut ref` scrutinee; the field place `match self.one` is accepted, and E0517 offers no fix | — |
 | B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
@@ -133,6 +132,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-40 | 2026-11-18 | typecheck | medium | An associated function or enum variant reached through `Self` (`Self.gcd(a, b)` in an impl, `Self.one()` in a trait's default body, `Self.B(3)` in an enum's impl) is typed as an error with no diagnostic, and `karac check` prints MIR's "a type that failed to check is not lowered yet" (E0516); the pattern `Self.A =>` is refused as "'Self' is a reserved keyword" | — |
 | B-2026-11-18-41 | 2026-11-18 | typecheck | low | A `#[deprecated]` trait named in a bound on a struct's, enum's or trait's own generic parameter (`struct W[T: T1]`) does not warn | — |
 | B-2026-11-18-43 | 2026-11-18 | typecheck | low | A generic distinct type (`distinct type Ids[T] = Vec[T]`) is accepted at its declaration, but its constructor cannot build a value: `let a: Ids[i64] = Ids([1])` is E0200 "expected 'Ids[i64]', found 'Ids'" | — |
+| B-2026-11-18-44 | 2026-11-18 | typecheck | low | A `fold` whose seed takes an `i32` from a field (`fold((vals[0], 1), |(s, c), k| (s + k, c + 1))` over `i64` items) is refused at `s + k` with the advice to write `as i32`, which would truncate the sum; the seed is not named and nothing offers to widen it (`vals[0] as i64`) | — |
 
 ### Relocated
 
@@ -1682,6 +1682,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-142 | parser | low | A Rust typed receiver naming the impl's own type (`self: ref Tournament`, `self: mut ref Tournament`) had no machine fix; only the `Self` spelling did | 03a6125579 |
 | B-2026-11-17-146 | typecheck | low | `let mut s = s; . | 03a6125579 |
 | B-2026-11-17-147 | typecheck | low | `(end_minute as usize).min(v.len() - 1)` with `end_minute: i32` is refused "`min` expects an argument of type `usize`, got `i64`" with no machine fix… | 03a6125579 |
+| B-2026-11-17-149 | resolver | low | Importing a prelude name by its module, `import std.iter.once;` (from Rust's `use std::iter::once;`) or `import std.collections.VecDeque;`, is refuse… | 68d6ffd6a0 |
 | B-2026-11-17-151 | runtime | low | `Set` has no `retain`, while `Map`, `SortedMap`, `SortedSet`, `Vec` and `VecDeque` all have one; Rust's `HashSet::retain` gets only "no method 'retai… | 03a6125579 |
 | B-2026-11-18-1 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both ba… | 1b91426f44 |
 | B-2026-11-18-2 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; . | ab7613763c |
