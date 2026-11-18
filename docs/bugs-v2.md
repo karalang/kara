@@ -117,10 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
 | B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
 | B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
-| B-2026-11-18-56 | 2026-11-18 | typecheck | low | Diagnostics for a `Secret[T]` used where a withheld trait is needed advise deriving that trait on `Secret`, which secret.md forbids: a log field says `derive it with #[derive(Serialize)] on Secret[String]`, `dbg`/`assert_eq` say `add #[derive(Debug)]`, a `Set[Secret[String]]` says a derive on `Secret` holds where its type arguments have the traits | — |
-| B-2026-11-18-57 | 2026-11-18 | typecheck | low | A string literal passed where `std.crypto` / `std.encoding` take `Slice[u8]` (`sha256("abc")`) is E0200 "expected 'Slice[u8]', found 'String'" with no fix, though crypto.md names `.bytes()` as the way | — |
-| B-2026-11-18-63 | 2026-11-18 | resolver | low | `import std.data.{DataFrame};` (or `{Column}`) is told the item "is in the prelude, visible without an import, so the import can go" with a machine fix deleting the import, though `DataFrame`/`Column` are the post-v1 `kara-data` package and every use is then E0520 not-in-0.8 | — |
-| B-2026-11-18-64 | 2026-11-18 | typecheck | low | `Tensor.zeros([2, 2])` leads with E0238 "cannot infer type parameter 'S' of `Tensor[T, S]`... add a type annotation" before the E0520 that says `Tensor` is not in 0.8 | — |
 
 ### Relocated
 
@@ -1729,11 +1725,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-53 | mir-llvm | medium | On mir-llvm a `shared` type used as a `Set` or `Map` key is hashed field by field, never by its own `Hash` impl: a set of keys its `Eq` calls equal k… | 59d6b19b98 |
 | B-2026-11-18-54 | typecheck | high | A range from an unannotated literal binding to an expression over it and a typed value (`let mut at = 0; for i in at..at + k` with `k: i64`) is refus… | 6e9fe3eaf3 |
 | B-2026-11-18-55 | mir+mir-llvm | low | A `std.log` record's `task_id` counts auto-par tasks: two adjacent `info` lines that auto-par runs side by side take ids, so a later `par` block's br… | 1438ef926a |
+| B-2026-11-18-56 | typecheck | low | Diagnostics for a `Secret[T]` used where a withheld trait is needed advise deriving that trait on `Secret`, which secret.md forbids: a log field says… | 2b7b438e66 |
+| B-2026-11-18-57 | typecheck | low | A string literal passed where `std.crypto` / `std.encoding` take `Slice[u8]` (`sha256("abc")`) is E0200 "expected 'Slice[u8]', found 'String'" with n… | 2b7b438e66 |
 | B-2026-11-18-58 | typecheck+mir | medium | `w.n.raw()` through a bare (borrowing) parameter `w` is refused as a move out of a borrowed place (E0516), though `n.raw()` of a bare `n` is a borrow… | bdc7412857 |
 | B-2026-11-18-59 | typecheck | medium | `karac fix` turns a Rust program's `usize`s into `i64` and leaves `i.checked_sub(1)` and `i.saturating_sub(k)` as they were, so at 0 they give `Some(… | 2e40b2fffa |
 | B-2026-11-18-60 | typecheck | medium | A list literal iterated and collected where it is written keeps its string literals `String` and its numbers `i64` when a tuple holds a non-number: `… | 2e40b2fffa |
 | B-2026-11-18-61 | mir-llvm | high | `m[k]` on a map whose values are views (`Map[i64, Str]`, `SortedMap[i64, Str]`, `Map[char, Slice[i64]]`) reads garbage in a built program: `karac bui… | 2e40b2fffa |
 | B-2026-11-18-62 | typecheck | low | A constant whose type holds a `Slice` of list literals (Rust's `const FOLLOWS: [&[usize]; 5] = [&[1], &[0, 2], ..]`, which `karac fix` writes `Array[… | 2e40b2fffa |
+| B-2026-11-18-63 | resolver | low | `import std.data.{DataFrame};` (or `{Column}`) is told the item "is in the prelude, visible without an import, so the import can go" with a machine f… | 645615d7b8 |
+| B-2026-11-18-64 | typecheck | low | `Tensor.zeros([2, 2])` leads with E0238 "cannot infer type parameter 'S' of `Tensor[T, S]`.. | 645615d7b8 |
 
 </details>
 
