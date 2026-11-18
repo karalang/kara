@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 508 |
+| diagnostics | 510 |
 | false-positive | 265 |
 | missing-feature | 201 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 636 |
+| typecheck | 638 |
 | mir-llvm | 291 |
 | mir | 253 |
 | cli | 198 |
@@ -1714,6 +1714,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-33 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-e… | f452630364 |
 | B-2026-11-18-36 | cli | low | The `ffi_float_eq` lint (W0318) never fired in `karac check`: it walks the lowered tree, where every `==` is already a trait call | abbd3d4aac |
 | B-2026-11-18-42 | resolver | medium | An argument-position `ref impl Trait` was not desugared like a bare `impl Trait`: forwarding `x: ref impl Shape` to another `ref impl Shape` paramete… | f949423e35 |
+| B-2026-11-18-45 | typecheck | low | `karac fix` leaves Rust's `last_mut()` unfixed when the arm that binds the element pops the vector after the element's last use (`Some(top) if top.0… | 275ab3ae7f |
+| B-2026-11-18-46 | typecheck | high | `karac fix` rewrites Rust's `or_default()` on a map of `BinaryHeap`s to `or_insert(PriorityQueue.new())`, a smallest-first queue, where every other `… | 275ab3ae7f |
 
 </details>
 
