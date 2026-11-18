@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 86 |
 | miscompile | 81 |
 | run-vs-build | 56 |
-| crash | 51 |
+| crash | 52 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
 | leak | 4 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 622 |
+| typecheck | 623 |
 | mir-llvm | 289 |
 | mir | 253 |
 | cli | 196 |
@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-12 | 2026-11-18 | typecheck | medium | An inline array literal indexed under an annotation keeps `i64`: `let c: i32 = [0, 45, 90][k]` is refused, though `let a: Vec[i32] = [0, 45, 90]; let c: i32 = a[k]` checks | — |
 | B-2026-11-18-13 | 2026-11-18 | typecheck | medium | A literal used as a `for` range's end is settled to `i64` before a later argument fixes it: `let n = 100; for a in 0..n {..}; take_i32(n)` is refused | — |
 | B-2026-11-18-14 | 2026-11-18 | typecheck | low | An unannotated `collect()` handed to a generic parameter (`show(it.collect())`, `show[T: Display]`) still reaches the MIR builder as E0516 "UnsolvedParam("C") is not lowered yet" | — |
-| B-2026-11-18-15 | 2026-11-18 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const` fix | — |
 | B-2026-11-18-16 | 2026-11-18 | typecheck+mir | medium | Compound assignment (`+=`, `-=`, `*=`) on a `#[derive(Arithmetic)]` distinct type passes check and is then refused by both backends; the plain `a = a + b` form works | — |
 | B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
 | B-2026-11-18-18 | 2026-11-18 | typecheck | low | A match covering `Flag(true)` and `Flag(false)` on a distinct `bool` is E0205 non-exhaustive, though a distinct type has exactly its base's constructor space | — |
@@ -1689,6 +1688,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-8 | typecheck+mir | medium | `Option` had `is_some_and` but not its dual `is_none_or` (Rust 1.82): `prev.is_none_or(\|p\| v > p)` was refused with a bare "no method" | 5bb1708545 |
 | B-2026-11-18-9 | typecheck | medium | The integer types had `MAX` and `MIN` but not Rust's `BITS`: `i32.BITS - n.leading_zeros()` was refused, "no associated constant `BITS` on `i32`" | 5bb1708545 |
 | B-2026-11-18-10 | typecheck | medium | An unannotated `collect()` in an f-string hole or a `println` argument reached the MIR builder as E0516 "type does not lower (UnsolvedParam("C")) is… | 5bb1708545 |
+| B-2026-11-18-15 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const`… | 391a146bcc |
+| B-2026-11-18-32 | typecheck | medium | A module-level `let` in any package module after the first panics `karac check` (subtract with overflow in E_MODULE_LET's fix): the module tree does… | 391a146bcc |
 
 </details>
 
