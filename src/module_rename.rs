@@ -180,7 +180,7 @@ pub fn plan(tree: &ProgramTree) -> FlatRenames {
 
 /// The top-level functions of the library a program is compiled with: the
 /// baked stdlib and the library source v2 appends.
-fn library_function_names() -> &'static HashSet<String> {
+pub(crate) fn library_function_names() -> &'static HashSet<String> {
     static NAMES: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(|| {
         let functions = |items: &[Item]| -> Vec<String> {
             items

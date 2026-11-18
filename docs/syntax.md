@@ -858,7 +858,7 @@ IMPORT_DECL = [ VISIBILITY ] "import" IMPORT_PATH ";"
 
 IMPORT_PATH = PATH_PREFIX IMPORT_TAIL
 
-PATH_PREFIX = IDENT { "." IDENT }      // e.g., std.collections
+PATH_PREFIX = IDENT { "." IDENT }      // e.g., std.path
 
 IMPORT_TAIL = "." IDENT [ "as" IDENT ]                                    // single item, optional rename
             | "." "{" IMPORT_ITEM { "," IMPORT_ITEM } [ "," ] "}"            // brace-grouped multi-item (flat or nested)
@@ -874,24 +874,24 @@ Paths are absolute from the crate root — there is no `self.` / `super.` / rela
 
 ```
 // Simple import
-import std.collections.Map;
+import std.path.join;
 import mylib.db.UserDB;
 
 // Rename
-import std.collections.Map as Dict;
+import std.path.join as join_path;
 
 // Multi-item (brace-grouped)
-import std.collections.{Map, Set};
+import std.path.{join, extension};
 import log.{debug, info, warn, error};
 
 // Multi-item with renames
-import std.collections.{Map as Dict, Set};
+import std.path.{join as join_path, extension};
 
 // Nested grouping — expands to: import a.b.c; import a.b.d; import a.e
 import a.{b.{c, d}, e};
 
-// Wildcard — all pub items from std.collections
-import std.collections.*;
+// Wildcard — all pub items from std.path
+import std.path.*;
 
 // Module as value (binds the module itself)
 import db.connection;
@@ -899,7 +899,7 @@ import db.connection;
 // Re-export
 pub import db.connection.Connection;
 pub import db.connection.{Connection, Pool};
-pub import std.collections.*;    // re-export an entire module's public surface
+pub import std.path.*;    // re-export an entire module's public surface
 ```
 
 ### 3.9 Module-Level Bindings
@@ -2411,7 +2411,7 @@ Modules are defined by the directory structure under `src/`. Each `.kara` file i
 ### 9.2 Imports
 
 ```
-import std.collections.Map;
+import std.path.join;
 import mylib.db.UserDB;
 ```
 
@@ -2422,7 +2422,7 @@ PATH = IDENT { "." IDENT }
 ```
 
 Used for:
-- Type references: `std.collections.Map`
+- Type references: `db.connection.Connection`
 - Associated functions: `User.new()`, `Map.new()`
 - Module-scoped access: `env.args()`
 - Effect resource references: `mylib.UserDB`

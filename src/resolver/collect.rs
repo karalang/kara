@@ -1270,17 +1270,73 @@ impl<'a> super::Resolver<'a> {
                  §11), so `Rc<RefCell<T>>` is a `T` declared `shared struct`",
             );
         }
-        if let Some(ref s) = suggestion {
+        let prelude = Self::prelude_import_note(imp);
+        if let Some((note, _)) = &prelude {
+            message.push_str(note);
+        } else if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean `{s}`?"));
         }
+        let (suggestion, replacement) = match prelude {
+            Some((_, edit)) => (None, Some(edit)),
+            None => (suggestion, None),
+        };
         self.errors.push(ResolveError {
             message,
             span: imp.span,
             kind: ResolveErrorKind::UnknownModule,
             suggestion,
-            replacement: None,
+            replacement,
             stub_hint: None,
         });
+    }
+
+    /// An import from `std` whose every item is visible without one
+    /// (`import std.iter.once;`, `import std.collections.VecDeque;`, Rust's
+    /// `use` lines carried over): the note that says so, and the edit that
+    /// deletes the import (B-2026-11-17-149). `None` when any item is not
+    /// a prelude name or is renamed.
+    fn prelude_import_note(imp: &ImportDecl) -> Option<(String, Box<TextEdit>)> {
+        if imp.path.first().map(String::as_str) != Some("std")
+            || imp.is_wildcard
+            || imp.items.is_empty()
+            || imp.items.iter().any(|it| it.alias.is_some())
+        {
+            return None;
+        }
+        let visible = |name: &str| {
+            crate::prelude::PRELUDE_TYPES.contains(&name)
+                || crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name)
+                || crate::prelude::PRELUDE_FUNCTIONS.contains(&name)
+                || crate::prelude::PRELUDE_TRAITS.contains(&name)
+                || name == "String"
+                || crate::module_rename::library_function_names().contains(name)
+        };
+        if !imp.items.iter().all(|it| visible(&it.name)) {
+            return None;
+        }
+        let names: Vec<String> = imp
+            .items
+            .iter()
+            .map(|it| format!("`{}`", it.name))
+            .collect();
+        let (them, is) = if names.len() == 1 {
+            ("it", "is")
+        } else {
+            ("them", "are")
+        };
+        let note = format!(
+            ": {} {is} in the prelude, visible without an import, so the import can go \
+             (delete {them})",
+            names.join(", ")
+        );
+        Some((
+            note,
+            Box::new(TextEdit {
+                offset: imp.span.offset,
+                length: imp.span.length,
+                replacement: String::new(),
+            }),
+        ))
     }
 
     /// B-2026-10-22-30: a file checked on its own that belongs to no package
@@ -1329,16 +1385,24 @@ impl<'a> super::Resolver<'a> {
         if crate::prelude::library_global_module(&imp.path).is_none() {
             return false;
         }
+        // Every item a prelude name: one deletion of the whole import, on
+        // the first item's error, and the note on each.
+        let mut prelude = Self::prelude_import_note(imp);
         for it in &imp.items {
-            if let Some(message) =
+            if let Some(mut message) =
                 crate::prelude::library_module_item_error(&imp.path, &it.name, it.alias.as_deref())
             {
+                let mut replacement = None;
+                if let Some((note, edit)) = prelude.take() {
+                    message = format!("`{}` has no item `{}`{note}", imp.path.join("."), it.name);
+                    replacement = Some(edit);
+                }
                 self.errors.push(ResolveError {
                     message,
                     span: it.span,
                     kind: ResolveErrorKind::UnknownItemInModule,
                     suggestion: None,
-                    replacement: None,
+                    replacement,
                     stub_hint: None,
                 });
             }
