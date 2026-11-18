@@ -1764,6 +1764,18 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // A distinct type's constructor (`UserId(n)` against a
+                // `distinct type UserId = i64`) binds its one sub-pattern to
+                // the base value, as `UserId(0)` already tests it
+                // (design.md § Distinct Types; B-2026-11-18-19).
+                if let Type::Named { name, .. } = peeled {
+                    if *name == variant_name && patterns.len() == 1 {
+                        if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+                            self.check_pattern_against(&patterns[0], &base, mode);
+                            return;
+                        }
+                    }
+                }
                 // Fallback: the scrutinee is not an enum that declares this
                 // variant. When we can *prove* the scrutinee type cannot own
                 // the variant (a primitive, a struct, an aggregate, or an
@@ -4510,6 +4522,16 @@ impl<'a> super::TypeChecker<'a> {
                     peeled = inner;
                 }
                 let peeled = peeled.clone();
+                // `let UserId(n) = u`: a distinct type's constructor binds
+                // its base value (B-2026-11-18-19).
+                if let (Type::Named { name, .. }, [sub]) = (&peeled, patterns.as_slice()) {
+                    if path.last() == Some(name) {
+                        if let Some(base) = self.env.distinct_bases.get(name).cloned() {
+                            self.bind_pattern_types(sub, &base);
+                            return;
+                        }
+                    }
+                }
                 self.report_struct_spelled_as_tuple_pattern(path, patterns, &peeled, &pattern.span);
                 for pat in patterns {
                     self.bind_pattern_types(pat, &Type::Error);

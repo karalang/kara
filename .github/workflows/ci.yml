@@ -734,7 +734,7 @@ jobs:
       # The v2 build and run on arm64: the AAPCS64 calling convention and
       # the arm64 linker see every program these targets build.
       - name: v2 E2E (arm64)
-        run: cargo test --features llvm --test run_v2 --test run_v2_jit_units --test build_v2 --test test_v2 --test mir_build --test mir_library
+        run: cargo test --features llvm --test run_v2 --test run_v2_jit_units --test build_v2 --test test_v2 --test mir_build --test mir_library --test distinct_pattern_and_display
 
       # The panic-free floor on Mach-O: ld64 roots dead-stripping at every
       # exported symbol, so the floor measured on Linux holds there only

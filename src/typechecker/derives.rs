@@ -354,7 +354,11 @@ impl<'a> super::TypeChecker<'a> {
     /// Named user types require `#[derive(Display)]`.
     pub(super) fn type_supports_display(&self, ty: &Type) -> bool {
         if let Some(ok) = self.distinct_derive_supported(ty, &["Display"]) {
-            return ok;
+            // A distinct type inherits nothing from its base, but a
+            // hand-written `impl Display for` it is its own: design.md §9's
+            // newtype escape hatch (B-2026-11-18-20).
+            return ok
+                || matches!(ty, Type::Named { name, args } if self.env.has_impl("Display", name, args));
         }
         match ty {
             Type::Refinement { base, .. } => self.type_supports_display(base),

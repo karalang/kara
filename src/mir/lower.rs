@@ -7314,6 +7314,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             PatternKind::Slice { .. } | PatternKind::AtBinding { .. } => {
                 self.bind_pattern(pat, &place, t, false, out)
             }
+            // `let UserId(n) = u` over a distinct type: its one sub-pattern
+            // binds the base value (B-2026-11-18-19).
+            PatternKind::TupleVariant { .. } if self.distinct_base(t).is_some() => {
+                self.bind_pattern(pat, &place, t, false, out)
+            }
             _ => self.unsupported(pat.span, "this pattern in a `let`"),
         }
     }
