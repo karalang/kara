@@ -128,7 +128,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-48 | 2026-11-18 | cli | low | Six lints ignore an item-level `#[allow]` / `#[deny]`, and `map_value_clone_reinsert` ignores `-D` too (W0312 stays a warning) | — |
 | B-2026-11-18-49 | 2026-11-18 | cli | low | Two catalogued codes never reach the user: L0001 (FfiLintHint) is built but never surfaced, and the char-boundary panic omits E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY | — |
 | B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
-| B-2026-11-18-54 | 2026-11-18 | typecheck | high | A range from an unannotated literal binding to an expression over it and a typed value (`let mut at = 0; for i in at..at + k` with `k: i64`) is refused E0200 "range bounds must have same type: 'i64' and 'i64'" since e05a5afee6 read range bounds open | — |
 
 ### Relocated
 
@@ -1724,6 +1723,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-50 | typecheck | medium | A generic struct literal or enum variant put where its type is already fixed kept a borrowed number as `ref i32`: `Reverse { value: x }` into a `Prio… | 9691a6290e |
 | B-2026-11-18-51 | typecheck | low | A range of literals feeding an `i32` was offered only `as i32`: with `x` from `for x in 0..=50`, `ans = vec![x, y]` into a `Vec<i32>` (LeetCode's Rus… | 9691a6290e |
 | B-2026-11-18-53 | mir-llvm | medium | On mir-llvm a `shared` type used as a `Set` or `Map` key is hashed field by field, never by its own `Hash` impl: a set of keys its `Eq` calls equal k… | 59d6b19b98 |
+| B-2026-11-18-54 | typecheck | high | A range from an unannotated literal binding to an expression over it and a typed value (`let mut at = 0; for i in at..at + k` with `k: i64`) is refus… | 6e9fe3eaf3 |
 
 </details>
 
