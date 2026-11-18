@@ -333,6 +333,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- An `Option` iterates as zero or one item, as Rust's does: `opt.iter()`
+  views the value, `opt.into_iter()` moves it out, and `Option[T]` is
+  `IntoIterator`, so `root.into_iter().collect()`,
+  `flat_map(|o| o.into_iter())` and `v.extend(Some(x))` work. An `Option` is
+  still not an `Iterator`: `.flatten()` over `Option` items stays refused with
+  its `filter_map` fix (B-2026-11-18-11, B-2026-11-16-40).
 - A trait's default method can carry its own `where Self: Bound`: the body
   is checked under it, a type that implements the trait without meeting it
   lacks only that method, and a call on one is refused naming the bound.

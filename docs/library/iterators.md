@@ -24,6 +24,8 @@ Besides the collections' own iterators and ranges, three free functions in the p
 
 A program's own function named `repeat`, `once` or `successors` takes the name, and the library's is not seen.
 
+An `Option` iterates as zero or one item: `opt.iter()` and `opt.into_iter()` ([core-types.md](core-types.md)). It is not an `Iterator`, so `flatten`'s bound refuses `Option` items.
+
 ## Adaptors
 
 | Method | Signature | Notes |

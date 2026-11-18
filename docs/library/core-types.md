@@ -39,6 +39,10 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `as_deref` | `fn as_deref(self) -> Option[Str]` on `Option[String]`, and `-> Option[Slice[T]]` on `Option[Vec[T]]` | A view of an owned string or vector, without moving or allocating: `req.header("X-Token").as_deref() == Some(TOKEN)` with `TOKEN: Str`. An `Option[String]` never compares with an `Option[Str]` directly, because comparison looks through each operand but not inside type arguments ([design.md](../design.md)). `karac fix` inserts `.as_deref()` on the owned side (review-thread ruling 2026-11-10, B-2026-11-09-97) |
 | `cloned` | `fn cloned(own self) -> Option[T]` on `Option[ref T]`, `where T: Clone` | An owned copy of a viewed value: `m.get(k).cloned() ?? d` gives a default for a non-`Copy` value |
 | `flatten` | `fn flatten(own self) -> Option[T]` on `Option[Option[T]]` | |
+| `iter` | `fn iter(self) -> impl Iterator[Item = ref T]` | A view of the value as zero or one item: `opt.iter().count()` is 0 or 1 |
+| `into_iter` | `fn into_iter(own self) -> impl Iterator[Item = T]` | The value, moved out, as zero or one item: `root.into_iter().collect()` is an empty or one-element `Vec`. From `impl[T] IntoIterator for Option[T]`, so an `Option` goes where an `IntoIterator` does |
+
+An `Option` iterates as zero or one item, but it is not itself an iterator: `.flatten()` over `Option` items is refused, and its fix keeps the values with `.filter_map(|v| v)`, or `.flat_map(|o| o.into_iter())` reads the same (review-thread ruling 2026-11-18, B-2026-11-18-11, B-2026-11-16-40).
 
 `is_ok` and `is_err` are `Result` methods. On an `Option` they are deprecated spellings of `is_some` and `is_none`: `karac check` warns and `karac fix` rewrites them. They become an error at the next minor release, as `vec!` and `mut` on a plain field do (review-thread ruling 2026-11-09, B-2026-11-09-21).
 

@@ -270,3 +270,23 @@ impl[T] Option[T] {
         None
     }
 }
+
+// An option iterates as zero or one item (core-types.md § Option,
+// iterators.md; review ruling on B-2026-11-18-11), as Rust's does. It is
+// not itself an iterator, so `.flatten()` over options is still refused
+// with its `filter_map` fix (B-2026-11-16-40).
+impl[T] Option[T] {
+    /// A borrow of the value, once, or nothing for `None`.
+    fn iter(ref self) -> IterOnce[ref T] {
+        IterOnce { item: self.as_ref() }
+    }
+}
+
+impl[T] IntoIterator for Option[T] {
+    type Item = T;
+
+    /// The value, moved out, once, or nothing for `None`.
+    fn into_iter(own self) -> IterOnce[T] {
+        IterOnce { item: self }
+    }
+}
