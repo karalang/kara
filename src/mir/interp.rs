@@ -945,6 +945,7 @@ fn run_with(
             _ => None,
         },
         tasks: Vec::new(),
+        log_ids: 0,
         handles: Vec::new(),
         groups: Vec::new(),
         spawned: Vec::new(),
@@ -1541,6 +1542,9 @@ struct Interp<'a> {
     cancel_after: Option<u64>,
     /// The executor's tasks (B-2026-10-14-49), the root first, by id.
     tasks: Vec<TaskSlot>,
+    /// The last `std.log` task id given out: an auto-par task logs as its
+    /// spawner and takes no number (B-2026-11-18-55).
+    log_ids: i128,
     /// The spawned tasks' handles under the executor, by id - 1.
     handles: Vec<HandleSlot>,
     /// Every `TaskGroup`, by id - 1: how many of its tasks may run at once,
@@ -8803,7 +8807,10 @@ impl<'a> Interp<'a> {
         };
         let (log_id, log_hold) = match log_seq {
             Some(_) => (self.log_task_id(), Some(me)),
-            None => (me as i128, log_up),
+            None => {
+                self.log_ids += 1;
+                (self.log_ids, log_up)
+            }
         };
         self.tasks.push(TaskSlot {
             frame: slot,

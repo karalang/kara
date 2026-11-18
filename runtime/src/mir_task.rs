@@ -386,6 +386,10 @@ struct Exec {
     sleepers: Vec<Sleeper>,
     /// The last task id given out.
     ids: u64,
+    /// The last `std.log` task id given out: tasks the program starts,
+    /// not the root and not an auto-par task, which logs as its spawner
+    /// (std/log.md § Span context; B-2026-11-18-55).
+    log_ids: u64,
     /// The live groups, by id.
     groups: IdMap<u64, *mut Group>,
     group_ids: u64,
@@ -1825,8 +1829,15 @@ unsafe fn spawn(group: *mut u8, poll: TaskPoll, a: *mut u8, b: *mut u8, site: Op
         } else {
             // Numbered from 1 in spawn order, the root not counted (it
             // spawns first and logs as 0): the interpreter's numbering
-            // (review-thread ruling 2026-11-16, B-2026-11-16-225).
-            (id - 1, up)
+            // (review-thread ruling 2026-11-16, B-2026-11-16-225). An
+            // auto-par task is not a task to the program, so it takes no
+            // number (B-2026-11-18-55).
+            if id == 1 {
+                (0, up)
+            } else {
+                e.log_ids += 1;
+                (e.log_ids, up)
+            }
         };
         e.push(Task {
             id,
