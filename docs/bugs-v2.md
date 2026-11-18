@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 487 |
-| false-positive | 255 |
-| missing-feature | 198 |
+| diagnostics | 491 |
+| false-positive | 259 |
+| missing-feature | 199 |
 | perf | 187 |
 | other | 113 |
-| soundness | 85 |
+| soundness | 86 |
 | miscompile | 81 |
-| run-vs-build | 55 |
+| run-vs-build | 56 |
 | crash | 50 |
-| codegen-gap | 37 |
+| codegen-gap | 38 |
 | use-after-free | 10 |
 | leak | 4 |
 | double-free | 2 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 611 |
+| typecheck | 621 |
 | mir-llvm | 288 |
-| mir | 251 |
+| mir | 253 |
 | cli | 195 |
-| parser | 112 |
-| ownership | 104 |
+| parser | 114 |
+| ownership | 105 |
 | interp | 87 |
 | runtime | 87 |
 | resolver | 43 |
@@ -120,12 +120,23 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-1 | 2026-11-18 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both backends) | — |
 | B-2026-11-18-2 | 2026-11-18 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; .. let b = cnt[1]; .. b.min(a)` returned as `i32` is refused with the generic "Write an explicit 'as i32'" and no edit, where `cnt[1].min(cnt[0])` gets the `0i32` suffix | — |
 | B-2026-11-18-3 | 2026-11-18 | typecheck | low | A bare `size_of()` (no type named) type-checks and runs, printing `0`, the placeholder body of the intrinsic, instead of E_LAYOUT_QUERY_TYPE_ARG_REQUIRED | — |
-| B-2026-11-18-4 | 2026-11-18 | cli | medium | `karac vendor` and `karac update` fetch no git or registry dependency: each is a warning (E_GIT_DEP_UNSUPPORTED / E_REGISTRY_DEP_UNSUPPORTED) and is skipped, so `vendor` copies 0 packages and exits 0, though `check`/`build` fetch the same dependencies | — |
 | B-2026-11-18-11 | 2026-11-18 | typecheck | medium | `Option` has no `iter`/`into_iter`, and `flatten` refuses `Option` items: `root.into_iter().collect()` and `.flatten()` over `[node.left, node.right]` are refused | — |
 | B-2026-11-18-12 | 2026-11-18 | typecheck | medium | An inline array literal indexed under an annotation keeps `i64`: `let c: i32 = [0, 45, 90][k]` is refused, though `let a: Vec[i32] = [0, 45, 90]; let c: i32 = a[k]` checks | — |
 | B-2026-11-18-13 | 2026-11-18 | typecheck | medium | A literal used as a `for` range's end is settled to `i64` before a later argument fixes it: `let n = 100; for a in 0..n {..}; take_i32(n)` is refused | — |
 | B-2026-11-18-14 | 2026-11-18 | typecheck | low | An unannotated `collect()` handed to a generic parameter (`show(it.collect())`, `show[T: Display]`) still reaches the MIR builder as E0516 "UnsolvedParam("C") is not lowered yet" | — |
 | B-2026-11-18-15 | 2026-11-18 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const` fix | — |
+| B-2026-11-18-16 | 2026-11-18 | typecheck+mir | medium | Compound assignment (`+=`, `-=`, `*=`) on a `#[derive(Arithmetic)]` distinct type passes check and is then refused by both backends; the plain `a = a + b` form works | — |
+| B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
+| B-2026-11-18-18 | 2026-11-18 | typecheck | low | A match covering `Flag(true)` and `Flag(false)` on a distinct `bool` is E0205 non-exhaustive, though a distinct type has exactly its base's constructor space | — |
+| B-2026-11-18-19 | 2026-11-18 | typecheck | medium | A binding inside a distinct-type pattern (`UserId(n) => n * 2`) is typed `ref <error>`: E0208 "type 'ref <error>' does not implement trait Mul" | — |
+| B-2026-11-18-20 | 2026-11-18 | typecheck | medium | A hand-written `impl Display for` a distinct type is ignored by f-strings, `println` and `T: Display` bounds (design.md's newtype escape-hatch example fails); the same impl on a struct works | — |
+| B-2026-11-18-21 | 2026-11-18 | typecheck+mir | medium | `#[derive(Serialize, Deserialize)]` on a distinct type generates nothing: a struct field of that type checks clean and then fails at run with "no method 'serialize' on type 'UserId'" | — |
+| B-2026-11-18-22 | 2026-11-18 | typecheck | low | Derive requirement rules skip distinct types: `#[derive(Eq)]` without `PartialEq` gets no deprecation warning, and `#[derive(Eq, PartialEq)]` on a distinct `f64` is accepted (NaN == NaN prints false) | — |
+| B-2026-11-18-23 | 2026-11-18 | typecheck | low | `#[derive(Default)]` on a distinct type is accepted, but `Count.default()` is E0202 "expected 1 argument(s), found 0" | — |
+| B-2026-11-18-24 | 2026-11-18 | parser | medium | Const generic parameter naming is inverted against design.md CN-3/CN-7: `const ROWS: i64` (the spec's own Matrix example) is E0001 'must be Type-class (PascalCase)', while `const Cap: i64` is accepted | — |
+| B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
+| B-2026-11-18-26 | 2026-11-18 | typecheck | low | `#[deprecated]` on an enum, a trait or a type alias never fires: uses of the enum's variants and type, `impl T1 for S` and `T: T1` bounds, and the alias in a signature all check clean | — |
+| B-2026-11-18-27 | 2026-11-18 | parser | medium | A parameter's pattern uses a reduced grammar: `ref name` (which §7 Destructuring parameters names), fixed-array patterns, `@` bindings and a distinct-type constructor are refused in fn and closure parameters, though each is irrefutable | — |
 
 ### Relocated
 
@@ -1667,6 +1678,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-136 | parser | low | A range-pattern bound that is an expression (`0..=(1 + 2) =>`) gets E_RANGE_PATTERN_BOUND_NOT_SIMPLE and then a spurious E0002 "Expected expression"… | a41a371f79 |
 | B-2026-11-17-137 | typecheck | low | Two `impl Grid[3]` blocks defining one method render the const-generic target as `Grid[Array[(), 3]]` in E0240, a type the program never wrote | a41a371f79 |
 | B-2026-11-17-138 | mir-llvm | low | Dropping a deep `shared` n-ary tree (`kids: Vec[N]`), a trie (`kids: Map[K, N]`) or a node whose handles sit inside a plain struct field (`items: Vec… | 7606280ba7 |
+| B-2026-11-18-4 | cli | medium | `karac vendor` and `karac update` fetch no git or registry dependency: each is a warning (E_GIT_DEP_UNSUPPORTED / E_REGISTRY_DEP_UNSUPPORTED) and is… | 96df1ac40f |
 | B-2026-11-18-5 | cli | medium | `karac fix` had no fix for `Rc::ptr_eq(&a, &b)`: the `Rc<RefCell<T>>` rewrite left `Rc.ptr_eq(a, b)` behind with no fix and no word of `ref_eq` | 5bb1708545 |
 | B-2026-11-18-6 | mir-llvm | medium | `n.min(v[0])` with `n: i64` and `v: Vec[i32]` runs in the interpreter and is refused by the LLVM backend: ``native `i64.min` is not lowered yet`` | 5bb1708545 |
 | B-2026-11-18-7 | parser | medium | `s.parse[i32]()` read as an index of `parse` by `i32`, and the error advised `as i32`, which does not parse a string | 5bb1708545 |
