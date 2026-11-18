@@ -13299,8 +13299,14 @@ impl<'a> super::TypeChecker<'a> {
     /// min(left[i][j], up[i][j])`. A narrowing refused where it is used is
     /// fixed on the fill's literal, as at the element read itself (kata
     /// 1139's Rust arm: `res = k` into an `i32`).
+    ///
+    /// The fill's literal may still be open at the `let` and settle later,
+    /// at a method on the copy: `let b = cnt[1]; .. b.min(a)` returned as
+    /// an `i32` (kata 1189's Rust arm, B-2026-11-18-2).
     fn literal_element_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
-        if resolve_type_var_top(ty, &self.env.substitutions) != Type::Int(IntSize::I64) {
+        if resolve_type_var_top(ty, &self.env.substitutions) != Type::Int(IntSize::I64)
+            && !self.is_open_literal(ty)
+        {
             return None;
         }
         self.element_copy_source(value)
@@ -13310,8 +13316,10 @@ impl<'a> super::TypeChecker<'a> {
         let settled = |this: &Self, e: &super::LiteralLet| {
             e.element
                 && e.suffix
-                && e.var
-                    .is_none_or(|v| this.resolved_now(&Type::TypeVar(v)) == Type::Int(IntSize::I64))
+                && e.var.is_none_or(|v| {
+                    let t = Type::TypeVar(v);
+                    this.resolved_now(&t) == Type::Int(IntSize::I64) || this.is_open_literal(&t)
+                })
         };
         match &value.kind {
             ExprKind::Index { .. } => {
