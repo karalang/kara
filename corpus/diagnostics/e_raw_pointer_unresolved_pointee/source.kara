@@ -1,0 +1,6 @@
+fn main() {
+    let p = ptr.null();
+    unsafe {
+        let v = p.read();
+    }
+}

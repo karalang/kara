@@ -1,0 +1,7 @@
+unsafe extern "C" {
+    type Handle;
+}
+
+fn main() {
+    println(Handle.size_of());
+}

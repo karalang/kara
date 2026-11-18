@@ -1,0 +1,8 @@
+fn build(r: ref i32) -> *const i32 {
+    r as *const i32
+}
+
+fn main() {
+    let x: i32 = 7;
+    let p = build(x);
+}

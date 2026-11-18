@@ -1,0 +1,8 @@
+fn promote(p: *const i32) -> *mut i32 {
+    p as *mut i32
+}
+
+fn main() {
+    let x: i32 = 7;
+    let q = promote(ptr.const(x));
+}

@@ -1,0 +1,1 @@
+ERROR at line 2: a `#[repr(transparent)]` struct may have at most one non-zero-sized field (the rest must be zero-sized, alignment-one companions like `PhantomData[T]` / `()` / `[T; 0]`); this struct has more than one data field

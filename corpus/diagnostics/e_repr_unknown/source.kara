@@ -1,0 +1,7 @@
+#[repr(u128)]
+enum Color {
+    Red,
+    Green,
+}
+
+fn main() {}

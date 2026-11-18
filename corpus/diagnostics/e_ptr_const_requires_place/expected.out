@@ -1,0 +1,1 @@
+ERROR at line 2: 'ptr.const' requires a place expression — a binding, field access, index, or dereference; got a value-producing expression that has no stable address

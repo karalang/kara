@@ -3503,6 +3503,680 @@ const CODE_PROSE: &[(&str, &str)] = &[
          change before 1.0\")]`, or no arguments at all. A positional \
          string is refused so the argument's role is never ambiguous.",
     ),
+    // B-2026-11-16-303 batch 5: raw pointers, opaque foreign types, repr, where
+    // clauses, layout queries.
+    (
+        "E_IMPL_TRAIT_ASSOC_MISMATCH",
+        "A function returns `impl Trait[A = P]`, but the type its body \
+         returns declares a different `A` (design.md § Return-position \
+         `impl Trait`). The binding is a promise to every caller, who types \
+         `A` as `P` on its strength, so the hidden type must match it \
+         exactly. Change the binding to the type the body produces, or \
+         return a value whose `A` is the promised one.",
+    ),
+    (
+        "E_LAYOUT_QUERY_TYPE_ARG_REQUIRED",
+        "`size_of` and `align_of` measure a type, and this call names none, \
+         or names more than one (design.md § Intrinsics). The type is \
+         written as the receiver: `i64.size_of()`, `Point.align_of()`. A \
+         call with no type has nothing to measure.",
+    ),
+    (
+        "E_OPAQUE_TYPE_NO_FIELDS",
+        "A field is read from an opaque foreign type, one declared as `type \
+         Handle;` inside an `unsafe extern` block (design.md § Opaque \
+         foreign types). Kāra knows nothing about such a type's contents: \
+         it has no fields, only an address. Read the field through a C \
+         function that takes the pointer, or declare the C struct's layout \
+         with `#[repr(C)] struct` instead.",
+    ),
+    (
+        "E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS",
+        "An `impl` block targets an opaque foreign type (design.md § Opaque \
+         foreign types). Its values exist only behind a pointer the foreign \
+         library owns, so a method could do nothing with `self` but pass it \
+         on. Wrap the pointer in a Kāra struct (`struct Session { raw: *mut \
+         Handle }`) and implement methods and traits on the wrapper.",
+    ),
+    (
+        "E_OPAQUE_TYPE_NO_KNOWN_SIZE",
+        "`size_of` or `align_of` is asked of an opaque foreign type \
+         (design.md § Opaque foreign types). Its layout belongs to the \
+         foreign library and Kāra does not know it. Ask the library for the \
+         size if it exports one, or measure the pointer instead (`(*const \
+         Handle).size_of()`).",
+    ),
+    (
+        "E_OPAQUE_TYPE_NO_METHODS",
+        "A method is called on an opaque foreign type (design.md § Opaque \
+         foreign types). Such a type can have no `impl` blocks, so no \
+         method can exist on it. Call the foreign function that takes the \
+         pointer (`handle_close(h)`), or wrap the pointer in a struct whose \
+         methods do that.",
+    ),
+    (
+        "E_OPAQUE_TYPE_REQUIRES_INDIRECTION",
+        "An opaque foreign type appears by value: as a struct field, a \
+         return type, an element type (design.md § Opaque foreign types). \
+         It has no known size, so no value of it can be stored or moved. \
+         Hold it through a pointer, `*const Handle` or `*mut Handle`, or a \
+         reference.",
+    ),
+    (
+        "E_PTR_CAST_REQUIRES_UNSAFE",
+        "A raw-pointer cast that asserts something the compiler cannot \
+         check is outside an `unsafe { }` block (design.md § Construction: \
+         `ptr.const` and `ptr.mut`). `*const T as *mut T` mints a write \
+         capability the source did not carry, and a cast that changes the \
+         pointee type reinterprets memory. Put the cast in an `unsafe` \
+         block with a `# Safety` note saying why it holds; the weakening \
+         cast `*mut T as *const T` needs none.",
+    ),
+    (
+        "E_PTR_CONST_REQUIRES_PLACE",
+        "`ptr.const(...)` takes the address of a place, a binding, field, \
+         index or dereference, and the argument is a value (design.md § \
+         Construction: `ptr.const` and `ptr.mut`). A value such as `1 + 2` \
+         or a call's result has no lasting address. Bind it to a local \
+         first and take that local's address.",
+    ),
+    (
+        "E_PTR_MUT_REQUIRES_PLACE",
+        "`ptr.mut(...)` takes the address of a place, and the argument is a \
+         value (design.md § Construction: `ptr.const` and `ptr.mut`). Bind \
+         the value to a `let mut` local first and take the address of that.",
+    ),
+    (
+        "E_PTR_TO_INT_CAST_FORBIDDEN",
+        "A raw pointer is cast to an integer with `as` (design.md § Pointer \
+         provenance). The cast would drop the pointer's provenance, the \
+         record of which allocation it may point into. Use `ptr.addr(p)` to \
+         read the address bits for tagging or alignment, or `ptr.expose(p)` \
+         when the integer will be turned back into a pointer with \
+         `ptr.from_exposed`.",
+    ),
+    (
+        "E_RAW_POINTER_UNRESOLVED_POINTEE",
+        "A method that reads, writes or offsets a raw pointer is called \
+         while the pointer's pointee type is unknown (design.md § Raw \
+         pointers). The method needs the size of what it touches. \
+         `ptr.null()` and its siblings take their pointee from the expected \
+         type, so annotate the binding: `let p: *const u8 = ptr.null();`.",
+    ),
+    (
+        "E_REF_OPERAND_UNSUPPORTED",
+        "`ref` or `mut ref` is applied to something that is not a place \
+         (core-semantics.md §5.1). A borrow names storage that already \
+         exists: a local, `self`, or a field or element of one. An \
+         arithmetic result or call result is a value with no storage to \
+         borrow. Bind it to a local and borrow that. The same code reports \
+         a borrow of an element of a container laid out by a `layout` \
+         block, whose elements are not stored contiguously.",
+    ),
+    (
+        "E_REF_TO_RAW_PTR_CAST_FORBIDDEN",
+        "A reference is cast to a raw pointer with `as` (design.md § \
+         Construction: `ptr.const` and `ptr.mut`). A raw pointer is built \
+         from the place itself, not from a reference to it. Write \
+         `ptr.const(x)` for `*const T`, or `ptr.mut(x)` for `*mut T`.",
+    ),
+    (
+        "E_REPR_INT_ON_STRUCT",
+        "A struct carries `#[repr(u8)]` or another integer repr (design.md \
+         § `#[repr]`: ABI layout). An integer repr fixes an enum's \
+         discriminant, and a struct has no discriminant. Use `#[repr(C)]` \
+         for C field order, or `#[repr(transparent)]` for a single-field \
+         wrapper, or move the repr to the enum it was meant for.",
+    ),
+    (
+        "E_REPR_UNKNOWN",
+        "A `#[repr(...)]` argument is not a form the language has \
+         (design.md § `#[repr]`: ABI layout). A struct takes `C` or \
+         `transparent`; an enum takes `C`, `transparent`, or a discriminant \
+         type from `u8` to `u64` or `i8` to `i64`. Wider types such as \
+         `u128` and `usize` are not discriminant types.",
+    ),
+    (
+        "E_REPR_TRANSPARENT_EXCLUSIVE",
+        "`#[repr(transparent)]` is combined with another repr (design.md § \
+         `#[repr(transparent)]`). A transparent type has exactly its one \
+         field's layout, which leaves nothing for a second repr to decide. \
+         Keep `transparent` alone, or drop it and use `#[repr(C)]`.",
+    ),
+    (
+        "E_REPR_TRANSPARENT_REQUIRES_FIELD",
+        "A `#[repr(transparent)]` struct has no data field (design.md § \
+         `#[repr(transparent)]`). The repr says the struct has its one \
+         field's layout, so it needs exactly one field that is not \
+         zero-sized. Add the field it wraps, or drop the repr.",
+    ),
+    (
+        "E_REPR_TRANSPARENT_REQUIRES_SINGLE_FIELD",
+        "A `#[repr(transparent)]` struct has more than one data field \
+         (design.md § `#[repr(transparent)]`). Only one field may have a \
+         size; any others must be zero-sized companions such as \
+         `PhantomData[T]` or `()`. Use `#[repr(C)]` for a struct of several \
+         fields.",
+    ),
+    (
+        "E_REPR_TRANSPARENT_REQUIRES_SIZED",
+        "The one field of a `#[repr(transparent)]` struct is a bare type \
+         parameter, so the wrapper's layout depends on what each use fills \
+         in and is not fixed by the declaration (design.md § \
+         `#[repr(transparent)]`). Wrap a concrete type, or drop the repr \
+         from the generic wrapper.",
+    ),
+    (
+        "E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT",
+        "A `#[repr(transparent)]` enum does not have exactly one variant \
+         carrying exactly one field (design.md § `#[repr(transparent)]`). \
+         Only such an enum can share its field's layout with no tag. Use an \
+         integer repr such as `#[repr(u8)]` for an enum with several \
+         variants.",
+    ),
+    (
+        "E_STRUCT_LITERAL_SPREAD_UNSUPPORTED",
+        "A struct literal ends in `..base`, but the base contributes \
+         nothing: every field is given explicitly, so there is nothing left \
+         to take from it (design.md § Structs, the update form `..base`). \
+         Remove `..base`. A spread that does fill fields is accepted.",
+    ),
+    (
+        "E_TEST_OUTSIDE_TEST_FILE",
+        "A `test` block is in an ordinary source file (design.md § 14. \
+         Testing). `karac test` collects tests only from `_test.kara` \
+         files, so the block would never run. Move it to the file's \
+         companion, `main_test.kara` next to `main.kara`, which the message \
+         names.",
+    ),
+    (
+        "E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED",
+        "A call's `where` clause requires an associated type to be a \
+         particular type (`T.Item = i64`), and for the type given it is \
+         not, or it is left unfixed by the caller's own bound (design.md § \
+         `where` clauses). Pass a type whose associated type matches, or, \
+         inside a generic function, fix the associated type in that \
+         function's own bound (`T: Iterator[Item = i64]`).",
+    ),
+    (
+        "E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED",
+        "A call's `where` clause bounds an associated type (`T.Item: \
+         Display`), and the associated type of the type given does not \
+         implement that trait (design.md § `where` clauses). Pass a type \
+         whose associated type does, or implement the trait for that \
+         associated type.",
+    ),
+    // B-2026-11-16-303 batch 6: package, dependency, lockfile, toolchain,
+    // install, cache and registry codes. The fetch codes (E_PROXY_*,
+    // E_GIT_UNAVAILABLE, ...) are reported in the note of
+    // E_REGISTRY_FETCH_FAILED or E_GIT_FETCH_FAILED.
+    (
+        "E_CACHE_HOME_UNSET",
+        "`karac cache` found neither `KARAC_BUILD_CACHE_ROOT` nor `$HOME` \
+         (or `$USERPROFILE`), so the build cache has no location. Set \
+         `KARAC_BUILD_CACHE_ROOT` to the directory the cache should use, or \
+         run with `HOME` set.",
+    ),
+    (
+        "E_CACHE_UNREADABLE",
+        "A directory or metadata file in the build cache could not be read; \
+         the message names the path and the operating system's reason. \
+         Check the cache directory's permissions, or point \
+         `KARAC_BUILD_CACHE_ROOT` at a directory you can read.",
+    ),
+    (
+        "E_CACHE_MALFORMED_METADATA",
+        "A build-cache entry's `entry.toml` parsed but has the wrong shape: \
+         a missing field, a field of the wrong type, or a schema version \
+         this compiler does not know. The entry was written by another \
+         compiler version or was damaged. Delete that entry's directory \
+         (the message names it), or the whole cache, and it is rebuilt on \
+         the next build.",
+    ),
+    (
+        "E_CACHE_WRITE_FAILED",
+        "Writing to the build cache failed (an artifact, its metadata, or a \
+         directory); the message names the path and the reason. Check free \
+         disk space and the directory's permissions, or point \
+         `KARAC_BUILD_CACHE_ROOT` elsewhere.",
+    ),
+    (
+        "E_DEPENDENCY_CYCLE",
+        "The package's path dependencies form a cycle: `a` depends on `b`, \
+         which depends on `a` (design.md § Packages and manifests). The \
+         message lists the chain. Packages are compiled in dependency \
+         order, and a cycle has none. Move what both need into a third \
+         package that each depends on.",
+    ),
+    (
+        "E_DEPENDENCY_SOURCE_CONFLICT",
+        "One package name is declared from two different sources in the \
+         graph, for example as a path dependency in one manifest and as a \
+         git or registry dependency in another (design.md § Packages and \
+         manifests). The two could be different code under the same name. \
+         Declare it from the same source everywhere, or put it in \
+         `[workspace.dependencies]` so every member shares one declaration.",
+    ),
+    (
+        "E_DEPENDENCY_UNSATISFIABLE",
+        "No choice of versions satisfies every constraint in the graph \
+         (design.md § Packages and manifests, Versions and resolution). The \
+         message is the resolver's explanation of why, as a chain of \
+         requirements. Relax one of the constraints it names, or update the \
+         package whose requirement excludes the others.",
+    ),
+    (
+        "E_DEPENDENCY_VERSION_CONFLICT",
+        "Two packages require versions of the same dependency that no \
+         single version satisfies, such as `C >=1.0, <2.0` and `C >=2.0` \
+         (design.md § Packages and manifests, Versions and resolution). \
+         Kāra builds one copy of each package, so the constraints must \
+         meet. The message shows the chain of requirements; relax one, or \
+         update the package that holds the older constraint.",
+    ),
+    (
+        "E_GIT_DEP_UNSUPPORTED",
+        "A git dependency is in the graph of a command that does not fetch \
+         git dependencies (design.md § Packages and manifests, Dependencies \
+         in 0.8). `check`, `run`, `build` and `test` fetch them; `karac \
+         vendor` and `karac update` do not yet, and report this as a \
+         warning and skip the dependency (B-2026-11-18-4). Until they do, \
+         vendor such a dependency by cloning it and declaring it as a \
+         `path` dependency.",
+    ),
+    (
+        "E_GIT_FETCH_FAILED",
+        "Cloning or checking out a git dependency failed (design.md § \
+         Packages and manifests, Dependencies in 0.8). The note gives the \
+         underlying error, ending in a more specific code: \
+         `E_GIT_UNAVAILABLE` when `git` could not be run, \
+         `E_GIT_NO_MANIFEST` when the repository has no `kara.toml` at its \
+         root. Otherwise check the URL, that the `branch`, `tag` or `rev` \
+         exists, and that the remote is reachable.",
+    ),
+    (
+        "E_GIT_NO_MANIFEST",
+        "A git dependency was cloned, but its repository has no `kara.toml` \
+         at its root, so it is not a Kāra package (design.md § Packages and \
+         manifests). It is reported in the note of `E_GIT_FETCH_FAILED`. \
+         Point the dependency at a repository that is a package.",
+    ),
+    (
+        "E_GIT_UNAVAILABLE",
+        "A git dependency could not be fetched because the `git` program \
+         could not be run: it is not installed or not on `PATH`. It is \
+         reported in the note of `E_GIT_FETCH_FAILED`. Install git, or \
+         replace the dependency with a `path` dependency on a local \
+         checkout.",
+    ),
+    (
+        "E_INSTALL_BIN_DIR_UNWRITABLE",
+        "`karac install` could not create the directory it installs into, \
+         `$KARAC_INSTALL_ROOT/bin` or `~/.kara/bin`; the message gives the \
+         reason. Fix the directory's permissions, or set \
+         `KARAC_INSTALL_ROOT` to a directory you can write.",
+    ),
+    (
+        "E_INSTALL_BUILD_FAILED",
+        "`karac install` built the package and the build failed; its errors \
+         are printed above this line. Fix them in the package, which `karac \
+         build` in its directory reproduces, and install again.",
+    ),
+    (
+        "E_INSTALL_BUILD_SPAWN_FAILED",
+        "`karac install` could not start the build of the package as a \
+         subprocess; the message gives the operating system's reason. This \
+         is an environment problem, such as a process limit, not a problem \
+         in the package.",
+    ),
+    (
+        "E_INSTALL_COPY_FAILED",
+        "`karac install` built the executable but could not copy it into \
+         the install directory; the message names both paths and the \
+         reason. Check the install directory's permissions and free space, \
+         and that no running copy of the program holds the destination \
+         open.",
+    ),
+    (
+        "E_INSTALL_EMPTY_SPEC",
+        "`karac install` was given an empty argument. It takes one of \
+         `path=<dir>`, `git=<url>`, `<name>` or `<name>@<version>`; in 0.8 \
+         only `path=` installs.",
+    ),
+    (
+        "E_INSTALL_EMPTY_VERSION",
+        "`karac install name@` has an `@` with no version after it. Write \
+         the version constraint, as in `my-tool@1.0`, or drop the `@`.",
+    ),
+    (
+        "E_INSTALL_EXE_UNRESOLVABLE",
+        "`karac install` could not find its own executable, which it runs \
+         to build the package; the message gives the reason. This is an \
+         environment problem: run `karac` by a path that exists.",
+    ),
+    (
+        "E_INSTALL_GIT_UNSUPPORTED",
+        "`karac install git=<url>` is not in 0.8: it installs only from a \
+         local directory. Clone the repository and run `karac install \
+         path=<checkout>`.",
+    ),
+    (
+        "E_INSTALL_HOME_UNSET",
+        "`karac install` found neither `KARAC_INSTALL_ROOT` nor `$HOME`, so \
+         it has nowhere to install. Set `KARAC_INSTALL_ROOT` to the \
+         directory whose `bin/` should receive the program.",
+    ),
+    (
+        "E_INSTALL_INVALID_NAME",
+        "The package name given to `karac install` is not a valid name: it \
+         must be a lowercase identifier, `[a-z][a-z0-9_]*`. The message \
+         suggests the corrected spelling when there is one.",
+    ),
+    (
+        "E_INSTALL_INVALID_VERSION",
+        "The version after `@` in `karac install name@version` is not a \
+         valid version constraint; the message gives the parse error. Write \
+         a semver constraint such as `1.2`, `=1.2.3` or `>=1.0, <2.0`.",
+    ),
+    (
+        "E_INSTALL_MISSING_VALUE",
+        "`karac install path=` or `git=` has nothing after the `=`. Give \
+         the directory or URL.",
+    ),
+    (
+        "E_INSTALL_NO_EXECUTABLE",
+        "`karac install` built the package but found no executable where \
+         the build puts it. The package is probably a library \
+         (`src/lib.kara` with no `src/main.kara`); only a package with a \
+         `main` can be installed.",
+    ),
+    (
+        "E_INSTALL_PATH_NOT_DIR",
+        "`karac install path=<p>` names a file, not a directory. Point it \
+         at the package's root directory, the one holding `kara.toml`.",
+    ),
+    (
+        "E_INSTALL_PATH_NOT_FOUND",
+        "`karac install path=<p>` names a path that does not exist; the \
+         message gives the reason. Check the path, which is relative to the \
+         current directory.",
+    ),
+    (
+        "E_INSTALL_REGISTRY_UNSUPPORTED",
+        "`karac install <name>` and `<name>@<version>` are not in 0.8: it \
+         installs only from a local directory. Get the package's source and \
+         run `karac install path=<dir>`.",
+    ),
+    (
+        "E_INSTALL_RESERVED_NAME",
+        "The package name given to `karac install` is a Kāra keyword, which \
+         cannot be a package name because dependents import the package by \
+         it. Use the package's actual name.",
+    ),
+    (
+        "E_LOCKFILE_IO",
+        "`kara.lock` could not be written after a successful resolution; \
+         the message gives the path and reason (design.md § Packages and \
+         manifests, Lockfile). This is a warning: the build goes on, and \
+         the next build tries again. Check the project directory's \
+         permissions.",
+    ),
+    (
+        "E_LOCKFILE_PARSE",
+        "`kara.lock` is not valid TOML (design.md § Packages and manifests, \
+         Lockfile). This is a warning: the lockfile's pins are ignored, \
+         versions are chosen afresh, and the next `karac build` or `karac \
+         test` rewrites the file. If it was edited by hand or damaged in a \
+         merge, restore it from version control first if its pins matter.",
+    ),
+    (
+        "E_LOCKFILE_SCHEMA_VERSION",
+        "`kara.lock` declares a schema version this compiler does not read, \
+         usually because a newer compiler wrote it (design.md § Packages \
+         and manifests, Lockfile). This is a warning: its pins are ignored \
+         and the next `karac build` rewrites it. Use the compiler the \
+         project pins in `karac-toolchain.toml`.",
+    ),
+    (
+        "E_LOCKFILE_INVALID_SOURCE",
+        "An entry in `kara.lock` has a `source` string that is not a path, \
+         git or registry source (design.md § Packages and manifests, \
+         Lockfile). This is a warning: the lockfile's pins are ignored and \
+         the next `karac build` rewrites it. Restore the file from version \
+         control if it was edited by hand.",
+    ),
+    (
+        "E_LOCKFILE_INVALID_FIELD",
+        "An entry in `kara.lock` has a field with the wrong type or value, \
+         such as a version that is not semver; the message names it \
+         (design.md § Packages and manifests, Lockfile). This is a warning: \
+         the lockfile's pins are ignored and the next `karac build` \
+         rewrites it.",
+    ),
+    (
+        "E_OFFLINE_NO_VENDOR_DIR",
+        "`--offline` reads every dependency from `./vendor/<name>/`, and \
+         the project has no `vendor/` directory. Run `karac vendor` while \
+         online to copy the dependencies there, then build with \
+         `--offline`.",
+    ),
+    (
+        "E_OFFLINE_VENDOR_ENTRY_MISSING",
+        "`--offline` reads every dependency from `./vendor/<name>/`, and \
+         this dependency's directory is missing or has no `kara.toml`. Run \
+         `karac vendor` again; it copies every dependency, including ones \
+         added since the last run.",
+    ),
+    (
+        "E_PATH_DEP_MANIFEST_INVALID",
+        "A path dependency's `kara.toml` failed to load or parse (design.md \
+         § Packages and manifests). The note carries the manifest's own \
+         diagnostic. Fix the dependency's manifest; `karac check` run \
+         inside that directory reports the same error in full.",
+    ),
+    (
+        "E_PATH_DEP_NOT_FOUND",
+        "A path dependency names a directory that does not exist or has no \
+         `kara.toml` (design.md § Packages and manifests). The path is \
+         relative to the manifest that declares it. Fix the `path`, or \
+         create the package there with `karac init`.",
+    ),
+    (
+        "E_PROXY_DISABLED",
+        "A registry dependency needed fetching while the registry proxy was \
+         disabled with `--no-proxy`. It is reported in the note of \
+         `E_REGISTRY_FETCH_FAILED`. Allow the proxy, or replace the \
+         dependency with a `path` or `git` one.",
+    ),
+    (
+        "E_PROXY_MALFORMED_RESPONSE",
+        "The registry proxy answered, but not with a catalog or package in \
+         the shape the compiler expects; the message names the URL and what \
+         was wrong. It is reported in the note of \
+         `E_REGISTRY_FETCH_FAILED`. Check that `KARAC_REGISTRY_PROXY` \
+         points at a Kāra proxy and not at some other server.",
+    ),
+    (
+        "E_PROXY_NOT_IMPLEMENTED",
+        "Fetching from the registry proxy is not available on this target, \
+         which has no outbound HTTP, as in the browser playground. It is \
+         reported in the note of `E_REGISTRY_FETCH_FAILED`. Use a native \
+         `karac`.",
+    ),
+    (
+        "E_PROXY_PACKAGE_NOT_FOUND",
+        "The registry proxy does not know the package. It is reported in \
+         the note of `E_REGISTRY_FETCH_FAILED`. Check the dependency's \
+         name, and that `KARAC_REGISTRY_PROXY` names the proxy that serves \
+         it.",
+    ),
+    (
+        "E_PROXY_UNAUTHORIZED",
+        "The registry proxy refused the request (HTTP 401 or 403). It is \
+         reported in the note of `E_REGISTRY_FETCH_FAILED`. A private proxy \
+         needs a token in `KARAC_REGISTRY_TOKEN`; set it, or check that the \
+         one set is still valid.",
+    ),
+    (
+        "E_PROXY_UNREACHABLE",
+        "The registry proxy could not be reached; the message gives the URL \
+         and the network error. It is reported in the note of \
+         `E_REGISTRY_FETCH_FAILED`. Check `KARAC_REGISTRY_PROXY` and the \
+         network, or build with `--offline` from a vendored copy.",
+    ),
+    (
+        "E_PROXY_VERSION_NOT_FOUND",
+        "The registry proxy knows the package but not the exact version \
+         asked for, usually one that `kara.lock` pins. It is reported in \
+         the note of `E_REGISTRY_FETCH_FAILED`. Run `karac update <pkg>` to \
+         choose a version the proxy has.",
+    ),
+    (
+        "E_REGISTRY_DEP_UNSUPPORTED",
+        "A registry dependency (`\"1.2\"` or `{ version = .. }`) is \
+         declared and no registry proxy is configured (design.md § Packages \
+         and manifests, Dependencies in 0.8). Set `KARAC_REGISTRY_PROXY` to \
+         a proxy's URL, or replace the dependency with a `path` dependency \
+         on a local checkout. In `check`, `run`, `build` and `test` it is \
+         an error, because a dependency dropped silently would surface \
+         later as an unknown module; `karac vendor` and `karac update` do \
+         not fetch registry dependencies yet and report it as a warning \
+         (B-2026-11-18-4).",
+    ),
+    (
+        "E_REGISTRY_EXTRACT_FAILED",
+        "A package fetched from the registry proxy could not be unpacked: \
+         the archive is damaged, or an entry would land outside its \
+         directory. It is reported in the note of \
+         `E_REGISTRY_FETCH_FAILED`. Fetch again; if it persists the proxy \
+         is serving a bad archive.",
+    ),
+    (
+        "E_REGISTRY_FETCH_FAILED",
+        "A registry dependency could not be fetched through the proxy \
+         (design.md § Packages and manifests, Dependencies in 0.8). The \
+         note gives the underlying error, ending in a more specific code \
+         (`E_PROXY_UNREACHABLE`, `E_PROXY_PACKAGE_NOT_FOUND`, \
+         `E_REGISTRY_NO_MATCHING_VERSION` and others); `karac explain` that \
+         code for its fix.",
+    ),
+    (
+        "E_REGISTRY_NO_MATCHING_VERSION",
+        "The registry proxy lists the package, but no published version \
+         satisfies the dependency's constraint; the message lists the \
+         versions there are. It is reported in the note of \
+         `E_REGISTRY_FETCH_FAILED`. Change the constraint to admit one of \
+         them.",
+    ),
+    (
+        "E_REGISTRY_ONLY_YANKED",
+        "Every version of the package that satisfies the constraint has \
+         been yanked, withdrawn by its publisher, so none is chosen for a \
+         fresh resolution. It is reported in the note of \
+         `E_REGISTRY_FETCH_FAILED`. Move the constraint to a version that \
+         is not yanked; a version already pinned in `kara.lock` still \
+         builds.",
+    ),
+    (
+        "E_TOOLCHAIN_EMPTY_TARGET_ENTRY",
+        "An entry of `targets` in `karac-toolchain.toml` is empty \
+         (design.md § Packages and manifests, Toolchain pinning). Each \
+         entry is a target triple such as `x86_64-unknown-linux-gnu`. \
+         Remove the empty entry.",
+    ),
+    (
+        "E_TOOLCHAIN_FILE_READ",
+        "`karac-toolchain.toml` exists but could not be read; the message \
+         gives the reason. Check the file's permissions. `karac build`, \
+         `run` and `test` read the file; `karac check` does not.",
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_TARGETS_TYPE",
+        "`targets` in `karac-toolchain.toml` is not an array (design.md § \
+         Packages and manifests, Toolchain pinning). Write it as a list of \
+         triples: `targets = [\"x86_64-unknown-linux-gnu\"]`.",
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_TARGET_ENTRY",
+        "An entry of `targets` in `karac-toolchain.toml` is not a string \
+         (design.md § Packages and manifests, Toolchain pinning). Each \
+         entry is a target triple in quotes.",
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_TOML",
+        "`karac-toolchain.toml` is not valid TOML; the message gives the \
+         parse error and its position.",
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_VERSION_CONSTRAINT",
+        "`version` in `karac-toolchain.toml` is not a valid semver \
+         constraint (design.md § Packages and manifests, Toolchain \
+         pinning). Write a version or range such as `\"0.8\"` or `\">=0.8, \
+         <0.9\"`.",
+    ),
+    (
+        "E_TOOLCHAIN_INVALID_VERSION_TYPE",
+        "`version` in `karac-toolchain.toml` is not a string (design.md § \
+         Packages and manifests, Toolchain pinning). Quote it: `version = \
+         \"0.8\"`, not `version = 0.8`.",
+    ),
+    (
+        "E_TOOLCHAIN_MISSING_VERSION",
+        "`karac-toolchain.toml` has no `version` key, which is the one \
+         thing the file is for (design.md § Packages and manifests, \
+         Toolchain pinning). Add `version = \"<the compiler version the \
+         project uses>\"`.",
+    ),
+    (
+        "E_TOOLCHAIN_TOO_OLD",
+        "A package in the dependency graph declares \
+         `[package].kara-version`, the oldest compiler it supports, and \
+         this compiler is older (design.md § Packages and manifests, \
+         Toolchain pinning). Use a newer compiler, or a version of that \
+         package that supports this one.",
+    ),
+    (
+        "E_TOOLCHAIN_VERSION_MISMATCH",
+        "`karac build`, `run` or `test` found that the project's \
+         `karac-toolchain.toml` pins a compiler version that the running \
+         `karac` does not satisfy (design.md § Packages and manifests, \
+         Toolchain pinning). Run the pinned version, or change the pin if \
+         the project has moved to this one.",
+    ),
+    (
+        "E_UPDATE_ROOT_PACKAGE",
+        "`karac update <pkg>` names the project's own package, which is not \
+         a dependency and has no locked version to move. Name a dependency, \
+         or run `karac update` with no argument to refresh them all.",
+    ),
+    (
+        "E_UPDATE_UNKNOWN_PACKAGE",
+        "`karac update <pkg>` names a package that is not in the resolved \
+         graph; the message suggests a close name when there is one. Check \
+         the spelling against `kara.lock`.",
+    ),
+    (
+        "E_VENDOR_COPY_FAILED",
+        "`karac vendor` could not copy a dependency into `vendor/`; the \
+         message names the dependency and the reason. Check free disk space \
+         and the permissions of the `vendor/` directory.",
+    ),
+    (
+        "E_WORKSPACE_DEP_NOT_DECLARED",
+        "A member's manifest declares `name = { workspace = true }`, and \
+         the workspace root's `[workspace.dependencies]` has no entry for \
+         that name (design.md § Packages and manifests, Workspaces). Add \
+         the dependency there, with its version or path, or declare it in \
+         the member directly.",
+    ),
+    (
+        "E_WORKSPACE_DEP_OUTSIDE_WORKSPACE",
+        "A manifest declares a dependency with `workspace = true`, but it \
+         is not part of a workspace whose root has \
+         `[workspace.dependencies]` (design.md § Packages and manifests, \
+         Workspaces). Declare the dependency's version or path directly, or \
+         add the package to a workspace's `members`.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
@@ -3681,6 +4355,10 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
         "`#[multiversion]` is deferred (docs/deferred.md § Multiversioning: `cpu-baseline` and `#[multiversion]`); the attribute is parsed and checked but no per-CPU variants are built.",
     ),
     (
+        "E_REPR_DEFERRED",
+        "`#[repr(packed)]` and `#[repr(align(N))]` are deferred to the systems track (docs/deferred.md § `#[repr(packed)]`, `#[repr(align(N))]`, `offset_of`); v1's forms are `C`, an integer type on an enum, and `transparent`.",
+    ),
+    (
         "E_IMPL_TRAIT_ALIAS",
         "Trait aliases are deferred (docs/deferred.md § Trait Aliases, \"Implementing trait aliases\"); implement each component trait separately.",
     ),
@@ -3715,7 +4393,7 @@ fn family_of(families: &[CodeFamily], code: &str) -> Option<&'static str> {
 const DEFERRED_FAMILIES: &[CodeFamily] = &[
     CodeFamily {
         prefixes: &["E_UNION_"],
-        codes: &["E_EMPTY_UNION"],
+        codes: &["E_EMPTY_UNION", "E_REPR_TRANSPARENT_UNION_FORBIDDEN"],
         pointer: "Unions are deferred (docs/deferred.md § FFI Unions: `union Foo { ... }`).",
     },
     CodeFamily {
@@ -3806,6 +4484,7 @@ fn experimental_note(code: &str) -> Option<String> {
 /// one does, which code reports the case now (review-thread ruling
 /// 2026-11-17 on B-2026-11-16-303).
 const RETIRED_CODES: &[(&str, &str)] = &[
+    ("E_ENUM_NESTED_ENUM_PAYLOAD", "An enum may carry another enum as a payload (`Step.Do(Command)`), to any depth; the one-level limit belonged to the legacy backend (B-2026-10-06-86), and nothing reports the case now."),
     ("E0103", "Access to an item the caller cannot see is E0111 PrivateItemAccess."),
     ("E0105", "A variant the enum does not declare is reported as E0236, no associated function of that name on the type."),
     ("E0220", "An unknown suffix on a number literal is a parse error, E0002."),

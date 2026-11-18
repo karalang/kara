@@ -44402,9 +44402,8 @@ fn test_struct_literal_spread_base_is_rejected_not_reported_as_a_missing_field()
 }
 
 /// With every field given explicitly the base is inert rather than lossy, so the
-/// message says so instead of listing fields to copy. Still an error: the form is
-/// unimplemented, and accepting it here would keep suggesting that the base means
-/// something.
+/// message says so instead of listing fields to copy. Still an error: accepting
+/// it would keep suggesting that the base means something.
 #[test]
 fn test_struct_literal_spread_base_with_all_fields_explicit_says_it_is_inert() {
     let errors = typecheck_errors(
@@ -44413,7 +44412,7 @@ fn test_struct_literal_spread_base_with_all_fields_explicit_says_it_is_inert() {
     );
     assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
     assert!(
-        errors[0].message.contains("the base has no effect"),
+        errors[0].message.contains("the base copies nothing"),
         "got {}",
         errors[0].message
     );

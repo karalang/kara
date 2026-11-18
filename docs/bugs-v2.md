@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 481 |
+| diagnostics | 482 |
 | false-positive | 253 |
-| missing-feature | 194 |
+| missing-feature | 195 |
 | perf | 187 |
 | other | 113 |
 | soundness | 85 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 603 |
+| typecheck | 604 |
 | mir-llvm | 287 |
 | mir | 250 |
-| cli | 193 |
+| cli | 194 |
 | parser | 110 |
 | ownership | 104 |
 | interp | 87 |
@@ -122,6 +122,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-139 | 2026-11-17 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum other than Option, a boxed field, a struct with its own `Drop` impl inside a container, or a library type; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
 | B-2026-11-18-1 | 2026-11-18 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both backends) | — |
 | B-2026-11-18-2 | 2026-11-18 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; .. let b = cnt[1]; .. b.min(a)` returned as `i32` is refused with the generic "Write an explicit 'as i32'" and no edit, where `cnt[1].min(cnt[0])` gets the `0i32` suffix | — |
+| B-2026-11-18-3 | 2026-11-18 | typecheck | low | A bare `size_of()` (no type named) type-checks and runs, printing `0`, the placeholder body of the intrinsic, instead of E_LAYOUT_QUERY_TYPE_ARG_REQUIRED | — |
+| B-2026-11-18-4 | 2026-11-18 | cli | medium | `karac vendor` and `karac update` fetch no git or registry dependency: each is a warning (E_GIT_DEP_UNSUPPORTED / E_REGISTRY_DEP_UNSUPPORTED) and is skipped, so `vendor` copies 0 packages and exits 0, though `check`/`build` fetch the same dependencies | — |
 
 ### Relocated
 

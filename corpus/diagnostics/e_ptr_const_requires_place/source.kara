@@ -1,0 +1,3 @@
+fn main() {
+    let p = ptr.const(1 + 2);
+}

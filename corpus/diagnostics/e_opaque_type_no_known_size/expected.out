@@ -1,0 +1,1 @@
+ERROR at line 6: `size_of` cannot be applied to opaque foreign type 'Handle'; the type's size and alignment are unknown to Kāra

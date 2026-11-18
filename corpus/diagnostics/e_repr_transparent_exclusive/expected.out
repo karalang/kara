@@ -1,0 +1,1 @@
+ERROR at line 2: `#[repr(transparent)]` cannot be combined with any other `#[repr(...)]` (`C` / `packed` / `align(N)` / `intN`) — `transparent` IS the layout claim, so another repr would either contradict it or duplicate the inner type's claim

@@ -1,0 +1,1 @@
+ERROR at line 2: cannot cast a reference to a raw pointer; references and raw pointers have different rooting and lifetime contracts. Use `ptr.const(place)` to construct a raw pointer directly from the underlying place (got `ref i32` to `*const i32`)

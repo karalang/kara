@@ -155,6 +155,7 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E0401", "may declare effects"),
         ("E0417", "may panic"),
         ("E0508", "E0515"),
+        ("E_ENUM_NESTED_ENUM_PAYLOAD", "any depth"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(out.contains("This code is retired"), "{code}: {out}");
@@ -176,6 +177,8 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E_MULTIVERSION_EMPTY", "Multiversioning"),
         ("E_CODEGEN_HINT_ON_CLOSURE", "Codegen Hint Attributes"),
         ("E_COLD_INLINE_ALWAYS_CONFLICT", "not yet lowered"),
+        ("E_REPR_DEFERRED", "`#[repr(packed)]`"),
+        ("E_REPR_TRANSPARENT_UNION_FORBIDDEN", "FFI Unions"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(
@@ -248,6 +251,13 @@ fn diagnostics_corpus_package_codes_are_produced_and_explained() {
             ],
         ),
         (
+            "E_TEST_OUTSIDE_TEST_FILE",
+            &[(
+                "src/main.kara",
+                "fn main() {}\ntest \"lost\" {\n    assert(true);\n}\n",
+            )],
+        ),
+        (
             "E0223",
             &[
                 ("src/main.kara", "import a;\nfn main() { a.f(); }\n"),
@@ -290,4 +300,30 @@ fn diagnostics_corpus_package_codes_are_produced_and_explained() {
         bad.push("E0227: no description".to_string());
     }
     assert!(bad.is_empty(), "{}", bad.join("\n\n"));
+}
+
+/// B-2026-11-18-3: a bare `size_of()` names no type, and returned the
+/// placeholder body's `0`. A program's own non-generic `size_of` is still its
+/// own function.
+#[test]
+fn diagnostics_corpus_bare_size_of_names_no_type() {
+    let dir = tempfile_dir("bare_size_of");
+    std::fs::write(
+        dir.join("main.kara"),
+        "fn main() {\n    println(size_of());\n    println(i64.align_of());\n}\n",
+    )
+    .unwrap();
+    let out = karac(&dir, &["check", "--output=json", "main.kara"]);
+    assert!(
+        out.contains("\"code\":\"E_LAYOUT_QUERY_TYPE_ARG_REQUIRED\""),
+        "{out}"
+    );
+    assert!(out.contains("T.size_of()"), "{out}");
+    std::fs::write(
+        dir.join("own.kara"),
+        "fn size_of() -> i64 { 7 }\nfn main() {\n    println(size_of());\n}\n",
+    )
+    .unwrap();
+    let out = karac(&dir, &["run", "own.kara"]);
+    assert!(out.trim_end().ends_with('7'), "{out}");
 }

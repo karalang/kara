@@ -1,0 +1,1 @@
+ERROR at line 1: `#[repr(u8)]` fixes an enum's discriminant, and a struct has none; a struct takes `#[repr(C)]` or `#[repr(transparent)]` (design.md § `#[repr]`: ABI layout)

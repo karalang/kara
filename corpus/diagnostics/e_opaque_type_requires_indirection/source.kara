@@ -1,0 +1,9 @@
+unsafe extern "C" {
+    type Handle;
+}
+
+struct Session {
+    handle: Handle,
+}
+
+fn main() {}

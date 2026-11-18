@@ -1,0 +1,1 @@
+ERROR at line 6: opaque foreign type 'Handle' has no methods — impl blocks on opaque types are rejected, so no '.close(…)' or any other method call resolves through 'Handle'. Use the wrapper-type pattern (`distinct type Wrapper = *mut Handle; impl Wrapper { … }`) or call a free function from the `unsafe extern "C" { … }` block that takes `ref Handle` / `mut ref Handle`.

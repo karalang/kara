@@ -1,0 +1,1 @@
+ERROR at line 3: `mut ref` borrows a place: a local, `self`, or a field or element of one (core-semantics.md §5.1)

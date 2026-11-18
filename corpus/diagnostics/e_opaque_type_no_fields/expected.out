@@ -1,0 +1,1 @@
+ERROR at line 6: opaque foreign type 'Handle' has no fields visible to Kāra; the C side owns the layout. Field access through `ref Handle` / `mut ref Handle` is not supported — pass the reference to a foreign function declared in the same `unsafe extern { }` block instead

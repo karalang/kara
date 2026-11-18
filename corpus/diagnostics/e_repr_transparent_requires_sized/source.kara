@@ -1,0 +1,6 @@
+#[repr(transparent)]
+struct Wrapper[T] {
+    value: T,
+}
+
+fn main() {}

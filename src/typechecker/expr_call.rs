@@ -533,8 +533,8 @@ impl<'a> super::TypeChecker<'a> {
             _ => {
                 self.type_error(
                     format!(
-                        "error[E_LAYOUT_QUERY_TYPE_ARG_REQUIRED]: `{name}` requires \
-                         exactly one type argument — call shape is `{name}[T]()`"
+                        "error[E_LAYOUT_QUERY_TYPE_ARG_REQUIRED]: `{name}` measures \
+                         one type, written as its receiver: `T.{name}()`"
                     ),
                     *span,
                     TypeErrorKind::WrongNumberOfArgs,
@@ -2041,6 +2041,23 @@ impl<'a> super::TypeChecker<'a> {
         // Single-arg `size_of[T]()` cannot be disambiguated from
         // `arr[i]()` so it parses as `Call { callee: Index { Ident, T } }`
         // — `T` is a value-position `Expr` that actually denotes a type.
+        // A bare `size_of()` names no type. The intrinsic's `T` appears in
+        // no parameter, so nothing decided it and the call returned the
+        // placeholder body's `0` (B-2026-11-18-3). The shape check leaves
+        // a program's own non-generic `fn size_of()` alone; a call with
+        // arguments keeps the ordinary arity error.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if (name == "size_of" || name == "align_of")
+                && args.is_empty()
+                && self
+                    .env
+                    .functions
+                    .get(name.as_str())
+                    .is_some_and(|sig| sig.generic_params.len() == 1 && sig.params.is_empty())
+            {
+                return self.infer_layout_query_intrinsic(name, &[], args, span);
+            }
+        }
         if let ExprKind::Path {
             segments,
             generic_args: Some(ga),

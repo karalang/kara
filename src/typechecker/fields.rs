@@ -1355,9 +1355,12 @@ impl<'a> super::TypeChecker<'a> {
             .filter(|n| !provided_fields.contains(n))
             .collect();
         if has_spread {
+            // A spread that copies something was rewritten into explicit
+            // copies before the resolver (src/struct_spread.rs), so the one
+            // that reaches here gives every field already.
             let tail = if missing.is_empty() {
-                "every field is already given explicitly here, so the base has no \
-                 effect — drop it"
+                "every field is given explicitly, so the base copies nothing: \
+                 drop `..base`"
                     .to_string()
             } else {
                 format!(
@@ -1377,8 +1380,7 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 format!(
                     "error[E_STRUCT_LITERAL_SPREAD_UNSUPPORTED]: struct '{struct_name}' \
-                     literal has a spread base (`..base`), which is parsed but NOT \
-                     applied — no field is copied from the base. {tail}."
+                     literal has a spread base (`..base`) with no effect; {tail}"
                 ),
                 *span,
                 TypeErrorKind::TypeMismatch,

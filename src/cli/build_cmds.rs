@@ -2503,7 +2503,7 @@ pub(super) fn run_dep_resolution(
                         return Err(());
                     }
                 };
-            let (joint, _) = solve(ws_root, wmf, &read_lockfile_pins(ws_root))?;
+            let (joint, _) = solve(ws_root, wmf, &read_lockfile_pins(ws_root, output))?;
             // `karac resolve` is read-only — it inspects the graph without
             // rewriting `kara.lock`. Only build / test persist the pin.
             if persist_lock {
@@ -2511,7 +2511,7 @@ pub(super) fn run_dep_resolution(
             }
             resolution_pins(&joint)
         }
-        None => read_lockfile_pins(root),
+        None => read_lockfile_pins(root, output),
     };
     let (resolution, graph) = solve(root, mf, &pins)?;
     // Warn on any resolved version the catalog marks yanked (follow-up
@@ -2921,9 +2921,13 @@ pub(super) fn emit_offline_no_vendor_dir(vendor_dir: &std::path::Path, output: O
 /// version pins for lockfile-pin-over-catalog resolution (follow-up (d)/(h),
 /// slice 3). Best-effort: a missing / unreadable / malformed lockfile yields an
 /// empty pin map, so a fresh project or a corrupt lockfile falls back to fresh
-/// version selection rather than failing the build.
+/// version selection rather than failing the build. A lockfile that exists but
+/// does not parse is said so, as a warning: its pins are dropped and the file
+/// is rewritten, which the user should hear (B-2026-11-16-303, whose
+/// `E_LOCKFILE_*` codes nothing reported before).
 pub(super) fn read_lockfile_pins(
     root: &std::path::Path,
+    output: OutputMode,
 ) -> std::collections::BTreeMap<String, semver::Version> {
     let path = root.join("kara.lock");
     let Ok(source) = std::fs::read_to_string(&path) else {
@@ -2931,7 +2935,17 @@ pub(super) fn read_lockfile_pins(
     };
     match crate::lockfile::Lockfile::parse(&path, &source) {
         Ok(lock) => lock.version_pins(),
-        Err(_) => std::collections::BTreeMap::new(),
+        Err(e) => {
+            emit_lockfile_diag(
+                &e,
+                output,
+                "the lockfile's version pins are ignored and versions are chosen afresh; \
+                 the next `karac build` or `karac test` rewrites `kara.lock`",
+                "if the file was edited by hand, restore it from version control",
+                false,
+            );
+            std::collections::BTreeMap::new()
+        }
     }
 }
 
@@ -3015,20 +3029,43 @@ pub(super) fn persist_lockfile(
 }
 
 pub(super) fn emit_lockfile_warning(err: &crate::lockfile::LockfileError, output: OutputMode) {
+    emit_lockfile_diag(
+        err,
+        output,
+        "the resolver succeeded; the lockfile write is a follow-up step",
+        "check filesystem permissions for the project root",
+        true,
+    );
+}
+
+fn emit_lockfile_diag(
+    err: &crate::lockfile::LockfileError,
+    output: OutputMode,
+    note: &str,
+    help: &str,
+    json_on_stdout: bool,
+) {
     let primary = err.to_string();
     let code = err.code();
     match output {
         OutputMode::Text => {
             eprintln!("warning[{code}]: {primary}");
-            eprintln!("   = note: the resolver succeeded; the lockfile write is a follow-up step");
-            eprintln!("   = help: check filesystem permissions for the project root");
+            eprintln!("   = note: {note}");
+            eprintln!("   = help: {help}");
         }
         OutputMode::Json => {
-            println!(
+            let doc = format!(
                 "{{\"status\":\"ok\",\"diagnostics\":[{{\"severity\":\"warning\",\"phase\":\"lockfile\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&primary),
             );
+            // A read warning comes before the command's own document, which
+            // `check --output=json` keeps as the only one on stdout.
+            if json_on_stdout {
+                println!("{doc}");
+            } else {
+                eprintln!("{doc}");
+            }
         }
         OutputMode::Jsonl => {
             emit_jsonl_event(

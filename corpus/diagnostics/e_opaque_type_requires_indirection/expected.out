@@ -1,0 +1,1 @@
+ERROR at line 6: opaque foreign type 'Handle' has no known size and cannot appear by value here; wrap it in `ref Handle` / `mut ref Handle` (or `*const Handle` / `*mut Handle` in FFI signatures) to use it through indirection

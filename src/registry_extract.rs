@@ -133,7 +133,8 @@ impl ProxyRegistryProvider<'_> {
         let root = match find_manifest_root(&extract_dir) {
             Some(root) => root, // already extracted — reuse
             None => {
-                extract_tarball(&pkg.tarball_bytes, &extract_dir).map_err(|e| e.to_string())?;
+                extract_tarball(&pkg.tarball_bytes, &extract_dir)
+                    .map_err(|e| format!("{e} [{}]", e.code()))?;
                 find_manifest_root(&extract_dir).ok_or_else(|| {
                     format!(
                         "extracted tarball for `{name}` {} contains no kara.toml",
@@ -152,19 +153,23 @@ impl ProxyRegistryProvider<'_> {
 
 impl RegistryProvider for ProxyRegistryProvider<'_> {
     fn fetch(&self, name: &str, req: &semver::VersionReq) -> Result<MaterializedDep, String> {
-        let pkg = fetch_registry_package(self.client, name, req).map_err(|e| e.to_string())?;
+        let pkg = fetch_registry_package(self.client, name, req)
+            .map_err(|e| format!("{e} [{}]", e.code()))?;
         self.extract_materialized(name, pkg)
     }
 
     fn available_versions(&self, name: &str) -> Result<Vec<semver::Version>, String> {
-        list_registry_versions(self.client, name).map_err(|e| e.to_string())
+        list_registry_versions(self.client, name).map_err(|e| format!("{e} [{}]", e.code()))
     }
 
     fn yanked_versions(&self, name: &str) -> Result<Vec<semver::Version>, String> {
         // The catalog's `yanked` array (resolver follow-up (h)). `available_versions`
         // above filters these *out* of fresh selection; here we surface them so a
         // lockfile pin that lands on a yanked version can be flagged.
-        let catalog = self.client.fetch_catalog(name).map_err(|e| e.to_string())?;
+        let catalog = self
+            .client
+            .fetch_catalog(name)
+            .map_err(|e| format!("{e} [{}]", e.code()))?;
         Ok(catalog.yanked)
     }
 
@@ -173,8 +178,8 @@ impl RegistryProvider for ProxyRegistryProvider<'_> {
         name: &str,
         version: &semver::Version,
     ) -> Result<MaterializedDep, String> {
-        let pkg =
-            fetch_registry_package_at(self.client, name, version).map_err(|e| e.to_string())?;
+        let pkg = fetch_registry_package_at(self.client, name, version)
+            .map_err(|e| format!("{e} [{}]", e.code()))?;
         self.extract_materialized(name, pkg)
     }
 }

@@ -1,0 +1,1 @@
+ERROR at line 2: cannot cast a pointer to an integer; use `ptr.addr(p)` for the address bits, or `ptr.expose(p)` if the pointer will be round-tripped through integer storage (got `*const i64` to `usize`)

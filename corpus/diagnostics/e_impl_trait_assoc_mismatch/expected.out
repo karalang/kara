@@ -1,0 +1,1 @@
+ERROR at line 2: function returns `impl Iterator[Item = String]` but body type `VecIter[i64]` declares `Item = ref i64`. An inline associated-type binding is a promise to every caller — they type `Item` as `String` on the strength of it — so the witness must match it exactly. Change the binding to `Item = ref i64`, or return a type whose `Item` is `String`.

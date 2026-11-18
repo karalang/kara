@@ -1,0 +1,9 @@
+unsafe extern "C" {
+    type Handle;
+}
+
+impl Handle {
+    fn close(self) {}
+}
+
+fn main() {}

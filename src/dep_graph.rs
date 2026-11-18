@@ -807,7 +807,10 @@ fn visit(
                 DepGraphError::GitFetchFailed {
                     from_dir: dir.to_path_buf(),
                     dep_name: dep_name.clone(),
-                    message: e.to_string(),
+                    // The specific code (`E_GIT_UNAVAILABLE`,
+                    // `E_GIT_NO_MANIFEST`) rides in the note, so `karac
+                    // explain` can find it (B-2026-11-16-303).
+                    message: format!("{e} [{}]", e.code()),
                 }
             })?;
             let canonical_target = canonicalize_or_self(&materialized.root_dir);

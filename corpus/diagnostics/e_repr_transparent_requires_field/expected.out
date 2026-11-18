@@ -1,0 +1,1 @@
+ERROR at line 2: a `#[repr(transparent)]` struct must have exactly one non-zero-sized field whose layout becomes the whole struct's layout; this struct has none

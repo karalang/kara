@@ -1,0 +1,6 @@
+#[repr(u8)]
+struct Flags {
+    bits: u8,
+}
+
+fn main() {}

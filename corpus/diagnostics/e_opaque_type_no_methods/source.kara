@@ -1,0 +1,9 @@
+unsafe extern "C" {
+    type Handle;
+}
+
+fn close_it(h: ref Handle) {
+    h.close();
+}
+
+fn main() {}

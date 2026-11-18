@@ -1,0 +1,5 @@
+fn address(p: *const i64) -> usize {
+    p as usize
+}
+
+fn main() {}

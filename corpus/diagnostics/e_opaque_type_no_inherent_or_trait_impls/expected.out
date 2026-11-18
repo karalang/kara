@@ -1,0 +1,1 @@
+ERROR at line 5: cannot write `impl Handle` — opaque foreign type 'Handle' has no Kāra-visible methods or trait implementations. Wrap 'Handle' in a Kāra-side newtype (e.g. `shared struct HandleHandle { p: ref Handle }`) and impl on the wrapper instead

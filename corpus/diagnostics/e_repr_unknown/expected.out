@@ -1,0 +1,1 @@
+ERROR at line 1: `#[repr(u128)]` is not a discriminant representation v1 has; an enum's is one of `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32` or `i64` (design.md § `#[repr]`: ABI layout)

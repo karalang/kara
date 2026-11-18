@@ -1,0 +1,1 @@
+ERROR at line 2: casting `*const i32` to `*mut i32` adds write capability the source pointer does not carry and must be wrapped in an `unsafe { ... }` block — the cast site is where the author asserts the reinterpretation is valid. (The capability-DROPPING cast `*mut T as *const T` is safe and needs no `unsafe`.)

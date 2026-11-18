@@ -1,0 +1,5 @@
+fn evens() -> impl Iterator[Item = String] {
+    [2, 4, 6].iter()
+}
+
+fn main() {}

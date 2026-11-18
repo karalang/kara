@@ -1,0 +1,9 @@
+unsafe extern "C" {
+    type Handle;
+}
+
+fn id_of(h: ref Handle) -> i32 {
+    h.id
+}
+
+fn main() {}

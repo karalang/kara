@@ -1,0 +1,6 @@
+#[repr(C, transparent)]
+struct Meters {
+    value: f64,
+}
+
+fn main() {}

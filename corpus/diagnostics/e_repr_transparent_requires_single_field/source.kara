@@ -1,0 +1,7 @@
+#[repr(transparent)]
+struct Pair {
+    a: i32,
+    b: i32,
+}
+
+fn main() {}

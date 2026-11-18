@@ -1,0 +1,1 @@
+ERROR at line 3: the single field of a `#[repr(transparent)]` struct is the bare type parameter 'value', so the wrapper's size depends on it and its layout is indeterminate; wrap a concrete or `Sized`-known type instead

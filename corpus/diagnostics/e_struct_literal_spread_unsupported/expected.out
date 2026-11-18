@@ -1,0 +1,1 @@
+ERROR at line 5: struct 'P' literal has a spread base (`..base`) with no effect; every field is given explicitly, so the base copies nothing: drop `..base`
