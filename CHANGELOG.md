@@ -338,6 +338,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- A parameter takes any irrefutable pattern, in functions and closures alike
+  (design.md § Destructuring parameters): `Req { ref h, body }: own Req` and
+  `h: ref hh`, a fixed-array pattern `[a, b, c]: Array[i64, 3]`,
+  `name @ (a, b)`, and a distinct type's `Id(n): Id` check and run, where
+  they were parse errors or refused as refutable. A pattern that can fail
+  for its declared type (`E.A(x): E`, `Some(x)`, `[a, b]: Vec[i64]`) is
+  refused once, naming its constructor (B-2026-11-18-27).
 - An `Option` iterates as zero or one item, as Rust's does: `opt.iter()`
   views the value, `opt.into_iter()` moves it out, and `Option[T]` is
   `IntoIterator`, so `root.into_iter().collect()`,

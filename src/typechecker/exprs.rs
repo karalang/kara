@@ -4678,13 +4678,7 @@ impl<'a> super::TypeChecker<'a> {
                         let ty = annotated.unwrap_or_else(|| expected_pty.clone());
                         let ty = self.d5_closure_param_borrows(&p.ty, ty, expected_pty);
                         let bound = self.copy_item_param(&expr.span, i, p, ty.clone());
-                        if !self.is_irrefutable_pattern(&p.pattern, &bound) {
-                            self.type_error(
-                                "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),
-                                p.pattern.span,
-                                TypeErrorKind::RefutablePattern,
-                            );
-                        }
+                        self.check_param_pattern_irrefutable(&p.pattern, &bound);
                         self.bind_pattern_types(&p.pattern, &bound);
                         ty
                     })
@@ -17833,13 +17827,7 @@ impl<'a> super::TypeChecker<'a> {
                             .or(seeded)
                             .unwrap_or_else(|| self.env.fresh_type_var());
                         let bound = self.copy_item_param(&expr.span, i, p, ty.clone());
-                        if !self.is_irrefutable_pattern(&p.pattern, &bound) {
-                            self.type_error(
-                                "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),
-                                p.pattern.span,
-                                TypeErrorKind::RefutablePattern,
-                            );
-                        }
+                        self.check_param_pattern_irrefutable(&p.pattern, &bound);
                         self.bind_pattern_types(&p.pattern, &bound);
                         ty
                     })

@@ -2402,6 +2402,26 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
+            // `[a, b, c]: Array[i64, 3]`, and `ref name` / `mut ref name`
+            // inside a destructured parameter: any irrefutable pattern may
+            // stand in parameter position (design.md § Destructuring
+            // parameters; B-2026-11-18-27), so these take the general
+            // grammar, and the typechecker judges irrefutability against
+            // the declared type.
+            Token::LeftBracket | Token::Ref => self.parse_single_pattern(),
+            Token::Mut if matches!(self.peek_token_ref_at(1), Token::Ref) => {
+                self.parse_single_pattern()
+            }
+            // `name @ (a, b)`, a qualified variant `E.A(x)`, and Rust's
+            // `E::A(x)`: the general grammar too (B-2026-11-18-27).
+            Token::Identifier { .. }
+                if matches!(
+                    self.peek_token_ref_at(1),
+                    Token::At | Token::Dot | Token::ColonColon
+                ) =>
+            {
+                self.parse_single_pattern()
+            }
             // Identifier — could be plain binding or struct destructure `Name { ... }`
             Token::Identifier { .. } => {
                 let name = self.expect_identifier()?;
@@ -2429,6 +2449,34 @@ impl super::Parser {
                             break;
                         }
                         let fstart = self.current_span();
+                        // `Req { ref h, body }`: the shorthand field takes
+                        // its binding mode, as in any struct pattern
+                        // (design.md § Binding modes in patterns;
+                        // B-2026-11-18-27).
+                        if self.check(&Token::Ref)
+                            || (self.check(&Token::Mut)
+                                && matches!(self.peek_token_ref_at(1), Token::Ref))
+                        {
+                            let pattern = self.parse_single_pattern()?;
+                            let name = match &pattern.kind {
+                                PatternKind::Binding(name) => name.clone(),
+                                _ => {
+                                    self.error(
+                                        "expected a field name after `ref` in a struct pattern",
+                                    );
+                                    String::new()
+                                }
+                            };
+                            fields.push(FieldPattern {
+                                name,
+                                pattern: Some(pattern),
+                                span: self.span_from(&fstart),
+                            });
+                            if !self.eat(&Token::Comma) {
+                                break;
+                            }
+                            continue;
+                        }
                         let field_name = self.expect_identifier()?;
                         let sub_pattern = if self.eat(&Token::Colon) {
                             Some(self.parse_param_pattern()?)
@@ -2455,10 +2503,11 @@ impl super::Parser {
                         span: self.span_from(&start),
                     })
                 } else if self.check(&Token::LeftParen) {
-                    // `Some(x): Option[i64]`: a variant pattern can fail, and a
-                    // parameter's pattern must not (design.md § Destructuring
-                    // parameters; B-2026-11-04-69). Parsed as a tuple pattern
-                    // under the name, so the error is the only one.
+                    // `Some(x): Option[i64]` can fail and `Id(n): Id` over a
+                    // distinct type cannot; the typechecker refuses the
+                    // first against the declared type (design.md §
+                    // Destructuring parameters; B-2026-11-04-69,
+                    // B-2026-11-18-27).
                     self.advance();
                     let mut patterns = Vec::new();
                     while !self.check(&Token::RightParen) && !self.is_at_end() {
@@ -2482,45 +2531,38 @@ impl super::Parser {
                             .map(str::to_string),
                         _ => None,
                     };
-                    match unwrapped {
-                        Some(inner) => {
-                            let stays = self.rust_reverse_stays();
-                            let (message, replacement) = if stays {
-                                (
-                                    format!(
-                                        "`Reverse` is a struct, not a tuple: its fields have \
-                                         names, so its pattern is `Reverse {{ value: {inner} }}`"
-                                    ),
-                                    format!("Reverse {{ value: {inner} }}"),
-                                )
-                            } else {
-                                (
-                                    format!(
-                                        "`Reverse({inner})` is Rust's `std::cmp::Reverse`, which \
-                                         Kāra has no use for: its `PriorityQueue` holds the value \
-                                         itself, so the parameter is `{inner}`"
-                                    ),
-                                    inner,
-                                )
-                            };
-                            self.error_at(&message, span);
-                            self.fix_edits.insert(
-                                crate::resolver::SpanKey::from_span(&span),
-                                crate::resolver::TextEdit {
-                                    offset: span.offset,
-                                    length: span.length,
-                                    replacement,
-                                },
-                            );
-                        }
-                        None => self.error_at(
-                            &format!(
-                                "a parameter's pattern must be irrefutable, and `{name}(..)` matches \
-                                 only some values (design.md § Destructuring parameters): take the \
-                                 value and use `if let` or `match` in the body"
-                            ),
-                            span,
-                        ),
+                    // Any other `Name(..)` is the typechecker's to judge:
+                    // `Some(x)` can fail, a distinct type's `Id(n)` cannot,
+                    // and only the declared type tells (B-2026-11-18-27).
+                    if let Some(inner) = unwrapped {
+                        let stays = self.rust_reverse_stays();
+                        let (message, replacement) = if stays {
+                            (
+                                format!(
+                                    "`Reverse` is a struct, not a tuple: its fields have \
+                                     names, so its pattern is `Reverse {{ value: {inner} }}`"
+                                ),
+                                format!("Reverse {{ value: {inner} }}"),
+                            )
+                        } else {
+                            (
+                                format!(
+                                    "`Reverse({inner})` is Rust's `std::cmp::Reverse`, which \
+                                     Kāra has no use for: its `PriorityQueue` holds the value \
+                                     itself, so the parameter is `{inner}`"
+                                ),
+                                inner,
+                            )
+                        };
+                        self.error_at(&message, span);
+                        self.fix_edits.insert(
+                            crate::resolver::SpanKey::from_span(&span),
+                            crate::resolver::TextEdit {
+                                offset: span.offset,
+                                length: span.length,
+                                replacement,
+                            },
+                        );
                     }
                     Some(Pattern {
                         id: crate::ids::NodeId::DUMMY,

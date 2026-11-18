@@ -4552,10 +4552,45 @@ impl<'a> super::TypeChecker<'a> {
                 rest,
                 suffix,
             } => {
+                // A borrowed parameter (`[a, b, c]: Array[i64, 3]`, a bare
+                // parameter borrowing) destructures through the borrow, as a
+                // tuple pattern does: each element binds the way a field of
+                // a borrowed tuple binds, a Copy scalar by value and anything
+                // else as a borrow (B-2026-11-18-27).
+                let (base, borrowed) = match ty {
+                    Type::Ref(inner) => (inner.as_ref(), Some(false)),
+                    Type::MutRef(inner) => (inner.as_ref(), Some(true)),
+                    _ => (ty, None),
+                };
                 let (element_ty, rest_ty) =
-                    self.slice_pattern_types(prefix, rest, suffix, ty, &pattern.span);
+                    self.slice_pattern_types(prefix, rest, suffix, base, &pattern.span);
+                let element_ty = match borrowed {
+                    Some(is_mut) if !self.is_open_literal(&element_ty) => {
+                        borrowed_field_binding_ty(&element_ty, is_mut)
+                    }
+                    _ => element_ty,
+                };
+                let rest_ty = match (borrowed, &rest_ty) {
+                    (Some(_), Type::Slice { .. } | Type::Error) | (None, _) => rest_ty,
+                    (Some(false), _) => Type::Ref(Box::new(rest_ty)),
+                    (Some(true), _) => Type::MutRef(Box::new(rest_ty)),
+                };
                 for pat in prefix.iter().chain(suffix.iter()) {
                     self.bind_pattern_types(pat, &element_ty);
+                    if borrowed.is_some()
+                        && self.library_methods_from_source
+                        && !self.cli_lint_overrides.strict_core
+                        && !matches!(element_ty, Type::Ref(_) | Type::MutRef(_))
+                    {
+                        if let PatternKind::Binding(n) = &pat.kind {
+                            self.local_scope.mark_view(n);
+                        }
+                    }
+                    if matches!(element_ty, Type::Ref(_) | Type::MutRef(_))
+                        && matches!(pat.kind, PatternKind::Binding(_))
+                    {
+                        self.record_pattern_binding_surface_types(pat, &element_ty);
+                    }
                 }
                 if let Some(RestPattern::Bound(name, _)) = rest {
                     self.local_scope.insert(name.clone(), rest_ty);
@@ -4669,13 +4704,51 @@ impl<'a> super::TypeChecker<'a> {
     /// Emit a `RefutablePattern` error if `param`'s pattern is refutable
     /// for its declared type.
     pub(super) fn check_param_irrefutable(&mut self, param: &Param, ty: &Type) {
-        if !self.is_irrefutable_pattern(&param.pattern, ty) {
-            self.type_error(
-                "refutable pattern in function parameter; use `if let` or `match` for patterns that may not match".to_string(),
-                param.pattern.span,
-                TypeErrorKind::RefutablePattern,
-            );
+        self.check_param_pattern_irrefutable(&param.pattern, ty);
+    }
+
+    /// A function's or a closure's parameter pattern that can fail for its
+    /// type: design.md § Destructuring parameters admits any irrefutable
+    /// pattern there, in functions and closures alike, so the judgement is
+    /// the type's (a distinct type's `Id(n)` always matches; `Some(x)` does
+    /// not), and the message names the part that can fail.
+    pub(super) fn check_param_pattern_irrefutable(&mut self, pattern: &Pattern, ty: &Type) {
+        // A bare parameter borrows; its pattern destructures through the
+        // borrow, so it can fail exactly when it can over the value.
+        let mut ty = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner.as_ref();
         }
+        if self.is_irrefutable_pattern(pattern, ty) {
+            return;
+        }
+        let what = match refutable_param_head(pattern) {
+            Some(head) => format!("`{head}`"),
+            None => "this pattern".to_string(),
+        };
+        self.type_error(
+            format!(
+                "a parameter's pattern must be irrefutable, and {what} matches only some values \
+                 (design.md § Destructuring parameters): take the value and use `if let` or \
+                 `match` in the body"
+            ),
+            pattern.span,
+            TypeErrorKind::RefutablePattern,
+        );
+    }
+}
+
+/// The constructor a refused parameter pattern names, for its message:
+/// `Some(..)`, `E.A { .. }`, `E.B`, `[..]`, or `None` for a pattern with
+/// none.
+fn refutable_param_head(p: &Pattern) -> Option<String> {
+    match &p.kind {
+        PatternKind::TupleVariant { path, .. } => Some(format!("{}(..)", path.join("."))),
+        PatternKind::Struct { path, .. } => Some(format!("{} {{ .. }}", path.join("."))),
+        PatternKind::Binding(name) if name.contains('.') => Some(name.clone()),
+        PatternKind::AtBinding { pattern, .. } => refutable_param_head(pattern),
+        PatternKind::Slice { .. } => Some("[..]".to_string()),
+        _ => None,
     }
 }
 
