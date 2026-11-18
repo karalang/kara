@@ -1762,6 +1762,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `karac fix` applies the `lossless_cast`, `redundant_cast` and
+  `redundant_clone` fixes in a program with a mutual-recursion group. Those
+  fixes wait for a pass with no error, and the group's L0002 note counted
+  as one, so 199 corpus programs that check clean kept the warning after
+  `karac fix` (B-2026-11-18-65).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a

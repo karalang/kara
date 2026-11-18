@@ -653,10 +653,14 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
                 .resolved
                 .as_ref()
                 .is_some_and(|r| !r.errors.is_empty())
-            || pipeline
-                .effects
-                .as_ref()
-                .is_some_and(|e| !e.errors.is_empty());
+            // A note is not an error: a mutual-recursion group's L0002 sits
+            // in the effect errors and held every such fix back
+            // (B-2026-11-18-65).
+            || pipeline.effects.as_ref().is_some_and(|e| {
+                e.errors
+                    .iter()
+                    .any(|x| crate::effectchecker::kind_blocks_production(&x.kind))
+            });
         //
         // `lossless_cast` and `redundant_cast` wait the same way for a pass
         // with no `redundant_suffix` fix: each is right alone, but a cast
