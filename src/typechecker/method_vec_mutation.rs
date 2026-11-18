@@ -149,6 +149,11 @@ impl<'a> super::TypeChecker<'a> {
                     // A constructor whose literal arguments the slot types,
                     // `Vec.filled(n, 0)` into a `Vec[Vec[u64]]`
                     // (B-2026-10-29-24).
+                    // B-2026-11-18-50 — and a user enum's variant, whose
+                    // payload's borrowed number the slot copies in.
+                    ExprKind::Call { callee, .. } if self.callee_is_variant_constructor(callee) => {
+                        true
+                    }
                     ExprKind::Call { callee, .. } => match &callee.kind {
                         ExprKind::Identifier(n) => ctor(n),
                         ExprKind::Path { segments, .. } => {
@@ -157,6 +162,11 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         _ => false,
                     },
+                    // B-2026-11-18-50 — a generic struct (or struct-shaped
+                    // variant) literal takes its parameters from the slot, as
+                    // under an annotated `let`: `Reverse { value: x }` into a
+                    // `Vec[Reverse[i32]]` with `x: ref i32`.
+                    ExprKind::StructLiteral { .. } => true,
                     // The library's `collect` (on the MIR pipeline) is
                     // generic in its target; the legacy one makes a `Vec`.
                     ExprKind::MethodCall { method, args, .. } => {

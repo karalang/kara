@@ -5066,6 +5066,42 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-11-18-50 — a struct-shaped variant of a generic enum at check
+        // position takes the enum's arguments from the expectation, as a
+        // generic struct literal does above: `Box2.N { v: x }` at `Box2[i64]`
+        // with `x: ref i64` copies `x` in rather than typing `Box2[ref i64]`.
+        // An explicit pin (`Box2[i64].N { .. }`) keeps its own path below.
+        if let ExprKind::StructLiteral {
+            path,
+            fields,
+            spread: None,
+            generic_args: None,
+            ..
+        } = &expr.kind
+        {
+            if let (Type::Named { name, args }, true) = (expected, path.len() == 2) {
+                let variant = &path[1];
+                if name == &path[0]
+                    && self.env.enums.get(name).is_some_and(|e| {
+                        !e.generic_params.is_empty() && e.generic_params.len() == args.len()
+                    })
+                {
+                    if let Some(decl_fields) = self.enum_struct_variant_fields(name, variant) {
+                        let ty = self.infer_enum_struct_variant_literal(
+                            name,
+                            variant,
+                            &decl_fields,
+                            fields,
+                            &expr.span,
+                            Some(args),
+                        );
+                        self.record_expr_type(&expr.span, &ty);
+                        return ty;
+                    }
+                }
+            }
+        }
+
         // B-2026-08-05-19 — publish the expectation for a generic CALL so its
         // type params can be seeded from it before being solved from arguments.
         // `let b: Box[i32] = Box.new(5)` infers `T = i64` from the literal
@@ -13379,7 +13415,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// `for k in 1..=m` or `for k in (1..=m).rev()` with `m` holding a
     /// fill's element ([`Self::literal_element_copy`]): `k` holds one too.
-    fn literal_range_for_entry(&self, iterable: &Expr) -> Option<super::LiteralLet> {
+    fn literal_range_for_entry(&self, iterable: &Expr, name: &str) -> Option<super::LiteralLet> {
         let range = match &iterable.kind {
             ExprKind::MethodCall {
                 object,
@@ -13396,6 +13432,33 @@ impl<'a> super::TypeChecker<'a> {
             .into_iter()
             .flatten()
             .find_map(|b| self.element_copy_source(b))
+            .or_else(|| {
+                // `for x in 0..=50` with both bounds unsuffixed literals: the
+                // range's type is its start's, so the suffix goes there
+                // (`0i32..=50`; kata 1620's Rust arm, B-2026-11-18-51). An
+                // end out of the suffix's range is then refused at the
+                // end, by name.
+                let lit = |e: &Option<Box<Expr>>| {
+                    e.as_deref()
+                        .filter(|b| matches!(b.kind, ExprKind::Integer(_, None)))
+                        .cloned()
+                };
+                let first = match (lit(start), lit(end)) {
+                    (Some(s), Some(_)) => s,
+                    (None, Some(e)) if start.is_none() => e,
+                    _ => return None,
+                };
+                let ty = self
+                    .expr_types
+                    .get(&SpanKey::from_span(&first.span))?
+                    .clone();
+                let at = Span {
+                    offset: first.span.offset + first.span.length,
+                    length: 0,
+                    ..first.span
+                };
+                self.literal_entry(&first, &ty, at, true, false, name)
+            })
     }
 
     /// The binding a collection expression is rooted at: `left` of `left`,
@@ -13472,7 +13535,7 @@ impl<'a> super::TypeChecker<'a> {
             .and_then(|root| self.literal_pushes.get(root))
             .cloned()
             .or_else(|| self.literal_array_entry(name, iterable, false))
-            .or_else(|| self.literal_range_for_entry(iterable));
+            .or_else(|| self.literal_range_for_entry(iterable, name));
         let prev = match entry {
             Some(e) => self.literal_lets.insert(name.clone(), e),
             None => self.literal_lets.remove(name.as_str()),

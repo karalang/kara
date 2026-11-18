@@ -1697,9 +1697,14 @@ impl<'a> super::TypeChecker<'a> {
                                 actual = opened;
                             }
                         }
+                        // B-2026-11-18-50 — a borrowed `Copy` value read into a
+                        // field is copied out, as it is for a non-generic field
+                        // (`P { a: x }` with `x: ref i64`): `Pair { a: x }` binds
+                        // `T = i64`, not `ref i64`, so it is a `Pair[i64]`.
                         let slot = projected
                             .clone()
                             .unwrap_or_else(|| substitute_type_params(expected_ty, &param_subs));
+                        actual = self.copied_out_of_ref(actual, &slot);
                         let unified = unify_types(
                             &slot,
                             &actual,
@@ -1908,6 +1913,32 @@ impl<'a> super::TypeChecker<'a> {
     /// `infer_struct_literal`'s missing/extra/field-type checks; like it,
     /// generic args are left empty (`Type::Named { args: [] }`) — context
     /// (`let e: Enum[T] = ...`) drives instantiation, not the literal.
+    /// The type a value of type `actual` puts into a generic slot that its
+    /// context has already fixed: a borrowed `Copy` value (`x: ref i64` from
+    /// `for x in v.iter()`) is copied in, as it is into a field of a fixed
+    /// type, so `let r: Reverse[i64] = Reverse { value: x }` checks
+    /// (B-2026-11-18-50).
+    pub(super) fn copied_out_of_ref(&self, actual: Type, slot: &Type) -> Type {
+        // Only into a slot already fixed to a type that is not a borrow: an
+        // open slot keeps the view (`Some(x)` alone is an `Option[ref i64]`,
+        // library/core-types.md), as a bare literal does.
+        let slot_now = resolve_type_var_top(slot, &self.env.substitutions);
+        if matches!(
+            slot_now,
+            Type::TypeVar(_) | Type::TypeParam(_) | Type::Ref(_) | Type::MutRef(_)
+        ) {
+            return actual;
+        }
+        if let Type::Ref(inner) | Type::MutRef(inner) =
+            resolve_type_var_top(&actual, &self.env.substitutions)
+        {
+            if self.is_copy_type_during_check(&inner) {
+                return (*inner).clone();
+            }
+        }
+        actual
+    }
+
     pub(super) fn infer_enum_struct_variant_literal(
         &mut self,
         enum_name: &str,
@@ -2015,7 +2046,10 @@ impl<'a> super::TypeChecker<'a> {
                         .get(&crate::resolver::SpanKey::from_span(&f.value.span))
                         .cloned()
                     {
+                        // B-2026-11-18-50 — as the struct path: a borrowed
+                        // `Copy` value is copied into the field.
                         let slot = substitute_type_params(expected_ty, &param_subs);
+                        let actual = self.copied_out_of_ref(actual, &slot);
                         // A field that CONFLICTS with a param already bound by
                         // an earlier field must be reported, not silently
                         // dropped in favour of the greedy first binding — the
