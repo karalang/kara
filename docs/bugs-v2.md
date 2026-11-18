@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 515 |
-| false-positive | 266 |
+| false-positive | 267 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 113 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 642 |
+| typecheck | 643 |
 | mir-llvm | 292 |
 | mir | 253 |
 | cli | 200 |
@@ -128,6 +128,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-48 | 2026-11-18 | cli | low | Six lints ignore an item-level `#[allow]` / `#[deny]`, and `map_value_clone_reinsert` ignores `-D` too (W0312 stays a warning) | — |
 | B-2026-11-18-49 | 2026-11-18 | cli | low | Two catalogued codes never reach the user: L0001 (FfiLintHint) is built but never surfaced, and the char-boundary panic omits E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY | — |
 | B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
+| B-2026-11-18-54 | 2026-11-18 | typecheck | high | A range from an unannotated literal binding to an expression over it and a typed value (`let mut at = 0; for i in at..at + k` with `k: i64`) is refused E0200 "range bounds must have same type: 'i64' and 'i64'" since e05a5afee6 read range bounds open | — |
 
 ### Relocated
 
