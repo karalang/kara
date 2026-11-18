@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 519 |
+| diagnostics | 521 |
 | false-positive | 269 |
 | missing-feature | 201 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 649 |
+| typecheck | 650 |
 | mir-llvm | 294 |
 | mir | 255 |
 | cli | 200 |
@@ -84,7 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 108 |
 | runtime | 88 |
 | interp | 87 |
-| resolver | 45 |
+| resolver | 46 |
 | effect | 41 |
 | other | 34 |
 | codegen | 22 |
@@ -119,6 +119,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
 | B-2026-11-18-56 | 2026-11-18 | typecheck | low | Diagnostics for a `Secret[T]` used where a withheld trait is needed advise deriving that trait on `Secret`, which secret.md forbids: a log field says `derive it with #[derive(Serialize)] on Secret[String]`, `dbg`/`assert_eq` say `add #[derive(Debug)]`, a `Set[Secret[String]]` says a derive on `Secret` holds where its type arguments have the traits | — |
 | B-2026-11-18-57 | 2026-11-18 | typecheck | low | A string literal passed where `std.crypto` / `std.encoding` take `Slice[u8]` (`sha256("abc")`) is E0200 "expected 'Slice[u8]', found 'String'" with no fix, though crypto.md names `.bytes()` as the way | — |
+| B-2026-11-18-63 | 2026-11-18 | resolver | low | `import std.data.{DataFrame};` (or `{Column}`) is told the item "is in the prelude, visible without an import, so the import can go" with a machine fix deleting the import, though `DataFrame`/`Column` are the post-v1 `kara-data` package and every use is then E0520 not-in-0.8 | — |
+| B-2026-11-18-64 | 2026-11-18 | typecheck | low | `Tensor.zeros([2, 2])` leads with E0238 "cannot infer type parameter 'S' of `Tensor[T, S]`... add a type annotation" before the E0520 that says `Tensor` is not in 0.8 | — |
 
 ### Relocated
 
