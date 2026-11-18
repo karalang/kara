@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 482 |
-| false-positive | 253 |
-| missing-feature | 195 |
+| diagnostics | 486 |
+| false-positive | 255 |
+| missing-feature | 198 |
 | perf | 187 |
 | other | 113 |
 | soundness | 85 |
 | miscompile | 81 |
 | run-vs-build | 55 |
 | crash | 50 |
-| codegen-gap | 36 |
+| codegen-gap | 37 |
 | use-after-free | 10 |
 | leak | 4 |
 | double-free | 2 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 604 |
-| mir-llvm | 287 |
-| mir | 250 |
-| cli | 194 |
-| parser | 110 |
+| typecheck | 611 |
+| mir-llvm | 288 |
+| mir | 251 |
+| cli | 195 |
+| parser | 111 |
 | ownership | 104 |
 | interp | 87 |
 | runtime | 87 |
@@ -124,6 +124,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-2 | 2026-11-18 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; .. let b = cnt[1]; .. b.min(a)` returned as `i32` is refused with the generic "Write an explicit 'as i32'" and no edit, where `cnt[1].min(cnt[0])` gets the `0i32` suffix | — |
 | B-2026-11-18-3 | 2026-11-18 | typecheck | low | A bare `size_of()` (no type named) type-checks and runs, printing `0`, the placeholder body of the intrinsic, instead of E_LAYOUT_QUERY_TYPE_ARG_REQUIRED | — |
 | B-2026-11-18-4 | 2026-11-18 | cli | medium | `karac vendor` and `karac update` fetch no git or registry dependency: each is a warning (E_GIT_DEP_UNSUPPORTED / E_REGISTRY_DEP_UNSUPPORTED) and is skipped, so `vendor` copies 0 packages and exits 0, though `check`/`build` fetch the same dependencies | — |
+| B-2026-11-18-11 | 2026-11-18 | typecheck | medium | `Option` has no `iter`/`into_iter`, and `flatten` refuses `Option` items: `root.into_iter().collect()` and `.flatten()` over `[node.left, node.right]` are refused | — |
+| B-2026-11-18-12 | 2026-11-18 | typecheck | medium | An inline array literal indexed under an annotation keeps `i64`: `let c: i32 = [0, 45, 90][k]` is refused, though `let a: Vec[i32] = [0, 45, 90]; let c: i32 = a[k]` checks | — |
+| B-2026-11-18-13 | 2026-11-18 | typecheck | medium | A literal used as a `for` range's end is settled to `i64` before a later argument fixes it: `let n = 100; for a in 0..n {..}; take_i32(n)` is refused | — |
+| B-2026-11-18-14 | 2026-11-18 | typecheck | low | An unannotated `collect()` handed to a generic parameter (`show(it.collect())`, `show[T: Display]`) still reaches the MIR builder as E0516 "UnsolvedParam("C") is not lowered yet" | — |
 
 ### Relocated
 
@@ -1662,6 +1666,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-136 | parser | low | A range-pattern bound that is an expression (`0..=(1 + 2) =>`) gets E_RANGE_PATTERN_BOUND_NOT_SIMPLE and then a spurious E0002 "Expected expression"… | a41a371f79 |
 | B-2026-11-17-137 | typecheck | low | Two `impl Grid[3]` blocks defining one method render the const-generic target as `Grid[Array[(), 3]]` in E0240, a type the program never wrote | a41a371f79 |
 | B-2026-11-17-138 | mir-llvm | low | Dropping a deep `shared` n-ary tree (`kids: Vec[N]`), a trie (`kids: Map[K, N]`) or a node whose handles sit inside a plain struct field (`items: Vec… | 7606280ba7 |
+| B-2026-11-18-5 | cli | medium | `karac fix` had no fix for `Rc::ptr_eq(&a, &b)`: the `Rc<RefCell<T>>` rewrite left `Rc.ptr_eq(a, b)` behind with no fix and no word of `ref_eq` | 5bb1708545 |
+| B-2026-11-18-6 | mir-llvm | medium | `n.min(v[0])` with `n: i64` and `v: Vec[i32]` runs in the interpreter and is refused by the LLVM backend: ``native `i64.min` is not lowered yet`` | 5bb1708545 |
+| B-2026-11-18-7 | parser | medium | `s.parse[i32]()` read as an index of `parse` by `i32`, and the error advised `as i32`, which does not parse a string | 5bb1708545 |
+| B-2026-11-18-8 | typecheck+mir | medium | `Option` had `is_some_and` but not its dual `is_none_or` (Rust 1.82): `prev.is_none_or(\|p\| v > p)` was refused with a bare "no method" | 5bb1708545 |
+| B-2026-11-18-9 | typecheck | medium | The integer types had `MAX` and `MIN` but not Rust's `BITS`: `i32.BITS - n.leading_zeros()` was refused, "no associated constant `BITS` on `i32`" | 5bb1708545 |
+| B-2026-11-18-10 | typecheck | medium | An unannotated `collect()` in an f-string hole or a `println` argument reached the MIR builder as E0516 "type does not lower (UnsolvedParam("C")) is… | 5bb1708545 |
 
 </details>
 
