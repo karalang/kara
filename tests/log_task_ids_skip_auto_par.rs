@@ -61,9 +61,34 @@ fn a_custom_backend_sees_the_first_par_as_tasks_one_and_two() {
     assert_eq!(ids(&run("__mir-run", BACKEND)), ["-1", "1", "2"]);
 }
 
+/// The compiled `par` branches run on worker threads, so their two lines
+/// come in either order; the ids are fixed by start order, not run order.
+#[cfg(feature = "llvm")]
+fn sorted_lines(out: &str) -> Vec<String> {
+    let mut v: Vec<String> = out.lines().map(str::to_string).collect();
+    v.sort();
+    v
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn compiled_log_task_ids_skip_auto_par_tasks() {
-    assert_eq!(run("__mir-llvm-run", ADJACENT), ADJACENT_OUT);
-    assert_eq!(ids(&run("__mir-llvm-run", BACKEND)), ["-1", "1", "2"]);
+    assert_eq!(
+        sorted_lines(&run("__mir-llvm-run", ADJACENT)),
+        sorted_lines(ADJACENT_OUT)
+    );
+    // Each branch's own line names its task: `i=1` is task 1, `i=2` task 2.
+    let out = run("__mir-llvm-run", BACKEND);
+    let mut pairs: Vec<String> = out
+        .lines()
+        .filter(|l| l.contains("in task"))
+        .map(|l| {
+            let i = l.split(" i=").nth(1).unwrap().split(' ').next().unwrap();
+            let t = l.split("task=").nth(1).unwrap().split(' ').next().unwrap();
+            format!("{i}:{t}")
+        })
+        .collect();
+    pairs.sort();
+    assert_eq!(pairs, ["1:1", "2:2"], "{out}");
+    assert_eq!(ids(&out).first().map(String::as_str), Some("-1"), "{out}");
 }
