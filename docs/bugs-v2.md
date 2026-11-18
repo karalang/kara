@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 517 |
-| false-positive | 268 |
+| diagnostics | 519 |
+| false-positive | 269 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 114 |
 | soundness | 86 |
-| miscompile | 83 |
+| miscompile | 84 |
 | run-vs-build | 56 |
 | crash | 53 |
 | codegen-gap | 38 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 646 |
-| mir-llvm | 293 |
+| typecheck | 649 |
+| mir-llvm | 294 |
 | mir | 255 |
 | cli | 200 |
 | parser | 117 |
@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
 | B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
-| B-2026-11-18-40 | 2026-11-18 | typecheck | medium | An associated function or enum variant reached through `Self` (`Self.gcd(a, b)` in an impl, `Self.one()` in a trait's default body, `Self.B(3)` in an enum's impl) is typed as an error with no diagnostic, and `karac check` prints MIR's "a type that failed to check is not lowered yet" (E0516); the pattern `Self.A =>` is refused as "'Self' is a reserved keyword" | — |
 | B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
 | B-2026-11-18-56 | 2026-11-18 | typecheck | low | Diagnostics for a `Secret[T]` used where a withheld trait is needed advise deriving that trait on `Secret`, which secret.md forbids: a log field says `derive it with #[derive(Serialize)] on Secret[String]`, `dbg`/`assert_eq` say `add #[derive(Debug)]`, a `Set[Secret[String]]` says a derive on `Secret` holds where its type arguments have the traits | — |
 | B-2026-11-18-57 | 2026-11-18 | typecheck | low | A string literal passed where `std.crypto` / `std.encoding` take `Slice[u8]` (`sha256("abc")`) is E0200 "expected 'Slice[u8]', found 'String'" with no fix, though crypto.md names `.bytes()` as the way | — |
@@ -1713,6 +1712,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-37 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit inside a library cell (`Mutex`, `RwLock`, `OnceLock`, channels… | 59d6b19b98 |
 | B-2026-11-18-38 | typecheck | low | Hand-written `impl PartialEq` + `impl Eq`, `impl Ord` or `impl Hash` on a distinct type is ignored by `==`, `T: Eq` / `T: Ord` bounds, `Vec.sort()` a… | 26e646ac02 |
 | B-2026-11-18-39 | mir-llvm | low | Kata 1197's bench (a breadth-first search over a `VecDeque` and a `Vec[bool]`) executes 1.49x checked Rust's instructions and runs 1.67x its time on… | 06723951c5 |
+| B-2026-11-18-40 | typecheck | medium | An associated function or enum variant reached through `Self` (`Self.gcd(a, b)` in an impl, `Self.one()` in a trait's default body, `Self.B(3)` in an… | 2e40b2fffa |
 | B-2026-11-18-41 | typecheck | low | A `#[deprecated]` trait named in a bound on a struct's, enum's or trait's own generic parameter (`struct W[T: T1]`) does not warn | 8265792719 |
 | B-2026-11-18-42 | resolver | medium | An argument-position `ref impl Trait` was not desugared like a bare `impl Trait`: forwarding `x: ref impl Shape` to another `ref impl Shape` paramete… | f949423e35 |
 | B-2026-11-18-43 | typecheck | low | A generic distinct type (`distinct type Ids[T] = Vec[T]`) is accepted at its declaration, but its constructor cannot build a value: `let a: Ids[i64]… | 43b255fda2 |
@@ -1728,6 +1728,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-54 | typecheck | high | A range from an unannotated literal binding to an expression over it and a typed value (`let mut at = 0; for i in at..at + k` with `k: i64`) is refus… | 6e9fe3eaf3 |
 | B-2026-11-18-55 | mir+mir-llvm | low | A `std.log` record's `task_id` counts auto-par tasks: two adjacent `info` lines that auto-par runs side by side take ids, so a later `par` block's br… | 1438ef926a |
 | B-2026-11-18-58 | typecheck+mir | medium | `w.n.raw()` through a bare (borrowing) parameter `w` is refused as a move out of a borrowed place (E0516), though `n.raw()` of a bare `n` is a borrow… | bdc7412857 |
+| B-2026-11-18-59 | typecheck | medium | `karac fix` turns a Rust program's `usize`s into `i64` and leaves `i.checked_sub(1)` and `i.saturating_sub(k)` as they were, so at 0 they give `Some(… | 2e40b2fffa |
+| B-2026-11-18-60 | typecheck | medium | A list literal iterated and collected where it is written keeps its string literals `String` and its numbers `i64` when a tuple holds a non-number: `… | 2e40b2fffa |
+| B-2026-11-18-61 | mir-llvm | high | `m[k]` on a map whose values are views (`Map[i64, Str]`, `SortedMap[i64, Str]`, `Map[char, Slice[i64]]`) reads garbage in a built program: `karac bui… | 2e40b2fffa |
+| B-2026-11-18-62 | typecheck | low | A constant whose type holds a `Slice` of list literals (Rust's `const FOLLOWS: [&[usize]; 5] = [&[1], &[0, 2], ..]`, which `karac fix` writes `Array[… | 2e40b2fffa |
 
 </details>
 
