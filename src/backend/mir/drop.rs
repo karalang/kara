@@ -372,9 +372,17 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 match lib.as_str() {
                     // The pool's own reference, or the connection's value
-                    // back to its pool (`pool.rs`).
+                    // back to its pool (`pool.rs`). The owner's drop closes
+                    // the pool first: its idle values drop now, and a loan
+                    // that outlives it drops its value when it comes back
+                    // (pool.md, Giving values back).
                     "Pool" => {
                         let h = self.load_ptr(p)?;
+                        let live = self
+                            .builder
+                            .build_is_not_null(h, "")
+                            .map_err(|e| e.to_string())?;
+                        self.if_then(live, |cx| cx.rt("pool_close", &[h.into()]))?;
                         return self.rt("pool_drop", &[h.into()]);
                     }
                     "PooledConnection" => {

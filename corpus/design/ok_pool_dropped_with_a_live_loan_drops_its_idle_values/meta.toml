@@ -1,0 +1,9 @@
+source = "docs/library/pool.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "pool"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "pool.md Giving values back: when the Pool drops its idle values drop at once, and a loan that outlives it keeps its value until the loan drops. Before the fix every backend kept the idle value until the last loan came back. interp, mir-llvm and ASan agree."

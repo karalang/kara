@@ -5646,8 +5646,18 @@ impl<'a> Interp<'a> {
                 });
                 Ok(Value::Agg(vec![Value::Int(self.pools.len() as i128)]))
             }
+            // The owner's drop: the idle values drop now, and a loan that
+            // outlives the pool drops its value when it comes back
+            // (pool.md, Giving values back), as after `close`.
             "drop" => {
                 let id = self.handle_field(args.next().as_ref(), name)?;
+                if let Some(p) = self.pool(id) {
+                    p.closed = true;
+                    let elem = p.elem;
+                    for v in std::mem::take(&mut p.slots) {
+                        self.drop_value(v, elem)?;
+                    }
+                }
                 self.pool_unref(id)?;
                 Ok(Value::Unit)
             }

@@ -1,0 +1,6 @@
+dropping pool
+drop conn 1
+pool dropped
+still 2
+drop conn 2
+end

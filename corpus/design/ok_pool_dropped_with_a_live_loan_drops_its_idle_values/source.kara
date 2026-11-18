@@ -1,0 +1,23 @@
+// pool.md Giving values back: when the Pool drops its idle values drop; a
+// loan that outlives the pool keeps its value until the loan drops.
+import std.pool.{Pool, PoolError};
+import std.time.{Duration};
+import std.sync.{Atomic};
+
+struct Conn { id: i64 }
+impl Drop for Conn { fn drop(mut ref self) { println(f"drop conn {self.id}") } }
+enum ConnectError { Refused }
+
+fn main() {
+    let n = Atomic.new(0);
+    let p: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: n.fetch_add(1) + 1 }), 4, 4);
+    let a = p.acquire(Duration.ms(5));
+    let b = p.acquire(Duration.ms(5));
+    drop(a);
+    println("dropping pool");
+    drop(p);
+    println("pool dropped");
+    match ref b { Ok(c) => println(f"still {c.val.id}"), Err(_) => println("??") }
+    drop(b);
+    println("end");
+}
