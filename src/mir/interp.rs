@@ -1139,6 +1139,87 @@ fn invalid_env_entry() -> std::io::Error {
     )
 }
 
+/// `cmd.spawn()`, failing as io.md § Running programs names it
+/// ([`spawn_error`]), and on macOS refusing first a program the kernel
+/// cannot exec ([`unrunnable_program`]).
+fn spawn_checked(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    #[cfg(unix)]
+    if cfg!(target_os = "macos") && unrunnable_program(cmd) {
+        return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    }
+    cmd.spawn().map_err(spawn_error)
+}
+
+/// Whether `cmd`'s program is a file the kernel cannot exec: one whose
+/// first bytes are neither `#!` nor a Mach-O magic ([`runnable_head`]).
+/// macOS's `posix_spawnp`, which `std::process::Command` uses there, runs
+/// such a file (`ENOEXEC`) as a `/bin/sh` script, as `execvp` does, so a
+/// program that cannot be run started a shell (exit 127) where io.md says
+/// `spawn` fails with `PermissionDenied` (B-2026-11-17-61). Linux's
+/// `posix_spawn` reports `ENOEXEC` itself, so this is asked on macOS only.
+/// The program is found as `spawn` finds it: a name with a `/` as written,
+/// any other on the `PATH` the command's own `env` sets, or else the
+/// parent's (B-2026-11-17-62); one not found is left to `spawn`. Its twin
+/// is in `runtime/src/mir_process.rs`.
+#[cfg(unix)]
+fn unrunnable_program(cmd: &std::process::Command) -> bool {
+    use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let prog = cmd.get_program();
+    let path = if prog.as_bytes().contains(&b'/') {
+        Some(std::path::PathBuf::from(prog))
+    } else {
+        let mut search = std::env::var_os("PATH");
+        for (k, v) in cmd.get_envs() {
+            if k == "PATH" {
+                search = v.map(|v| v.to_os_string());
+            }
+        }
+        search.and_then(|p| {
+            std::env::split_paths(&p).map(|d| d.join(prog)).find(|c| {
+                std::fs::metadata(c)
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+        })
+    };
+    let Some(path) = path else {
+        return false;
+    };
+    let Ok(mut f) = std::fs::File::open(&path) else {
+        return false;
+    };
+    if !f.metadata().is_ok_and(|m| m.is_file()) {
+        return false;
+    }
+    let mut head = [0u8; 4];
+    let mut n = 0;
+    while let Some(rest) = head.get_mut(n..).filter(|r| !r.is_empty()) {
+        match f.read(rest) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    !runnable_head(head.get(..n).unwrap_or_default())
+}
+
+/// Whether a file starting with `head` (its first four bytes, or fewer
+/// when it is shorter) is one macOS's kernel can exec: a `#!` script, or a
+/// Mach-O image, thin (`MH_MAGIC` / `MH_MAGIC_64`, in either byte order) or
+/// universal (`FAT_MAGIC` / `FAT_MAGIC_64`, as `/usr/bin`'s tools are).
+#[cfg(unix)]
+fn runnable_head(head: &[u8]) -> bool {
+    const MACHO: [[u8; 4]; 6] = [
+        [0xfe, 0xed, 0xfa, 0xce],
+        [0xce, 0xfa, 0xed, 0xfe],
+        [0xfe, 0xed, 0xfa, 0xcf],
+        [0xcf, 0xfa, 0xed, 0xfe],
+        [0xca, 0xfe, 0xba, 0xbe],
+        [0xca, 0xfe, 0xba, 0xbf],
+    ];
+    head.starts_with(b"#!") || MACHO.iter().any(|m| head == m)
+}
+
 /// A failed `spawn` as io.md § Running programs names it: a program the
 /// system cannot run (`ENOEXEC`, not a binary or a script) is
 /// `PermissionDenied`, and a working directory that is not a directory
@@ -7581,7 +7662,7 @@ impl<'a> Interp<'a> {
             }
             let res = self
                 .command(name, recv, arg_tys.first().copied(), output)?
-                .and_then(|mut cmd| cmd.spawn().map_err(spawn_error));
+                .and_then(|mut cmd| spawn_checked(&mut cmd));
             let res = match res {
                 Ok(child) if output => child.wait_with_output().map(Err),
                 Ok(child) => Ok(Ok(child)),
@@ -21901,5 +21982,62 @@ fn main() {
             "{:?}",
             r.outcome
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod spawn_check_tests {
+    use super::{runnable_head, unrunnable_program};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_program_file_is_read_where_spawn_finds_it() {
+        let dir = std::env::temp_dir().join(format!("karac-unrunnable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = |name: &str, body: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            p
+        };
+        let bad = exe("badelf", b"\x7fELFgarbage");
+        let script = exe("script", b"#!/bin/sh\nexit 0\n");
+        assert!(unrunnable_program(&std::process::Command::new(&bad)));
+        assert!(!unrunnable_program(&std::process::Command::new(&script)));
+        // A bare name is found on the command's own `PATH`.
+        let mut by_name = std::process::Command::new("badelf");
+        by_name.env("PATH", &dir);
+        assert!(unrunnable_program(&by_name));
+        let mut by_script = std::process::Command::new("script");
+        by_script.env("PATH", &dir);
+        assert!(!unrunnable_program(&by_script));
+        // A program that is not there is left to `spawn`'s `NotFound`.
+        assert!(!unrunnable_program(&std::process::Command::new(
+            dir.join("missing")
+        )));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_mach_o_magic_and_a_script_are_runnable() {
+        for head in [
+            &[0xfe, 0xed, 0xfa, 0xce][..],
+            &[0xce, 0xfa, 0xed, 0xfe],
+            &[0xfe, 0xed, 0xfa, 0xcf],
+            &[0xcf, 0xfa, 0xed, 0xfe],
+            &[0xca, 0xfe, 0xba, 0xbe],
+            &[0xca, 0xfe, 0xba, 0xbf],
+            b"#!/b",
+            b"#!",
+        ] {
+            assert!(runnable_head(head), "{head:x?}");
+        }
+    }
+
+    #[test]
+    fn an_elf_text_or_empty_file_is_not_runnable_on_macos() {
+        for head in [&b"\x7fELF"[..], b"echo", b"", b"#", b"\xca\xfe\xba"] {
+            assert!(!runnable_head(head), "{head:x?}");
+        }
     }
 }
