@@ -77,7 +77,10 @@ fn a_widening_collect_refusal_names_the_cast_and_is_fixed() {
 
 #[test]
 fn a_narrowing_collect_refusal_offers_no_widening() {
-    let src = "fn main() {\n    let small: Vec[u8] = [1, 2].iter().map(|x| x + 1).collect();\n    \
+    // The items are `i64` by annotation: a literal list read inline is
+    // open and takes the `u8` (B-2026-11-18-71).
+    let src = "fn main() {\n    let wide: Vec[i64] = [1, 2];\n    \
+               let small: Vec[u8] = wide.iter().map(|x| x + 1).collect();\n    \
                println(f\"{small}\");\n}\n";
     let (dir, path) = fixture("narrow", src);
     let out = karac().arg("check").arg(&path).output().unwrap();

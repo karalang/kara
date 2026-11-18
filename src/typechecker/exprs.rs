@@ -3783,6 +3783,16 @@ impl<'a> super::TypeChecker<'a> {
                                 // elements coerce into it: `Some((1, Hello {}))`.
                                 || (matches!(args[0].value.kind, ExprKind::Tuple(_))
                                     && tuple_has_dyn_slot(&slot))
+                                // B-2026-11-18-71 — and a read of an item a
+                                // closure was handed, into a number slot
+                                // (`Some(*a)`), fixes an open literal behind
+                                // it as `let b: i32 = *a` does.
+                                || (matches!(
+                                    resolve_type_var_top(&slot, &self.env.substitutions),
+                                    Type::Int(_) | Type::UInt(_) | Type::Float(_)
+                                ) && matches!(&args[0].value.kind,
+                                    ExprKind::Unary { op: UnaryOp::Deref, .. }
+                                        | ExprKind::TupleIndex { .. }))
                                 // FX5: an empty `[]` under a tuple or another
                                 // constructor: `Some(([], 0))`, `Some(Ok([]))`.
                                 || (matches!(
@@ -3965,6 +3975,14 @@ impl<'a> super::TypeChecker<'a> {
                             && matches!(slot, Type::Named { .. })
                             && expectation_is_concrete(slot))
                         || is_dyn_slot(slot)
+                        // B-2026-11-18-71 — a read of an item a closure
+                        // was handed (`*a`, `p.0`) into a number slot: the
+                        // slot fixes an open literal behind it, as
+                        // `let b: i32 = *a` does.
+                        || (matches!(slot, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+                            && matches!(&e.kind,
+                                ExprKind::Unary { op: UnaryOp::Deref, .. }
+                                    | ExprKind::TupleIndex { .. }))
                         || (matches!(e.kind, ExprKind::Tuple(_)) && tuple_has_dyn_slot(slot))
                         // FX5: a nested tuple or constructor holding an empty
                         // `[]`: `((1i8, []), 2u8)`.
@@ -11004,10 +11022,18 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => return None,
         };
-        let Type::Array { element, .. } = &elem else {
-            return None;
-        };
-        if !type_is_fully_concrete(element) || contains_type_param(element) {
+        // An array element, or a tuple or `Option`: the closure's `(*a, 1)`
+        // over an open literal list is that type, so the list's literals
+        // take the annotation's widths
+        // (`let q = [3, 4]; q.iter().map(|a| (*a, *a)).collect()` into a
+        // `Vec[(i32, i32)]`, B-2026-11-18-71).
+        let shaped = match &elem {
+            Type::Array { element, .. } => Some(&**element),
+            Type::Tuple(_) => Some(&elem),
+            Type::Named { name, args } if name == "Option" && args.len() == 1 => Some(&elem),
+            _ => None,
+        }?;
+        if !type_is_fully_concrete(shaped) || contains_type_param(shaped) {
             return None;
         }
         let ExprKind::MethodCall { method, args, .. } = &object.kind else {

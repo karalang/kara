@@ -2355,13 +2355,35 @@ impl<'a> super::TypeChecker<'a> {
                 let (_, want) = self.pinned_into_iter_literal.take().unwrap();
                 self.check_expr(object, &want)
             }
-            None if matches!(object.kind, ExprKind::ArrayLiteral(_)) && method == "into_iter" => {
+            // `iter` too when the call is itself an adapter's receiver
+            // (`[1, 2].iter().map(|x| *x)`), where its items are read
+            // through the chain, as `let v = [1, 2]; v.iter().map(..)` reads
+            // them (B-2026-11-18-71).
+            None if matches!(object.kind, ExprKind::ArrayLiteral(_))
+                && (method == "into_iter"
+                    || (method == "iter" && self.iter_literal_chain == Some(object.id))) =>
+            {
                 let saved = self.open_collection_let.replace(object.id);
                 let t = self.infer_expr(object);
                 self.open_collection_let = saved;
                 t
             }
-            None => self.infer_expr(object),
+            None => {
+                let chained = match &object.kind {
+                    ExprKind::MethodCall {
+                        object: inner,
+                        method: m,
+                        ..
+                    } if m == "iter" && matches!(inner.kind, ExprKind::ArrayLiteral(_)) => {
+                        Some(inner.id)
+                    }
+                    _ => None,
+                };
+                let saved = std::mem::replace(&mut self.iter_literal_chain, chained);
+                let t = self.infer_expr(object);
+                self.iter_literal_chain = saved;
+                t
+            }
         };
         // A literal a generic call holds open (a `scan` state) is decided
         // where a method is called on it, as any other literal's read is:

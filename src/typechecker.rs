@@ -4484,6 +4484,10 @@ pub struct TypeChecker<'a> {
     /// string literal is a `Str` and a number takes its type, as in `let v:
     /// Vec[(char, Str)] = [('a', "eiu")];` (design.md §8 Literals).
     pub(super) pinned_into_iter_literal: Option<(crate::ids::NodeId, Type)>,
+    /// The list literal of an `[..].iter()` call that is itself the
+    /// receiver of another method (`[1, 2].iter().map(..)`), whose list literal is kept
+    /// open for the chain's end to fix (B-2026-11-18-71).
+    pub(super) iter_literal_chain: Option<crate::ids::NodeId>,
     /// The element type an array literal takes from the `Vec[E]` its
     /// `.to_vec()` is checked against, keyed by the literal's node
     /// (B-2026-11-09-49).
@@ -4987,6 +4991,7 @@ impl<'a> TypeChecker<'a> {
             timeout_duration_args: FxHashMap::default(),
             open_collection_let: None,
             pinned_into_iter_literal: None,
+            iter_literal_chain: None,
             array_element_hint: None,
             literal_collection_uses: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),
