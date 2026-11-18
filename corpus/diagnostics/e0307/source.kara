@@ -1,0 +1,6 @@
+#[warn(redundant_literal_method)]
+#[deny(redundant_literal_method)]
+fn main() {
+    let s = "hi".to_string();
+    println(s);
+}

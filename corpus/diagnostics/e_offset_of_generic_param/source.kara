@@ -1,0 +1,7 @@
+struct Point { x: i64, y: i64 }
+fn off[T](p: T) -> usize {
+    offset_of[T](x)
+}
+fn main() {
+    println(off(Point { x: 1, y: 2 }));
+}

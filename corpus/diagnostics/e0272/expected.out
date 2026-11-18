@@ -1,0 +1,1 @@
+ERROR at line 2: Atomic[f64] is not a valid atomic type: a floating-point type cannot be operated on atomically. An atomic holds `bool` or one of the integers `i32`, `i64`, `u32` and `u64` (library/concurrency.md § Atomics); to share other data across tasks use `Mutex[T]`, which can guard any type

@@ -1,0 +1,11 @@
+trait Show { fn show(ref self) -> i64; }
+struct Foo {}
+struct Bar {}
+impl Show for Foo { fn show(ref self) -> i64 { 1 } }
+trait Functor {
+type Mapped[U]: Show;
+}
+struct Doubler {}
+impl Functor for Doubler {
+type Mapped[U] = Bar;
+}

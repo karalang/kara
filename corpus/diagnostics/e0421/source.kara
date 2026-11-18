@@ -1,0 +1,10 @@
+struct Fake { }
+impl NetworkProvider for Fake {}
+
+fn route(req: ref Request) -> Response { Response { status: 200, body: "ok".to_string() } }
+
+fn main() {
+    with_provider[Network](Fake { }, || {
+        let _ = Server.serve("127.0.0.1:0", route);
+    });
+}

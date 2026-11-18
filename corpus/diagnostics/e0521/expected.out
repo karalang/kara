@@ -1,0 +1,1 @@
+ERROR at line 5: a variant is built with its enum's name: write `Light.Red`; only `Some`, `None`, `Ok` and `Err` are written bare (design.md § Enums)

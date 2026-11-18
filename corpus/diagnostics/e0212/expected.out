@@ -1,0 +1,1 @@
+ERROR at line 2: if/else branches have incompatible types: 'i64' and 'bool'

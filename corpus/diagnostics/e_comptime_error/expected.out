@@ -1,0 +1,1 @@
+ERROR at line 4: derive(Message): repeated field `items` has element type `Plain`, which does not derive(Message)

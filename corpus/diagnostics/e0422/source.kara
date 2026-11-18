@@ -1,0 +1,14 @@
+struct MemFs { n: i64 }
+impl FileSystemProvider for MemFs {
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(1) }
+    fn close(mut ref self, h: i64) { println(f"close {h}"); }
+}
+struct Cap { }
+impl StdoutProvider for Cap { fn write(mut ref self, s: Str) { } }
+fn main() {
+    with_provider[Stdout](Cap { }, || {
+        with_provider[FileSystem](MemFs { n: 0 }, || {
+            let _ = File.open("a");
+        });
+    });
+}

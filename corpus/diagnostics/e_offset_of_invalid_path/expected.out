@@ -1,0 +1,1 @@
+ERROR at line 2: offset_of accepts a field-name path (e.g. `offset_of[T](field)` or `offset_of[T](inner.y)`); indexing, method calls, dereferences, and other expression forms are not legal here

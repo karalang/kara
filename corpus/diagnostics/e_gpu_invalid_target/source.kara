@@ -1,0 +1,2 @@
+#[gpu]
+struct Foo { x: i64, }

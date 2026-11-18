@@ -1,0 +1,3 @@
+ERROR at line 3: 'i64' does not support indexing with []
+  help: indexable types are Array[T, N], Slice[T], Vec[T], VecDeque[T],
+        Map[K, V] (by key), and Vector[T, N] (lane read)

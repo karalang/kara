@@ -1,0 +1,3 @@
+#[gpu]
+fn k(n: i64) -> i64 { todo() }
+fn main() { println(1) }

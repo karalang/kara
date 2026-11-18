@@ -1,0 +1,5 @@
+fn ident[T](x: T) -> T { x }
+fn helper(n: i64) -> i64 { ident(n) }
+#[gpu]
+fn k(n: i64) -> i64 { helper(n) }
+fn main() { println(1) }

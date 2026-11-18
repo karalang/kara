@@ -1,0 +1,7 @@
+#[deny(acronym_case)]
+struct HTTPServer {
+    port: i64,
+}
+
+#[deny(acronym_case)]
+fn main() {}

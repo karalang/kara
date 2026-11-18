@@ -1,0 +1,10 @@
+struct R { s: String }
+struct S { r: R }
+fn f(s: ref S) -> i64 {
+    let m = s.r;
+    m.s.len()
+}
+fn main() {
+    let s = S { r: R { s: "a".to_string() } };
+    println(f(s));
+}

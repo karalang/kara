@@ -1,0 +1,9 @@
+struct D { v: i64 }
+impl Drop for D { fn drop(mut ref self) { println("drop"); } }
+fn main() {
+    let xs: Vec[D] = [D { v: 1 }];
+    for x in xs.iter() {
+        let y: D = x;
+        println(y.v);
+    }
+}

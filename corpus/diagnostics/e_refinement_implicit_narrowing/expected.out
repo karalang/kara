@@ -1,0 +1,1 @@
+ERROR at line 2: cannot narrow `i64` to refinement `Even` implicitly — the value is not a compile-time constant, so its predicate cannot be checked at build time. Use `Even.try_from(x)?` (recoverable) or `x as Even` (asserting) to narrow explicitly. Note: flow-sensitive narrowing is not supported, so a surrounding `if` guard does not refine the value's type

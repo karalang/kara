@@ -1,0 +1,1 @@
+ERROR at line 2: `-> Fn() -> i64 with reads(Clock)` gives the clause to the function, not to the returned function value, which keeps every effect; write `-> (Fn() -> i64 with reads(Clock))` to give it to the value, or `-> (Fn() -> i64) with reads(Clock)` to keep it the function's

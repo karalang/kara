@@ -1,0 +1,1 @@
+ERROR at line 2: effect parameter `with E` is not permitted on a generic associated type declaration; GATs are over types only — move the `with E` clause to the carrying method's generic-parameter list instead

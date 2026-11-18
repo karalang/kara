@@ -1,0 +1,4 @@
+
+        fn f(a: i64, b: i64, c: i64) -> i64 { a + b + c }
+        fn main() { let r = f(a: 1, 2, c: 3); }
+    

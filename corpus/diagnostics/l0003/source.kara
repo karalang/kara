@@ -1,0 +1,10 @@
+effect resource Stdout;
+fn sink(x: i64) -> i64 with writes(Stdout) { return x; }
+fn main() {
+let (a, b) = par {
+let a = { let mut acc = 0; let mut i = 0; while i < 10 { acc = acc + i; i = i + 1; } acc };
+let b = { let mut t = 0; let mut j = 0; while j < 3 { t = t + sink(j); j = j + 1; } t };
+(a, b)
+};
+println(a + b);
+}

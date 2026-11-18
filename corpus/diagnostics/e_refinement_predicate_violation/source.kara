@@ -1,0 +1,2 @@
+distinct type Even = i64 where self % 2 == 0;
+         fn f() -> i64 { let e = Even(3); 0 }

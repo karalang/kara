@@ -1,0 +1,1 @@
+ERROR at line 1: field `cell` of `sync struct Service` has type `OnceCell[i64]`, but `OnceCell[T]` is single-task; fields of a `sync struct` are visible to every task and must use the cross-task-safe `OnceLock[T]` instead. Replace `OnceCell` with `OnceLock` in the field type

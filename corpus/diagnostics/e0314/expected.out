@@ -1,0 +1,1 @@
+ERROR at line 6: cannot move a non-`Copy` value out of a borrowed place: its type runs a user `Drop` body, so a copy would run that body twice. This type has no `.clone()` yet: derive `Clone` on it and write `.clone()` to take a copy, or keep using it in place

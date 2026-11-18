@@ -1,0 +1,4 @@
+fn main() {
+    let a = Atomic.new(1.5);
+    println(1);
+}

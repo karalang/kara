@@ -46,8 +46,48 @@ fn karac(dir: &Path, args: &[&str], env: &[(&str, Option<&str>)]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
 }
 
+const CATALOG_1_2_0: &str = r#"{ "upstream": "https://example.test/http", "versions": ["1.2.0"] }"#;
+const CATALOG_1_2_0_YANKED: &str =
+    r#"{ "upstream": "https://example.test/http", "versions": ["1.2.0"], "yanked": ["1.2.0"] }"#;
+
+/// A registry proxy on a local socket: `/catalog/...` answers `catalog`,
+/// anything else (`/pkg/...`) answers `tarball`, each as (status, body).
+fn serve(catalog: (u16, &'static str), tarball: (u16, &'static str)) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let path = request.split_whitespace().nth(1).unwrap_or("");
+            let (status, body) = if path.starts_with("/catalog/") {
+                catalog
+            } else {
+                tarball
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{addr}")
+}
+
 fn reported(out: &str, code: &str) -> bool {
-    out.contains(&format!("\"code\":\"{code}\"")) || out.contains(&format!("[{code}]"))
+    out.contains(&format!("\"code\":\"{code}\""))
+        || out.contains(&format!("\"parent_code\":\"{code}\""))
+        || out.contains(&format!("[{code}]"))
 }
 
 #[test]
@@ -298,14 +338,14 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
         "#[allow(unused_variables)]\nfn helper() -> i64 {\n    let x = 1;\n    2\n}\n\nfn main() {\n    println(helper());\n}\n",
     )
     .unwrap();
-    expect(
-        "E_FORBIDDEN_LINT_ALLOW",
-        karac(
-            &d,
-            &["check", "-F", "unused_variables", "--output=json"],
-            &[],
-        ),
+    let out = karac(
+        &d,
+        &["check", "-F", "unused_variables", "--output=json"],
+        &[],
     );
+    // E0247 is the JSON `parent_code` of the symbolic code.
+    expect("E_FORBIDDEN_LINT_ALLOW", out.clone());
+    expect("E0247", out);
 
     // `#[non_exhaustive]` types used from another package.
     let d = root.join("non_exhaustive");
@@ -332,10 +372,264 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
     let out = karac(&d.join("app"), &check, &[]);
     expect("E_NON_EXHAUSTIVE_CROSS_PACKAGE_MATCH", out.clone());
     expect("E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL", out.clone());
+    // The match's and the literal's JSON `code` fields are E0241 / E0243.
+    expect("E0241", out.clone());
+    expect("E0243", out.clone());
     expect("E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN", out);
 
+    // An orphan impl: `mid` implements `lib`'s trait for a std type, and
+    // owns neither (tests/cross_package_coherence.rs has the full matrix).
+    let d = root.join("orphan");
+    package(&d.join("lib"), "lib", "", false);
+    std::fs::write(
+        d.join("lib/src/lib.kara"),
+        "pub trait Tw { fn tw(self) -> i64; }\npub struct S { pub n: i64 }\n",
+    )
+    .unwrap();
+    package(
+        &d.join("mid"),
+        "mid",
+        "\n[dependencies]\nlib = { path = \"../lib\" }\n",
+        false,
+    );
+    std::fs::write(
+        d.join("mid/src/lib.kara"),
+        "import lib.Tw;\nimpl Tw for String { fn tw(self) -> i64 { self.len() } }\n",
+    )
+    .unwrap();
+    package(
+        &d.join("app"),
+        "app",
+        "\n[dependencies]\nlib = { path = \"../lib\" }\nmid = { path = \"../mid\" }\n",
+        true,
+    );
+    std::fs::write(d.join("app/src/main.kara"), "fn main() { println(1); }\n").unwrap();
+    expect("E0246", karac(&d.join("app"), &check, &[]));
+
+    // The ratchet's sweep (tests/diagnostics_coverage.rs): the rest of
+    // `karac install`, the lockfile, the offline vendor tree, git and path
+    // dependency graphs, and the build cache.
+    let d = root.join("install");
+    package(&d.join("app"), "app", "", true);
+    package(&d.join("bad"), "bad", "", true);
+    std::fs::write(
+        d.join("bad/src/main.kara"),
+        "fn main() {\n    let x: i64 = \"s\";\n}\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("root_is_a_file"), "").unwrap();
+    let file_root = d.join("root_is_a_file");
+    expect(
+        "E_INSTALL_BIN_DIR_UNWRITABLE",
+        karac(
+            &d,
+            &["install", "path=app"],
+            &[("KARAC_INSTALL_ROOT", file_root.to_str())],
+        ),
+    );
+    let bin_root = d.join("bin");
+    expect(
+        "E_INSTALL_BUILD_FAILED",
+        karac(
+            &d,
+            &["install", "path=bad"],
+            &[("KARAC_INSTALL_ROOT", bin_root.to_str())],
+        ),
+    );
+
+    let d = root.join("lockfile");
+    package(
+        &d.join("app"),
+        "app",
+        "[dependencies]\nlib = { path = \"../lib\" }\n",
+        true,
+    );
+    package(&d.join("lib"), "lib", "", false);
+    for (code, lock) in [
+        ("E_LOCKFILE_SCHEMA_VERSION", "version = 99\n"),
+        ("E_LOCKFILE_INVALID_FIELD", "version = \"one\"\n"),
+        (
+            "E_LOCKFILE_INVALID_SOURCE",
+            "version = 1\n\n[[package]]\nname = \"lib\"\nversion = \"0.1.0\"\n\
+             source = \"bogus+x\"\ncontent_hash = \"blake3:00\"\ndependencies = []\n",
+        ),
+    ] {
+        std::fs::write(d.join("app/kara.lock"), lock).unwrap();
+        expect(code, karac(&d.join("app"), &check, &[]));
+    }
+    std::fs::remove_file(d.join("app/kara.lock")).unwrap();
+    // An empty vendor tree: present, but without `lib`.
+    std::fs::create_dir_all(d.join("app/vendor")).unwrap();
+    expect(
+        "E_OFFLINE_VENDOR_ENTRY_MISSING",
+        karac(&d.join("app"), &["build", "--offline"], &[]),
+    );
+
+    let d = root.join("graphs");
+    package(&d.join("lib"), "lib", "", false);
+    package(&d.join("lib2"), "lib", "", false);
+    package(
+        &d.join("mid"),
+        "mid",
+        "[dependencies]\nlib = { path = \"../lib2\" }\n",
+        false,
+    );
+    package(
+        &d.join("conflict"),
+        "conflict",
+        "[dependencies]\nlib = { path = \"../lib\" }\nmid = { path = \"../mid\" }\n",
+        true,
+    );
+    expect(
+        "E_DEPENDENCY_SOURCE_CONFLICT",
+        karac(&d.join("conflict"), &check, &[]),
+    );
+    package(
+        &d.join("newer"),
+        "newer",
+        "[dependencies]\nlib = { path = \"../lib\", version = \"2.0\" }\n",
+        true,
+    );
+    expect(
+        "E_DEPENDENCY_VERSION_CONFLICT",
+        karac(&d.join("newer"), &check, &[]),
+    );
+
+    // A git dependency whose repository has no `kara.toml`, cloned from a
+    // local repository so no network is needed.
+    let d = root.join("git_no_manifest");
+    let repo = d.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README"), "not a package\n").unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .current_dir(&repo)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    if git(&["init", "-q"]) && git(&["add", "."]) && git(&["commit", "-qm", "init"]) {
+        package(
+            &d.join("app"),
+            "app",
+            &format!(
+                "[dependencies]\nlib = {{ git = \"file://{}\" }}\n",
+                repo.display()
+            ),
+            true,
+        );
+        let cache = d.join("cache");
+        expect(
+            "E_GIT_NO_MANIFEST",
+            karac(
+                &d.join("app"),
+                &check,
+                &[("KARAC_GIT_CACHE_ROOT", cache.to_str())],
+            ),
+        );
+    } else {
+        panic!("E_GIT_NO_MANIFEST: `git` could not build the test repository");
+    }
+
+    // A cache root that is a file cannot be listed.
+    let cache_file = root.join("cache_is_a_file");
+    std::fs::write(&cache_file, "").unwrap();
+    expect(
+        "E_CACHE_UNREADABLE",
+        karac(
+            &root,
+            &["cache", "info"],
+            &[("KARAC_BUILD_CACHE_ROOT", cache_file.to_str())],
+        ),
+    );
+
+    // A toolchain pin that is not UTF-8 cannot be read.
+    let d = root.join("toolchain_unreadable");
+    package(&d, "tc", "", true);
+    std::fs::write(d.join("karac-toolchain.toml"), [0xffu8, 0xfe]).unwrap();
+    expect("E_TOOLCHAIN_FILE_READ", karac(&d, &check, &[]));
+
+    // A registry proxy that answers wrongly, served from a local socket.
+    let d = root.join("proxy");
+    for (code, req, catalog, tarball) in [
+        ("E_PROXY_UNAUTHORIZED", "1.2", (401, ""), (401, "")),
+        ("E_PROXY_PACKAGE_NOT_FOUND", "1.2", (404, ""), (404, "")),
+        (
+            "E_PROXY_MALFORMED_RESPONSE",
+            "1.2",
+            (200, "not json"),
+            (404, ""),
+        ),
+        (
+            "E_REGISTRY_NO_MATCHING_VERSION",
+            "2.0",
+            (200, CATALOG_1_2_0),
+            (404, ""),
+        ),
+        (
+            "E_REGISTRY_ONLY_YANKED",
+            "1.2",
+            (200, CATALOG_1_2_0_YANKED),
+            (404, ""),
+        ),
+        (
+            "E_PROXY_VERSION_NOT_FOUND",
+            "1.2",
+            (200, CATALOG_1_2_0),
+            (404, ""),
+        ),
+        (
+            "E_REGISTRY_EXTRACT_FAILED",
+            "1.2",
+            (200, CATALOG_1_2_0),
+            (200, "not a tarball"),
+        ),
+    ] {
+        let dir = d.join(code.to_lowercase());
+        package(
+            &dir,
+            "app",
+            &format!("[dependencies]\nhttp = \"{req}\"\n"),
+            true,
+        );
+        let url = serve(catalog, tarball);
+        let cache = dir.join("cache");
+        expect(
+            code,
+            karac(
+                &dir,
+                &check,
+                &[
+                    ("KARAC_REGISTRY_PROXY", Some(url.as_str())),
+                    ("KARAC_REGISTRY_CACHE_ROOT", cache.to_str()),
+                ],
+            ),
+        );
+    }
+
+    // A lint's deny form, from its warning pin, for the lints that do not
+    // read `#[deny]` on the enclosing item (B-2026-11-18-48).
+    let pins = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/diagnostics");
+    for (code, lint, pin) in [
+        ("E0278", "must_use", "w0278"),
+        ("E0296", "unused_doc_comment", "w0296"),
+        ("E0317", "undocumented_unsafe", "w0317"),
+        ("E0318", "ffi_float_eq", "w0318"),
+        ("E0319", "ambiguous_not_comparison", "w0319"),
+    ] {
+        expect(
+            code,
+            karac(
+                &pins.join(pin),
+                &["check", "-D", lint, "--output=json", "source.kara"],
+                &[],
+            ),
+        );
+    }
+
     // A void run must not pass.
-    assert_eq!(seen, 40, "case count changed");
+    assert_eq!(seen, 67, "case count changed");
     assert!(bad.is_empty(), "{}", bad.join("\n\n"));
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -1,0 +1,8 @@
+#[test(requires: [Env])]
+fn t() {
+    assert(true);
+}
+
+fn main() {
+    t();
+}

@@ -1,0 +1,2 @@
+distinct type Bad = i64 where is_valid(self);
+         fn is_valid(x: i64) -> bool { true }

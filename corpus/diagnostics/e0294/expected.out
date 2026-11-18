@@ -1,0 +1,1 @@
+ERROR at line 20: `.unwrap()` on a `weak` read: the read is `None` once the referent is gone, so write the invariant that keeps it alive as `.expect("…")` (design.md § Cycles and `weak`)

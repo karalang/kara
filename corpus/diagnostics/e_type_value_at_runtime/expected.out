@@ -1,0 +1,1 @@
+ERROR at line 1: a runtime function may not take a `Type` parameter; `Type` values are first-class only at compile time — mark the parameter `comptime` or the function `comptime fn` (deferred.md § Comptime — Types as first-class values)

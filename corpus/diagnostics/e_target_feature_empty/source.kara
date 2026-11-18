@@ -1,0 +1,2 @@
+#[target_feature()]
+unsafe fn hot(a: i64) -> i64 { a }

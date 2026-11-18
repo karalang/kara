@@ -1,0 +1,7 @@
+#[deny(return_clause_on_fn)]
+fn make() -> Fn() -> i64 with reads(Clock) {
+    || 1
+}
+
+#[deny(return_clause_on_fn)]
+fn main() {}

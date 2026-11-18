@@ -1,0 +1,10 @@
+fn main() {
+    let x = comptime {
+        let mut i = 0;
+        while i >= 0 {
+            i = i + 1;
+        }
+        i
+    };
+    println(x);
+}

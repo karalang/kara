@@ -1,0 +1,11 @@
+struct Rs { id: i64, name: String }
+impl Drop for Rs { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
+struct Bs { one: Rs, two: Rs }
+impl Bs { fn set(mut ref self, r: own Rs) { self.one = r; } }
+fn main() {
+    let mut g = Bs { one: mks(1), two: mks(2) };
+    let taken = g.one;
+    g.set(mks(7));
+    println(f"t{taken.id}");
+}

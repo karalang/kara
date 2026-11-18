@@ -1,0 +1,1 @@
+fn main() { let off: usize = offset_of[i64](field); }

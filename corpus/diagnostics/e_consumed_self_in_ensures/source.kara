@@ -1,0 +1,7 @@
+struct Account { balance: i64 }
+impl Account {
+    pub fn close(own self) -> i64 ensures(result) result == self.balance { self.balance }
+}
+fn main() {
+    println(Account { balance: 1 }.close());
+}

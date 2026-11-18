@@ -1,0 +1,1 @@
+ERROR at line 2: `ident` is generic and must be annotated `#[gpu]` to be called from a `#[gpu]` call graph (here: `k → helper → ident`) — GPU-callability is declared at the definition site, not inferred from the call, so even an all-`GpuSafe` instantiation needs the annotation. Add `#[gpu]` to `ident`. See design.md § GPU Subset Constraints > Generics and `#[gpu]`.

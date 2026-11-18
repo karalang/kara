@@ -1,0 +1,9 @@
+trait Show { fn show(ref self) -> i64; }
+trait Sink { fn sink(ref self) -> i64; }
+struct NoShow {}
+impl Sink for NoShow { fn sink(ref self) -> i64 { 0 } }
+trait Functor { type Mapped[U: Show]; }
+struct V {}
+impl Functor for V { type Mapped[U] = NoShow; }
+fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[NoShow]: Sink { 0 }
+fn app_main() -> i64 { use_it(V {}) }

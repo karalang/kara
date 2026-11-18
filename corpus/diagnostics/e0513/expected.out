@@ -1,0 +1,1 @@
+ERROR at line 9: 'g.one' was moved out at line 8:17, and 'set' refills it through this call — the compiler cannot place the `Drop` bodies correctly

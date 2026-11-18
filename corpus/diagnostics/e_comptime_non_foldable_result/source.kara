@@ -1,0 +1,5 @@
+
+struct Point { x: i64, y: i64 }
+fn main() {
+    let _p = comptime { Point { x: 1, y: 2 } };
+}

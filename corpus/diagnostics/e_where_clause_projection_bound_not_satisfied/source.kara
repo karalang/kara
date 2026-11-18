@@ -1,0 +1,7 @@
+trait Collector { fn collect(ref self) -> i64; }
+trait Functor { type Mapped[U]; }
+struct Bar {}
+struct V {}
+impl Functor for V { type Mapped[U] = Bar; }
+fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }
+fn app_main() -> i64 { use_it(V {}) }

@@ -1,0 +1,11 @@
+#[deny(redundant_clone)]
+fn total(xs: Vec[i64]) -> i64 {
+    xs.len()
+}
+
+#[deny(redundant_clone)]
+fn main() {
+    let xs: Vec[i64] = [1, 2];
+    println(total(xs.clone()));
+    println(xs.len());
+}

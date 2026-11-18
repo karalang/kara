@@ -1,0 +1,1 @@
+ERROR at line 2: cannot #[derive(Default)] for refined distinct type 'Even': the default of its base type 'i64' may violate its `where` predicate; write `impl Default for Even` with a value that satisfies it

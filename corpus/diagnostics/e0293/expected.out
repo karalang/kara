@@ -1,0 +1,1 @@
+ERROR at line 2: bound 'T: Ord' on alias 'Ranked' is implied by the underlying type 'SortedMap[T, i32]'; consider removing

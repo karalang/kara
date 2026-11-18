@@ -1,0 +1,1 @@
+ERROR at line 4: `old(...)` requires the captured expression to be Clone, but `Big` is not — capture a narrower Clone field (e.g. `old(self.field)`) instead

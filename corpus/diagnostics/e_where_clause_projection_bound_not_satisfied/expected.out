@@ -1,0 +1,1 @@
+ERROR at line 7: projection bound `V.Mapped[i64]: Collector` is not satisfied; resolved projection type `Bar` does not implement `Collector`

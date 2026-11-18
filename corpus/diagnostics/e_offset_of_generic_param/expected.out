@@ -1,0 +1,1 @@
+ERROR at line 3: offset_of requires a concrete type; the type parameter 'T' is not resolvable to a layout at this call site

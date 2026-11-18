@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 511 |
+| diagnostics | 513 |
 | false-positive | 265 |
 | missing-feature | 201 |
 | perf | 188 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 639 |
 | mir-llvm | 291 |
 | mir | 253 |
-| cli | 198 |
+| cli | 200 |
 | parser | 117 |
 | ownership | 108 |
 | runtime | 88 |
@@ -128,6 +128,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-40 | 2026-11-18 | typecheck | medium | An associated function or enum variant reached through `Self` (`Self.gcd(a, b)` in an impl, `Self.one()` in a trait's default body, `Self.B(3)` in an enum's impl) is typed as an error with no diagnostic, and `karac check` prints MIR's "a type that failed to check is not lowered yet" (E0516); the pattern `Self.A =>` is refused as "'Self' is a reserved keyword" | — |
 | B-2026-11-18-44 | 2026-11-18 | typecheck | low | A `fold` whose seed takes an `i32` from a field (`fold((vals[0], 1), |(s, c), k| (s + k, c + 1))` over `i64` items) is refused at `s + k` with the advice to write `as i32`, which would truncate the sum; the seed is not named and nothing offers to widen it (`vals[0] as i64`) | — |
 | B-2026-11-18-47 | 2026-11-18 | typecheck | low | Over an owned local's element (`let mut s: Vec[Option[V]]`, `match s[0] { Some(v) => v.n += 1, .. }`), a plain binding written through is E0517 "reached through a shared `ref`" with no fix, though §4.6 makes `s[0]` an owned scrutinee whose plain binding is a move out of an index (§3.7), fixed by `mut ref v` | — |
+| B-2026-11-18-48 | 2026-11-18 | cli | low | Six lints ignore an item-level `#[allow]` / `#[deny]`, and `map_value_clone_reinsert` ignores `-D` too (W0312 stays a warning) | — |
+| B-2026-11-18-49 | 2026-11-18 | cli | low | Two catalogued codes never reach the user: L0001 (FfiLintHint) is built but never surfaced, and the char-boundary panic omits E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY | — |
 
 ### Relocated
 

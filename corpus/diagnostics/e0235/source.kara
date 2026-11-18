@@ -1,0 +1,6 @@
+struct Cfg { name: i64 }
+fn run(f: Fn() -> i64) -> i64 { f() }
+fn main() {
+let c = Cfg { name: 7 };
+let r = run(|| { let _ = c; 0 });
+}

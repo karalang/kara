@@ -1,0 +1,1 @@
+ERROR at line 1: a `#[target_feature]` function widens its CPU-feature set above the baseline, so calling it on hardware without the feature is undefined — mark it `unsafe fn` (the caller asserts the target supports it)

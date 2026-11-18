@@ -1,0 +1,6 @@
+effect resource Log;
+fn audit() -> bool with reads(Log) { true }
+fn f(x: i64) -> i64 requires audit() { x }
+fn main() {
+    println(f(1));
+}

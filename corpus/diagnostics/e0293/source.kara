@@ -1,0 +1,8 @@
+#[deny(redundant_alias_bound)]
+type Ranked[T: Ord] = SortedMap[T, i32];
+
+#[deny(redundant_alias_bound)]
+fn main() {
+    let m: Ranked[i64] = SortedMap.new();
+    println(m.len());
+}

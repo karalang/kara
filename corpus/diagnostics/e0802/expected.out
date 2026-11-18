@@ -1,0 +1,1 @@
+ERROR at line 2: a `#[gpu]` function must not perform an explicit panic (`todo()`); it is reached on the call chain k. The GPU subset forbids heap allocation, host I/O, channels, and explicit panics — restructure to keep it off the `#[gpu]` call graph. See design.md § GPU Subset Constraints.

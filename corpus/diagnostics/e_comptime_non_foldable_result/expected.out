@@ -1,0 +1,1 @@
+ERROR at line 4: `comptime` evaluation produced a value that cannot be spliced as a constant: a `Point` struct value (struct folding is a later comptime substrate)

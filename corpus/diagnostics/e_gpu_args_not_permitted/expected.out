@@ -1,0 +1,1 @@
+ERROR at line 1: `#[gpu]` takes no arguments — it is a bare constraint marker asserting the function uses only the GPU-compatible subset; remove the arguments

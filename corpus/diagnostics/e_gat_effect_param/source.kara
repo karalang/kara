@@ -1,0 +1,4 @@
+trait Functor {
+    type Mapped[U, with E];
+}
+fn main() {}

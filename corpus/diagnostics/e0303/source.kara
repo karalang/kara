@@ -1,0 +1,10 @@
+#[deny(unreachable_errdefer)]
+fn work() {
+    errdefer println("cleanup");
+    println("work");
+}
+
+#[deny(unreachable_errdefer)]
+fn main() {
+    work();
+}

@@ -1,0 +1,1 @@
+ERROR at line 2: unsafe extern block is missing a `# Safety` doc-comment section explaining the trust contract for its imports

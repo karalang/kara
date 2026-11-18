@@ -1,0 +1,6 @@
+enum Light { Red, Green }
+enum Signal { Red, Stop }
+
+fn main() {
+    let x = Red;
+}

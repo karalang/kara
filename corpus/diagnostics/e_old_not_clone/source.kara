@@ -1,0 +1,5 @@
+struct Big { data: Vec[i64] }
+         impl Big {
+             pub fn f(mut ref self) -> i64
+                 ensures(result) self.data.len() >= old(self).data.len() { 0 }
+         }

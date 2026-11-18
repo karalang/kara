@@ -1,0 +1,1 @@
+ERROR at line 3: `x` is never written, assigned through or borrowed as `mut`, so the `let` needs no `mut`

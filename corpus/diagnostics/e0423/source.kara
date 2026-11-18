@@ -1,0 +1,16 @@
+effect resource Clk: ClkP;
+trait ClkP {
+    fn now(ref self) -> i64;
+}
+struct F { t: i64 }
+impl ClkP for F {
+    fn now(ref self) -> i64 { self.t }
+}
+trait At { fn at(self) -> i64; }
+struct S {}
+impl At for S { fn at(self) -> i64 { Clk.now() } }
+fn main() {
+    let d: dyn At = S {};
+    let r = with_provider[Clk](F { t: 9 }, || d.at());
+    println(r);
+}

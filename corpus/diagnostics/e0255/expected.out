@@ -1,0 +1,1 @@
+ERROR at line 3: use of `#[unstable]` item `Server.serve_static` — the API surface may change before 1.0: serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers — opt in with `#[allow(unstable_api)]` on the enclosing item, or globally via `[lints].allow_unstable_api = true` in `kara.toml`

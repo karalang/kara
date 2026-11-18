@@ -4435,6 +4435,139 @@ const CODE_PROSE: &[(&str, &str)] = &[
          with this compiler are inconsistent, which is a compiler bug worth \
          reporting.",
     ),
+    // B-2026-11-16-303 ratchet sweep: codes the sweep pinned that had no class
+    // page.
+    (
+        "E0253",
+        "A scope-local type, such as `TaskGroup`, is bound to the scope \
+         that created it: its tasks are joined when that scope ends. A \
+         value of such a type cannot escape that scope through a return \
+         type, a struct field or a channel send, because it would outlive \
+         the tasks it tracks. Create the group in the function that waits \
+         on it, and pass it down by reference (`group: ref TaskGroup`) \
+         instead of returning it.",
+    ),
+    (
+        "E0256",
+        "A refinement predicate (`distinct type Even = i64 where self % 2 \
+         == 0`) is checked at every conversion, so it may only use `self`, \
+         literals, operators and zero-argument methods on `self`. A call to \
+         a free function could read state or have effects the check cannot \
+         see. Inline the condition, or make it a zero-argument method on \
+         the base type and call `self.is_valid()`. Refinement types are \
+         experimental (docs/deferred.md § Refinement Types).",
+    ),
+    (
+        "E0284",
+        "`LazyLock.new(|| ...)` runs its closure once, on first access, and \
+         keeps the result for the rest of the program. The closure may \
+         capture only module-level compile-time bindings: a captured local \
+         would fix the value of a binding that dies before the cell does. \
+         Make the captured value a module-level `const`, or compute it \
+         inside the closure. Module-level cells are experimental \
+         (docs/deferred.md § Module-Level Mutable State).",
+    ),
+    (
+        "E0410",
+        "A `requires` or `ensures` predicate must be pure: its effect set \
+         may hold `panics` (indexing, division, `unwrap`) and nothing else, \
+         because a contract that reads or writes a resource would change \
+         what the program does depending on whether contracts are checked. \
+         Compute the value before the call and pass it in, or check it in \
+         the body with `assert`. Contracts are experimental \
+         (docs/deferred.md § Contracts).",
+    ),
+    (
+        "E0421",
+        "Inside `with_provider[R](fake, || ...)`, every operation on `R` \
+         goes to the fake, except those the provider trait does not cover. \
+         A server (`Server.serve`), UDP, TLS and WebSocket are not served \
+         by `NetworkProvider`, so under the override they would reach the \
+         real network and the test would not be isolated (core-semantics.md \
+         §14.12). Test a handler by calling it directly with a `Request`, \
+         and leave the server out of the overridden block.",
+    ),
+    (
+        "E0422",
+        "A provider's `close` (for a file, a socket) can run after the \
+         block that installed it has ended, so it runs with every other \
+         resource at its default. A `close` that uses a resource overridden \
+         around the `with_provider` call would see the default, not the \
+         override (core-semantics.md §14.11). Do the work in an earlier \
+         method of the provider, or install the provider outside the other \
+         override.",
+    ),
+    (
+        "E0423",
+        "A value used as a `dyn Trait` cannot carry a provider with it. \
+         When a method behind the `dyn` uses a resource that has no default \
+         (only a provider supplies it), calling it through the trait object \
+         would leave that resource unbound (design.md §9). Take a generic \
+         parameter (`fn f[T: At](x: T)`) instead of `dyn At`, so the \
+         provider in scope at the call reaches the method, or give the \
+         resource a default provider.",
+    ),
+    (
+        "E0801",
+        "Whether a function may run on the GPU is declared where it is \
+         defined, not inferred from where it is called. A generic function \
+         called from a `#[gpu]` call graph must itself be marked `#[gpu]`, \
+         even when every instantiation would be safe. The message names the \
+         path from the kernel to the function. Add `#[gpu]` to it. GPU \
+         kernels are experimental (docs/deferred.md § GPU).",
+    ),
+    (
+        "E_TEST_ATTR_INVALID_TARGET",
+        "`#[test(...)]` configures a `test \"name\" { ... }` block, the \
+         only form `karac test` runs (design.md §14). On a `fn` it would \
+         configure nothing, and the function would not run as a test. Write \
+         the test as `#[test(requires: [Env])] test \"name\" { ... }` in a \
+         `_test.kara` file, and call helper functions from it.",
+    ),
+    (
+        "E_TEST_REQUIRES",
+        "`#[test(requires: [R])]` runs the test only when the real resource \
+         `R` is available, so `R` must be a program-rooted resource: one \
+         declared with a default provider (`effect resource Db: DbT = \
+         RealDb {};`), or one of the library's (`Env`, `Clock`, \
+         `RandomSource`, `FileSystem`, `Network`, `Stdout`, `Stderr`, \
+         `Stdin`). A name that is not a resource, or one with no default \
+         provider, would leave the test nothing to run against \
+         (core-semantics.md §14.13). For a provider-rooted resource, bind a \
+         fake with `#[with_provider(R, ...)]` instead.",
+    ),
+    // B-2026-11-16-303 ratchet: the numbered parents of codes the tooling test
+    // reaches.
+    (
+        "E0241",
+        "A struct literal builds a type that another package marks \
+         `#[non_exhaustive]` (the JSON `parent_code` of \
+         E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL). The defining package may \
+         add a field in a compatible release, which would make every \
+         outside literal incomplete (design.md § `#[non_exhaustive]` for \
+         Evolvable Public Types). Build the value through the constructor \
+         the package exports, commonly `T.new(...)` or a builder.",
+    ),
+    (
+        "E0243",
+        "A struct pattern destructures a type that another package marks \
+         `#[non_exhaustive]` and lists its fields without `..` (the JSON \
+         `parent_code` of E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN). The \
+         defining package may add a field in a compatible release, and the \
+         pattern would then stop compiling (design.md § `#[non_exhaustive]` \
+         for Evolvable Public Types). Add `..` before the closing brace, as \
+         in `Opts { port, .. }`.",
+    ),
+    (
+        "E0246",
+        "Orphan impl: a library package wrote `impl Trait for Type` where \
+         it declares neither the trait, nor the type, nor a type among the \
+         trait's arguments. Two packages could then write the same impl and \
+         never build together (design.md § Coherence, the orphan rule). \
+         Only the final application is exempt. Implement the trait on a \
+         type this package declares, or wrap the foreign type in a \
+         `distinct type` and implement it there.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
@@ -4666,6 +4799,10 @@ const DEFERRED_FAMILIES: &[CodeFamily] = &[
         codes: &[
             "E_UNKNOWN_PROFILE",
             "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE",
+            // `[profile] panic_on_alloc_failure` (docs/deferred.md §
+            // Fallible-Allocation Mode), which nothing reads until profiles land.
+            "E0264",
+            "E0265",
         ],
         pointer: "Profiles are deferred (docs/deferred.md § Project Profiles).",
     },
@@ -4765,8 +4902,40 @@ const RETIRED_CODES: &[(&str, &str)] = &[
     ("E0401", "A public function may declare effects it does not perform; the extra effects are room for the API to grow (design.md § 12, Effects, the declaration paragraph)."),
     ("E0417", "A `Drop` body may panic; the panic ends the process (core-semantics.md § 7.11)."),
     ("E0508", "A closure that would outlive a value it borrows is E0515."),
+    ("E0281", "The deny form of the retired lint W0281: module-level `let mut` is the error E_MODULE_LET (design.md § Constants, \"No mutable globals\")."),
+    ("E0315", "The deny form of the retired lint W0315: moving a payload out of an enum that has a `Drop` body is the error E0289 (core-semantics.md §3.7)."),
+    ("E0408", "A `par` branch writing a module-level binding needs a mutable module binding, and the language has none: a module-level `let` is E_MODULE_LET, and a write to shared state across branches is checked as E0418 (core-semantics.md §11.2)."),
+    ("E0502", "`#![no_rc]` refused an inserted reference count, and the compiler inserts none (core-semantics.md §6.4, \"No implicit sharing\"): where one would have been, the program has the move error E0500."),
+    ("E_RC_BUDGET_EXCEEDED", "The budget counted inserted reference counts, and the compiler inserts none (core-semantics.md §6.4): where one would have been, the program has the move error E0500."),
+    ("N0503", "The RC fallback note is gone with the fallback (core-semantics.md §6.4, \"No implicit sharing\"): where it would have fired, the program has the move error E0500."),
+    ("E0413", "A panic aborts in every build (core-semantics.md §10), so no panic unwinds through an exported `extern \"C-unwind\"` fn and it need not declare `panics`: such a fn is refused as E0415, which names the abort-only build."),
+    ("N0507", "The note suggested the `mut ref ||` capture prefix, which is removed from the language: writing it is E0519."),
     ("E_MODULE_BINDING_NAMING", "A module-level `let` is E_MODULE_LET, whose fix declares it `const` under its SCREAMING_SNAKE_CASE name and renames its uses (design.md § Constants)."),
 ];
+
+/// Every code `karac explain` catalogues, once each in table order, with
+/// what exempts it from needing a program that produces it: `"retired"`
+/// (no diagnostic emits it), `"deferred"` (a later-track or deferred
+/// feature's code, which prints the scope paragraph), or `None`. A code
+/// with `None` needs a pin; `tests/diagnostics_coverage.rs` holds the
+/// ratchet (B-2026-11-16-303).
+pub fn catalogued_code_dispositions() -> Vec<(&'static str, Option<&'static str>)> {
+    let mut seen = std::collections::HashSet::new();
+    CODE_TABLE
+        .iter()
+        .filter(|(c, _)| seen.insert(*c))
+        .map(|(code, entry)| {
+            let why = if retired_note(code).is_some() {
+                Some("retired")
+            } else if is_scope_code(code, entry) {
+                Some("deferred")
+            } else {
+                None
+            };
+            (*code, why)
+        })
+        .collect()
+}
 
 fn retired_note(code: &str) -> Option<&'static str> {
     RETIRED_CODES
@@ -7193,17 +7362,11 @@ mod tests {
     /// takes any unclassified code that has none.
     #[test]
     fn unclassified_code_says_so_rather_than_printing_other() {
-        let (code, entry) = CODE_TABLE
-            .iter()
-            .find(|(c, e)| {
-                e.class.is_none()
-                    && code_prose(c).is_none()
-                    && !is_scope_code(c, e)
-                    && retired_note(c).is_none()
-                    && experimental_note(c).is_none()
-            })
-            .expect("an unclassified code with no prose");
-        let text = render_code_text(code, vec![*entry]);
+        // Every catalogued code has a page since the B-2026-11-16-303
+        // sweep, so the fallback is fed a code the table does not hold.
+        let (code, entry) = ("E9999", ty("SyntheticUnclassified", None));
+        assert!(lookup_code(code).is_empty() && code_prose(code).is_none());
+        let text = render_code_text(code, vec![entry]);
         assert!(text.contains(entry.kind), "{text}");
         assert!(text.contains("no class page yet"), "{text}");
         let e0250 = render_code_text("E0250", lookup_code("E0250"));

@@ -1,0 +1,1 @@
+ERROR at line 5: cannot consume `u` while closure at line 4:18 captures `u.x` by `mut ref` (borrow still live)

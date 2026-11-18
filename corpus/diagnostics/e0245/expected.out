@@ -1,0 +1,1 @@
+ERROR at line 3: use of deprecated `vec![..]`: the list literal is `[a, b]` (and `Vec.filled(n, v)` for `vec![v; n]`) — suppress with `#[allow(deprecated)]` on the enclosing item

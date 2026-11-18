@@ -1,0 +1,1 @@
+ERROR at line 2: the lint `unreachable_arm` did not fire anywhere in the scope of this `#[expect(unreachable_arm)]` — either the lint has been fixed (remove the attribute) or the attribute was attached to the wrong scope

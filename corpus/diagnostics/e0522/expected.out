@@ -1,0 +1,1 @@
+ERROR at line 4: `defer` block moves `s`: a cleanup block never captures by move, so the bindings it uses stay valid until the scope ends (design.md §10)

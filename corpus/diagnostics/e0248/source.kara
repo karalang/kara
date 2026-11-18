@@ -1,0 +1,2 @@
+#[expect(unfulfilled_lint_expectation)]
+fn f() -> i64 { 0 }

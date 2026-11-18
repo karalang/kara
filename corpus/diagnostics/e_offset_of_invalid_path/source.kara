@@ -1,0 +1,2 @@
+struct Frame { hdr: i64 }
+fn main() { let off: usize = offset_of[Frame](hdr[0]); }

@@ -1,0 +1,1 @@
+ERROR at line 2: declaration of 'Map' shadows the prelude type of the same name; built-in paths keyed on 'Map' no longer apply to this type (the declaration is legal — prelude names are not reserved)

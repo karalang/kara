@@ -1,0 +1,1 @@
+ERROR at line 1: function calls are not allowed in a refinement predicate — only zero-argument methods on `self` are permitted

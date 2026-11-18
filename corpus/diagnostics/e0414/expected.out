@@ -1,0 +1,1 @@
+ERROR at line 1: exported `extern "C" fn 'drain'` suspends, but the C-export boundary is synchronous-only: a C caller drives no Kāra scheduler, so a suspending export cannot yield on a bare foreign thread. Expose a *blocking* wrapper that owns a runtime-scoped task internally, or keep the suspending work behind a non-exported function. See design.md § Exported C ABI.

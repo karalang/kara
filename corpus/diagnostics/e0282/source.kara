@@ -1,0 +1,9 @@
+#[deny(prelude_shadow)]
+struct Map {
+    size: i64,
+}
+
+#[deny(prelude_shadow)]
+fn main() {
+    println(Map { size: 1 }.size);
+}

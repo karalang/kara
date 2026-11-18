@@ -1,0 +1,4 @@
+pub extern "C" fn drain() -> i64 {
+             sleep_ms(1);
+             0
+         }

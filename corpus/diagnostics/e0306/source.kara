@@ -1,0 +1,10 @@
+#[warn(needless_return)]
+#[deny(needless_return)]
+fn double(x: i64) -> i64 {
+    return x * 2;
+}
+
+#[deny(needless_return)]
+fn main() {
+    println(double(2));
+}

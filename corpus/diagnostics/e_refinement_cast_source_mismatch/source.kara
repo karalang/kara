@@ -1,0 +1,2 @@
+type Even = i64 where self % 2 == 0;
+         fn bad(x: i32) -> Even { x as Even }

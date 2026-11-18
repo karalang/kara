@@ -1,0 +1,7 @@
+struct D { v: String }
+impl Drop for D { fn drop(mut ref self) { println("drop"); } }
+fn main() {
+    let d = D { v: "a".to_string() };
+    let v = d.v;
+    println(v);
+}

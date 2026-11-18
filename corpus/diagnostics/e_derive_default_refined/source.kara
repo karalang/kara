@@ -1,0 +1,6 @@
+#[derive(Default)]
+distinct type Even = i64 where self % 2 == 0;
+
+fn main() {
+    println(1);
+}

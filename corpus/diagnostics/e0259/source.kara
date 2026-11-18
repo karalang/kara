@@ -1,0 +1,7 @@
+#[deny(undocumented_unsafe)]
+unsafe extern "C" {
+    type Handle;
+}
+
+#[deny(undocumented_unsafe)]
+fn main() {}

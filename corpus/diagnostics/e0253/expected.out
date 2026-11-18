@@ -1,0 +1,1 @@
+ERROR at line 1: ScopeLocal type 'TaskGroup' cannot appear in return type of 'make_group'; the value is bound to the scope that created it and cannot escape via return, field storage, or channel send

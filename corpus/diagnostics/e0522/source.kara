@@ -1,0 +1,8 @@
+fn main() {
+    let s = "a".to_string();
+    defer {
+        let t = s;
+        println(t);
+    }
+    println(1);
+}

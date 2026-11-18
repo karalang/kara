@@ -1,0 +1,21 @@
+#[deny(prelude_shadow)]
+#[deny(weak_read_unwrap)]
+shared struct Parent {
+    name: String,
+    mut kids: Vec[Child],
+}
+
+#[deny(prelude_shadow)]
+#[deny(weak_read_unwrap)]
+shared struct Child {
+    mut parent: weak Parent,
+}
+
+#[deny(prelude_shadow)]
+#[deny(weak_read_unwrap)]
+fn main() {
+    let p = Parent { name: "root".to_string(), kids: [] };
+    p.kids.push(Child { parent: p });
+    let k = p.kids[0];
+    println(k.parent.unwrap().name);
+}

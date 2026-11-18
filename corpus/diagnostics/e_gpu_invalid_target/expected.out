@@ -1,0 +1,1 @@
+ERROR at line 1: `#[gpu]` is not valid on struct; the attribute is the GPU-subset constraint marker and only applies to `fn` declarations — it asserts the function uses only GPU-compatible features and makes it callable from `gpu.dispatch`. See design.md § GPU Subset Constraints.

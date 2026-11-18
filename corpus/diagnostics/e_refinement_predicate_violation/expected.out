@@ -1,0 +1,1 @@
+ERROR at line 2: constant value `3i64` does not satisfy refinement `Even`'s `where` predicate; this is a compile-time-detected contract violation — supply a value the predicate admits, or construct it through `Even.try_from(x)?` to handle the failure at runtime

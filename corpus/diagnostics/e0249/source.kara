@@ -1,0 +1,3 @@
+#[deny(unfulfilled_lint_expectation)]
+#[expect(unreachable_arm)]
+fn f() -> i64 { 0 }

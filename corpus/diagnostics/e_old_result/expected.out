@@ -1,0 +1,1 @@
+ERROR at line 1: `old(result)` is invalid — `result` does not exist at function entry; `old(...)` captures pre-state only

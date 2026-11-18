@@ -1,0 +1,6 @@
+struct Owned { x: i64 }
+fn main() {
+let u = Owned { x: 1 };
+let _f = mut ref || u.x + 1;
+let _w = u;
+}

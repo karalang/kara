@@ -1,0 +1,1 @@
+ERROR at line 2: `HTTPServer` writes an acronym in capitals: a Type name treats an acronym as a word (design.md §3 CN-4), so write `HttpServer`

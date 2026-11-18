@@ -164,6 +164,14 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("W0316", "E0316"),
         ("E_CONCURRENT_SHARED_STRUCT", "E_NOT_CROSS_TASK"),
         ("E_CONCURRENT_PLAIN_STRUCT", "E0418"),
+        ("E0281", "E_MODULE_LET"),
+        ("E0315", "E0289"),
+        ("E0408", "E_MODULE_LET"),
+        ("E0502", "E0500"),
+        ("E_RC_BUDGET_EXCEEDED", "E0500"),
+        ("N0503", "E0500"),
+        ("N0507", "E0519"),
+        ("E0413", "E0415"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(out.contains("This code is retired"), "{code}: {out}");
@@ -188,6 +196,8 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E_REPR_DEFERRED", "`#[repr(packed)]`"),
         ("E_REPR_TRANSPARENT_UNION_FORBIDDEN", "FFI Unions"),
         ("E_SHAPE", "Numerical Types"),
+        ("E0264", "Project Profiles"),
+        ("E0265", "Project Profiles"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(
@@ -272,6 +282,16 @@ fn diagnostics_corpus_package_codes_are_produced_and_explained() {
                 ("src/main.kara", "import a;\nfn main() { a.f(); }\n"),
                 ("src/a.kara", "import b;\npub fn f() { b.g(); }\n"),
                 ("src/b.kara", "import a;\npub fn g() { a.f(); }\n"),
+            ],
+        ),
+        (
+            "E_TEST_REQUIRES",
+            &[
+                ("src/main.kara", "fn main() {}\n"),
+                (
+                    "src/main_test.kara",
+                    "#[test(requires: [Nope])]\ntest \"x\" {\n    assert(true);\n}\n",
+                ),
             ],
         ),
     ];

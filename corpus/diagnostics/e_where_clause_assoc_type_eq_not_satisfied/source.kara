@@ -1,0 +1,5 @@
+fn main() {
+    let v = [1, 2, 3];
+    let s = ["a", "b"];
+    println(f"{v.iter().eq(s.iter())}");
+}

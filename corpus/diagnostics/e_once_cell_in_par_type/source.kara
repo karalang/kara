@@ -1,0 +1,3 @@
+sync struct Service { cell: OnceCell[i64] }
+
+fn main() {}

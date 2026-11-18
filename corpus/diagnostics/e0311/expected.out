@@ -1,0 +1,1 @@
+ERROR at line 5: `f16` arithmetic is software-emulated on this target (cpu `x86-64-v2`): LLVM promotes each operation to `f32` and rounds back. Store in `f16` if you need the space, but compute in `f32` to make the conversions explicit

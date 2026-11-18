@@ -1,0 +1,1 @@
+ERROR at line 9: `xs.clone()` copies `xs` for a parameter that only borrows it: pass `xs`, which the call borrows (a bare parameter borrows, core-semantics.md §4.1)

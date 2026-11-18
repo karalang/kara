@@ -1,0 +1,1 @@
+ERROR at line 4: cannot move a non-`Copy` value out of a borrowed place: `s.r` is reached through `s`, a reference. This type has no `.clone()`: borrow it instead (`ref <place>`), use it in place, or take it with `mem.replace` / `mem.swap` / `Option.take()`

@@ -1,0 +1,3 @@
+fn make_group() -> TaskGroup {
+             TaskGroup.new()
+         }

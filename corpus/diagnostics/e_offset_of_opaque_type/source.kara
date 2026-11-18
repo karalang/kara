@@ -1,0 +1,4 @@
+unsafe extern "C" {
+type Foo;
+}
+fn main() { let off: usize = offset_of[Foo](field); }

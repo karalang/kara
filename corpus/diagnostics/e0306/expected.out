@@ -1,0 +1,1 @@
+ERROR at line 4: a final `return` is redundant: the body's last expression is its value, so drop the `return` and the `;`

@@ -1,0 +1,1 @@
+ERROR at line 3: `reads(Log)` is not permitted in a requires contract expression — contract predicates must be pure (effect set ⊆ {panics}); only `panics` (indexing, division, unwrap) is allowed

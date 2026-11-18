@@ -1,0 +1,1 @@
+ERROR at line 2: the `compiler` module is only available inside a `comptime` context (deferred.md § Comptime — Comptime stdlib surface)

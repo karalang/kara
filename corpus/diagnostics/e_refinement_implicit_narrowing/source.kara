@@ -1,0 +1,2 @@
+type Even = i64 where self % 2 == 0;
+         fn bind(n: i64) -> i64 { let x: Even = n; x }

@@ -1,0 +1,2 @@
+ERROR at line 3: this function cannot return an error, so the errdefer never runs
+help: use `defer` if the cleanup should always run
