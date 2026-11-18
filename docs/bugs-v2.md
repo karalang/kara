@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 81 |
 | run-vs-build | 55 |
 | crash | 50 |
-| codegen-gap | 35 |
+| codegen-gap | 36 |
 | use-after-free | 10 |
 | leak | 4 |
 | double-free | 2 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 602 |
 | mir-llvm | 287 |
-| mir | 249 |
+| mir | 250 |
 | cli | 193 |
 | parser | 110 |
 | ownership | 104 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-17). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -125,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-136 | 2026-11-17 | parser | low | A range-pattern bound that is an expression (`0..=(1 + 2) =>`) gets E_RANGE_PATTERN_BOUND_NOT_SIMPLE and then a spurious E0002 "Expected expression" at the end of the `match` | — |
 | B-2026-11-17-137 | 2026-11-17 | typecheck | low | Two `impl Grid[3]` blocks defining one method render the const-generic target as `Grid[Array[(), 3]]` in E0240, a type the program never wrote | — |
 | B-2026-11-17-139 | 2026-11-17 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum other than Option, a boxed field, a struct with its own `Drop` impl inside a container, or a library type; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
+| B-2026-11-18-1 | 2026-11-18 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both backends) | — |
 
 ### Relocated
 
