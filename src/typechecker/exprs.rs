@@ -18576,11 +18576,16 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                     (s, e) => {
+                        // A bound read open is the variable as it stood
+                        // when read; the other bound may have fixed it
+                        // since (`at..at + k` with `let mut at = 0` and an
+                        // `i64` `k`), so it is resolved before the two are
+                        // compared (kata 2296, B-2026-11-18-54).
                         let open = |this: &mut Self, t: Option<Type>| {
                             t.map(|t| match this.unbound_literal_var(&t) {
                                 Some((_, inference::LiteralKind::Int)) => t,
                                 Some(_) => this.settle_literals(&t),
-                                None => t,
+                                None => this.resolved_now(&t),
                             })
                         };
                         (open(self, s), open(self, e))
