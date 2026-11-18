@@ -1827,6 +1827,7 @@ impl<'a> super::TypeChecker<'a> {
         );
         self.method_call_ends.push(ends);
         self.note_literal_push(object, method, args);
+        self.note_last_mut_receiver(object, args);
         // The dependency traits the file this call is written in does not
         // import supply none of its methods (B-2026-11-16-180).
         if !self.trait_scopes.is_empty() {

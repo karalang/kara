@@ -2532,21 +2532,48 @@ impl<'a> super::TypeChecker<'a> {
     /// Notes Rust's `*v.last_mut().unwrap()` (or `first_mut`, or
     /// `.expect(..)`) as an assignment's left side over a plain place `v`
     /// (a name, or a field path of one): the library has no `last_mut`, and
-    /// the write is `v[v.len() - 1] = ..` / `v[0] = ..` (kata 1520).
+    /// the write is `v[v.len() - 1] = ..` / `v[0] = ..` (kata 1520). A field
+    /// or an element written through it, `v.last_mut().unwrap().f = ..` or
+    /// `..unwrap()[i] = ..`, is the same index (B-2026-11-18-30).
     pub(super) fn note_last_mut_write(&mut self, target: &Expr) {
-        let ExprKind::Unary {
-            op: UnaryOp::Deref,
-            operand,
-        } = &target.kind
-        else {
+        match &target.kind {
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                operand,
+            } => self.note_last_mut_unwrap(operand, Some(target.span), &[]),
+            ExprKind::FieldAccess { object, .. } => self.note_last_mut_unwrap(object, None, &[]),
+            ExprKind::Index { object, index } => {
+                self.note_last_mut_unwrap(object, None, &[index.as_ref()])
+            }
+            _ => {}
+        }
+    }
+
+    /// Notes Rust's `v.last_mut().unwrap()` as the receiver of a call:
+    /// `stack.last_mut().unwrap().push(c)` is `stack[stack.len() - 1].push(c)`
+    /// (kata 1190, B-2026-11-18-30).
+    pub(super) fn note_last_mut_receiver(&mut self, object: &Expr, args: &[CallArg]) {
+        if !matches!(&object.kind, ExprKind::MethodCall { method, .. }
+            if method == "unwrap" || method == "expect")
+        {
             return;
-        };
+        }
+        let rest: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
+        self.note_last_mut_unwrap(object, None, &rest);
+    }
+
+    /// `unwrapped` is `v.last_mut().unwrap()`: the fix replaces it, from
+    /// `from` (the `*` of a write through it) or else from `v`, with the
+    /// index. `rest` is what else the expression evaluates (a call's
+    /// arguments, an index); one that names `v`'s root is left alone, since
+    /// the index reads `v` where Rust's borrow refused it.
+    fn note_last_mut_unwrap(&mut self, unwrapped: &Expr, from: Option<Span>, rest: &[&Expr]) {
         let ExprKind::MethodCall {
             object: call,
             method: unwrap,
             args_close_span: close,
             ..
-        } = &operand.kind
+        } = &unwrapped.kind
         else {
             return;
         };
@@ -2578,8 +2605,13 @@ impl<'a> super::TypeChecker<'a> {
         let Some(v) = place(recv) else {
             return;
         };
+        let root = v.split('.').next().unwrap_or_default();
+        if rest.iter().any(|e| super::rust_last_mut::names(e, root)) {
+            return;
+        }
+        let from = from.unwrap_or(recv.span);
         let end = close.offset + close.length;
-        if close.length == 0 || end <= target.span.offset {
+        if close.length == 0 || end <= from.offset {
             return;
         }
         let replacement = if method == "last_mut" {
@@ -2591,10 +2623,10 @@ impl<'a> super::TypeChecker<'a> {
             recv.span.offset,
             FixIt {
                 span: Span {
-                    line: target.span.line,
-                    column: target.span.column,
-                    offset: target.span.offset,
-                    length: end - target.span.offset,
+                    line: from.line,
+                    column: from.column,
+                    offset: from.offset,
+                    length: end - from.offset,
                 },
                 replacement,
             },

@@ -62,7 +62,7 @@ fn root(e: &Expr) -> Option<&str> {
 
 /// Whether `e` names `name`: used, or bound again (a closure parameter, a
 /// `let` or a pattern), either of which leaves the substitution unsound.
-fn names(e: &Expr, name: &str) -> bool {
+pub(super) fn names(e: &Expr, name: &str) -> bool {
     let mut hit = false;
     crate::span_visitor::for_each_expr(e, &mut |x| match &x.kind {
         ExprKind::Identifier(n) if n == name => hit = true,
