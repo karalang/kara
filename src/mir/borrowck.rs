@@ -3776,6 +3776,7 @@ fn main() -> () {
             // `Mutex.lock` and a `weak` field's read are the library's
             // (B-2026-11-17-101).
             "drop_body_suspends_in_a_mutex",
+            "drop_body_suspends_lets_other_tasks_run",
             "drop_body_suspends_while_a_weak_handle_outlives",
             // A channel's `recv` and `OnceCell.set` are the library's
             // (B-2026-11-17-127).

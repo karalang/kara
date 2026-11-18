@@ -1,19 +1,46 @@
-import std.time.{Duration, sleep};
 trait Job { fn id(self) -> i64; }
-struct Slow { n: i64 }
-impl Drop for Slow { fn drop(mut ref self) { println(f"drop {self.n} starts"); sleep(Duration.ms(60)); println(f"slow drop {self.n}"); } }
+struct Slow { n: i64, go: Sender[i64], back: Receiver[i64] }
+impl Drop for Slow {
+    fn drop(mut ref self) {
+        println(f"drop {self.n} starts");
+        let _ = self.go.send(self.n);
+        let seen = self.back.recv().unwrap_or(-1);
+        println(f"slow drop {self.n} after tick {seen}");
+    }
+}
 impl Job for Slow { fn id(self) -> i64 { self.n } }
 shared struct H { s: Slow }
-fn by_dyn() -> i64 { { let j: dyn Job = Slow { n: 1 }; } println("after the dyn drop"); 1 }
-fn by_handle() -> i64 { sleep(Duration.ms(100)); { let h = H { s: Slow { n: 2 } }; } println("after the handle drop"); 2 }
-fn ticks() -> i64 { sleep(Duration.ms(20)); println("tick 1"); sleep(Duration.ms(100)); println("tick 2"); 0 }
+fn by_dyn(go: own Sender[i64], back: own Receiver[i64]) {
+    { let j: dyn Job = Slow { n: 1, go: go, back: back }; }
+    println("after the dyn drop");
+}
+fn by_handle(go: own Sender[i64], back: own Receiver[i64]) {
+    { let h = H { s: Slow { n: 2, go: go, back: back } }; }
+    println("after the handle drop");
+}
+fn drops(go1: own Sender[i64], back1: own Receiver[i64], go2: own Sender[i64], back2: own Receiver[i64]) -> i64 {
+    by_dyn(go1, back1);
+    by_handle(go2, back2);
+    0
+}
+fn ticks(rx1: own Receiver[i64], tx1: own Sender[i64], rx2: own Receiver[i64], tx2: own Sender[i64]) -> i64 {
+    let a = rx1.recv().unwrap_or(-1);
+    println(f"tick {a}");
+    let _ = tx1.send(a);
+    let b = rx2.recv().unwrap_or(-1);
+    println(f"tick {b}");
+    let _ = tx2.send(b);
+    0
+}
 fn main() {
+    let (go1, rx1) = channel(1);
+    let (tx1, back1) = channel(1);
+    let (go2, rx2) = channel(1);
+    let (tx2, back2) = channel(1);
     let g = TaskGroup.new();
-    let a = g.spawn(|| by_dyn());
-    let b = g.spawn(|| by_handle());
-    let t = g.spawn(|| ticks());
-    let _ = a.join();
-    let _ = b.join();
+    let d = g.spawn(|| drops(go1, back1, go2, back2));
+    let t = g.spawn(|| ticks(rx1, tx1, rx2, tx2));
+    let _ = d.join();
     let _ = t.join();
     println("end");
 }
