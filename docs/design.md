@@ -3535,7 +3535,7 @@ Generic associated types (`type Mapped[U]`) are in [deferred.md](deferred.md#uns
 
 Type-alias `impl Trait` (`type X = impl Trait`) is deferred ([deferred.md](deferred.md#unscheduled-language-extensions)).
 
-**Argument position is generic-parameter sugar.** `fn f(x: impl Trait)` is identical to `fn f[T: Trait](x: T)`: same monomorphization, same dispatch, same effect inference. Each `impl Trait` is an independent generic parameter, so `fn pair(x: impl Trait, y: impl Trait)` does not force `x` and `y` to share a type; when they must, write `[T: Trait]`. Argument-position `impl Trait` is not allowed in trait methods; use the explicit generic form there.
+**Argument position is generic-parameter sugar.** `fn f(x: impl Trait)` is identical to `fn f[T: Trait](x: T)`: same monomorphization, same dispatch, same effect inference. Each `impl Trait` is an independent generic parameter, so `fn pair(x: impl Trait, y: impl Trait)` does not force `x` and `y` to share a type; when they must, write `[T: Trait]`. Under a borrow the sugar is the same: `x: ref impl Trait` is `[T: Trait](x: ref T)` and `x: mut ref impl Trait` is `[T: Trait](x: mut ref T)`. Argument-position `impl Trait` is not allowed in trait methods; use the explicit generic form there.
 
 #### Return-position `impl Trait`
 

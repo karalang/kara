@@ -2987,18 +2987,36 @@ fn desugar_impl_trait_args_in_program(program: &mut Program) {
 /// existential, no special handling downstream)" — the `with E'` clause is
 /// meaningful only on return-position existentials, where slice 3 + Phase 8
 /// pick it up.
+/// The type node an argument-position `impl Trait` desugar rewrites: the
+/// parameter type itself, or the type under a `ref` / `mut ref` borrow.
+fn impl_trait_param_slot(ty: &mut TypeExpr) -> &mut TypeExpr {
+    match ty.kind {
+        TypeKind::Ref(_) | TypeKind::MutRef(_) => {
+            let (TypeKind::Ref(inner) | TypeKind::MutRef(inner)) = &mut ty.kind else {
+                unreachable!()
+            };
+            impl_trait_param_slot(inner)
+        }
+        _ => ty,
+    }
+}
+
 fn desugar_impl_trait_args_in_function(f: &mut Function) {
     let mut synthetic_params: Vec<GenericParam> = Vec::new();
     let mut hoisted: Vec<WhereConstraint> = Vec::new();
     let mut counter = 0usize;
     for param in &mut f.params {
+        // `ref impl Trait` / `mut ref impl Trait` are the same sugar under a
+        // borrow: `[T: Trait](x: ref T)`. Only the `impl Trait` node itself is
+        // rewritten; the borrow wrapping it stays.
+        let slot = impl_trait_param_slot(&mut param.ty);
         let TypeKind::ImplTrait {
             trait_path,
             args,
             assoc_bindings,
             span: impl_trait_span,
             ..
-        } = &param.ty.kind
+        } = &slot.kind
         else {
             continue;
         };
@@ -3053,8 +3071,8 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             span: *impl_trait_span,
         });
 
-        let original_span = param.ty.span;
-        param.ty = TypeExpr {
+        let original_span = slot.span;
+        *slot = TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![synthetic_name],
                 generic_args: None,
