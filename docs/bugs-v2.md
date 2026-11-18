@@ -134,7 +134,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-26 | 2026-11-18 | typecheck | low | `#[deprecated]` on an enum, a trait or a type alias never fires: uses of the enum's variants and type, `impl T1 for S` and `T: T1` bounds, and the alias in a signature all check clean | — |
 | B-2026-11-18-27 | 2026-11-18 | parser | medium | A parameter's pattern uses a reduced grammar: `ref name` (which §7 Destructuring parameters names), fixed-array patterns, `@` bindings and a distinct-type constructor are refused in fn and closure parameters, though each is irrefutable | — |
 | B-2026-11-18-28 | 2026-11-18 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum with a `Drop` impl, a boxed field, a library container (VecDeque, SortedMap, Set, Mutex and the rest) or more than 8 levels of nesting within one node; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
-| B-2026-11-18-29 | 2026-11-18 | cli | medium | `karac build --offline` in a workspace member fails: the workspace's own members are looked up in `vendor/` (E_OFFLINE_VENDOR_ENTRY_MISSING for the member itself), and an offline joint solve would rewrite the workspace's shared kara.lock | — |
 | B-2026-11-18-30 | 2026-11-18 | typecheck | low | `karac fix` rewrites a write through `v.last_mut().unwrap()` to an index, but not a method call, field or element reached through it: `v.last_mut().unwrap().push(c)` (a Rust stack of groups) is refused with no fix | — |
 | B-2026-11-18-31 | 2026-11-18 | ownership | low | A bare parameter consumed by a by-value method gets `.clone()` from `karac fix` and no mention of `own`, even when it was Rust's by-value `Vec<T>`: `blocks.into_iter()` becomes `blocks.clone().into_iter()`, an O(n) copy the Rust never made | — |
 
@@ -1689,6 +1688,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-9 | typecheck | medium | The integer types had `MAX` and `MIN` but not Rust's `BITS`: `i32.BITS - n.leading_zeros()` was refused, "no associated constant `BITS` on `i32`" | 5bb1708545 |
 | B-2026-11-18-10 | typecheck | medium | An unannotated `collect()` in an f-string hole or a `println` argument reached the MIR builder as E0516 "type does not lower (UnsolvedParam("C")) is… | 5bb1708545 |
 | B-2026-11-18-15 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const`… | 391a146bcc |
+| B-2026-11-18-29 | cli | medium | `karac build --offline` in a workspace member fails: the workspace's own members are looked up in `vendor/` (E_OFFLINE_VENDOR_ENTRY_MISSING for the m… | 0b0eb1ead5 |
 | B-2026-11-18-32 | typecheck | medium | A module-level `let` in any package module after the first panics `karac check` (subtract with overflow in E_MODULE_LET's fix): the module tree does… | 391a146bcc |
 
 </details>
