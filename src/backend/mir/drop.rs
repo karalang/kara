@@ -154,6 +154,10 @@ enum Part {
     /// A value of a recursive type met again inside itself: a task that
     /// takes its parts, planned once per type (B-2026-11-18-28).
     Typed(u64, Ty),
+    /// A `OnceLock` / `OnceCell` handle: its held value, when set, is the
+    /// part (at offset 0 of `karac_runtime_once_get`'s pointer), and the
+    /// cell is freed once its parts are taken (B-2026-11-18-37).
+    Once(u64, Box<Part>),
 }
 
 /// The tasks of one drained release: each type's `Drop` body (if any) and
@@ -171,9 +175,11 @@ fn holds_handle(parts: &[Part]) -> bool {
         // when it is needed.
         Part::Handle(_) | Part::Typed(..) => true,
         Part::Quiet(..) => false,
-        Part::Vec(_, e, _) | Part::Map(_, _, e) | Part::Deque(_, e, _) | Part::Boxed(_, e) => {
-            holds_handle(std::slice::from_ref(&**e))
-        }
+        Part::Vec(_, e, _)
+        | Part::Map(_, _, e)
+        | Part::Deque(_, e, _)
+        | Part::Boxed(_, e)
+        | Part::Once(_, e) => holds_handle(std::slice::from_ref(&**e)),
         Part::Struct(_, ps) | Part::Owned(_, _, _, ps) => holds_handle(ps),
         Part::Enum(_, _, vs) => vs.iter().any(|(_, ps)| holds_handle(ps)),
     })
@@ -185,9 +191,11 @@ fn defers(parts: &[Part]) -> bool {
     parts.iter().any(|p| match p {
         Part::Handle(_) | Part::Quiet(..) => false,
         Part::Owned(..) | Part::Typed(..) => true,
-        Part::Vec(_, e, _) | Part::Map(_, _, e) | Part::Deque(_, e, _) | Part::Boxed(_, e) => {
-            defers(std::slice::from_ref(&**e))
-        }
+        Part::Vec(_, e, _)
+        | Part::Map(_, _, e)
+        | Part::Deque(_, e, _)
+        | Part::Boxed(_, e)
+        | Part::Once(_, e) => defers(std::slice::from_ref(&**e)),
         Part::Struct(_, ps) => defers(ps),
         Part::Enum(_, _, vs) => vs.iter().any(|(_, ps)| defers(ps)),
     })
@@ -1245,9 +1253,12 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(Some(Part::Deque(off, Box::new(elem), self.layout(e)?.size)));
         }
         if let Some(t) = self.table_of(ft) {
-            let (Some(v), true) = (t.val, !self.tys.needs_drop(t.key) || self.is_quiet(t.key))
-            else {
-                return Ok(None);
+            // A set's entries are its keys, each the part; a map's keys
+            // drop quietly or not at all (B-2026-11-18-37).
+            let v = match t.val {
+                Some(v) if !self.tys.needs_drop(t.key) || self.is_quiet(t.key) => v,
+                Some(_) => return Ok(None),
+                None => t.key,
             };
             let Some(elem) = self.part_at(v, 0, owner, depth + 1, open)? else {
                 return Ok(None);
@@ -1257,6 +1268,31 @@ impl<'ctx> Cx<'ctx, '_> {
         let TyKind::Adt(a) = self.tys.kind(ft) else {
             return Ok(None);
         };
+        // A library cell whose contents are in reach (B-2026-11-18-37): a
+        // `Mutex[T]` holds its `T` in place, and a `OnceLock` / `OnceCell`
+        // holds its value behind the runtime's handle. The others' contents
+        // live in the runtime, and drop through their own paths.
+        let lib = self.tys.adt(a).library_name().unwrap_or("").to_string();
+        let held = self
+            .tys
+            .tcx()
+            .adt_of(ft)
+            .and_then(|(_, args)| args.first().copied());
+        match (lib.as_str(), held) {
+            ("Mutex", Some(t)) => return self.part_at(t, off, owner, depth + 1, open),
+            ("OnceLock" | "OnceCell", Some(t)) => {
+                let Some(elem) = self.part_at(t, 0, owner, depth + 1, open)? else {
+                    return Ok(None);
+                };
+                // A value whose memory a later task frees is not drained:
+                // the cell would be freed under it.
+                if defers(std::slice::from_ref(&elem)) {
+                    return Ok(None);
+                }
+                return Ok(Some(Part::Once(off, Box::new(elem))));
+            }
+            _ => {}
+        }
         if open.contains(&ft) {
             return Ok(Some(Part::Typed(off, ft)));
         }
@@ -1659,9 +1695,46 @@ impl<'ctx> Cx<'ctx, '_> {
                         cx.push_parts(b, one, stack, tasks)
                     })?;
                 }
+                Part::Once(off, inner) => {
+                    let h = self.load_ptr(self.offset(base, *off)?)?;
+                    let inner = (**inner).clone();
+                    self.if_once_set(h, |cx, v| {
+                        cx.push_parts(v, std::slice::from_ref(&inner), stack, tasks)
+                    })?;
+                }
             }
         }
         Ok(())
+    }
+
+    /// Runs `body` with the value the `OnceLock` handle `h` holds, when `h`
+    /// is not null and the cell is set.
+    fn if_once_set(
+        &mut self,
+        h: PointerValue<'ctx>,
+        body: impl FnOnce(&mut Self, PointerValue<'ctx>) -> R<()>,
+    ) -> R<()> {
+        let pt = self.ptr_ty();
+        let get = self.extern_fn(ONCE_GET, pt.fn_type(&[pt.into()], false));
+        let live = self
+            .builder
+            .build_is_not_null(h, "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(live, |cx| {
+            let v = cx
+                .builder
+                .build_call(get, &[h.into()], "held")
+                .map_err(|e| e.to_string())?
+                .try_as_basic_value()
+                .basic()
+                .ok_or("karac_runtime_once_get returns nothing")?
+                .into_pointer_value();
+            let set = cx
+                .builder
+                .build_is_not_null(v, "")
+                .map_err(|e| e.to_string())?;
+            cx.if_then(set, |cx| body(cx, v))
+        })
     }
 
     /// The element at logical index `j` of a `VecDeque` ring: slot
@@ -1816,7 +1889,8 @@ impl<'ctx> Cx<'ctx, '_> {
                         .build_is_not_null(h, "")
                         .map_err(|e| e.to_string())?;
                     self.if_then(live, |cx| {
-                        let kd = cx.tys.needs_drop(t.key);
+                        // A set's keys are its part (B-2026-11-18-37).
+                        let kd = t.val.is_some() && cx.tys.needs_drop(t.key);
                         let vd =
                             !matches!(elem, Part::Handle(_) | Part::Owned(..) | Part::Typed(..));
                         if kd || vd {
@@ -1880,6 +1954,24 @@ impl<'ctx> Cx<'ctx, '_> {
                             return Ok(());
                         }
                         cx.free(b)
+                    })?;
+                }
+                Part::Once(off, inner) => {
+                    let h = self.load_ptr(self.offset(base, *off)?)?;
+                    let inner = (**inner).clone();
+                    self.if_once_set(h, |cx, v| cx.finish_parts(v, std::slice::from_ref(&inner)))?;
+                    let live = self
+                        .builder
+                        .build_is_not_null(h, "")
+                        .map_err(|e| e.to_string())?;
+                    self.if_then(live, |cx| {
+                        let pt = cx.ptr_ty();
+                        let void = cx.llcx.void_type();
+                        let free = cx.extern_fn(ONCE_FREE, void.fn_type(&[pt.into()], false));
+                        cx.builder
+                            .build_call(free, &[h.into()], "")
+                            .map_err(|e| e.to_string())?;
+                        Ok(())
                     })?;
                 }
             }

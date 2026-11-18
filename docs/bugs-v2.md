@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 188 |
 | other | 113 |
 | soundness | 86 |
-| miscompile | 82 |
+| miscompile | 83 |
 | run-vs-build | 56 |
 | crash | 53 |
 | codegen-gap | 38 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 642 |
-| mir-llvm | 291 |
+| mir-llvm | 292 |
 | mir | 253 |
 | cli | 200 |
 | parser | 117 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-48 | 2026-11-18 | cli | low | Six lints ignore an item-level `#[allow]` / `#[deny]`, and `map_value_clone_reinsert` ignores `-D` too (W0312 stays a warning) | — |
 | B-2026-11-18-49 | 2026-11-18 | cli | low | Two catalogued codes never reach the user: L0001 (FfiLintHint) is built but never surfaced, and the char-boundary panic omits E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY | — |
 | B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
+| B-2026-11-18-53 | 2026-11-18 | mir-llvm | medium | On mir-llvm a `shared` type used as a `Set` or `Map` key is hashed field by field, never by its own `Hash` impl: a set of keys its `Eq` calls equal keeps duplicates (50 entries where the interpreter has 5), and a key with a `Set` field fails to build ("feeding a `Set[shared M]` to a hasher is not lowered yet") | — |
 
 ### Relocated
 

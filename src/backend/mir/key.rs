@@ -738,6 +738,24 @@ impl<'ctx> Cx<'ctx, '_> {
         p: PointerValue<'ctx>,
         ty: Ty,
     ) -> R<()> {
+        // A `shared` type's own `Hash` body takes the handle, so it is
+        // looked for before the handle is seen through to the body.
+        let (mut p, mut ty) = (p, ty);
+        loop {
+            if let Some(body) = th.own.get(&ty).cloned() {
+                let unit = self.entry_slot(1, "unit")?;
+                return self.call_body_by_mode(&body, unit, &[p, state]);
+            }
+            match self.tys.kind(ty) {
+                TyKind::Ref(i) | TyKind::MutRef(i)
+                    if !matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) =>
+                {
+                    p = self.load_ptr(p)?;
+                    ty = i;
+                }
+                _ => break,
+            }
+        }
         let (p, ty) = self.key_place(p, ty)?;
         if let Some(body) = th.own.get(&ty).cloned() {
             let unit = self.entry_slot(1, "unit")?;
