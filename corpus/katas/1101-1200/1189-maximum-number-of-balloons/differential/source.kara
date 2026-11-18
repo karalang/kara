@@ -1,0 +1,204 @@
+// LeetCode #1189: Maximum Number of Balloons -- the six arms against the
+// statement read literally and six more properties. Generated from the arms;
+// see the README.
+
+// ---- arm 0: star --------------------------------------------------------
+fn a0_max_number_of_balloons(text: String) -> i64 {
+    let mut count = [0; 26];
+    for b in text.bytes() {
+        count[b - b'a'] += 1;
+    }
+    let letter = |c: u8| count[c - b'a'];
+    [letter(b'b'), letter(b'a'), letter(b'l') / 2, letter(b'o') / 2, letter(b'n')].iter().min().unwrap()
+}
+
+// ---- arm 1: map ---------------------------------------------------------
+fn a1_max_number_of_balloons(text: String) -> i64 {
+    let mut have: Map[char, i64] = Map.new();
+    for c in text.chars() {
+        *have.entry(c).or_insert(0) += 1;
+    }
+    let mut need: Map[char, i64] = Map.new();
+    for c in "balloon".chars() {
+        *need.entry(c).or_insert(0) += 1;
+    }
+    need.iter().map(|(c, k)| have.get(c).unwrap_or(0) / k).min().unwrap_or(0)
+}
+
+// ---- arm 2: remove ------------------------------------------------------
+fn a2_max_number_of_balloons(text: String) -> i64 {
+    let mut left = [0; 26];
+    for b in text.bytes() {
+        left[b - b'a'] += 1;
+    }
+    let mut words = 0;
+    loop {
+        for b in "balloon".bytes() {
+            if left[b - b'a'] == 0 {
+                return words;
+            }
+            left[b - b'a'] -= 1;
+        }
+        words += 1;
+    }
+}
+
+// ---- arm 3: filter ------------------------------------------------------
+fn a3_max_number_of_balloons(text: String) -> i64 {
+    let in_text = |c: char| text.chars().filter(|t| t == c).count();
+    let in_word = |c: char| "balloon".chars().filter(|t| t == c).count();
+    "balon".chars().map(|c| in_text(c) / in_word(c)).min().unwrap()
+}
+
+// ---- arm 4: solution ----------------------------------------------------
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn max_number_of_balloons(text: String) -> i32 {
+        let mut cnt = [0i32; 26];
+        for b in text.bytes() {
+            cnt[(b - b'a') as usize] += 1;
+        }
+        let b = cnt[1];
+        let a = cnt[0];
+        let l = cnt[11] / 2;
+        let o = cnt[14] / 2;
+        let n = cnt[13];
+        b.min(a).min(l).min(o).min(n)
+    }
+}
+
+fn a4_max_number_of_balloons(text: String) -> i64 {
+    A4Solution.max_number_of_balloons(text)
+}
+
+// ---- arm 5: chain -------------------------------------------------------
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn max_number_of_balloons(text: String) -> i32 {
+        let have = text.chars().fold(Map.new(), |m, c| {
+            let mut m = m;
+            *m.entry(c).or_insert(0) += 1;
+            m
+        });
+        let need = "balloon".chars().fold(Map.new(), |m, c| {
+            let mut m = m;
+            *m.entry(c).or_insert(0) += 1;
+            m
+        });
+        need.iter()
+            .map(|(c, k)| have.get(c).cloned().unwrap_or(0) / k)
+            .min()
+            .unwrap_or(0)
+    }
+}
+
+fn a5_max_number_of_balloons(text: String) -> i64 {
+    A5Solution.max_number_of_balloons(text)
+}
+// ---- the statement read literally ----------------------------------------
+
+// Does `pool` hold every letter of `word`, each letter used once?
+fn holds(pool: Vec[char], word: String) -> bool {
+    let mut left = pool.clone();
+    for c in word.chars() {
+        match left.iter().position(|t| t == c) {
+            Some(i) => {
+                left.remove(i);
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
+// The most copies of "balloon" the text's letters make at once.
+fn literal(text: String) -> i64 {
+    let pool: Vec[char] = text.chars().collect();
+    let mut k = 0;
+    while holds(pool, "balloon".repeat(k + 1)) {
+        k += 1;
+    }
+    k
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arms(text: String) -> Vec[i64] {
+    [
+        a0_max_number_of_balloons(text),
+        a1_max_number_of_balloons(text),
+        a2_max_number_of_balloons(text),
+        a3_max_number_of_balloons(text),
+        a4_max_number_of_balloons(text),
+        a5_max_number_of_balloons(text),
+    ]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random text of `n` letters from `letters`.
+fn random_text(seed: mut ref i64, n: i64, letters: Str) -> String {
+    let pool: Vec[char] = letters.chars().collect();
+    let mut s = String.with_capacity(n);
+    for _ in 0..n {
+        s.push(pool[next_random(mut seed) % pool.len()]);
+    }
+    s
+}
+
+fn main() {
+    let names = ["the statement read literally", "at most one word per 7 letters", "one more word appended makes one more", "the text reversed", "letters outside the word added", "one letter taken off the front costs at most one", "the ★ arm's answer"];
+    let mut fails = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 1189;
+    for round in 0..2000 {
+        // the first 200 texts from the word's own letters, the rest from
+        // the word's letters and two others
+        let letters = if round < 200 { "balloon" } else { "balonxy" };
+        let n = next_random(mut seed) % 40 + 1;
+        let text = random_text(mut seed, n, letters);
+        let got = arms(text);
+        let want = literal(text);
+        let longer = arms(text + "balloon");
+        let reversed: String = text.chars().rev().collect();
+        let back = arms(reversed);
+        let padded = arms(text + "cdefxyz");
+        let rest: String = text.chars().skip(1).collect();
+        let shorter = arms(rest);
+        for i in 0..6 {
+            let v = got[i];
+            let held = [
+                v == want,
+                7 * v <= text.len(),
+                longer[i] == v + 1,
+                back[i] == v,
+                padded[i] == v,
+                shorter[i] == v or shorter[i] == v - 1,
+                v == got[0],
+            ];
+            for p in 0..7 {
+                checks += 1;
+                if not held[p] {
+                    fails[p] += 1;
+                    if fails[p] <= 2 {
+                        println(f"P{p + 1} ({names[p]}) fails on arm {i}: {text} -> {v}");
+                    }
+                }
+            }
+        }
+        check = (check * 131 + got[0] + 1) % 1000000007;
+    }
+    for p in 0..7 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    let total = fails.iter().sum();
+    println(f"2000 texts: checksum {check}, {checks} checks over 6 arms: {total} failures");
+}

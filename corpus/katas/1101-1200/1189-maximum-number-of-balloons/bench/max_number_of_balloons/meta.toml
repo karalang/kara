@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1189-maximum-number-of-balloons/bench/max_number_of_balloons.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1189 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "b7ab000fe"
+extracted_src = "3cba14cf"

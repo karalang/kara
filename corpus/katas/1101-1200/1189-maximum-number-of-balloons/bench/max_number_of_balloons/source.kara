@@ -1,0 +1,45 @@
+// LeetCode #1189 bench: the ★ arm (a count of each letter of the text, then
+// the least of what each letter of "balloon" makes) over 200 texts of 10^4
+// letters, LeetCode's longest, built once: from the whole alphabet, from the
+// word's own letters, and from the word's letters and two others. Then 200
+// rounds over the texts, each answer folded into a checksum.
+
+fn max_number_of_balloons(text: String) -> i64 {
+    let mut count = [0; 26];
+    for b in text.bytes() {
+        count[b - b'a'] += 1;
+    }
+    let letter = |c: u8| count[c - b'a'];
+    [letter(b'b'), letter(b'a'), letter(b'l') / 2, letter(b'o') / 2, letter(b'n')].iter().min().unwrap()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random text of `n` letters from `letters`.
+fn random_text(seed: mut ref i64, n: i64, letters: Str) -> String {
+    let pool: Vec[char] = letters.chars().collect();
+    let mut s = String.with_capacity(n);
+    for _ in 0..n {
+        s.push(pool[next_random(mut seed) % pool.len()]);
+    }
+    s
+}
+
+fn main() {
+    let alphabets = ["abcdefghijklmnopqrstuvwxyz", "balloon", "balonxy"];
+    let mut seed = 1189;
+    let mut texts: Vec[String] = Vec.new();
+    for i in 0..200 {
+        texts.push(random_text(mut seed, 10000, alphabets[i % 3]));
+    }
+    let mut check = 0;
+    for _ in 0..200 {
+        for t in texts.iter() {
+            check = (check * 131 + max_number_of_balloons(t) + 1) % 1000000007;
+        }
+    }
+    println(f"200 rounds of 200 texts of 10000 letters: checksum {check}");
+}

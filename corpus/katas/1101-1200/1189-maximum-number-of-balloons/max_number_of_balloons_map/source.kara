@@ -1,0 +1,60 @@
+// LeetCode #1189: Maximum Number of Balloons -- two counts in `Map`s, the
+// text's letters and the word's, and for each of the word's letters how
+// many words the text's count makes; the least of them is the answer.
+// O(n) time, O(1) space: at most 26 keys.
+
+fn max_number_of_balloons(text: String) -> i64 {
+    let mut have: Map[char, i64] = Map.new();
+    for c in text.chars() {
+        *have.entry(c).or_insert(0) += 1;
+    }
+    let mut need: Map[char, i64] = Map.new();
+    for c in "balloon".chars() {
+        *need.entry(c).or_insert(0) += 1;
+    }
+    need.iter().map(|(c, k)| have.get(c).unwrap_or(0) / k).min().unwrap_or(0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random text of `n` letters from `letters`.
+fn random_text(seed: mut ref i64, n: i64, letters: Str) -> String {
+    let pool: Vec[char] = letters.chars().collect();
+    let mut s = String.with_capacity(n);
+    for _ in 0..n {
+        s.push(pool[next_random(mut seed) % pool.len()]);
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's three examples and six more: one word, one word short of
+    // an `l`, the letters of three words shuffled, no `n` at all, one
+    // letter, and every letter of the alphabet twice
+    let cases = ["nlaebolko", "loonbalxballpoon", "leetcode", "balloon", "baloon", "lnolaoblnoobllaobaonlbllno", "ballooballoo", "b", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"];
+    for c in cases.iter() {
+        println(f"{c}: {max_number_of_balloons(c.to_string())}");
+    }
+    // 2000 random texts of up to 60 letters, from the word's letters and two
+    // others, folded into a checksum
+    let mut seed = 1189;
+    let mut check = 0;
+    let mut total = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 60 + 1;
+        let text = random_text(mut seed, n, "balonxy");
+        let words = max_number_of_balloons(text);
+        total += words;
+        check = (check * 131 + words + 1) % 1000000007;
+    }
+    println(f"2000 random texts: {total} words, checksum {check}");
+    // LeetCode's longest, 10^4 letters, from every letter of the alphabet,
+    // and 10^4 letters from the word's own
+    println(f"10000 letters of 26: {max_number_of_balloons(random_text(mut seed, 10000, "abcdefghijklmnopqrstuvwxyz"))}");
+    println(f"10000 letters of balloon: {max_number_of_balloons(random_text(mut seed, 10000, "balloon"))}");
+}
