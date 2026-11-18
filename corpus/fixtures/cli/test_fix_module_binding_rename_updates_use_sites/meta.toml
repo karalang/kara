@@ -1,6 +1,6 @@
 source = "tests/cli.rs::test_fix_module_binding_rename_updates_use_sites"
 dedup_of = []
-expect = "error:E0100"
+expect = "error:E_MODULE_LET"
 exit = 1
 tags = ["src:legacy-tests"]
 class = "a"

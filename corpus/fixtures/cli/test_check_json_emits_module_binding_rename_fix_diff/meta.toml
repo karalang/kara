@@ -1,6 +1,6 @@
 source = "tests/cli.rs::test_check_json_emits_module_binding_rename_fix_diff"
 dedup_of = []
-expect = "error:E0100"
+expect = "error:E_MODULE_LET"
 exit = 1
 tags = ["src:legacy-tests"]
 class = "a"

@@ -1,6 +1,6 @@
 source = "tests/cli.rs::fix_reports_no_progress_on_unfixable_naming_diagnostic"
 dedup_of = []
-expect = "error:E0100"
+expect = "error:E_MODULE_LET"
 exit = 1
 tags = ["src:legacy-tests"]
 class = "a"
