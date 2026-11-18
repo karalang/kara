@@ -4078,8 +4078,7 @@ const CODE_PROSE: &[(&str, &str)] = &[
     (
         "E_TOOLCHAIN_FILE_READ",
         "`karac-toolchain.toml` exists but could not be read; the message \
-         gives the reason. Check the file's permissions. `karac build`, \
-         `run` and `test` read the file; `karac check` does not.",
+         gives the reason. Check the file's permissions.",
     ),
     (
         "E_TOOLCHAIN_INVALID_TARGETS_TYPE",
@@ -4128,11 +4127,12 @@ const CODE_PROSE: &[(&str, &str)] = &[
     ),
     (
         "E_TOOLCHAIN_VERSION_MISMATCH",
-        "`karac build`, `run` or `test` found that the project's \
-         `karac-toolchain.toml` pins a compiler version that the running \
+        "The project's `karac-toolchain.toml` pins a compiler version that the running \
          `karac` does not satisfy (design.md § Packages and manifests, \
-         Toolchain pinning). Run the pinned version, or change the pin if \
-         the project has moved to this one.",
+         Toolchain pinning). `karac check`, `build`, `run` and \
+         `test` refuse the package; the language server warns and keeps \
+         checking. Run the pinned version, or change the pin if the project \
+         has moved to this one.",
     ),
     (
         "E_UPDATE_ROOT_PACKAGE",

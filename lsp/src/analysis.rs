@@ -561,10 +561,33 @@ pub fn diagnostics(source: &str) -> Vec<Diagnostic> {
 /// package is checked with its package, so `import util;` resolves the
 /// sibling module the way `karac check` does (B-2026-11-05-15).
 pub fn diagnostics_for(source: &str, uri: &Uri) -> Vec<Diagnostic> {
-    analyze(source, file_path(uri).as_deref())
+    let path = file_path(uri);
+    let mut out: Vec<Diagnostic> = analyze(source, path.as_deref())
         .into_iter()
         .map(|(d, _)| d)
-        .collect()
+        .collect();
+    out.extend(toolchain_warning(path.as_deref()));
+    out
+}
+
+/// A `karac-toolchain.toml` above the file that this compiler does not satisfy
+/// (or cannot read) is a warning at the top of the file. `karac check` refuses
+/// to check such a package; the editor keeps checking, because a server that
+/// goes dark over a pin helps nobody (review-thread ruling 2026-11-18).
+fn toolchain_warning(path: Option<&std::path::Path>) -> Option<Diagnostic> {
+    let dir = path?.parent()?;
+    let (code, message) = karac::karac_toolchain::pin_problem(dir)?;
+    Some(Diagnostic {
+        range: lsp_types::Range::default(),
+        severity: Some(DiagnosticSeverity::WARNING),
+        code: Some(NumberOrString::String(code.to_string())),
+        source: Some("kara".to_string()),
+        message: format!(
+            "{message}\nhelp: `karac check` and `karac build` refuse this package until the \
+             toolchain matches; diagnostics here come from the running compiler"
+        ),
+        ..Default::default()
+    })
 }
 
 /// [`diagnostics_for`], re-checking only what the edit since `checker`'s
@@ -585,7 +608,12 @@ pub fn diagnostics_with(
         }
     };
     match std::panic::catch_unwind(AssertUnwindSafe(check)) {
-        Ok(raw) => to_lsp(source, raw).into_iter().map(|(d, _)| d).collect(),
+        Ok(raw) => {
+            let mut out: Vec<Diagnostic> =
+                to_lsp(source, raw).into_iter().map(|(d, _)| d).collect();
+            out.extend(toolchain_warning(path.as_deref()));
+            out
+        }
         Err(_) => {
             *checker = karac::DocumentChecker::new();
             eprintln!("kara-lsp: analysis panicked; skipping diagnostics for this revision");

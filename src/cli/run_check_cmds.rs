@@ -793,6 +793,12 @@ pub(super) fn cmd_check_project(
         super::build_cmds::run_in_members(&root, &mf, output);
     }
     super::build_cmds::emit_manifest_warnings(&mf, output);
+    // `karac check` holds to the toolchain pin as build, run and test do: a
+    // different compiler gives different diagnostics, and check is the Mend
+    // loop's front door (review-thread ruling 2026-11-18).
+    if !enforce_toolchain_pin(&root, output) {
+        process::exit(1);
+    }
     // The package's dependencies resolve as `karac build` resolves them, so
     // a cycle among them is E_DEPENDENCY_CYCLE here too rather than an
     // "unknown module" at the import (B-2026-11-13-41).
@@ -1620,6 +1626,11 @@ pub(super) fn cmd_check(
         .filter(|p| !p.as_os_str().is_empty())
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // The toolchain pin, as `karac run` reads it for a file: from the file's
+    // own directory up (review-thread ruling 2026-11-18).
+    if !enforce_toolchain_pin(&file_dir, output) {
+        process::exit(1);
+    }
     if let Some(root) = manifest::discover_project_root(&file_dir) {
         if let Ok(mf) = manifest::load_from_root(&root) {
             super::build_cmds::emit_manifest_warnings(&mf, output);

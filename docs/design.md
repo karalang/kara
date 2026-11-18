@@ -755,6 +755,7 @@ target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host
 **Toolchain pinning and library MSRV.**
 - A library states the oldest compiler it supports with `[package].kara-version = ">=0.42"`; the resolver enforces it.
 - A project pins the exact compiler in an optional `karac-toolchain.toml` at the project or workspace root (`version = "0.42"`, optional `targets = [...]`). A toolchain manager installs that version before running `karac`.
+- `karac check`, `build`, `run` and `test` all refuse a package whose pin the running compiler does not satisfy, with `E_TOOLCHAIN_VERSION_MISMATCH` and exit status 1; a pin that does not parse is refused with its own `E_TOOLCHAIN_*` code. `check` holds to it like the others because a different compiler gives different diagnostics, and `check` is where the Mend loop starts. The language server only warns, at the top of the file, and keeps checking: an editor that goes dark over a pin helps nobody (review-thread ruling 2026-11-18).
 - They are separate because the MSRV travels with the package and is read by the resolver, while the pin belongs to one checkout and is read by toolchain managers. This mirrors Rust's `rust-version` and `rust-toolchain.toml`.
 
 **Per-target dependencies and profiles.**

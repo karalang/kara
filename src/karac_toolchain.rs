@@ -258,6 +258,24 @@ pub fn parse_toolchain_file(path: &Path, source: &str) -> Result<ToolchainSpec, 
 /// otherwise. The caller emits the structured diagnostic from the
 /// mismatch — separating verification from rendering keeps the unit
 /// tests hermetic against output formatting.
+/// The pin that governs `start_dir`, judged against the running compiler:
+/// `None` when there is no `karac-toolchain.toml` above it or the pin admits
+/// this compiler, else the diagnostic's code and message. For a caller that
+/// reports rather than refuses: kara-lsp warns with it, because an editor
+/// must not go dark over a pin (review-thread ruling 2026-11-18).
+pub fn pin_problem(start_dir: &Path) -> Option<(&'static str, String)> {
+    match load_from_start(start_dir) {
+        Ok(None) => None,
+        Err(e) => Some((e.code(), e.to_string())),
+        Ok(Some((path, spec))) => {
+            let active = crate::dep_resolver::active_toolchain_version();
+            enforce(&spec, &path, &active)
+                .err()
+                .map(|m| (m.code(), m.message()))
+        }
+    }
+}
+
 pub fn enforce(
     spec: &ToolchainSpec,
     source: &Path,

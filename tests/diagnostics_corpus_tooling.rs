@@ -327,3 +327,31 @@ fn diagnostics_corpus_tooling_unprovoked_codes_are_explained() {
         );
     }
 }
+
+/// Review-thread ruling 2026-11-18: `karac check` holds to the toolchain pin
+/// as `karac build` does, in package mode and for a single file, with the
+/// same code and exit status.
+#[test]
+fn diagnostics_corpus_tooling_check_enforces_the_toolchain_pin() {
+    let d = scratch("check_pin");
+    package(&d, "tc", "", true);
+    std::fs::write(d.join("karac-toolchain.toml"), "version = \"=99.0.0\"\n").unwrap();
+    for args in [&["check"][..], &["check", "src/main.kara"], &["build"]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&d)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .expect("karac");
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {text}");
+        assert!(
+            text.contains("error[E_TOOLCHAIN_VERSION_MISMATCH]"),
+            "{args:?}: {text}"
+        );
+    }
+    std::fs::write(d.join("karac-toolchain.toml"), "version = \"*\"\n").unwrap();
+    let out = karac(&d, &["check"], &[]);
+    assert!(out.contains("All checks passed"), "{out}");
+    let _ = std::fs::remove_dir_all(&d);
+}
