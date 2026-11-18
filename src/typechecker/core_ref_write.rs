@@ -536,6 +536,35 @@ impl<'a> TypeChecker<'a> {
                 e.replacement = e.replacement.replace("ref ", "mut ref ");
             }
         }
+        // §4.6 / §3.7: a plain binding over an element of an owned local
+        // moves out of the index. Its repair borrows the element in place,
+        // `mut ref` where the arm writes through it (B-2026-11-18-47).
+        // §4.6: an index place is a `ref` scrutinee whatever its root, so a
+        // plain binding of a non-`Copy` part of an owned local's element is
+        // a `ref` too; a write through it is §5.9's error, repaired by
+        // binding it `mut ref` (B-2026-11-18-47).
+        for (span, name, place, shorthand) in std::mem::take(&mut self.core_index_ref_bindings) {
+            if !written.contains(&span.offset) {
+                continue;
+            }
+            let replacement = if shorthand {
+                format!("{name}: mut ref ")
+            } else {
+                "mut ref ".to_string()
+            };
+            let message = format!(
+                "cannot write through `{name}`: `{place}` is an index place, which is a `ref` \
+                 scrutinee whatever its root, since nothing moves out of an index \
+                 (core-semantics.md §4.6), so the plain binding `{name}` is a shared `ref`, \
+                 which is read-only (§5.9). Bind it `mut ref {name}` to change the element \
+                 in place"
+            );
+            let fix = FixIt {
+                span: Span { length: 0, ..span },
+                replacement,
+            };
+            self.type_error_with_fix_it(message, span, TypeErrorKind::WriteThroughSharedRef, fix);
+        }
         self.mut_fn_local_calls.extend(mut_fn_local_calls);
         self.mut_fn_place_calls.extend(mut_fn_place_calls);
         self.receiver_write_calls.extend(receiver_write_calls);

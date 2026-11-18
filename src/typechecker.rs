@@ -3080,6 +3080,16 @@ pub struct TypeChecker<'a> {
     /// nothing. Set and restored beside
     /// [`Self::current_scrutinee_borrow_projection`].
     pub(super) current_scrutinee_core_borrowed: bool,
+    /// The scrutinee being checked is an element (`s[i]`, `s[i].f`) of a
+    /// local the function owns, reached through no reference or handle. An
+    /// index place is a `ref` scrutinee whatever its root (core semantics
+    /// §4.6), and here no `mut ref` on the way makes it writable, so a write
+    /// through a plain binding needs `mut ref` (B-2026-11-18-47).
+    pub(super) current_scrutinee_owned_index: Option<String>,
+    /// Such bindings: the binding's span, its name, the scrutinee as
+    /// written, and whether it is a struct field's shorthand. The core write
+    /// pass reports those the arm writes through, with the `mut ref` edit.
+    pub(super) core_index_ref_bindings: Vec<(Span, String, String, bool)>,
     /// The scrutinee is a tuple literal (`match (m.get(a), m.get(b))`):
     /// whether each of its elements is a place the function does not own,
     /// so the matching sub-pattern binds `ref`s as it would against that
@@ -4632,6 +4642,8 @@ impl<'a> TypeChecker<'a> {
             current_arm_body_block: None,
             current_scrutinee_borrow_projection: false,
             current_scrutinee_core_borrowed: false,
+            current_scrutinee_owned_index: None,
+            core_index_ref_bindings: Vec::new(),
             scrutinee_tuple_parts_borrowed: None,
             current_scrutinee_mut_self: false,
             current_scrutinee_clone_view: false,

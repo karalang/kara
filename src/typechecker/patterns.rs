@@ -1589,6 +1589,25 @@ impl<'a> super::TypeChecker<'a> {
                             .contains(&SpanKey::from_span(&pattern.span)))
                 {
                     self.local_scope.mark_view(name);
+                    // §4.6: over an owned local's element the binding is a
+                    // `ref` too; a write through it needs `mut ref`
+                    // (B-2026-11-18-47).
+                    if let Some(text) = self.current_scrutinee_owned_index.clone() {
+                        let key = SpanKey::from_span(&pattern.span);
+                        if self.core_shared_depth == 0
+                            && !self.program.ref_binding_spans.contains(&key)
+                            && !self.program.mut_ref_binding_spans.contains(&key)
+                            && !matches!(expected, Type::Error | Type::Never | Type::TypeParam(_))
+                            && !self.copy_is_only_an_rc_retain(expected)
+                        {
+                            self.core_index_ref_bindings.push((
+                                pattern.span,
+                                name.clone(),
+                                text,
+                                self.core_shorthand_field,
+                            ));
+                        }
+                    }
                 } else if self.library_methods_from_source
                     && matches!(mode, ScrutineeMode::Owned)
                     && (self.core_shared_depth > 0
@@ -2340,7 +2359,14 @@ impl<'a> super::TypeChecker<'a> {
         let prev_ok = self
             .current_scrutinee_ok_fix
             .replace((scrutinee.span, ty.clone()));
+        let owned_index = if self.cli_lint_overrides.strict_core {
+            self.scrutinee_owned_index(scrutinee)
+        } else {
+            None
+        };
+        let prev_index = std::mem::replace(&mut self.current_scrutinee_owned_index, owned_index);
         self.check_pattern_against(pattern, ty, mode);
+        self.current_scrutinee_owned_index = prev_index;
         self.current_scrutinee_ok_fix = prev_ok;
         self.scrutinee_tuple_parts_borrowed = prev_parts;
         // On the MIR pipeline a pattern over a view (a bare `for` element,

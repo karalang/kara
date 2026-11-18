@@ -9485,6 +9485,69 @@ impl<'a> super::TypeChecker<'a> {
             || self.core_map_get_view(value, true)
     }
 
+    /// `value` as written when it is an element of a local this function
+    /// owns (`s[i]`, `s[i].f`, `o.v[i]`), reached through no reference,
+    /// view or `shared` handle. Its plain non-`Copy` bindings are `ref`s
+    /// (core semantics §4.6), which only `mut ref` makes writable
+    /// (B-2026-11-18-47). `None` otherwise.
+    pub(super) fn scrutinee_owned_index(&self, value: &Expr) -> Option<String> {
+        let mut cur = value;
+        let mut indexed = false;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    if self.expr_is_shared_handle(object) {
+                        return None;
+                    }
+                    cur = object;
+                }
+                ExprKind::Index { object, index } => {
+                    if matches!(index.kind, ExprKind::Range { .. })
+                        || self.expr_is_shared_handle(object)
+                    {
+                        return None;
+                    }
+                    indexed = true;
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => {
+                    let owned = !matches!(
+                        self.local_scope.lookup(n.as_str()),
+                        None | Some(
+                            Type::Ref(_)
+                                | Type::MutRef(_)
+                                | Type::Slice { .. }
+                                | Type::Shared(_)
+                                | Type::Rc(_)
+                                | Type::Arc(_)
+                        )
+                    ) && !self.current_fn_ref_params.contains(n.as_str())
+                        && !self.local_scope.is_view(n.as_str());
+                    if !(indexed && owned) {
+                        return None;
+                    }
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        fn text(e: &Expr) -> Option<String> {
+            Some(match &e.kind {
+                ExprKind::Identifier(n) => n.clone(),
+                ExprKind::Integer(v, ..) => v.to_string(),
+                ExprKind::FieldAccess { object, field } => format!("{}.{field}", text(object)?),
+                ExprKind::TupleIndex { object, index } => format!("{}.{index}", text(object)?),
+                ExprKind::Index { object, index } => format!(
+                    "{}[{}]",
+                    text(object)?,
+                    text(index).unwrap_or_else(|| "..".to_string())
+                ),
+                _ => return None,
+            })
+        }
+        text(value)
+    }
+
     /// On the MIR pipeline, is `value` a place reached through a reference,
     /// a handle or an index (`self.peeked` in a `mut ref self` method,
     /// `v[i]`)? The builder matches such a place through a shared reborrow,

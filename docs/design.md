@@ -2414,7 +2414,7 @@ The semantics are in core-semantics:
 The mode of each binding in a `match`, `if let`, `while let`, `let` or `for` pattern comes from the pattern and the scrutinee's type, never from how the arm uses it. [core-semantics.md §4.6](core-semantics.md#4-parameters-calls-and-patterns) is normative. In short:
 
 - Over an **owned** scrutinee (an owned local, an `own` parameter or a temporary), a plain binding of a non-`Copy` part moves that part out. `ref name` borrows it instead, and `mut ref name` borrows it mutably.
-- Over a **borrowed** scrutinee (a bare parameter of a non-`Copy` type, a `ref` or a view), a binding of a non-`Copy` part is a `ref` into it, and a binding of a `Copy` part copies it.
+- Over a **borrowed** scrutinee (a bare parameter of a non-`Copy` type, a `ref`, a view, or an index place such as `v[i]`, whatever its root: nothing moves out of an index, B-2026-11-18-47), a binding of a non-`Copy` part is a `ref` into it, and a binding of a `Copy` part copies it.
 - Over a **`shared`** value, a plain binding of a part is a `ref`; moving it is an error whose fix is `.clone()`.
 - `_` and `..` never bind and never move. A pattern that binds nothing by value leaves the scrutinee intact.
 - A pattern over a type with a `Drop` body may bind the whole value but may not move a part out.
