@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 493 |
-| false-positive | 259 |
+| false-positive | 260 |
 | missing-feature | 200 |
 | perf | 187 |
 | other | 113 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 623 |
+| typecheck | 624 |
 | mir-llvm | 289 |
 | mir | 253 |
 | cli | 196 |
@@ -117,9 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-1 | 2026-11-18 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both backends) | — |
 | B-2026-11-18-3 | 2026-11-18 | typecheck | low | A bare `size_of()` (no type named) type-checks and runs, printing `0`, the placeholder body of the intrinsic, instead of E_LAYOUT_QUERY_TYPE_ARG_REQUIRED | — |
 | B-2026-11-18-11 | 2026-11-18 | typecheck | medium | `Option` has no `iter`/`into_iter`, and `flatten` refuses `Option` items: `root.into_iter().collect()` and `.flatten()` over `[node.left, node.right]` are refused | — |
-| B-2026-11-18-12 | 2026-11-18 | typecheck | medium | An inline array literal indexed under an annotation keeps `i64`: `let c: i32 = [0, 45, 90][k]` is refused, though `let a: Vec[i32] = [0, 45, 90]; let c: i32 = a[k]` checks | — |
-| B-2026-11-18-13 | 2026-11-18 | typecheck | medium | A literal used as a `for` range's end is settled to `i64` before a later argument fixes it: `let n = 100; for a in 0..n {..}; take_i32(n)` is refused | — |
-| B-2026-11-18-14 | 2026-11-18 | typecheck | low | An unannotated `collect()` handed to a generic parameter (`show(it.collect())`, `show[T: Display]`) still reaches the MIR builder as E0516 "UnsolvedParam("C") is not lowered yet" | — |
 | B-2026-11-18-16 | 2026-11-18 | typecheck+mir | medium | Compound assignment (`+=`, `-=`, `*=`) on a `#[derive(Arithmetic)]` distinct type passes check and is then refused by both backends; the plain `a = a + b` form works | — |
 | B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
 | B-2026-11-18-18 | 2026-11-18 | typecheck | low | A match covering `Flag(true)` and `Flag(false)` on a distinct `bool` is E0205 non-exhaustive, though a distinct type has exactly its base's constructor space | — |
@@ -133,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-28 | 2026-11-18 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum with a `Drop` impl, a boxed field, a library container (VecDeque, SortedMap, Set, Mutex and the rest) or more than 8 levels of nesting within one node; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
 | B-2026-11-18-30 | 2026-11-18 | typecheck | low | `karac fix` rewrites a write through `v.last_mut().unwrap()` to an index, but not a method call, field or element reached through it: `v.last_mut().unwrap().push(c)` (a Rust stack of groups) is refused with no fix | — |
 | B-2026-11-18-31 | 2026-11-18 | ownership | low | A bare parameter consumed by a by-value method gets `.clone()` from `karac fix` and no mention of `own`, even when it was Rust's by-value `Vec<T>`: `blocks.into_iter()` becomes `blocks.clone().into_iter()`, an O(n) copy the Rust never made | — |
+| B-2026-11-18-33 | 2026-11-18 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-exhaustive (E0205 "pattern `_` not covered") though it covers every value | — |
 
 ### Relocated
 
@@ -1685,6 +1683,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-8 | typecheck+mir | medium | `Option` had `is_some_and` but not its dual `is_none_or` (Rust 1.82): `prev.is_none_or(\|p\| v > p)` was refused with a bare "no method" | 5bb1708545 |
 | B-2026-11-18-9 | typecheck | medium | The integer types had `MAX` and `MIN` but not Rust's `BITS`: `i32.BITS - n.leading_zeros()` was refused, "no associated constant `BITS` on `i32`" | 5bb1708545 |
 | B-2026-11-18-10 | typecheck | medium | An unannotated `collect()` in an f-string hole or a `println` argument reached the MIR builder as E0516 "type does not lower (UnsolvedParam("C")) is… | 5bb1708545 |
+| B-2026-11-18-12 | typecheck | medium | An inline array literal indexed under an annotation keeps `i64`: `let c: i32 = [0, 45, 90][k]` is refused, though `let a: Vec[i32] = [0, 45, 90]; let… | e05a5afee6 |
+| B-2026-11-18-13 | typecheck | medium | A literal used as a `for` range's end is settled to `i64` before a later argument fixes it: `let n = 100; for a in 0..n {..}; take_i32(n)` is refused | e05a5afee6 |
+| B-2026-11-18-14 | typecheck | low | An unannotated `collect()` handed to a generic parameter (`show(it.collect())`, `show[T: Display]`) still reaches the MIR builder as E0516 "UnsolvedP… | e05a5afee6 |
 | B-2026-11-18-15 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const`… | 391a146bcc |
 | B-2026-11-18-19 | typecheck | medium | A binding inside a distinct-type pattern (`UserId(n) => n * 2`) is typed `ref <error>`: E0208 "type 'ref <error>' does not implement trait Mul" | 9617e5a664 |
 | B-2026-11-18-20 | typecheck | medium | A hand-written `impl Display for` a distinct type is ignored by f-strings, `println` and `T: Display` bounds (design.md's newtype escape-hatch exampl… | 9617e5a664 |
