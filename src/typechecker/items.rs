@@ -8171,10 +8171,33 @@ impl<'a> super::TypeChecker<'a> {
             // `s.chars().collect() == t` fixes nothing. A nested one there
             // (`f(x) == Ok(true)`'s `Result[bool, E]`) is fixed by the other
             // side after the operand's type was recorded.
+            // B-2026-11-18-10: an f-string hole, and an argument of `print` or
+            // `println`, takes any `Display` value and fixes no type, so a
+            // bare unsolved parameter there (`f"{it.collect()}"`) is final
+            // too; it used to reach the MIR builder as "does not lower".
             let (operands, bare): (Vec<&Expr>, bool) = match &e.kind {
                 ExprKind::MethodCall { object, .. } => (vec![object.as_ref()], false),
                 ExprKind::Binary { op, left, right } if !matches!(op, BinOp::And | BinOp::Or) => {
                     (vec![left.as_ref(), right.as_ref()], true)
+                }
+                ExprKind::InterpolatedStringLit(parts) => (
+                    parts
+                        .iter()
+                        .filter_map(|p| match p {
+                            ParsedInterpolationPart::Expr(e, _) => Some(e.as_ref()),
+                            _ => None,
+                        })
+                        .collect(),
+                    true,
+                ),
+                // Not any call's argument: a parameter that fixes it
+                // (`take(v: Vec[char])`, `Some(..)` under an annotated `let`)
+                // leaves the argument's recorded type unsolved (B-2026-11-18-14).
+                ExprKind::Call { callee, args, .. }
+                    if matches!(&callee.kind, ExprKind::Identifier(n)
+                        if matches!(n.as_str(), "print" | "println" | "eprint" | "eprintln")) =>
+                {
+                    (args.iter().map(|a| &a.value).collect(), true)
                 }
                 _ => return,
             };

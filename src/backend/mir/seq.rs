@@ -3404,8 +3404,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 continue;
             }
             // An unsuffixed literal argument typed `i64` or `f64`
-            // (`x.wrapping_add(1)` on an `i32`) is the receiver's number.
+            // (`x.wrapping_add(1)` on an `i32`) is the receiver's number,
+            // and so is a narrower integer the typechecker widened
+            // implicitly (`n.min(v[0])`, an `i64` and an `i32`), which MIR
+            // hands over at its own width. B-2026-11-18-6.
             match (self.tys.kind(at), self.tys.kind(t), a) {
+                (TyKind::Int(from), TyKind::Int(to), _)
+                    if from.bits() < to.bits() && (to.signed() || !from.signed()) =>
+                {
+                    let v = self.operand_scalar(a)?.into_int_value();
+                    let to = vals[0].into_int_value().get_type();
+                    let v = self
+                        .builder
+                        .build_int_cast_sign_flag(v, to, from.signed(), "")
+                        .map_err(e)?;
+                    vals.push(v.into());
+                }
                 (TyKind::Int(from), TyKind::Int(_), Operand::Const(_)) => {
                     let v = self.operand_scalar(a)?.into_int_value();
                     let to = vals[0].into_int_value().get_type();

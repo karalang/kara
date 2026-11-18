@@ -781,6 +781,20 @@ pub static PRIMITIVE_CONSTS: &[(&str, &str, ConstValue)] = &[
     ("usize", "MIN", ConstValue::Usize(0)),
     ("isize", "MAX", ConstValue::Isize(i64::MAX)),
     ("isize", "MIN", ConstValue::Isize(i64::MIN)),
+    // The integer types' bit widths, an `i64` as every count is in Kāra
+    // (B-2026-11-18-9).
+    ("i8", "BITS", ConstValue::I64(8)),
+    ("i16", "BITS", ConstValue::I64(16)),
+    ("i32", "BITS", ConstValue::I64(32)),
+    ("i64", "BITS", ConstValue::I64(64)),
+    ("i128", "BITS", ConstValue::I64(128)),
+    ("isize", "BITS", ConstValue::I64(64)),
+    ("u8", "BITS", ConstValue::I64(8)),
+    ("u16", "BITS", ConstValue::I64(16)),
+    ("u32", "BITS", ConstValue::I64(32)),
+    ("u64", "BITS", ConstValue::I64(64)),
+    ("u128", "BITS", ConstValue::I64(128)),
+    ("usize", "BITS", ConstValue::I64(64)),
     ("f32", "INFINITY", ConstValue::F32(f32::INFINITY)),
     ("f32", "NEG_INFINITY", ConstValue::F32(f32::NEG_INFINITY)),
     ("f32", "MAX", ConstValue::F32(f32::MAX)),
@@ -812,11 +826,13 @@ pub static PRIMITIVE_CONSTS: &[(&str, &str, ConstValue)] = &[
 pub fn lookup_primitive_const(type_name: &str, const_name: &str) -> Option<&'static ConstValue> {
     // `isize` and `usize` are 32-bit on wasm32 (design.md §5,
     // B-2026-11-16-324).
-    static WASM32: [(&str, &str, ConstValue); 4] = [
+    static WASM32: [(&str, &str, ConstValue); 6] = [
         ("usize", "MAX", ConstValue::Usize(u32::MAX as u64)),
         ("usize", "MIN", ConstValue::Usize(0)),
+        ("usize", "BITS", ConstValue::I64(32)),
         ("isize", "MAX", ConstValue::Isize(i32::MAX as i64)),
         ("isize", "MIN", ConstValue::Isize(i32::MIN as i64)),
+        ("isize", "BITS", ConstValue::I64(32)),
     ];
     if crate::target::active_target_is_wasm() {
         if let Some((_, _, v)) = WASM32

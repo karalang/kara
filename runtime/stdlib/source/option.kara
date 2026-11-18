@@ -31,6 +31,15 @@ impl[T] Option[T] {
         }
     }
 
+    /// `true` if `None`, or if `Some` and the value passes: the check
+    /// that holds vacuously when there is nothing to check (B-2026-11-18-8).
+    fn is_none_or(ref self, pred: own OnceFn(T) -> bool) -> bool {
+        match self {
+            Some(x) => pred(x),
+            None => true,
+        }
+    }
+
     /// A view of the value, without moving it.
     fn as_ref(ref self) -> Option[ref T] {
         match self {

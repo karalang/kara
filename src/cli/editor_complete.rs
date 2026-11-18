@@ -371,6 +371,7 @@ pub(crate) const OPTION_METHODS: &[&str] = &[
     "get_or_insert",
     "get_or_insert_with",
     "is_none",
+    "is_none_or",
     "is_some",
     "is_some_and",
     "map",

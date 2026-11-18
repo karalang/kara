@@ -8024,6 +8024,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => return None,
         };
+        // `i32.BITS`: the bit width, an `i64` as every count is in Kāra
+        // (B-2026-11-18-9).
+        if field == "BITS" {
+            let bits = int_limit_bits(kind)?.0;
+            return Some((
+                tcx.intern(HK::Int(IntSize::I64)),
+                ConstKind::Scalar(bits as u128),
+            ));
+        }
         let v = int_limit(kind, field)?;
         Some((tcx.intern(kind), ConstKind::Scalar(v)))
     }
@@ -29452,7 +29461,21 @@ enum PendingPlace<'a> {
 /// `i64.MAX`, `u8.MIN`, …: the bits of an integer type's limit.
 fn int_limit(kind: HK, path: &str) -> Option<u128> {
     let limit = path.rsplit('.').next()?;
-    let (bits, signed) = match kind {
+    let (bits, signed) = int_limit_bits(kind)?;
+    let v: i128 = match (limit, signed) {
+        ("MAX", true) => (1i128 << (bits - 1)).wrapping_sub(1),
+        ("MIN", true) => (-1i128).wrapping_shl(bits - 1),
+        ("MAX", false) if bits == 128 => return Some(u128::MAX),
+        ("MAX", false) => (1i128 << bits) - 1,
+        ("MIN", false) => 0,
+        _ => return None,
+    };
+    Some(v as u128)
+}
+
+/// An integer kind's bit width, and whether it is signed.
+fn int_limit_bits(kind: HK) -> Option<(u32, bool)> {
+    Some(match kind {
         HK::Int(s) => (
             match s {
                 IntSize::I8 => 8,
@@ -29476,16 +29499,7 @@ fn int_limit(kind: HK, path: &str) -> Option<u128> {
             false,
         ),
         _ => return None,
-    };
-    let v: i128 = match (limit, signed) {
-        ("MAX", true) => (1i128 << (bits - 1)).wrapping_sub(1),
-        ("MIN", true) => (-1i128).wrapping_shl(bits - 1),
-        ("MAX", false) if bits == 128 => return Some(u128::MAX),
-        ("MAX", false) => (1i128 << bits) - 1,
-        ("MIN", false) => 0,
-        _ => return None,
-    };
-    Some(v as u128)
+    })
 }
 
 fn bool_const(t: Ty, b: bool) -> Operand {

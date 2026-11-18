@@ -2973,7 +2973,8 @@ const METHOD_SPELLED_AS_FUNCTION: &[&str] = &[
 const RC_REFCELL_HELP: &str = "`Rc` and `RefCell` are Rust's: Kāra has neither. A `shared struct` \
      is reference counted, and its `mut` fields can be written through any handle (design.md \
      §11), so `Rc<RefCell<T>>` is a `T` declared `shared struct` with `mut` fields, \
-     `Rc::new(RefCell::new(x))` is `x`, and `.borrow()` / `.borrow_mut()` are the handle itself";
+     `Rc::new(RefCell::new(x))` is `x`, `Rc::ptr_eq(&a, &b)` is `a.ref_eq(b)`, and `.borrow()` / \
+     `.borrow_mut()` are the handle itself";
 
 /// `db.UserDB` or `UserDB` as written in an attribute argument.
 fn attribute_dotted_path(expr: &Expr) -> Option<Vec<String>> {

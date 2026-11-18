@@ -129,6 +129,7 @@ pub(crate) fn method_runs_closure_without_keeping_it(method: &str) -> bool {
             | "sort_by_key"
             | "retain"
             | "is_some_and"
+            | "is_none_or"
             | "is_ok_and"
     )
 }

@@ -4457,19 +4457,39 @@ impl super::Parser {
     /// it, skip the type list so the call still parses, and offer its
     /// deletion as a fix. Called with the method name consumed.
     fn reject_method_turbofish(&mut self, receiver: Span) {
-        if !self.check(&Token::ColonColon)
-            || !matches!(
-                self.peek_token_ref_at(1),
-                Token::LessThan | Token::LeftBracket
-            )
-        {
-            return;
-        }
-        let start = self.current_span();
         let method = match self.pos.checked_sub(1).map(|i| &self.tokens[i].token) {
             Some(Token::Identifier { name, .. }) => name.clone(),
             _ => String::new(),
         };
+        // `s.parse[i32]()`: the type in brackets, as Kāra spells a type
+        // list, where Rust writes `::<i32>`. It read as an index of `parse`
+        // by `i32`, and the error said `i32` is not a function and to cast,
+        // which does not parse a string. Only a primitive's name is taken,
+        // so an index by a variable is never read this way.
+        // B-2026-11-18-7.
+        let bracketed = method == "parse"
+            && self.check(&Token::LeftBracket)
+            && matches!(
+                self.peek_token_ref_at(1),
+                Token::Identifier { name, .. } if matches!(
+                    name.as_str(),
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32"
+                        | "u64" | "u128" | "usize" | "f32" | "f64" | "bool" | "char"
+                )
+            )
+            && matches!(self.peek_token_ref_at(2), Token::RightBracket)
+            && matches!(self.peek_token_ref_at(3), Token::LeftParen)
+            && matches!(self.peek_token_ref_at(4), Token::RightParen);
+        if !bracketed
+            && (!self.check(&Token::ColonColon)
+                || !matches!(
+                    self.peek_token_ref_at(1),
+                    Token::LessThan | Token::LeftBracket
+                ))
+        {
+            return;
+        }
+        let start = self.current_span();
         let dot = self
             .pos
             .checked_sub(2)
@@ -4493,7 +4513,9 @@ impl super::Parser {
         let receiver_start = dot.map_or(receiver.offset, |d| {
             self.receiver_start_past_parens(receiver.offset, receiver_end.unwrap_or(d))
         });
-        self.advance();
+        if !bracketed {
+            self.advance();
+        }
         let open = self.pos;
         // One depth counter for both bracket kinds: the list is a type, so
         // `<` and `[` only ever nest properly, and `>>` closes two.
@@ -4641,11 +4663,15 @@ impl super::Parser {
                 && matches!(self.peek_token_ref_at(1), Token::RightParen)
             {
                 let close = self.tokens[self.pos + 1].span;
+                let what = if bracketed {
+                    "a type in brackets after a method name is a call-site type argument"
+                } else {
+                    "`::<..>` after a method name is Rust's turbofish"
+                };
                 self.error_at(
                     &format!(
-                        "`::<..>` after a method name is Rust's turbofish; Kāra has no \
-                         call-site type arguments -- the type to parse to is named before \
-                         the call: `{t}.parse(s)`"
+                        "{what}; Kāra has no call-site type arguments -- the type to parse \
+                         to is named before the call: `{t}.parse(s)`"
                     ),
                     start,
                 );

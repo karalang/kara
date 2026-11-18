@@ -9,7 +9,8 @@
 //! line, rewrites the program around it in one envelope: each struct `T`
 //! named in an `Rc<RefCell<T>>` becomes `shared struct` with `mut` fields,
 //! the type becomes `T`, `Rc::new(RefCell::new(x))` / `RefCell::new(x)` /
-//! `Rc::clone(&x)` become `x`, and `.borrow()` / `.borrow_mut()` go, with
+//! `Rc::clone(&x)` become `x`, `Rc::ptr_eq(&a, &b)` becomes `a.ref_eq(b)`
+//! (B-2026-11-18-5), and `.borrow()` / `.borrow_mut()` go, with
 //! a `let n = n.borrow();` that would be left rebinding `n` to itself. A shape
 //! the rewrite does not know (`Rc<Vec<T>>`, `Weak`) is left alone, and the
 //! resolver's diagnostic for the name points at `shared struct`.
@@ -360,6 +361,76 @@ impl super::Parser {
                 start,
                 end: end_tok.offset + end_tok.length,
                 text: self.rc_rewrite_text(lo, close, source, base)?,
+                next: close + 1,
+            });
+        }
+        // `Rc::ptr_eq(&a, &b)`: `a.ref_eq(b)`, the identity test every
+        // `shared` handle has (design.md § Equality). A first argument that
+        // is more than a path or a postfix chain is parenthesized.
+        // B-2026-11-18-5.
+        let ptr_eq = ident(i) == Some("Rc")
+            && matches!(token(i + 1), Some(Token::ColonColon | Token::Dot))
+            && ident(i + 2) == Some("ptr_eq")
+            && matches!(token(i + 3), Some(Token::LeftParen));
+        if ptr_eq {
+            let close = self.matching_paren(i + 3)?;
+            let mut hi = close;
+            if matches!(token(hi - 1), Some(Token::Comma)) {
+                hi -= 1;
+            }
+            let mut depth = 0usize;
+            let mut comma = None;
+            for k in i + 4..hi {
+                match token(k)? {
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth = depth.saturating_sub(1)
+                    }
+                    Token::Comma if depth == 0 => {
+                        comma = Some(k);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let comma = comma?;
+            let operand = |lo: usize, hi: usize| -> Option<(String, bool)> {
+                let lo = if matches!(token(lo), Some(Token::Amp)) {
+                    lo + 1
+                } else {
+                    lo
+                };
+                if lo >= hi {
+                    return None;
+                }
+                let mut depth = 0usize;
+                let mut chain = true;
+                for k in lo..hi {
+                    match token(k)? {
+                        Token::LeftParen | Token::LeftBracket => depth += 1,
+                        Token::RightParen | Token::RightBracket => depth = depth.saturating_sub(1),
+                        Token::Identifier { .. }
+                        | Token::SelfValue
+                        | Token::SelfType
+                        | Token::Dot
+                        | Token::ColonColon => {}
+                        _ if depth > 0 => {}
+                        _ => chain = false,
+                    }
+                }
+                Some((self.rc_rewrite_text(lo, hi, source, base)?, chain))
+            };
+            let (a, chain) = operand(i + 4, comma)?;
+            let (b, _) = operand(comma + 1, hi)?;
+            let end_tok = self.tokens[close].span;
+            return Some(Piece {
+                start,
+                end: end_tok.offset + end_tok.length,
+                text: if chain {
+                    format!("{a}.ref_eq({b})")
+                } else {
+                    format!("({a}).ref_eq({b})")
+                },
                 next: close + 1,
             });
         }
