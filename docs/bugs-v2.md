@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 486 |
+| diagnostics | 487 |
 | false-positive | 255 |
 | missing-feature | 198 |
 | perf | 187 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 288 |
 | mir | 251 |
 | cli | 195 |
-| parser | 111 |
+| parser | 112 |
 | ownership | 104 |
 | interp | 87 |
 | runtime | 87 |
@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-109 | 2026-11-17 | ownership | low | A `scan` state seeded with `[None; 4]` reads as not `Copy`: `Some((last, last))` is refused as a use after a move and `karac fix` writes `Some((last.clone(), last))` | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
-| B-2026-11-17-125 | 2026-11-17 | resolver | low | A top-level `let my_count` beside `fn main` gets E_MODULE_BINDING_NAMING, whose machine rename to `MY_COUNT` only leads to E_MODULE_LET; it should say directly that a module-level value is a `const` | — |
 | B-2026-11-17-132 | 2026-11-17 | mir | high | A view stored through a `Mutex` in a field is accepted, and later reads see whatever the place holds then: a `Holder[ref i64]` (or a generic `sync struct BoundedBlockingQueue[T: CrossTask]` whose `T` is inferred as `ref i64`) filled by `h.put(v)` over `mine.iter()` in an inner scope prints `3 3` for the first two values, not `1 0` | — |
 | B-2026-11-17-133 | 2026-11-17 | typecheck | medium | A struct's type parameter left open inside `Mutex.new(..)` is never fixed by a later call: `let h = Holder { values: Mutex.new(VecDeque.new()) }; h.put(5)` stops at lowering with "an expression whose type does not lower (Type(UnknownParam(\"T\"))) is not lowered yet" [E0516], where `Holder { values: VecDeque.new() }` takes `T = i64` from the same `put` | — |
 | B-2026-11-17-134 | 2026-11-17 | mir-llvm | low | A `Map` insert or remove is a runtime call of about 110 to 130 Ir (kata 220: mir_map::insert 1.45G, remove_slot 1.72G over 13M each) where hashbrown's inline insert and erase take about 75; kata 220 still runs 11.71G Ir against Rust's 9.15G | — |
@@ -128,6 +127,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-12 | 2026-11-18 | typecheck | medium | An inline array literal indexed under an annotation keeps `i64`: `let c: i32 = [0, 45, 90][k]` is refused, though `let a: Vec[i32] = [0, 45, 90]; let c: i32 = a[k]` checks | — |
 | B-2026-11-18-13 | 2026-11-18 | typecheck | medium | A literal used as a `for` range's end is settled to `i64` before a later argument fixes it: `let n = 100; for a in 0..n {..}; take_i32(n)` is refused | — |
 | B-2026-11-18-14 | 2026-11-18 | typecheck | low | An unannotated `collect()` handed to a generic parameter (`show(it.collect())`, `show[T: Display]`) still reaches the MIR builder as E0516 "UnsolvedParam("C") is not lowered yet" | — |
+| B-2026-11-18-15 | 2026-11-18 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const` fix | — |
 
 ### Relocated
 
@@ -1656,6 +1656,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-122 | resolver+parser | medium | `Arc` in `use std::sync::{Arc, Mutex};` is "`std.sync` has no item `Arc`" with no fix, and `Arc::new(Mutex::new(s))` / `server.clone()` have none eit… | 9848aac48d |
 | B-2026-11-17-123 | typecheck | low | `Duration::from_nanos(x)` with `x: u64` mends to `Duration.ns(x)` and then has a narrowing error with no fix | 9848aac48d |
 | B-2026-11-17-124 | mir-llvm | low | FIXED for the get side (a lookup helper inlines, kata 220 13.98G to 11.71G Ir); insert/remove and probe width remain as B-2026-11-17-134 | a6581f8672 |
+| B-2026-11-17-125 | resolver | low | A top-level `let my_count` beside `fn main` gets E_MODULE_BINDING_NAMING, whose machine rename to `MY_COUNT` only leads to E_MODULE_LET; it should sa… | 0eae175069 |
 | B-2026-11-17-126 | mir | low | An iterator adaptor or terminal called straight on a Set, SortedSet, Map or SortedMap (`s.difference(t).cloned()`, `sorted.map(..)`) got no machine f… | 85459908b12962ac0dcccbc6e464861568361a42 |
 | B-2026-11-17-127 | mir | medium | A value whose `Drop` body suspends, dropped from inside a OnceCell / OnceLock or a channel's queue, stops the program instead of waiting (function-va… | d637d8d84a |
 | B-2026-11-17-128 | cli | high | `karac fix` applies `redundant_suffix` and `lossless_cast` in one pass and narrows an `i64` table: `vec![vec![0i64; n]; m]` with `t[i][j] = x as i64`… | d3c2716a19 |
