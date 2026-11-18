@@ -1,0 +1,12 @@
+"(abcd)" -> "dcba"
+"(u(love)i)" -> "iloveu"
+"(ed(et(oc))el)" -> "leetcode"
+"a" -> "a"
+"()" -> ""
+"((ab))" -> "ab"
+"a(bcdefghijkl(mno)p)q" -> "apmnolkjihgfedcbq"
+"ta()usw((((a))))" -> "tauswa"
+"(a)(b)(c)" -> "abc"
+2000 random strings: 24623 letters, checksum 33249746
+500 nested pairs: 1000 letters, digest 191919548
+2000 random characters: 1009 letters, digest 256864982

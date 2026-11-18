@@ -1,0 +1,61 @@
+// LeetCode #1197: Minimum Knight Moves -- another Rust solution, the
+// recursion with a memo: a nested `fn` folding each square with `abs`,
+// `HashMap<(i32, i32), i32>` as the memo, and the better of the two squares
+// a knight move back towards the origin, carried to Kāra by `karac fix`.
+
+struct Solution {}
+
+fn dfs(x: i32, y: i32, memo: mut ref Map[(i32, i32), i32]) -> i32 {
+    let (x, y) = (x.abs(), y.abs());
+    if x + y == 0 {
+        return 0;
+    }
+    if x + y == 2 {
+        return 2;
+    }
+    if let Some(v) = memo.get((x, y)).cloned() {
+        return v;
+    }
+    let v = 1 + dfs(x - 1, y - 2, mut memo).min(dfs(x - 2, y - 1, mut memo));
+    memo.insert((x, y), v);
+    v
+}
+
+impl Solution {
+    pub fn min_knight_moves(x: i32, y: i32) -> i32 {
+        dfs(x, y, mut Map.new())
+    }
+}
+
+fn min_knight_moves(x: i64, y: i64) -> i64 {
+    Solution.min_knight_moves(x as i32, y as i32)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [(2, 1), (5, 5), (0, 0), (1, 0), (1, 1), (2, 2), (-1, -2), (0, -1), (3, 0), (300, 0), (0, -300), (150, 150), (-150, 150), (1, 299)];
+    for (x, y) in cases {
+        println(f"({x}, {y}): {min_knight_moves(x, y)}");
+    }
+    // 100 random targets with |x| + |y| <= 300
+    let mut seed = 1197;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        let s = next_random(mut seed) % 301;
+        let x = next_random(mut seed) % (s + 1);
+        let y = s - x;
+        let x = if next_random(mut seed) % 2 == 0 { x } else { -x };
+        let y = if next_random(mut seed) % 2 == 0 { y } else { -y };
+        let m = min_knight_moves(x, y);
+        total += m;
+        check = (check * 131 + m + 1) % 1000000007;
+    }
+    println(f"100 random targets: {total} moves, checksum {check}");
+}

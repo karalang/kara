@@ -1,0 +1,45 @@
+// LeetCode #1196 bench: the ★ arm (the weights sorted, the lightest put in
+// until the next would take the load past 5000) over 200 baskets of 10^3
+// apples, the constraints' most, built once, from weights of 1 to 1000, 1
+// to 20, 300 to 1000 and 1 to 100 in turn; then 200 rounds over the
+// baskets, each call sorting its own copy, each answer folded into a
+// checksum.
+
+fn max_number_of_apples(weight: own Vec[i64]) -> i64 {
+    let mut weight = weight;
+    weight.sort();
+    let mut load = 0;
+    for (i, w) in weight.iter().enumerate() {
+        load += w;
+        if load > 5000 {
+            return i;
+        }
+    }
+    weight.len()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let lows = [1, 1, 300, 1];
+    let highs = [1000, 20, 1000, 100];
+    let mut seed = 1196;
+    let mut baskets: Vec[Vec[i64]] = Vec.new();
+    for k in 0..200 {
+        let low = lows[k % 4];
+        let high = highs[k % 4];
+        let basket: Vec[i64] = (0..1000).map(|_| low + next_random(mut seed) % (high - low + 1)).collect();
+        baskets.push(basket);
+    }
+    let mut check = 0;
+    for _ in 0..200 {
+        for basket in baskets.iter() {
+            let apples = max_number_of_apples(basket.clone());
+            check = (check * 131 + apples + 1) % 1000000007;
+        }
+    }
+    println(f"200 rounds of 200 baskets of 1000 apples: checksum {check}");
+}

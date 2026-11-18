@@ -1,0 +1,102 @@
+// LeetCode #1192 bench: the ★ arm (Tarjan's low-link search with an
+// explicit stack) over 4 networks of LeetCode's largest size, built once:
+// 5 * 10^4 servers with 10^5 random connections, a random tree of 10^5
+// servers, a path of 10^5, and a cycle of 10^5. Then 10 rounds over the
+// networks, the critical connections folded into a checksum in the order
+// the search finds them.
+
+fn critical_connections(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    // each server's neighbours, with the connection that joins them
+    let mut adj: Vec[Vec[(i64, i64)]] = Vec.filled(n, Vec.new());
+    for (id, c) in connections.iter().enumerate() {
+        adj[c[0]].push((c[1], id));
+        adj[c[1]].push((c[0], id));
+    }
+    let mut disc = Vec.filled(n, -1);
+    let mut low = Vec.filled(n, 0);
+    let mut bridges: Vec[Vec[i64]] = Vec.new();
+    disc[0] = 0;
+    let mut time = 1;
+    // (server, the connection it was entered by, its next neighbour)
+    let mut stack: Vec[(i64, i64, i64)] = [(0, -1, 0)];
+    while stack.len() > 0 {
+        let top = stack.len() - 1;
+        let (u, via, next) = stack[top];
+        if next < adj[u].len() {
+            stack[top] = (u, via, next + 1);
+            let (v, id) = adj[u][next];
+            if id == via {
+                continue;
+            }
+            if disc[v] == -1 {
+                disc[v] = time;
+                low[v] = time;
+                time += 1;
+                stack.push((v, id, 0));
+            } else {
+                low[u] = low[u].min(disc[v]);
+            }
+        } else {
+            stack.pop();
+            if stack.len() > 0 {
+                let (p, _, _) = stack[stack.len() - 1];
+                low[p] = low[p].min(low[u]);
+                if low[u] > disc[p] {
+                    bridges.push([p, u]);
+                }
+            }
+        }
+    }
+    bridges
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random connected network: a random tree on `n` servers, then up to
+// `extra` more connections between servers not yet joined.
+fn random_network(seed: mut ref i64, n: i64, extra: i64) -> Vec[Vec[i64]] {
+    let mut joined: Set[(i64, i64)] = Set.new();
+    let mut edges: Vec[Vec[i64]] = Vec.new();
+    for v in 1..n {
+        let u = next_random(mut seed) % v;
+        joined.insert((u, v));
+        edges.push([u, v]);
+    }
+    for _ in 0..extra {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        let key = (a.min(b), a.max(b));
+        if a != b and not joined.contains(key) {
+            joined.insert(key);
+            edges.push([a, b]);
+        }
+    }
+    edges
+}
+
+fn main() {
+    let mut seed = 1192;
+    let path: Vec[Vec[i64]] = (0..99999).map(|i| [i, i + 1]).collect();
+    let mut ring = path.clone();
+    ring.push([99999, 0]);
+    let networks = [
+        (50000, random_network(mut seed, 50000, 50001)),
+        (100000, random_network(mut seed, 100000, 0)),
+        (100000, path),
+        (100000, ring),
+    ];
+    let mut check = 0;
+    for _ in 0..10 {
+        for (n, edges) in networks.iter() {
+            let bridges = critical_connections(n, edges);
+            check = (check * 131 + bridges.len()) % 1000000007;
+            for b in bridges.iter() {
+                check = (check * 131 + b[0] * 100003 + b[1]) % 1000000007;
+            }
+        }
+    }
+    println(f"10 rounds of 4 networks of up to 100000 servers: checksum {check}");
+}

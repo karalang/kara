@@ -1,0 +1,417 @@
+// LeetCode #1195: Fizz Buzz Multithreaded -- the four arms against the
+// statement read literally and six more properties of what they print.
+// Generated from the arms; see the README.
+
+import std.sync.{Atomic, Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+// ---- arm 0: star --------------------------------------------------------
+sync struct A0FizzBuzz {
+    n: i64,
+    fizz_turn: Semaphore,
+    buzz_turn: Semaphore,
+    fizzbuzz_turn: Semaphore,
+    number_turn: Semaphore,
+}
+
+impl A0FizzBuzz {
+    fn new(n: i64) -> A0FizzBuzz {
+        A0FizzBuzz {
+            n,
+            fizz_turn: Semaphore.new(0),
+            buzz_turn: Semaphore.new(0),
+            fizzbuzz_turn: Semaphore.new(0),
+            number_turn: Semaphore.new(1),
+        }
+    }
+
+    // Hands the turn to the printer of `i`, if `i` is still to print.
+    fn pass(self, i: i64) {
+        if i > self.n {
+            return;
+        }
+        if i % 15 == 0 {
+            self.fizzbuzz_turn.release();
+        } else if i % 3 == 0 {
+            self.fizz_turn.release();
+        } else if i % 5 == 0 {
+            self.buzz_turn.release();
+        } else {
+            self.number_turn.release();
+        }
+    }
+
+    fn fizz(self, print_fizz: Fn()) {
+        for i in 1..=self.n {
+            if i % 3 == 0 and i % 5 != 0 {
+                let _ = self.fizz_turn.acquire(60000);
+                print_fizz();
+                self.pass(i + 1);
+            }
+        }
+    }
+
+    fn buzz(self, print_buzz: Fn()) {
+        for i in 1..=self.n {
+            if i % 5 == 0 and i % 3 != 0 {
+                let _ = self.buzz_turn.acquire(60000);
+                print_buzz();
+                self.pass(i + 1);
+            }
+        }
+    }
+
+    fn fizzbuzz(self, print_fizzbuzz: Fn()) {
+        for i in 1..=self.n {
+            if i % 15 == 0 {
+                let _ = self.fizzbuzz_turn.acquire(60000);
+                print_fizzbuzz();
+                self.pass(i + 1);
+            }
+        }
+    }
+
+    fn number(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            if i % 3 != 0 and i % 5 != 0 {
+                let _ = self.number_turn.acquire(60000);
+                print_number(i);
+                self.pass(i + 1);
+            }
+        }
+    }
+}
+
+// One run of arm 0, as the arms' harness runs it.
+fn run0(n: i64, order: Vec[i64]) -> Vec[String] {
+    let fb = A0FizzBuzz.new(n);
+    let out: Mutex[Vec[String]] = Mutex.new([]);
+    {
+        let group = TaskGroup.new();
+        for role in order.iter() {
+            match role {
+                0 => group.spawn(|| fb.fizz(|| out.lock().value.push("fizz"))),
+                1 => group.spawn(|| fb.buzz(|| out.lock().value.push("buzz"))),
+                2 => group.spawn(|| fb.fizzbuzz(|| out.lock().value.push("fizzbuzz"))),
+                _ => group.spawn(|| fb.number(|i| out.lock().value.push(f"{i}"))),
+            }
+        }
+    }
+    out.lock().value.clone()
+}
+
+// ---- arm 1: polling -----------------------------------------------------
+sync struct A1FizzBuzz {
+    n: i64,
+    next: Mutex[i64],
+}
+
+impl A1FizzBuzz {
+    fn new(n: i64) -> A1FizzBuzz {
+        A1FizzBuzz { n, next: Mutex.new(1) }
+    }
+
+    // Prints each number `mine` accepts, in turn, with `print`.
+    fn serve(self, mine: Fn(i64) -> bool, print: Fn(i64)) {
+        loop {
+            {
+                let g = self.next.lock();
+                let i = g.value;
+                if i > self.n {
+                    return;
+                }
+                if mine(i) {
+                    print(i);
+                    *g.value = i + 1;
+                    continue;
+                }
+            }
+            sleep(Duration.ms(0));
+        }
+    }
+
+    fn fizz(self, print_fizz: Fn()) {
+        self.serve(|i| i % 3 == 0 and i % 5 != 0, |_| print_fizz());
+    }
+
+    fn buzz(self, print_buzz: Fn()) {
+        self.serve(|i| i % 5 == 0 and i % 3 != 0, |_| print_buzz());
+    }
+
+    fn fizzbuzz(self, print_fizzbuzz: Fn()) {
+        self.serve(|i| i % 15 == 0, |_| print_fizzbuzz());
+    }
+
+    fn number(self, print_number: Fn(i64)) {
+        self.serve(|i| i % 3 != 0 and i % 5 != 0, |i| print_number(i));
+    }
+}
+
+// One run of arm 1, as the arms' harness runs it.
+fn run1(n: i64, order: Vec[i64]) -> Vec[String] {
+    let fb = A1FizzBuzz.new(n);
+    let out: Mutex[Vec[String]] = Mutex.new([]);
+    {
+        let group = TaskGroup.new();
+        for role in order.iter() {
+            match role {
+                0 => group.spawn(|| fb.fizz(|| out.lock().value.push("fizz"))),
+                1 => group.spawn(|| fb.buzz(|| out.lock().value.push("buzz"))),
+                2 => group.spawn(|| fb.fizzbuzz(|| out.lock().value.push("fizzbuzz"))),
+                _ => group.spawn(|| fb.number(|i| out.lock().value.push(f"{i}"))),
+            }
+        }
+    }
+    out.lock().value.clone()
+}
+
+// ---- arm 2: atomic ------------------------------------------------------
+sync struct A2FizzBuzz {
+    n: i64,
+    next: Atomic[i64],
+}
+
+impl A2FizzBuzz {
+    fn new(n: i64) -> A2FizzBuzz {
+        A2FizzBuzz { n, next: Atomic.new(1) }
+    }
+
+    fn fizz(self, print_fizz: Fn()) {
+        loop {
+            let i = self.next.load();
+            if i > self.n {
+                return;
+            }
+            if i % 3 == 0 and i % 5 != 0 {
+                print_fizz();
+                self.next.store(i + 1);
+            } else {
+                sleep(Duration.ms(0));
+            }
+        }
+    }
+
+    fn buzz(self, print_buzz: Fn()) {
+        loop {
+            let i = self.next.load();
+            if i > self.n {
+                return;
+            }
+            if i % 5 == 0 and i % 3 != 0 {
+                print_buzz();
+                self.next.store(i + 1);
+            } else {
+                sleep(Duration.ms(0));
+            }
+        }
+    }
+
+    fn fizzbuzz(self, print_fizzbuzz: Fn()) {
+        loop {
+            let i = self.next.load();
+            if i > self.n {
+                return;
+            }
+            if i % 15 == 0 {
+                print_fizzbuzz();
+                self.next.store(i + 1);
+            } else {
+                sleep(Duration.ms(0));
+            }
+        }
+    }
+
+    fn number(self, print_number: Fn(i64)) {
+        loop {
+            let i = self.next.load();
+            if i > self.n {
+                return;
+            }
+            if i % 3 != 0 and i % 5 != 0 {
+                print_number(i);
+                self.next.store(i + 1);
+            } else {
+                sleep(Duration.ms(0));
+            }
+        }
+    }
+}
+
+// One run of arm 2, as the arms' harness runs it.
+fn run2(n: i64, order: Vec[i64]) -> Vec[String] {
+    let fb = A2FizzBuzz.new(n);
+    let out: Mutex[Vec[String]] = Mutex.new([]);
+    {
+        let group = TaskGroup.new();
+        for role in order.iter() {
+            match role {
+                0 => group.spawn(|| fb.fizz(|| out.lock().value.push("fizz"))),
+                1 => group.spawn(|| fb.buzz(|| out.lock().value.push("buzz"))),
+                2 => group.spawn(|| fb.fizzbuzz(|| out.lock().value.push("fizzbuzz"))),
+                _ => group.spawn(|| fb.number(|i| out.lock().value.push(f"{i}"))),
+            }
+        }
+    }
+    out.lock().value.clone()
+}
+
+// ---- arm 3: channel -----------------------------------------------------
+sync struct A3FizzBuzz {
+    n: i64,
+    // fizz, buzz, fizzbuzz and number, in that order
+    senders: Vec[Sender[i64]],
+    receivers: Vec[Receiver[i64]],
+}
+
+impl A3FizzBuzz {
+    fn new(n: i64) -> A3FizzBuzz {
+        let mut senders: Vec[Sender[i64]] = Vec.new();
+        let mut receivers: Vec[Receiver[i64]] = Vec.new();
+        for _ in 0..4 {
+            let (tx, rx) = channel(1);
+            senders.push(tx);
+            receivers.push(rx);
+        }
+        let _ = senders[3].send(1);
+        A3FizzBuzz { n, senders, receivers }
+    }
+
+    // Whose number `i` is.
+    fn owner(i: i64) -> i64 {
+        if i % 15 == 0 {
+            2
+        } else if i % 3 == 0 {
+            0
+        } else if i % 5 == 0 {
+            1
+        } else {
+            3
+        }
+    }
+
+    // Prints each number that comes down channel `me`, and hands on the turn.
+    fn serve(self, me: i64, print: Fn(i64)) {
+        loop {
+            let i = self.receivers[me].recv().unwrap_or(0);
+            if i == 0 {
+                return;
+            }
+            print(i);
+            if i == self.n {
+                for tx in self.senders.iter() {
+                    let _ = tx.send(0);
+                }
+            } else {
+                let _ = self.senders[A3FizzBuzz.owner(i + 1)].send(i + 1);
+            }
+        }
+    }
+
+    fn fizz(self, print_fizz: Fn()) {
+        self.serve(0, |_| print_fizz());
+    }
+
+    fn buzz(self, print_buzz: Fn()) {
+        self.serve(1, |_| print_buzz());
+    }
+
+    fn fizzbuzz(self, print_fizzbuzz: Fn()) {
+        self.serve(2, |_| print_fizzbuzz());
+    }
+
+    fn number(self, print_number: Fn(i64)) {
+        self.serve(3, |i| print_number(i));
+    }
+}
+
+// One run of arm 3, as the arms' harness runs it.
+fn run3(n: i64, order: Vec[i64]) -> Vec[String] {
+    let fb = A3FizzBuzz.new(n);
+    let out: Mutex[Vec[String]] = Mutex.new([]);
+    {
+        let group = TaskGroup.new();
+        for role in order.iter() {
+            match role {
+                0 => group.spawn(|| fb.fizz(|| out.lock().value.push("fizz"))),
+                1 => group.spawn(|| fb.buzz(|| out.lock().value.push("buzz"))),
+                2 => group.spawn(|| fb.fizzbuzz(|| out.lock().value.push("fizzbuzz"))),
+                _ => group.spawn(|| fb.number(|i| out.lock().value.push(f"{i}"))),
+            }
+        }
+    }
+    out.lock().value.clone()
+}
+// ---- the statement read literally ----------------------------------------
+
+// The sequence the statement asks for: `fizzbuzz` for a multiple of 15,
+// `fizz` for one of 3, `buzz` for one of 5, and the number otherwise.
+fn literal(n: i64) -> Vec[String] {
+    (1..=n).map(|i| if i % 15 == 0 { "fizzbuzz" } else if i % 3 == 0 { "fizz" } else if i % 5 == 0 { "buzz" } else { f"{i}" }).collect()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arms(n: i64, order: Vec[i64]) -> Vec[Vec[String]] {
+    [run0(n, order), run1(n, order), run2(n, order), run3(n, order)]
+}
+
+fn count(out: Vec[String], word: Str) -> i64 {
+    out.iter().filter(|s| s == word).count()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["the statement read literally", "n lines", "each printer prints its own count", "the plain numbers are the others, rising", "a run of n is the start of a run of n + 1", "the tasks started in reverse print the same", "the ★ arm's answer"];
+    let mut fails = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut printed = 0;
+    let mut seed = 1195;
+    for _ in 0..500 {
+        let n = next_random(mut seed) % 50 + 1;
+        let mut order = [0, 1, 2, 3];
+        for i in (1..4).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            order.swap(i, j);
+        }
+        let reverse: Vec[i64] = order.iter().rev().collect();
+        let got = arms(n, order);
+        let longer = arms(n + 1, order);
+        let again = arms(n, reverse);
+        let want = literal(n);
+        let plain: Vec[String] = (1..=n).filter(|i| i % 3 != 0 and i % 5 != 0).map(|i| f"{i}").collect();
+        for i in 0..4 {
+            let v = ref got[i];
+            let numbers: Vec[String] = v.iter().filter(|s| s != "fizz" and s != "buzz" and s != "fizzbuzz").cloned().collect();
+            let held = [
+                v == want,
+                v.len() == n,
+                count(v, "fizz") == n / 3 - n / 15 and count(v, "buzz") == n / 5 - n / 15 and count(v, "fizzbuzz") == n / 15,
+                numbers == plain,
+                longer[i].len() == n + 1 and longer[i][0..n].to_vec() == v,
+                again[i] == v,
+                v == got[0],
+            ];
+            for p in 0..7 {
+                checks += 1;
+                if not held[p] {
+                    fails[p] += 1;
+                    if fails[p] <= 2 {
+                        println(f"P{p + 1} ({names[p]}) fails on arm {i}: n={n} order={order} -> {v.join(", ")}");
+                    }
+                }
+            }
+        }
+        printed += got[0].len();
+    }
+    for p in 0..7 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    let total = fails.iter().sum();
+    println(f"500 runs: {printed} printed, {checks} checks over 4 arms: {total} failures");
+}

@@ -1,0 +1,56 @@
+// LeetCode #1197: Minimum Knight Moves -- a recursion with a memo. Folded
+// into the first quadrant, a target is best reached through one of the two
+// squares a knight move back towards the origin, (x - 1, y - 2) or
+// (x - 2, y - 1), folded again; the origin takes 0 moves, and a square with
+// x + y = 2 takes 2, the ones the recursion would otherwise step past.
+
+fn moves(x: i64, y: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    let x = x.abs();
+    let y = y.abs();
+    if x + y == 0 {
+        return 0;
+    }
+    if x + y == 2 {
+        return 2;
+    }
+    if let Some(m) = memo.get((x, y)) {
+        return m;
+    }
+    let m = 1 + moves(x - 1, y - 2, mut memo).min(moves(x - 2, y - 1, mut memo));
+    memo.insert((x, y), m);
+    m
+}
+
+fn min_knight_moves(x: i64, y: i64) -> i64 {
+    let mut memo = Map.new();
+    moves(x, y, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [(2, 1), (5, 5), (0, 0), (1, 0), (1, 1), (2, 2), (-1, -2), (0, -1), (3, 0), (300, 0), (0, -300), (150, 150), (-150, 150), (1, 299)];
+    for (x, y) in cases {
+        println(f"({x}, {y}): {min_knight_moves(x, y)}");
+    }
+    // 100 random targets with |x| + |y| <= 300
+    let mut seed = 1197;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        let s = next_random(mut seed) % 301;
+        let x = next_random(mut seed) % (s + 1);
+        let y = s - x;
+        let x = if next_random(mut seed) % 2 == 0 { x } else { -x };
+        let y = if next_random(mut seed) % 2 == 0 { y } else { -y };
+        let m = min_knight_moves(x, y);
+        total += m;
+        check = (check * 131 + m + 1) % 1000000007;
+    }
+    println(f"100 random targets: {total} moves, checksum {check}");
+}

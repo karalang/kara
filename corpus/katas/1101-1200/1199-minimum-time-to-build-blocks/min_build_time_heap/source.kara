@@ -1,0 +1,57 @@
+// LeetCode #1199: Minimum Time to Build Blocks -- a Rust solution as
+// LeetCode's Rust users write it: Huffman's merge on a `BinaryHeap` of
+// `Reverse`d times, carried to Kāra by `karac fix`.
+
+import std.cmp.Reverse;
+
+struct Solution {}
+
+impl Solution {
+    pub fn min_build_time(blocks: Vec[i32], split: i32) -> i32 {
+        let mut heap: PriorityQueue[Reverse[i32]] = PriorityQueue.max_first_from(blocks.clone().into_iter().map(|x| Reverse { value: x }).collect());
+        while heap.len() > 1 {
+            heap.pop();
+            let Reverse { value: b } = heap.pop().unwrap();
+            heap.push(Reverse { value: b + split });
+        }
+        heap.pop().unwrap().value
+    }
+}
+
+fn min_build_time(blocks: own Vec[i64], split: i64) -> i64 {
+    Solution.min_build_time(blocks.iter().map(|b| b as i32).collect(), split as i32)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [([1], 1), ([1, 2], 5), ([1, 2, 3], 1), ([5, 5, 5, 5], 2), ([1, 1, 1, 100], 10), ([10, 1, 1, 1, 1], 3)];
+    for (blocks, split) in cases.iter() {
+        println(f"{blocks}, split {split}: {min_build_time(blocks.clone(), split)}");
+    }
+    println(f"1000 blocks of 1, split 100: {min_build_time(Vec.filled(1000, 1), 100)}");
+    println(f"1000 blocks of 100000, split 100: {min_build_time(Vec.filled(1000, 100000), 100)}");
+    println(f"512 blocks of 7, split 1: {min_build_time(Vec.filled(512, 7), 1)}");
+    println(f"1000 blocks of 7, split 1: {min_build_time(Vec.filled(1000, 7), 1)}");
+    println(f"513 blocks of 7, split 1: {min_build_time(Vec.filled(513, 7), 1)}");
+    let mut seed = 1199;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let split = next_random(mut seed) % 20 + 1;
+        let blocks: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 50 + 1).collect();
+        let t = min_build_time(blocks, split);
+        total += t;
+        check = (check * 131 + t) % 1000000007;
+    }
+    println(f"1000 random block sets: total {total}, checksum {check}");
+    let big: Vec[i64] = (0..1000).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000 + 1).collect();
+    println(f"1000 random blocks up to 100000, split 100: {min_build_time(big.clone(), 100)}");
+    println(f"the same, split 1: {min_build_time(big, 1)}");
+}

@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1198-find-smallest-common-element-in-all-rows/bench/smallest_common_element.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1198 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "ef4d75dcb"
+extracted_src = "96d8861b"

@@ -1,0 +1,39 @@
+// LeetCode #1199 bench: the ★ arm (Huffman's merge on a smallest-first
+// queue) on 200 sets of 1000 blocks, the constraints' most, built once,
+// with times up to 10, 1000 and 100000 and splits of 1 to 100 in turn;
+// then 50 rounds over the sets, each answer folded into a checksum.
+
+fn min_build_time(blocks: own Vec[i64], split: i64) -> i64 {
+    let mut queue = PriorityQueue.from(blocks);
+    while queue.len() > 1 {
+        let _ = queue.pop();
+        let slower = queue.pop().unwrap();
+        queue.push(slower + split);
+    }
+    queue.pop().unwrap()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let highs = [10, 1000, 100000];
+    let mut seed = 1199;
+    let mut sets: Vec[(Vec[i64], i64)] = Vec.new();
+    for k in 0..200 {
+        let high = highs[k % 3];
+        let split = next_random(mut seed) % 100 + 1;
+        let blocks: Vec[i64] = (0..1000).map(|_| (next_random(mut seed) * 32768 + next_random(mut seed)) % high + 1).collect();
+        sets.push((blocks, split));
+    }
+    let mut check = 0;
+    for _ in 0..50 {
+        for (blocks, split) in sets.iter() {
+            let t = min_build_time(blocks.clone(), split);
+            check = (check * 131 + t) % 1000000007;
+        }
+    }
+    println(f"50 rounds of 200 sets of 1000 blocks: checksum {check}");
+}

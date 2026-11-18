@@ -1,0 +1,144 @@
+// LeetCode #1195: Fizz Buzz Multithreaded -- the ★ arm, one semaphore per
+// printer: `number`'s starts with a permit, since 1 is a plain number, and
+// the others with none. Each printer walks 1..=n, and at each of its own
+// numbers waits for its semaphore, prints, and releases the semaphore of
+// whichever printer has the next number. So exactly one printer holds the
+// turn at a time, and they print in order.
+
+import std.sync.{TaskGroup};
+
+sync struct FizzBuzz {
+    n: i64,
+    fizz_turn: Semaphore,
+    buzz_turn: Semaphore,
+    fizzbuzz_turn: Semaphore,
+    number_turn: Semaphore,
+}
+
+impl FizzBuzz {
+    fn new(n: i64) -> FizzBuzz {
+        FizzBuzz {
+            n,
+            fizz_turn: Semaphore.new(0),
+            buzz_turn: Semaphore.new(0),
+            fizzbuzz_turn: Semaphore.new(0),
+            number_turn: Semaphore.new(1),
+        }
+    }
+
+    // Hands the turn to the printer of `i`, if `i` is still to print.
+    fn pass(self, i: i64) {
+        if i > self.n {
+            return;
+        }
+        if i % 15 == 0 {
+            self.fizzbuzz_turn.release();
+        } else if i % 3 == 0 {
+            self.fizz_turn.release();
+        } else if i % 5 == 0 {
+            self.buzz_turn.release();
+        } else {
+            self.number_turn.release();
+        }
+    }
+
+    fn fizz(self, print_fizz: Fn()) {
+        for i in 1..=self.n {
+            if i % 3 == 0 and i % 5 != 0 {
+                let _ = self.fizz_turn.acquire(60000);
+                print_fizz();
+                self.pass(i + 1);
+            }
+        }
+    }
+
+    fn buzz(self, print_buzz: Fn()) {
+        for i in 1..=self.n {
+            if i % 5 == 0 and i % 3 != 0 {
+                let _ = self.buzz_turn.acquire(60000);
+                print_buzz();
+                self.pass(i + 1);
+            }
+        }
+    }
+
+    fn fizzbuzz(self, print_fizzbuzz: Fn()) {
+        for i in 1..=self.n {
+            if i % 15 == 0 {
+                let _ = self.fizzbuzz_turn.acquire(60000);
+                print_fizzbuzz();
+                self.pass(i + 1);
+            }
+        }
+    }
+
+    fn number(self, print_number: Fn(i64)) {
+        for i in 1..=self.n {
+            if i % 3 != 0 and i % 5 != 0 {
+                let _ = self.number_turn.acquire(60000);
+                print_number(i);
+                self.pass(i + 1);
+            }
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: four tasks share one `FizzBuzz`, each calling one of its
+// methods with a printer that appends to the output; `order` is the order
+// the four tasks are started in, 0 to 3 for fizz, buzz, fizzbuzz and
+// number. Returns what was printed, in the order it was printed.
+fn run(n: i64, order: Vec[i64]) -> Vec[String] {
+    let fb = FizzBuzz.new(n);
+    let out: Mutex[Vec[String]] = Mutex.new([]);
+    {
+        let group = TaskGroup.new();
+        for role in order.iter() {
+            match role {
+                0 => group.spawn(|| fb.fizz(|| out.lock().value.push("fizz"))),
+                1 => group.spawn(|| fb.buzz(|| out.lock().value.push("buzz"))),
+                2 => group.spawn(|| fb.fizzbuzz(|| out.lock().value.push("fizzbuzz"))),
+                _ => group.spawn(|| fb.number(|i| out.lock().value.push(f"{i}"))),
+            }
+        }
+    }
+    out.lock().value.clone()
+}
+
+// The sequence the statement asks for.
+fn expected(n: i64) -> Vec[String] {
+    (1..=n).map(|i| if i % 15 == 0 { "fizzbuzz" } else if i % 3 == 0 { "fizz" } else if i % 5 == 0 { "buzz" } else { f"{i}" }).collect()
+}
+
+fn main() {
+    // LeetCode's two examples and three more: one number, the first fizz,
+    // and LeetCode's largest n
+    for n in [15, 5, 1, 3, 50] {
+        println(f"n={n}: {run(n, [0, 1, 2, 3]).join(", ")}");
+    }
+    // 2000 random runs: n from 1 to 50, the four tasks started in a random
+    // order
+    let mut seed = 1195;
+    let mut right = 0;
+    let mut printed = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 50 + 1;
+        let mut order = [0, 1, 2, 3];
+        for i in (1..4).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            order.swap(i, j);
+        }
+        let got = run(n, order);
+        printed += got.len();
+        if got == expected(n) {
+            right += 1;
+        }
+    }
+    println(f"2000 random runs: {printed} printed, {right} in order");
+}

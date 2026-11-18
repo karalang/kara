@@ -1,0 +1,55 @@
+// LeetCode #1196: How Many Apples Can You Put into the Basket -- the sorted
+// weights' running totals, in an iterator chain: the number of them that
+// stay within 5000.
+
+fn max_number_of_apples(weight: own Vec[i64]) -> i64 {
+    let mut weight = weight;
+    weight.sort();
+    let mut load = 0;
+    weight.iter().map(|w| {
+        load += w;
+        load
+    }).take_while(|total| total <= 5000).count()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn weights(seed: mut ref i64, n: i64, low: i64, high: i64) -> Vec[i64] {
+    (0..n).map(|_| low + next_random(mut seed) % (high - low + 1)).collect()
+}
+
+fn main() {
+    let cases = [
+        [100, 200, 150, 1000],
+        [900, 950, 800, 1000, 700, 800],
+        [1000, 1000, 1000, 1000, 1000],
+        [1000, 1000, 1000, 1000, 1000, 1000],
+        [1],
+        [1000, 1000, 1000, 1000, 999, 1],
+        [1000, 1000, 1000, 1000, 999, 2],
+        [1000, 1, 1000, 1, 1000, 1, 1000, 1, 1000, 1],
+    ];
+    for c in cases.iter() {
+        println(f"{c}: {max_number_of_apples(c.clone())}");
+    }
+    println(f"1000 apples of 1: {max_number_of_apples(Vec.filled(1000, 1))}");
+    println(f"1000 apples of 1000: {max_number_of_apples(Vec.filled(1000, 1000))}");
+    let mut seed = 1196;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 40 + 1;
+        let high = [10, 100, 400, 1000][next_random(mut seed) % 4];
+        let apples = max_number_of_apples(weights(mut seed, n, 1, high));
+        total += apples;
+        check = (check * 131 + apples + 1) % 1000000007;
+    }
+    println(f"2000 random baskets: {total} apples, checksum {check}");
+    println(f"1000 apples of 1 to 1000: {max_number_of_apples(weights(mut seed, 1000, 1, 1000))}");
+    println(f"1000 apples of 1 to 20: {max_number_of_apples(weights(mut seed, 1000, 1, 20))}");
+}

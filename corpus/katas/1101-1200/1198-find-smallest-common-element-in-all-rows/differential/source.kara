@@ -1,0 +1,201 @@
+// LeetCode #1198: Find Smallest Common Element in All Rows -- the six arms
+// against the statement read literally and six more properties.
+// Generated from the arms; see the README.
+
+// ---- arm 0: star --------------------------------------------------------
+fn a0_smallest_common_element(mat: Vec[Vec[i64]]) -> i64 {
+    let mut count = [0; 10001];
+    for row in mat.iter() {
+        for v in row.iter() {
+            count[v] += 1;
+        }
+    }
+    for v in mat[0].iter() {
+        if count[v] == mat.len() {
+            return v;
+        }
+    }
+    -1
+}
+
+// ---- arm 1: search ------------------------------------------------------
+fn a1_smallest_common_element(mat: Vec[Vec[i64]]) -> i64 {
+    for v in mat[0].iter() {
+        if mat.iter().skip(1).all(|row| row.binary_search(v).is_some()) {
+            return v;
+        }
+    }
+    -1
+}
+
+// ---- arm 2: pointers ----------------------------------------------------
+fn a2_smallest_common_element(mat: Vec[Vec[i64]]) -> i64 {
+    let m = mat.len();
+    let mut at = Vec.filled(m, 0);
+    loop {
+        let mut high = 0;
+        for r in 0..m {
+            high = high.max(mat[r][at[r]]);
+        }
+        let mut moved = false;
+        for r in 0..m {
+            while mat[r][at[r]] < high {
+                at[r] += 1;
+                if at[r] == mat[r].len() {
+                    return -1;
+                }
+                moved = true;
+            }
+        }
+        if not moved {
+            return high;
+        }
+    }
+}
+
+// ---- arm 3: sets --------------------------------------------------------
+fn a3_smallest_common_element(mat: Vec[Vec[i64]]) -> i64 {
+    let mut common: Set[i64] = mat[0].iter().collect();
+    for row in mat.iter().skip(1) {
+        let here: Set[i64] = row.iter().collect();
+        common = common.intersection(here);
+    }
+    common.iter().min().unwrap_or(-1)
+}
+
+// ---- arm 4: solution ----------------------------------------------------
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn smallest_common_element(mat: Vec[Vec[i32]]) -> i32 {
+        let mut count = Vec.filled(10001, 0);
+        for row in ref mat {
+            for v in row {
+                count[v as usize] += 1;
+            }
+        }
+        for v in ref mat[0] {
+            if count[v as usize] == mat.len() {
+                return v;
+            }
+        }
+        -1
+    }
+}
+
+fn a4_smallest_common_element(mat: Vec[Vec[i64]]) -> i64 {
+    A4Solution.smallest_common_element(mat.iter().map(|row| row.iter().map(|v| v as i32).collect()).collect())
+}
+
+// ---- arm 5: chain -------------------------------------------------------
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn smallest_common_element(mat: Vec[Vec[i32]]) -> i32 {
+        mat[0]
+            .iter()
+            .find(|v| mat.iter().all(|row| row.binary_search(v).is_some()))
+            .cloned()
+            .unwrap_or(-1)
+    }
+}
+
+fn a5_smallest_common_element(mat: Vec[Vec[i64]]) -> i64 {
+    A5Solution.smallest_common_element(mat.iter().map(|row| row.iter().map(|v| v as i32).collect()).collect())
+}
+
+// ---- the statement read literally ----------------------------------------
+
+// The smallest value that every row holds: each value from 1 up, looked for
+// in every row, one entry at a time; -1 when none is.
+fn literal(mat: Vec[Vec[i64]]) -> i64 {
+    for v in 1..=10000 {
+        if mat.iter().all(|row| row.contains(v)) {
+            return v;
+        }
+    }
+    -1
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arms(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    [a0_smallest_common_element(mat), a1_smallest_common_element(mat), a2_smallest_common_element(mat), a3_smallest_common_element(mat), a4_smallest_common_element(mat), a5_smallest_common_element(mat)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_row(seed: mut ref i64, n: i64, high: i64) -> Vec[i64] {
+    let mut row = Vec.new();
+    let mut v = 0;
+    while row.len() < n {
+        v += 1 + next_random(mut seed) % (2 * high / n);
+        if v > high - (n - row.len()) + 1 {
+            v = high - (n - row.len()) + 1;
+        }
+        row.push(v);
+    }
+    row
+}
+
+fn main() {
+    let names = ["the statement read literally", "the rows reversed", "the first row repeated", "every value 7 higher", "a row taken off finds one as small or smaller", "10000 put at the end of every row", "the ★ arm's answer"];
+    let mut fails = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 1198;
+    for _ in 0..2000 {
+        let m = next_random(mut seed) % 6 + 1;
+        let n = next_random(mut seed) % 12 + 1;
+        let high = n + next_random(mut seed) % 30;
+        let mat: Vec[Vec[i64]] = (0..m).map(|_| random_row(mut seed, n, high)).collect();
+        let got = arms(mat);
+        let want = literal(mat);
+        let reversed: Vec[Vec[i64]] = mat.iter().rev().cloned().collect();
+        let back = arms(reversed);
+        let mut repeated = mat.clone();
+        repeated.push(mat[0].clone());
+        let again = arms(repeated);
+        let shifted: Vec[Vec[i64]] = mat.iter().map(|row| row.iter().map(|v| v + 7).collect()).collect();
+        let up = arms(shifted);
+        let fewer = if m > 1 { arms(mat[0..m - 1].to_vec()) } else { got.clone() };
+        let topped: Vec[Vec[i64]] = mat.iter().map(|row| {
+            let mut row = row.clone();
+            row.push(10000);
+            row
+        }).collect();
+        let top = arms(topped);
+        for i in 0..6 {
+            let v = got[i];
+            let held = [
+                v == want,
+                back[i] == v,
+                again[i] == v,
+                up[i] == if v < 0 { -1 } else { v + 7 },
+                v < 0 or (fewer[i] >= 1 and fewer[i] <= v),
+                top[i] == if v < 0 { 10000 } else { v },
+                v == got[0],
+            ];
+            for p in 0..7 {
+                checks += 1;
+                if not held[p] {
+                    fails[p] += 1;
+                    if fails[p] <= 2 {
+                        println(f"P{p + 1} ({names[p]}) fails on arm {i}: {mat} -> {v}");
+                    }
+                }
+            }
+        }
+        check = (check * 131 + got[0] + 2) % 1000000007;
+    }
+    for p in 0..7 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    let total = fails.iter().sum();
+    println(f"2000 matrices: checksum {check}, {checks} checks over 6 arms: {total} failures");
+}

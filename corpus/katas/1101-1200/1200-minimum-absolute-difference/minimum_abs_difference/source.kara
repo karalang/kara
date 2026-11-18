@@ -1,0 +1,65 @@
+// LeetCode #1200: Minimum Absolute Difference -- the ★ arm: sorted, the
+// least difference of any two values is between neighbours, so one pass
+// finds it and a second collects the neighbours that have it, in order.
+
+fn minimum_abs_difference(arr: own Vec[i64]) -> Vec[Vec[i64]] {
+    let mut arr = arr;
+    arr.sort();
+    let mut least = i64.MAX;
+    for i in 1..arr.len() {
+        least = least.min(arr[i] - arr[i - 1]);
+    }
+    let mut pairs = Vec.new();
+    for i in 1..arr.len() {
+        if arr[i] - arr[i - 1] == least {
+            pairs.push([arr[i - 1], arr[i]]);
+        }
+    }
+    pairs
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` distinct values from -`span` to `span`, in random order.
+fn distinct(seed: mut ref i64, n: i64, span: i64) -> Vec[i64] {
+    let mut taken: Set[i64] = Set.new();
+    let mut out = Vec.new();
+    while out.len() < n {
+        let v = (next_random(mut seed) * 32768 + next_random(mut seed)) % (2 * span + 1) - span;
+        if taken.insert(v) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn main() {
+    let cases = [[4, 2, 1, 3], [1, 3, 6, 10, 15], [3, 8, -10, 23, 19, -4, -14, 27], [5, -5], [1000000, -1000000], [0, 2, 4, 6, 8, 7]];
+    for c in cases.iter() {
+        println(f"{c}: {minimum_abs_difference(c.clone())}");
+    }
+    let mut seed = 1200;
+    let mut count = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 20 + 2;
+        let span = [10, 100, 1000][next_random(mut seed) % 3];
+        let pairs = minimum_abs_difference(distinct(mut seed, n, span));
+        count += pairs.len();
+        for p in pairs.iter() {
+            check = (check * 131 + p[0] + 1000000) % 1000000007;
+            check = (check * 131 + p[1] + 1000000) % 1000000007;
+        }
+    }
+    println(f"1000 random arrays: {count} pairs, checksum {check}");
+    let evens: Vec[i64] = (0..100000).map(|i| 2 * i - 100000).collect();
+    let pairs = minimum_abs_difference(evens.iter().rev().collect());
+    println(f"100000 evens: {pairs.len()} pairs, first {pairs[0]}, last {pairs[pairs.len() - 1]}");
+    let wide = minimum_abs_difference(distinct(mut seed, 100000, 1000000));
+    println(f"100000 random from -10^6 to 10^6: {wide.len()} pairs, first {wide[0]}");
+}

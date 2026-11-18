@@ -1,0 +1,435 @@
+// LeetCode #1192: Critical Connections in a Network -- the five arms against
+// the statement read literally and six more properties. Generated from the
+// arms; see the README.
+
+// ---- arm 0: star --------------------------------------------------------
+fn a0_critical_connections(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    // each server's neighbours, with the connection that joins them
+    let mut adj: Vec[Vec[(i64, i64)]] = Vec.filled(n, Vec.new());
+    for (id, c) in connections.iter().enumerate() {
+        adj[c[0]].push((c[1], id));
+        adj[c[1]].push((c[0], id));
+    }
+    let mut disc = Vec.filled(n, -1);
+    let mut low = Vec.filled(n, 0);
+    let mut bridges: Vec[Vec[i64]] = Vec.new();
+    disc[0] = 0;
+    let mut time = 1;
+    // (server, the connection it was entered by, its next neighbour)
+    let mut stack: Vec[(i64, i64, i64)] = [(0, -1, 0)];
+    while stack.len() > 0 {
+        let top = stack.len() - 1;
+        let (u, via, next) = stack[top];
+        if next < adj[u].len() {
+            stack[top] = (u, via, next + 1);
+            let (v, id) = adj[u][next];
+            if id == via {
+                continue;
+            }
+            if disc[v] == -1 {
+                disc[v] = time;
+                low[v] = time;
+                time += 1;
+                stack.push((v, id, 0));
+            } else {
+                low[u] = low[u].min(disc[v]);
+            }
+        } else {
+            stack.pop();
+            if stack.len() > 0 {
+                let (p, _, _) = stack[stack.len() - 1];
+                low[p] = low[p].min(low[u]);
+                if low[u] > disc[p] {
+                    bridges.push([p, u]);
+                }
+            }
+        }
+    }
+    bridges
+}
+
+// ---- arm 1: recursive ---------------------------------------------------
+struct A1Search {
+    adj: Vec[Vec[(i64, i64)]],
+    disc: Vec[i64],
+    low: Vec[i64],
+    time: i64,
+    bridges: Vec[Vec[i64]],
+}
+
+fn a1_visit(s: mut ref A1Search, u: i64, via: i64) {
+    s.disc[u] = s.time;
+    s.low[u] = s.time;
+    s.time += 1;
+    for i in 0..s.adj[u].len() {
+        let (v, id) = s.adj[u][i];
+        if id == via {
+            continue;
+        }
+        if s.disc[v] == -1 {
+            a1_visit(mut s, v, id);
+            s.low[u] = s.low[u].min(s.low[v]);
+            if s.low[v] > s.disc[u] {
+                s.bridges.push([u, v]);
+            }
+        } else {
+            s.low[u] = s.low[u].min(s.disc[v]);
+        }
+    }
+}
+
+fn a1_critical_connections(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut adj: Vec[Vec[(i64, i64)]] = Vec.filled(n, Vec.new());
+    for (id, c) in connections.iter().enumerate() {
+        adj[c[0]].push((c[1], id));
+        adj[c[1]].push((c[0], id));
+    }
+    let mut s = A1Search { adj, disc: Vec.filled(n, -1), low: Vec.filled(n, 0), time: 0, bridges: Vec.new() };
+    a1_visit(mut s, 0, -1);
+    s.bridges
+}
+
+// ---- arm 2: cover -------------------------------------------------------
+fn a2_find(up: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while up[root] != root {
+        root = up[root];
+    }
+    let mut at = x;
+    while up[at] != root {
+        let next = up[at];
+        up[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn a2_critical_connections(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut adj: Vec[Vec[(i64, i64)]] = Vec.filled(n, Vec.new());
+    for (id, c) in connections.iter().enumerate() {
+        adj[c[0]].push((c[1], id));
+        adj[c[1]].push((c[0], id));
+    }
+    // the tree: each server's parent, depth, and the connection to its parent
+    let mut parent = Vec.filled(n, -1);
+    let mut depth = Vec.filled(n, -1);
+    let mut up_edge = Vec.filled(n, -1);
+    let mut in_tree = Vec.filled(connections.len(), false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    depth[0] = 0;
+    queue.push_back(0);
+    while let Some(u) = queue.pop_front() {
+        for (v, id) in adj[u].iter() {
+            if depth[v] == -1 {
+                depth[v] = depth[u] + 1;
+                parent[v] = u;
+                up_edge[v] = id;
+                in_tree[id] = true;
+                queue.push_back(v);
+            }
+        }
+    }
+    // each server's lowest ancestor whose connection up is not yet covered
+    let mut up: Vec[i64] = (0..n).collect();
+    let mut covered = Vec.filled(connections.len(), false);
+    for (id, c) in connections.iter().enumerate() {
+        if in_tree[id] {
+            continue;
+        }
+        let mut a = a2_find(mut up, c[0]);
+        let mut b = a2_find(mut up, c[1]);
+        while a != b {
+            if depth[a] < depth[b] {
+                let t = a;
+                a = b;
+                b = t;
+            }
+            covered[up_edge[a]] = true;
+            up[a] = parent[a];
+            a = a2_find(mut up, a);
+        }
+    }
+    let mut bridges: Vec[Vec[i64]] = Vec.new();
+    for v in 1..n {
+        if not covered[up_edge[v]] {
+            bridges.push([parent[v], v]);
+        }
+    }
+    bridges
+}
+
+// ---- arm 3: solution ----------------------------------------------------
+struct A3Solution {}
+
+fn a3_dfs(
+    u: i64,
+    parent: i64,
+    graph: Vec[Vec[i64]],
+    disc: mut ref Vec[i32],
+    low: mut ref Vec[i32],
+    time: mut ref i32,
+    res: mut ref Vec[Vec[i32]],
+) {
+    disc[u] = *time;
+    low[u] = *time;
+    *time += 1;
+    for v in ref graph[u] {
+        if v == parent {
+            continue;
+        }
+        if disc[v] == 0 {
+            a3_dfs(v, u, graph, mut disc, mut low, mut time, mut res);
+            low[u] = low[u].min(low[v]);
+            if low[v] > disc[u] {
+                res.push([u as i32, v as i32]);
+            }
+        } else {
+            low[u] = low[u].min(disc[v]);
+        }
+    }
+}
+
+impl A3Solution {
+    pub fn critical_connections(n: i32, connections: Vec[Vec[i32]]) -> Vec[Vec[i32]] {
+        let n = n as i64;
+        let mut graph = Vec.filled(n, Vec.new());
+        for c in ref connections {
+            graph[c[0]].push(c[1] as i64);
+            graph[c[1]].push(c[0]);
+        }
+        let mut low = Vec.filled(n, 0);
+        let mut disc = Vec.filled(n, 0);
+        let mut time = 1;
+        let mut res = Vec.new();
+        a3_dfs(0, i64.MAX, graph, mut disc, mut low, mut time, mut res);
+        res
+    }
+}
+
+fn a3_critical_connections(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let connections: Vec[Vec[i32]] = connections
+        .iter()
+        .map(|c| c.iter().map(|x| x as i32).collect())
+        .collect();
+    A3Solution.critical_connections(n as i32, connections)
+        .iter()
+        .map(|c| c.iter().map(|x| x as i64).collect())
+        .collect()
+}
+
+// ---- arm 4: struct ------------------------------------------------------
+struct A4Solution {}
+
+struct A4Tarjan {
+    graph: Vec[Vec[i64]],
+    disc: Vec[i32],
+    low: Vec[i32],
+    time: i32,
+    bridges: Vec[Vec[i32]],
+}
+
+impl A4Tarjan {
+    fn dfs(mut ref self, u: i64, parent: Option[i64]) {
+        self.time += 1;
+        self.disc[u] = self.time;
+        self.low[u] = self.time;
+        for i in 0..self.graph[u].len() {
+            let v = self.graph[u][i];
+            if Some(v) == parent {
+                continue;
+            }
+            if self.disc[v] == 0 {
+                self.dfs(v, Some(u));
+                self.low[u] = self.low[u].min(self.low[v]);
+                if self.low[v] > self.disc[u] {
+                    self.bridges.push([u as i32, v as i32]);
+                }
+            } else {
+                self.low[u] = self.low[u].min(self.disc[v]);
+            }
+        }
+    }
+}
+
+impl A4Solution {
+    pub fn critical_connections(n: i32, connections: Vec[Vec[i32]]) -> Vec[Vec[i32]] {
+        let n = n as i64;
+        let mut graph = Vec.filled(n, Vec.new());
+        for c in connections.iter() {
+            let (a, b) = (c[0] as i64, c[1] as i64);
+            graph[a].push(b);
+            graph[b].push(a);
+        }
+        let mut t = A4Tarjan {
+            graph,
+            disc: Vec.filled(n, 0),
+            low: Vec.filled(n, 0),
+            time: 0,
+            bridges: Vec.new(),
+        };
+        t.dfs(0, None);
+        t.bridges
+    }
+}
+
+fn a4_critical_connections(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let connections: Vec[Vec[i32]] = connections
+        .iter()
+        .map(|c| c.iter().map(|x| x as i32).collect())
+        .collect();
+    A4Solution.critical_connections(n as i32, connections)
+        .iter()
+        .map(|c| c.iter().map(|x| x as i64).collect())
+        .collect()
+}
+// ---- the statement read literally ----------------------------------------
+
+// A connection is critical when, without it, some server cannot reach
+// server 0.
+fn literal(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for skip in 0..connections.len() {
+        let mut adj: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+        for (i, c) in connections.iter().enumerate() {
+            if i != skip {
+                adj[c[0]].push(c[1]);
+                adj[c[1]].push(c[0]);
+            }
+        }
+        let mut seen = Vec.filled(n, false);
+        seen[0] = true;
+        let mut todo = [0];
+        let mut reached = 1;
+        while let Some(u) = todo.pop() {
+            for v in adj[u].iter() {
+                if not seen[v] {
+                    seen[v] = true;
+                    reached += 1;
+                    todo.push(v);
+                }
+            }
+        }
+        if reached < n {
+            out.push(connections[skip].clone());
+        }
+    }
+    out
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn normalized(bridges: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = bridges.iter().map(|b| (b[0].min(b[1]), b[0].max(b[1]))).collect();
+    out.sort();
+    out
+}
+
+fn arms(n: i64, connections: Vec[Vec[i64]]) -> Vec[Vec[(i64, i64)]] {
+    [
+        normalized(a0_critical_connections(n, connections)),
+        normalized(a1_critical_connections(n, connections)),
+        normalized(a2_critical_connections(n, connections)),
+        normalized(a3_critical_connections(n, connections)),
+        normalized(a4_critical_connections(n, connections)),
+    ]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random connected network, as the arms' harness draws them.
+fn random_network(seed: mut ref i64, n: i64, extra: i64) -> Vec[Vec[i64]] {
+    let mut joined: Set[(i64, i64)] = Set.new();
+    let mut edges: Vec[Vec[i64]] = Vec.new();
+    for v in 1..n {
+        let u = next_random(mut seed) % v;
+        joined.insert((u, v));
+        edges.push([u, v]);
+    }
+    for _ in 0..extra {
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        let key = (a.min(b), a.max(b));
+        if a != b and not joined.contains(key) {
+            joined.insert(key);
+            edges.push([a, b]);
+        }
+    }
+    edges
+}
+
+fn fold(check: i64, bridges: Vec[(i64, i64)]) -> i64 {
+    let mut h = (check * 131 + bridges.len()) % 1000000007;
+    for (a, b) in bridges.iter() {
+        h = (h * 131 + a * 100003 + b) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let names = ["the statement read literally", "each one a connection of the network, none twice", "at most one fewer than the servers", "the servers numbered backwards", "the connections listed backwards", "one more connection makes none critical that was not", "the ★ arm's answer"];
+    let mut fails = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 1192;
+    for round in 0..2000 {
+        // the first 200 networks trees, the rest with up to n more connections
+        let n = next_random(mut seed) % 8 + 2;
+        let extra = if round < 200 { 0 } else { next_random(mut seed) % (n + 1) };
+        let edges = random_network(mut seed, n, extra);
+        let got = arms(n, edges);
+        let want = normalized(literal(n, edges));
+        let mut known: Set[(i64, i64)] = Set.new();
+        for e in edges.iter() {
+            known.insert((e[0].min(e[1]), e[0].max(e[1])));
+        }
+        let flipped: Vec[Vec[i64]] = edges.iter().map(|e| [n - 1 - e[0], n - 1 - e[1]]).collect();
+        let back = arms(n, flipped);
+        let listed: Vec[Vec[i64]] = edges.iter().rev().map(|e| e.clone()).collect();
+        let reordered = arms(n, listed);
+        // one more connection, between two servers not yet joined, if any
+        let mut more = edges.clone();
+        let a = next_random(mut seed) % n;
+        let b = next_random(mut seed) % n;
+        let added = a != b and not known.contains((a.min(b), a.max(b)));
+        if added {
+            more.push([a, b]);
+        }
+        let grown = arms(n, more);
+        for i in 0..5 {
+            let v = ref got[i];
+            let mut unflipped: Vec[(i64, i64)] = back[i].iter().map(|(x, y)| (n - 1 - y, n - 1 - x)).collect();
+            unflipped.sort();
+            let mut distinct = v.clone();
+            distinct.dedup();
+            let held = [
+                v == want,
+                distinct.len() == v.len() and v.iter().all(|p| known.contains(p)),
+                v.len() <= n - 1,
+                unflipped == v,
+                reordered[i] == v,
+                grown[i].iter().all(|p| v.contains(p)),
+                v == got[0],
+            ];
+            for p in 0..7 {
+                checks += 1;
+                if not held[p] {
+                    fails[p] += 1;
+                    if fails[p] <= 2 {
+                        println(f"P{p + 1} ({names[p]}) fails on arm {i}: n={n} {edges} -> {v}");
+                    }
+                }
+            }
+        }
+        check = fold(check, got[0]);
+    }
+    for p in 0..7 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    let total = fails.iter().sum();
+    println(f"2000 networks: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

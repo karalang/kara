@@ -1,0 +1,58 @@
+// LeetCode #1200 bench: the ★ arm (sorted, the least difference between
+// neighbours, then the neighbours that have it) on 20 arrays of 10^5
+// distinct values, the constraints' most, built once, from -10^6 to 10^6,
+// -10^5 to 10^5 and -60000 to 60000 in turn; then 10 rounds over the
+// arrays, each call sorting its own copy, every pair folded into a
+// checksum.
+
+fn minimum_abs_difference(arr: own Vec[i64]) -> Vec[Vec[i64]] {
+    let mut arr = arr;
+    arr.sort();
+    let mut least = i64.MAX;
+    for i in 1..arr.len() {
+        least = least.min(arr[i] - arr[i - 1]);
+    }
+    let mut pairs = Vec.new();
+    for i in 1..arr.len() {
+        if arr[i] - arr[i - 1] == least {
+            pairs.push([arr[i - 1], arr[i]]);
+        }
+    }
+    pairs
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let spans = [1000000, 100000, 60000];
+    let mut seed = 1200;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for k in 0..20 {
+        let span = spans[k % 3];
+        // 10^5 distinct values: marked as they are drawn, until enough
+        let mut taken = Vec.filled(2 * span + 1, false);
+        let mut arr = Vec.new();
+        while arr.len() < 100000 {
+            let v = (next_random(mut seed) * 32768 + next_random(mut seed)) % (2 * span + 1) - span;
+            if not taken[v + span] {
+                taken[v + span] = true;
+                arr.push(v);
+            }
+        }
+        arrays.push(arr);
+    }
+    let mut check = 0;
+    for _ in 0..10 {
+        for arr in arrays.iter() {
+            let pairs = minimum_abs_difference(arr.clone());
+            check = (check * 131 + pairs.len()) % 1000000007;
+            for p in pairs.iter() {
+                check = (check * 131 + p[0] + p[1] + 2000000) % 1000000007;
+            }
+        }
+    }
+    println(f"10 rounds of 20 arrays of 100000 values: checksum {check}");
+}

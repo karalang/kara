@@ -1,0 +1,290 @@
+// LeetCode #1197: Minimum Knight Moves -- the six arms against the
+// statement read literally and six more properties.
+// Generated from the arms; see the README.
+
+// ---- arm 0: star --------------------------------------------------------
+const A0_MOVES: Array[(i64, i64), 8] = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+
+fn a0_min_knight_moves(x: i64, y: i64) -> i64 {
+    let tx = x.abs();
+    let ty = y.abs();
+    let side = 305;
+    let mut seen = Vec.filled(side * side, false);
+    let mut queue = VecDeque.new();
+    queue.push_back((0, 0, 0));
+    seen[2 * side + 2] = true;
+    while let Some((cx, cy, steps)) = queue.pop_front() {
+        if cx == tx and cy == ty {
+            return steps;
+        }
+        for (dx, dy) in A0_MOVES {
+            let nx = cx + dx;
+            let ny = cy + dy;
+            if nx >= -2 and ny >= -2 and nx <= 302 and ny <= 302 {
+                let k = (nx + 2) * side + ny + 2;
+                if not seen[k] {
+                    seen[k] = true;
+                    queue.push_back((nx, ny, steps + 1));
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- arm 1: memo --------------------------------------------------------
+fn a1_moves(x: i64, y: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    let x = x.abs();
+    let y = y.abs();
+    if x + y == 0 {
+        return 0;
+    }
+    if x + y == 2 {
+        return 2;
+    }
+    if let Some(m) = memo.get((x, y)) {
+        return m;
+    }
+    let m = 1 + a1_moves(x - 1, y - 2, mut memo).min(a1_moves(x - 2, y - 1, mut memo));
+    memo.insert((x, y), m);
+    m
+}
+
+fn a1_min_knight_moves(x: i64, y: i64) -> i64 {
+    let mut memo = Map.new();
+    a1_moves(x, y, mut memo)
+}
+
+// ---- arm 2: formula -----------------------------------------------------
+fn a2_min_knight_moves(x: i64, y: i64) -> i64 {
+    let a = x.abs();
+    let b = y.abs();
+    let x = a.max(b);
+    let y = a.min(b);
+    if x == 1 and y == 0 {
+        return 3;
+    }
+    if x == 2 and y == 2 {
+        return 4;
+    }
+    let d = x - y;
+    if y > d {
+        d + 2 * ((y - d + 2) / 3)
+    } else {
+        d - 2 * ((d - y) / 4)
+    }
+}
+
+// ---- arm 3: meet --------------------------------------------------------
+const A3_MOVES: Array[(i64, i64), 8] = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+
+fn a3_min_knight_moves(x: i64, y: i64) -> i64 {
+    if x == 0 and y == 0 {
+        return 0;
+    }
+    let mut near: Map[(i64, i64), i64] = Map.new();
+    let mut far: Map[(i64, i64), i64] = Map.new();
+    near.insert((0, 0), 0);
+    far.insert((x, y), 0);
+    let mut near_edge = [(0, 0)];
+    let mut far_edge = [(x, y)];
+    let mut near_depth = 0;
+    let mut far_depth = 0;
+    loop {
+        // grow the smaller frontier
+        let from_near = near_edge.len() <= far_edge.len();
+        let (edge, depth) = if from_near { (near_edge.clone(), near_depth) } else { (far_edge.clone(), far_depth) };
+        let mut next = Vec.new();
+        let mut best = -1;
+        for (cx, cy) in edge {
+            for (dx, dy) in A3_MOVES {
+                let n = (cx + dx, cy + dy);
+                let mine = if from_near { ref near } else { ref far };
+                if mine.contains_key(n) {
+                    continue;
+                }
+                let other = if from_near { ref far } else { ref near };
+                if let Some(d) = other.get(n) {
+                    if best < 0 or depth + 1 + d < best {
+                        best = depth + 1 + d;
+                    }
+                }
+                if from_near {
+                    near.insert(n, depth + 1);
+                } else {
+                    far.insert(n, depth + 1);
+                }
+                next.push(n);
+            }
+        }
+        if best >= 0 {
+            return best;
+        }
+        if from_near {
+            near_edge = next;
+            near_depth += 1;
+        } else {
+            far_edge = next;
+            far_depth += 1;
+        }
+    }
+}
+
+// ---- arm 4: solution ----------------------------------------------------
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn min_knight_moves(x: i32, y: i32) -> i32 {
+        let (x, y) = (x.abs(), y.abs());
+        let dirs = [(1, 2), (2, 1), (-1, 2), (-2, 1), (1, -2), (2, -1), (-1, -2), (-2, -1)];
+        let mut seen = Set.new();
+        let mut q = VecDeque.new();
+        q.push_back((0, 0));
+        seen.insert((0, 0));
+        let mut steps = 0;
+        while not q.is_empty() {
+            for _ in 0..q.len() {
+                let (cx, cy) = q.pop_front().unwrap();
+                if cx == x and cy == y {
+                    return steps;
+                }
+                for (dx, dy) in dirs.iter() {
+                    let (nx, ny) = (cx + dx, cy + dy);
+                    if nx >= -1 and ny >= -1 and not seen.contains((nx, ny)) {
+                        seen.insert((nx, ny));
+                        q.push_back((nx, ny));
+                    }
+                }
+            }
+            steps += 1;
+        }
+        -1
+    }
+}
+
+fn a4_min_knight_moves(x: i64, y: i64) -> i64 {
+    A4Solution.min_knight_moves(x as i32, y as i32)
+}
+
+// ---- arm 5: dfs ---------------------------------------------------------
+struct A5Solution {}
+
+fn a5_dfs(x: i32, y: i32, memo: mut ref Map[(i32, i32), i32]) -> i32 {
+    let (x, y) = (x.abs(), y.abs());
+    if x + y == 0 {
+        return 0;
+    }
+    if x + y == 2 {
+        return 2;
+    }
+    if let Some(v) = memo.get((x, y)).cloned() {
+        return v;
+    }
+    let v = 1 + a5_dfs(x - 1, y - 2, mut memo).min(a5_dfs(x - 2, y - 1, mut memo));
+    memo.insert((x, y), v);
+    v
+}
+
+impl A5Solution {
+    pub fn min_knight_moves(x: i32, y: i32) -> i32 {
+        a5_dfs(x, y, mut Map.new())
+    }
+}
+
+fn a5_min_knight_moves(x: i64, y: i64) -> i64 {
+    A5Solution.min_knight_moves(x as i32, y as i32)
+}
+
+// ---- the statement read literally ----------------------------------------
+
+// The fewest moves from (0, 0) to (x, y) on the whole board: a breadth-
+// first search over every square, with no folding and no bound, a level at
+// a time until the target is reached.
+fn literal(x: i64, y: i64) -> i64 {
+    let jumps = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+    let mut seen: Set[(i64, i64)] = Set.new();
+    seen.insert((0, 0));
+    let mut level = [(0, 0)];
+    let mut steps = 0;
+    loop {
+        let mut next = Vec.new();
+        for (cx, cy) in level {
+            if cx == x and cy == y {
+                return steps;
+            }
+            for (dx, dy) in jumps {
+                let n = (cx + dx, cy + dy);
+                if seen.insert(n) {
+                    next.push(n);
+                }
+            }
+        }
+        level = next;
+        steps += 1;
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arms(x: i64, y: i64) -> Vec[i64] {
+    [a0_min_knight_moves(x, y), a1_min_knight_moves(x, y), a2_min_knight_moves(x, y), a3_min_knight_moves(x, y), a4_min_knight_moves(x, y), a5_min_knight_moves(x, y)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["the statement read literally", "as many moves as x + y, mod 2", "the target turned a quarter", "the target mirrored in the diagonal", "a square a knight move from the target is one move nearer or farther", "at least half the longer side and a third of |x| + |y|", "the ★ arm's answer"];
+    let jumps = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+    let mut fails = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 1197;
+    for _ in 0..600 {
+        // |x| + |y| up to 30, each sign at random
+        let s = next_random(mut seed) % 31;
+        let x = next_random(mut seed) % (s + 1);
+        let y = s - x;
+        let x = if next_random(mut seed) % 2 == 0 { x } else { -x };
+        let y = if next_random(mut seed) % 2 == 0 { y } else { -y };
+        let (jx, jy) = jumps[next_random(mut seed) % 8];
+        let got = arms(x, y);
+        let want = literal(x, y);
+        let turned = arms(-y, x);
+        let mirrored = arms(y, x);
+        let near = arms(x + jx, y + jy);
+        let long = x.abs().max(y.abs());
+        let sum = x.abs() + y.abs();
+        for i in 0..6 {
+            let v = got[i];
+            let held = [
+                v == want,
+                v % 2 == sum % 2,
+                turned[i] == v,
+                mirrored[i] == v,
+                near[i] == v + 1 or near[i] == v - 1,
+                v >= (long + 1) / 2 and v >= (sum + 2) / 3,
+                v == got[0],
+            ];
+            for p in 0..7 {
+                checks += 1;
+                if not held[p] {
+                    fails[p] += 1;
+                    if fails[p] <= 2 {
+                        println(f"P{p + 1} ({names[p]}) fails on arm {i}: ({x}, {y}) -> {v}");
+                    }
+                }
+            }
+        }
+        check = (check * 131 + got[0] + 1) % 1000000007;
+    }
+    for p in 0..7 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    let total = fails.iter().sum();
+    println(f"600 targets: checksum {check}, {checks} checks over 6 arms: {total} failures");
+}

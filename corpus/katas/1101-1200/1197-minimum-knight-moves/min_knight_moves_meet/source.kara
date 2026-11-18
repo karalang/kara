@@ -1,0 +1,88 @@
+// LeetCode #1197: Minimum Knight Moves -- a breadth-first search from both
+// ends at once, on the whole board with no folding: a map of the squares
+// each end has reached, and the smaller frontier grown by a level at a
+// time. The first level that reaches a square the other end has seen gives
+// the answer, the least over that level of its depth plus the other end's.
+
+const MOVES: Array[(i64, i64), 8] = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+
+fn min_knight_moves(x: i64, y: i64) -> i64 {
+    if x == 0 and y == 0 {
+        return 0;
+    }
+    let mut near: Map[(i64, i64), i64] = Map.new();
+    let mut far: Map[(i64, i64), i64] = Map.new();
+    near.insert((0, 0), 0);
+    far.insert((x, y), 0);
+    let mut near_edge = [(0, 0)];
+    let mut far_edge = [(x, y)];
+    let mut near_depth = 0;
+    let mut far_depth = 0;
+    loop {
+        // grow the smaller frontier
+        let from_near = near_edge.len() <= far_edge.len();
+        let (edge, depth) = if from_near { (near_edge.clone(), near_depth) } else { (far_edge.clone(), far_depth) };
+        let mut next = Vec.new();
+        let mut best = -1;
+        for (cx, cy) in edge {
+            for (dx, dy) in MOVES {
+                let n = (cx + dx, cy + dy);
+                let mine = if from_near { ref near } else { ref far };
+                if mine.contains_key(n) {
+                    continue;
+                }
+                let other = if from_near { ref far } else { ref near };
+                if let Some(d) = other.get(n) {
+                    if best < 0 or depth + 1 + d < best {
+                        best = depth + 1 + d;
+                    }
+                }
+                if from_near {
+                    near.insert(n, depth + 1);
+                } else {
+                    far.insert(n, depth + 1);
+                }
+                next.push(n);
+            }
+        }
+        if best >= 0 {
+            return best;
+        }
+        if from_near {
+            near_edge = next;
+            near_depth += 1;
+        } else {
+            far_edge = next;
+            far_depth += 1;
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [(2, 1), (5, 5), (0, 0), (1, 0), (1, 1), (2, 2), (-1, -2), (0, -1), (3, 0), (300, 0), (0, -300), (150, 150), (-150, 150), (1, 299)];
+    for (x, y) in cases {
+        println(f"({x}, {y}): {min_knight_moves(x, y)}");
+    }
+    // 100 random targets with |x| + |y| <= 300
+    let mut seed = 1197;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        let s = next_random(mut seed) % 301;
+        let x = next_random(mut seed) % (s + 1);
+        let y = s - x;
+        let x = if next_random(mut seed) % 2 == 0 { x } else { -x };
+        let y = if next_random(mut seed) % 2 == 0 { y } else { -y };
+        let m = min_knight_moves(x, y);
+        total += m;
+        check = (check * 131 + m + 1) % 1000000007;
+    }
+    println(f"100 random targets: {total} moves, checksum {check}");
+}

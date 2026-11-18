@@ -1,0 +1,203 @@
+// LeetCode #1196: How Many Apples Can You Put into the Basket -- the six
+// arms against the statement read literally and six more properties.
+// Generated from the arms; see the README.
+
+// ---- arm 0: star -----------------------------------------------------
+fn a0_max_number_of_apples(weight: own Vec[i64]) -> i64 {
+    let mut weight = weight;
+    weight.sort();
+    let mut load = 0;
+    for (i, w) in weight.iter().enumerate() {
+        load += w;
+        if load > 5000 {
+            return i;
+        }
+    }
+    weight.len()
+}
+
+// ---- arm 1: count ----------------------------------------------------
+fn a1_max_number_of_apples(weight: Vec[i64]) -> i64 {
+    let mut count = [0; 1001];
+    for w in weight.iter() {
+        count[w] += 1;
+    }
+    let mut room = 5000;
+    let mut apples = 0;
+    for w in 1..=1000 {
+        let take = count[w].min(room / w);
+        apples += take;
+        room -= take * w;
+        if take < count[w] {
+            break;
+        }
+    }
+    apples
+}
+
+// ---- arm 2: heap -----------------------------------------------------
+fn a2_max_number_of_apples(weight: own Vec[i64]) -> i64 {
+    let mut load: i64 = weight.iter().sum();
+    let mut basket = PriorityQueue.max_first_from(weight);
+    while load > 5000 {
+        match basket.pop() {
+            Some(w) => load -= w,
+            None => break,
+        }
+    }
+    basket.len()
+}
+
+// ---- arm 3: prefix ---------------------------------------------------
+fn a3_max_number_of_apples(weight: own Vec[i64]) -> i64 {
+    let mut weight = weight;
+    weight.sort();
+    let mut load = 0;
+    weight.iter().map(|w| {
+        load += w;
+        load
+    }).take_while(|total| total <= 5000).count()
+}
+
+// ---- arm 4: solution -------------------------------------------------
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn max_number_of_apples(weight: own Vec[i32]) -> i32 {
+        let mut weight = weight;
+        weight.sort();
+        let mut sum = 0;
+        for (i, w) in weight.iter().enumerate() {
+            sum += w;
+            if sum > 5000 {
+                return i as i32;
+            }
+        }
+        weight.len() as i32
+    }
+}
+
+fn a4_max_number_of_apples(weight: Vec[i64]) -> i64 {
+    A4Solution.max_number_of_apples(weight.iter().map(|w| w as i32).collect())
+}
+
+// ---- arm 5: chain ----------------------------------------------------
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn max_number_of_apples(weight: own Vec[i32]) -> i32 {
+        let mut weight = weight;
+        weight.sort();
+        weight
+            .iter()
+            .scan(0, |sum, w| { let sum = sum + w; Some((sum, sum)) })
+            .take_while(|sum| sum <= 5000)
+            .count() as i32
+    }
+}
+
+fn a5_max_number_of_apples(weight: Vec[i64]) -> i64 {
+    A5Solution.max_number_of_apples(weight.iter().map(|w| w as i32).collect())
+}
+
+// ---- the statement read literally ----------------------------------------
+
+// The most apples any choice of them puts in the basket: every subset of
+// the apples weighed, and the largest within 5000 kept.
+fn literal(weight: Vec[i64]) -> i64 {
+    let n = weight.len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut load = 0;
+        let mut apples = 0;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                load += weight[i];
+                apples += 1;
+            }
+        }
+        if load <= 5000 and apples > best {
+            best = apples;
+        }
+    }
+    best
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arms(weight: Vec[i64]) -> Vec[i64] {
+    [
+        a0_max_number_of_apples(weight.clone()),
+        a1_max_number_of_apples(weight),
+        a2_max_number_of_apples(weight.clone()),
+        a3_max_number_of_apples(weight.clone()),
+        a4_max_number_of_apples(weight),
+        a5_max_number_of_apples(weight),
+    ]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["the statement read literally", "at least min(n, 5) and at most n", "the apples reversed", "one apple more puts in as many or one more", "the first apple taken out puts in as many or one fewer", "every weight halved puts in as many or more", "the ★ arm's answer"];
+    let mut fails = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 1196;
+    for _ in 0..2000 {
+        // 4 to 12 apples, each of `low` to 1000, or one in five baskets
+        // of 500s and 1000s, which often fill the basket exactly
+        let n = next_random(mut seed) % 9 + 4;
+        let kind = next_random(mut seed) % 5;
+        let weight: Vec[i64] = if kind == 4 {
+            (0..n).map(|_| 500 * (1 + next_random(mut seed) % 2)).collect()
+        } else {
+            let low = [1, 300, 500, 700][kind];
+            (0..n).map(|_| low + next_random(mut seed) % (1001 - low)).collect()
+        };
+        let extra = 1 + next_random(mut seed) % 1000;
+        let got = arms(weight);
+        let want = literal(weight);
+        let reversed: Vec[i64] = weight.iter().rev().collect();
+        let back = arms(reversed);
+        let mut more = weight.clone();
+        more.push(extra);
+        let more = arms(more);
+        let rest: Vec[i64] = weight.iter().skip(1).collect();
+        let fewer = arms(rest);
+        let halved: Vec[i64] = weight.iter().map(|w| (w + 1) / 2).collect();
+        let lighter = arms(halved);
+        for i in 0..6 {
+            let v = got[i];
+            let held = [
+                v == want,
+                v >= n.min(5) and v <= n,
+                back[i] == v,
+                more[i] == v or more[i] == v + 1,
+                fewer[i] == v or fewer[i] == v - 1,
+                lighter[i] >= v,
+                v == got[0],
+            ];
+            for p in 0..7 {
+                checks += 1;
+                if not held[p] {
+                    fails[p] += 1;
+                    if fails[p] <= 2 {
+                        println(f"P{p + 1} ({names[p]}) fails on arm {i}: {weight} -> {v}");
+                    }
+                }
+            }
+        }
+        check = (check * 131 + got[0] + 1) % 1000000007;
+    }
+    for p in 0..7 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    let total = fails.iter().sum();
+    println(f"2000 baskets: checksum {check}, {checks} checks over 6 arms: {total} failures");
+}

@@ -1,0 +1,63 @@
+// LeetCode #1197: Minimum Knight Moves -- the ★ arm, a breadth-first search
+// from the origin. The board is symmetric under each reflection, so the
+// target is folded into the first quadrant; a shortest path there never
+// needs a square below -2 in either coordinate, and with |x| + |y| <= 300
+// none past 302, so the squares searched fit a 305 x 305 grid.
+
+const MOVES: Array[(i64, i64), 8] = [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)];
+
+fn min_knight_moves(x: i64, y: i64) -> i64 {
+    let tx = x.abs();
+    let ty = y.abs();
+    let side = 305;
+    let mut seen = Vec.filled(side * side, false);
+    let mut queue = VecDeque.new();
+    queue.push_back((0, 0, 0));
+    seen[2 * side + 2] = true;
+    while let Some((cx, cy, steps)) = queue.pop_front() {
+        if cx == tx and cy == ty {
+            return steps;
+        }
+        for (dx, dy) in MOVES {
+            let nx = cx + dx;
+            let ny = cy + dy;
+            if nx >= -2 and ny >= -2 and nx <= 302 and ny <= 302 {
+                let k = (nx + 2) * side + ny + 2;
+                if not seen[k] {
+                    seen[k] = true;
+                    queue.push_back((nx, ny, steps + 1));
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = [(2, 1), (5, 5), (0, 0), (1, 0), (1, 1), (2, 2), (-1, -2), (0, -1), (3, 0), (300, 0), (0, -300), (150, 150), (-150, 150), (1, 299)];
+    for (x, y) in cases {
+        println(f"({x}, {y}): {min_knight_moves(x, y)}");
+    }
+    // 100 random targets with |x| + |y| <= 300
+    let mut seed = 1197;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        let s = next_random(mut seed) % 301;
+        let x = next_random(mut seed) % (s + 1);
+        let y = s - x;
+        let x = if next_random(mut seed) % 2 == 0 { x } else { -x };
+        let y = if next_random(mut seed) % 2 == 0 { y } else { -y };
+        let m = min_knight_moves(x, y);
+        total += m;
+        check = (check * 131 + m + 1) % 1000000007;
+    }
+    println(f"100 random targets: {total} moves, checksum {check}");
+}

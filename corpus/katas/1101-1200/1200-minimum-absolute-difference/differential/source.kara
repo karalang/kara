@@ -1,0 +1,241 @@
+// LeetCode #1200: Minimum Absolute Difference -- the six arms against the
+// statement read literally and six more properties.
+// Generated from the arms; see the README.
+
+// ---- arm 0: star --------------------------------------------------------
+fn a0_minimum_abs_difference(arr: own Vec[i64]) -> Vec[Vec[i64]] {
+    let mut arr = arr;
+    arr.sort();
+    let mut least = i64.MAX;
+    for i in 1..arr.len() {
+        least = least.min(arr[i] - arr[i - 1]);
+    }
+    let mut pairs = Vec.new();
+    for i in 1..arr.len() {
+        if arr[i] - arr[i - 1] == least {
+            pairs.push([arr[i - 1], arr[i]]);
+        }
+    }
+    pairs
+}
+
+// ---- arm 1: onepass -----------------------------------------------------
+fn a1_minimum_abs_difference(arr: own Vec[i64]) -> Vec[Vec[i64]] {
+    let mut arr = arr;
+    arr.sort();
+    let mut least = i64.MAX;
+    let mut pairs: Vec[Vec[i64]] = Vec.new();
+    for i in 1..arr.len() {
+        let d = arr[i] - arr[i - 1];
+        if d < least {
+            least = d;
+            pairs.clear();
+        }
+        if d == least {
+            pairs.push([arr[i - 1], arr[i]]);
+        }
+    }
+    pairs
+}
+
+// ---- arm 2: marks -------------------------------------------------------
+fn a2_minimum_abs_difference(arr: Vec[i64]) -> Vec[Vec[i64]] {
+    let low = arr.iter().min().unwrap();
+    let high = arr.iter().max().unwrap();
+    let mut seen = Vec.filled(high - low + 1, false);
+    for v in arr.iter() {
+        seen[v - low] = true;
+    }
+    let mut least = i64.MAX;
+    let mut pairs: Vec[Vec[i64]] = Vec.new();
+    let mut last = low;
+    for k in 1..seen.len() {
+        if not seen[k] {
+            continue;
+        }
+        let v = k + low;
+        let d = v - last;
+        if d < least {
+            least = d;
+            pairs.clear();
+        }
+        if d == least {
+            pairs.push([last, v]);
+        }
+        last = v;
+    }
+    pairs
+}
+
+// ---- arm 3: windows -----------------------------------------------------
+fn a3_minimum_abs_difference(arr: own Vec[i64]) -> Vec[Vec[i64]] {
+    let mut arr = arr;
+    arr.sort();
+    let least = arr.windows(2).into_iter().map(|w| w[1] - w[0]).min().unwrap();
+    arr.windows(2).into_iter().filter(|w| w[1] - w[0] == least).map(|w| w.to_vec()).collect()
+}
+
+// ---- arm 4: solution ----------------------------------------------------
+struct A4Solution {}
+
+impl A4Solution {
+    pub fn minimum_abs_difference(arr: own Vec[i32]) -> Vec[Vec[i32]] {
+        let mut arr = arr;
+        arr.sort();
+        let min_diff = arr.windows(2).into_iter().map(|w| w[1] - w[0]).min().unwrap();
+        arr.windows(2).into_iter()
+            .filter(|w| w[1] - w[0] == min_diff)
+            .map(|w| [w[0], w[1]])
+            .collect()
+    }
+}
+
+fn a4_minimum_abs_difference(arr: own Vec[i64]) -> Vec[Vec[i64]] {
+    A4Solution.minimum_abs_difference(arr.iter().map(|v| v as i32).collect())
+        .iter()
+        .map(|p| p.iter().map(|v| v as i64).collect())
+        .collect()
+}
+
+// ---- arm 5: loop --------------------------------------------------------
+struct A5Solution {}
+
+impl A5Solution {
+    pub fn minimum_abs_difference(arr: own Vec[i32]) -> Vec[Vec[i32]] {
+        let mut arr = arr;
+        arr.sort();
+        let mut res: Vec[Vec[i32]] = Vec.new();
+        let mut min = i32.MAX;
+        for i in 1..arr.len() {
+            let d = arr[i] - arr[i - 1];
+            if d < min {
+                min = d;
+                res.clear();
+            }
+            if d == min {
+                res.push([arr[i - 1], arr[i]]);
+            }
+        }
+        res
+    }
+}
+
+fn a5_minimum_abs_difference(arr: own Vec[i64]) -> Vec[Vec[i64]] {
+    A5Solution.minimum_abs_difference(arr.iter().map(|v| v as i32).collect())
+        .iter()
+        .map(|p| p.iter().map(|v| v as i64).collect())
+        .collect()
+}
+
+// ---- the statement read literally ----------------------------------------
+
+// Every pair of values weighed: the least difference of any two, then
+// every pair that has it, the smaller first, and the pairs in order.
+fn literal(arr: Vec[i64]) -> Vec[Vec[i64]] {
+    let n = arr.len();
+    let mut least = -1;
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                let d = (arr[i] - arr[j]).abs();
+                if least < 0 or d < least {
+                    least = d;
+                }
+            }
+        }
+    }
+    let mut pairs: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        for j in 0..n {
+            if arr[j] - arr[i] == least {
+                pairs.push([arr[i], arr[j]]);
+            }
+        }
+    }
+    pairs.sort();
+    pairs
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arms(arr: Vec[i64]) -> Vec[Vec[Vec[i64]]] {
+    [
+        a0_minimum_abs_difference(arr.clone()),
+        a1_minimum_abs_difference(arr.clone()),
+        a2_minimum_abs_difference(arr),
+        a3_minimum_abs_difference(arr.clone()),
+        a4_minimum_abs_difference(arr.clone()),
+        a5_minimum_abs_difference(arr.clone()),
+    ]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn mapped(pairs: Vec[Vec[i64]], f: Fn(i64) -> i64) -> Vec[Vec[i64]] {
+    pairs.iter().map(|p| [f(p[0]), f(p[1])]).collect()
+}
+
+fn main() {
+    let names = ["the statement read literally", "each pair rising by one difference, the pairs in order, at most n - 1", "the values reversed", "the values negated mirror the pairs", "the values doubled double the pairs", "the values 500 higher shift the pairs", "the ★ arm's answer"];
+    let mut fails = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 1200;
+    for _ in 0..2000 {
+        // 2 to 20 distinct values from -span to span
+        let n = next_random(mut seed) % 19 + 2;
+        let span = [10, 50, 1000][next_random(mut seed) % 3];
+        let mut taken: Set[i64] = Set.new();
+        let mut arr = Vec.new();
+        while arr.len() < n {
+            let v = next_random(mut seed) % (2 * span + 1) - span;
+            if taken.insert(v) {
+                arr.push(v);
+            }
+        }
+        let got = arms(arr);
+        let want = literal(arr);
+        let back = arms(arr.iter().rev().collect());
+        let negated = arms(arr.iter().map(|v| -v).collect());
+        let doubled = arms(arr.iter().map(|v| 2 * v).collect());
+        let shifted = arms(arr.iter().map(|v| v + 500).collect());
+        for i in 0..6 {
+            let v = ref got[i];
+            let mut mirror: Vec[Vec[i64]] = v.iter().map(|p| [-p[1], -p[0]]).collect();
+            mirror.reverse();
+            let shape = v.len() >= 1 and v.len() <= n - 1 and v.iter().all(|p| p[0] < p[1] and p[1] - p[0] == v[0][1] - v[0][0]) and (1..v.len()).all(|k| v[k - 1][0] < v[k][0]);
+            let held = [
+                v == want,
+                shape,
+                back[i] == v,
+                negated[i] == mirror,
+                doubled[i] == mapped(v, |x| 2 * x),
+                shifted[i] == mapped(v, |x| x + 500),
+                v == got[0],
+            ];
+            for p in 0..7 {
+                checks += 1;
+                if not held[p] {
+                    fails[p] += 1;
+                    if fails[p] <= 2 {
+                        println(f"P{p + 1} ({names[p]}) fails on arm {i}: {arr} -> {v}");
+                    }
+                }
+            }
+        }
+        for p in got[0].iter() {
+            check = (check * 131 + p[0] + 2000) % 1000000007;
+            check = (check * 131 + p[1] + 2000) % 1000000007;
+        }
+    }
+    for p in 0..7 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    let total = fails.iter().sum();
+    println(f"2000 arrays: checksum {check}, {checks} checks over 6 arms: {total} failures");
+}

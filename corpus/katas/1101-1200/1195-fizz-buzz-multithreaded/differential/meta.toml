@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1101-1200/1195-fizz-buzz-multithreaded/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "post-m1:par", "post-m1:net"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "ef4d75dcb"
+extracted_src = "e4562722"
