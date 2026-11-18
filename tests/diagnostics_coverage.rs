@@ -121,12 +121,11 @@ const NO_PIN: &[(&str, &str)] = &[
         "build_cache::record has no caller in 0.8, so no build writes the cache",
     ),
     (
-        "W_DEPENDENCY_YANKED",
-        "needs a registry store with a yanked version pinned by kara.lock; tests/registry_fetch_e2e.rs build_warns_when_lockfile_pins_a_yanked_version produces it",
-    ),
-    (
         "E_DEPENDENCY_UNSATISFIABLE",
-        "needs a version conflict PubGrub cannot resolve across registry versions; src/dep_resolver.rs unit tests produce it",
+        "PubGrub's derivation-report fallback: the solve fails only when the walk's highest-version \
+         picks conflict, and first_version_conflict names that pair first as \
+         E_DEPENDENCY_VERSION_CONFLICT (lockfile pins are preferences, not constraints); \
+         src/dep_resolver.rs unit tests render it",
     ),
 ];
 

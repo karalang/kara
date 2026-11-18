@@ -53,6 +53,14 @@ const CATALOG_1_2_0_YANKED: &str =
 /// A registry proxy on a local socket: `/catalog/...` answers `catalog`,
 /// anything else (`/pkg/...`) answers `tarball`, each as (status, body).
 fn serve(catalog: (u16, &'static str), tarball: (u16, &'static str)) -> String {
+    serve_bytes(
+        (catalog.0, catalog.1.as_bytes().to_vec()),
+        (tarball.0, tarball.1.as_bytes().to_vec()),
+    )
+}
+
+/// [`serve`] with byte bodies, for a real `.tar.gz`.
+fn serve_bytes(catalog: (u16, Vec<u8>), tarball: (u16, Vec<u8>)) -> String {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -70,18 +78,35 @@ fn serve(catalog: (u16, &'static str), tarball: (u16, &'static str)) -> String {
             }
             let path = request.split_whitespace().nth(1).unwrap_or("");
             let (status, body) = if path.starts_with("/catalog/") {
-                catalog
+                &catalog
             } else {
-                tarball
+                &tarball
             };
             let _ = write!(
                 stream,
-                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
+            let _ = stream.write_all(body);
         }
     });
     format!("http://{addr}")
+}
+
+/// A `.tar.gz` of `entries`, as a registry serves a package.
+fn targz(entries: &[(&str, &str)]) -> Vec<u8> {
+    let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut builder = tar::Builder::new(gz);
+    for (path, contents) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, contents.as_bytes())
+            .unwrap();
+    }
+    builder.into_inner().unwrap().finish().unwrap()
 }
 
 fn reported(out: &str, code: &str) -> bool {
@@ -604,6 +629,41 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
         );
     }
 
+    // A lockfile pin on a version the registry has since yanked: the pin is
+    // honoured and built, with a warning.
+    let dir = d.join("yanked_pin");
+    package(&dir, "app", "[dependencies]\nhttp = \"1.2\"\n", true);
+    std::fs::write(
+        dir.join("kara.lock"),
+        "version = 1\n\n[[package]]\nname = \"app\"\nversion = \"0.0.0\"\nsource = \"root\"\n\
+         content_hash = \"blake3:x\"\ndependencies = [\"http\"]\n\n[[package]]\nname = \"http\"\n\
+         version = \"1.2.0\"\nsource = \"registry+https://example.test/http\"\n\
+         content_hash = \"blake3:y\"\ndependencies = []\n",
+    )
+    .unwrap();
+    let url = serve_bytes(
+        (200, CATALOG_1_2_0_YANKED.as_bytes().to_vec()),
+        (
+            200,
+            targz(&[
+                ("kara.toml", "[package]\nname = \"http\"\n"),
+                ("src/lib.kara", "pub fn answer() -> i64 { 42 }\n"),
+            ]),
+        ),
+    );
+    let cache = dir.join("cache");
+    expect(
+        "W_DEPENDENCY_YANKED",
+        karac(
+            &dir,
+            &check,
+            &[
+                ("KARAC_REGISTRY_PROXY", Some(url.as_str())),
+                ("KARAC_REGISTRY_CACHE_ROOT", cache.to_str()),
+            ],
+        ),
+    );
+
     // A lint's deny form from the command line, on its warning pin; the
     // `#[deny]` form is tests/lint_item_attributes.rs (B-2026-11-18-48).
     let pins = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/diagnostics");
@@ -625,7 +685,7 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
     }
 
     // A void run must not pass.
-    assert_eq!(seen, 67, "case count changed");
+    assert_eq!(seen, 68, "case count changed");
     assert!(bad.is_empty(), "{}", bad.join("\n\n"));
     let _ = std::fs::remove_dir_all(&root);
 }
