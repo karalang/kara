@@ -335,14 +335,10 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
     package(&d, "app", "", true);
     std::fs::write(
         d.join("src/main.kara"),
-        "#[allow(unused_variables)]\nfn helper() -> i64 {\n    let x = 1;\n    2\n}\n\nfn main() {\n    println(helper());\n}\n",
+        "#[allow(unused_mut)]\nfn helper() -> i64 {\n    let mut x = 1;\n    x\n}\n\nfn main() {\n    println(helper());\n}\n",
     )
     .unwrap();
-    let out = karac(
-        &d,
-        &["check", "-F", "unused_variables", "--output=json"],
-        &[],
-    );
+    let out = karac(&d, &["check", "-F", "unused_mut", "--output=json"], &[]);
     // E0247 is the JSON `parent_code` of the symbolic code.
     expect("E_FORBIDDEN_LINT_ALLOW", out.clone());
     expect("E0247", out);
@@ -608,8 +604,8 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
         );
     }
 
-    // A lint's deny form, from its warning pin, for the lints that do not
-    // read `#[deny]` on the enclosing item (B-2026-11-18-48).
+    // A lint's deny form from the command line, on its warning pin; the
+    // `#[deny]` form is tests/lint_item_attributes.rs (B-2026-11-18-48).
     let pins = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/diagnostics");
     for (code, lint, pin) in [
         ("E0278", "must_use", "w0278"),

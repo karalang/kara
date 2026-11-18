@@ -1,0 +1,1 @@
+ERROR at line 5: extending a map's container value by clone-and-reinsert copies the whole value on every append — appending the k-th item under one key copies k-1 elements, so building this map is O(k²) where it could be O(k). `index.entry(w).or_insert(..)` returns a `mut ref` into the map's own slot, so `push` appends in place and nothing is copied

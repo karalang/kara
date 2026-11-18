@@ -21,18 +21,6 @@ use std::path::Path;
 /// the files above that does produce it.
 const NO_PIN: &[(&str, &str)] = &[
     (
-        "E0312",
-        "the deny form of map_value_clone_reinsert, which ignores -D and #[deny] and stays W0312 (B-2026-11-18-48)",
-    ),
-    (
-        "L0001",
-        "FfiLintHint is built by the effect checker but neither check nor run surfaces it (B-2026-11-18-49)",
-    ),
-    (
-        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
-        "a runtime panic whose message neither backend prefixes with the code: `runtime error: byte index 2 is not a char boundary` (B-2026-11-18-49)",
-    ),
-    (
         "W0246",
         "fires only on a std library `pub enum` without #[non_exhaustive]; a user enum is never checked",
     ),

@@ -699,6 +699,30 @@ pub fn effective_level_for_module_lint(
     }
 }
 
+/// The severity of `lint` for a finding at `span`, for a lint that runs
+/// outside the typechecker's attribute cascade: a CLI forbid; else the
+/// innermost attribute naming the lint (the statement's, the statements
+/// around it, the function's or method's, its impl block's); else the CLI
+/// flags over the registry default. An `#[expect]` suppresses, as
+/// [`effective_level_for_module_lint`] has it (B-2026-11-18-48: five lints
+/// read only the CLI, so `#[allow]` / `#[deny]` on an item did nothing).
+pub fn severity_at(
+    program: &crate::ast::Program,
+    span: &crate::token::Span,
+    cli: &CliLintOverrides,
+    lint_name: &str,
+) -> ModuleLintSeverity {
+    if cli.is_forbidden(lint_name) {
+        return ModuleLintSeverity::Deny;
+    }
+    match crate::typechecker::attribute_lint_level_at(program, span, lint_name).map(|ov| ov.level) {
+        Some(LintLevel::Allow | LintLevel::Expect) => ModuleLintSeverity::Suppress,
+        Some(LintLevel::Warn) => ModuleLintSeverity::Warn,
+        Some(LintLevel::Deny) => ModuleLintSeverity::Deny,
+        None => effective_level_for_module_lint(false, false, false, cli, lint_name),
+    }
+}
+
 #[cfg(test)]
 mod emit_site_guard {
     //! A registered lint that nothing emits is a promise the compiler does not

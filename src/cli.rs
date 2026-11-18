@@ -1759,7 +1759,17 @@ impl Pipeline {
                 &source,
                 &self.lint_overrides,
             );
-            typed.warnings.extend(extra);
+            for finding in extra {
+                if crate::map_entry_lint::is_denied(
+                    &self.parsed.program,
+                    &finding,
+                    &self.lint_overrides,
+                ) {
+                    typed.errors.push(finding);
+                } else {
+                    typed.warnings.push(finding);
+                }
+            }
         }
         // B-2026-10-21-56 — `std.regex` and `std.json` items are used through
         // an import; a bare use is an error whose fix-it adds it. Read from

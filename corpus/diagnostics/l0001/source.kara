@@ -1,0 +1,7 @@
+unsafe extern "C" {
+    fn malloc(n: usize) -> *mut u8;
+}
+
+fn main() {
+    println(1);
+}

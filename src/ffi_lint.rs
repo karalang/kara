@@ -45,20 +45,9 @@ pub fn check_ffi_float_eq(
     program: &Program,
     cli_lint_overrides: &crate::lints::CliLintOverrides,
 ) -> Vec<FfiFloatEqDiagnostic> {
-    let severity = crate::lints::effective_level_for_module_lint(
-        false,
-        false,
-        false,
-        cli_lint_overrides,
-        "ffi_float_eq",
-    );
-    if matches!(severity, crate::lints::ModuleLintSeverity::Suppress) {
-        return Vec::new();
-    }
-    let level = match severity {
-        crate::lints::ModuleLintSeverity::Deny => LintLevel::Error,
-        _ => LintLevel::Warning,
-    };
+    // Each finding takes the level in force at its own span
+    // (B-2026-11-18-48), so the walk stamps a placeholder.
+    let level = LintLevel::Warning;
     let ffi_float_fns = collect_ffi_float_fns(program);
     let mut diags = Vec::new();
     for item in &program.items {
@@ -74,6 +63,14 @@ pub fn check_ffi_float_eq(
             _ => {}
         }
     }
+    diags.retain_mut(|d| {
+        match crate::lints::severity_at(program, &d.span, cli_lint_overrides, "ffi_float_eq") {
+            crate::lints::ModuleLintSeverity::Suppress => return false,
+            crate::lints::ModuleLintSeverity::Warn => d.level = LintLevel::Warning,
+            crate::lints::ModuleLintSeverity::Deny => d.level = LintLevel::Error,
+        }
+        true
+    });
     diags
 }
 

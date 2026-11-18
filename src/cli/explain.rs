@@ -2129,15 +2129,6 @@ const fn res(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
 /// and names the section, so the prose has a source to be checked against.
 const CODE_PROSE: &[(&str, &str)] = &[
     (
-        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
-        "A runtime error (panic kind `index_out_of_bounds`): a string was sliced \
-         by a byte range (`s[a..b]`) whose ends do not fall between UTF-8 \
-         characters, so the slice would cut a character in two. The message \
-         reads `byte index N is not a char boundary` and names the first end \
-         that cuts one; it quotes none of the text (B-2026-11-16-320). Slice at a boundary (`s.char_indices()` gives each \
-         character's byte offset), or work in characters with `s.chars()`.",
-    ),
-    (
         "W_OPAQUE_TYPE_REDECLARED",
         "A warning (design.md §15, Opaque foreign types): two `unsafe extern` \
          blocks declare the same opaque type `type Foo;`. Both must name the \
@@ -4909,6 +4900,7 @@ const RETIRED_CODES: &[(&str, &str)] = &[
     ("E_RC_BUDGET_EXCEEDED", "The budget counted inserted reference counts, and the compiler inserts none (core-semantics.md §6.4): where one would have been, the program has the move error E0500."),
     ("N0503", "The RC fallback note is gone with the fallback (core-semantics.md §6.4, \"No implicit sharing\"): where it would have fired, the program has the move error E0500."),
     ("E0413", "A panic aborts in every build (core-semantics.md §10), so no panic unwinds through an exported `extern \"C-unwind\"` fn and it need not declare `panics`: such a fn is refused as E0415, which names the abort-only build."),
+    ("E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY", "Slicing a string inside a character is a runtime panic (kind `index_out_of_bounds`), and no panic prints a diagnostic code: the message reads `byte index N is not a char boundary` (B-2026-11-16-320). Slice at a boundary (`s.char_indices()` gives each character's byte offset), or work in characters with `s.chars()`."),
     ("N0507", "The note suggested the `mut ref ||` capture prefix, which is removed from the language: writing it is E0519."),
     ("E_MODULE_BINDING_NAMING", "A module-level `let` is E_MODULE_LET, whose fix declares it `const` under its SCREAMING_SNAKE_CASE name and renames its uses (design.md § Constants)."),
 ];

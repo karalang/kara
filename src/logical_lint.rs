@@ -38,30 +38,25 @@ pub fn check_ambiguous_not_comparison(
     program: &Program,
     cli_lint_overrides: &crate::lints::CliLintOverrides,
 ) -> Vec<LintDiagnostic> {
-    // Slice 4b cross-cutting — compute the post-cascade severity
-    // once (the lint name is constant per module, so the resolution
-    // is the same for every emission this pass produces). The
-    // `false`s reflect the module's current scope: no in-source
-    // attribute walking happens here (unlike `unsafe_lint`), so
-    // suppression / promotion is purely CLI-driven for now.
-    let severity = crate::lints::effective_level_for_module_lint(
-        false,
-        false,
-        false,
-        cli_lint_overrides,
-        "ambiguous_not_comparison",
-    );
-    if matches!(severity, crate::lints::ModuleLintSeverity::Suppress) {
-        return Vec::new();
-    }
-    let level = match severity {
-        crate::lints::ModuleLintSeverity::Deny => LintLevel::Error,
-        _ => LintLevel::Warning,
-    };
+    // Each finding takes the level in force at its own span: the
+    // attributes around it, then the CLI (B-2026-11-18-48).
     let mut diags = Vec::new();
     for item in &program.items {
-        walk_item(item, level, &mut diags);
+        walk_item(item, LintLevel::Warning, &mut diags);
     }
+    diags.retain_mut(|d| {
+        match crate::lints::severity_at(
+            program,
+            &d.span,
+            cli_lint_overrides,
+            "ambiguous_not_comparison",
+        ) {
+            crate::lints::ModuleLintSeverity::Suppress => return false,
+            crate::lints::ModuleLintSeverity::Warn => d.level = LintLevel::Warning,
+            crate::lints::ModuleLintSeverity::Deny => d.level = LintLevel::Error,
+        }
+        true
+    });
     diags
 }
 

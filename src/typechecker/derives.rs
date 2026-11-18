@@ -1450,6 +1450,13 @@ impl<'a> super::TypeChecker<'a> {
             .copied()
             .collect();
         for (span, why) in found {
+            // This runs after the item walk, with no frame pushed: the
+            // attribute around the comment sets its level (B-2026-11-18-48).
+            let frame: Vec<_> =
+                super::attribute_lint_level_at(self.program, &span, "unused_doc_comment")
+                    .into_iter()
+                    .collect();
+            self.lint_override_stack.push(frame);
             self.type_lint_warning_with_fix(
                 format!(
                     "this doc comment documents nothing ({why}), so it is discarded \
@@ -1460,6 +1467,7 @@ impl<'a> super::TypeChecker<'a> {
                 "unused_doc_comment",
                 None,
             );
+            self.lint_override_stack.pop();
         }
     }
 

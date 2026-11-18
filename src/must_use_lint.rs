@@ -159,24 +159,10 @@ pub fn check_implicit_must_use(
     let Some(typed) = typed else {
         return Vec::new();
     };
-    // Slice 4b cross-cutting — resolve the CLI fall-through severity
-    // once (the lint name is constant per pass). Suppress is a fast
-    // exit; Warn / Deny set the level the walker stamps on each
-    // emitted diagnostic.
-    let severity = crate::lints::effective_level_for_module_lint(
-        false,
-        false,
-        false,
-        cli_lint_overrides,
-        "must_use",
-    );
-    if matches!(severity, crate::lints::ModuleLintSeverity::Suppress) {
-        return Vec::new();
-    }
-    let level = match severity {
-        crate::lints::ModuleLintSeverity::Deny => LintLevel::Error,
-        _ => LintLevel::Warning,
-    };
+    // Each finding takes the level in force at its own span: the
+    // attributes around it, then the CLI (B-2026-11-18-48). The walker
+    // stamps a placeholder, set at the end.
+    let level = LintLevel::Warning;
     let mut diags: Vec<LintDiagnostic> = Vec::new();
     {
         let library_iterators: std::collections::HashSet<&str> = program
@@ -233,6 +219,14 @@ pub fn check_implicit_must_use(
     // program).
     let user_end = user_text_end(program);
     diags.retain(|d| d.span.offset < user_end);
+    diags.retain_mut(|d| {
+        match crate::lints::severity_at(program, &d.span, cli_lint_overrides, "must_use") {
+            crate::lints::ModuleLintSeverity::Suppress => return false,
+            crate::lints::ModuleLintSeverity::Warn => d.level = LintLevel::Warning,
+            crate::lints::ModuleLintSeverity::Deny => d.level = LintLevel::Error,
+        }
+        true
+    });
     diags
 }
 

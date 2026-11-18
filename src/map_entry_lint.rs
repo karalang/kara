@@ -375,22 +375,10 @@ pub fn check_map_value_clone_reinsert(
     src: &str,
     cli_lint_overrides: &crate::lints::CliLintOverrides,
 ) -> Vec<TypeError> {
-    // Honour `--allow`/`--deny` and the manifest's `[lints]` table. Per-ITEM
-    // `#[allow(map_value_clone_reinsert)]` is NOT yet honoured — this module
-    // emits outside `TypeChecker::type_lint_warning`, which is what consults
-    // item attributes. That matches `must_use_lint`, which passes the same
-    // `false` triple for the source-level flags; wiring attribute scope is a
-    // shared follow-up for both, not something to fake here.
-    let severity = crate::lints::effective_level_for_module_lint(
-        false,
-        false,
-        false,
-        cli_lint_overrides,
-        LINT_NAME,
-    );
-    if matches!(severity, crate::lints::ModuleLintSeverity::Suppress) {
-        return Vec::new();
-    }
+    // Each finding takes the level in force at its own span: the attributes
+    // around it, then `-A` / `-D` and the manifest's `[lints]` table
+    // (B-2026-11-18-48). A suppressed one is dropped here; the caller files a
+    // denied one as an error ([`is_denied`]).
     let mut out = Vec::new();
     for item in &program.items {
         match item {
@@ -414,7 +402,22 @@ pub fn check_map_value_clone_reinsert(
             _ => {}
         }
     }
+    out.retain(|e| {
+        crate::lints::severity_at(program, &e.span, cli_lint_overrides, LINT_NAME)
+            != crate::lints::ModuleLintSeverity::Suppress
+    });
     out
+}
+
+/// Whether a finding of [`check_map_value_clone_reinsert`] is an error: `-D`,
+/// `-F` or a `#[deny]` around it (B-2026-11-18-48), so it reports E0312.
+pub fn is_denied(
+    program: &Program,
+    finding: &TypeError,
+    cli_lint_overrides: &crate::lints::CliLintOverrides,
+) -> bool {
+    crate::lints::severity_at(program, &finding.span, cli_lint_overrides, LINT_NAME)
+        == crate::lints::ModuleLintSeverity::Deny
 }
 
 fn walk_block(block: &Block, typed: &TypeCheckResult, src: &str, out: &mut Vec<TypeError>) {

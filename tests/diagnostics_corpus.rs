@@ -172,6 +172,10 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("N0503", "E0500"),
         ("N0507", "E0519"),
         ("E0413", "E0415"),
+        (
+            "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY",
+            "is not a char boundary",
+        ),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(out.contains("This code is retired"), "{code}: {out}");
