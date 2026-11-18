@@ -3767,13 +3767,12 @@ const CODE_PROSE: &[(&str, &str)] = &[
     ),
     (
         "E_GIT_DEP_UNSUPPORTED",
-        "A git dependency is in the graph of a command that does not fetch \
-         git dependencies (design.md § Packages and manifests, Dependencies \
-         in 0.8). `check`, `run`, `build` and `test` fetch them; `karac \
-         vendor` and `karac update` do not yet, and report this as a \
-         warning and skip the dependency (B-2026-11-18-4). Until they do, \
-         vendor such a dependency by cloning it and declaring it as a \
-         `path` dependency.",
+        "A git dependency is declared and was not cloned: either the git \
+         cache has no root (it needs `KARAC_GIT_CACHE_ROOT` or `$HOME`), or \
+         the command ran with `--offline` (design.md § Packages and \
+         manifests, Dependencies in 0.8). Set one of the two variables, drop \
+         `--offline`, or replace the dependency with a `path` dependency on \
+         a local checkout.",
     ),
     (
         "E_GIT_FETCH_FAILED",
@@ -4028,11 +4027,9 @@ const CODE_PROSE: &[(&str, &str)] = &[
          declared and no registry proxy is configured (design.md § Packages \
          and manifests, Dependencies in 0.8). Set `KARAC_REGISTRY_PROXY` to \
          a proxy's URL, or replace the dependency with a `path` dependency \
-         on a local checkout. In `check`, `run`, `build` and `test` it is \
-         an error, because a dependency dropped silently would surface \
-         later as an unknown module; `karac vendor` and `karac update` do \
-         not fetch registry dependencies yet and report it as a warning \
-         (B-2026-11-18-4).",
+         on a local checkout. It is an error, not a warning, because a \
+         dependency dropped silently would surface later as an unknown \
+         module.",
     ),
     (
         "E_REGISTRY_EXTRACT_FAILED",

@@ -76,7 +76,7 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
         } => Diagnostic {
             code: err.code(),
             primary: format!(
-                "git dependency `{}` cannot be resolved yet",
+                "git dependency `{}` was not fetched",
                 package
             ),
             notes: vec![format!(
@@ -84,7 +84,7 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
                 declared_in.display()
             )],
             help: Some(
-                "git dependencies are not in 0.8; switch to a `path = \"...\"` dependency that points at a local checkout".to_string()
+                "a git dependency is cloned into the git cache, which needs `KARAC_GIT_CACHE_ROOT` or `$HOME`, and is never cloned under `--offline`; set one of them, drop `--offline`, or switch to a `path = \"...\"` dependency that points at a local checkout".to_string()
             ),
         },
         ResolverError::VersionConflict {

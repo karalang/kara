@@ -196,7 +196,7 @@ impl std::fmt::Display for ResolverError {
                 declared_in,
             } => write!(
                 f,
-                "git dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: git dependencies are not in 0.8",
+                "git dependency `{}` (declared in `{}/kara.toml`) was not fetched: no git cache root (`KARAC_GIT_CACHE_ROOT` or `$HOME`), or `--offline`",
                 package,
                 declared_in.display(),
             ),

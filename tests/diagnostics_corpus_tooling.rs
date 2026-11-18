@@ -164,6 +164,19 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
     let no_git = karac(&d, &check, &[("PATH", Some(""))]);
     expect("E_GIT_UNAVAILABLE", no_git.clone());
     expect("E_GIT_FETCH_FAILED", no_git);
+    // No git cache root to clone into.
+    expect(
+        "E_GIT_DEP_UNSUPPORTED",
+        karac(
+            &d,
+            &check,
+            &[
+                ("HOME", None),
+                ("USERPROFILE", None),
+                ("KARAC_GIT_CACHE_ROOT", None),
+            ],
+        ),
+    );
 
     // A lockfile that does not parse is a warning, and its pins are dropped.
     let d = root.join("lock");
@@ -278,7 +291,7 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
     );
 
     // A void run must not pass.
-    assert_eq!(seen, 35, "case count changed");
+    assert_eq!(seen, 36, "case count changed");
     assert!(bad.is_empty(), "{}", bad.join("\n\n"));
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -295,7 +308,6 @@ fn diagnostics_corpus_tooling_unprovoked_codes_are_explained() {
         "E_DEPENDENCY_SOURCE_CONFLICT",
         "E_DEPENDENCY_UNSATISFIABLE",
         "E_DEPENDENCY_VERSION_CONFLICT",
-        "E_GIT_DEP_UNSUPPORTED",
         "E_GIT_NO_MANIFEST",
         "E_INSTALL_BIN_DIR_UNWRITABLE",
         "E_INSTALL_BUILD_FAILED",
