@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 527 |
-| false-positive | 269 |
+| false-positive | 271 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 114 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 655 |
+| typecheck | 657 |
 | mir-llvm | 294 |
 | mir | 255 |
 | cli | 203 |
@@ -122,6 +122,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-68 | 2026-11-18 | typecheck | medium | A bare parameter of an unbounded type parameter handed to a generic `own` parameter is offered `.clone()` (E0236 after the fix) instead of `own` | — |
 | B-2026-11-18-69 | 2026-11-18 | typecheck+cli | low | E0208's derive fix adds `#[derive(PartialOrd, PartialEq)]` to a type that implements `PartialEq` by hand, and the fixed program is E0240 (conflicting impl) | — |
 | B-2026-11-18-70 | 2026-11-18 | typecheck | low | The E0236 fix for `v.iter().chunks(2).collect()` into a `Vec[Vec[i64]]` writes `v.chunks(2).into_iter().collect()`, whose items are slices (E0200 FromIterator[Slice[i64]]) | — |
+| B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
 
 ### Relocated
 
@@ -1740,6 +1741,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-62 | typecheck | low | A constant whose type holds a `Slice` of list literals (Rust's `const FOLLOWS: [&[usize]; 5] = [&[1], &[0, 2], ..]`, which `karac fix` writes `Array[… | 2e40b2fffa |
 | B-2026-11-18-63 | resolver | low | `import std.data.{DataFrame};` (or `{Column}`) is told the item "is in the prelude, visible without an import, so the import can go" with a machine f… | 645615d7b8 |
 | B-2026-11-18-64 | typecheck | low | `Tensor.zeros([2, 2])` leads with E0238 "cannot infer type parameter 'S' of `Tensor[T, S]`.. | 645615d7b8 |
+| B-2026-11-18-71 | typecheck | low | A literal list read through `iter()` and an adapter, or a closure that builds a tuple or `Some` from a bound literal list's items, did not take a `co… | dd8b194cd6 |
 
 </details>
 
