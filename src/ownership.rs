@@ -1689,6 +1689,182 @@ fn once_closure_of(body: &Block, name: &str, before: &Span) -> Option<SpanKey> {
 /// root's parts (`p.a = v`, `p.0.b = v`). After a whole move that is the
 /// refused partial reinitialization of core semantics §3.4, whose remedy is
 /// assigning the whole root, not a copy of the value (B-2026-11-13-23).
+/// Puts back the operators lowering made calls of (`i64.add(a, b)` is
+/// `a + b` again) on a primitive, so a fix rendered from the lowered AST reads
+/// as the author wrote it.
+struct Resugar;
+
+impl crate::span_visitor::MutVisitor for Resugar {
+    fn span(&mut self, _: &mut Span) {}
+    fn expr(&mut self, e: &mut Expr) {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return;
+        };
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return;
+        };
+        let [ty, method] = segments.as_slice() else {
+            return;
+        };
+        if !crate::prelude::PRELUDE_PRIMITIVES.contains(&ty.as_str()) {
+            return;
+        }
+        let op = match method.as_str() {
+            "add" => BinOp::Add,
+            "sub" => BinOp::Sub,
+            "mul" => BinOp::Mul,
+            "div" => BinOp::Div,
+            "rem" => BinOp::Mod,
+            "eq" => BinOp::Eq,
+            "ne" => BinOp::NotEq,
+            "lt" => BinOp::Lt,
+            "le" => BinOp::LtEq,
+            "gt" => BinOp::Gt,
+            "ge" => BinOp::GtEq,
+            "bitand" => BinOp::BitAnd,
+            "bitor" => BinOp::BitOr,
+            "bitxor" => BinOp::BitXor,
+            "shl" => BinOp::Shl,
+            "shr" => BinOp::Shr,
+            _ => return,
+        };
+        let [l, r] = args.as_slice() else {
+            return;
+        };
+        e.kind = ExprKind::Binary {
+            op,
+            left: Box::new(l.value.clone()),
+            right: Box::new(r.value.clone()),
+        };
+    }
+}
+
+/// `push(acc, acc.len() + i)`: the first argument moves `acc` and a later
+/// one reads it. Arguments evaluate left to right, so the read is taken first
+/// in a `let` and the move needs no copy (B-2026-11-17-145):
+/// `{ let acc_len = acc.len(); push(acc, acc_len + i) }`. Only a read that is
+/// a field or a no-argument method call on the binding with a `Copy` result,
+/// and the only mention of the binding in that argument, is hoisted; a clone
+/// per call is what the fallback gives, quadratic in a `fold`.
+fn hoist_later_read(
+    body: &Block,
+    binding: &str,
+    consume: &Span,
+    used: &Span,
+    tc: &TypeCheckResult,
+) -> Option<crate::resolver::TextEdit> {
+    fn mentions(e: &Expr, binding: &str) -> usize {
+        let mut n = 0;
+        crate::span_visitor::for_each_expr(e, &mut |x| {
+            if matches!(&x.kind, ExprKind::Identifier(b) if b == binding) {
+                n += 1;
+            }
+        });
+        n
+    }
+    let within = |outer: &Span, inner: &Span| {
+        outer.offset <= inner.offset && inner.offset < outer.offset + outer.length.max(1)
+    };
+    let mut found: Option<(Expr, usize)> = None;
+    crate::span_visitor::for_each_expr_in_block(body, &mut |e| {
+        if found.is_some() {
+            return;
+        }
+        let args = match &e.kind {
+            ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => args,
+            _ => return,
+        };
+        let Some(i) = args.iter().position(|a| {
+            matches!(&a.value.kind, ExprKind::Identifier(b) if b == binding)
+                && a.value.span.offset == consume.offset
+        }) else {
+            return;
+        };
+        if let Some(j) = args.iter().position(|a| within(&a.value.span, used)) {
+            if j > i {
+                found = Some((e.clone(), j));
+            }
+        }
+    });
+    let (call, j) = found?;
+    let arg = match &call.kind {
+        ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => &args[j].value,
+        _ => return None,
+    };
+    if mentions(arg, binding) != 1 {
+        return None;
+    }
+    // The read: `acc.len()` or `acc.n`, rooted at the use.
+    let mut read: Option<(Expr, String)> = None;
+    crate::span_visitor::for_each_expr(arg, &mut |x| {
+        if read.is_some() {
+            return;
+        }
+        let (object, what) = match &x.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() => (object, method),
+            ExprKind::FieldAccess { object, field, .. } => (object, field),
+            _ => return,
+        };
+        if matches!(&object.kind, ExprKind::Identifier(b) if b == binding)
+            && within(&object.span, used)
+        {
+            read = Some((x.clone(), format!("{binding}_{what}")));
+        }
+    });
+    let (read, name) = read?;
+    let ty = tc.expr_types.get(&SpanKey::from_span(&read.span))?;
+    if !is_copy_type_basic(ty) {
+        return None;
+    }
+    // Matched by span AND spelling: a desugared operator's callee can carry
+    // its left operand's span.
+    struct Swap<'a> {
+        at: Span,
+        text: String,
+        name: &'a str,
+    }
+    impl crate::span_visitor::MutVisitor for Swap<'_> {
+        fn span(&mut self, _: &mut Span) {}
+        fn expr(&mut self, e: &mut Expr) {
+            if e.span.offset == self.at.offset
+                && e.span.length == self.at.length
+                && matches!(
+                    e.kind,
+                    ExprKind::MethodCall { .. } | ExprKind::FieldAccess { .. }
+                )
+                && crate::formatter::render_expr(e) == self.text
+            {
+                e.kind = ExprKind::Identifier(self.name.to_string());
+            }
+        }
+    }
+    let mut rewritten = call.clone();
+    crate::span_visitor::walk_expr_mut_with(
+        &mut rewritten,
+        &mut Swap {
+            at: read.span,
+            text: crate::formatter::render_expr(&read),
+            name: &name,
+        },
+    );
+    crate::span_visitor::walk_expr_mut_with(&mut rewritten, &mut Resugar);
+    let text = format!(
+        "{{ let {name} = {}; {} }}",
+        crate::formatter::render_expr(&read),
+        crate::formatter::render_expr(&rewritten)
+    );
+    Some(crate::resolver::TextEdit {
+        offset: call.span.offset,
+        length: call.span.length,
+        replacement: text,
+    })
+}
+
 fn assigns_into_part(body: &Block, at: &Span) -> bool {
     fn root_at(target: &Expr, at: &Span) -> bool {
         let mut e = target;
@@ -4288,7 +4464,17 @@ impl<'a> OwnershipChecker<'a> {
             } else {
                 self.derive_copy_fix(&w.consume_span)
             };
-            let replacement = if supports_clone {
+            let hoist = hoist_later_read(
+                &f.body,
+                binding,
+                &w.consume_span,
+                &w.other_use_span,
+                self.typecheck_result,
+            );
+            let hoisted = hoist.is_some();
+            let replacement = if let Some(edit) = hoist {
+                Some(Box::new(edit))
+            } else if supports_clone {
                 Some(Box::new(crate::resolver::TextEdit {
                     offset: w.consume_span.offset + w.consume_span.length,
                     length: 0,
@@ -4358,6 +4544,11 @@ impl<'a> OwnershipChecker<'a> {
                     format!(
                         "call `{binding}` once, or have its body clone what it moves out so \
                          it is an `Fn` (design.md §7 Function types and kinds)"
+                    )
+                } else if hoisted {
+                    format!(
+                        "the arguments are evaluated left to right, so read '{binding}' in a \
+                         `let` before the call and move it after, with no copy"
                     )
                 } else if part_assign {
                     format!(
