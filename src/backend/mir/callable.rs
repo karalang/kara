@@ -720,7 +720,11 @@ impl<'ctx> Cx<'ctx, '_> {
     /// (by reference, or consuming the value) as [`Self::build_thunk`]
     /// does, 2 and 3 start it in a frame of its own (`coroutine::FN_START`)
     /// by calling its `dstart` the same way, and 4 writes at `ret` whether
-    /// it suspends (`coroutine::FN_SUSPENDS`). A suspending `name` has no
+    /// it suspends (`coroutine::FN_SUSPENDS`), and 5 writes at `ret` the
+    /// code of the dropper of its environment (`suspending_drop::FN_DROPPER`),
+    /// or null when that drop does not suspend, and 6 whether a consuming
+    /// call drops the environment after the body through that dropper's
+    /// glue (`suspending_drop::FN_CALL_DROPS`). A suspending `name` has no
     /// body to call synchronously, so modes 0 and 1 abort; a call from the
     /// program's own code asks first, and a native never gets one
     /// (`coroutine::passed_to_native`).
@@ -736,9 +740,16 @@ impl<'ctx> Cx<'ctx, '_> {
         let program = self.program;
         let suspends = program.bodies.get(&start);
         let f = self.cur_fn()?;
-        let [call, by_ref, consuming, query, done] =
-            ["call", "start", "start.own", "query", "done"]
-                .map(|n| self.llcx.append_basic_block(f, n));
+        let [call, by_ref, consuming, query, dropper, call_drops, done] = [
+            "call",
+            "start",
+            "start.own",
+            "query",
+            "dropper",
+            "call.drops",
+            "done",
+        ]
+        .map(|n| self.llcx.append_basic_block(f, n));
         let i8t = self.llcx.i8_type();
         self.builder
             .build_switch(
@@ -748,9 +759,48 @@ impl<'ctx> Cx<'ctx, '_> {
                     (i8t.const_int(2, false), by_ref),
                     (i8t.const_int(3, false), consuming),
                     (i8t.const_int(4, false), query),
+                    (i8t.const_int(5, false), dropper),
+                    (i8t.const_int(6, false), call_drops),
                 ],
             )
             .map_err(e)?;
+        // The environment's closure type's glue, when the program made one
+        // that starts in a frame of its own: the drop suspends.
+        self.builder.position_at_end(dropper);
+        let with_env = program
+            .bodies
+            .get(name)
+            .or(suspends)
+            .filter(|b| b.arg_count == args.len() + 1);
+        let glue = with_env
+            .and_then(|b| {
+                let mut t = b.locals[1].ty;
+                while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+                    t = i;
+                }
+                matches!(self.tys.kind(t), TyKind::Closure(..))
+                    .then(|| crate::mir::suspending_drop::glue_name(self.tys, t))
+            })
+            .filter(|g| program.bodies.contains_key(&coroutine::dstart_name(g)));
+        let has_glue = glue.is_some();
+        let code = match glue {
+            Some(g) => {
+                let to = crate::mir::suspending_drop::dropper_ty(self.tys);
+                self.shim_fn(Shim::Thunk(g, to))
+                    .as_global_value()
+                    .as_pointer_value()
+            }
+            None => self.ptr_ty().const_null(),
+        };
+        self.store(ret, code.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        // Mode 6: whether a consuming call drops the environment after
+        // the body, which borrows it, through that glue
+        // (`suspending_drop::FN_CALL_DROPS`).
+        self.builder.position_at_end(call_drops);
+        let borrows = has_glue && with_env.is_some_and(|b| !self.env_by_value(b));
+        self.store(ret, i8t.const_int(u64::from(borrows), false).into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(query);
         let answer = i8t.const_int(u64::from(suspends.is_some()), false);
         self.store(ret, answer.into())?;
@@ -849,6 +899,73 @@ impl<'ctx> Cx<'ctx, '_> {
             self.store_bool(dest, on)?;
         }
         Ok(())
+    }
+
+    /// `suspending_drop`'s natives on the erased value behind the reference
+    /// `args[0]`: `__fn_drop_suspends` (whether its thunk, asked in mode 5,
+    /// has a dropper), `__fn_dropper` (the value as that dropper, which
+    /// owns the environment's block but drops nothing), `__fn_free`
+    /// (the dropper's block freed) and `__fn_call_drops` (mode 6).
+    pub(super) fn fn_drop_native(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
+        let f = args
+            .first()
+            .ok_or("a function-value native takes a value")?;
+        let mut ty = self.operand_type(f)?;
+        let mut at = self.operand_ptr(f)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ty) {
+            at = self.load_ptr(at)?;
+            ty = i;
+        }
+        let TyKind::Fn { params, .. } = self.tys.kind(ty) else {
+            return Err(format!("{name} of a non-function type"));
+        };
+        let env = self.load_ptr(self.offset(at, 8)?)?;
+        if name == crate::mir::suspending_drop::FN_FREE {
+            let live = self.builder.build_is_not_null(env, "").map_err(e)?;
+            return self.if_then(live, |cx| cx.free(env));
+        }
+        // The thunk in mode 5 (the dropper's code, or null) or 6 (whether a
+        // consuming call drops the environment through it).
+        let call_drops = name == crate::mir::suspending_drop::FN_CALL_DROPS;
+        let i8t = self.llcx.i8_type();
+        let p = self.ptr_ty();
+        let ret = self.entry_slot(8, "dropper")?;
+        let code = self.load_ptr(at)?;
+        let mode = if call_drops { 6 } else { 5 };
+        let mut vals: Vec<BasicMetadataValueEnum> =
+            vec![ret.into(), env.into(), i8t.const_int(mode, false).into()];
+        vals.extend(
+            params
+                .iter()
+                .map(|_| BasicMetadataValueEnum::from(p.const_null())),
+        );
+        let mut ps: Vec<BasicMetadataTypeEnum> = vec![p.into(), p.into(), i8t.into()];
+        ps.extend(params.iter().map(|_| BasicMetadataTypeEnum::from(p)));
+        let fn_ty = self.llcx.void_type().fn_type(&ps, false);
+        self.builder
+            .build_indirect_call(fn_ty, code, &vals, "")
+            .map_err(e)?;
+        if call_drops {
+            let b = self
+                .builder
+                .build_load(i8t, ret, "")
+                .map_err(e)?
+                .into_int_value();
+            let on = self
+                .builder
+                .build_int_compare(IntPredicate::NE, b, i8t.const_zero(), "")
+                .map_err(e)?;
+            return self.store_bool(dest, on);
+        }
+        let dropper = self.load_ptr(ret)?;
+        if name == crate::mir::suspending_drop::FN_DROP_SUSPENDS {
+            let some = self.builder.build_is_not_null(dropper, "").map_err(e)?;
+            return self.store_bool(dest, some);
+        }
+        let d = self.place_ptr(dest)?;
+        self.store(d, dropper.into())?;
+        self.store(self.offset(d, 8)?, env.into())?;
+        self.store(self.offset(d, 16)?, p.const_null().into())
     }
 
     /// `coroutine::FRAME_START`: a frame of the resume body `args[0]` on

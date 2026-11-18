@@ -195,7 +195,7 @@ pub fn made_from(body_name: &str) -> &str {
 
 /// The erased function type `t` with its kind forgotten, so a value
 /// widened from `Fn` to `MutFn` or `OnceFn` keeps its taint.
-fn fn_key(tys: &TyInterner, t: Ty) -> Option<Ty> {
+pub fn fn_key(tys: &TyInterner, t: Ty) -> Option<Ty> {
     match tys.kind(t) {
         TyKind::Fn { params, ret, .. } => Some(tys.intern(TyKind::Fn {
             params,
@@ -640,6 +640,16 @@ fn erased_coroutines(
             for st in &d.statements {
                 if let StatementKind::Assign(_, Rvalue::Cast(CastKind::Erase, o, to)) = &st.kind {
                     let from = operand_ty(b, tys, o);
+                    // A closure erased into a value takes its drop glue
+                    // along when that suspends: the value's drop calls it
+                    // through a dropper (`suspending_drop::FN_DROPPER`).
+                    if let Some(c) = from.filter(|&t| matches!(tys.kind(t), TyKind::Closure(..))) {
+                        let glue = super::suspending_drop::glue_name(tys, c);
+                        if set.contains(&glue) {
+                            erased.insert(glue);
+                            tainted.extend(fn_key(tys, super::suspending_drop::dropper_ty(tys)));
+                        }
+                    }
                     let source = match (direct_callee(o), from.map(|t| tys.kind(t))) {
                         (Some(n), _) => set.contains(n).then(|| n.to_string()),
                         (None, Some(TyKind::FnDef(def) | TyKind::Closure(def, _))) => by_def(def),
@@ -2182,6 +2192,11 @@ fn passed_to_native(
             let Some(native) = direct_callee(func).filter(|c| !names.contains(c)) else {
                 continue;
             };
+            // The drop glue's natives take the value being dropped, which
+            // they never call (`suspending_drop`).
+            if super::suspending_drop::is_glue_native(native) {
+                continue;
+            }
             for a in args {
                 if let Some(n) = direct_callee(a).filter(|n| set.contains(*n)) {
                     return Some((n.to_string(), native.to_string()));
@@ -2589,20 +2604,34 @@ impl<'a> Resume<'a> {
                                 kind: StatementKind::FreeBox(sub.clone()),
                                 source_info: self.info(),
                             };
-                            extra.push(BasicBlockData {
-                                statements: vec![
-                                    self.assign(
-                                        dest,
-                                        Rvalue::Use(Operand::Move(Place {
-                                            local: r,
-                                            projection: vec![
-                                                ProjElem::Downcast(VariantIdx(0)),
-                                                ProjElem::Field(FieldIdx(0), callee_body_ret),
-                                            ],
-                                        })),
-                                    ),
-                                    free,
+                            let result = Operand::Move(Place {
+                                local: r,
+                                projection: vec![
+                                    ProjElem::Downcast(VariantIdx(0)),
+                                    ProjElem::Field(FieldIdx(0), callee_body_ret),
                                 ],
+                            });
+                            // A function value the call widens to the
+                            // destination's kind (`Fn` into `OnceFn`) is
+                            // widened from the ready value.
+                            let dest_ty =
+                                super::place_ty::place_ty(self.body, self.tys, destination)
+                                    .ok()
+                                    .map(|t| t.ty)
+                                    .filter(|&d| {
+                                        d != callee_body_ret
+                                            && matches!(self.tys.kind(d), TyKind::Fn { .. })
+                                            && matches!(
+                                                self.tys.kind(callee_body_ret),
+                                                TyKind::Fn { .. }
+                                            )
+                                    });
+                            let value = match dest_ty {
+                                Some(d) => Rvalue::Cast(CastKind::Erase, result, d),
+                                None => Rvalue::Use(result),
+                            };
+                            extra.push(BasicBlockData {
+                                statements: vec![self.assign(dest, value), free],
                                 terminator: Terminator {
                                     kind: TerminatorKind::Goto { target: b(*next) },
                                     source_info: t.source_info,

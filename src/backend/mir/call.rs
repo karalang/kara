@@ -1117,6 +1117,17 @@ impl<'ctx> Cx<'ctx, '_> {
             // An owned `dyn` value whose table's drop slot dropped its
             // concrete value (`suspending_drop::DYN_FREE`): its block.
             ("__dyn_free", "") => self.dyn_free(&args[0]),
+            // A reference to a function value, as one to a `Fn`
+            // (`suspending_drop::FN_VIEW`): the same address.
+            ("__fn_view", "") => {
+                let d = self.place_ptr(dest)?;
+                self.store_operand(d, &args[0])
+            }
+            // A function value whose environment's drop suspends, and its
+            // dropper (`suspending_drop::FN_DROPPER`).
+            ("__fn_drop_suspends" | "__fn_dropper" | "__fn_free" | "__fn_call_drops", "") => {
+                self.fn_drop_native(base, args, dest)
+            }
             // A `shared` handle's release split around its parts' drop,
             // which may suspend (`suspending_drop::SHARED_RELEASE`): the
             // count, then the box, as `release` and `release_last` do.

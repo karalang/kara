@@ -2519,6 +2519,94 @@ impl<'a> Interp<'a> {
                     other => err(format!("{name} of {other:?}")),
                 }
             }
+            // A function value whose environment's drop suspends
+            // (`suspending_drop::FN_DROP_SUSPENDS`): its closure's type
+            // has a glue body that starts in a frame of its own.
+            ("__fn_drop_suspends", "") => {
+                let [Value::Ref(a)] = args.as_slice() else {
+                    return err(format!("{name} takes a reference to a function value"));
+                };
+                Ok(Value::Bool(match self.slot(a)? {
+                    Value::Erased {
+                        env: Some((_, c)), ..
+                    } => {
+                        let glue = super::suspending_drop::glue_name(self.tys, c);
+                        self.program
+                            .bodies
+                            .contains_key(&coroutine::dstart_name(&glue))
+                    }
+                    _ => false,
+                }))
+            }
+            // Whether a consuming call through the function value drops
+            // its environment after the body, which borrows it, through a
+            // glue that suspends (`suspending_drop::FN_CALL_DROPS`).
+            ("__fn_call_drops", "") => {
+                let [Value::Ref(a)] = args.as_slice() else {
+                    return err(format!("{name} takes a reference to a function value"));
+                };
+                let Value::Erased {
+                    body,
+                    env: Some((_, c)),
+                } = self.slot(a)?
+                else {
+                    return Ok(Value::Bool(false));
+                };
+                let program: &'a Program = self.program;
+                let glue = super::suspending_drop::glue_name(self.tys, c);
+                let borrows = program
+                    .bodies
+                    .get(&body)
+                    .or_else(|| program.bodies.get(&coroutine::dstart_name(&body)))
+                    .and_then(|b| b.args().next().map(|l| b.local(l).ty))
+                    .is_some_and(|t| {
+                        matches!(self.tys.kind(t), TyKind::Ref(_) | TyKind::MutRef(_))
+                    });
+                Ok(Value::Bool(
+                    borrows && program.bodies.contains_key(&coroutine::dstart_name(&glue)),
+                ))
+            }
+            // The function value taken out as the dropper that calls its
+            // closure type's glue on its environment
+            // (`suspending_drop::FN_DROPPER`).
+            ("__fn_dropper", "") => {
+                let [Value::Ref(a)] = args.as_slice() else {
+                    return err(format!("{name} takes a reference to a function value"));
+                };
+                match std::mem::replace(self.slot_mut(a)?, Value::Uninit) {
+                    Value::Erased {
+                        env: Some((slot, c)),
+                        ..
+                    } => Ok(Value::Erased {
+                        body: super::suspending_drop::glue_name(self.tys, c),
+                        env: Some((slot, c)),
+                    }),
+                    other => err(format!("{name} of {other:?}")),
+                }
+            }
+            // A reference to a function value, as one to a `Fn`
+            // (`suspending_drop::FN_VIEW`).
+            ("__fn_view", "") => match args.as_slice() {
+                [r @ Value::Ref(_)] => Ok(r.clone()),
+                _ => err(format!("{name} takes a reference to a function value")),
+            },
+            // A dropper whose call dropped its environment
+            // (`suspending_drop::FN_FREE`): the environment's block.
+            ("__fn_free", "") => {
+                let [Value::Ref(a)] = args.as_slice() else {
+                    return err(format!("{name} takes a reference to a function value"));
+                };
+                match std::mem::replace(self.slot_mut(a)?, Value::Uninit) {
+                    Value::Erased {
+                        env: Some((slot, _)),
+                        ..
+                    } => {
+                        self.free_slot(slot);
+                        Ok(Value::Unit)
+                    }
+                    other => err(format!("{name} of {other:?}")),
+                }
+            }
             // A value `suspending_drop`'s glue dropped part by part.
             ("__dropped", "") => {
                 if let [Value::Ref(a)] = args.as_slice() {
@@ -16312,7 +16400,7 @@ impl<'a> Interp<'a> {
                     .contains_key(&coroutine::resume_name(&f))
             {
                 return err(format!(
-                    "the `Drop` body of {} suspends, and a value of it is dropped where the drop cannot wait: inside a function value's environment (B-2026-11-18-1)",
+                    "the `Drop` body of {} suspends, and a value of it is dropped where the drop cannot wait: outside the routes `suspending_drop` lowers (B-2026-11-17-35)",
                     adt.name
                 ));
             }

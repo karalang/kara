@@ -1,0 +1,9 @@
+source = "B-2026-11-18-1"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Drop, 'A drop body may suspend' (B-2026-11-18-1): a function value's environment drops through its closure's glue when the value does: in a Vec (index order, beside closures whose drop does not suspend and a plain function), a struct field, a MutFn, an uncalled OnceFn, and a closure that captures such a value."

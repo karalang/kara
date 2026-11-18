@@ -1,0 +1,20 @@
+sum 31
+slow drop 1
+quick drop 2
+slow drop 3
+vec done
+holder 4
+slow drop 4
+holder done
+count 6 7
+slow drop 5
+counter done
+slow drop 6
+once 6
+once called
+once done
+once never called
+slow drop 7
+nested 108
+slow drop 8
+end

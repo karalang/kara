@@ -37,10 +37,21 @@
 //!   (`drain_entries`) and drop from there, oldest first; then the end
 //!   goes as before (B-2026-11-17-127).
 //!
-//! A drop that reaches a suspending body only through anything else (a
-//! function value's environment) keeps the backends' glue, which reports
-//! that the drop cannot wait there (B-2026-11-18-1). A `LazyLock` is
-//! only ever a module-level binding, which is never dropped.
+//! - a function value (`Fn`, `MutFn`, `OnceFn`) some closure whose drop
+//!   suspends is erased into: `__fn_drop_suspends` asks the value whether
+//!   its environment's drop suspends. When it does, `__fn_dropper` turns
+//!   the value into one that calls the environment's closure type's glue
+//!   on the environment, a call through a value that may suspend
+//!   (`coroutine::FN_START`: the closure's glue is erased with it, so it
+//!   has a `dstart`), and `__fn_free` frees the emptied environment's
+//!   block; when it does not, the value drops by a plain `Drop`
+//!   (B-2026-11-18-1). A consuming call through such a value (a `OnceFn`'s)
+//!   whose body borrows the environment would drop it after the body by
+//!   the backends' glue: `__fn_call_drops` asks, and when so the call is
+//!   made through a reference and the value then dropped as above.
+//!
+//! A `LazyLock` is only ever a module-level binding, which is never
+//! dropped.
 //!
 //! In a cancelled task's teardown the drop runs to completion: its waits
 //! are not cancellation points. The teardown's own calls are not
@@ -52,7 +63,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::coroutine;
 use super::syntax::*;
-use super::ty::{IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
+use super::ty::{FnKind, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
 
 /// `__dropped(mut ref v)`, the last call of every glue body: `v`'s parts
 /// are dropped, and what is left of it (its `Copy` parts) is no value
@@ -71,6 +82,55 @@ pub const SHARED_FREE: &str = "__shared_free";
 /// `__dyn_free(mut ref d)`: frees the block of the owned `dyn` value `d`,
 /// whose concrete value its table's drop slot dropped in place.
 pub const DYN_FREE: &str = "__dyn_free";
+/// `__fn_drop_suspends(mut ref f) -> bool`: whether the drop of the
+/// erased function value `f`'s environment suspends, which it does when
+/// its closure's type has a glue body (with a `dstart`).
+pub const FN_DROP_SUSPENDS: &str = "__fn_drop_suspends";
+/// `__fn_dropper(mut ref f) -> Fn()`: the erased value `f`, taken out,
+/// as a value of [`dropper_ty`] whose call drops its environment in place
+/// through the closure type's glue body. It owns the environment's block
+/// but drops nothing: [`FN_FREE`] frees it.
+pub const FN_DROPPER: &str = "__fn_dropper";
+/// `__fn_call_drops(mut ref f) -> bool`: whether a consuming call through
+/// the erased value `f` drops its environment after the body (which
+/// borrows it) through its closure type's glue body, so a drop that
+/// suspends. Such a call is made through a reference instead, and the
+/// value then dropped through the glue.
+pub const FN_CALL_DROPS: &str = "__fn_call_drops";
+/// `__fn_view(mut ref f) -> ref Fn(..)`: the reference `f` to an erased
+/// value of any kind, as a reference to the `Fn` of the same signature,
+/// for the call [`FN_CALL_DROPS`] makes through a reference: the body
+/// behind it borrows its environment, so that call is one a `Fn` makes.
+pub const FN_VIEW: &str = "__fn_view";
+/// `__fn_free(mut ref d)`: frees the environment block of the dropper `d`,
+/// whose call dropped what it held.
+pub const FN_FREE: &str = "__fn_free";
+
+/// Whether `name` is one of the natives this pass's glue calls on the
+/// value it drops, none of which calls it.
+pub fn is_glue_native(name: &str) -> bool {
+    [
+        DROPPED,
+        SHARED_RELEASE,
+        SHARED_FREE,
+        DYN_FREE,
+        FN_DROP_SUSPENDS,
+        FN_DROPPER,
+        FN_CALL_DROPS,
+        FN_VIEW,
+        FN_FREE,
+    ]
+    .contains(&name)
+}
+
+/// The type of a [`FN_DROPPER`] value: `Fn()`.
+pub fn dropper_ty(tys: &TyInterner) -> Ty {
+    tys.intern(TyKind::Fn {
+        params: vec![],
+        ret: tys.unit(),
+        kind: FnKind::Fn,
+    })
+}
 
 /// The name of the glue body that drops a `ty` in place.
 pub fn glue_name(tys: &TyInterner, ty: Ty) -> String {
@@ -109,6 +169,7 @@ pub fn lower(
         tys,
         drop_body,
         tables,
+        fn_reach: BTreeSet::new(),
         drop_slots: BTreeMap::new(),
         suspending: BTreeMap::new(),
         memo: HashMap::new(),
@@ -120,23 +181,87 @@ pub fn lower(
         by_name: &by_name,
         bodies,
     };
-    // The suspending `Drop` bodies, found by the types the bodies drop.
+    // The function types a closure whose drop suspends is erased into
+    // (widened kinds included), and those closures, whose glue the erased
+    // values' drop calls.
+    let mut erased: Vec<(Ty, Ty)> = Vec::new();
+    let mut widened: Vec<(Ty, Ty)> = Vec::new();
+    for b in pass.bodies.iter() {
+        for d in &b.blocks {
+            for st in &d.statements {
+                let StatementKind::Assign(_, Rvalue::Cast(CastKind::Erase, o, to)) = &st.kind
+                else {
+                    continue;
+                };
+                let from = match o {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        super::place_ty::place_ty(b, tys, p).ok().map(|t| t.ty)
+                    }
+                    Operand::Const(_) => None,
+                };
+                let (Some(from), Some(key)) = (from, coroutine::fn_key(tys, *to)) else {
+                    continue;
+                };
+                match tys.kind(from) {
+                    TyKind::Closure(..) => erased.push((from, key)),
+                    TyKind::Fn { .. } => {
+                        widened.extend(coroutine::fn_key(tys, from).map(|f| (f, key)))
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut closures: BTreeSet<Ty> = BTreeSet::new();
+    loop {
+        let before = pass.fn_reach.len();
+        for &(c, key) in &erased {
+            if pass.reaches(c) {
+                closures.insert(c);
+                pass.fn_reach.insert(key);
+            }
+        }
+        for &(f, t) in &widened {
+            if pass.fn_reach.contains(&f) {
+                pass.fn_reach.insert(t);
+            }
+        }
+        if pass.fn_reach.len() == before {
+            break;
+        }
+        // A `false` may have leaned on a function type now reached.
+        pass.memo.clear();
+    }
+    // The suspending `Drop` bodies, found by the types the bodies drop,
+    // and the function values whose consuming calls may drop them.
     let mut dropped: Vec<Ty> = Vec::new();
     for b in pass.bodies.iter() {
         for d in &b.blocks {
-            if let TerminatorKind::Drop { place, .. } = &d.terminator.kind {
-                if let Ok(t) = super::place_ty::place_ty(b, tys, place) {
-                    dropped.push(t.ty);
+            match &d.terminator.kind {
+                TerminatorKind::Drop { place, .. }
+                | TerminatorKind::Call {
+                    func: Operand::Move(place),
+                    ..
+                } => {
+                    if let Ok(t) = super::place_ty::place_ty(b, tys, place) {
+                        dropped.push(t.ty);
+                    }
                 }
+                _ => {}
             }
         }
     }
     if !dropped.iter().any(|&t| pass.reaches(t)) {
         return Ok(());
     }
+    // An erased closure's glue, which its function value's drop calls.
+    for c in closures {
+        pass.glue_of(c);
+    }
     for i in 0..pass.bodies.len() {
         let placeholder = empty_like(&pass.bodies[i]);
         let mut b = std::mem::replace(&mut pass.bodies[i], placeholder);
+        pass.rewrite_consuming_calls(&mut b)?;
         pass.rewrite_drops(&mut b)?;
         pass.bodies[i] = b;
     }
@@ -203,6 +328,9 @@ struct Pass<'a, 'b> {
     /// trait's methods, that its tables fill with their concrete type's
     /// glue.
     drop_slots: BTreeMap<crate::ids::DefId, u32>,
+    /// The function types ([`coroutine::fn_key`]) some closure whose drop
+    /// reaches a suspending body is erased into.
+    fn_reach: BTreeSet<Ty>,
     /// Per type with a `Drop` body: its instance and name, when it suspends.
     suspending: BTreeMap<Ty, (InstanceId, String)>,
     memo: HashMap<Ty, bool>,
@@ -314,7 +442,9 @@ impl Pass<'_, '_> {
             return false;
         }
         let outer = std::mem::take(&mut self.leaned);
-        let r = if let TyKind::Dyn { trait_, .. } = self.tys.kind(ty) {
+        let r = if let TyKind::Fn { .. } = self.tys.kind(ty) {
+            coroutine::fn_key(self.tys, ty).is_some_and(|k| self.fn_reach.contains(&k))
+        } else if let TyKind::Dyn { trait_, .. } = self.tys.kind(ty) {
             // A `dyn` value reaches what any concrete type behind it does.
             let behind: Vec<Ty> = self
                 .tables
@@ -363,6 +493,143 @@ impl Pass<'_, '_> {
             args: vec![],
             name: glue_name(self.tys, ty),
         }
+    }
+
+    /// Each consuming call `dest = (move f)(args) -> next` through a
+    /// function value whose drop may suspend becomes, when
+    /// [`FN_CALL_DROPS`] says the call would drop the environment after
+    /// the body, `r = __fn_view(&mut f); dest = (copy r)(args); Drop(f) ->
+    /// next`, a drop
+    /// [`Self::rewrite_drops`] then makes a call of the value's glue.
+    fn rewrite_consuming_calls(&mut self, b: &mut Body) -> Result<(), String> {
+        for i in 0..b.blocks.len() {
+            let t = &b.blocks[i].terminator;
+            let TerminatorKind::Call {
+                func: Operand::Move(f),
+                args,
+                destination,
+                target: Some(next),
+                unwind,
+            } = &t.kind
+            else {
+                continue;
+            };
+            let ft = super::place_ty::place_ty(b, self.tys, f)?.ty;
+            if !matches!(self.tys.kind(ft), TyKind::Fn { .. }) || !self.reaches(ft) {
+                continue;
+            }
+            let (f, args, dest, next, unwind, si) = (
+                f.clone(),
+                args.clone(),
+                destination.clone(),
+                *next,
+                *unwind,
+                t.source_info,
+            );
+            let tys = self.tys;
+            let q = push_local(b, tys.bool(), si);
+            let m = push_local(b, tys.intern(TyKind::MutRef(ft)), si);
+            let as_fn = match tys.kind(ft) {
+                TyKind::Fn { params, ret, .. } => tys.intern(TyKind::Fn {
+                    params,
+                    ret,
+                    kind: FnKind::Fn,
+                }),
+                _ => ft,
+            };
+            let m2 = push_local(b, tys.intern(TyKind::MutRef(ft)), si);
+            let r = push_local(b, tys.intern(TyKind::Ref(as_fn)), si);
+            let base = b.blocks.len() as u32;
+            let [sw, consume, view, by_ref, drop] =
+                std::array::from_fn(|k| BasicBlock(base + k as u32));
+            let orig = std::mem::replace(
+                &mut b.blocks[i].terminator,
+                Terminator {
+                    kind: TerminatorKind::Call {
+                        func: fn_const(
+                            tys,
+                            InstanceId {
+                                def: crate::ids::DefId(u32::MAX),
+                                args: Vec::new(),
+                                name: FN_CALL_DROPS.to_string(),
+                            },
+                        ),
+                        args: vec![Operand::Move(Place::local(m))],
+                        destination: Place::local(q),
+                        target: Some(sw),
+                        unwind: UnwindAction::Abort,
+                    },
+                    source_info: si,
+                },
+            );
+            b.blocks[i].statements.push(Statement {
+                kind: StatementKind::Assign(
+                    Place::local(m),
+                    Rvalue::Ref(BorrowKind::Mut, f.clone()),
+                ),
+                source_info: si,
+            });
+            let block = |statements, kind| BasicBlockData {
+                statements,
+                terminator: Terminator {
+                    kind,
+                    source_info: si,
+                },
+            };
+            b.blocks.push(block(
+                vec![],
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(q)),
+                    targets: SwitchTargets::if_else(view, consume),
+                },
+            ));
+            b.blocks.push(BasicBlockData {
+                statements: vec![],
+                terminator: orig,
+            });
+            b.blocks.push(block(
+                vec![Statement {
+                    kind: StatementKind::Assign(
+                        Place::local(m2),
+                        Rvalue::Ref(BorrowKind::Mut, f.clone()),
+                    ),
+                    source_info: si,
+                }],
+                TerminatorKind::Call {
+                    func: fn_const(
+                        tys,
+                        InstanceId {
+                            def: crate::ids::DefId(u32::MAX),
+                            args: Vec::new(),
+                            name: FN_VIEW.to_string(),
+                        },
+                    ),
+                    args: vec![Operand::Move(Place::local(m2))],
+                    destination: Place::local(r),
+                    target: Some(by_ref),
+                    unwind: UnwindAction::Abort,
+                },
+            ));
+            b.blocks.push(block(
+                vec![],
+                TerminatorKind::Call {
+                    func: Operand::Copy(Place::local(r)),
+                    args,
+                    destination: dest,
+                    target: Some(drop),
+                    unwind,
+                },
+            ));
+            b.blocks.push(block(
+                vec![],
+                TerminatorKind::Drop {
+                    place: f,
+                    target: next,
+                    unwind,
+                },
+            ));
+        }
+        Ok(())
     }
 
     /// Each `Drop` in `b` of a value whose drop reaches a suspending body
@@ -529,6 +796,82 @@ impl Pass<'_, '_> {
                         args: vec![Operand::Copy(Place::local(Local(1)))],
                         destination: Place::local(u),
                         target: Some(free),
+                        unwind: UnwindAction::Abort,
+                    },
+                )
+            }
+            // A function value whose environment's drop suspends: that drop
+            // called through a dropper made of the value, then the block
+            // freed; any other function value by a plain `Drop`.
+            TyKind::Fn { .. } => {
+                let dropper = dropper_ty(tys);
+                let native = |name: &str| {
+                    fn_const(
+                        tys,
+                        InstanceId {
+                            def: crate::ids::DefId(u32::MAX),
+                            args: Vec::new(),
+                            name: name.to_string(),
+                        },
+                    )
+                };
+                let q = g.local(tys.bool());
+                let d = g.local(dropper);
+                let rd = g.local(tys.intern(TyKind::Ref(dropper)));
+                let u = g.local(tys.unit());
+                let plain = g.drops(vec![(this.clone(), ty)], finish);
+                let free = g.on_handle(FN_FREE, Place::local(d), dropper, ret);
+                let call = g.block(
+                    vec![Statement {
+                        kind: StatementKind::Assign(
+                            Place::local(rd),
+                            Rvalue::Ref(BorrowKind::Shared, Place::local(d)),
+                        ),
+                        source_info: si,
+                    }],
+                    TerminatorKind::Call {
+                        func: Operand::Copy(Place::local(rd)),
+                        args: vec![],
+                        destination: Place::local(u),
+                        target: Some(free),
+                        unwind: UnwindAction::Abort,
+                    },
+                );
+                let reborrow = |l: Local| Statement {
+                    kind: StatementKind::Assign(
+                        Place::local(l),
+                        Rvalue::Ref(BorrowKind::Mut, this.clone()),
+                    ),
+                    source_info: si,
+                };
+                let (r1, r2) = (
+                    g.local(tys.intern(TyKind::MutRef(ty))),
+                    g.local(tys.intern(TyKind::MutRef(ty))),
+                );
+                let take = g.block(
+                    vec![reborrow(r2)],
+                    TerminatorKind::Call {
+                        func: native(FN_DROPPER),
+                        args: vec![Operand::Move(Place::local(r2))],
+                        destination: Place::local(d),
+                        target: Some(call),
+                        unwind: UnwindAction::Abort,
+                    },
+                );
+                let sw = g.block(
+                    vec![],
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(q)),
+                        targets: SwitchTargets::if_else(take, plain),
+                    },
+                );
+                g.block(
+                    vec![reborrow(r1)],
+                    TerminatorKind::Call {
+                        func: native(FN_DROP_SUSPENDS),
+                        args: vec![Operand::Move(Place::local(r1))],
+                        destination: Place::local(q),
+                        target: Some(sw),
                         unwind: UnwindAction::Abort,
                     },
                 )

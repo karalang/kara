@@ -1,0 +1,16 @@
+taken
+slow drop 1
+taker 1
+taker not called
+slow drop 2
+sleeper 3 3
+slow drop 3
+slow drop 4
+widened 4
+widened not called
+slow drop 5
+slow drop 6
+run 6
+slow drop 7
+widened from a suspending call 7
+end

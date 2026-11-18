@@ -1,0 +1,9 @@
+source = "B-2026-11-18-1"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "concurrency"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Drop, 'A drop body may suspend' (B-2026-11-18-1): a consuming call through a OnceFn drops the environment after the body when the body borrows it, and a body that takes its captures drops them itself; a Fn widened to OnceFn or MutFn, also from a suspending call's result, keeps its environment's suspending drop."
