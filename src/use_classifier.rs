@@ -1102,14 +1102,14 @@ impl<'a> UseClassifier<'a> {
         match &expr.kind {
             ExprKind::Identifier(name) => {
                 self.note_escaping_borrow_capture(expr);
-                let kind = self.classify_identifier(name, &expr.span, mode);
+                let kind = self.classify_identifier(name, expr, mode);
                 self.note_capture_scope(name, &expr.span, mode, kind);
                 self.record_named(&expr.span, kind, Some(name));
                 self.record_closure_capture_consume(name, kind, &expr.span);
             }
             ExprKind::SelfValue => {
                 self.note_escaping_borrow_capture(expr);
-                let kind = self.classify_identifier("self", &expr.span, mode);
+                let kind = self.classify_identifier("self", expr, mode);
                 self.note_capture_scope("self", &expr.span, mode, kind);
                 self.record_named(&expr.span, kind, Some("self"));
                 self.record_closure_capture_consume("self", kind, &expr.span);
@@ -1911,7 +1911,7 @@ impl<'a> UseClassifier<'a> {
         match &expr.kind {
             ExprKind::Identifier(name) => {
                 self.record_place_at_root(&expr.span, path);
-                let kind = self.classify_identifier(name, &expr.span, leaf_mode);
+                let kind = self.classify_identifier(name, expr, leaf_mode);
                 self.note_capture_scope(name, &expr.span, leaf_mode, kind);
                 self.record(&expr.span, kind);
                 // A place rooted at the closure's own local (`match o.sub`
@@ -1928,7 +1928,7 @@ impl<'a> UseClassifier<'a> {
             }
             ExprKind::SelfValue => {
                 self.record_place_at_root(&expr.span, path);
-                let kind = self.classify_identifier("self", &expr.span, leaf_mode);
+                let kind = self.classify_identifier("self", expr, leaf_mode);
                 self.note_capture_scope("self", &expr.span, leaf_mode, kind);
                 self.record(&expr.span, kind);
                 self.record_closure_capture_consume("self", kind, &expr.span);
@@ -2164,7 +2164,7 @@ impl<'a> UseClassifier<'a> {
         }
     }
 
-    fn classify_identifier(&self, name: &str, span: &crate::token::Span, mode: Mode) -> UseKind {
+    fn classify_identifier(&self, name: &str, expr: &Expr, mode: Mode) -> UseKind {
         // v2 core §9.3: an escaping closure captures every outer binding by
         // move, whatever its body does with it.
         let captured_by_move = self.captured_by_move(name);
@@ -2194,12 +2194,15 @@ impl<'a> UseClassifier<'a> {
         // span-keyed expr_types. The first two are name-keyed and
         // immune to the parser's `MethodCall.span == receiver.span`
         // aliasing that breaks span-only lookups for projection-root
-        // identifiers like `c` in `c.inner.unwrap()`.
+        // identifiers like `c` in `c.inner.unwrap()`. The last is the use's
+        // type as `expr_type` reads it, so a closure parameter a later call
+        // solved is that solved type here too, as it is to the operator
+        // lowering that hands it on (B-2026-11-17-109).
         let ty = self
             .param_types
             .get(name)
             .or_else(|| self.local_types.get(name))
-            .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(span)));
+            .or_else(|| self.tc.expr_type(expr));
         match ty {
             // A `weak` slot holds a counted handle: storing a `shared` value
             // into one (`b.prev = at`, typed `weak N` at `at` by the

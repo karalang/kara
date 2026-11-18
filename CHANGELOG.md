@@ -735,6 +735,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A local whose type a later use decides is `Copy` when the solved type
+  is: `let mut x = None; x = Some(5); (x, x)`, a `[None; 3]` array, and a
+  `scan` state seeded with `[None; 4]` were refused as a use after a move,
+  and `karac fix` added a needless `.clone()` (B-2026-11-17-109).
 - A generic struct's parameter left open inside a generic call in one of
   its fields (`Holder { values: Mutex.new(VecDeque.new()) }`,
   `Bag { items: Some(Vec.new()) }`) is solved by a later use, as it is for

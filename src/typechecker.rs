@@ -2883,7 +2883,23 @@ impl TypeCheckResult {
                 return Some(t);
             }
         }
-        self.expr_types.get(&key)
+        let by_span = self.expr_types.get(&key);
+        // A value whose type a later use decides (`let mut x = None;
+        // x = Some(5)`, a `[None; 4]` state) keeps the signature's `T`, or a
+        // variable a closure's body solved later, in the span table, which
+        // was written when it was checked, while its node took the solved
+        // type: `Option[i64]`, which is `Copy`, where `Option[T]` is not
+        // (B-2026-11-17-109). A node that still names a
+        // parameter (a generic body's own `T`) changes nothing.
+        if let (Some(span_ty), Some((node_ty, _))) = (by_span, self.node_types.get(&e.id)) {
+            if (types::contains_type_param(span_ty) || exprs::contains_type_var(span_ty))
+                && !types::contains_type_param(node_ty)
+                && !exprs::contains_type_var(node_ty)
+            {
+                return Some(node_ty);
+            }
+        }
+        by_span
     }
 
     /// The `Type.method` callee of the method call `call`, read from its own
