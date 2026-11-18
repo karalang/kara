@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 506 |
+| diagnostics | 507 |
 | false-positive | 265 |
 | missing-feature | 201 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 634 |
+| typecheck | 635 |
 | mir-llvm | 291 |
 | mir | 253 |
 | cli | 198 |
@@ -123,8 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
 | B-2026-11-18-18 | 2026-11-18 | typecheck | low | A match covering `Flag(true)` and `Flag(false)` on a distinct `bool` is E0205 non-exhaustive, though a distinct type has exactly its base's constructor space | — |
 | B-2026-11-18-21 | 2026-11-18 | typecheck+mir | medium | `#[derive(Serialize, Deserialize)]` on a distinct type generates nothing: a struct field of that type checks clean and then fails at run with "no method 'serialize' on type 'UserId'" | — |
-| B-2026-11-18-22 | 2026-11-18 | typecheck | low | Derive requirement rules skip distinct types: `#[derive(Eq)]` without `PartialEq` gets no deprecation warning, and `#[derive(Eq, PartialEq)]` on a distinct `f64` is accepted (NaN == NaN prints false) | — |
-| B-2026-11-18-23 | 2026-11-18 | typecheck | low | `#[derive(Default)]` on a distinct type is accepted, but `Count.default()` is E0202 "expected 1 argument(s), found 0" | — |
 | B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
 | B-2026-11-18-27 | 2026-11-18 | parser | medium | A parameter's pattern uses a reduced grammar: `ref name` (which §7 Destructuring parameters names), fixed-array patterns, `@` bindings and a distinct-type constructor are refused in fn and closure parameters, though each is irrefutable | — |
 | B-2026-11-18-33 | 2026-11-18 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-exhaustive (E0205 "pattern `_` not covered") though it covers every value | — |
@@ -135,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-39 | 2026-11-18 | mir-llvm | low | Kata 1197's bench (a breadth-first search over a `VecDeque` and a `Vec[bool]`) executes 1.49x checked Rust's instructions and runs 1.67x its time on x86: `VecDeque` push/pop and `for (dx, dy) in MOVES` over a const `Array` account for about two thirds of the gap | — |
 | B-2026-11-18-40 | 2026-11-18 | typecheck | medium | An associated function or enum variant reached through `Self` (`Self.gcd(a, b)` in an impl, `Self.one()` in a trait's default body, `Self.B(3)` in an enum's impl) is typed as an error with no diagnostic, and `karac check` prints MIR's "a type that failed to check is not lowered yet" (E0516); the pattern `Self.A =>` is refused as "'Self' is a reserved keyword" | — |
 | B-2026-11-18-41 | 2026-11-18 | typecheck | low | A `#[deprecated]` trait named in a bound on a struct's, enum's or trait's own generic parameter (`struct W[T: T1]`) does not warn | — |
+| B-2026-11-18-43 | 2026-11-18 | typecheck | low | A generic distinct type (`distinct type Ids[T] = Vec[T]`) is accepted at its declaration, but its constructor cannot build a value: `let a: Ids[i64] = Ids([1])` is E0200 "expected 'Ids[i64]', found 'Ids'" | — |
 
 ### Relocated
 
@@ -1703,6 +1702,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-16 | typecheck+mir | medium | Compound assignment (`+=`, `-=`, `*=`) on a `#[derive(Arithmetic)]` distinct type passes check and is then refused by both backends; the plain `a = a… | d14ec5899e |
 | B-2026-11-18-19 | typecheck | medium | A binding inside a distinct-type pattern (`UserId(n) => n * 2`) is typed `ref <error>`: E0208 "type 'ref <error>' does not implement trait Mul" | 9617e5a664 |
 | B-2026-11-18-20 | typecheck | medium | A hand-written `impl Display for` a distinct type is ignored by f-strings, `println` and `T: Display` bounds (design.md's newtype escape-hatch exampl… | 9617e5a664 |
+| B-2026-11-18-22 | typecheck | low | Derive requirement rules skip distinct types: `#[derive(Eq)]` without `PartialEq` gets no deprecation warning, and `#[derive(Eq, PartialEq)]` on a di… | 30768dc2d8 |
+| B-2026-11-18-23 | typecheck | low | `#[derive(Default)]` on a distinct type is accepted, but `Count.default()` is E0202 "expected 1 argument(s), found 0" | 30768dc2d8 |
 | B-2026-11-18-24 | parser | medium | Const generic parameter naming is inverted against design.md CN-3/CN-7: `const ROWS: i64` (the spec's own Matrix example) is E0001 'must be Type-clas… | 0305322d6a |
 | B-2026-11-18-26 | typecheck | low | `#[deprecated]` on an enum, a trait or a type alias never fires: uses of the enum's variants and type, `impl T1 for S` and `T: T1` bounds, and the al… | 90431ffd81 |
 | B-2026-11-18-28 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum with a `Drop` impl, a boxed field, a library contain… | d553e3129a |
