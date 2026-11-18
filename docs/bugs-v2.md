@@ -137,7 +137,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-33 | 2026-11-18 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-exhaustive (E0205 "pattern `_` not covered") though it covers every value | — |
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
 | B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
-| B-2026-11-18-36 | 2026-11-18 | cli | low | The `ffi_float_eq` lint (W0318) never fired in `karac check`: it walks the lowered tree, where every `==` is already a trait call | — |
 
 ### Relocated
 
@@ -1706,6 +1705,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-20 | typecheck | medium | A hand-written `impl Display for` a distinct type is ignored by f-strings, `println` and `T: Display` bounds (design.md's newtype escape-hatch exampl… | 9617e5a664 |
 | B-2026-11-18-29 | cli | medium | `karac build --offline` in a workspace member fails: the workspace's own members are looked up in `vendor/` (E_OFFLINE_VENDOR_ENTRY_MISSING for the m… | 0b0eb1ead5 |
 | B-2026-11-18-32 | typecheck | medium | A module-level `let` in any package module after the first panics `karac check` (subtract with overflow in E_MODULE_LET's fix): the module tree does… | 391a146bcc |
+| B-2026-11-18-36 | cli | low | The `ffi_float_eq` lint (W0318) never fired in `karac check`: it walks the lowered tree, where every `==` is already a trait call | abbd3d4aac |
 
 </details>
 
