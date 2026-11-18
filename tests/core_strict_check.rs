@@ -13569,10 +13569,12 @@ fn an_own_self_method_on_a_borrowed_receiver_is_a_move_out_of_the_borrow() {
             "fn f(o: ref Option[String]) -> i64 {\n    o.unwrap().len()\n}\n",
             "o.clone().unwrap()",
         ),
+        // A bare parameter no caller would break takes `own` instead of the
+        // copy (B-2026-11-18-31; `f` has no caller here).
         (
             "bare-param",
             "fn f(o: Option[String]) -> i64 {\n    o.unwrap().len()\n}\n",
-            "o.clone().unwrap()",
+            "o: own Option[String]",
         ),
         (
             "for-over-param",

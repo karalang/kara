@@ -126,6 +126,28 @@ impl ClassifierPrelude {
     }
 }
 
+impl ClassifierPrelude {
+    /// Give parameter `i` of function `key` the mode `mode`, for a trial run
+    /// that asks what its callers would do were it written so
+    /// ([`crate::ownership::OwnershipChecker::own_param_keeps_callers`]).
+    pub(crate) fn set_param_mode(
+        &mut self,
+        key: &str,
+        i: usize,
+        method: bool,
+        mode: OwnershipMode,
+    ) {
+        let table = if method {
+            &mut self.method_param_modes
+        } else {
+            &mut self.callee_param_modes
+        };
+        if let Some(slot) = table.get_mut(key).and_then(|v| v.get_mut(i)) {
+            *slot = mode;
+        }
+    }
+}
+
 /// Map each function body's span to the `Copy`-bounded generic type-parameter
 /// names in scope for it, merging an enclosing `impl` block's parameters with
 /// the method's own. Mirrors `OwnershipChecker::check_function`'s walk so the

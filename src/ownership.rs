@@ -2225,6 +2225,11 @@ pub struct OwnershipChecker<'a> {
     pub(crate) current_classification: Option<crate::cfg::Classification>,
     /// The D5 migration walk's state (`d5_migrate`); `None` outside it.
     pub(crate) d5: Option<d5_migrate::D5State>,
+    /// This checker is a trial run of [`Self::own_param_keeps_callers`].
+    pub(crate) own_trial: bool,
+    /// The position that trial run takes `own`: (function key, parameter
+    /// index, whether it is an instance method's).
+    pub(crate) own_trial_position: Option<(String, usize, bool)>,
     /// Stack of enclosing loop / break-target frames for the walk in
     /// progress, driving post-`loop` break-dominance definite assignment
     /// (B-2026-08-17-17). Pushed/popped by the `While` / `WhileLet` /
@@ -2692,6 +2697,8 @@ impl<'a> OwnershipChecker<'a> {
             slice_binding_keys: HashMap::new(),
             current_classification: None,
             d5: None,
+            own_trial: false,
+            own_trial_position: None,
         }
     }
 
@@ -3518,7 +3525,10 @@ impl<'a> OwnershipChecker<'a> {
         // classification), so rebuilding these per function made the pass
         // O(functions × program) — the super-linear factor measured in the
         // G8 front-end benchmark. See `ClassifierPrelude`.
-        let prelude = ClassifierPrelude::new(self.program, self.typecheck_result);
+        let mut prelude = ClassifierPrelude::new(self.program, self.typecheck_result);
+        if let Some((key, i, method)) = &self.own_trial_position {
+            prelude.set_param_mode(key, *i, *method, OwnershipMode::Own);
+        }
         let items: &[Item] = &self.program.items;
         for item in items {
             match item {

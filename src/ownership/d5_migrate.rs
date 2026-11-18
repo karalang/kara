@@ -52,6 +52,8 @@ struct Decl<'p> {
     self_param: Option<&'p SelfParam>,
     self_is_own: bool,
     self_span: Option<Span>,
+    /// The whole function, body included.
+    span: Span,
 }
 
 fn decls(program: &Program) -> Vec<Decl<'_>> {
@@ -65,6 +67,7 @@ fn decls(program: &Program) -> Vec<Decl<'_>> {
                 self_param: None,
                 self_is_own: false,
                 self_span: None,
+                span: f.span,
             }),
             Item::ImplBlock(imp) => {
                 let TypeKind::Path(p) = &imp.target_type.kind else {
@@ -86,6 +89,7 @@ fn decls(program: &Program) -> Vec<Decl<'_>> {
                             self_param: m.self_param.as_ref(),
                             self_is_own: m.self_is_own,
                             self_span: m.self_span,
+                            span: m.span,
                         });
                     }
                 }
@@ -101,6 +105,7 @@ fn decls(program: &Program) -> Vec<Decl<'_>> {
                             self_param: m.self_param.as_ref(),
                             self_is_own: m.self_is_own,
                             self_span: m.self_span,
+                            span: m.span,
                         });
                     }
                 }
@@ -138,6 +143,130 @@ fn bare_positions(decl: &Decl<'_>) -> Vec<(usize, usize)> {
 }
 
 impl<'a> OwnershipChecker<'a> {
+    /// Whether the bare parameter whose type starts at byte `at` can be made
+    /// `own` without breaking a caller (B-2026-11-18-31): the program is
+    /// checked twice more, once as written and once with that position
+    /// owned, so a call passing it a value is a move. When the owned run
+    /// reports no more errors outside the function itself, every caller
+    /// passes an owned value it does not reuse (or there is no caller), and
+    /// `own` is the fix that keeps the program's meaning without the copy
+    /// `.clone()` would make. A trial run never trials again.
+    pub(crate) fn own_param_keeps_callers(&self, at: usize) -> bool {
+        if self.own_trial {
+            return false;
+        }
+        // The strict check reads a bare `T` as `ref T` (the D5 rewrite keeps
+        // the written type's span), so the position is found by its offset
+        // whatever mode it now spells.
+        let found = decls(self.program).into_iter().find_map(|d| {
+            d.params
+                .iter()
+                .position(|p| p.ty.span.offset == at)
+                .map(|i| (d.key.clone(), i, d.self_param.is_some(), d.span))
+        });
+        let Some((key, i, method, span)) = found else {
+            return false;
+        };
+        // A caller handing over a value it only borrows (its own bare
+        // parameter) would have to clone there, or own its parameter in
+        // turn; that is the type checker's error, which no ownership run
+        // shows, so it is looked for here.
+        if self.borrowed_argument_reaches(&key, i, method) {
+            return false;
+        }
+        let outside = |e: &&super::OwnershipError| {
+            e.span.offset < span.offset || e.span.offset >= span.offset + span.length
+        };
+        let run = |owned: bool| -> usize {
+            let mut c = OwnershipChecker::new(self.program, self.typecheck_result);
+            c.own_trial = true;
+            if owned {
+                c.own_trial_position = Some((key.clone(), i, method));
+                let table = if method {
+                    &mut c.method_param_modes
+                } else {
+                    &mut c.callee_param_modes
+                };
+                match table.get_mut(&key).and_then(|v| v.get_mut(i)) {
+                    Some(slot) => *slot = OwnershipMode::Own,
+                    None => return usize::MAX,
+                }
+            }
+            let r = c.check();
+            r.errors
+                .iter()
+                .chain(r.core_errors.iter())
+                .filter(outside)
+                .count()
+        };
+        run(true) <= run(false)
+    }
+
+    /// Whether some call to function `key` passes, at parameter `i`, an
+    /// argument the type checker typed as a borrow.
+    fn borrowed_argument_reaches(&self, key: &str, i: usize, method: bool) -> bool {
+        let tc = self.typecheck_result;
+        let borrowed = |args: &[CallArg]| {
+            args.get(i).is_some_and(|a| {
+                matches!(
+                    tc.expr_types.get(&SpanKey::from_span(&a.value.span)),
+                    Some(Type::Ref(_) | Type::MutRef(_))
+                )
+            })
+        };
+        let name = key.rsplit('.').next().unwrap_or(key);
+        let mut found = false;
+        let mut visit = |e: &Expr| match &e.kind {
+            ExprKind::Call { callee, args } if !method => {
+                if super::callee_param_modes_key(callee).as_deref() == Some(key) && borrowed(args) {
+                    found = true;
+                }
+            }
+            ExprKind::MethodCall {
+                object,
+                method: m,
+                args,
+                ..
+            } if m == name => {
+                let static_receiver = match &object.kind {
+                    ExprKind::Identifier(t) => key == format!("{t}.{m}"),
+                    _ => false,
+                };
+                if (method || static_receiver) && borrowed(args) {
+                    found = true;
+                }
+            }
+            _ => {}
+        };
+        for item in &self.program.items {
+            match item {
+                Item::Function(f) if !f.stdlib_origin => {
+                    crate::span_visitor::for_each_expr_in_block(&f.body, &mut visit)
+                }
+                Item::ImplBlock(imp) => {
+                    for it in &imp.items {
+                        if let ImplItem::Method(m) = it {
+                            if !m.stdlib_origin {
+                                crate::span_visitor::for_each_expr_in_block(&m.body, &mut visit);
+                            }
+                        }
+                    }
+                }
+                Item::TraitDef(t) => {
+                    for it in &t.items {
+                        if let TraitItem::Method(m) = it {
+                            if let Some(b) = &m.body {
+                                crate::span_visitor::for_each_expr_in_block(b, &mut visit);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
     /// Treat every bare position outside `own` as a borrow, so an argument
     /// passed to one is read rather than moved.
     pub(crate) fn with_d5(mut self, own: FxHashSet<(String, usize)>) -> Self {

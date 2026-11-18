@@ -412,12 +412,22 @@ impl<'a> super::OwnershipChecker<'a> {
             // when it has no `.clone()` to call the method on a copy of,
             // taking it `own` is the fix, not a `#[derive(Copy)]` on its
             // type (B-2026-10-29-45).
+            //
+            // When it has one, `own` is still the fix when no caller would
+            // break: each passes an owned value it does not use again (or
+            // there is no caller), so the parameter can take it instead of
+            // the body copying it (B-2026-11-18-31).
             let supports_clone = self.moved_type_supports_clone(span);
-            if let Some((name, at, closure)) = self
+            let own_param = self
                 .typecheck_result
                 .core_own_param_receivers
-                .get(&SpanKey::from_span(span))
-                .filter(|_| !supports_clone)
+                .get(&SpanKey::from_span(span));
+            let own_keeps_callers = supports_clone
+                && own_param.is_some_and(|(_, at, closure)| {
+                    !closure && self.own_param_keeps_callers(at.offset)
+                });
+            if let Some((name, at, closure)) =
+                own_param.filter(|_| !supports_clone || own_keeps_callers)
             {
                 let (what, spelling) = if *closure {
                     (
@@ -435,9 +445,17 @@ impl<'a> super::OwnershipChecker<'a> {
                     ),
                     span: *span,
                     kind: OwnershipErrorKind::MoveOutOfPlace,
-                    suggestion: Some(format!(
-                        "take `{name}` by value with {spelling}, or use a method that borrows"
-                    )),
+                    suggestion: Some(if own_keeps_callers {
+                        format!(
+                            "take `{name}` by value with {spelling} (every caller passes a \
+                             value it does not use again), write `.clone()` to call it on a \
+                             copy, or use a method that borrows"
+                        )
+                    } else {
+                        format!(
+                            "take `{name}` by value with {spelling}, or use a method that borrows"
+                        )
+                    }),
                     replacement: Some(Box::new(crate::resolver::TextEdit {
                         offset: at.offset,
                         length: 0,
@@ -474,6 +492,12 @@ impl<'a> super::OwnershipChecker<'a> {
                          method that borrows"
                     )
                 }
+            } else if let (true, Some((name, _, false))) = (supports_clone, own_param) {
+                format!(
+                    "write `.clone()` to call it on a copy, take `{name}` by value with \
+                     `{name}: own ...` (a caller still uses what it passes, so it would clone \
+                     there instead), or use a method that borrows"
+                )
             } else if supports_clone {
                 "write `.clone()` to call it on a copy, or use a method that borrows".to_string()
             } else {
