@@ -677,7 +677,8 @@ impl<'a> super::TypeChecker<'a> {
                 // `Type::Error` to preserve the pre-existing silent
                 // fallthrough — impl-method bodies bind `Self` via
                 // `current_self_type`, a different mechanism.
-                return self.dispatch_self_receiver_method(method, args, span);
+                let type_receiver = matches!(object.kind, ExprKind::SelfType);
+                return self.dispatch_self_receiver_method(method, args, span, type_receiver);
             }
             Type::TypeParam(name) => {
                 // Receiver-form generic call-site dispatch (slice 2 of the

@@ -1,0 +1,11 @@
+source = "design.md § Associated functions"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits", "defaults", "self"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "Through Self in a trait default body: Self is the implementing type, so the default two() calls each impl's own one(), as T.one() does under T: Unit; an impl that overrides two() and calls Self.one() in it gets its own (B-2026-11-18-40, review-thread ruling 2026-11-18)."

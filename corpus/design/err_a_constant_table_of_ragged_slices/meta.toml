@@ -1,0 +1,9 @@
+source = "B-2026-11-18-62"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "constants", "slices", "diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Constants: a constant's list literal is an Array. A list literal at a Slice inside the constant's type was refused six times, once per row, with a borrow error about a temporary \"which this function owns\"; it is one error at the type, which names the ragged lengths and the owning type to build at run time. Rows of one length get the B-2026-11-15-14 fix instead, an Array of Arrays. The expected.out wording of an error pin is guidance, not a byte oracle."

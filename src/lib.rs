@@ -96,6 +96,7 @@ pub mod presize;
 pub mod pubgrub_solve;
 pub mod question_chain;
 pub mod select_desugar;
+pub mod self_paths;
 pub mod struct_spread;
 pub mod tls_conn;
 pub mod trait_scope;

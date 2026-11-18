@@ -32,6 +32,10 @@ pub fn desugar_program(program: &mut Program) {
     hoist_assoc_bindings_in_program(program);
     synthesize_default_impls(program);
     synthesize_trait_default_methods(program);
+    // `Self.f(..)`, `Self.B(x)` and the pattern `Self.A` in an `impl`, the
+    // copied default bodies included, become paths through the type's name
+    // (B-2026-11-18-40).
+    crate::self_paths::desugar_self_paths(program);
     synthesize_user_hash_byte_wrappers(program);
     propagate_codegen_hints(program);
     desugar_impl_trait_args_in_program(program);

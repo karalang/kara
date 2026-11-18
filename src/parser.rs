@@ -502,6 +502,8 @@ pub struct Parser {
     pub(crate) parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::range_arg_edits`].
     pub(crate) range_arg_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// See [`crate::ast::Program::unsigned_floor_names`].
+    pub(crate) unsigned_floor_names: rustc_hash::FxHashMap<usize, Span>,
     /// See [`crate::ast::Program::paren_return_types`].
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::cast_operand_ends`].
@@ -856,6 +858,7 @@ impl Parser {
             rust_heap_collect: rustc_hash::FxHashMap::default(),
             parse_target_edits: rustc_hash::FxHashMap::default(),
             range_arg_edits: rustc_hash::FxHashMap::default(),
+            unsigned_floor_names: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             cast_operand_ends: rustc_hash::FxHashMap::default(),
             paren_casts: rustc_hash::FxHashMap::default(),
@@ -1350,6 +1353,7 @@ impl Parser {
             rust_std_paths: self.rust_std_paths(),
             parse_target_edits: std::mem::take(&mut self.parse_target_edits),
             range_arg_edits: std::mem::take(&mut self.range_arg_edits),
+            unsigned_floor_names: std::mem::take(&mut self.unsigned_floor_names),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
             paren_casts: std::mem::take(&mut self.paren_casts),

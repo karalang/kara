@@ -1,0 +1,43 @@
+enum Shape {
+    Dot,
+    Square(i64),
+    Rect { w: i64, h: i64 },
+}
+
+impl Shape {
+    fn area(self) -> i64 {
+        match self {
+            Self.Dot => 0,
+            Self.Square(s) => s * s,
+            Self.Rect { w, h } => w * h,
+        }
+    }
+
+    fn is_dot(self) -> bool {
+        if let Self.Dot = self { true } else { false }
+    }
+}
+
+enum Maybe[T] {
+    Nothing,
+    Just(T),
+}
+
+impl[T] Maybe[T] {
+    fn present(self) -> bool {
+        match self {
+            Self.Nothing => false,
+            Self.Just(_) => true,
+        }
+    }
+}
+
+fn main() {
+    let shapes = [Shape.Dot, Shape.Square(3), Shape.Rect { w: 2, h: 5 }];
+    for s in shapes.iter() {
+        println(f"{s.area()} {s.is_dot()}");
+    }
+    let a: Maybe[i64] = Maybe.Just(4);
+    let b: Maybe[i64] = Maybe.Nothing;
+    println(f"{a.present()} {b.present()}");
+}

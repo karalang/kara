@@ -713,6 +713,18 @@ impl super::Parser {
                                 if method == "range" && args.len() == 1 {
                                     self.note_range_arg(name_span, &args[0].value, args_close_span);
                                 }
+                                if args.len() == 1
+                                    && matches!(
+                                        method.as_str(),
+                                        "checked_sub"
+                                            | "saturating_sub"
+                                            | "checked_add_signed"
+                                            | "saturating_add_signed"
+                                    )
+                                {
+                                    self.unsigned_floor_names
+                                        .insert(args_close_span.offset, name_span);
+                                }
                                 // B-2026-08-18-24 — MEASUREMENT SCAFFOLD.
                                 let end = args_close_span.offset + args_close_span.length;
                                 let span = Span {
@@ -2174,6 +2186,18 @@ impl super::Parser {
                         },
                     );
                     return self.parse_struct_literal_body(vec![name], &start);
+                }
+                // `Self.Rect { w: 1, h: 2 }`: a struct-like variant of the
+                // type the `impl` is for, which the desugar names
+                // (B-2026-11-18-40).
+                if self.check(&Token::Dot)
+                    && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+                    && self.looks_like_struct_literal_at(self.pos + 2)
+                {
+                    self.advance();
+                    let variant = self.expect_identifier()?;
+                    return self
+                        .parse_struct_literal_body(vec!["Self".to_string(), variant], &start);
                 }
                 Some(Expr {
                     id: crate::ids::NodeId::DUMMY,

@@ -1,0 +1,11 @@
+source = "design.md § Associated functions"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["enums", "patterns", "self"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "Through Self, an enum variant in a pattern: Self.Dot, Self.Square(s) and Self.Rect { w, h } in a match in impl Shape, Self.Dot in an if let, and Self.Nothing and Self.Just(_) in impl[T] Maybe[T] (B-2026-11-18-40, review-thread ruling 2026-11-18)."

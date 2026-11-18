@@ -1,0 +1,9 @@
+source = "B-2026-11-18-61"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "strings", "views"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Str: a Str is a view, and m[k] lends the value under k. words[1] is one, words[2] has 5 bytes, tags[3] and tags[1] are c and a, parts['x'] views all three of base and its [2] is 7, and the set walks pp then q. The LLVM build lent a pointer to the slot where the view itself belonged, so `m[k]` on a Map[i64, Str] printed garbage or ran out of memory, while the interpreter was right (kata 1220's Rust arm)."

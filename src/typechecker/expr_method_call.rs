@@ -1121,20 +1121,35 @@ impl<'a> super::TypeChecker<'a> {
     /// `None`) so the caller's silent-fallthrough behavior is preserved for
     /// non-trait `Self` cases (impl-method bodies bind `Self` to the impl's
     /// target type via `current_self_type`, a different mechanism).
+    ///
+    /// `type_receiver` is `Self.f(..)`, the type itself as the receiver
+    /// (B-2026-11-18-40): in a default body it reaches the trait's
+    /// associated functions as `T.f(..)` does under `T: Trait`, and in an
+    /// `impl` the desugar has already written the type's name, so one that
+    /// reaches here is in an `impl` for a type no path names.
     pub(super) fn dispatch_self_receiver_method(
         &mut self,
         method: &str,
         args: &[CallArg],
         span: &Span,
+        type_receiver: bool,
     ) -> Type {
         let trait_name = match self.enclosing_trait.clone() {
             Some(name) => name,
             None => {
-                // Not inside a trait body — `Self` here resolves through a
-                // different mechanism (impl-method `current_self_type`).
-                // Preserve the pre-existing silent fallthrough.
                 for arg in args {
                     self.infer_expr(&arg.value);
+                }
+                if type_receiver {
+                    self.type_error(
+                        format!(
+                            "`Self.{method}(..)` names the type an `impl` is for, and this \
+                             `impl`'s type is not one a path can name; call the function \
+                             through the trait, `Trait.{method}(..)`"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
                 }
                 return Type::Error;
             }
@@ -1146,8 +1161,11 @@ impl<'a> super::TypeChecker<'a> {
             .iter()
             .filter_map(|t| {
                 let m = self.find_trait_method(t, method)?;
-                // Receiver-form requires a self_param.
-                m.self_param.as_ref()?;
+                // Receiver-form requires a self_param; `Self.f(..)` takes
+                // the associated functions, which have none.
+                if m.self_param.is_some() == type_receiver {
+                    return None;
+                }
                 Some((t.clone(), m.clone()))
             })
             .collect();
@@ -2325,6 +2343,17 @@ impl<'a> super::TypeChecker<'a> {
             // Only `into_iter`: `iter`'s `ref` items of an open literal are
             // not read as values where a by-value `i64` is wanted
             // (`m.insert(k, ..)` over `[50, 10].iter()`).
+            // The literal of `[..].into_iter().collect()` is checked against
+            // the collected items (`TypeChecker::pinned_into_iter_literal`).
+            None if method == "into_iter"
+                && self
+                    .pinned_into_iter_literal
+                    .as_ref()
+                    .is_some_and(|(id, _)| *id == object.id) =>
+            {
+                let (_, want) = self.pinned_into_iter_literal.take().unwrap();
+                self.check_expr(object, &want)
+            }
             None if matches!(object.kind, ExprKind::ArrayLiteral(_)) && method == "into_iter" => {
                 let saved = self.open_collection_let.replace(object.id);
                 let t = self.infer_expr(object);

@@ -1,0 +1,35 @@
+trait Unit {
+    fn one() -> i64;
+
+    fn two() -> i64 {
+        Self.one() + Self.one()
+    }
+
+    fn times(self, n: i64) -> i64 {
+        Self.one() * n
+    }
+}
+
+struct Single {}
+struct Ten {}
+
+impl Unit for Single {
+    fn one() -> i64 {
+        1
+    }
+}
+
+impl Unit for Ten {
+    fn one() -> i64 {
+        10
+    }
+
+    fn two() -> i64 {
+        Self.one() * 3
+    }
+}
+
+fn main() {
+    println(f"{Single.two()} {Ten.two()}");
+    println(f"{Single {}.times(5)} {Ten {}.times(5)}");
+}

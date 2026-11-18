@@ -16,7 +16,14 @@ impl super::Formatter {
                 } else if self.ref_binding_spans.contains(&key) {
                     self.write_str("ref ");
                 }
-                self.write_ident(name)
+                // A unit variant through its type, `E.A` or `Self.A`
+                // (B-2026-11-18-40), is a path: each segment on its own.
+                if name.contains('.') {
+                    let segments: Vec<String> = name.split('.').map(str::to_string).collect();
+                    self.write_path(&segments)
+                } else {
+                    self.write_ident(name)
+                }
             }
             PatternKind::Literal(lit) => self.format_literal_pattern(lit),
             PatternKind::RangePattern {

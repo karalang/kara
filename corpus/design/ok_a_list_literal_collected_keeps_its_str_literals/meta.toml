@@ -1,0 +1,9 @@
+source = "B-2026-11-18-60"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "literals", "strings", "collections"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § String literals: a string literal is a Str where a Str is expected, and § Type inference: a literal takes the type its use gives it. The literal of `[..].into_iter().collect()` is checked against the collected items, so `[('a', \"eiu\")]` collects into a Map[char, Str] and `[('a', 200)]` into a Vec[(char, u8)] (200 + 7 is 207 in u8). Both were refused with `FromIterator[(char, String)]` / `FromIterator[(char, i64)]` and no fix (kata 1220's Rust arm)."

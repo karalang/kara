@@ -656,6 +656,50 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
+            // `Self.A`, `Self.B(x)`, `Self.C { .. }`: a variant of the type an
+            // `impl` is for, which the desugar names (B-2026-11-18-40).
+            Token::SelfType if matches!(self.peek_token_ref_at(1), Token::Dot) => {
+                self.advance();
+                let mut path = vec!["Self".to_string()];
+                while self.eat(&Token::Dot) {
+                    path.push(self.expect_identifier()?);
+                }
+                if self.check(&Token::LeftBrace) {
+                    self.advance();
+                    let (fields, has_rest) = self.parse_struct_pattern_fields()?;
+                    self.expect(&Token::RightBrace)?;
+                    Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
+                        kind: PatternKind::Struct {
+                            path,
+                            fields,
+                            has_rest,
+                        },
+                        span: self.span_from(&start),
+                    })
+                } else if self.check(&Token::LeftParen) {
+                    self.advance();
+                    let mut patterns = Vec::new();
+                    while !self.check(&Token::RightParen) && !self.is_at_end() {
+                        patterns.push(self.parse_pattern()?);
+                        if !self.eat(&Token::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Token::RightParen)?;
+                    Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
+                        kind: PatternKind::TupleVariant { path, patterns },
+                        span: self.span_from(&start),
+                    })
+                } else {
+                    Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
+                        kind: PatternKind::Binding(path.join(".")),
+                        span: self.span_from(&start),
+                    })
+                }
+            }
             Token::Identifier { .. } => {
                 // `Dir::Up =>`: Rust's path, written `Dir.Up` (B-2026-11-04-5).
                 self.rewrite_rust_path();

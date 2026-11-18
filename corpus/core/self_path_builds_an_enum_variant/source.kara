@@ -1,0 +1,57 @@
+enum Shape {
+    Dot,
+    Square(i64),
+    Rect { w: i64, h: i64 },
+}
+
+impl Shape {
+    fn unit() -> Shape {
+        Self.Square(1)
+    }
+
+    fn grown(self) -> Shape {
+        match self {
+            Shape.Dot => Self.Dot,
+            Shape.Square(s) => Self.Square(s + 1),
+            Shape.Rect { w, h } => Self.Rect { w: w + 1, h: h + 1 },
+        }
+    }
+
+    fn area(self) -> i64 {
+        match self {
+            Shape.Dot => 0,
+            Shape.Square(s) => s * s,
+            Shape.Rect { w, h } => w * h,
+        }
+    }
+}
+
+enum Maybe[T] {
+    Nothing,
+    Just(T),
+}
+
+impl[T] Maybe[T] {
+    fn wrap(v: own T) -> Maybe[T] {
+        Self.Just(v)
+    }
+
+    fn none() -> Maybe[T] {
+        Self.Nothing
+    }
+
+    fn present(self) -> bool {
+        match self {
+            Maybe.Nothing => false,
+            Maybe.Just(_) => true,
+        }
+    }
+}
+
+fn main() {
+    let r = Shape.Rect { w: 2, h: 3 };
+    println(f"{Shape.unit().area()} {Shape.unit().grown().area()} {r.grown().area()} {Shape.Dot.grown().area()}");
+    let a: Maybe[String] = Maybe.wrap("x");
+    let b: Maybe[i64] = Maybe.none();
+    println(f"{a.present()} {b.present()}");
+}

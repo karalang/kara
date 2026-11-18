@@ -1,0 +1,11 @@
+source = "design.md § Associated functions"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["enums", "impls", "self"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "Through Self, an enum variant in an expression: Self.Square(1), the unit Self.Dot and the struct-like Self.Rect { .. } in impl Shape, and Self.Just(v) and Self.Nothing in impl[T] Maybe[T], where T is carried (B-2026-11-18-40, review-thread ruling 2026-11-18)."

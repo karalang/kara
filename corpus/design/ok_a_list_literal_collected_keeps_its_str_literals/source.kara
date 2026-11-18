@@ -1,0 +1,14 @@
+// design.md § String literals: a string literal is a `Str` where a `Str` is
+// expected. A list literal iterated and collected where it is written,
+// `[..].into_iter().collect()`, holds the collected items, so its string
+// literals are `Str`s and its numbers take their slot's type, as when the
+// literal is written straight into a `Vec[Str]`.
+fn main() {
+    let before: Map[char, Str] = [('a', "eiu"), ('e', "ai"), ('u', "a")].into_iter().collect();
+    let order: Vec[Str] = ["xy", "z"].into_iter().collect();
+    let small: Vec[(char, u8)] = [('a', 200), ('b', 7)].into_iter().collect();
+    let names: SortedSet[Str] = ["b", "a", "b"].into_iter().collect();
+    println(f"{before['a']} {before['e'].len()} {before['u']}");
+    println(f"{order[0]}{order[1]} {small[0].1 + small[1].1}");
+    println(f"{names.len()} {names.min()}");
+}

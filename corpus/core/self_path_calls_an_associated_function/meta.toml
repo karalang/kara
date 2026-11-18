@@ -1,0 +1,11 @@
+source = "design.md § Associated functions"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits", "impls", "self"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "Through Self: in an impl, Self.f(..) is the impl's type's associated function, so Self.gcd(b, a % b) recurses through Solution.gcd; in impl[T] Stack[T], Self.new() is Stack[T].new(), with T carried, so `let s = Self.new()` needs no annotation (B-2026-11-18-40, review-thread ruling 2026-11-18)."

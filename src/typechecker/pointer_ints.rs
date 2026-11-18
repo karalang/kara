@@ -58,7 +58,11 @@ impl<'a> super::TypeChecker<'a> {
 
     /// The fixes, one error each, when the program mixed the two.
     pub(super) fn emit_written_pointer_int_fixes(&mut self) {
+        let mut floors = std::mem::take(&mut self.usize_floor_calls);
+        let mut seen_floor = std::collections::HashSet::new();
+        floors.retain(|f| seen_floor.insert(f.2.offset));
         if !self.pointer_int_mixed {
+            self.unsigned_floor_errors(floors, false);
             return;
         }
         let errors_before = self.errors.len();
@@ -79,6 +83,8 @@ impl<'a> super::TypeChecker<'a> {
             ffi.iter()
                 .any(|f| s.offset >= f.offset && s.offset < f.offset + f.length)
         };
+        // Not in a program with FFI items, where a `usize` may stay one.
+        self.unsigned_floor_errors(floors, ffi.is_empty());
         let spans: Vec<Span> = self
             .written_pointer_ints
             .values()
@@ -186,6 +192,74 @@ impl<'a> super::TypeChecker<'a> {
             for key in std::mem::take(&mut self.usize_use_site_fixes) {
                 self.error_fix_diffs.remove(&key);
             }
+        }
+    }
+
+    /// The `usize` floors the retype to `i64` would lose (kata 1219's Rust
+    /// arm): `i.checked_sub(1)` is `None` at 0 on a `usize` and `Some(-1)`
+    /// on an `i64`, and `i.saturating_sub(1)` stops at 0 on one and not on
+    /// the other. With `retyped`, each gets the edit that keeps the floor,
+    /// in the pass that makes the `usize` an `i64`; and `checked_add_signed`
+    /// / `saturating_add_signed`, which `i64` lacks, become its `checked_add`
+    /// / `saturating_add` with the floor. Without it, those two are an error
+    /// with no edit, as any method the type does not have.
+    fn unsigned_floor_errors(&mut self, floors: Vec<(String, Span, Span, Span)>, retyped: bool) {
+        for (method, name, close, call) in floors {
+            let signed = method.ends_with("_signed");
+            if !retyped {
+                if signed {
+                    self.type_error(
+                        format!("no method '{method}' on type 'usize'"),
+                        call,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                }
+                continue;
+            }
+            let checked = method.starts_with("checked_");
+            let floor = if checked {
+                ".filter(|v| v >= 0)"
+            } else {
+                ".max(0)"
+            };
+            let mut edits = Vec::new();
+            let message = if signed {
+                let to = if checked {
+                    "checked_add"
+                } else {
+                    "saturating_add"
+                };
+                edits.push(crate::resolver::TextEdit {
+                    offset: name.offset,
+                    length: name.length,
+                    replacement: to.to_string(),
+                });
+                format!(
+                    "this `usize` becomes `i64` (design.md §5), which has no `{method}`: \
+                     its `{to}` takes the `i64` the `isize` becomes, and `{floor}` keeps \
+                     the floor at 0 the `usize` had"
+                )
+            } else if checked {
+                format!(
+                    "this `usize` becomes `i64` (design.md §5), and an `i64`'s `{method}` \
+                     gives `Some` of a number below 0 where the `usize` one gave `None`, \
+                     so `{floor}` keeps the floor"
+                )
+            } else {
+                format!(
+                    "this `usize` becomes `i64` (design.md §5), and an `i64`'s `{method}` \
+                     goes below 0 where the `usize` one stopped at 0, so `{floor}` keeps \
+                     the floor"
+                )
+            };
+            edits.push(crate::resolver::TextEdit {
+                offset: close.offset + close.length,
+                length: 0,
+                replacement: floor.to_string(),
+            });
+            self.type_error(message, call, TypeErrorKind::TypeMismatch);
+            self.error_fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&call), edits);
         }
     }
 

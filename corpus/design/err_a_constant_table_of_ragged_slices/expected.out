@@ -1,0 +1,1 @@
+ERROR at line 5: a constant's list literal is an `Array`, not a `Slice` (design.md § Constants): each use builds the value, and a `Slice` only views one; the lists inside `FOLLOWS` differ in length (1, 2 and 4), so no `Array` type holds them all and the table cannot be a constant: build it as an `Array[Vec[usize], 5]` with a `let` in the function that uses it

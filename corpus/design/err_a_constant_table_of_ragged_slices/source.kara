@@ -1,0 +1,9 @@
+// design.md § Constants: a constant's list literal is an `Array`, and each
+// use builds the value. Rows of different lengths fit no `Array` type, so
+// Rust's `const FOLLOWS: [&[usize]; 5] = [&[1], &[0, 2], ..]` has no
+// constant form; the error says so once, at the type.
+const FOLLOWS: Array[Slice[usize], 5] = [[1], [0, 2], [0, 1, 3, 4], [2, 4], [0]];
+
+fn main() {
+    println(f"{FOLLOWS[2].len()}");
+}

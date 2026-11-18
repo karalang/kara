@@ -597,6 +597,44 @@ impl<'a> super::TypeChecker<'a> {
         // Both operands and the result are the receiver's type (same strict
         // same-type / literal-promotion rule as `wrapping_*`). Backends:
         // interpreter + codegen `method_call.rs`.
+        //
+        // On a `usize`, Rust's `checked_sub` / `saturating_sub` floor at 0,
+        // and so do its `checked_add_signed` / `saturating_add_signed`,
+        // which take an `isize`. When the program's written `usize`s become
+        // `i64` (pointer_ints.rs) the floor has to be kept by hand, so each
+        // call is noted for that fix; the two `_signed` ones, which Kāra's
+        // integers do not have, are typed here only for it, and are an error
+        // when no such fix comes (kata 1219's Rust arm).
+        if matches!(receiver_for_lookup, Type::UInt(UIntSize::Usize)) && args.len() == 1 {
+            let signed = matches!(method, "checked_add_signed" | "saturating_add_signed");
+            if signed || matches!(method, "checked_sub" | "saturating_sub") {
+                if let Some(name) = self
+                    .program
+                    .unsigned_floor_names
+                    .get(&args_close_span.offset)
+                    .copied()
+                {
+                    self.usize_floor_calls.push((
+                        method.to_string(),
+                        name,
+                        *args_close_span,
+                        *span,
+                    ));
+                }
+            }
+            if signed {
+                self.infer_expr(&args[0].value);
+                let self_ty = receiver_for_lookup.clone();
+                return Some(if method == "checked_add_signed" {
+                    Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![self_ty],
+                    }
+                } else {
+                    self_ty
+                });
+            }
+        }
         {
             let checked = matches!(method, "checked_add" | "checked_sub" | "checked_mul");
             let saturating = matches!(

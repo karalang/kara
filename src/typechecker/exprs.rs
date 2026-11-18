@@ -1981,7 +1981,10 @@ impl<'a> super::TypeChecker<'a> {
             self.open_collection_let = Some(expr.id);
         }
         let hinted = self.note_collect_closure_result(expr, expected);
+        let saved_pin = self.pinned_into_iter_literal.take();
+        self.pinned_into_iter_literal = self.collected_literal_pin(expr, expected);
         let mut ty = self.check_expr_inner(expr, expected);
+        self.pinned_into_iter_literal = saved_pin;
         if let Some(id) = hinted {
             self.closure_result_hints.remove(&id);
         }
@@ -10726,6 +10729,79 @@ impl<'a> super::TypeChecker<'a> {
     /// literal: `(1..=5).collect()` returned as a `Vec[i32]` is a range of
     /// `i32` (design.md § Type inference, B-2026-11-08-86), decided here,
     /// before the body's end gives the literal its default.
+    /// `[..].into_iter().collect()` checked against a collection whose items
+    /// are known: the literal and the `Vec` of those items it is checked
+    /// against. The literal's items are the collected ones, so a string
+    /// literal under a `Str` is a `Str` and a number takes its slot's type,
+    /// as when the literal is written straight into the slot: `let before:
+    /// Map[char, Str] = [('a', "eiu")].into_iter().collect();` (design.md §3
+    /// String literals, §8 Literals; kata 1220's Rust arm).
+    fn collected_literal_pin(
+        &self,
+        expr: &Expr,
+        expected: &Type,
+    ) -> Option<(crate::ids::NodeId, Type)> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            turbofish: None,
+            ..
+        } = &expr.kind
+        else {
+            return None;
+        };
+        if method != "collect" || !args.is_empty() {
+            return None;
+        }
+        let ExprKind::MethodCall {
+            object: literal,
+            method: into_iter,
+            args: into_args,
+            ..
+        } = &object.kind
+        else {
+            return None;
+        };
+        if into_iter != "into_iter" || !into_args.is_empty() || literal.id.is_dummy() {
+            return None;
+        }
+        if !matches!(&literal.kind, ExprKind::ArrayLiteral(items) if !items.is_empty()) {
+            return None;
+        }
+        let want = inference::resolve_type_vars(
+            expected,
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &HashMap::new(),
+        );
+        let item = match Self::peel_borrow(&want) {
+            Type::Named { name, args }
+                if matches!(name.as_str(), "Vec" | "VecDeque" | "Set" | "SortedSet")
+                    && !args.is_empty() =>
+            {
+                args[0].clone()
+            }
+            Type::Named { name, args }
+                if matches!(name.as_str(), "Map" | "SortedMap") && args.len() >= 2 =>
+            {
+                Type::Tuple(vec![args[0].clone(), args[1].clone()])
+            }
+            _ => return None,
+        };
+        if contains_type_var(&item) {
+            return None;
+        }
+        Some((
+            literal.id,
+            Type::Named {
+                name: "Vec".to_string(),
+                args: vec![item],
+            },
+        ))
+    }
+
     fn collect_fixes_literal_items(&mut self, expr: &Expr, expected: &Type) {
         let ExprKind::MethodCall {
             object,
@@ -16003,7 +16079,24 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             ExprKind::SelfValue => self.current_self_type.clone().unwrap_or(Type::Error),
-            ExprKind::SelfType => self.current_self_type.clone().unwrap_or(Type::Error),
+            ExprKind::SelfType => match self
+                .current_self_type
+                .clone()
+                .or_else(|| self.fn_self_type.clone())
+            {
+                Some(t) => t,
+                None => {
+                    // B-2026-11-18-40: outside both, nothing to name.
+                    self.type_error(
+                        "`Self` names the type of the `impl` or `trait` it is written in, \
+                         and this is in neither"
+                            .to_string(),
+                        expr.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    Type::Error
+                }
+            },
 
             // Operators
             ExprKind::Binary { op, left, right } => self.infer_binary(op, left, right, &expr.span),

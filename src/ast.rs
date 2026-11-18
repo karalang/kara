@@ -1056,6 +1056,14 @@ pub struct Program {
     /// `T.MIN` / `T.MAX` in place of the stand-ins when `T` is an integer
     /// type, and leaves the error without an edit otherwise.
     pub range_arg_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// The method name of each one-argument `checked_sub`, `saturating_sub`,
+    /// `checked_add_signed` and `saturating_add_signed` call, keyed by the
+    /// offset of the call's closing parenthesis. Set by the PARSER: on a
+    /// `usize` the written-`usize` fix makes `i64`, these four floor at 0 in
+    /// Rust and not on an `i64`, so the typechecker's fix keeps the floor
+    /// (`.filter(|v| v >= 0)`, `.max(0)`) and renames the two `_signed`
+    /// ones, which `i64` does not have (kata 1219's Rust arm).
+    pub unsigned_floor_names: rustc_hash::FxHashMap<usize, Span>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and

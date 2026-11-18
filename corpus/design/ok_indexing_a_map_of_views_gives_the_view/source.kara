@@ -1,0 +1,21 @@
+// design.md § Str: a `Str` is a view, a pointer and a length, and `m[k]`
+// lends the value stored under `k`. A map or set of views lends the view
+// itself, as `v[i]` on a `Vec[Str]` does.
+fn main() {
+    let mut words: Map[i64, Str] = Map.new();
+    words.insert(1, "one");
+    words.insert(2, "three");
+    let mut tags: SortedMap[i64, Str] = SortedMap.new();
+    tags.insert(3, "c");
+    tags.insert(1, "a");
+    let base: Vec[i64] = [5, 6, 7];
+    let mut parts: Map[char, Slice[i64]] = Map.new();
+    parts.insert('x', base.as_slice());
+    let mut seen: SortedSet[Str] = SortedSet.new();
+    seen.insert("q");
+    seen.insert("pp");
+    println(f"{words[1]} {words[2].len()} {tags[3]}{tags[1]} {parts['x'].len()} {parts['x'][2]}");
+    for w in seen.iter() {
+        println(f"{w} {w.len()}");
+    }
+}

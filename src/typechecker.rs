@@ -3214,6 +3214,12 @@ pub struct TypeChecker<'a> {
     /// `usize` types become `i64`, a cast left behind feeds a `usize` into
     /// them (B-2026-11-08-49).
     pub(super) usize_cast_lets: Vec<Expr>,
+    /// Each `checked_sub` / `saturating_sub` / `checked_add_signed` /
+    /// `saturating_add_signed` on a `usize`, as (method, name span, closing
+    /// parenthesis, call span): when the written `usize`s become `i64`, these
+    /// lose the floor at 0 they had (Some(-1) where Rust gave None), so the
+    /// fix keeps it ([`crate::ast::Program::unsigned_floor_names`], kata 1219).
+    pub(super) usize_floor_calls: Vec<(String, Span, Span, Span)>,
     /// Rust's `*v.last_mut().unwrap() = x` (and `first_mut`, `expect`, a
     /// compound assignment) over a plain place `v`: the edit that writes
     /// `v[v.len() - 1]` / `v[0]` for the whole left side, keyed by the
@@ -4313,6 +4319,10 @@ pub struct TypeChecker<'a> {
     /// (impl-method bodies bind `Self` to the impl's target type via
     /// `current_self_type`, a different mechanism).
     pub(super) enclosing_trait: Option<String>,
+    /// The type `Self` names in the function being checked: the `impl`'s
+    /// type, or the trait's `Self` in a default body, whether or not the
+    /// function has a receiver (B-2026-11-18-40). `None` outside both.
+    pub(super) fn_self_type: Option<Type>,
     /// Closure expression span → reason that closure became once-callable.
     /// Populated by `closure_type_with_capture_inference` when the body walk
     /// finds a captured-non-Copy consume; consumed by `check_assignable` so
@@ -4468,6 +4478,12 @@ pub struct TypeChecker<'a> {
     /// repeat literal (`[0; 26]`) or `Vec.filled(n, 0)`: its element's
     /// number literal stays open for a later use to fix (B-2026-11-08-57).
     pub(super) open_collection_let: Option<crate::ids::NodeId>,
+    /// A list literal iterated and collected where it is written,
+    /// `[('a', "eiu")].into_iter().collect()` into a `Map[char, Str]`: its
+    /// id and the `Vec` of the target's items it is checked against, so a
+    /// string literal is a `Str` and a number takes its type, as in `let v:
+    /// Vec[(char, Str)] = [('a', "eiu")];` (design.md §8 Literals).
+    pub(super) pinned_into_iter_literal: Option<(crate::ids::NodeId, Type)>,
     /// The element type an array literal takes from the `Vec[E]` its
     /// `.to_vec()` is checked against, keyed by the literal's node
     /// (B-2026-11-09-49).
@@ -4690,6 +4706,7 @@ impl<'a> TypeChecker<'a> {
             usize_use_site_fixes: Vec::new(),
             duration_unit_args: std::collections::HashSet::new(),
             usize_cast_lets: Vec::new(),
+            usize_floor_calls: Vec::new(),
             last_mut_writes: Default::default(),
             untargeted_parses: Vec::new(),
             fn_item_spans: FxHashSet::default(),
@@ -4939,6 +4956,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_const_params: Vec::new(),
             current_impl_const_params: Vec::new(),
             enclosing_trait: None,
+            fn_self_type: None,
             closure_once_reasons: FxHashMap::default(),
             current_stmt: None,
             once_slot_types: Vec::new(),
@@ -4968,6 +4986,7 @@ impl<'a> TypeChecker<'a> {
             read_only_slice_let_uses: FxHashMap::default(),
             timeout_duration_args: FxHashMap::default(),
             open_collection_let: None,
+            pinned_into_iter_literal: None,
             array_element_hint: None,
             literal_collection_uses: FxHashMap::default(),
             str_lit_let_uses: FxHashMap::default(),

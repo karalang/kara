@@ -393,6 +393,7 @@ Escaping one of these is `error[E_RAW_IDENT_NOT_ALLOWED]` (`E0004`). It is a dif
 
 **Type.** A string literal is a `String` by default and a `Str` where a `Str` is expected, the same way an integer literal is `i64` by default and takes an expected type ([§8](#8-type-inference-and-generics)). The rule is the same in every scope.
 - `let s = "hi";` makes a `String`. `let s: Str = "hi";` and a `Str` argument make a `Str`.
+- A list literal iterated and collected where it is written holds the collected items, so `let m: Map[char, Str] = [('a', "eiu")].into_iter().collect();` makes `Str`s, as `let v: Vec[(char, Str)] = [('a', "eiu")];` does, and its numbers take their slots' types the same way.
 - A literal typed as `Str` is a view of static data. It allocates nothing and borrows nothing, so it may go anywhere, a `const` and a global included ([core-semantics.md §5.3](core-semantics.md#5-references-and-views-c5)).
 - A literal where a `ref String` is expected is a reference to a constant `String` in static data, so it borrows nothing either: `m.get(k).unwrap_or("")` may be bound and kept. The same holds for any literal in a `ref T` slot, such as the `0` in `counts.get(k).unwrap_or(0)` ([core-semantics.md §5.3](core-semantics.md#5-references-and-views-c5)).
 - A literal used as the receiver of a method defined on `Str` is a `Str`, so `"0123456789abcdef".bytes()` is a view of static data and may be bound and kept ([library/strings.md](library/strings.md)). A literal receiving a method only `String` has (`push_str`, `own self` methods) is a `String` temporary.
@@ -3206,6 +3207,8 @@ trait FromStr {
 **It is called on a type**, written as the receiver: `T.default()`, `Config.default()`. The compiler looks `default` up on the type as it looks up methods (inherent first, then traits), with no receiver value. The ambiguity rules are the same. There is no bare `default()` form that takes its type from the expected type.
 
 There are no call-site type arguments: the form is `T.default()`, never `default[T]()` ([§8 Generic parameters and arguments](#generic-parameters-and-arguments)).
+
+**Through `Self`.** As the first segment of a path, `Self` is the type an `impl` is for, with its type arguments: `Self.gcd(a, b)` in `impl Solution` is `Solution.gcd(a, b)`, `Self.new()` in `impl[T] Stack[T]` is `Stack[T].new()`, and a variant is `Self.Leaf(x)` in an expression and `Self.Leaf(x) => ..` in a pattern. In a trait's default body it is the implementing type, so `Self.one()` reaches the associated function `one` as `T.one()` does under `T: Unit`. Outside an `impl` or a trait, `Self` is an error (review-thread ruling 2026-11-18).
 
 An inherent associated function hides a trait one of the same name at `T.name()`, as inherent methods hide trait methods. `Trait.name(args)` reaches the trait's. Its `Self` comes from the expected type, through the function's return type: `let p: P = Make.name()` calls `P`'s impl of `Make`, even where `P` has an inherent `name`, and `let o: Option[P] = Parse.parse_it(s)` takes `Self` from `Option[Self]` (review-thread ruling 2026-11-16). With no expected type, or a return type that does not name `Self`, the call names no type and is an error whose message gives the `P.name()` form, and the annotation when one would fix `Self`. An expected type that does not implement the trait is an error naming it.
 

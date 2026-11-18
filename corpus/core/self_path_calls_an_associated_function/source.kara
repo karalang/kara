@@ -1,0 +1,38 @@
+struct Solution {}
+
+impl Solution {
+    fn gcd(a: i64, b: i64) -> i64 {
+        if b == 0 { a } else { Self.gcd(b, a % b) }
+    }
+
+    fn lcm(a: i64, b: i64) -> i64 {
+        a / Self.gcd(a, b) * b
+    }
+}
+
+struct Stack[T] {
+    items: Vec[T],
+}
+
+impl[T] Stack[T] {
+    fn new() -> Stack[T] {
+        Stack { items: Vec.new() }
+    }
+
+    fn of(first: own T) -> Stack[T] {
+        let mut s = Self.new();
+        s.items.push(first);
+        s
+    }
+
+    fn empty_len() -> i64 {
+        let s = Self.new();
+        s.items.len()
+    }
+}
+
+fn main() {
+    println(f"{Solution.gcd(84, 36)} {Solution.lcm(4, 6)}");
+    let s: Stack[String] = Stack.of("top");
+    println(f"{s.items.len()} {s.items[0]} {Stack[i64].empty_len()}");
+}

@@ -3003,6 +3003,9 @@ impl<'a> super::TypeChecker<'a> {
             self.validate_all_bounds(&f.generic_params, &f.where_clause, &gp);
         }
 
+        // The type `Self` names in the body, with or without a receiver
+        // (B-2026-11-18-40).
+        self.fn_self_type = self_type.cloned();
         // Bind self
         if f.self_param.is_some() {
             if let Some(st) = self_type {
@@ -3285,6 +3288,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_return_type = None;
         self.current_self_type = None;
         self.current_self_borrowed = false;
+        self.fn_self_type = None;
         self.enclosing_bounds = saved_bounds;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_proj_bounds = saved_proj_bounds;
@@ -6536,11 +6540,14 @@ impl<'a> super::TypeChecker<'a> {
         // Rust's `const NAMES: &[&str] = &["a", "b"]`, which `karac fix`
         // writes `Slice[Str] = [..]`: a constant's list literal is an
         // `Array` (design.md § Constants, "Allowed initializers"), so the
-        // fix names its length (B-2026-11-15-14).
-        if let (Type::Slice { .. }, ExprKind::ArrayLiteral(elems)) = (&declared_ty, &c.value.kind) {
-            let text = crate::formatter::render_type_expr(&c.ty);
-            if text.starts_with("Slice[") && text.ends_with(']') {
-                let array = format!("Array[{}, {}]", &text[6..text.len() - 1], elems.len());
+        // fix names its length (B-2026-11-15-14). The same holds for a list
+        // literal at a `Slice` inside the constant's type, Rust's `const
+        // FOLLOWS: [&[usize]; 5] = [&[1], &[0, 2], ..]`: rows of one length
+        // make an `Array` of `Array`s, and rows that differ have no
+        // constant form (B-2026-11-18-62).
+        match const_slice_literal_type(&c.ty, &c.value) {
+            ConstSliceType::Same(_) => {}
+            ConstSliceType::Array(array) => {
                 self.type_error_with_fix_it(
                     format!(
                         "a constant's list literal is an `Array`, not a `Slice` (design.md \
@@ -6553,6 +6560,29 @@ impl<'a> super::TypeChecker<'a> {
                         span: c.ty.span,
                         replacement: array,
                     },
+                );
+            }
+            ConstSliceType::Ragged(lengths) => {
+                self.type_error(
+                    format!(
+                        "a constant's list literal is an `Array`, not a `Slice` (design.md \
+                         § Constants): each use builds the value, and a `Slice` only views \
+                         one; the lists inside `{}` differ in length ({lengths}), so no \
+                         `Array` type holds them all and the table cannot be a constant: \
+                         build it as {} with a `let` in the function that uses it",
+                        c.name,
+                        {
+                            let owned = owned_type_text(&c.ty);
+                            let article = if owned.starts_with(['A', 'E', 'I', 'O', 'U']) {
+                                "an"
+                            } else {
+                                "a"
+                            };
+                            format!("{article} `{owned}`")
+                        }
+                    ),
+                    c.ty.span,
+                    TypeErrorKind::TypeMismatch,
                 );
             }
         }
@@ -11299,8 +11329,12 @@ impl<'a> super::TypeChecker<'a> {
                     return None;
                 }
                 // `[..].to_vec()` copies the elements out, so the `Vec`
-                // carries what they borrow, not the array (B-2026-11-09-50).
-                if let (ExprKind::ArrayLiteral(items), "to_vec") = (&object.kind, method.as_str()) {
+                // carries what they borrow, not the array (B-2026-11-09-50);
+                // `[..].into_iter()` moves them out, so its items do too
+                // (`["x"].into_iter().collect()` into a `Vec[Str]`).
+                if let (ExprKind::ArrayLiteral(items), "to_vec" | "into_iter") =
+                    (&object.kind, method.as_str())
+                {
                     return items.iter().find_map(|x| self.core_view_temp_origin(x));
                 }
                 if self.core_expr_is_temp(object) {
@@ -14816,4 +14850,102 @@ fn body_writes_through(
         _ => {}
     });
     found
+}
+
+/// What a constant's type becomes once each list literal it holds at a
+/// `Slice` is an `Array` of that literal's length (design.md § Constants).
+enum ConstSliceType {
+    /// No list literal sits at a `Slice`: the type as written.
+    Same(String),
+    /// The type with each such `Slice` an `Array`.
+    Array(String),
+    /// Lists at one `Slice` differ in length, so no `Array` holds them:
+    /// the lengths, as written in the message (`1, 2 and 4`).
+    Ragged(String),
+}
+
+fn const_slice_literal_type(ty: &TypeExpr, value: &Expr) -> ConstSliceType {
+    let written = crate::formatter::render_type_expr(ty);
+    let ExprKind::ArrayLiteral(items) = &value.kind else {
+        return ConstSliceType::Same(written);
+    };
+    // `Slice[E]`, or `Array[E, N]` written either way, with its `E`.
+    let (element, slice, size) = match &ty.kind {
+        TypeKind::Path(p) if p.segments.len() == 1 => {
+            match (p.segments[0].as_str(), p.generic_args.as_deref()) {
+                ("Slice", Some([GenericArg::Type(e)])) => (e, true, None),
+                ("Array", Some([GenericArg::Type(e), GenericArg::Const(n)])) => (e, false, Some(n)),
+                _ => return ConstSliceType::Same(written),
+            }
+        }
+        TypeKind::Array { element, size } => (&**element, false, Some(&**size)),
+        _ => return ConstSliceType::Same(written),
+    };
+    let mut rows: Vec<String> = Vec::new();
+    let mut changed = slice;
+    for item in items {
+        match const_slice_literal_type(element, item) {
+            ConstSliceType::Same(t) => rows.push(t),
+            ConstSliceType::Array(t) => {
+                changed = true;
+                rows.push(t);
+            }
+            ragged @ ConstSliceType::Ragged(_) => return ragged,
+        }
+    }
+    if !changed {
+        return ConstSliceType::Same(written);
+    }
+    let first = rows
+        .first()
+        .cloned()
+        .unwrap_or_else(|| crate::formatter::render_type_expr(element));
+    if rows.iter().any(|r| *r != first) {
+        // The rows' own lengths, each list's count of items.
+        let mut lengths: Vec<usize> = items
+            .iter()
+            .map(|i| match &i.kind {
+                ExprKind::ArrayLiteral(inner) => inner.len(),
+                _ => 0,
+            })
+            .collect();
+        lengths.sort_unstable();
+        lengths.dedup();
+        let shown: Vec<String> = lengths.iter().map(|l| l.to_string()).collect();
+        let text = match shown.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            _ => shown.join(""),
+        };
+        return ConstSliceType::Ragged(text);
+    }
+    let length = match size {
+        Some(n) if !slice => crate::formatter::render_expr(n),
+        _ => items.len().to_string(),
+    };
+    ConstSliceType::Array(format!("Array[{first}, {length}]"))
+}
+
+/// `ty` with each `Slice[E]` a `Vec[E]`: the owning type a ragged table
+/// built at run time takes (`Array[Slice[usize], 5]` is `Array[Vec[usize],
+/// 5]`).
+fn owned_type_text(ty: &TypeExpr) -> String {
+    match &ty.kind {
+        TypeKind::Path(p) if p.segments.len() == 1 => {
+            match (p.segments[0].as_str(), p.generic_args.as_deref()) {
+                ("Slice", Some([GenericArg::Type(e)])) => format!("Vec[{}]", owned_type_text(e)),
+                ("Array", Some([GenericArg::Type(e), GenericArg::Const(n)])) => format!(
+                    "Array[{}, {}]",
+                    owned_type_text(e),
+                    crate::formatter::render_expr(n)
+                ),
+                _ => crate::formatter::render_type_expr(ty),
+            }
+        }
+        TypeKind::Array { element, size } => format!(
+            "Array[{}, {}]",
+            owned_type_text(element),
+            crate::formatter::render_expr(size)
+        ),
+        _ => crate::formatter::render_type_expr(ty),
+    }
 }
