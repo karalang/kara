@@ -1,0 +1,1 @@
+ERROR at line 7: struct 'User' derives Serialize but field 'id' has type 'UserId', and 'UserId' does not implement Serialize; add `#[derive(Serialize)]` to `UserId`'s declaration, or write `impl Serialize for UserId` (design.md §9)

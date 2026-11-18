@@ -1611,6 +1611,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "is_struct"
                 | "is_enum"
                 | "is_union"
+                | "is_distinct"
                 | "is_generic"
                 | "fields"
                 | "variants"
@@ -1731,7 +1732,7 @@ impl<'a> super::TypeChecker<'a> {
         };
         match method {
             "name" => Type::Str,
-            "is_struct" | "is_enum" | "is_union" | "is_generic" => Type::Bool,
+            "is_struct" | "is_enum" | "is_union" | "is_distinct" | "is_generic" => Type::Bool,
             "fields" => vec_of(named("Field")),
             "variants" => vec_of(named("Variant")),
             // The type's own `#[...]` attributes, rendered as `Field.attrs`

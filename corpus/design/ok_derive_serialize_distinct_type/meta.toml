@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "serde", "distinct"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-18-21: #[derive(Serialize, Deserialize)] on a distinct type writes and reads its base, so a struct field of one is the base's value (design.md §9 Serialize and Deserialize); a mistyped value is a DeserializeError."

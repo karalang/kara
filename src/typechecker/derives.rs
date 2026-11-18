@@ -1316,6 +1316,157 @@ impl<'a> super::TypeChecker<'a> {
         self.validate_derive_pod_on_enums();
         self.validate_derive_default();
         self.validate_derive_display_on_enums();
+        self.validate_derive_serde("Serialize");
+        self.validate_derive_serde("Deserialize");
+    }
+
+    /// design.md §9: `#[derive(Serialize)]` / `#[derive(Deserialize)]` needs
+    /// the trait on every field. The derive's code is generated after this
+    /// check, and type errors inside it are not reported against the user's
+    /// text, so a field of a program type without the trait checked clean and
+    /// failed at run with "no method 'serialize'" (B-2026-11-18-21). The rule
+    /// is checked here, on the declaration, for the parts a program declares;
+    /// the library's types and type parameters are left to the generated
+    /// impl's bounds.
+    fn validate_derive_serde(&mut self, trait_name: &str) {
+        if !self.is_comptime_derive_fn(&format!(
+            "derive_{}",
+            crate::comptime::to_snake_case(trait_name)
+        )) {
+            return;
+        }
+        // An impl for every type meeting a bound covers types this walk
+        // cannot judge.
+        let blanket = self.env.impls_by_trait.get(trait_name).is_some_and(|ix| {
+            ix.iter().any(|&i| {
+                let imp = &self.env.impls[i];
+                imp.generic_params
+                    .as_ref()
+                    .is_some_and(|g| g.params.iter().any(|p| p.name == imp.target_type))
+            })
+        });
+        if blanket {
+            return;
+        }
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let mut parts: Vec<(String, String, Type, Span)> = Vec::new();
+        for item in &self.program.items {
+            match item {
+                Item::StructDef(s)
+                    if s.span.offset < library
+                        && extract_derived_traits(&s.attributes).contains(trait_name) =>
+                {
+                    let Some(info) = self.env.structs.get(&s.name) else {
+                        continue;
+                    };
+                    for (field, ty, _) in &info.fields {
+                        let span = s
+                            .fields
+                            .iter()
+                            .find(|f| &f.name == field)
+                            .map_or(s.span, |f| f.span);
+                        parts.push((
+                            format!("struct '{}'", s.name),
+                            format!("field '{field}'"),
+                            ty.clone(),
+                            span,
+                        ));
+                    }
+                }
+                Item::EnumDef(e)
+                    if e.span.offset < library
+                        && extract_derived_traits(&e.attributes).contains(trait_name) =>
+                {
+                    let Some(info) = self.env.enums.get(&e.name) else {
+                        continue;
+                    };
+                    for (variant, v) in &info.variants {
+                        let fields: Vec<(String, Type)> = match v {
+                            VariantTypeInfo::Unit => Vec::new(),
+                            VariantTypeInfo::Tuple(tys) => tys
+                                .iter()
+                                .enumerate()
+                                .map(|(i, t)| (i.to_string(), t.clone()))
+                                .collect(),
+                            VariantTypeInfo::Struct(fs) => fs.clone(),
+                        };
+                        for (field, ty) in fields {
+                            parts.push((
+                                format!("enum '{}'", e.name),
+                                format!("variant '{variant}' field '{field}'"),
+                                ty,
+                                e.span,
+                            ));
+                        }
+                    }
+                }
+                Item::DistinctType(d)
+                    if d.span.offset < library
+                        && extract_derived_traits(&d.attributes).contains(trait_name) =>
+                {
+                    let Some(base) = self.env.distinct_bases.get(&d.name) else {
+                        continue;
+                    };
+                    parts.push((
+                        format!("distinct type '{}'", d.name),
+                        "its base".to_string(),
+                        base.clone(),
+                        d.span,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for (owner, part, ty, span) in parts {
+            let Some(missing) = self.serde_missing_part(&ty, trait_name) else {
+                continue;
+            };
+            self.type_error(
+                format!(
+                    "{owner} derives {trait_name} but {part} has type '{}', and '{missing}' \
+                     does not implement {trait_name}; add `#[derive({trait_name})]` to \
+                     `{missing}`'s declaration, or write `impl {trait_name} for {missing}` \
+                     (design.md §9)",
+                    type_display(&ty)
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+    }
+
+    /// The first type in `ty` that the program declares and that has neither
+    /// a derive nor an impl of `trait_name`.
+    fn serde_missing_part(&self, ty: &Type, trait_name: &str) -> Option<String> {
+        match ty {
+            Type::Named { name, args } => {
+                let declared = (self.env.structs.contains_key(name)
+                    || self.env.enums.contains_key(name)
+                    || self.env.distinct_bases.contains_key(name))
+                    && self.program_declares_type(name);
+                if declared
+                    && !self.comptime_derives(name, trait_name)
+                    && !self.env.impls_by_trait.get(trait_name).is_some_and(|ix| {
+                        ix.iter().any(|&i| self.env.impls[i].target_type == *name)
+                    })
+                {
+                    return Some(name.clone());
+                }
+                args.iter()
+                    .find_map(|a| self.serde_missing_part(a, trait_name))
+            }
+            Type::Tuple(elems) => elems
+                .iter()
+                .find_map(|e| self.serde_missing_part(e, trait_name)),
+            Type::Array { element, .. }
+            | Type::Slice { element, .. }
+            | Type::Vector { element, .. } => self.serde_missing_part(element, trait_name),
+            Type::Ref(inner) | Type::MutRef(inner) | Type::Rc(inner) | Type::Arc(inner) => {
+                self.serde_missing_part(inner, trait_name)
+            }
+            Type::Refinement { base, .. } => self.serde_missing_part(base, trait_name),
+            _ => None,
+        }
     }
 
     /// design.md §9 Derive, two list rules (B-2026-11-06-27 items 3-5):

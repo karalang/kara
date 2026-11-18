@@ -25,6 +25,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   suggested, and the spec's `struct Matrix[T, const ROWS: i64, const COLS:
   i64]`, refused until now, checks. A one-letter `N` checks as before
   (B-2026-11-18-24).
+- A type deriving `Serialize` or `Deserialize` whose field's type lacks the
+  trait is refused at check, naming the field, its type and the type that
+  lacks it: `#[derive(Serialize)] struct U { id: UserId }` with no derive
+  on `UserId` (or on a plain struct field) checked clean and then failed
+  at run with "no method 'serialize' on type 'UserId'" (design.md §9,
+  B-2026-11-18-21).
 - An unsuffixed float literal is range-checked against the type its
   context gives it, as a suffixed one already was: `let a: f32 = 1e39;`,
   an `f32` argument `1e39`, `let e: f16 = 70000.0;` and the same literal
@@ -768,6 +774,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `distinct type Flag = bool`, or each variant on a distinct enum, were
   E0205 non-exhaustive. A missing case is named with its wrapper,
   `Flag(false)` (B-2026-11-18-18).
+- `#[derive(Serialize, Deserialize)]` on a distinct type writes and reads
+  its base: `UserId(7)` is `7` on the wire, and a struct field of that type
+  is the base's value. The derive was accepted and generated nothing, so a
+  field of the type failed at run and `Json.serialize(UserId(7))` was
+  "`UserId` does not implement Serialize" (design.md §9, B-2026-11-18-21).
 - A local whose type a later use decides is `Copy` when the solved type
   is: `let mut x = None; x = Some(5); (x, x)`, a `[None; 3]` array, and a
   `scan` state seeded with `[None; 4]` were refused as a use after a move,

@@ -1,0 +1,29 @@
+import std.json.{Json};
+
+// A distinct type is its base on the wire: `UserId(7)` is `7`.
+#[derive(Serialize, Deserialize)]
+distinct type UserId = i64;
+
+#[derive(Serialize, Deserialize)]
+distinct type Name = String;
+
+#[derive(Serialize, Deserialize)]
+struct User { id: UserId, name: Name, friends: Vec[UserId] }
+
+fn main() {
+    let u = User { id: UserId(7), name: Name("ada".to_string()), friends: [UserId(1), UserId(2)] };
+    let text = Json.serialize(u);
+    println(text);
+    println(Json.serialize(UserId(9)));
+    let back: Result[User, DeserializeError] = Json.deserialize(text);
+    match back {
+        Ok(b) => {
+            println(b.id.raw());
+            println(b.name.raw());
+            println(b.friends.len());
+        }
+        Err(e) => println(f"error: {e}"),
+    }
+    let bad: Result[UserId, DeserializeError] = Json.deserialize("\"seven\"");
+    println(bad.is_err());
+}

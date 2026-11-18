@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "serde", "distinct"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-18-21: a type deriving Serialize whose field's type lacks Serialize is refused at check, naming the field and the type (design.md §9 derive table). The expected.out wording of an error pin is guidance, not a byte oracle."

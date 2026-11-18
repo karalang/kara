@@ -10461,7 +10461,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             let kind = self.lcx.defs.table.get(*d).kind;
             if matches!(
                 kind,
-                DefKind::Struct | DefKind::Enum | DefKind::Union | DefKind::TypeAlias
+                DefKind::Struct
+                    | DefKind::Enum
+                    | DefKind::Union
+                    | DefKind::TypeAlias
+                    | DefKind::DistinctType
             ) && matches!(self.tys().tcx().kind(t), HK::Str)
             {
                 let name = self.lcx.def_name(*d);

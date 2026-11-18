@@ -4401,7 +4401,7 @@ struct Point { x: i64, y: i64 }
 - `Copy` needs `Clone`, and every field `Copy`;
 - `Hash` and `Default` need no other derive.
 
-**A field that lacks the trait.** The requirement column holds for every field, as the field's own impl is what the derived one calls. A field type without the trait is an error at the next minor release; in 0.8.x it is a `deprecated` warning naming the field and its type, and `Clone`, `Debug` and `Display` still copy or render such a field by its shape (review-thread ruling 2026-11-16, B-2026-11-16-330). A `Secret` field meets `Debug` and `Display`, which render it as `<redacted>` ([std.secret](library/secret.md)).
+**A field that lacks the trait.** The requirement column holds for every field, as the field's own impl is what the derived one calls. A field type without the trait is an error at the next minor release; in 0.8.x it is a `deprecated` warning naming the field and its type, and `Clone`, `Debug` and `Display` still copy or render such a field by its shape (review-thread ruling 2026-11-16, B-2026-11-16-330). A `Secret` field meets `Debug` and `Display`, which render it as `<redacted>` ([std.secret](library/secret.md)). `Serialize` and `Deserialize` are an error already: the derived code cannot write or read such a field, so the check refuses the declaration, naming the field, its type and the type that lacks the trait (B-2026-11-18-21).
 
 **Bounds propagate.** On a generic type, each derived impl is bounded by what its fields need ([Conditional impls](#conditional-impls)).
 
@@ -4522,6 +4522,7 @@ struct Config {
 - A field the input names twice is refused, ``duplicate field `a` ``, rather than taking either value; `Json.parse` into a dynamic `Json` keeps the last ([json.md](library/json.md)).
 - A missing field is reported by the key the input should have held: for `#[serde(rename: "userName")] name: String` the error reads ``missing field `userName` ``.
 - `Json.deserialize(text: Str)` reads a view, so a line of `text.lines()` or a slice is read without a copy.
+- **A distinct type is its base on the wire.** `#[derive(Serialize, Deserialize)]` on `distinct type UserId = i64` writes `UserId(7)` as `7` and reads `7` back as `UserId(7)`, so a struct field of that type is the base's value in the struct (`{"id":7}`), not a one-field wrapper (B-2026-11-18-21).
 
 ---
 

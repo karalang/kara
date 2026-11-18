@@ -189,6 +189,7 @@ fn program_has_derive_to_expand(
         let attrs = match item {
             Item::StructDef(s) => &s.attributes,
             Item::EnumDef(e) => &e.attributes,
+            Item::DistinctType(d) => &d.attributes,
             _ => return false,
         };
         ordered_derived_traits(attrs)

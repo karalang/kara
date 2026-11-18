@@ -1647,6 +1647,15 @@ comptime fn serde_self_type(t: ref Type) -> String {
     if out == "" { t.name() } else { t.name() + "[" + out + "]" }
 }
 
+// A distinct type's base, the type of its one reflected field.
+comptime fn serde_distinct_base(t: ref Type) -> String {
+    let mut base = "";
+    for f in t.fields() {
+        base = f.ty.name();
+    }
+    base
+}
+
 comptime fn serde_untagged(t: ref Type) -> bool {
     serde_flag(serde_args(t.attributes()), "untagged")
 }
@@ -1753,6 +1762,10 @@ comptime fn derive_serialize(comptime T: own Type) -> Vec[Item] {
             body = body + pat + " => { " + write + "} ";
         }
         body = body + "}";
+    } else if T.is_distinct() {
+        // A distinct type is its base on the wire: `UserId(7)` is `7`
+        // (B-2026-11-18-21).
+        body = serde_write_value("self.raw()", serde_distinct_base(T), n, "0");
     } else {
         let mut names: Vec[String] = Vec.new();
         let mut tys: Vec[String] = Vec.new();
@@ -1876,6 +1889,9 @@ comptime fn derive_deserialize(comptime T: own Type) -> Vec[Item] {
             }
         }
         body = body + "Err(DeserializeError.new(f\"unknown variant `{serde_v}` of " + n + "\"))";
+    } else if T.is_distinct() {
+        // Its base, read and wrapped (B-2026-11-18-21).
+        body = "Ok(" + n + "(" + serde_read_value(serde_distinct_base(T), n, "0", 0) + "))";
     } else {
         let mut names: Vec[String] = Vec.new();
         let mut tys: Vec[String] = Vec.new();

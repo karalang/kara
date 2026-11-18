@@ -1,0 +1,12 @@
+import std.json.{Json};
+
+// No derive: `UserId` has no `Serialize`, so `User`'s derive cannot hold.
+distinct type UserId = i64;
+
+#[derive(Serialize)]
+struct User { id: UserId, name: String }
+
+fn main() {
+    let u = User { id: UserId(7), name: "x".to_string() };
+    println(Json.serialize(u));
+}

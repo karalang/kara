@@ -5889,7 +5889,7 @@ comptime { print_fields(User) };   // prints User's fields at build time
 
 `Type` values are first-class only at comptime — they cannot appear in runtime expressions. A runtime function may not take a parameter of type `Type` (it would be a value-level reference to a compile-time-only value). The boundary is enforced by the typechecker: a `Type` value flowing into a non-comptime context is a compile error with diagnostic `error[E_TYPE_VALUE_AT_RUNTIME]`.
 
-The `Type` pseudotype's reflection surface — `fields()`, `variants()`, `methods()`, `name()`, `size_of()`, `align_of()`, `is_struct()`, `is_enum()`, `is_union()`, `is_generic()`, `generic_args()`, `attributes()` — is fixed by the language; user code reads it but cannot extend it.
+The `Type` pseudotype's reflection surface — `fields()`, `variants()`, `methods()`, `name()`, `size_of()`, `align_of()`, `is_struct()`, `is_enum()`, `is_union()`, `is_distinct()`, `is_generic()`, `generic_args()`, `attributes()` — is fixed by the language; user code reads it but cannot extend it. A `distinct type` answers `is_distinct()` and reflects as one field, `0`, of its base type.
 
 #### Reflection API
 

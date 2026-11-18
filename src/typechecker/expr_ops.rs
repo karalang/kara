@@ -977,7 +977,8 @@ impl<'a> super::TypeChecker<'a> {
                     .enums
                     .get(name)
                     .is_some_and(|e| !prelude || !e.defining_stdlib_origin)
-                || (!prelude && self.env.unions.contains_key(name)))
+                || (!prelude && self.env.unions.contains_key(name))
+                || (!prelude && self.env.distinct_bases.contains_key(name)))
         {
             return Type::Named {
                 name: "Type".to_string(),
@@ -2204,11 +2205,17 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn comptime_derives(&self, type_name: &str, trait_name: &str) -> bool {
         let derives = match self.env.structs.get(type_name) {
             Some(s) => s.derived_traits.contains(trait_name),
-            None => self
-                .env
-                .enums
-                .get(type_name)
-                .is_some_and(|e| e.derived_traits.contains(trait_name)),
+            None => {
+                self.env
+                    .enums
+                    .get(type_name)
+                    .is_some_and(|e| e.derived_traits.contains(trait_name))
+                    || self
+                        .env
+                        .distinct_types
+                        .get(type_name)
+                        .is_some_and(|t| t.contains(trait_name))
+            }
         };
         derives
             && self.is_comptime_derive_fn(&format!(
@@ -2218,7 +2225,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// Is `fn_name` a comptime function of the program or the stdlib?
-    fn is_comptime_derive_fn(&self, fn_name: &str) -> bool {
+    pub(super) fn is_comptime_derive_fn(&self, fn_name: &str) -> bool {
         let in_items = |items: &[Item]| {
             items
                 .iter()

@@ -404,6 +404,7 @@ fn plan(
         let (type_name, attributes, site) = match item {
             Item::StructDef(s) => (&s.name, &s.attributes, s.span),
             Item::EnumDef(e) => (&e.name, &e.attributes, e.span),
+            Item::DistinctType(d) => (&d.name, &d.attributes, d.span),
             _ => continue,
         };
         for trait_name in ordered_derived_traits(attributes) {
@@ -704,6 +705,42 @@ fn reflection(program: &Program, tc: &TypeCheckResult) -> natives::Reflection {
                 derives,
                 attrs: item_attrs.get(name.as_str()).cloned().unwrap_or_default(),
                 variants,
+                ..Default::default()
+            },
+        );
+    }
+    // A distinct type reflects as one field, `0`, of its base type: what a
+    // derive writes for it is its base's (B-2026-11-18-21).
+    for item in &program.items {
+        let Item::DistinctType(d) = item else {
+            continue;
+        };
+        let Some(base) = tc.distinct_bases.get(&d.name) else {
+            continue;
+        };
+        let mut derives: Vec<String> = tc
+            .distinct_type_traits
+            .get(&d.name)
+            .map(|t| t.iter().cloned().collect())
+            .unwrap_or_default();
+        derives.sort();
+        types.insert(
+            d.name.clone(),
+            ReflType {
+                is_distinct: true,
+                generic_params: d
+                    .generic_params
+                    .as_ref()
+                    .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+                    .unwrap_or_default(),
+                derives,
+                attrs: attrs(&d.attributes),
+                fields: vec![ReflField {
+                    name: "0".to_string(),
+                    ty: type_display(base),
+                    is_pub: true,
+                    attrs: Vec::new(),
+                }],
                 ..Default::default()
             },
         );

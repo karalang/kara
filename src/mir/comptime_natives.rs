@@ -28,6 +28,7 @@ pub const REFLECTION_METHODS: &[&str] = &[
     "is_struct",
     "is_enum",
     "is_union",
+    "is_distinct",
     "is_generic",
     "derives",
     "fields",
@@ -67,6 +68,8 @@ pub struct ReflType {
     pub is_struct: bool,
     pub is_enum: bool,
     pub is_union: bool,
+    /// A `distinct type`: its one field, named `0`, is the base.
+    pub is_distinct: bool,
     pub generic_params: Vec<String>,
     pub derives: Vec<String>,
     /// The type's own attributes, rendered.
@@ -255,6 +258,7 @@ impl Interp<'_> {
             "is_struct" => Ok(Value::Bool(t.is_struct)),
             "is_enum" => Ok(Value::Bool(t.is_enum)),
             "is_union" => Ok(Value::Bool(t.is_union)),
+            "is_distinct" => Ok(Value::Bool(t.is_distinct)),
             "is_generic" => Ok(Value::Bool(!t.generic_params.is_empty())),
             "derives" => Ok(Value::Bool(t.derives.iter().any(|d| d == operand))),
             "generic_params" => Ok(self.string_vec(&t.generic_params)),
