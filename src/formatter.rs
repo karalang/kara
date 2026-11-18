@@ -93,6 +93,14 @@ pub fn render_expr(expr: &Expr) -> String {
     f.output
 }
 
+/// Render a single [`Stmt`] at indent level zero, without its trailing
+/// newline: a machine fix that rewrites one statement.
+pub fn render_stmt(stmt: &Stmt) -> String {
+    let mut f = Formatter::new();
+    f.format_stmt(stmt);
+    f.output.trim_end().to_string()
+}
+
 /// Render a single [`TraitBound`] (`Trait[Args]`) to its surface form.
 pub fn render_trait_bound(bound: &TraitBound) -> String {
     let mut f = Formatter::new();

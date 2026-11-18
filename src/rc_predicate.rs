@@ -492,6 +492,7 @@ fn first_witness(
         if c.kind != UseKind::Consume {
             continue;
         }
+        let mut capture_fallback: Option<RcWitness> = None;
         for (j, (ub, ui, u)) in uses.iter().enumerate() {
             if i == j {
                 continue;
@@ -707,14 +708,45 @@ fn first_witness(
                     continue;
                 }
             }
-            return Some(RcWitness {
+            let witness = RcWitness {
                 binding: binding.to_string(),
                 consume_span: c.span,
                 other_use_span: u.span,
                 consume_block: *cb,
                 other_block: *ub,
                 consume_origin: c.consume_origin,
-            });
+            };
+            // B-2026-11-17-150: of a capture's partners, the one named is a
+            // use that can run after the capture when there is one, not the
+            // first in source order (a table's init loop before the loop that
+            // captures and then writes it). Which pair fires is unchanged.
+            // Asked from where the closure is made: its body's blocks are
+            // not ordered against the code around it.
+            // A closure made in another's body is made when that one is,
+            // outermost first.
+            let mut made_at = c
+                .capture_scope
+                .and_then(|k| cfg.closure_creations.get(&k).copied())
+                .unwrap_or(*cb);
+            for _ in 0..16 {
+                match cfg
+                    .closure_body_owner
+                    .get(&made_at)
+                    .and_then(|k| cfg.closure_creations.get(k))
+                {
+                    Some(&outer) if outer != made_at => made_at = outer,
+                    _ => break,
+                }
+            }
+            if c.consume_origin == ConsumeOrigin::ClosureCapture && !cfg_reaches(cfg, made_at, *ub)
+            {
+                capture_fallback.get_or_insert(witness);
+                continue;
+            }
+            return Some(witness);
+        }
+        if let Some(w) = capture_fallback.take() {
+            return Some(w);
         }
     }
     None

@@ -9491,6 +9491,34 @@ impl<'a> TypeChecker<'a> {
                 .filter(|r| r.into_returned && r.consumed_binding != "self")
                 .map(|r| r.consumed_binding.clone());
             if let (Some(n), Some(stmt)) = (returned, self.current_stmt) {
+                // B-2026-11-17-150: the shadow `let n = ref n;` stands for
+                // the rest of the block, so a later write or move of `n`
+                // there would be refused. Then the borrow takes its own name
+                // and the statement reads it.
+                if let Some(node) = self.statement_rewritten_if_name_used_later(stmt, &n) {
+                    let fresh = format!("{n}_ref");
+                    let msg = format!(
+                        "this closure can run only once, but this slot ('{}') calls it again: \
+                         the closure it returns reads `{n}`, and a returned closure takes its \
+                         captures by move (core semantics §9.3), so each call would move `{n}` \
+                         out of this one (§9.6). Borrow `{n}` under a new name before the \
+                         statement (`let {fresh} = ref {n};`) and read `{fresh}` in it, so the \
+                         returned closure copies the borrow; a shadowing `let {n} = ref {n};` \
+                         would stand for the rest of the block, where `{n}` is used again",
+                        type_display(expected),
+                    );
+                    let fix = FixIt {
+                        span: stmt,
+                        replacement: format!(
+                            "let {fresh} = ref {n};\n{}{}",
+                            " ".repeat(stmt.column.saturating_sub(1)),
+                            node
+                        ),
+                    };
+                    self.once_slot_types.push(type_display(found));
+                    self.type_error_with_fix_it(msg, span, TypeErrorKind::OnceFnIntoFnSlot, fix);
+                    return false;
+                }
                 let msg = format!(
                     "this closure can run only once, but this slot ('{}') calls it again: \
                      the closure it returns reads `{n}`, and a returned closure takes its \
@@ -10472,6 +10500,87 @@ impl<'a> TypeChecker<'a> {
     /// (e.g., bare `OnceFn` arg into `ref Fn` slot) is also recognized as
     /// the once-callability violation rather than a generic ref-mismatch.
     /// Step 3 / round 12.45.
+    /// The statement at `stmt`, rendered with every `name` in it read as
+    /// `{name}_ref`, when a later statement of its block mentions `name`
+    /// again; `None` when nothing after it does (or it cannot be found), so
+    /// a shadowing borrow is safe (B-2026-11-17-150).
+    fn statement_rewritten_if_name_used_later(&self, stmt: Span, name: &str) -> Option<String> {
+        use crate::span_visitor::MutVisitor;
+        struct Find<'a> {
+            at: Span,
+            name: &'a str,
+            found: Option<(Stmt, bool)>,
+        }
+        fn mentions_in(e: &mut Expr, name: &str) -> bool {
+            let mut hit = false;
+            crate::span_visitor::for_each_expr(e, &mut |x| {
+                hit |= matches!(&x.kind, ExprKind::Identifier(b) if b == name);
+            });
+            hit
+        }
+        struct Mentions<'a>(&'a str, bool);
+        impl MutVisitor for Mentions<'_> {
+            fn span(&mut self, _: &mut Span) {}
+            fn expr(&mut self, e: &mut Expr) {
+                self.1 |= matches!(&e.kind, ExprKind::Identifier(b) if b == self.0);
+            }
+        }
+        impl MutVisitor for Find<'_> {
+            fn span(&mut self, _: &mut Span) {}
+            fn block(&mut self, b: &mut Block) {
+                if self.found.is_some() {
+                    return;
+                }
+                let Some(i) = b.stmts.iter().position(|s| {
+                    s.span.offset == self.at.offset && s.span.length == self.at.length
+                }) else {
+                    return;
+                };
+                let mut later = Mentions(self.name, false);
+                for s in &mut b.stmts[i + 1..] {
+                    crate::span_visitor::walk_stmt_mut_with(s, &mut later);
+                }
+                if let Some(e) = b.final_expr.as_mut() {
+                    later.1 |= mentions_in(e, self.name);
+                }
+                self.found = Some((b.stmts[i].clone(), later.1));
+            }
+        }
+        let inside = |sp: &Span| sp.offset <= stmt.offset && stmt.offset < sp.offset + sp.length;
+        let mut item = self
+            .program
+            .items
+            .iter()
+            .find(|it| match it {
+                Item::Function(f) => inside(&f.span),
+                Item::ImplBlock(imp) => inside(&imp.span),
+                Item::TraitDef(t) => inside(&t.span),
+                _ => false,
+            })?
+            .clone();
+        let mut find = Find {
+            at: stmt,
+            name,
+            found: None,
+        };
+        crate::span_visitor::walk_item_mut_with(&mut item, &mut find);
+        let (mut node, used_later) = find.found?;
+        if !used_later {
+            return None;
+        }
+        struct Rename<'a>(&'a str);
+        impl MutVisitor for Rename<'_> {
+            fn span(&mut self, _: &mut Span) {}
+            fn expr(&mut self, e: &mut Expr) {
+                if matches!(&e.kind, ExprKind::Identifier(b) if b == self.0) {
+                    e.kind = ExprKind::Identifier(format!("{}_ref", self.0));
+                }
+            }
+        }
+        crate::span_visitor::walk_stmt_mut_with(&mut node, &mut Rename(name));
+        Some(crate::formatter::render_stmt(&node))
+    }
+
     fn is_once_into_fn_shape(expected: &Type, found: &Type) -> bool {
         fn unwrap(t: &Type) -> &Type {
             match t {
