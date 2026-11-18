@@ -305,6 +305,7 @@ impl<'a> super::TypeChecker<'a> {
             (false, true) => "`Hash`",
             _ => "`Eq`",
         };
+        let secret = self.secret_withheld_hint(key, "Hash");
         let hint = match key {
             // design.md § Floats: the total-order `F32` / `F64` are the
             // key types, named in the fix.
@@ -318,6 +319,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::Float(_) => " A float has neither: `NaN != NaN`. Key by its bits \
                                (`x.to_bits()`) or use an integer."
                 .to_string(),
+            Type::Named { .. } if secret.is_some() => format!(" {}.", secret.unwrap_or_default()),
             Type::Named { name: n, args } if !args.is_empty() => {
                 format!(" A derive on `{n}` holds only where its type arguments have the traits.")
             }

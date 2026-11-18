@@ -25,6 +25,47 @@ pub(super) struct DeriveDecl {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// When `ty` is `std.secret`'s `Secret[T]`: why it has no `trait_name`
+    /// and what to write instead, for a refusal that would otherwise advise
+    /// a derive, which secret.md forbids on `Secret` (B-2026-11-18-56).
+    pub(super) fn secret_withheld_hint(&self, ty: &Type, trait_name: &str) -> Option<String> {
+        let mut t = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        let Type::Named { name, .. } = t else {
+            return None;
+        };
+        let std_secret = name == "Secret"
+            && self
+                .env
+                .structs
+                .get("Secret")
+                .is_some_and(|i| i.defining_stdlib_origin);
+        if !std_secret {
+            return None;
+        }
+        let instead = match trait_name {
+            "Hash" | "Eq" | "PartialEq" => {
+                "compare secrets with `.ct_eq(other)`, and key a table by a non-secret digest \
+                 of the value, never by the secret"
+            }
+            "Serialize" => {
+                "send it only by an explicit choice: `.expose()` at the use site, or a \
+                 non-secret field in its place"
+            }
+            _ => {
+                "print something that is not the secret, or read it deliberately with \
+                 `.expose()` at the use site"
+            }
+        };
+        Some(format!(
+            "`{}` withholds `{trait_name}` on purpose, so a secret cannot leak by accident, \
+             and no derive or impl can add it (docs/library/secret.md); {instead}",
+            type_display(t)
+        ))
+    }
+
     /// See [`super::env::TypeEnv::distinct_derive_supported`].
     fn distinct_derive_supported(&self, ty: &Type, wanted: &[&str]) -> Option<bool> {
         self.env.distinct_derive_supported(ty, wanted)

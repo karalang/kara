@@ -10029,6 +10029,54 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // Text where bytes are wanted (`sha256("abc")`, `hex_encode(name)`):
+        // a digest or an encoding is defined over bytes, and `.bytes()` gives
+        // a string's UTF-8 bytes (library/crypto.md § Inputs are bytes,
+        // B-2026-11-18-57).
+        if self.library_methods_from_source {
+            let want = match expected {
+                Type::Ref(t) => t.as_ref(),
+                t => t,
+            };
+            let found_now = inference::resolve_type_var_top(found, &self.env.substitutions);
+            let text = match &found_now {
+                Type::Str => true,
+                Type::Named { name, args } => name == "String" && args.is_empty(),
+                Type::Ref(t) => {
+                    matches!(t.as_ref(), Type::Str)
+                        || matches!(t.as_ref(), Type::Named { name, .. } if name == "String")
+                }
+                _ => false,
+            };
+            if text
+                && matches!(
+                    want,
+                    Type::Slice { element, mutable: false }
+                        if matches!(element.as_ref(), Type::UInt(types::UIntSize::U8))
+                )
+            {
+                self.type_error_with_fix_it(
+                    format!(
+                        "expected '{}', found '{}': this takes bytes, and a text has more \
+                         than one byte encoding; `.bytes()` gives its UTF-8 bytes",
+                        type_display(expected),
+                        type_display(&found_now),
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    FixIt {
+                        span: Span {
+                            line: span.line,
+                            column: span.column,
+                            offset: span.offset + span.length,
+                            length: 0,
+                        },
+                        replacement: ".bytes()".to_string(),
+                    },
+                );
+                return false;
+            }
+        }
         if let Some(name) = self
             .list_lit_let_uses
             .get(&SpanKey::from_span(&span))

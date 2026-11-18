@@ -2308,13 +2308,21 @@ impl<'a> super::TypeChecker<'a> {
                             continue;
                         }
                         if !self.type_supports_debug(t) {
-                            let message = format!(
-                                "`{name}` needs its operands to implement `Debug`, to print \
-                                 them when it fails, and `{}` does not (design.md §14 \
-                                 Assertions: `{name}[T: PartialEq + Debug]`); add \
-                                 `#[derive(Debug)]` to it, or compare with `assert(a == b)`",
-                                type_display(t)
-                            );
+                            let message = match self.secret_withheld_hint(t, "Debug") {
+                                Some(hint) => format!(
+                                    "`{name}` needs its operands to implement `Debug`, to \
+                                     print them when it fails: {hint}. Compare secrets with \
+                                     `assert(a.ct_eq(b))`"
+                                ),
+                                None => format!(
+                                    "`{name}` needs its operands to implement `Debug`, to \
+                                     print them when it fails, and `{}` does not (design.md \
+                                     §14 Assertions: `{name}[T: PartialEq + Debug]`); add \
+                                     `#[derive(Debug)]` to it, or compare with \
+                                     `assert(a == b)`",
+                                    type_display(t)
+                                ),
+                            };
                             // The program's own struct or enum takes the derive
                             // as a fix (B-2026-11-16-189).
                             let fix = match t {
@@ -3123,14 +3131,20 @@ impl<'a> super::TypeChecker<'a> {
                                 // design.md §9 "Two traits, no fallback": a
                                 // type with no `Debug` is refused, never
                                 // printed through `Display` (B-2026-11-07-11).
-                                self.type_error(
-                                    format!(
+                                let message = match self.secret_withheld_hint(&peeled, "Debug") {
+                                    Some(hint) => {
+                                        format!("dbg() argument must implement `Debug`: {hint}")
+                                    }
+                                    None => format!(
                                         "dbg() argument must implement `Debug`, and '{}' does \
                                          not; add `#[derive(Debug)]` to it (or to the type \
                                          argument that lacks it). dbg never falls back to \
                                          `Display` (design.md §9 Display and Debug)",
                                         type_display(&peeled)
                                     ),
+                                };
+                                self.type_error(
+                                    message,
                                     args[0].value.span,
                                     TypeErrorKind::TraitBoundNotSatisfied,
                                 );

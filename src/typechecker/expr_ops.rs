@@ -5971,6 +5971,52 @@ impl<'a> super::TypeChecker<'a> {
                             );
                             self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp)
                         }
+                        None if self.secret_withheld_hint(cmp_left, "PartialEq").is_some() => {
+                            let hint = self
+                                .secret_withheld_hint(cmp_left, "PartialEq")
+                                .unwrap_or_default();
+                            let msg = format!(
+                                "type '{}' does not implement PartialEq, so == and != do not \
+                                 apply to it: {hint}",
+                                type_display(cmp_left)
+                            );
+                            self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp);
+                            // `a == b` is `a.ct_eq(b)`, constant-time; `ct_eq` is
+                            // on `Secret[String]` for now (B-2026-11-18-56).
+                            let string_secret = matches!(
+                                cmp_left,
+                                Type::Named { args, .. }
+                                    if matches!(args.as_slice(), [Type::Str])
+                                        || matches!(args.as_slice(), [Type::Named { name, .. }] if name == "String")
+                            );
+                            let gap = right
+                                .span
+                                .offset
+                                .checked_sub(left.span.offset + left.span.length);
+                            if let (true, Some(gap)) =
+                                (string_secret && types_compatible(cmp_left, cmp_right), gap)
+                            {
+                                let mut edits = Vec::new();
+                                if matches!(op, BinOp::NotEq) {
+                                    edits.push(crate::resolver::TextEdit {
+                                        offset: left.span.offset,
+                                        length: 0,
+                                        replacement: "not ".to_string(),
+                                    });
+                                }
+                                edits.push(crate::resolver::TextEdit {
+                                    offset: left.span.offset + left.span.length,
+                                    length: gap,
+                                    replacement: ".ct_eq(".to_string(),
+                                });
+                                edits.push(crate::resolver::TextEdit {
+                                    offset: right.span.offset + right.span.length,
+                                    length: 0,
+                                    replacement: ")".to_string(),
+                                });
+                                self.error_fix_diffs.insert(SpanKey::from_span(span), edits);
+                            }
+                        }
                         None if !self.program_declares(cmp_left) => {
                             // A library or built-in type takes no derive
                             // from the program (B-2026-11-08-82).

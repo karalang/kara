@@ -9906,6 +9906,9 @@ impl<'a> super::TypeChecker<'a> {
                     replacement,
                 },
             );
+        } else if let Some(hint) = self.secret_withheld_hint(concrete, "Serialize") {
+            message.push_str(&format!("; {hint}"));
+            self.type_error(message, at, TypeErrorKind::TypeMismatch);
         } else {
             message.push_str(&format!(
                 "; derive it with `#[derive(Serialize)]` on `{shown}`"
