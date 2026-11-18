@@ -575,10 +575,11 @@ impl super::Parser {
                 // it into the synthesized `fn main`. Const-class
                 // (SCREAMING_SNAKE) names keep the existing ModuleBinding
                 // path; Type-class names also stay on it so E_MODULE_LET's
-                // `const` fix, which renames to SCREAMING_SNAKE_CASE, fires for
-                // the module-const-with-wrong-case mistake (B-2026-11-17-125). Guarded on a bare
-                // `let` (no attributes / visibility — those unambiguously
-                // mean a module binding was intended).
+                // `const` fix, which renames to SCREAMING_SNAKE_CASE, fires
+                // for the module-const-with-wrong-case mistake
+                // (B-2026-11-17-125). Guarded on a bare `let` (no attributes
+                // / visibility — those unambiguously mean a module binding
+                // was intended).
                 if attributes.is_empty() && !is_pub && !is_private {
                     let name_tok = if matches!(self.peek_token_ref_at(1), Token::Mut) {
                         self.peek_token_at(2)

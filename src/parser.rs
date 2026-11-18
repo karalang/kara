@@ -1103,6 +1103,12 @@ impl Parser {
         // `synchronize_to_item` skipped them), so a main-less script
         // "passed" `karac check` and did nothing under `run --interp`.
         let mut script_stmts: Vec<Stmt> = Vec::new();
+        // For each statement, how many items preceded it: a `let` that is
+        // reclassified below as a module binding takes its place among the
+        // items, so the items stay in source order. A consumer that parses
+        // a text and its extension and splits the second by the first's item
+        // count relies on that (`PackageLibrary`, B-2026-11-18-15).
+        let mut stmt_at: Vec<usize> = Vec::new();
         while !self.is_at_end() {
             if matches!(self.peek_token_ref(), Token::ModuleDocComment(_)) {
                 self.misplaced_module_doc();
@@ -1124,7 +1130,10 @@ impl Parser {
                     // the loop always makes progress.
                     let pos_before = self.pos;
                     match self.parse_top_level_script_stmt() {
-                        Some(stmt) => script_stmts.push(stmt),
+                        Some(stmt) => {
+                            stmt_at.push(items.len());
+                            script_stmts.push(stmt);
+                        }
                         None => {
                             if self.pos == pos_before {
                                 self.synchronize_to_item();
@@ -1162,14 +1171,19 @@ impl Parser {
         // NOT module-binding shaped (expression statements, assignments, tuple
         // destructures) stay behind and keep the ambiguity error, which is the
         // right diagnostic for them.
-        if self.allow_script_mode
-            && !script_stmts.is_empty()
-            && items
-                .iter()
-                .any(|it| matches!(it, Item::Function(f) if f.name == "main"))
+        //
+        // An item-only context (a package's module file) has no script mode
+        // at all, so there a top-level `let` is a module binding whether or
+        // not the file has `fn main` (B-2026-11-18-15).
+        if !script_stmts.is_empty()
+            && (!self.allow_script_mode
+                || items
+                    .iter()
+                    .any(|it| matches!(it, Item::Function(f) if f.name == "main")))
         {
             let mut kept: Vec<Stmt> = Vec::new();
-            for st in std::mem::take(&mut script_stmts) {
+            let mut inserted = 0;
+            for (st, at) in std::mem::take(&mut script_stmts).into_iter().zip(stmt_at) {
                 let reclassified = match (&st.kind, &st.span) {
                     (
                         StmtKind::Let {
@@ -1202,7 +1216,10 @@ impl Parser {
                     _ => None,
                 };
                 match reclassified {
-                    Some(mb) => items.push(Item::ModuleBinding(mb)),
+                    Some(mb) => {
+                        items.insert(at + inserted, Item::ModuleBinding(mb));
+                        inserted += 1;
+                    }
                     None => kept.push(st),
                 }
             }

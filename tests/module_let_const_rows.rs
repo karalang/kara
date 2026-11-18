@@ -85,3 +85,83 @@ fn a_module_let_computed_at_run_time_points_at_a_fn_or_a_provider() {
     assert!(!d.contains("\"fix_diff\""), "{d}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn package(name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "karac-module-let-pkg-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    for (path, text) in files {
+        std::fs::write(dir.join(path), text).unwrap();
+    }
+    dir
+}
+
+/// B-2026-11-18-15: in a package's `src/main.kara` the same `let` was E0001,
+/// "top-level statements are not allowed", since a module file has no script
+/// mode and so never read the `let` as a module binding.
+#[test]
+fn a_lowercase_let_in_a_package_main_is_e_module_let_with_its_fix() {
+    let dir = package(
+        "main",
+        &[(
+            "src/main.kara",
+            "let my_count: i64 = 2;\nfn main() { println(my_count); }\n",
+        )],
+    );
+    let out = karac(&dir, &["check"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("error[E_MODULE_LET]"), "{err}");
+    assert!(!err.contains("E0001"), "{err}");
+    assert!(!err.contains("E_DUPLICATE_MODULE_BINDING"), "{err}");
+    let fix = karac(&dir, &["fix"]);
+    assert!(fix.status.success(), "{fix:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src/main.kara")).unwrap(),
+        "const MY_COUNT: i64 = 2;\nfn main() { println(MY_COUNT); }\n"
+    );
+    let run = karac(&dir, &["run"]);
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n", "{run:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-11-18-15: a module `let` in a module after the first one
+/// panicked karac (subtract with overflow in E_MODULE_LET's fix), since the
+/// binding's name span was not rebased into the module tree.
+#[test]
+fn a_module_let_in_a_second_module_is_e_module_let_not_a_panic() {
+    let dir = package(
+        "second",
+        &[
+            (
+                "src/main.kara",
+                "import util;\nfn main() { println(util.lim()); }\n",
+            ),
+            (
+                "src/util.kara",
+                "let limit: i64 = 3;\npub fn lim() -> i64 { limit + limit }\n",
+            ),
+        ],
+    );
+    let out = karac(&dir, &["check"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("panicked"), "{err}");
+    assert!(err.contains("src/util.kara:1:5"), "{err}");
+    assert!(err.contains("declare it `const LIMIT`"), "{err}");
+    let fix = karac(&dir, &["fix", "src/util.kara"]);
+    assert!(fix.status.success(), "{fix:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src/util.kara")).unwrap(),
+        "const LIMIT: i64 = 3;\npub fn lim() -> i64 { LIMIT + LIMIT }\n"
+    );
+    let run = karac(&dir, &["run"]);
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "6\n", "{run:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

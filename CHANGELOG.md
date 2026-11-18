@@ -1670,6 +1670,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- In a package, a top-level `let` in a module file is a module binding, as in
+  a lone file with `fn main`: `let my_count` in `src/main.kara` is
+  E_MODULE_LET with its `const` fix rather than E0001 "top-level statements
+  are not allowed", and a module `let` in any module after the first no
+  longer panics `karac check` (subtract with overflow in that fix)
+  (B-2026-11-18-15).
 - A module-level `let` whose name is not SCREAMING_SNAKE_CASE (`let my_count`
   beside `fn main`) is reported as E_MODULE_LET, whose fix declares it
   `const MY_COUNT` and renames its uses in one edit; it was

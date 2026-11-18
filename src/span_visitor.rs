@@ -206,6 +206,10 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         }
         Item::ModuleBinding(b) => {
             visit(&b.span);
+            // The name's own span, which E_MODULE_LET's fix measures from:
+            // unrebased, a module after the first one underflowed it
+            // (B-2026-11-18-15).
+            visit(&b.name_span);
             if let Some(ref ty) = b.ty {
                 visit_type(ty, visit);
             }
@@ -1610,6 +1614,7 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
         }
         Item::ModuleBinding(b) => {
             visit.span(&mut b.span);
+            visit.span(&mut b.name_span);
             if let Some(ty) = &mut b.ty {
                 visit_type_spans_mut(ty, visit);
             }
