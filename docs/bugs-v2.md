@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 513 |
-| false-positive | 265 |
+| diagnostics | 515 |
+| false-positive | 266 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 113 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 639 |
+| typecheck | 642 |
 | mir-llvm | 291 |
 | mir | 253 |
 | cli | 200 |
@@ -129,6 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-47 | 2026-11-18 | typecheck | low | Over an owned local's element (`let mut s: Vec[Option[V]]`, `match s[0] { Some(v) => v.n += 1, .. }`), a plain binding written through is E0517 "reached through a shared `ref`" with no fix, though §4.6 makes `s[0]` an owned scrutinee whose plain binding is a move out of an index (§3.7), fixed by `mut ref v` | — |
 | B-2026-11-18-48 | 2026-11-18 | cli | low | Six lints ignore an item-level `#[allow]` / `#[deny]`, and `map_value_clone_reinsert` ignores `-D` too (W0312 stays a warning) | — |
 | B-2026-11-18-49 | 2026-11-18 | cli | low | Two catalogued codes never reach the user: L0001 (FfiLintHint) is built but never surfaced, and the char-boundary panic omits E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY | — |
+| B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
 
 ### Relocated
 
@@ -1719,6 +1720,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-43 | typecheck | low | A generic distinct type (`distinct type Ids[T] = Vec[T]`) is accepted at its declaration, but its constructor cannot build a value: `let a: Ids[i64]… | 43b255fda2 |
 | B-2026-11-18-45 | typecheck | low | `karac fix` leaves Rust's `last_mut()` unfixed when the arm that binds the element pops the vector after the element's last use (`Some(top) if top.0… | 275ab3ae7f |
 | B-2026-11-18-46 | typecheck | high | `karac fix` rewrites Rust's `or_default()` on a map of `BinaryHeap`s to `or_insert(PriorityQueue.new())`, a smallest-first queue, where every other `… | 275ab3ae7f |
+| B-2026-11-18-50 | typecheck | medium | A generic struct literal or enum variant put where its type is already fixed kept a borrowed number as `ref i32`: `Reverse { value: x }` into a `Prio… | 9691a6290e |
+| B-2026-11-18-51 | typecheck | low | A range of literals feeding an `i32` was offered only `as i32`: with `x` from `for x in 0..=50`, `ans = vec![x, y]` into a `Vec<i32>` (LeetCode's Rus… | 9691a6290e |
 
 </details>
 
