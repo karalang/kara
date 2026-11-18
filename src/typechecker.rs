@@ -3120,6 +3120,8 @@ pub struct TypeChecker<'a> {
     pub(super) rejected_assign_spans: Vec<Span>,
     /// See [`deprecated_variant`]; built on first use.
     pub(super) deprecated_variants: Option<deprecated_variant::DeprecatedVariants>,
+    /// The `#[deprecated]` enums, by name (B-2026-11-18-26).
+    pub(super) deprecated_enums: Option<rustc_hash::FxHashSet<String>>,
     /// The receivers of the builtin `Option.unwrap` in the program's source,
     /// by span (B-2026-11-05-3).
     pub(super) option_unwrap_receivers: FxHashSet<SpanKey>,
@@ -4639,6 +4641,7 @@ impl<'a> TypeChecker<'a> {
             core_ref_copy_spans: FxHashSet::default(),
             rejected_assign_spans: Vec::new(),
             deprecated_variants: None,
+            deprecated_enums: None,
             option_unwrap_receivers: FxHashSet::default(),
             option_unwrap_sites: Vec::new(),
             braceless_arm_assign: None,
@@ -6641,6 +6644,14 @@ impl<'a> TypeChecker<'a> {
             message.push_str(&format!(" (since {since})"));
         }
         message.push_str(" — suppress with `#[allow(deprecated)]` on the enclosing item");
+        // A signature is lowered more than once; one use warns once.
+        if self
+            .warnings
+            .iter()
+            .any(|w| w.span == *span && w.message == message)
+        {
+            return;
+        }
         self.type_lint_warning(message, *span, TypeErrorKind::Deprecated, "deprecated");
     }
 

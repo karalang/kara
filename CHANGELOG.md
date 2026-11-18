@@ -1697,6 +1697,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `#[deprecated]` on an enum, a trait or a type alias warns at every use, as
+  design.md § `#[deprecated]` says: the alias where it is named, the enum at
+  its name, each variant constructor and each pattern, and the trait at each
+  bound (`T: T1`, `where T: T1`) and `impl T1 for S`. The attribute was
+  accepted and ignored on all three. A use warns once, where a signature
+  lowered twice warned twice (B-2026-11-18-26).
 - In a package, a top-level `let` in a module file is a module binding, as in
   a lone file with `fn main`: `let my_count` in `src/main.kara` is
   E_MODULE_LET with its `const` fix rather than E0001 "top-level statements

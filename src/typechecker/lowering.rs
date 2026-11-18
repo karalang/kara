@@ -914,6 +914,10 @@ impl<'a> super::TypeChecker<'a> {
             // `type AdminId = UserId; type UserId = i64;` sees `AdminId`
             // as `i64` regardless of source order.
             if self.env.type_aliases.contains_key(name) {
+                // A `#[deprecated]` alias warns where it is named, as a
+                // struct or enum does (design.md § `#[deprecated]`,
+                // B-2026-11-18-26).
+                self.check_deprecated_use_at(&path.span, name);
                 let mut visited: HashSet<String> = HashSet::new();
                 let body = self.resolve_alias_deep(name.clone(), &mut visited);
                 // Generic alias (`type Pair[T] = Vec[T]`): substitute the

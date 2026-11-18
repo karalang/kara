@@ -36,6 +36,12 @@ impl TypeChecker<'_> {
             }
             self.deprecated_variants = Some(table);
         }
+        // `E.A` names the enum: a `#[deprecated]` enum warns at each
+        // variant constructor and pattern too (design.md § `#[deprecated]`,
+        // B-2026-11-18-26).
+        if self.deprecated_enum_names().contains(enum_name) {
+            self.check_deprecated_use_at(span, enum_name);
+        }
         let Some((note, since)) = self
             .deprecated_variants
             .as_ref()
@@ -50,6 +56,60 @@ impl TypeChecker<'_> {
             note.as_deref(),
             since.as_deref(),
         );
+    }
+}
+
+impl TypeChecker<'_> {
+    /// The enums of this program marked `#[deprecated]`.
+    fn deprecated_enum_names(&mut self) -> &rustc_hash::FxHashSet<String> {
+        if self.deprecated_enums.is_none() {
+            let set = self
+                .program
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::EnumDef(e) if e.deprecation.is_some() => Some(e.name.clone()),
+                    _ => None,
+                })
+                .collect();
+            self.deprecated_enums = Some(set);
+        }
+        self.deprecated_enums.as_ref().unwrap()
+    }
+
+    /// Each bound in `gp` and `wc` that names a `#[deprecated]` trait warns
+    /// at the bound, and so does an `impl` of one at its trait's name
+    /// (design.md § `#[deprecated]`: every use of the item; B-2026-11-18-26).
+    pub(super) fn check_deprecated_trait_uses(
+        &mut self,
+        gp: Option<&crate::ast::GenericParams>,
+        wc: Option<&crate::ast::WhereClause>,
+        imp: Option<&crate::ast::PathExpr>,
+    ) {
+        let mut named: Vec<(Span, String)> = Vec::new();
+        let mut bound = |b: &crate::ast::TraitBound| {
+            if let [name] = b.path.as_slice() {
+                named.push((b.span, name.clone()));
+            }
+        };
+        for p in gp.iter().flat_map(|g| &g.params) {
+            p.bounds.iter().for_each(&mut bound);
+        }
+        for c in wc.iter().flat_map(|w| &w.constraints) {
+            if let crate::ast::WhereConstraint::TypeBound { bounds, .. } = c {
+                bounds.iter().for_each(&mut bound);
+            }
+        }
+        if let Some(path) = imp {
+            if let [name] = path.segments.as_slice() {
+                named.push((path.span, name.clone()));
+            }
+        }
+        for (span, name) in named {
+            if self.env.traits.contains_key(name.as_str()) {
+                self.check_deprecated_use_at(&span, &name);
+            }
+        }
     }
 }
 

@@ -3085,6 +3085,7 @@ impl<'a> super::TypeChecker<'a> {
         // as the innermost cascade frame. Popped on exit so sibling
         // / outer items don't inherit it.
         self.lint_override_stack.push(f.lint_overrides.clone());
+        self.check_deprecated_trait_uses(f.generic_params.as_ref(), f.where_clause.as_ref(), None);
 
         // `impl Trait` slice 4 — compute the capture set for every
         // return-position existential declared in this function's
@@ -6211,6 +6212,11 @@ impl<'a> super::TypeChecker<'a> {
         // so per-method `check_function` calls inherit the impl's
         // overrides via the cascade. Popped at the end of the impl.
         self.lint_override_stack.push(imp.lint_overrides.clone());
+        self.check_deprecated_trait_uses(
+            imp.generic_params.as_ref(),
+            imp.where_clause.as_ref(),
+            imp.trait_name.as_ref(),
+        );
 
         // GAT slice 7: cache the trait's AssocTypeDecl bounds keyed by
         // assoc-type name so the binding loop can enforce them at impl
