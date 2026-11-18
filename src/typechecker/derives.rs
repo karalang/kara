@@ -1784,13 +1784,35 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // A trait the program implements by hand for this type is not
+            // filled in, and adding it to the derive would be E0240's
+            // conflicting impl (B-2026-11-18-69).
+            let hand: Vec<&str> = self
+                .program
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::ImplBlock(imp) => match &imp.target_type.kind {
+                        TypeKind::Path(path)
+                            if path.segments.len() == 1 && &path.segments[0] == name =>
+                        {
+                            imp.trait_name
+                                .as_ref()
+                                .and_then(|p| p.segments.last())
+                                .map(String::as_str)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
             // Close the written set under §9's chains; what the closure adds
             // is what the compiler is filling in.
             let mut needed: Vec<&str> = written.clone();
             let mut i = 0;
             while i < needed.len() {
                 for w in needs(needed[i]) {
-                    if !needed.contains(w) {
+                    if !needed.contains(w) && !hand.contains(w) {
                         needed.push(w);
                     }
                 }
@@ -1823,7 +1845,7 @@ impl<'a> super::TypeChecker<'a> {
                     let lacking: Vec<&str> = needs(w)
                         .iter()
                         .copied()
-                        .filter(|r| !written.contains(r))
+                        .filter(|r| !written.contains(r) && !hand.contains(r))
                         .collect();
                     (!lacking.is_empty())
                         .then(|| format!("`{w}` needs `{}`", lacking.join("` and `")))

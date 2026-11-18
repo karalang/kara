@@ -6039,6 +6039,7 @@ impl<'a> super::TypeChecker<'a> {
                 let saved_mut_through = self.mut_through_param_arg;
                 self.borrow_context = borrow_context_for_param(param_ty);
                 self.mut_through_param_arg = param_mutates_through(param_ty);
+                self.note_bytes_copy_tails(&arg.value, param_ty);
                 // design.md § Strings: at a call boundary a `String` passes
                 // as a `Str` parameter, borrowed. Elsewhere `as_str()` is
                 // written, so the coercion lives here, not in assignability.

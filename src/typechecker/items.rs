@@ -10216,6 +10216,76 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-19-42: an `if`, `match` or block lent to a `Slice[u8]`
+    /// parameter whose tails are text, one of them a temporary
+    /// (`sha256(if c { a.clone() } else { b })`). The temporary drops at its
+    /// tail (core-semantics §7.4), so `.bytes()` there would outlive it;
+    /// every tail's fix copies instead, which keeps the branches one type.
+    pub(super) fn note_bytes_copy_tails(&mut self, arg: &Expr, param: &Type) {
+        if !matches!(
+            param,
+            Type::Slice { element, mutable: false }
+                if matches!(element.as_ref(), Type::UInt(UIntSize::U8))
+        ) || !matches!(
+            arg.kind,
+            ExprKind::Block(_)
+                | ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
+                | ExprKind::Match { .. }
+        ) {
+            return;
+        }
+        fn tails<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match &e.kind {
+                ExprKind::Block(b) => {
+                    if let Some(t) = b.final_expr.as_deref() {
+                        tails(t, out);
+                    }
+                }
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                }
+                | ExprKind::IfLet {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    if let Some(t) = then_block.final_expr.as_deref() {
+                        tails(t, out);
+                    }
+                    if let Some(t) = else_branch.as_deref() {
+                        tails(t, out);
+                    }
+                }
+                ExprKind::Match { arms, .. } => {
+                    for a in arms {
+                        tails(&a.body, out);
+                    }
+                }
+                _ => out.push(e),
+            }
+        }
+        // A place, `self` or a literal outlives the branch; anything else
+        // is taken to be a temporary (a copy is correct either way).
+        fn lasting(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(_) | ExprKind::SelfValue | ExprKind::StringLit(_) => true,
+                ExprKind::FieldAccess { object, .. } => lasting(object),
+                _ => false,
+            }
+        }
+        let mut out = Vec::new();
+        tails(arg, &mut out);
+        if out.iter().all(|t| lasting(t)) {
+            return;
+        }
+        for t in out {
+            self.bytes_copy_tails.insert(SpanKey::from_span(&t.span));
+        }
+    }
+
     /// v2 core §4.6 (B-2026-10-28-25): note a result of a `match`, `if` or
     /// block that is a reference (a view, which covers a `ref` pattern
     /// binding, a bare parameter and a local copied from either, or a

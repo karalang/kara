@@ -3107,6 +3107,11 @@ pub struct TypeChecker<'a> {
     /// written, and whether it is a struct field's shorthand. The core write
     /// pass reports those the arm writes through, with the `mut ref` edit.
     pub(super) core_index_ref_bindings: Vec<(Span, String, String, bool)>,
+    /// Branch tails of a text argument lent as bytes where some tail is a
+    /// temporary (B-2026-11-19-42): `.bytes()` there would view a value
+    /// that drops at the tail (core-semantics §7.4), so each tail's fix is
+    /// `.bytes().to_vec()`.
+    pub(super) bytes_copy_tails: HashSet<SpanKey>,
     /// The scrutinee is a tuple literal (`match (m.get(a), m.get(b))`):
     /// whether each of its elements is a place the function does not own,
     /// so the matching sub-pattern binds `ref`s as it would against that
@@ -4701,6 +4706,7 @@ impl<'a> TypeChecker<'a> {
             current_scrutinee_core_borrowed: false,
             current_scrutinee_owned_index: None,
             core_index_ref_bindings: Vec::new(),
+            bytes_copy_tails: HashSet::new(),
             scrutinee_tuple_parts_borrowed: None,
             current_scrutinee_mut_self: false,
             current_scrutinee_clone_view: false,
@@ -10167,10 +10173,23 @@ impl<'a> TypeChecker<'a> {
                         if matches!(element.as_ref(), Type::UInt(types::UIntSize::U8))
                 )
             {
+                // A branch whose result is a temporary drops it at the tail
+                // (core-semantics §7.4), so a view of it cannot leave the
+                // branch: those tails copy the bytes out.
+                let copy = self.bytes_copy_tails.contains(&SpanKey::from_span(&span));
+                let (fix, how) = if copy {
+                    (
+                        ".bytes().to_vec()",
+                        "`.bytes().to_vec()` copies its UTF-8 bytes out of the branch, \
+                         whose temporary text drops at the branch's end",
+                    )
+                } else {
+                    (".bytes()", "`.bytes()` gives its UTF-8 bytes")
+                };
                 self.type_error_with_fix_it(
                     format!(
                         "expected '{}', found '{}': this takes bytes, and a text has more \
-                         than one byte encoding; `.bytes()` gives its UTF-8 bytes",
+                         than one byte encoding; {how}",
                         type_display(expected),
                         type_display(&found_now),
                     ),
@@ -10183,7 +10202,7 @@ impl<'a> TypeChecker<'a> {
                             offset: span.offset + span.length,
                             length: 0,
                         },
-                        replacement: ".bytes()".to_string(),
+                        replacement: fix.to_string(),
                     },
                 );
                 return false;

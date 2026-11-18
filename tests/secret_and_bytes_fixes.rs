@@ -16,6 +16,11 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 const BYTES: &str = "import std.crypto.sha2.{sha256};\nimport std.crypto.hmac.{hmac_sha256};\nimport std.encoding.{hex_encode, base64_encode};\nstruct U { name: String }\nfn main() {\n    let s = \"abc\".to_string();\n    let u = U { name: \"n\".to_string() };\n    println(hex_encode(sha256(\"abc\")));\n    println(hex_encode(sha256(s)));\n    println(hex_encode(hmac_sha256(\"key\", u.name)));\n    println(base64_encode(s.as_str()));\n    println(hex_encode(sha256(s.to_uppercase())));\n}\n";
 const BYTES_OUT: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n15d3e3bd1b61ac4338bbaea5d17c9839b972bea1940825f05acd005df0ad439a\nYWJj\nb5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78\n";
+/// B-2026-11-19-42: text that is a branch's temporary drops at the tail
+/// (core-semantics §7.4), so its fix copies the bytes out; a branch of
+/// places and literals keeps the plain `.bytes()`.
+const BRANCH_TAILS: &str = "import std.crypto.sha2.{sha256};\nimport std.encoding.{hex_encode};\nfn main() {\n    let a = \"x\".to_string();\n    let s = \"xy\".to_string();\n    let c = a.len() == 1;\n    println(hex_encode(sha256(if c { a.clone() } else { s.to_uppercase() })));\n    println(hex_encode(sha256(match c { true => s.to_uppercase(), false => a.clone() })));\n    println(hex_encode(sha256(if c { s } else { \"q\" })));\n    println(a);\n}\n";
+const BRANCH_TAILS_OUT: &str = "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\nc07a3de039fbc0914689549f041eae295d621de7f7f647fd863f6d2f8db2080e\n769a4e6d0003189c7e96c5d9b7e810a0d11c3a12832527ec94b0f86d277f51ca\nx\n";
 const CT_EQ: &str = "import std.secret.{Secret};\nfn main() {\n    let a: Secret[String] = Secret.new(\"x\".to_string());\n    let b: Secret[String] = Secret.new(\"x\".to_string());\n    let c: Secret[String] = Secret.new(\"y\".to_string());\n    if a == b { println(\"same\"); }\n    println(a != c);\n}\n";
 
 fn karac(args: &[&str]) -> std::process::Output {
@@ -98,6 +103,29 @@ fn text_passed_as_bytes_is_fixed_with_bytes() {
 }
 
 #[test]
+fn text_from_a_branch_temporary_copies_its_bytes() {
+    let (codes, fixed, out) = mend(BRANCH_TAILS, "__mir-run");
+    assert!(codes.iter().all(|c| c == "E0200"), "{codes:?}");
+    assert!(
+        fixed.contains(
+            "if c { a.clone().bytes().to_vec() } else { s.to_uppercase().bytes().to_vec() }"
+        ),
+        "{fixed}"
+    );
+    assert!(
+        fixed.contains(
+            "true => s.to_uppercase().bytes().to_vec(), false => a.clone().bytes().to_vec()"
+        ),
+        "{fixed}"
+    );
+    assert!(
+        fixed.contains("if c { s.bytes() } else { \"q\".bytes() }"),
+        "{fixed}"
+    );
+    assert_eq!(out, BRANCH_TAILS_OUT);
+}
+
+#[test]
 fn secret_equality_is_fixed_to_ct_eq() {
     let (codes, fixed, out) = mend(CT_EQ, "__mir-run");
     assert_eq!(
@@ -131,4 +159,5 @@ fn secret_refusals_never_advise_a_derive() {
 fn the_fixed_secret_and_bytes_programs_run_compiled() {
     assert_eq!(mend(BYTES, "__mir-llvm-run").2, BYTES_OUT);
     assert_eq!(mend(CT_EQ, "__mir-llvm-run").2, "same\ntrue\n");
+    assert_eq!(mend(BRANCH_TAILS, "__mir-llvm-run").2, BRANCH_TAILS_OUT);
 }
