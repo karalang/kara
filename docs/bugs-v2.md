@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 527 |
-| false-positive | 271 |
+| false-positive | 272 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 114 |
 | soundness | 86 |
-| miscompile | 84 |
+| miscompile | 85 |
 | run-vs-build | 56 |
 | crash | 53 |
 | codegen-gap | 38 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 657 |
-| mir-llvm | 294 |
+| typecheck | 658 |
+| mir-llvm | 295 |
 | mir | 255 |
 | cli | 203 |
 | parser | 117 |
 | ownership | 108 |
+| interp | 88 |
 | runtime | 88 |
-| interp | 87 |
 | resolver | 46 |
 | effect | 41 |
 | other | 34 |
@@ -123,6 +123,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-69 | 2026-11-18 | typecheck+cli | low | E0208's derive fix adds `#[derive(PartialOrd, PartialEq)]` to a type that implements `PartialEq` by hand, and the fixed program is E0240 (conflicting impl) | — |
 | B-2026-11-18-70 | 2026-11-18 | typecheck | low | The E0236 fix for `v.iter().chunks(2).collect()` into a `Vec[Vec[i64]]` writes `v.chunks(2).into_iter().collect()`, whose items are slices (E0200 FromIterator[Slice[i64]]) | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
+| B-2026-11-18-73 | 2026-11-18 | interp+mir-llvm | medium | A `Pool` dropped while one of its loans is still out keeps its IDLE values alive until that loan comes back, on every surface; pool.md says the idle values drop when the Pool drops | — |
+| B-2026-11-18-74 | 2026-11-18 | typecheck | medium | `let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping());` is refused with E0238 `cannot infer type parameter 'E'`, and its help says to annotate a binding that is already annotated: a type variable that only a closure argument's result mentions is not carried through a chained method's return type | — |
 
 ### Relocated
 
