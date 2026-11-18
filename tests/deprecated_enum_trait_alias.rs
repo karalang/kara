@@ -3,7 +3,8 @@
 //! named, the enum at its type name, each variant constructor and each
 //! pattern, and the trait at each bound and `impl`. Each use warns once,
 //! though a signature is lowered more than once, and `#[allow(deprecated)]`
-//! on the enclosing item silences it.
+//! on the enclosing item silences it. B-2026-11-18-41: a bound on a
+//! struct's, enum's or trait's own parameter warns too.
 
 use karac::check_source;
 
@@ -109,6 +110,41 @@ fn main() {
             "8:9 use of deprecated item `E`",
             "9:9 use of deprecated item `E`",
             "13:13 use of deprecated item `E`",
+        ],
+    );
+}
+
+/// B-2026-11-18-41: a bound on a type's own parameter is a use too.
+#[test]
+fn a_deprecated_trait_warns_in_a_type_s_own_bound() {
+    assert_eq!(
+        deprecated_at(
+            "#[deprecated(note: \"x\")]
+trait T1 {
+    fn f(self) -> i64;
+}
+struct W[T: T1] {
+    v: T,
+}
+enum E[T] where T: T1 {
+    A(T),
+}
+trait U[T: T1] {
+    fn g(self) -> i64;
+}
+#[allow(deprecated)]
+struct Q[T: T1] {
+    v: T,
+}
+fn main() {
+    println(1);
+}
+"
+        ),
+        [
+            "5:13 use of deprecated item `T1`",
+            "8:20 use of deprecated item `T1`",
+            "11:12 use of deprecated item `T1`",
         ],
     );
 }

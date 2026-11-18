@@ -468,6 +468,22 @@ impl<'a> super::TypeChecker<'a> {
             self.refuse_deferred_item(item);
         }
         self.warn_acronym_names();
+        // A `#[deprecated]` trait in a type's own bound warns, inside the
+        // declaration's lint frame (B-2026-11-18-41).
+        for item in items {
+            let (gp, wc, lints) = match item {
+                Item::StructDef(s) => (&s.generic_params, &s.where_clause, &s.lint_overrides),
+                Item::EnumDef(e) => (&e.generic_params, &e.where_clause, &e.lint_overrides),
+                Item::TraitDef(t) => (&t.generic_params, &t.where_clause, &t.lint_overrides),
+                _ => continue,
+            };
+            if gp.is_none() && wc.is_none() {
+                continue;
+            }
+            self.lint_override_stack.push(lints.to_vec());
+            self.check_deprecated_trait_uses(gp.as_ref(), wc.as_ref(), None);
+            self.lint_override_stack.pop();
+        }
         let derive_backers = derive_backers(items);
         for item in items {
             match item {
