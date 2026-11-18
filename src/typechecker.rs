@@ -91,6 +91,7 @@ mod method_numeric;
 pub(crate) use method_numeric::{
     FLOAT_METHODS, INT_METHODS, SIGNED_INT_METHODS, UNSIGNED_INT_METHODS,
 };
+mod fold_seed_widen;
 mod method_optres_combinator;
 mod method_pointer;
 mod method_sequence_mutation;
@@ -3921,6 +3922,8 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-17-144: method calls on a closure parameter nothing had
     /// typed yet, judged at the end of `check`.
     pub(super) open_receiver_calls: Vec<open_receiver::OpenReceiverCall>,
+    /// B-2026-11-18-44: the `fold` calls whose arguments are being checked.
+    pub(super) fold_seed_frames: Vec<fold_seed_widen::FoldSeedFrame>,
     /// B-2026-11-10-8: an operator whose operands are both a variable
     /// nothing has typed yet (`|x, n| x + n`, typed by a later `f(1, 2)`),
     /// judged at the end of `check` (`discharge_deferred_operand_vars`).
@@ -4845,6 +4848,7 @@ impl<'a> TypeChecker<'a> {
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
             open_receiver_calls: Vec::new(),
+            fold_seed_frames: Vec::new(),
             deferred_operand_vars: Vec::new(),
             unsolved_call_consts: Vec::new(),
             unsolved_array_lens: Vec::new(),

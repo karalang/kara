@@ -14881,6 +14881,20 @@ impl<'a> super::TypeChecker<'a> {
             );
             return;
         }
+        if let Some((edits, why)) = self.fold_seed_widening(expr, &source, &target) {
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&expr.span), edits);
+            self.type_error(
+                format!(
+                    "implicit coercion from '{}' to '{}' would narrow or change sign: {why}",
+                    type_display(&source),
+                    type_display(&target),
+                ),
+                expr.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return;
+        }
         if let Some((fix, why)) = self.literal_reduction_source(expr, &source, &target) {
             self.type_error_with_fix_it(
                 format!(

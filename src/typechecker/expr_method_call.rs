@@ -1836,7 +1836,9 @@ impl<'a> super::TypeChecker<'a> {
         let errors_before = self.errors.len();
         self.call_receiver_roots
             .push(super::exprs::clone_place_root(object).map(str::to_string));
+        let fold = self.enter_fold_seed(method, args);
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
+        self.leave_fold_seed(fold);
         self.note_open_receiver_call(object, method, &ty, errors_before);
         self.call_receiver_roots.pop();
         self.method_call_ends.pop();
