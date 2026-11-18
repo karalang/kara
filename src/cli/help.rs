@@ -439,7 +439,7 @@ TARGETS:
     (matching `karac cache key` defaults).
 
 OFFLINE:
-    `--offline` redirects every transitive `path` dependency to
+    `--offline` redirects every transitive dependency to
     `<project>/vendor/<dep-name>/`. The vendored manifest is the source
     of truth — version mismatches with the declared path don't apply.
     If `./vendor/` does not exist when `--offline` is set on a project
@@ -449,12 +449,8 @@ OFFLINE:
     surfaces `error[E_OFFLINE_VENDOR_ENTRY_MISSING]` naming the
     offending dependency.
 
-    0.8 status:
-        Path-source deps are fully wired through `--offline`. Registry
-        and git deps in offline mode still surface
-        `E_REGISTRY_DEP_UNSUPPORTED` / `E_GIT_DEP_UNSUPPORTED`
-        (promoted to a hard error in offline mode rather than the
-        default warning); registry and git vendoring are not in 0.8."
+    A registry or git dependency is read from that copy too; kara.lock
+    keeps the source and pin the online resolution recorded."
         }
         "query" => {
             "\
@@ -1051,13 +1047,13 @@ Air-gap workflow for regulated environments and offline CI. Pairs with
 and refuses any network access.
 
 OPTIONS:
-    --no-proxy        Opt out of the registry proxy at
-                      proxy.kara-lang.org. The path-dependency copy
-                      does not use the proxy.
+    --no-proxy        Fetch registry dependencies straight from the
+                      upstream registry instead of through the proxy.
     -h, --help        Print this message
 
-Path dependencies are copied verbatim; registry and git vendoring are
-not in 0.8."
+Dependencies resolve as `karac build` resolves them, honoring kara.lock:
+a path dependency is copied verbatim, a git one from its checkout
+(without .git), and a registry one from its extracted package."
         }
         "update" => {
             "\
@@ -1069,17 +1065,17 @@ USAGE:
 OPTIONS:
     --output=json     Structured JSON output on stdout
     --output=jsonl    Streaming JSONL output on stdout
-    --no-proxy        Opt out of the registry proxy at
-                      proxy.kara-lang.org. Accepted; it has nothing to
-                      change while dependencies are path-only.
+    --no-proxy        Fetch registry dependencies straight from the
+                      upstream registry instead of through the proxy.
     -h, --help        Print this message
 
 Bare form refreshes every locked package; surgical form targets one
-package by name (the name is not validated in 0.8).
+package by name.
 
-0.8 status: path-deps are manifest-pinned, so bumping isn't meaningful;
-both forms re-derive the lockfile from the current manifest. Version
-bumping needs registry dependencies, which are not in 0.8."
+Dependencies are fetched as `karac build` fetches them, but without the
+kara.lock pins: a git dependency is locked at the commit its ref names
+now, a registry one at the newest version its requirement allows. Both
+forms re-derive the whole lockfile."
         }
         "resolve" => {
             "\

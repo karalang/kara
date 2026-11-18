@@ -2365,7 +2365,132 @@ pub(super) fn run_dep_resolution(
     persist_lock: bool,
 ) -> Result<Option<crate::dep_resolver::Resolution>, ()> {
     let loader = crate::dep_graph::FsLoader;
+    let registries = (mf.build_registry.clone(), mf.build_registry_proxy.clone());
+    with_dep_providers(
+        (registries.0.as_deref(), registries.1.as_deref()),
+        offline_root,
+        no_proxy,
+        |registry_provider, git_provider| {
+            let solve = |dir: &std::path::Path,
+                         mf: crate::manifest::Manifest,
+                         pins: &std::collections::BTreeMap<String, semver::Version>|
+             -> Result<
+                (crate::dep_resolver::Resolution, crate::dep_graph::DepGraph),
+                (),
+            > {
+                let options = crate::dep_graph::DepGraphOptions {
+                    offline_root,
+                    include_dev_deps,
+                    registry_provider,
+                    git_provider,
+                    pins: Some(pins),
+                };
+                let graph =
+                    match crate::dep_graph::build_dep_graph_with_options(dir, mf, &loader, options)
+                    {
+                        Ok(g) => g,
+                        Err(e) => {
+                            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+                            emit_dep_diagnostic(&diag, output, "error");
+                            return Err(());
+                        }
+                    };
+                let active = crate::dep_resolver::active_toolchain_version();
+                match crate::dep_resolver::resolve_with_pins(&graph, &active, offline_root, pins) {
+                    Ok(resolution) => Ok((resolution, graph)),
+                    Err(boxed) => {
+                        let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
+                        // A registry dependency with no configured proxy, or a git one
+                        // with nothing to fetch it with, is refused: dropped, it would
+                        // only resurface as an "unknown module" at its first import
+                        // (design.md § 4, Dependencies in 0.8; B-2026-11-13-41).
+                        emit_dep_diagnostic(&diag, output, "error");
+                        Err(())
+                    }
+                }
+            };
 
+            // Lockfile-pin-over-catalog (follow-up (d)/(h)): read an existing
+            // `kara.lock` and prefer its recorded registry-package versions, so a
+            // rebuild reproduces the locked graph rather than drifting to the newest
+            // compatible version. The pins feed BOTH the graph walk (slice 4 — a pinned
+            // registry dep is fetched at exactly that version via `fetch_exact`, even if
+            // since-yanked, and added to the candidate set) and version selection (slice
+            // 2). Best-effort — an absent / unreadable / malformed lockfile yields no
+            // pins (fresh selection), never a build error. Pins bite only where the
+            // registry candidate set is widened; path/git deps ignore them.
+            //
+            // In a workspace (design.md § Workspaces, B-2026-11-13-60) the lock is the
+            // root's, shared by every member: it is solved once over all the members'
+            // requirements, and this package is then resolved pinned to that solution,
+            // so two members always agree on a dependency's version.
+            let workspace = crate::dep_graph::workspace_root_of(root, &loader);
+            let pins = match &workspace {
+                Some(ws_root) => {
+                    let wmf = match crate::dep_graph::workspace_lock_manifest(
+                        ws_root,
+                        &loader,
+                        include_dev_deps,
+                    ) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            emit_manifest_error(&e, output);
+                            return Err(());
+                        }
+                    };
+                    let (joint, _) = solve(ws_root, wmf, &read_lockfile_pins(ws_root, output))?;
+                    // `karac resolve` is read-only — it inspects the graph without
+                    // rewriting `kara.lock`. Only build / test persist the pin.
+                    if persist_lock {
+                        persist_lockfile(ws_root, &joint, output);
+                    }
+                    resolution_pins(&joint)
+                }
+                None => read_lockfile_pins(root, output),
+            };
+            let (resolution, graph) = solve(root, mf, &pins)?;
+            // Warn on any resolved version the catalog marks yanked (follow-up
+            // (h), slice 4). Fresh selection excludes yanked versions, so this
+            // fires only when a `kara.lock` pin lands on a version yanked since
+            // it was recorded — reproducibility kept it, and the user should
+            // hear the pin is now withdrawn.
+            emit_yanked_pin_warnings(&resolution, &graph, output);
+            // Offline, a git or registry dependency resolved from its `vendor/`
+            // copy as a path one; `kara.lock` keeps the source and pin the
+            // online resolution recorded.
+            let read_vendored_fetch = offline_root.is_some()
+                && graph.manifests.values().any(|m| {
+                    m.dependencies.values().any(|d| {
+                        matches!(
+                            d,
+                            crate::manifest::DependencySpec::Registry { .. }
+                                | crate::manifest::DependencySpec::Git { .. }
+                        )
+                    })
+                });
+            if persist_lock && workspace.is_none() && !read_vendored_fetch {
+                persist_lockfile(root, &resolution, output);
+            }
+            Ok(Some(resolution))
+        },
+    )
+}
+
+/// Builds the registry and git providers a resolution fetches through and
+/// hands them to `f`: what `karac build` / `check` / `run` / `test` resolve
+/// with, and `karac vendor` and `karac update` too (they used to resolve
+/// with neither, so a git or registry dependency was never fetched).
+/// `registries` is the manifest's `[build].registry` and
+/// `[build].registry-proxy`.
+pub(super) fn with_dep_providers<R>(
+    registries: (Option<&str>, Option<&str>),
+    offline_root: Option<&std::path::Path>,
+    no_proxy: bool,
+    f: impl FnOnce(
+        Option<&dyn crate::dep_graph::RegistryProvider>,
+        Option<&dyn crate::git_fetch::GitProvider>,
+    ) -> R,
+) -> R {
     // Activate the registry fetch path. A `ProxyRegistryProvider` — the
     // cache → retry → live-HTTP decorator stack — is threaded into the graph
     // walk so a `[dependencies]` registry entry is fetched, extracted, and
@@ -2394,12 +2519,12 @@ pub(super) fn run_dep_resolution(
     let registry_base: Option<String> = if offline_root.is_some() || cache_root.is_none() {
         None
     } else if no_proxy {
-        crate::registry_proxy::resolve_direct_registry_url(mf.build_registry.as_deref())
-    } else if crate::registry_proxy::explicit_proxy_configured(mf.build_registry_proxy.as_deref()) {
+        crate::registry_proxy::resolve_direct_registry_url(registries.0)
+    } else if crate::registry_proxy::explicit_proxy_configured(registries.1) {
         Some(
             crate::registry_proxy::ProxyConfig::resolve(
                 crate::registry_proxy::ProxyMode::Default,
-                mf.build_registry_proxy.as_deref(),
+                registries.1,
             )
             .url,
         )
@@ -2448,88 +2573,7 @@ pub(super) fn run_dep_resolution(
     let git_provider = git_provider
         .as_ref()
         .map(|p| p as &dyn crate::git_fetch::GitProvider);
-    let solve = |dir: &std::path::Path,
-                 mf: crate::manifest::Manifest,
-                 pins: &std::collections::BTreeMap<String, semver::Version>|
-     -> Result<(crate::dep_resolver::Resolution, crate::dep_graph::DepGraph), ()> {
-        let options = crate::dep_graph::DepGraphOptions {
-            offline_root,
-            include_dev_deps,
-            registry_provider,
-            git_provider,
-            pins: Some(pins),
-        };
-        let graph = match crate::dep_graph::build_dep_graph_with_options(dir, mf, &loader, options)
-        {
-            Ok(g) => g,
-            Err(e) => {
-                let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
-                emit_dep_diagnostic(&diag, output, "error");
-                return Err(());
-            }
-        };
-        let active = crate::dep_resolver::active_toolchain_version();
-        match crate::dep_resolver::resolve_with_pins(&graph, &active, offline_root, pins) {
-            Ok(resolution) => Ok((resolution, graph)),
-            Err(boxed) => {
-                let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
-                // A registry dependency with no configured proxy, or a git one
-                // with nothing to fetch it with, is refused: dropped, it would
-                // only resurface as an "unknown module" at its first import
-                // (design.md § 4, Dependencies in 0.8; B-2026-11-13-41).
-                emit_dep_diagnostic(&diag, output, "error");
-                Err(())
-            }
-        }
-    };
-
-    // Lockfile-pin-over-catalog (follow-up (d)/(h)): read an existing
-    // `kara.lock` and prefer its recorded registry-package versions, so a
-    // rebuild reproduces the locked graph rather than drifting to the newest
-    // compatible version. The pins feed BOTH the graph walk (slice 4 — a pinned
-    // registry dep is fetched at exactly that version via `fetch_exact`, even if
-    // since-yanked, and added to the candidate set) and version selection (slice
-    // 2). Best-effort — an absent / unreadable / malformed lockfile yields no
-    // pins (fresh selection), never a build error. Pins bite only where the
-    // registry candidate set is widened; path/git deps ignore them.
-    //
-    // In a workspace (design.md § Workspaces, B-2026-11-13-60) the lock is the
-    // root's, shared by every member: it is solved once over all the members'
-    // requirements, and this package is then resolved pinned to that solution,
-    // so two members always agree on a dependency's version.
-    let workspace = crate::dep_graph::workspace_root_of(root, &loader);
-    let pins = match &workspace {
-        Some(ws_root) => {
-            let wmf =
-                match crate::dep_graph::workspace_lock_manifest(ws_root, &loader, include_dev_deps)
-                {
-                    Ok(m) => m,
-                    Err(e) => {
-                        emit_manifest_error(&e, output);
-                        return Err(());
-                    }
-                };
-            let (joint, _) = solve(ws_root, wmf, &read_lockfile_pins(ws_root, output))?;
-            // `karac resolve` is read-only — it inspects the graph without
-            // rewriting `kara.lock`. Only build / test persist the pin.
-            if persist_lock {
-                persist_lockfile(ws_root, &joint, output);
-            }
-            resolution_pins(&joint)
-        }
-        None => read_lockfile_pins(root, output),
-    };
-    let (resolution, graph) = solve(root, mf, &pins)?;
-    // Warn on any resolved version the catalog marks yanked (follow-up
-    // (h), slice 4). Fresh selection excludes yanked versions, so this
-    // fires only when a `kara.lock` pin lands on a version yanked since
-    // it was recorded — reproducibility kept it, and the user should
-    // hear the pin is now withdrawn.
-    emit_yanked_pin_warnings(&resolution, &graph, output);
-    if persist_lock && workspace.is_none() {
-        persist_lockfile(root, &resolution, output);
-    }
-    Ok(Some(resolution))
+    f(registry_provider, git_provider)
 }
 
 /// The directory whose `dist/` holds the package at `root`'s output: the

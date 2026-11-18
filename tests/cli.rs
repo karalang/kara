@@ -15135,7 +15135,7 @@ name = "solo"
 }
 
 #[test]
-fn test_vendor_registry_dep_skipped_with_note() {
+fn test_vendor_registry_dep_without_proxy_is_refused() {
     let tmp = vendor_tempdir("reg-skip");
     std::fs::write(
         tmp.join("kara.toml"),
@@ -15153,20 +15153,24 @@ http = "1.2"
     let out = karac_bin()
         .arg("vendor")
         .current_dir(&tmp)
+        .env_remove("KARAC_REGISTRY_PROXY")
+        .env_remove("KARAC_REGISTRY_URL")
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     let _ = std::fs::remove_dir_all(&tmp);
 
-    // Registry deps downgrade to a resolver warning; vendor honors that
-    // and walks the (empty) remaining resolution.
+    // Vendor resolves as `karac build` does: with no proxy configured a
+    // registry dependency cannot be fetched, and is refused rather than
+    // skipped with "copied 0 packages" (B-2026-11-13-41; it used to be a
+    // warning and exit 0).
     assert!(
-        out.status.success(),
-        "registry-only vendor should not halt; stderr={stderr}",
+        !out.status.success(),
+        "an unfetchable registry dep must halt vendor; stderr={stderr}",
     );
     assert!(
-        stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
-        "expected the resolver warning to surface; got: {stderr}",
+        stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "expected the resolver error to surface; got: {stderr}",
     );
 }
 
@@ -15373,10 +15377,10 @@ child = { path = "libs/child" }
 
 #[test]
 fn test_build_offline_registry_dep_is_hard_error() {
-    // Outside offline mode, a registry dep downgrades to a warning so the
-    // build proceeds with the path-dep half resolved. In offline mode the
-    // same diagnostic is fatal — vendor-of-registry-deps lands alongside
-    // line 845, so until then registry deps cannot satisfy offline builds.
+    // Offline, a registry dep is read from its `vendor/<name>/` copy, as a
+    // path dep is; one `karac vendor` never copied halts the build with the
+    // per-dep offline diagnostic (it used to be E_REGISTRY_DEP_UNSUPPORTED
+    // even with the copy present).
     let tmp = offline_tempdir("registry-fatal");
     std::fs::create_dir_all(tmp.join("src")).unwrap();
     std::fs::create_dir_all(tmp.join("vendor")).unwrap();
@@ -15405,8 +15409,8 @@ http = "1.2"
         "registry dep in offline mode must halt the build; stderr={stderr}",
     );
     assert!(
-        stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
-        "expected registry-unsupported promoted to error in offline mode; got: {stderr}",
+        stderr.contains("error[E_OFFLINE_VENDOR_ENTRY_MISSING]") && stderr.contains("http"),
+        "expected the missing vendor entry named; got: {stderr}",
     );
 }
 

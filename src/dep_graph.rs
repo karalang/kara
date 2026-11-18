@@ -559,6 +559,28 @@ pub fn build_dep_graph_with_options(
     })
 }
 
+/// Offline, a git or registry dependency is read from the copy
+/// `karac vendor` made at `vendor/<name>/`, as a path dependency is
+/// (design.md § Vendoring: `karac build --offline` reads only `vendor/`).
+/// Online, or for any other source, the spec is unchanged.
+fn offline_vendored(
+    spec: DependencySpec,
+    name: &str,
+    offline_root: Option<&Path>,
+) -> DependencySpec {
+    match (offline_root, spec) {
+        (Some(vendor_root), DependencySpec::Registry { version }) => DependencySpec::Path {
+            path: vendor_root.join(name),
+            version: Some(version),
+        },
+        (Some(vendor_root), DependencySpec::Git { version, .. }) => DependencySpec::Path {
+            path: vendor_root.join(name),
+            version,
+        },
+        (_, spec) => spec,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn visit(
     dir: &Path,
@@ -592,14 +614,14 @@ fn visit(
     let mut derived = BTreeMap::new();
     for (name, spec) in &manifest_doc.dependencies {
         let resolved = deref_workspace(dir, name, spec, workspace_deps)?;
-        derived.insert(name.clone(), resolved);
+        derived.insert(name.clone(), offline_vendored(resolved, name, offline_root));
     }
     if is_root && include_dev_deps {
         for (name, spec) in &manifest_doc.dev_dependencies {
             // A name appearing in both base and dev tables is unusual but
             // allowed — the dev entry wins, matching Cargo's behavior.
             let resolved = deref_workspace(dir, name, spec, workspace_deps)?;
-            derived.insert(name.clone(), resolved);
+            derived.insert(name.clone(), offline_vendored(resolved, name, offline_root));
         }
     }
     derived_deps.insert(dir.to_path_buf(), derived.clone());
@@ -690,8 +712,8 @@ fn visit(
     // Recurse into each registry dep — but only when a provider is
     // configured. Without one, registry deps stay recorded-only and the
     // resolver reports `E_REGISTRY_DEP_UNSUPPORTED`, preserving the
-    // pre-fetch behavior. Offline mode never fetches (a registry dep must
-    // be vendored as a path-dep to build offline), so it is skipped too.
+    // pre-fetch behavior. Offline mode never fetches: a registry dep is read
+    // from its `vendor/` copy as a path dep (`offline_vendored`).
     if let (Some(provider), None) = (registry_provider, offline_root) {
         for (dep_name, spec) in &derived_owned {
             let DependencySpec::Registry { version: req } = spec else {

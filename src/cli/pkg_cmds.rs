@@ -246,7 +246,6 @@ pub(super) fn install_from_path(path: &std::path::Path) {
 
 pub(super) fn cmd_vendor(no_proxy: bool) {
     emit_no_proxy_note(no_proxy);
-    let _ = no_proxy;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -263,72 +262,36 @@ pub(super) fn cmd_vendor(no_proxy: bool) {
         }
     };
 
-    let loader = crate::dep_graph::FsLoader;
-    let graph = match crate::dep_graph::build_dep_graph(&root, mf, &loader) {
-        Ok(g) => g,
-        Err(e) => {
-            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
-            emit_dep_diagnostic(&diag, OutputMode::Text, "error");
-            process::exit(1);
-        }
-    };
-    let active = crate::dep_resolver::active_toolchain_version();
-    let resolution = match crate::dep_resolver::resolve(&graph, &active) {
-        Ok(r) => r,
-        Err(boxed) => {
-            let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
-            let code = boxed.code();
-            let severity = match code {
-                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
-                _ => "error",
-            };
-            emit_dep_diagnostic(&diag, OutputMode::Text, severity);
-            if severity == "error" {
-                process::exit(1);
-            }
-            // Warnings (registry/git unsupported until line 845 ships)
-            // leave an empty resolution — the vendor copy walks zero
-            // path-deps and exits cleanly with the warning above.
-            crate::dep_resolver::Resolution {
+    // Resolve as `karac build` does, through the same registry and git
+    // providers and the `kara.lock` pins, so a git or registry dependency
+    // is fetched and vendored like a path one.
+    let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
+    let resolution =
+        match run_dep_resolution(&root, mf, OutputMode::Text, None, false, no_proxy, false) {
+            Ok(Some(r)) => r,
+            Ok(None) => crate::dep_resolver::Resolution {
                 packages: std::collections::BTreeMap::new(),
-            }
-        }
-    };
+            },
+            Err(()) => process::exit(1),
+        };
 
     let vendor_dir = root.join("vendor");
     let mut copied = 0usize;
-    let mut skipped_non_path = 0usize;
     for (name, pkg) in &resolution.packages {
-        match &pkg.source {
-            crate::dep_resolver::ResolvedSource::Path(src_dir) => {
-                let dest = vendor_dir.join(name);
-                if let Err(e) = copy_dir_recursive(src_dir, &dest) {
-                    eprintln!(
-                        "error[E_VENDOR_COPY_FAILED]: failed to copy `{name}` into `vendor/`: {e}"
-                    );
-                    process::exit(1);
-                }
-                copied += 1;
-            }
-            crate::dep_resolver::ResolvedSource::Root => {
-                // Root is the host project — nothing to vendor.
-            }
-            crate::dep_resolver::ResolvedSource::Registry { .. }
-            | crate::dep_resolver::ResolvedSource::Git { .. } => {
-                // Forward-compat: the fetched copy lands in vendor/ once
-                // line 845 / git fetch ships. For now we observe and report.
-                skipped_non_path += 1;
-            }
+        let src_dir = match &pkg.source {
+            crate::dep_resolver::ResolvedSource::Root => continue,
+            crate::dep_resolver::ResolvedSource::Path(dir)
+            | crate::dep_resolver::ResolvedSource::Registry { dir, .. }
+            | crate::dep_resolver::ResolvedSource::Git { dir, .. } => dir,
+        };
+        let dest = vendor_dir.join(name);
+        if let Err(e) = copy_dir_recursive(src_dir, &dest) {
+            eprintln!("error[E_VENDOR_COPY_FAILED]: failed to copy `{name}` into `vendor/`: {e}");
+            process::exit(1);
         }
+        copied += 1;
     }
 
-    if skipped_non_path > 0 {
-        eprintln!(
-            "note: {skipped_non_path} non-path dependency entr{} skipped: registry and git \
-             vendoring are not in 0.8.",
-            if skipped_non_path == 1 { "y" } else { "ies" }
-        );
-    }
     eprintln!(
         "karac vendor: copied {copied} package{} into {}",
         if copied == 1 { "" } else { "s" },
@@ -350,6 +313,11 @@ pub(super) fn copy_dir_recursive(
     std::fs::create_dir_all(dest)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
+        // A git dependency's checkout carries its repository; the vendored
+        // copy is the source alone.
+        if entry.file_name() == ".git" {
+            continue;
+        }
         let file_type = entry.file_type()?;
         let from = entry.path();
         let to = dest.join(entry.file_name());
@@ -388,7 +356,6 @@ pub(super) fn copy_dir_recursive(
 
 pub(super) fn cmd_update(package: Option<&str>, output: OutputMode, no_proxy: bool) {
     emit_no_proxy_note(no_proxy);
-    let _ = no_proxy;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -428,37 +395,44 @@ pub(super) fn cmd_update(package: Option<&str>, output: OutputMode, no_proxy: bo
     // Unlike cmd_build_project, we *always* run the resolver here even when
     // the manifest declares no deps. The user explicitly asked to refresh
     // the lockfile — honoring that is the whole point of the subcommand.
-    let graph = match crate::dep_graph::build_dep_graph(&root, mf, &loader) {
-        Ok(g) => g,
-        Err(e) => {
-            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
-            emit_dep_diagnostic(&diag, output, "error");
-            process::exit(1);
-        }
-    };
-    let active = crate::dep_resolver::active_toolchain_version();
-    let resolution = match crate::dep_resolver::resolve(&graph, &active) {
-        Ok(r) => r,
-        Err(boxed) => {
-            let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
-            let code = boxed.code();
-            let severity = match code {
-                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
-                _ => "error",
+    // Fetch through the same registry and git providers as `karac build`,
+    // with no `kara.lock` pins: refreshing them is what `update` is for.
+    let registries = (mf.build_registry.clone(), mf.build_registry_proxy.clone());
+    let resolution = with_dep_providers(
+        (registries.0.as_deref(), registries.1.as_deref()),
+        None,
+        no_proxy,
+        |registry_provider, git_provider| {
+            let options = crate::dep_graph::DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider,
+                git_provider,
+                pins: None,
             };
-            emit_dep_diagnostic(&diag, output, severity);
-            if severity == "error" {
-                process::exit(1);
+            let graph =
+                match crate::dep_graph::build_dep_graph_with_options(&root, mf, &loader, options) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+                        emit_dep_diagnostic(&diag, output, "error");
+                        process::exit(1);
+                    }
+                };
+            let active = crate::dep_resolver::active_toolchain_version();
+            match crate::dep_resolver::resolve(&graph, &active) {
+                Ok(r) => r,
+                Err(boxed) => {
+                    // A git or registry dependency that cannot be fetched is
+                    // refused, as `karac build` refuses it (B-2026-11-13-41):
+                    // writing a lock without it would drop its pin.
+                    let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
+                    emit_dep_diagnostic(&diag, output, "error");
+                    process::exit(1);
+                }
             }
-            // Warning: still produce an empty-but-valid lockfile via a
-            // pseudo-resolution. Practically v1.1 paths trip the
-            // path-dep / MSRV branches first; the registry-warn case
-            // surfaces here as a no-op-on-update-but-don't-crash.
-            crate::dep_resolver::Resolution {
-                packages: std::collections::BTreeMap::new(),
-            }
-        }
-    };
+        },
+    );
 
     if let Some(pkg) = package {
         if !validate_update_target(pkg, &resolution, output) {
