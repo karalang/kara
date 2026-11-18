@@ -120,6 +120,15 @@ const UNROLL_FULL_MAX_STATEMENTS: usize = 48;
 /// and at this limit no bench of the 1016 screened for B-2026-10-31-44
 /// changed but those two.
 const UNROLL_FULL_MAX_CALLING_STATEMENTS: usize = 128;
+/// The largest bound, and the most statements, of a loop hinted because
+/// it reads a constant table by its counter ([`const_tables`]): `for (dx,
+/// dy) in MOVES` over a grid's eight knight moves or four directions.
+/// Unrolled, each trip's reads fold to constants, so such a loop may call
+/// anything and build any value; kata 1197's search ran 7.34G instructions
+/// with the loop rolled, 5.09G unrolled (checked Rust's twin: 4.94G),
+/// B-2026-11-18-39. `KARAC_MIR_CONST_ARRAYS=0` leaves these out.
+const UNROLL_TABLE_MAX_BOUND: u128 = 8;
+const UNROLL_TABLE_MAX_STATEMENTS: usize = 128;
 
 /// The latches of `body`'s small counting loops, whose back edges codegen
 /// marks `llvm.loop.unroll.full`: a guard `i < K` or `i <= K` counting to
@@ -144,6 +153,11 @@ pub fn unroll_full_latches<'b>(
     let idom = dominators(body, &preds);
     let loops = natural_loops(body, &preds, &idom);
     let writes = local_writes(body);
+    let tables = if std::env::var("KARAC_MIR_CONST_ARRAYS").as_deref() == Ok("0") {
+        vec![false; body.locals.len()]
+    } else {
+        const_tables(body, &writes)
+    };
     let scalar = |t: super::ty::Ty| unroll_scalar(tys, t);
     for lp in &loops {
         let inner = loops
@@ -152,6 +166,37 @@ pub fn unroll_full_latches<'b>(
         if inner {
             continue;
         }
+        let in_loop = || {
+            lp.blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, &b)| b)
+                .map(|(b, _)| &body.blocks[b])
+        };
+        // A loop over a constant table: any call that returns, any
+        // statement, no drop.
+        let table_loop = in_loop().any(|data| {
+            data.statements.iter().any(|s| match &s.kind {
+                StatementKind::Assign(_, Rvalue::Use(Operand::Copy(p) | Operand::Move(p))) => {
+                    tables[p.local.index()]
+                        && matches!(p.projection.first(), Some(ProjElem::Index(_)))
+                }
+                _ => false,
+            })
+        }) && in_loop().all(|data| {
+            matches!(
+                &data.terminator.kind,
+                TerminatorKind::Goto { .. }
+                    | TerminatorKind::SwitchInt { .. }
+                    | TerminatorKind::Abort { .. }
+                    | TerminatorKind::Unreachable
+                    | TerminatorKind::Call {
+                        target: Some(_),
+                        ..
+                    }
+            )
+        }) && in_loop().map(|d| d.statements.len()).sum::<usize>()
+            <= UNROLL_TABLE_MAX_STATEMENTS;
         let mut statements = 0;
         let mut calls = false;
         let cheap = lp
@@ -217,9 +262,13 @@ pub fn unroll_full_latches<'b>(
         } else {
             UNROLL_FULL_MAX_STATEMENTS
         };
-        if !cheap || statements > max {
+        let bound_max = if cheap && statements <= max {
+            UNROLL_FULL_MAX_BOUND
+        } else if table_loop {
+            UNROLL_TABLE_MAX_BOUND
+        } else {
             continue;
-        }
+        };
         let Some(chain) = entry_chain(body, &preds, lp) else {
             continue;
         };
@@ -235,7 +284,7 @@ pub fn unroll_full_latches<'b>(
             };
             let nonneg = |v: u128| !signed || mask(v, bits) >> (bits - 1) == 0;
             // `i <= K` counts to `K + 1`.
-            if !nonneg(k) || mask(k, bits) + u128::from(le) > UNROLL_FULL_MAX_BOUND {
+            if !nonneg(k) || mask(k, bits) + u128::from(le) > bound_max {
                 return false;
             }
             if writes.other[i.index()] || writes.assigns[i.index()].len() != 2 {
@@ -255,13 +304,83 @@ pub fn unroll_full_latches<'b>(
                 let c = mask(c, bits);
                 c != 0 && nonneg(c) && lp.latches.iter().all(|&t| dominates(&idom, cb, t))
             });
-            init && step
+            // A `for` over an array steps its index with an unchecked add.
+            let plain = table_loop
+                && plain_increment(body, &writes, i).is_some_and(|(cb, c)| {
+                    let c = mask(c, bits);
+                    c != 0 && nonneg(c) && lp.latches.iter().all(|&t| dominates(&idom, cb, t))
+                });
+            init && (step || plain)
         });
         if counted {
             out.extend(lp.latches.iter().copied());
         }
     }
     out
+}
+
+/// The block of `l = Add(copy l, const c)` and `c`, when that is one of
+/// `l`'s writes.
+fn plain_increment(body: &Body, writes: &Writes, l: Local) -> Option<(usize, u128)> {
+    writes.assigns[l.index()].iter().find_map(|&(bi, si)| {
+        match &body.blocks[bi].statements[si].kind {
+            StatementKind::Assign(_, Rvalue::BinaryOp(BinOp::Add, a, b)) => match (a, b) {
+                (Operand::Copy(p), Operand::Const(k)) | (Operand::Const(k), Operand::Copy(p))
+                    if *p == Place::local(l) =>
+                {
+                    match k.kind {
+                        ConstKind::Scalar(c) => Some((bi, c)),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    })
+}
+
+/// The locals of `body` that hold a constant table: written once, by an
+/// array literal whose every element is a constant, or a tuple, array or
+/// struct of them built in a local written once and nowhere else (how a
+/// `const MOVES: Array[(i64, i64), 8]` reaches its use). Codegen builds
+/// such a literal from a constant global (`backend/mir/body.rs`'s
+/// `const_array_global`), so LLVM folds what a trip reads from it.
+fn const_tables(body: &Body, writes: &Writes) -> Vec<bool> {
+    fn constant(body: &Body, writes: &Writes, op: &Operand, depth: u32) -> bool {
+        match op {
+            Operand::Const(c) => matches!(c.kind, ConstKind::Scalar(_) | ConstKind::Float(_)),
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() && depth < 4 => {
+                literal(body, writes, p.local)
+                    .is_some_and(|ops| ops.iter().all(|o| constant(body, writes, o, depth + 1)))
+            }
+            _ => false,
+        }
+    }
+    fn literal<'b>(body: &'b Body, writes: &Writes, l: Local) -> Option<&'b [Operand]> {
+        let i = l.index();
+        if writes.other[i] || writes.assigns[i].len() != 1 || i <= body.arg_count {
+            return None;
+        }
+        let (bi, si) = writes.assigns[i][0];
+        match &body.blocks[bi].statements[si].kind {
+            StatementKind::Assign(_, Rvalue::Aggregate(_, ops)) => Some(ops),
+            _ => None,
+        }
+    }
+    (0..body.locals.len())
+        .map(|i| {
+            let (bi, si) = match writes.assigns[i].as_slice() {
+                [one] => *one,
+                _ => return false,
+            };
+            matches!(
+                &body.blocks[bi].statements[si].kind,
+                StatementKind::Assign(_, Rvalue::Aggregate(AggregateKind::Array(_), ops))
+                    if ops.len() >= 2 && ops.iter().all(|o| constant(body, writes, o, 0))
+            ) && !writes.other[i]
+        })
+        .collect()
 }
 
 /// The most statements a loop hinted by [`unroll_partial_latches`] may hold:

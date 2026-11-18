@@ -1924,6 +1924,13 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             AggregateKind::Array(el) => {
                 let size = self.layout(*el)?.size;
+                if let Some(g) = self.const_array_global(ty, ops)? {
+                    let total = self.layout(ty)?.size;
+                    self.builder
+                        .build_memcpy(dst, 1, g, 8, self.i64(total))
+                        .map_err(e)?;
+                    return Ok(());
+                }
                 // A repeat literal (`[0; 65536]`) comes as N copies of one
                 // place: a loop, not N stores.
                 if ops.len() > 16
@@ -1969,6 +1976,201 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(dst, h.into())
             }
         }
+    }
+
+    /// A private constant global holding the array literal `ty = [ops]`
+    /// when every element is a constant: a scalar, or a tuple, array or
+    /// plain struct of them built in a temporary just before (`_5 = (const
+    /// 1, const 2); ...; _4 = [copy _5, ...]`, how `const MOVES: Array[(i64,
+    /// i64), 8]` reaches a use). Copied from the global, the literal is one
+    /// `memcpy`, and LLVM, seeing the slot written only by a copy of
+    /// constant memory, reads the global in its place: the loop over it
+    /// then folds each element to a constant once unrolled, where N stores
+    /// per use and loads of unknown values were left before (kata 1197's
+    /// `for (dx, dy) in MOVES`, B-2026-11-18-39). The global is an array of
+    /// the narrowest scalar any element has, so LLVM's unroller can read an
+    /// `i64` element out of an `[N x i64]` while weighing the loop.
+    fn const_array_global(&self, ty: Ty, ops: &[Operand]) -> R<Option<PointerValue<'ctx>>> {
+        if ops.len() < 2 || std::env::var("KARAC_MIR_CONST_ARRAYS").as_deref() == Ok("0") {
+            return Ok(None);
+        }
+        let Some(stmt) = self.aggregate_index(ops) else {
+            return Ok(None);
+        };
+        let kind = AggregateKind::Array(match self.tys.kind(ty) {
+            TyKind::Array(el, _) => el,
+            _ => return Ok(None),
+        });
+        let mut leaves = Vec::new();
+        if !self.const_leaves(ty, &kind, ops, 0, stmt, 0, &mut leaves)? {
+            return Ok(None);
+        }
+        let total = self.layout(ty)?.size;
+        let Some(w) = leaves.iter().map(|l| l.1).min() else {
+            return Ok(None);
+        };
+        if !matches!(w, 1 | 2 | 4 | 8)
+            || total % w != 0
+            || leaves.iter().any(|l| l.0 % w != 0 || l.1 % w != 0)
+        {
+            return Ok(None);
+        }
+        let mut bytes = vec![0u8; total as usize];
+        for (off, size, bits) in &leaves {
+            let b = bits.to_le_bytes();
+            bytes[*off as usize..(*off + *size) as usize].copy_from_slice(&b[..*size as usize]);
+        }
+        let it = match w {
+            1 => self.llcx.i8_type(),
+            2 => self.llcx.i16_type(),
+            4 => self.llcx.i32_type(),
+            _ => self.llcx.i64_type(),
+        };
+        let words: Vec<_> = bytes
+            .chunks(w as usize)
+            .map(|c| {
+                let mut v = [0u8; 8];
+                v[..c.len()].copy_from_slice(c);
+                it.const_int(u64::from_le_bytes(v), false)
+            })
+            .collect();
+        let data = it.const_array(&words);
+        let g = self.module.add_global(data.get_type(), None, "const.array");
+        g.set_initializer(&data);
+        g.set_constant(true);
+        g.set_linkage(Linkage::Private);
+        g.set_unnamed_addr(true);
+        g.set_alignment(8);
+        Ok(Some(g.as_pointer_value()))
+    }
+
+    /// The index in the block being lowered of the aggregate statement
+    /// whose operands are `ops`.
+    fn aggregate_index(&self, ops: &[Operand]) -> Option<usize> {
+        let body = self.body?;
+        let block = body.blocks.get(self.cur_block)?;
+        block.statements.iter().position(|s| {
+            matches!(&s.kind, StatementKind::Assign(_, Rvalue::Aggregate(_, o))
+                if std::ptr::eq(o.as_ptr(), ops.as_ptr()))
+        })
+    }
+
+    /// Collects the scalar leaves (offset, size, little-endian bits) of the
+    /// aggregate `ty = kind(ops)` placed at `base`; `false` when one is not
+    /// a constant. `before` is the statement index in the block being
+    /// lowered that a temporary's one write must precede.
+    #[allow(clippy::too_many_arguments)]
+    fn const_leaves(
+        &self,
+        ty: Ty,
+        kind: &AggregateKind,
+        ops: &[Operand],
+        base: u64,
+        before: usize,
+        depth: u32,
+        out: &mut Vec<(u64, u64, u128)>,
+    ) -> R<bool> {
+        if depth > 4 {
+            return Ok(false);
+        }
+        for (i, op) in ops.iter().enumerate() {
+            let off = match kind {
+                AggregateKind::Array(el) => self.layout(*el)?.size * i as u64,
+                AggregateKind::Tuple => self.field_offset(ty, None, i as u32)?,
+                AggregateKind::Adt { ty: aty, .. }
+                    if layout::enum_tag(self.tys, *aty).is_none()
+                        && !layout::boxed_field(self.tys, *aty, None, i as u32) =>
+                {
+                    self.field_offset(ty, None, i as u32)?
+                }
+                _ => return Ok(false),
+            };
+            let at = base + off;
+            match op {
+                Operand::Const(c) => {
+                    let size = self.layout(c.ty)?.size;
+                    let bits = match (&c.kind, self.tys.kind(c.ty)) {
+                        (ConstKind::Scalar(v), TyKind::Int(_) | TyKind::Bool | TyKind::Char) => *v,
+                        (ConstKind::Float(b), TyKind::Float(FloatTy::F64)) => u128::from(*b),
+                        (ConstKind::Float(b), TyKind::Float(FloatTy::F32)) => {
+                            u128::from((f64::from_bits(*b) as f32).to_bits())
+                        }
+                        _ => return Ok(false),
+                    };
+                    match size {
+                        1 | 2 | 4 | 8 => {
+                            out.push((at, size, bits & ((1u128 << (size * 8)) - 1)));
+                        }
+                        // A 16-byte leaf is two 8-byte ones.
+                        16 => {
+                            out.push((at, 8, bits & u128::from(u64::MAX)));
+                            out.push((at + 8, 8, bits >> 64));
+                        }
+                        _ => return Ok(false),
+                    }
+                }
+                Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                    let Some((k, o)) = self.single_aggregate_def(p.local, before) else {
+                        return Ok(false);
+                    };
+                    let lty = self.place_type(p)?;
+                    if !self.const_leaves(lty, k, o, at, before, depth + 1, out)? {
+                        return Ok(false);
+                    }
+                }
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    /// The aggregate that is local `l`'s only write, when that write is a
+    /// statement of the block being lowered before `before`, `l` is no
+    /// parameter, and nothing borrows it or takes a call's result in it.
+    fn single_aggregate_def(
+        &self,
+        l: Local,
+        before: usize,
+    ) -> Option<(&AggregateKind, &[Operand])> {
+        let body = self.body?;
+        if (l.0 as usize) <= body.arg_count {
+            return None;
+        }
+        let mut found = None;
+        for (bi, b) in body.blocks.iter().enumerate() {
+            for (si, s) in b.statements.iter().enumerate() {
+                match &s.kind {
+                    StatementKind::Assign(p, rv) => {
+                        if p.local == l {
+                            match rv {
+                                Rvalue::Aggregate(k, o)
+                                    if p.projection.is_empty()
+                                        && found.is_none()
+                                        && bi == self.cur_block
+                                        && si < before =>
+                                {
+                                    found = Some((k, o.as_slice()));
+                                }
+                                _ => return None,
+                            }
+                        }
+                        if let Rvalue::Ref(_, q) = rv {
+                            if q.local == l {
+                                return None;
+                            }
+                        }
+                    }
+                    StatementKind::SetDiscriminant(p, _) if p.local == l => return None,
+                    _ => {}
+                }
+            }
+            if let TerminatorKind::Call { destination, .. } = &b.terminator.kind {
+                if destination.local == l {
+                    return None;
+                }
+            }
+        }
+        found
     }
 
     /// Writes variant `v` of the ADT `ty` (plain, or the body of a

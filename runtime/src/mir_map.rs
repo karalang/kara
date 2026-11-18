@@ -293,6 +293,8 @@ impl MirMap {
     }
 
     /// Rebuilds `index` with `cells` cells over the live slots.
+    #[cold]
+    #[inline(never)]
     fn reindex(&mut self, cells: usize) {
         if cells != self.ncells {
             self.free_cells();
@@ -651,6 +653,8 @@ impl MirMap {
     }
 
     /// Closes every hole, keeping the order of the live entries.
+    #[cold]
+    #[inline(never)]
     fn compact(&mut self) {
         self.forget();
         let es = self.entry_size;
@@ -681,6 +685,14 @@ impl MirMap {
         if self.slots < self.cap {
             return;
         }
+        self.grow_room();
+    }
+
+    /// [`Self::grow`]'s doubling, out of line and cold, so the insert it
+    /// sits in keeps fewer registers to save (B-2026-11-17-134).
+    #[cold]
+    #[inline(never)]
+    fn grow_room(&mut self) {
         let cap = (self.cap * 2).max(INLINE_SLOTS);
         let es = self.entry_size;
         let (old_at, new_at) = (round8(self.cap * es), round8(cap * es));
@@ -1009,8 +1021,14 @@ pub unsafe extern "C" fn karac_mir_map_like(h: *const MirMap, entry_size: u64) -
 
 /// Returns the new entry's slot.
 ///
+/// In line in each caller: [`karac_mir_map_insert_hv`], the one compiled
+/// code calls for a hashed table, then knows there is a hash and no `cmp`,
+/// and pays no second call's prologue (kata 220 inserts 13M times,
+/// B-2026-11-17-134).
+///
 /// # Safety
 /// As [`karac_mir_map_insert`], with `hv` the hash for a hashed table.
+#[inline(always)]
 unsafe fn insert(
     hp: *mut *mut MirMap,
     entry_size: usize,
@@ -1279,20 +1297,43 @@ pub unsafe extern "C" fn karac_mir_map_remove_entry(h: *mut MirMap, at: *const u
         }
         return;
     }
-    let s = (at as usize - m.buf as usize) / m.entry_size.max(1);
+    let es = m.entry_size.max(1);
+    let off = at as usize - m.buf as usize;
+    // An entry of a power-of-two size (an `i64` key and value is 16
+    // bytes) finds its slot by a shift, not a division.
+    let s = if es.is_power_of_two() {
+        off >> es.trailing_zeros()
+    } else {
+        off / es
+    };
     // SAFETY: as above.
     unsafe { remove_slot(m, s, out) }
 }
 
 /// Moves the live entry in slot `s` to `out`, as [`karac_mir_map_remove`].
+/// In line in its two callers, as [`insert`] is.
 ///
 /// # Safety
 /// As [`karac_mir_map_remove`], with `s` a live slot.
+#[inline(always)]
 unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
     let es = m.entry_size;
     m.forget();
-    // SAFETY: as above.
-    unsafe { std::ptr::copy_nonoverlapping(m.slot_ptr(s), out, es) };
+    // SAFETY: as above. A word or two-word entry as one move, as `insert`
+    // writes one, rather than a `memcpy` call of a size the compiler
+    // cannot see.
+    unsafe {
+        let from = m.slot_ptr(s);
+        match es {
+            8 => out
+                .cast::<u64>()
+                .write_unaligned(from.cast::<u64>().read_unaligned()),
+            16 => out
+                .cast::<u128>()
+                .write_unaligned(from.cast::<u128>().read_unaligned()),
+            _ => std::ptr::copy_nonoverlapping(from, out, es),
+        }
+    }
     if !m.hashed {
         // SAFETY: as above; a sorted table has no holes.
         unsafe {

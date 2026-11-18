@@ -1,0 +1,9 @@
+source = "B-2026-11-18-39"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["const"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Constants, each use of a constant is a fresh value: constant array tables of tuples, scalars of several widths, floats, chars, nested arrays and structs read the same on every backend, and a changed copy leaves the constant as it was (B-2026-11-18-39: the compiled backend builds such a literal from a constant global and unrolls a short loop over one). Expected values checked by hand."

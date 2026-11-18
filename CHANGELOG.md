@@ -1503,6 +1503,24 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- An array literal whose elements are all constants (`const MOVES:
+  Array[(i64, i64), 8] = [...]` at its use) is copied from a constant
+  global rather than stored element by element, and a loop of at most
+  eight trips that reads such a table by its index is unrolled in full
+  whatever it calls, so each trip reads constants. A `VecDeque.push_back`
+  whose ring is full hands the runtime a copy of the element, so the
+  element itself stays in registers on the in-line path. Kata 1197's
+  knight-move search went from 1.49x checked Rust's instructions to 1.02x
+  (1.03x its wall time on x86); over the 1,215 kata benches, 70 build
+  differently, none prints differently, instructions fall by up to 0.69x
+  (1197) and 0.78x (808), and the worst is 1.001x
+  (B-2026-11-18-39). `KARAC_MIR_CONST_ARRAYS=0` turns the first two off.
+- A hashed `Map` or `Set` insert and removal cost fewer instructions: the
+  runtime's insert and removal are in line in their entry points, a
+  two-word entry is moved out as one value rather than through `memcpy`,
+  a removal finds a power-of-two entry's slot by a shift, and growth and
+  rebuilds are out of line. Kata 220 went from 11.71G instructions to
+  11.11G (B-2026-11-17-134).
 - A read-only walk over a `shared` value's `mut` vector field
   (`for child in node.children.iter()`) in a body that writes nothing
   through a `shared` handle checks the field's borrow flag once instead of

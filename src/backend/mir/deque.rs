@@ -157,10 +157,21 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 self.store(self.offset(q, 16)?, n.into())?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
+                // The runtime takes a copy of the element, never the
+                // element's own slot: a slot whose address goes to a call
+                // stays in memory, so the fast path's copy out of it was
+                // two 8-byte stores read back as one 16-byte load, which
+                // the store buffer cannot forward (kata 1197's queue of
+                // `(i64, i64, i64)`, B-2026-11-18-39). Copied, the slot is
+                // only read, and LLVM keeps the element in registers.
                 self.builder.position_at_end(slow);
+                let tmp = self.entry_slot(size as u32, "pushed")?;
+                self.builder
+                    .build_memcpy(tmp, 1, x, 1, self.i64(size))
+                    .map_err(e)?;
                 self.rt(
                     "deque_push",
-                    &[q.into(), x.into(), self.i64(size).into(), flag.into()],
+                    &[q.into(), tmp.into(), self.i64(size).into(), flag.into()],
                 )?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
