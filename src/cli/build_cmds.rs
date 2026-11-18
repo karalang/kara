@@ -2426,6 +2426,13 @@ pub(super) fn run_dep_resolution(
             // so two members always agree on a dependency's version.
             let workspace = crate::dep_graph::workspace_root_of(root, &loader);
             let pins = match &workspace {
+                // Offline, the joint solve cannot run: its manifest names the
+                // members as path dependencies, which offline mode would look
+                // up in `vendor/`, and it would rewrite the shared lock with
+                // vendored git and registry dependencies as path ones. The
+                // lock's recorded pins stand for it, and the lock is left as
+                // the online resolution wrote it (B-2026-11-18-29).
+                Some(ws_root) if offline_root.is_some() => read_lockfile_pins(ws_root, output),
                 Some(ws_root) => {
                     let wmf = match crate::dep_graph::workspace_lock_manifest(
                         ws_root,

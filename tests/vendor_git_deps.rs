@@ -155,3 +155,55 @@ fn vendor_copies_a_git_dependency_and_offline_build_reads_it() {
         "offline, kara.lock keeps the git pin"
     );
 }
+
+#[test]
+fn offline_build_of_a_workspace_member_reads_vendor_and_keeps_the_shared_lock() {
+    // B-2026-11-18-29: offline, the workspace's joint solve looked its own
+    // members up in `vendor/` (E_OFFLINE_VENDOR_ENTRY_MISSING for `app`
+    // itself), and would have rewritten the shared lock.
+    let root = scratch("workspace");
+    let Some(app) = project(&root) else {
+        eprintln!("skipping: git not available");
+        return;
+    };
+    write(
+        &root.join("kara.toml"),
+        "[workspace]\nmembers = [\"app\"]\n",
+    );
+    let cache = root.join("cache");
+    let update = karac(&["update"], &app, &cache);
+    let vendor = karac(&["vendor"], &app, &cache);
+    std::fs::remove_dir_all(root.join("dep")).unwrap();
+    let _ = std::fs::remove_dir_all(&cache);
+    let lock_before = std::fs::read_to_string(root.join("kara.lock")).unwrap_or_default();
+    let resolve = karac(&["resolve", "--offline"], &app, &cache);
+    #[cfg(feature = "llvm")]
+    let built = {
+        let build = karac(&["build", "--offline"], &app, &cache);
+        let ran = Command::new(root.join("dist/native/app")).output();
+        (build, ran)
+    };
+    let lock_after = std::fs::read_to_string(root.join("kara.lock")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(update.status.success(), "{}", text(&update));
+    assert!(vendor.status.success(), "{}", text(&vendor));
+    assert!(resolve.status.success(), "{}", text(&resolve));
+    assert!(
+        !text(&resolve).contains("E_OFFLINE_VENDOR_ENTRY_MISSING"),
+        "{}",
+        text(&resolve)
+    );
+    #[cfg(feature = "llvm")]
+    {
+        let (build, ran) = built;
+        assert!(build.status.success(), "{}", text(&build));
+        let ran = ran.expect("the offline build's binary runs");
+        assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "42");
+    }
+    assert!(lock_before.contains("git+file://"), "{lock_before}");
+    assert_eq!(
+        lock_before, lock_after,
+        "offline, the workspace lock stands"
+    );
+}
