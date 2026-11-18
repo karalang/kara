@@ -1,0 +1,9 @@
+unsafe extern "C" {
+    fn cos(x: f64) -> f64;
+}
+
+fn is_one() -> bool {
+    unsafe { cos(0.0) == 1.0 }
+}
+
+fn main() {}

@@ -1,0 +1,9 @@
+unsafe extern "C" {
+    type Handle;
+}
+
+unsafe extern "C" {
+    type Handle;
+}
+
+fn main() {}

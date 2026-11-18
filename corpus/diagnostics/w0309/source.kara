@@ -1,0 +1,5 @@
+fn main() {
+    let n: i64 = 5;
+    let m = n as i64;
+    println(m);
+}

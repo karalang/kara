@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 503 |
+| diagnostics | 504 |
 | false-positive | 263 |
 | missing-feature | 201 |
 | perf | 187 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 631 |
 | mir-llvm | 289 |
 | mir | 253 |
-| cli | 197 |
+| cli | 198 |
 | parser | 117 |
 | ownership | 108 |
 | runtime | 88 |
@@ -137,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-33 | 2026-11-18 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-exhaustive (E0205 "pattern `_` not covered") though it covers every value | — |
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
 | B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
+| B-2026-11-18-36 | 2026-11-18 | cli | low | The `ffi_float_eq` lint (W0318) never fired in `karac check`: it walks the lowered tree, where every `==` is already a trait call | — |
 
 ### Relocated
 

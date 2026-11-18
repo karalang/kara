@@ -1,0 +1,15 @@
+shared struct Parent {
+    name: String,
+    mut kids: Vec[Child],
+}
+
+shared struct Child {
+    mut parent: weak Parent,
+}
+
+fn main() {
+    let p = Parent { name: "root".to_string(), kids: [] };
+    p.kids.push(Child { parent: p });
+    let k = p.kids[0];
+    println(k.parent.unwrap().name);
+}

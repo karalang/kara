@@ -347,9 +347,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              `s: ref S`) mints an implicit copy — the heap is allocated again and any \
              user `Drop` body runs a second time, neither of which is visible at the \
              read. `.clone()` says the same thing out loud where the type has one. \
-             design.md's dereference rule makes this an error in principle, and the \
-             sibling `E_INDEX_MOVE_NON_COPY` already enforces it for `v[i]`; it stays a \
-             warning here until `ref <place>` gives it a zero-cost fix-it.",
+             A core rule (core-semantics.md §4.1), so always an error.",
     },
     LintInfo {
         name: "for_element_drop_copy",
@@ -362,7 +360,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              the collection. A by-value call argument is not covered: a discarding callee \
              receives it without a copy. Write `.clone()` where the type has one, or \
              use the element in place. `String` and plain-struct elements are left to \
-             `borrow_projection_copy`, which only warns.",
+             `borrow_projection_copy`. A core rule, so always an error.",
     },
     LintInfo {
         name: "partial_move_of_drop_enum",
@@ -374,8 +372,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              bound and still reaches its destructor, so whether its drop body runs would \
              depend on what the arm does with the payload. It fires only where the payload \
              is consumed; reading it in place is fine. Clone the payload, or match on a \
-             reference and use it in place; `#[allow(partial_move_of_drop_enum)]` on the \
-             enclosing item opts out.",
+             reference and use it in place. A core rule, so always an error.",
     },
     LintInfo {
         name: "partial_move_of_drop_struct",
@@ -389,7 +386,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              `match` tail, a call or method argument, a struct, tuple or array literal \
              element, `Vec.push`, and a `Some` / `Ok` / `Err` payload); the `w.r` in \
              `println(w.r.s)` moves nothing and is not reported. Clone the field, or borrow \
-             it; `#[allow(partial_move_of_drop_struct)]` on the enclosing item opts out.",
+             it. A core rule, so always an error.",
     },
     LintInfo {
         name: "chained_field_receiver",

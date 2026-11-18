@@ -3146,23 +3146,23 @@ pub(super) fn lint_entries_for_compile_path(
         let is_err = d.level == crate::unsafe_lint::LintLevel::Error;
         out.push((d.lint_name, is_err, d.message, d.span));
     }
-    for d in crate::ffi_lint::check_ffi_float_eq(&pipeline.parsed.program, &pipeline.lint_overrides)
-    {
-        let is_err = d.level == crate::ffi_lint::LintLevel::Error;
-        out.push(("ffi_float_eq".to_string(), is_err, d.message, d.span));
-    }
     // `not x == y` reads as `(not x) == y` (design.md § 6); the lint had no
-    // caller (B-2026-11-05-23). It reads OPERATORS, and by now
-    // `lowering::lower_program` has rewritten every `==` and `not` in
-    // `pipeline.parsed` into a trait call, so it walks a fresh parse of the
-    // program's own text instead. The library appended after it is not the
-    // user's to parenthesize.
+    // caller (B-2026-11-05-23). Both it and `ffi_float_eq` read OPERATORS,
+    // and by now `lowering::lower_program` has rewritten every `==` and
+    // `not` in `pipeline.parsed` into a trait call, so they walk a fresh
+    // parse of the program's own text instead (`ffi_float_eq` never fired
+    // on the lowered tree: B-2026-11-18-36). The library appended after it
+    // is not the user's to parenthesize.
     let user_end = pipeline
         .parsed
         .program
         .library_start
         .unwrap_or(source.len());
     let operators = crate::parse_shared(source.get(..user_end).unwrap_or(source));
+    for d in crate::ffi_lint::check_ffi_float_eq(&operators.program, &pipeline.lint_overrides) {
+        let is_err = d.level == crate::ffi_lint::LintLevel::Error;
+        out.push(("ffi_float_eq".to_string(), is_err, d.message, d.span));
+    }
     for d in crate::logical_lint::check_ambiguous_not_comparison(
         &operators.program,
         &pipeline.lint_overrides,

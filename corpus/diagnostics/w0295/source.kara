@@ -1,0 +1,7 @@
+fn main() {
+    if let n = 5 {
+        println(n);
+    } else {
+        println(0);
+    }
+}

@@ -1,0 +1,7 @@
+struct Map {
+    size: i64,
+}
+
+fn main() {
+    println(Map { size: 1 }.size);
+}

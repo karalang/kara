@@ -4168,6 +4168,170 @@ const CODE_PROSE: &[(&str, &str)] = &[
          Workspaces). Declare the dependency's version or path directly, or \
          add the package to a workspace's `members`.",
     ),
+    // B-2026-11-16-303 W batch: the warning codes that had only their class
+    // paragraph.
+    (
+        "W0152",
+        "A field of a type that derives `Serialize` or `Deserialize` is a \
+         float (design.md § `Serialize` and `Deserialize`). JSON has no \
+         encoding for NaN, and binary formats carry IEEE bits that other \
+         decoders may read differently, so a round trip may not preserve \
+         NaN or a negative zero. If the values are always finite this is \
+         fine: `#[allow(float_in_serialized_type)]` on the type says so. \
+         Otherwise store a fixed-point integer, or a string.",
+    ),
+    (
+        "W0237",
+        "A `match` arm can never be chosen, because the arms before it \
+         already cover every value it matches (design.md § Pattern \
+         exhaustiveness). Often a wildcard `_` or a binding arm was written \
+         too early. Move the specific arm above the general one, or delete \
+         it.",
+    ),
+    (
+        "W0238",
+        "A `match` on a refinement type whose domain is too wide to \
+         enumerate (more values than the exhaustiveness checker lists), so \
+         the compiler cannot prove the arms cover it and requires a \
+         wildcard arm. The refinement is an experimental feature \
+         (docs/deferred.md § Refinement Types). Add `_ =>`, or use an \
+         `enum` if the set of cases is meant to be closed.",
+    ),
+    (
+        "W0244",
+        "A lint attribute (`#[allow(..)]`, `#[warn(..)]`, `#[deny(..)]`, \
+         `#[expect(..)]`) names a lint that does not exist, so it does \
+         nothing (design.md § Lint levels). Check the spelling against \
+         `karac lint --list`.",
+    ),
+    (
+        "W0245",
+        "A deprecated API is used (design.md § `#[deprecated]`). The \
+         message names the replacement, and `karac fix` applies it when it \
+         is mechanical. A deprecated item becomes an error in a later \
+         release; `#[allow(deprecated)]` on the enclosing item silences it \
+         until then.",
+    ),
+    (
+        "W0246",
+        "A public `...Error` enum in the standard library lacks \
+         `#[non_exhaustive]` (design.md § `#[non_exhaustive]`). It is \
+         reported while compiling the library itself: an error enum without \
+         the attribute could not gain a variant without breaking every \
+         `match` on it. A program does not see it.",
+    ),
+    (
+        "W0249",
+        "A `#[expect(lint)]` attribute's lint did not fire anywhere in its \
+         scope (design.md § Lint levels). `expect` is an `allow` that also \
+         checks the lint still has something to suppress. The code was \
+         fixed, so delete the attribute, or it sits on the wrong item, so \
+         move it.",
+    ),
+    (
+        "W0255",
+        "An item marked `#[unstable]` is used: its API may change before \
+         1.0 (design.md § Attributes, `#[unstable]`). The message names the \
+         item and any note. Opt in with `#[allow(unstable_api)]` on the \
+         enclosing item, or for the whole package with \
+         `[lints].allow_unstable_api = true` in `kara.toml`.",
+    ),
+    (
+        "W0259",
+        "The parent code of three lints that are checked on the whole \
+         program after type checking: `undocumented_unsafe` (W0317), \
+         `ffi_float_eq` (W0318) and `ambiguous_not_comparison` (W0319). A \
+         diagnostic reports its lint's own code in `code`, and this one in \
+         `parent_code`. `karac explain` the code in `code` for the specific \
+         case.",
+    ),
+    (
+        "W0278",
+        "The result of a `#[must_use]` function is discarded (design.md § \
+         `#[must_use]`). Its author marked the value as one that should not \
+         be ignored: an error, a handle, a computed answer. Use it, or \
+         write `let _ = f();` to discard it on purpose.",
+    ),
+    (
+        "W0280",
+        "A numeric literal carries the suffix of the type it would have \
+         anyway, such as `5i64` (an integer literal is `i64` by default) or \
+         `1.0f64` (design.md § Numeric literals). The suffix says nothing. \
+         `karac fix` removes it.",
+    ),
+    (
+        "W0282",
+        "A declaration takes the name of a prelude type, such as `struct \
+         Map` or `enum Option` (docs/library/README.md § The prelude). It \
+         is legal, but the built-in behaviour keyed on that name (literal \
+         syntax, methods, the compiler's knowledge of the type) no longer \
+         applies to it. Rename the type unless the shadowing is meant.",
+    ),
+    (
+        "W0290",
+        "A function's return type is a function or closure type followed by \
+         `with ...`, as in `-> Fn() -> i64 with reads(Clock)`. The clause \
+         belongs to the outer function, not to the returned closure, whose \
+         effects are left open (design.md § Function types and kinds). \
+         Write `-> (Fn() -> i64 with reads(Clock))` to give the clause to \
+         the closure, or `-> (Fn() -> i64) with reads(Clock)` to keep it \
+         the function's and say so.",
+    ),
+    (
+        "W0291",
+        "The parent code of the two cast lints: `redundant_cast` (W0309), a \
+         cast to the type the value already has, and `lossless_cast` \
+         (W0310), a widening cast that happens implicitly where it stands. \
+         A diagnostic reports its lint's own code in `code`, and this one \
+         in `parent_code`.",
+    ),
+    (
+        "W0293",
+        "A type alias puts a bound on its parameter that the aliased type \
+         already requires, as in `type Ranked[T: Ord] = SortedMap[T, i32]`, \
+         where `SortedMap` needs `T: Ord` itself (design.md § Type \
+         aliases). The bound repeats what the compiler enforces anyway. \
+         Remove it, or `#[allow(redundant_alias_bound)]` if it is there for \
+         the reader.",
+    ),
+    (
+        "W0294",
+        "`.unwrap()` is called on a `weak` read, which is `None` once the \
+         referent is gone (design.md § Cycles and `weak`). Unwrapping \
+         states that the referent is alive at this point without saying \
+         why. Write the invariant as `.expect(\"...\")`, which `karac fix` \
+         does, or handle the `None`.",
+    ),
+    (
+        "W0295",
+        "The parent code of the style lints, among them `unused_mut` \
+         (W0301), `irrefutable_let_pattern` (W0302) and `needless_return` \
+         (W0306). A diagnostic reports its lint's own code in `code`, and \
+         this one in `parent_code`. `karac explain` the code in `code` for \
+         the specific lint.",
+    ),
+    (
+        "W0296",
+        "A doc comment (`///`) is attached to something that is not \
+         documented, such as a statement inside a function body, so it is \
+         discarded (design.md § Doc comments). Write `//` for a plain \
+         comment, or move the `///` onto the item it describes.",
+    ),
+    (
+        "W0298",
+        "A type name writes an acronym in capitals, such as `HTTPServer` \
+         (design.md § Identifiers and naming, rule CN-4). In a type name an \
+         acronym is a word, so it is `HttpServer`. The message gives the \
+         spelling; `karac fix` renames the declaration.",
+    ),
+    (
+        "E_MISSING_NON_EXHAUSTIVE",
+        "A public `...Error` enum in the standard library lacks \
+         `#[non_exhaustive]`, so a later release could not add a variant \
+         without breaking every `match` on it (design.md § \
+         `#[non_exhaustive]`). It is reported, as W0246, while compiling \
+         the library itself. A program does not see it.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
@@ -4475,6 +4639,11 @@ fn experimental_note(code: &str) -> Option<String> {
 /// one does, which code reports the case now (review-thread ruling
 /// 2026-11-17 on B-2026-11-16-303).
 const RETIRED_CODES: &[(&str, &str)] = &[
+    ("W0281", "Module-level `let mut` is not a warning any more: the language has no mutable globals, and it is the error E_MODULE_LET (design.md § Constants, \"No mutable globals\")."),
+    ("W0313", "`borrow_projection_copy` is a core rule now, not a lint, so it is always the error E0313 and `#[allow]` / `#[warn]` no longer apply (core-semantics.md §4.1)."),
+    ("W0314", "`for_element_drop_copy` is a core rule now, not a lint, so it is always the error E0314 and `#[allow]` / `#[warn]` no longer apply (core-semantics.md §3.7)."),
+    ("W0315", "Moving a payload out of an enum that has a `Drop` body is a core rule now, not a lint: it is the error E0289 (core-semantics.md §3.7), and `#[allow]` / `#[warn]` no longer apply."),
+    ("W0316", "`partial_move_of_drop_struct` is a core rule now, not a lint, so it is always the error E0316 and `#[allow]` / `#[warn]` no longer apply (core-semantics.md §3.7)."),
     ("E_ENUM_NESTED_ENUM_PAYLOAD", "An enum may carry another enum as a payload (`Step.Do(Command)`), to any depth; the one-level limit belonged to the legacy backend (B-2026-10-06-86), and nothing reports the case now."),
     ("E0103", "Access to an item the caller cannot see is E0111 PrivateItemAccess."),
     ("E0105", "A variant the enum does not declare is reported as E0236, no associated function of that name on the type."),
@@ -4501,14 +4670,16 @@ fn retired_note(code: &str) -> Option<&'static str> {
 /// misfit its own prose alone, and a symbolic code with no prose of its own
 /// says that the class paragraph is general. `sep` joins two paragraphs.
 fn code_description(code: &str, entry: &CodeEntry, sep: &str) -> Option<String> {
-    if let Some(text) = lint_code_description(code, sep) {
-        return Some(text);
-    }
+    // A retired code first: the warning half of a lint that became a core
+    // rule is retired, though the lint table still names it.
     if let Some(note) = retired_note(code) {
         return Some(format!(
             "This code is retired: no diagnostic emits it any more, and its number \
              stays reserved so it is never reused.{sep}{note}"
         ));
+    }
+    if let Some(text) = lint_code_description(code, sep) {
+        return Some(text);
     }
     let prose = code_prose(code);
     if let Some(note) = experimental_note(code) {
@@ -4550,6 +4721,15 @@ fn lint_code_description(code: &str, sep: &str) -> Option<String> {
         .iter()
         .find(|(_, w, e)| *w == code || *e == code)?;
     let info = crate::lints::lint_by_name(name)?;
+    if crate::lints::CORE_RULE_LINTS.contains(name) {
+        return Some(format!(
+            "`{name}`: {}{sep}This was a lint and is a core rule now: it is always the \
+             error `{error}`, and `#[allow({name})]`, `#[warn({name})]` and `-A {name}` no \
+             longer change it (`{warn}`, its warning, is retired). The record's \
+             `lint_name` is still `{name}`.",
+            info.description,
+        ));
+    }
     Some(format!(
         "The `{name}` lint: {}{sep}It is `{}` by default. `{warn}` is the lint \
          warning and `{error}` the same lint made an error by `-D {name}` or \

@@ -1,0 +1,5 @@
+fn main() {
+    let b: u8 = 7;
+    let n: i32 = b as i32;
+    println(n);
+}

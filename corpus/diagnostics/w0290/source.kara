@@ -1,0 +1,5 @@
+fn make() -> Fn() -> i64 with reads(Clock) {
+    || 1
+}
+
+fn main() {}

@@ -1,0 +1,8 @@
+fn work() {
+    errdefer println("cleanup");
+    println("work");
+}
+
+fn main() {
+    work();
+}

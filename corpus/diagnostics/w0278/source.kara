@@ -1,0 +1,8 @@
+#[must_use]
+fn compute() -> i64 {
+    42
+}
+
+fn main() {
+    compute();
+}

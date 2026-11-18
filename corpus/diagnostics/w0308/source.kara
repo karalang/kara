@@ -1,0 +1,8 @@
+#[warn(redundant_ref_param)]
+fn length(s: ref String) -> i64 {
+    s.len()
+}
+
+fn main() {
+    println(length("abc".to_string()));
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let a: f16 = 1.5;
+    let b: f16 = 2.0;
+    println(a + b);
+}

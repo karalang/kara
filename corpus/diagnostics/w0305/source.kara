@@ -1,0 +1,6 @@
+#[warn(manual_compound_assign)]
+fn main() {
+    let mut x = 1;
+    x = x + 2;
+    println(x);
+}

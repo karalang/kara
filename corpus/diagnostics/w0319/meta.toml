@@ -1,0 +1,9 @@
+source = "B-2026-11-16-303"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-16-303: the smallest program that produces W0319 (a warning; the program still runs), the example behind `karac explain W0319`. tests/diagnostics_corpus.rs checks the code is still produced and explained."

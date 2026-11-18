@@ -1,0 +1,10 @@
+type Big = i64 where self >= 0 and self <= 1000000;
+
+fn name(b: Big) -> String {
+    match b {
+        0 => "zero".to_string(),
+        _ => "more".to_string(),
+    }
+}
+
+fn main() {}

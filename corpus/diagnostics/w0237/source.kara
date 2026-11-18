@@ -1,0 +1,10 @@
+fn describe(n: i64) -> String {
+    match n {
+        _ => "any".to_string(),
+        0 => "zero".to_string(),
+    }
+}
+
+fn main() {
+    println(describe(0));
+}

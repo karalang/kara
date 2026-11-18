@@ -1,0 +1,7 @@
+fn main() {
+    let a = true;
+    let b = false;
+    if not a == b {
+        println("same");
+    }
+}
