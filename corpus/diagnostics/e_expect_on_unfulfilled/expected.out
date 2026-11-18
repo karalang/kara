@@ -1,0 +1,1 @@
+ERROR at line 1: `#[expect(unfulfilled_lint_expectation)]` is rejected — the form would be circular (an unfulfilled `#[expect]` fires this very lint, which the outer `#[expect]` would silence, fulfilling itself, so the user gets no signal either way)

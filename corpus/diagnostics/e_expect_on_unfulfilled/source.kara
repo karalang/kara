@@ -1,0 +1,8 @@
+#[expect(unfulfilled_lint_expectation)]
+fn helper() -> i64 {
+    1
+}
+
+fn main() {
+    println(helper());
+}

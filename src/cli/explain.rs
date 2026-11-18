@@ -4342,6 +4342,99 @@ const CODE_PROSE: &[(&str, &str)] = &[
          `#[non_exhaustive]`). It is reported, as W0246, while compiling \
          the library itself. A program does not see it.",
     ),
+    // B-2026-11-16-303 batch 7: the last reachable codes without prose.
+    (
+        "E_SHARED_FIELD_MOVE",
+        "A non-`Copy` field is moved out of a value of a `shared struct` \
+         (or `par struct`). The value is a refcounted box, so another \
+         handle to the same box may still read the field after it has been \
+         moved out and dropped (design.md § Shared types; core-semantics.md §6). The rule holds even when the root is owned (`h: own Holder`): \
+         owning the handle is not owning the box. Take an independent copy \
+         with `.clone()`, which `karac fix` applies, or borrow the field \
+         instead of moving it.",
+    ),
+    (
+        "E_QUERY_RESOLUTION_CONFLICT",
+        "Two attributes on one item answer the same compiler question in \
+         opposite ways: `#[no_rc]` forbids the compiler from boxing the \
+         item's values in a refcount, and `#[prefer_rc]` asks it to \
+         (docs/glossary.md § Compiler Concepts, Resolution Surface). Only one can apply. Keep the one that \
+         matches the intent and delete the other; the error points at the \
+         second of the pair.",
+    ),
+    (
+        "E_SLICE_BORROW_CONFLICT",
+        "A slice of a collection is created while another slice of the same \
+         collection is still live, and at least one of the two is a `mut \
+         Slice[T]`, or the collection is moved or dropped while a slice \
+         into it is live (core-semantics.md §5: a mutable borrow excludes \
+         every other borrow of its place, and a let-bound slice is borrowed \
+         until its last use). End the first slice before taking the second, \
+         for example by finishing its last use first or scoping it in a \
+         block, or copy the elements out with `.to_vec()` when an \
+         independent copy is what is wanted.",
+    ),
+    (
+        "E_EXPECT_ON_UNFULFILLED",
+        "`#[expect(unfulfilled_lint_expectation)]` is refused. An \
+         unfulfilled `#[expect]` reports exactly that lint, so expecting it \
+         would silence its own report and fulfil itself, and the attribute \
+         could never tell the author anything (design.md § Lint levels, \
+         `#[expect]`). Remove the attribute, or expect the lint that the \
+         item is actually expected to trigger.",
+    ),
+    (
+        "E_FORBIDDEN_LINT_ALLOW",
+        "A lint was set to `forbid` on the command line (`karac check -F \
+         <lint>`) and the source tries to switch it off with \
+         `#[allow(<lint>)]` (design.md § Lint levels: `forbid` cannot be \
+         lowered by any inner attribute). Forbid exists so that a build can \
+         guarantee a lint is never silenced; remove the `#[allow]` and fix \
+         what the lint reports, or drop the `-F` flag if the lint should be \
+         negotiable in this build.",
+    ),
+    (
+        "E_NON_EXHAUSTIVE_CROSS_PACKAGE_MATCH",
+        "A `match` on an enum that another package marks \
+         `#[non_exhaustive]` names its variants but has no wildcard arm. \
+         The defining package may add a variant in a compatible release, \
+         and the match would then stop compiling (design.md § \
+         `#[non_exhaustive]` for Evolvable Public Types). Add an arm such \
+         as `_ => panic(\"handle new variant\")` or one that handles an \
+         unknown variant gracefully; `karac fix` adds the arm. Inside the \
+         defining package the match may be exhaustive.",
+    ),
+    (
+        "E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL",
+        "A struct literal builds a type that another package marks \
+         `#[non_exhaustive]`. The defining package may add a field in a \
+         compatible release, which would make every outside literal \
+         incomplete (design.md § `#[non_exhaustive]` for Evolvable Public \
+         Types). Build the value through the constructor the package \
+         exports, commonly `T.new(...)` or a builder; inside the defining \
+         package the literal is allowed.",
+    ),
+    (
+        "E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN",
+        "A struct pattern destructures a type that another package marks \
+         `#[non_exhaustive]` and lists its fields without `..`. The \
+         defining package may add a field in a compatible release, and the \
+         pattern would then stop compiling (design.md § `#[non_exhaustive]` \
+         for Evolvable Public Types). Add `..` before the closing brace, as \
+         in `Opts { port, .. }`; `karac fix` inserts it.",
+    ),
+    (
+        "E_STDLIB_VARIANCE_IMPLICIT",
+        "A check on the standard library's own sources: every type \
+         parameter of a parametric library type must declare its variance \
+         explicitly, `=T` (invariant), `+T` (covariant) or `-T` \
+         (contravariant), so that variance is always a decision and never a \
+         default (design.md § Subtyping and variance). It guards the compiler's baked \
+         library; a user program does not declare variance and cannot \
+         produce this code. Seeing it means the library sources shipped \
+         with this compiler are inconsistent, which is a compiler bug worth \
+         reporting.",
+    ),
 ];
 
 /// `E0254` and `E_NOT_CROSS_TASK` are one rule: the message names the
@@ -4452,6 +4545,13 @@ fn is_scope_code(code: &str, entry: &CodeEntry) -> bool {
 /// pointer, and have no corpus pin
 /// (review-thread ruling 2026-11-17 on B-2026-11-16-303).
 const DEFERRED_CODES: &[(&str, &str)] = &[
+    (
+        "E_SHAPE",
+        "Shape-typed tensors are deferred with the numerical types \
+         (docs/deferred.md § Numerical Types (Tensor, Column, DataFrame)), \
+         which come with the `kara-data` package; no 0.8 program has a \
+         static tensor shape to mismatch.",
+    ),
     (
         "E0217",
         "The pipe operator is not in the language (design.md § Symbols: \
@@ -4653,6 +4753,8 @@ const RETIRED_CODES: &[(&str, &str)] = &[
     ("W0313", "`borrow_projection_copy` is a core rule now, not a lint, so it is always the error E0313 and `#[allow]` / `#[warn]` no longer apply (core-semantics.md §4.1)."),
     ("W0314", "`for_element_drop_copy` is a core rule now, not a lint, so it is always the error E0314 and `#[allow]` / `#[warn]` no longer apply (core-semantics.md §3.7)."),
     ("W0315", "Moving a payload out of an enum that has a `Drop` body is a core rule now, not a lint: it is the error E0289 (core-semantics.md §3.7), and `#[allow]` / `#[warn]` no longer apply."),
+    ("E_CONCURRENT_SHARED_STRUCT", "The per-binding count of `par` branches this code came from is not the v2 rule (core-semantics.md §11.3): a `shared` handle cannot enter a `par` branch at all, which is E_NOT_CROSS_TASK."),
+    ("E_CONCURRENT_PLAIN_STRUCT", "The per-binding count of `par` branches this code came from is not the v2 rule (core-semantics.md §11.2): branches may read one place together, and two branches that write it, or one that writes and one that reads, conflict as E0418."),
     ("W0316", "`partial_move_of_drop_struct` is a core rule now, not a lint, so it is always the error E0316 and `#[allow]` / `#[warn]` no longer apply (core-semantics.md §3.7)."),
     ("E_ENUM_NESTED_ENUM_PAYLOAD", "An enum may carry another enum as a payload (`Step.Do(Command)`), to any depth; the one-level limit belonged to the legacy backend (B-2026-10-06-86), and nothing reports the case now."),
     ("E0103", "Access to an item the caller cannot see is E0111 PrivateItemAccess."),

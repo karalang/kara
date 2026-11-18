@@ -1,0 +1,1 @@
+ERROR at line 2: `#[no_rc]` and `#[prefer_rc]` resolve the same compiler query in conflicting ways — only one may apply to this item. Drop whichever does not match the intent.

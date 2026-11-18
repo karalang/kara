@@ -1,0 +1,9 @@
+shared struct Holder { name: String }
+
+fn take(h: own Holder) -> String {
+    h.name
+}
+
+fn main() {
+    println(take(Holder { name: "a".to_string() }));
+}

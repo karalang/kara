@@ -95,7 +95,7 @@ fn diagnostics_corpus_later_track_codes_get_the_scope_paragraph() {
 #[test]
 fn diagnostics_corpus_symbolic_code_frames_its_class_paragraph() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let out = karac(dir, &["explain", "E_SHAPE"]);
+    let out = karac(dir, &["explain", "E_INDEX_MOVE_NON_COPY"]);
     assert!(
         out.contains("filed under the TYPE_MISMATCH class, which gathers many"),
         "{out}"
@@ -162,6 +162,8 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("W0314", "E0314"),
         ("W0315", "E0289"),
         ("W0316", "E0316"),
+        ("E_CONCURRENT_SHARED_STRUCT", "E_NOT_CROSS_TASK"),
+        ("E_CONCURRENT_PLAIN_STRUCT", "E0418"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(out.contains("This code is retired"), "{code}: {out}");
@@ -185,6 +187,7 @@ fn diagnostics_corpus_retired_and_deferred_codes_say_so() {
         ("E_COLD_INLINE_ALWAYS_CONFLICT", "not yet lowered"),
         ("E_REPR_DEFERRED", "`#[repr(packed)]`"),
         ("E_REPR_TRANSPARENT_UNION_FORBIDDEN", "FFI Unions"),
+        ("E_SHAPE", "Numerical Types"),
     ] {
         let out = karac(dir, &["explain", code]);
         assert!(

@@ -1,0 +1,7 @@
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    let s_mut = v.as_slice_mut();
+    let s_imm = v.as_slice();
+    println(s_mut.len() + s_imm.len());
+}

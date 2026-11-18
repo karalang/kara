@@ -290,8 +290,52 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
         ),
     );
 
+    // A lint forbidden on the command line, allowed in the source.
+    let d = root.join("forbid");
+    package(&d, "app", "", true);
+    std::fs::write(
+        d.join("src/main.kara"),
+        "#[allow(unused_variables)]\nfn helper() -> i64 {\n    let x = 1;\n    2\n}\n\nfn main() {\n    println(helper());\n}\n",
+    )
+    .unwrap();
+    expect(
+        "E_FORBIDDEN_LINT_ALLOW",
+        karac(
+            &d,
+            &["check", "-F", "unused_variables", "--output=json"],
+            &[],
+        ),
+    );
+
+    // `#[non_exhaustive]` types used from another package.
+    let d = root.join("non_exhaustive");
+    package(&d.join("lib"), "lib", "", false);
+    std::fs::write(
+        d.join("lib/src/lib.kara"),
+        "#[non_exhaustive]\npub enum Kind { A, B }\npub fn get() -> Kind { Kind.A }\n\
+         #[non_exhaustive]\npub struct Opts { pub port: i64 }\npub fn mk() -> Opts { Opts { port: 3 } }\n",
+    )
+    .unwrap();
+    package(
+        &d.join("app"),
+        "app",
+        "\n[dependencies]\nlib = { path = \"../lib\" }\n",
+        true,
+    );
+    std::fs::write(
+        d.join("app/src/main.kara"),
+        "import lib.{Kind, Opts, get, mk};\nfn main() {\n    \
+         match get() { Kind.A => println(\"a\"), Kind.B => println(\"b\") }\n    \
+         let o = Opts { port: 1 };\n    let Opts { port } = mk();\n    println(f\"{o.port} {port}\");\n}\n",
+    )
+    .unwrap();
+    let out = karac(&d.join("app"), &check, &[]);
+    expect("E_NON_EXHAUSTIVE_CROSS_PACKAGE_MATCH", out.clone());
+    expect("E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL", out.clone());
+    expect("E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN", out);
+
     // A void run must not pass.
-    assert_eq!(seen, 36, "case count changed");
+    assert_eq!(seen, 40, "case count changed");
     assert!(bad.is_empty(), "{}", bad.join("\n\n"));
     let _ = std::fs::remove_dir_all(&root);
 }

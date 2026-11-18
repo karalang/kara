@@ -1,0 +1,8 @@
+#[no_rc]
+#[prefer_rc]
+struct Node { value: i64 }
+
+fn main() {
+    let n = Node { value: 1 };
+    println(n.value);
+}

@@ -5488,7 +5488,8 @@ pub(crate) fn borrow_kind_display(kind: &BorrowKind) -> &'static str {
 pub(crate) fn slice_conflict_message(shape: &SliceConflictShape, root: &str) -> String {
     match shape {
         SliceConflictShape::ImmSliceVsMutSlice => format!(
-            "cannot create a `mut Slice[T]` of `{}` while another slice borrow is live",
+            "cannot create this slice of `{}` while another slice borrow is live (a \
+             `mut Slice[T]` excludes every other slice of its source)",
             root
         ),
         SliceConflictShape::MutSliceVsMutSlice => format!(
