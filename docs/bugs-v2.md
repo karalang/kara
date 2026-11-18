@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 510 |
+| diagnostics | 511 |
 | false-positive | 265 |
 | missing-feature | 201 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 638 |
+| typecheck | 639 |
 | mir-llvm | 291 |
 | mir | 253 |
 | cli | 198 |
@@ -118,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-144 | 2026-11-17 | typecheck | low | A closure whose parameter has no type and whose body calls a method on it (`let digits = |time| { time.chars()..count() }; digits(a)`) reports only E0516 "a type that failed to check is not lowered yet", naming no cause | — |
 | B-2026-11-17-145 | 2026-11-17 | ownership | low | When a later argument reads a value that an earlier argument moves into an `own` parameter (`push(acc, acc.len() + i)`), the fix clones the moved value; in a `fold` that is a copy per step, where hoisting the read into a `let` is the fix | — |
 | B-2026-11-17-150 | 2026-11-17 | ownership | low | E0235's fix `let best = ref best;` shadows `best` for the rest of a loop body, so a later write `best[next][w] = ..` in that body is refused next round (E0517 through a shared ref); and E0500's "used again here" points at a use before the capture | — |
-| B-2026-11-17-152 | 2026-11-17 | typecheck | medium | Under `mut ref self`, `match self.slots[i] { Some(v) => v.n += 1, .. }` binds `v` as a `ref` and the write is E0517 "reached through a shared ref", though core-semantics §4.6 makes a place reached through a `mut ref` and no `ref` a `mut ref` scrutinee; the field place `match self.one` is accepted, and E0517 offers no fix | — |
 | B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
 | B-2026-11-18-21 | 2026-11-18 | typecheck+mir | medium | `#[derive(Serialize, Deserialize)]` on a distinct type generates nothing: a struct field of that type checks clean and then fails at run with "no method 'serialize' on type 'UserId'" | — |
 | B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
@@ -132,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-41 | 2026-11-18 | typecheck | low | A `#[deprecated]` trait named in a bound on a struct's, enum's or trait's own generic parameter (`struct W[T: T1]`) does not warn | — |
 | B-2026-11-18-43 | 2026-11-18 | typecheck | low | A generic distinct type (`distinct type Ids[T] = Vec[T]`) is accepted at its declaration, but its constructor cannot build a value: `let a: Ids[i64] = Ids([1])` is E0200 "expected 'Ids[i64]', found 'Ids'" | — |
 | B-2026-11-18-44 | 2026-11-18 | typecheck | low | A `fold` whose seed takes an `i32` from a field (`fold((vals[0], 1), |(s, c), k| (s + k, c + 1))` over `i64` items) is refused at `s + k` with the advice to write `as i32`, which would truncate the sum; the seed is not named and nothing offers to widen it (`vals[0] as i64`) | — |
+| B-2026-11-18-47 | 2026-11-18 | typecheck | low | Over an owned local's element (`let mut s: Vec[Option[V]]`, `match s[0] { Some(v) => v.n += 1, .. }`), a plain binding written through is E0517 "reached through a shared `ref`" with no fix, though §4.6 makes `s[0]` an owned scrutinee whose plain binding is a move out of an index (§3.7), fixed by `mut ref v` | — |
 
 ### Relocated
 
@@ -1683,6 +1683,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-147 | typecheck | low | `(end_minute as usize).min(v.len() - 1)` with `end_minute: i32` is refused "`min` expects an argument of type `usize`, got `i64`" with no machine fix… | 03a6125579 |
 | B-2026-11-17-149 | resolver | low | Importing a prelude name by its module, `import std.iter.once;` (from Rust's `use std::iter::once;`) or `import std.collections.VecDeque;`, is refuse… | 68d6ffd6a0 |
 | B-2026-11-17-151 | runtime | low | `Set` has no `retain`, while `Map`, `SortedMap`, `SortedSet`, `Vec` and `VecDeque` all have one; Rust's `HashSet::retain` gets only "no method 'retai… | 03a6125579 |
+| B-2026-11-17-152 | typecheck | medium | Under `mut ref self`, `match self.slots[i] { Some(v) => v.n += 1, . | b3388ea406 |
 | B-2026-11-18-1 | mir | low | A value whose `Drop` body suspends, captured in a function value's environment, aborts with "cannot wait" when the function value is dropped (both ba… | 1b91426f44 |
 | B-2026-11-18-2 | typecheck | low | A copy of a fill's element made while the fill's literal is still open gets no fix: `let mut cnt = [0; 26]; . | ab7613763c |
 | B-2026-11-18-3 | typecheck | low | A bare `size_of()` (no type named) type-checks and runs, printing `0`, the placeholder body of the intrinsic, instead of E_LAYOUT_QUERY_TYPE_ARG_REQU… | 5fb653b49b |
