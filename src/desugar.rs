@@ -1326,6 +1326,13 @@ fn synthesize_default_impls(program: &mut Program) {
             {
                 defaultable.insert(e.name.clone());
             }
+            Item::DistinctType(d)
+                if d.refinement.is_none()
+                    && d.generic_params.is_none()
+                    && derives_default(&d.attributes) =>
+            {
+                defaultable.insert(d.name.clone());
+            }
             Item::ImplBlock(imp) => {
                 let provides_default = imp
                     .items
@@ -1396,6 +1403,46 @@ fn synthesize_default_impls(program: &mut Program) {
                         e.generic_params.as_ref(),
                         body,
                         e.span,
+                    ));
+                }
+            }
+            // `Count.default()` of `#[derive(Default)] distinct type Count =
+            // i64` is `Count(i64.default())` (B-2026-11-18-23). A refined
+            // distinct type is refused by the typechecker instead: its base's
+            // default need not satisfy the `where` predicate.
+            // A generic distinct type is left out: `Ids([1])` of `distinct type
+            // Ids[T] = Vec[T]` does not check yet either.
+            Item::DistinctType(d)
+                if d.refinement.is_none()
+                    && d.generic_params.is_none()
+                    && derives_default(&d.attributes)
+                    && !has_user_default.contains(&d.name) =>
+            {
+                if let Some(base) = default_field_expr(&d.base_type, &defaultable) {
+                    let span = d.span;
+                    let body = Expr {
+                        id: crate::ids::NodeId::DUMMY,
+                        kind: ExprKind::Call {
+                            callee: Box::new(Expr {
+                                id: crate::ids::NodeId::DUMMY,
+                                kind: ExprKind::Identifier(d.name.clone()),
+                                span,
+                            }),
+                            args: vec![CallArg {
+                                label: None,
+                                mut_marker: false,
+                                mut_marker_span: None,
+                                value: base,
+                                span,
+                            }],
+                        },
+                        span,
+                    };
+                    synthesized.push(make_default_impl(
+                        &d.name,
+                        d.generic_params.as_ref(),
+                        body,
+                        span,
                     ));
                 }
             }

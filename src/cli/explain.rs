@@ -1332,6 +1332,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
     ),
     (
+        "E_DERIVE_DEFAULT_REFINED",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
         "E_DISCRIMINANT_OUT_OF_RANGE",
         ty("DiscriminantInvalid", None),
     ),
@@ -3018,6 +3022,15 @@ const CODE_PROSE: &[(&str, &str)] = &[
          Derive or implement `Default` on the field's type, or write `impl \
          Config { fn default() -> Config { ... } }` by hand and choose that \
          field's starting value there.",
+    ),
+    (
+        "E_DERIVE_DEFAULT_REFINED",
+        "`#[derive(Default)]` on a distinct type builds it from its base \
+         type's default, and a refined distinct type (`distinct type Pos = \
+         i64 where self > 0`) has a predicate that default may break: \
+         `0` is not positive. Nothing checks the predicate at the derive, so \
+         the derive is refused. Write `impl Default for Pos { fn default() \
+         -> Pos { Pos(1) } }` with a value that satisfies the predicate.",
     ),
     (
         "E_DISCRIMINANT_OUT_OF_RANGE",

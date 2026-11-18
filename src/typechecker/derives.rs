@@ -1478,6 +1478,9 @@ impl<'a> super::TypeChecker<'a> {
             let (name, attrs, stdlib_origin, lints) = match item {
                 Item::StructDef(d) => (&d.name, &d.attributes, d.stdlib_origin, &d.lint_overrides),
                 Item::EnumDef(d) => (&d.name, &d.attributes, d.stdlib_origin, &d.lint_overrides),
+                // B-2026-11-18-22: a distinct type's derives follow the same
+                // chains.
+                Item::DistinctType(d) => (&d.name, &d.attributes, false, &d.lint_overrides),
                 _ => continue,
             };
             if stdlib_origin {
@@ -1811,6 +1814,52 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
             }
+        }
+
+        // Distinct types (B-2026-11-18-23): `Count.default()` is
+        // `Count(<base>.default())`, so the base must be `Default`. A refined
+        // distinct type is refused outright: nothing evaluates the `where`
+        // predicate against the base's default, which may violate it.
+        let distinct: Vec<_> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::DistinctType(d)
+                    if extract_derived_traits(&d.attributes).contains("Default") =>
+                {
+                    Some((
+                        d.name.clone(),
+                        d.span,
+                        d.base_type.clone(),
+                        distinct_scope(d),
+                        d.refinement.is_some(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        for (name, span, base, scope, refined) in distinct {
+            let base_ty = self.lower_type_expr(&base, &scope);
+            let message = if refined {
+                format!(
+                    "error[E_DERIVE_DEFAULT_REFINED]: cannot #[derive(Default)] for refined \
+                     distinct type '{name}': the default of its base type '{}' may violate its \
+                     `where` predicate; write `impl Default for {name}` with a value that \
+                     satisfies it",
+                    type_display(&base_ty)
+                )
+            } else if !self.derived_default_field_ok(&base_ty) {
+                format!(
+                    "error[E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT]: cannot #[derive(Default)] \
+                     for distinct type '{name}' — its base type '{}' does not implement \
+                     'Default'",
+                    type_display(&base_ty)
+                )
+            } else {
+                continue;
+            };
+            self.type_error(message, span, TypeErrorKind::TypeMismatch);
         }
 
         // Enums: exactly one `#[default]`-marked, field-less variant.
@@ -2332,6 +2381,46 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::TypeMismatch,
                     );
                 }
+            }
+        }
+
+        // A distinct type's one "field" is its base (B-2026-11-18-22):
+        // `#[derive(Eq)] distinct type M = f64` is an `Eq` whose `M(NaN)` is
+        // not equal to itself. `Copy` has its own distinct-type check in
+        // `validate_derive_copy`.
+        if trait_name == "Copy" {
+            return;
+        }
+        let distinct: Vec<_> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::DistinctType(d)
+                    if extract_derived_traits(&d.attributes).contains(trait_name) =>
+                {
+                    Some((
+                        d.name.clone(),
+                        d.span,
+                        d.base_type.clone(),
+                        distinct_scope(d),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        for (name, span, base, scope) in distinct {
+            let base_ty = self.lower_type_expr(&base, &scope);
+            if !supports(self, &base_ty) {
+                self.type_error(
+                    format!(
+                        "distinct type '{name}' derives {trait_name} but its base type '{}' is \
+                         not {trait_name}",
+                        type_display(&base_ty)
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
             }
         }
     }
@@ -3404,4 +3493,14 @@ fn allows_derive_clone_allocates(overrides: &[crate::lints::LintLevelOverride]) 
     overrides.iter().any(|o| {
         o.lint == "derive_clone_allocates" && matches!(o.level, crate::lints::LintLevel::Allow)
     })
+}
+
+/// The type parameters in scope in a distinct type's base: `T` of
+/// `distinct type Meters[T] = T`.
+fn distinct_scope(d: &crate::ast::DistinctTypeDef) -> Vec<String> {
+    d.generic_params
+        .iter()
+        .flat_map(|g| &g.params)
+        .map(|p| p.name.clone())
+        .collect()
 }
