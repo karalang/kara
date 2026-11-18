@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 85 |
 | miscompile | 81 |
 | run-vs-build | 55 |
-| crash | 49 |
+| crash | 50 |
 | codegen-gap | 35 |
 | use-after-free | 10 |
 | leak | 4 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 602 |
-| mir-llvm | 286 |
+| mir-llvm | 287 |
 | mir | 249 |
 | cli | 193 |
 | parser | 110 |
@@ -118,8 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-97 | 2026-11-17 | typecheck | low | A library trait's default method cannot carry its own `where Self: Clone` bound, so `Iterator.cycle` is an inherent method on each Clone-able adaptor instead of one default method on `Iterator` | — |
 | B-2026-11-17-125 | 2026-11-17 | resolver | low | A top-level `let my_count` beside `fn main` gets E_MODULE_BINDING_NAMING, whose machine rename to `MY_COUNT` only leads to E_MODULE_LET; it should say directly that a module-level value is a `const` | — |
 | B-2026-11-17-127 | 2026-11-17 | mir | medium | A value whose `Drop` body suspends, dropped from inside a function value's environment, a OnceCell / OnceLock / LazyLock, or a channel's queue, stops the program ('a `Drop` body that suspends was reached from a drop that cannot wait') instead of waiting: the remainder of B-2026-11-17-101, which lowered the shared, dyn, Map/Set/sorted/VecDeque and Mutex routes | — |
-| B-2026-11-17-129 | 2026-11-17 | typecheck | low | A `fold` seed settled to `i64` by a method on the accumulator (`v.iter().map(|x| 1).fold(0, |a, b| a.max(b))` returned as `i32`) is refused with advice to truncate by `as i32` and no fix, where the same literal in a `let` is named and given a `: i32` fix | — |
-| B-2026-11-17-130 | 2026-11-17 | typecheck | medium | A literal handed on as a `mut` argument is not fixed by the parameter: `let mut best = 0; bump(mut best); best` with `bump(x: mut ref i32)`, returned as `i32`, is refused as an `i64`, where `let best = 0; take(best)` into an `i32` checks | — |
 | B-2026-11-17-131 | 2026-11-17 | typecheck | medium | An impl's `CrossTask` bound refuses every type: `impl[T: CrossTask] BoundedBlockingQueue[T]` makes `q.enqueue(..)` on a `BoundedBlockingQueue[String]` an error, "`String` does not implement `CrossTask`" (and `i64`, `Vec[i64]` alike), where `fn f[T: CrossTask](x: T)` takes a `String` | — |
 | B-2026-11-17-132 | 2026-11-17 | mir | high | A view stored through a `Mutex` in a field is accepted, and later reads see whatever the place holds then: a `Holder[ref i64]` (or a generic `sync struct BoundedBlockingQueue[T: CrossTask]` whose `T` is inferred as `ref i64`) filled by `h.put(v)` over `mine.iter()` in an inner scope prints `3 3` for the first two values, not `1 0` | — |
 | B-2026-11-17-133 | 2026-11-17 | typecheck | medium | A struct's type parameter left open inside `Mutex.new(..)` is never fixed by a later call: `let h = Holder { values: Mutex.new(VecDeque.new()) }; h.put(5)` stops at lowering with "an expression whose type does not lower (Type(UnknownParam(\"T\"))) is not lowered yet" [E0516], where `Holder { values: VecDeque.new() }` takes `T = i64` from the same `put` | — |
@@ -127,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-135 | 2026-11-17 | ownership | low | Moving a field out of an `own` `shared struct` parameter reports borrow_projection_copy ("`h` ... does not own it") instead of E_SHARED_FIELD_MOVE, so the message blames a borrow the program does not have | — |
 | B-2026-11-17-136 | 2026-11-17 | parser | low | A range-pattern bound that is an expression (`0..=(1 + 2) =>`) gets E_RANGE_PATTERN_BOUND_NOT_SIMPLE and then a spurious E0002 "Expected expression" at the end of the `match` | — |
 | B-2026-11-17-137 | 2026-11-17 | typecheck | low | Two `impl Grid[3]` blocks defining one method render the const-generic target as `Grid[Array[(), 3]]` in E0240, a type the program never wrote | — |
+| B-2026-11-17-139 | 2026-11-17 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit in an enum other than Option, a boxed field, a struct with its own `Drop` impl inside a container, or a library type; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
 
 ### Relocated
 
@@ -1656,6 +1655,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-124 | mir-llvm | low | FIXED for the get side (a lookup helper inlines, kata 220 13.98G to 11.71G Ir); insert/remove and probe width remain as B-2026-11-17-134 | a6581f8672 |
 | B-2026-11-17-126 | mir | low | An iterator adaptor or terminal called straight on a Set, SortedSet, Map or SortedMap (`s.difference(t).cloned()`, `sorted.map(..)`) got no machine f… | 85459908b12962ac0dcccbc6e464861568361a42 |
 | B-2026-11-17-128 | cli | high | `karac fix` applies `redundant_suffix` and `lossless_cast` in one pass and narrows an `i64` table: `vec![vec![0i64; n]; m]` with `t[i][j] = x as i64`… | d3c2716a19 |
+| B-2026-11-17-129 | typecheck | low | A `fold` seed settled to `i64` by a method on the accumulator (`v.iter().map(\|x\| 1).fold(0, \|a, b\| a.max(b))` returned as `i32`) is refused with advi… | da91f9fd3b |
+| B-2026-11-17-130 | typecheck | medium | A literal handed on as a `mut` argument is not fixed by the parameter: `let mut best = 0; bump(mut best); best` with `bump(x: mut ref i32)`, returned… | da91f9fd3b |
 | B-2026-11-17-138 | mir-llvm | low | Dropping a deep `shared` n-ary tree (`kids: Vec[N]`), a trie (`kids: Map[K, N]`) or a node whose handles sit inside a plain struct field (`items: Vec… | 7606280ba7 |
 
 </details>
