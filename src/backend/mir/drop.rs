@@ -145,14 +145,35 @@ enum Part {
     Owned(u64, Ty, AdtId, Vec<Part>),
     /// A plain enum: for each variant whose fields need a drop, its parts.
     Enum(u64, Ty, Vec<(u32, Vec<Part>)>),
+    /// A `VecDeque` ring whose elements are each the part (at offset 0),
+    /// `size` bytes apart (B-2026-11-18-28).
+    Deque(u64, Box<Part>, u64),
+    /// A boxed field: a pointer, null or to a heap value that is the part
+    /// (at offset 0) (B-2026-11-18-28).
+    Boxed(u64, Box<Part>),
+    /// A value of a recursive type met again inside itself: a task that
+    /// takes its parts, planned once per type (B-2026-11-18-28).
+    Typed(u64, Ty),
+}
+
+/// The tasks of one drained release: each type's `Drop` body (if any) and
+/// parts, in the order they were first needed; a `RUN` entry's kind picks
+/// one.
+struct Tasks {
+    owner: Ty,
+    list: Vec<(Ty, Option<AdtId>, Vec<Part>)>,
 }
 
 /// Whether the parts hold a handle anywhere.
 fn holds_handle(parts: &[Part]) -> bool {
     parts.iter().any(|p| match p {
-        Part::Handle(_) => true,
+        // A recursive type is assumed to hold one: its plan is taken only
+        // when it is needed.
+        Part::Handle(_) | Part::Typed(..) => true,
         Part::Quiet(..) => false,
-        Part::Vec(_, e, _) | Part::Map(_, _, e) => holds_handle(std::slice::from_ref(&**e)),
+        Part::Vec(_, e, _) | Part::Map(_, _, e) | Part::Deque(_, e, _) | Part::Boxed(_, e) => {
+            holds_handle(std::slice::from_ref(&**e))
+        }
         Part::Struct(_, ps) | Part::Owned(_, _, _, ps) => holds_handle(ps),
         Part::Enum(_, _, vs) => vs.iter().any(|(_, ps)| holds_handle(ps)),
     })
@@ -163,8 +184,10 @@ fn holds_handle(parts: &[Part]) -> bool {
 fn defers(parts: &[Part]) -> bool {
     parts.iter().any(|p| match p {
         Part::Handle(_) | Part::Quiet(..) => false,
-        Part::Owned(..) => true,
-        Part::Vec(_, e, _) | Part::Map(_, _, e) => defers(std::slice::from_ref(&**e)),
+        Part::Owned(..) | Part::Typed(..) => true,
+        Part::Vec(_, e, _) | Part::Map(_, _, e) | Part::Deque(_, e, _) | Part::Boxed(_, e) => {
+            defers(std::slice::from_ref(&**e))
+        }
         Part::Struct(_, ps) => defers(ps),
         Part::Enum(_, _, vs) => vs.iter().any(|(_, ps)| defers(ps)),
     })
@@ -834,7 +857,7 @@ impl<'ctx> Cx<'ctx, '_> {
             return self.release_tree(b0, ty, a, &offs, &quiet);
         }
         if self.own_handle_fields(ty)?.is_none() {
-            if let Some(parts) = self.drain_plan(ty, ty, 0)?.filter(|p| holds_handle(p)) {
+            if let Some(parts) = self.drain_plan(ty, ty)?.filter(|p| holds_handle(p)) {
                 return self.release_drained(b0, ty, a, &parts);
             }
         }
@@ -1137,14 +1160,12 @@ impl<'ctx> Cx<'ctx, '_> {
     /// The parts of the struct `ty` (the body of the `shared` type
     /// `owner`, or a struct inside it) through which the release of
     /// `owner` reaches its own handles, in field order: each field needing
-    /// a drop is such a handle, a quiet field, a `Vec` or a `Map` of parts,
-    /// a struct (plain, or with a `Drop` body run in its turn) or a plain
-    /// enum of parts. `None` when another field needs a drop
-    /// (B-2026-11-17-138, B-2026-11-17-139).
-    fn drain_plan(&self, ty: Ty, owner: Ty, depth: u32) -> R<Option<Vec<Part>>> {
-        if depth > 8 {
-            return Ok(None);
-        }
+    /// a drop is such a handle, a quiet field, a container (`Vec`,
+    /// `VecDeque`, a map) of parts, a box of one, a struct or an enum of
+    /// parts. A type met again inside itself (a recursive enum) is a task
+    /// planned on its own. `None` when another field needs a drop
+    /// (B-2026-11-17-138, B-2026-11-17-139, B-2026-11-18-28).
+    fn drain_plan(&self, ty: Ty, owner: Ty) -> R<Option<Vec<Part>>> {
         let Some((adt, _)) = self.tys.tcx().adt_of(ty) else {
             return Ok(None);
         };
@@ -1152,7 +1173,7 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(None);
         }
         let n = adt.variants[0].fields.len();
-        self.fields_plan(ty, None, n, owner, depth)
+        self.fields_plan(ty, None, n, owner, 0, &mut Vec::new())
     }
 
     /// The parts of the fields of `ty` (of its variant `v`, for an enum).
@@ -1163,6 +1184,7 @@ impl<'ctx> Cx<'ctx, '_> {
         n: usize,
         owner: Ty,
         depth: u32,
+        open: &mut Vec<Ty>,
     ) -> R<Option<Vec<Part>>> {
         let mut parts = Vec::new();
         for f in 0..n as u32 {
@@ -1172,11 +1194,15 @@ impl<'ctx> Cx<'ctx, '_> {
             if !self.tys.needs_drop(ft) {
                 continue;
             }
-            if layout::boxed_field(self.tys, ty, v, f) {
-                return Ok(None);
-            }
             let off = self.field_offset(ty, v, f)?;
-            let Some(part) = self.part_at(ft, off, owner, depth)? else {
+            if layout::boxed_field(self.tys, ty, v, f) {
+                let Some(inner) = self.part_at(ft, 0, owner, depth + 1, open)? else {
+                    return Ok(None);
+                };
+                parts.push(Part::Boxed(off, Box::new(inner)));
+                continue;
+            }
+            let Some(part) = self.part_at(ft, off, owner, depth, open)? else {
                 return Ok(None);
             };
             parts.push(part);
@@ -1184,32 +1210,46 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(parts))
     }
 
-    /// The part a value of type `ft` at `off` is in a drain plan.
-    fn part_at(&self, ft: Ty, off: u64, owner: Ty, depth: u32) -> R<Option<Part>> {
+    /// The part a value of type `ft` at `off` is in a drain plan. `open`
+    /// holds the types being planned around it: meeting one again is a
+    /// recursive type, planned once as its own task ([`Part::Typed`]).
+    fn part_at(
+        &self,
+        ft: Ty,
+        off: u64,
+        owner: Ty,
+        depth: u32,
+        open: &mut Vec<Ty>,
+    ) -> R<Option<Part>> {
         if self.is_own_handle(ft, owner) {
             return Ok(Some(Part::Handle(off)));
         }
         if self.is_quiet(ft) {
             return Ok(Some(Part::Quiet(off, ft)));
         }
-        if depth > 8 {
+        // Only a type that grows without repeating (`W[Vec[T]]` inside
+        // `W[T]`) gets this deep.
+        if depth > 32 {
             return Ok(None);
         }
         if let TyKind::Intrinsic(IntrinsicTy::Vec(e)) = self.tys.kind(ft) {
-            let Some(elem) = self.part_at(e, 0, owner, depth + 1)? else {
+            let Some(elem) = self.part_at(e, 0, owner, depth + 1, open)? else {
                 return Ok(None);
             };
             return Ok(Some(Part::Vec(off, Box::new(elem), self.layout(e)?.size)));
         }
-        if matches!(self.tys.kind(ft), TyKind::Intrinsic(IntrinsicTy::Map(..))) {
-            let Some(t) = self.table_of(ft) else {
+        if let TyKind::Intrinsic(IntrinsicTy::VecDeque(e)) = self.tys.kind(ft) {
+            let Some(elem) = self.part_at(e, 0, owner, depth + 1, open)? else {
                 return Ok(None);
             };
+            return Ok(Some(Part::Deque(off, Box::new(elem), self.layout(e)?.size)));
+        }
+        if let Some(t) = self.table_of(ft) {
             let (Some(v), true) = (t.val, !self.tys.needs_drop(t.key) || self.is_quiet(t.key))
             else {
                 return Ok(None);
             };
-            let Some(elem) = self.part_at(v, 0, owner, depth + 1)? else {
+            let Some(elem) = self.part_at(v, 0, owner, depth + 1, open)? else {
                 return Ok(None);
             };
             return Ok(Some(Part::Map(off, t, Box::new(elem))));
@@ -1217,13 +1257,33 @@ impl<'ctx> Cx<'ctx, '_> {
         let TyKind::Adt(a) = self.tys.kind(ft) else {
             return Ok(None);
         };
+        if open.contains(&ft) {
+            return Ok(Some(Part::Typed(off, ft)));
+        }
+        open.push(ft);
+        let part = self.adt_part(ft, a, off, owner, depth, open);
+        open.pop();
+        part
+    }
+
+    /// [`Cx::part_at`] for the user struct or enum (or `Option` /
+    /// `Result`) `ft`.
+    fn adt_part(
+        &self,
+        ft: Ty,
+        a: AdtId,
+        off: u64,
+        owner: Ty,
+        depth: u32,
+        open: &mut Vec<Ty>,
+    ) -> R<Option<Part>> {
         let def = self.tys.adt(a);
         if coroutine::frame_owner(&def.name).is_some() {
             return Ok(None);
         }
         let has_drop = def.has_drop_impl;
         if def.is_enum {
-            if has_drop || !matches!(def.library_name(), None | Some("Option" | "Result")) {
+            if !matches!(def.library_name(), None | Some("Option" | "Result")) {
                 return Ok(None);
             }
             let Some((adt, _)) = self.tys.tcx().adt_of(ft) else {
@@ -1232,19 +1292,30 @@ impl<'ctx> Cx<'ctx, '_> {
             let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
             let mut vs = Vec::new();
             for (v, n) in counts.into_iter().enumerate() {
-                let Some(ps) = self.fields_plan(ft, Some(v as u32), n, owner, depth + 1)? else {
+                let Some(ps) = self.fields_plan(ft, Some(v as u32), n, owner, depth + 1, open)?
+                else {
                     return Ok(None);
                 };
                 if !ps.is_empty() {
                     vs.push((v as u32, ps));
                 }
             }
-            return Ok(Some(Part::Enum(off, ft, vs)));
+            // An enum with a `Drop` body is a task like such a struct: its
+            // body, then its active variant's parts (B-2026-11-18-28).
+            return Ok(Some(if has_drop {
+                Part::Owned(off, ft, a, vec![Part::Enum(0, ft, vs)])
+            } else {
+                Part::Enum(off, ft, vs)
+            }));
         }
         if def.library_name().is_some() {
             return Ok(None);
         }
-        let Some(ps) = self.drain_plan(ft, owner, depth + 1)? else {
+        let Some((adt, _)) = self.tys.tcx().adt_of(ft) else {
+            return Ok(None);
+        };
+        let n = adt.variants[0].fields.len();
+        let Some(ps) = self.fields_plan(ft, None, n, owner, depth + 1, open)? else {
             return Ok(None);
         };
         Ok(Some(if has_drop {
@@ -1252,6 +1323,25 @@ impl<'ctx> Cx<'ctx, '_> {
         } else {
             Part::Struct(off, ps)
         }))
+    }
+
+    /// The task of a [`Part::Typed`] value of type `ty`: its `Drop` body,
+    /// if any, and its parts, planned with `ty` itself open so a value of
+    /// it inside is another such task.
+    fn task_plan(&self, ty: Ty, owner: Ty) -> R<(Option<AdtId>, Vec<Part>)> {
+        let TyKind::Adt(a) = self.tys.kind(ty) else {
+            return err(format!("`{}` is not an ADT", self.tys.display(ty)));
+        };
+        let mut open = vec![ty];
+        match self.adt_part(ty, a, 0, owner, 0, &mut open)? {
+            Some(Part::Owned(_, _, a, ps)) => Ok((Some(a), ps)),
+            Some(Part::Struct(_, ps)) => Ok((None, ps)),
+            Some(p @ Part::Enum(..)) => Ok((None, vec![p])),
+            _ => err(format!(
+                "`{}` has no drain plan of its own",
+                self.tys.display(ty)
+            )),
+        }
     }
 
     /// [`Cx::release_last`] for a `shared` struct whose own handles sit in
@@ -1304,7 +1394,10 @@ impl<'ctx> Cx<'ctx, '_> {
             self.call_drop_body(a, ty, slot)?;
         }
         let body = self.offset(b, off)?;
-        let mut tasks: Vec<(Ty, AdtId, Vec<Part>)> = Vec::new();
+        let mut tasks = Tasks {
+            owner: ty,
+            list: Vec::new(),
+        };
         let late = defers(parts);
         if late {
             self.push_entry(TASK_FREE_BOX, b, stack)?;
@@ -1372,14 +1465,16 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_unconditional_branch(pop)
             .map_err(|e| e.to_string())?;
         let mut k = 0;
-        while k < tasks.len() {
-            let (tty, ta, tparts) = tasks[k].clone();
+        while k < tasks.list.len() {
+            let (tty, ta, tparts) = tasks.list[k].clone();
             let run = self.llcx.append_basic_block(f, "pending.run");
             arms.push((self.i64(TASK_RUN + k as u64), run));
             self.builder.position_at_end(run);
             let me = self.entry_slot(8, "self")?;
             self.store(me, p.into())?;
-            self.call_drop_body(ta, tty, me)?;
+            if let Some(ta) = ta {
+                self.call_drop_body(ta, tty, me)?;
+            }
             self.push_parts(p, &tparts, stack, &mut tasks)?;
             self.finish_parts(p, &tparts)?;
             self.builder
@@ -1405,7 +1500,7 @@ impl<'ctx> Cx<'ctx, '_> {
         base: PointerValue<'ctx>,
         parts: &[Part],
         stack: PointerValue<'ctx>,
-        tasks: &mut Vec<(Ty, AdtId, Vec<Part>)>,
+        tasks: &mut Tasks,
     ) -> R<()> {
         for part in parts {
             match part {
@@ -1490,11 +1585,23 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 Part::Owned(off, ty, a, sub) => {
                     let q = self.offset(base, *off)?;
-                    let k = match tasks.iter().position(|(t, _, _)| t == ty) {
+                    let k = match tasks.list.iter().position(|(t, _, _)| t == ty) {
                         Some(k) => k,
                         None => {
-                            tasks.push((*ty, *a, sub.clone()));
-                            tasks.len() - 1
+                            tasks.list.push((*ty, Some(*a), sub.clone()));
+                            tasks.list.len() - 1
+                        }
+                    };
+                    self.push_entry(TASK_RUN + k as u64, q, stack)?;
+                }
+                Part::Typed(off, ty) => {
+                    let q = self.offset(base, *off)?;
+                    let k = match tasks.list.iter().position(|(t, _, _)| t == ty) {
+                        Some(k) => k,
+                        None => {
+                            let (a, sub) = self.task_plan(*ty, tasks.owner)?;
+                            tasks.list.push((*ty, a, sub));
+                            tasks.list.len() - 1
                         }
                     };
                     self.push_entry(TASK_RUN + k as u64, q, stack)?;
@@ -1505,9 +1612,83 @@ impl<'ctx> Cx<'ctx, '_> {
                         cx.push_parts(q, ps, stack, tasks)
                     })?;
                 }
+                Part::Deque(off, elem, size) => {
+                    let v = self.offset(base, *off)?;
+                    let buf = self.load_ptr(v)?;
+                    let head = self.load_i64(self.offset(v, 8)?)?;
+                    let n = self.load_i64(self.offset(v, 16)?)?;
+                    let cap = self.load_i64(self.offset(v, 24)?)?;
+                    let one = std::slice::from_ref(&**elem);
+                    if defers(one) {
+                        let has = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, cap, self.i64(0), "")
+                            .map_err(|e| e.to_string())?;
+                        self.if_then(has, |cx| cx.push_entry(TASK_FREE_BUF, buf, stack))?;
+                    }
+                    if !holds_handle(one) && !defers(one) {
+                        continue;
+                    }
+                    let size = *size;
+                    let elem = (**elem).clone();
+                    self.count_loop(n, |cx, i| {
+                        let back = cx
+                            .builder
+                            .build_int_sub(n, cx.i64(1), "")
+                            .map_err(|e| e.to_string())?;
+                        let j = cx
+                            .builder
+                            .build_int_sub(back, i, "")
+                            .map_err(|e| e.to_string())?;
+                        let q = cx.ring_slot(buf, head, cap, j, size)?;
+                        cx.push_parts(q, std::slice::from_ref(&elem), stack, tasks)
+                    })?;
+                }
+                Part::Boxed(off, inner) => {
+                    let b = self.load_ptr(self.offset(base, *off)?)?;
+                    let inner = (**inner).clone();
+                    let live = self
+                        .builder
+                        .build_is_not_null(b, "")
+                        .map_err(|e| e.to_string())?;
+                    self.if_then(live, |cx| {
+                        let one = std::slice::from_ref(&inner);
+                        if defers(one) {
+                            cx.push_entry(TASK_FREE_BUF, b, stack)?;
+                        }
+                        cx.push_parts(b, one, stack, tasks)
+                    })?;
+                }
             }
         }
         Ok(())
+    }
+
+    /// The element at logical index `j` of a `VecDeque` ring: slot
+    /// `(head + j) % cap` of `buf`, `size` bytes each.
+    fn ring_slot(
+        &mut self,
+        buf: PointerValue<'ctx>,
+        head: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+        j: IntValue<'ctx>,
+        size: u64,
+    ) -> R<PointerValue<'ctx>> {
+        let b = &self.builder;
+        let k = b.build_int_add(head, j, "").map_err(|e| e.to_string())?;
+        let slot = b
+            .build_int_unsigned_rem(k, cap, "")
+            .map_err(|e| e.to_string())?;
+        let at = b
+            .build_int_mul(slot, self.i64(size), "")
+            .map_err(|e| e.to_string())?;
+        // SAFETY: a slot `< cap` of a ring of `cap` elements, reached only
+        // for an index below its length (so `cap > 0`).
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(self.llcx.i8_type(), buf, &[at], "")
+                .map_err(|e| e.to_string())
+        }
     }
 
     /// Runs `f` on the parts of the active variant of the enum `ty` at
@@ -1596,14 +1777,14 @@ impl<'ctx> Cx<'ctx, '_> {
     fn finish_parts(&mut self, base: PointerValue<'ctx>, parts: &[Part]) -> R<()> {
         for part in parts.iter().rev() {
             match part {
-                Part::Handle(_) | Part::Owned(..) => {}
+                Part::Handle(_) | Part::Owned(..) | Part::Typed(..) => {}
                 Part::Quiet(off, ft) => {
                     let q = self.offset(base, *off)?;
                     self.call_glue(q, *ft)?;
                 }
                 Part::Vec(off, elem, size) => {
                     let v = self.offset(base, *off)?;
-                    if !matches!(**elem, Part::Handle(_) | Part::Owned(..)) {
+                    if !matches!(**elem, Part::Handle(_) | Part::Owned(..) | Part::Typed(..)) {
                         let buf = self.load_ptr(v)?;
                         let n = self.load_i64(self.offset(v, 8)?)?;
                         let size = *size;
@@ -1636,7 +1817,8 @@ impl<'ctx> Cx<'ctx, '_> {
                         .map_err(|e| e.to_string())?;
                     self.if_then(live, |cx| {
                         let kd = cx.tys.needs_drop(t.key);
-                        let vd = !matches!(elem, Part::Handle(_) | Part::Owned(..));
+                        let vd =
+                            !matches!(elem, Part::Handle(_) | Part::Owned(..) | Part::Typed(..));
                         if kd || vd {
                             let voff = cx.val_off(t)?;
                             let n = cx.table_len(h)?;
@@ -1665,6 +1847,40 @@ impl<'ctx> Cx<'ctx, '_> {
                 Part::Enum(off, ty, vs) => {
                     let q = self.offset(base, *off)?;
                     self.each_variant_part(q, *ty, vs, |cx, ps| cx.finish_parts(q, ps))?;
+                }
+                Part::Deque(off, elem, size) => {
+                    let v = self.offset(base, *off)?;
+                    if !matches!(**elem, Part::Handle(_) | Part::Owned(..) | Part::Typed(..)) {
+                        let buf = self.load_ptr(v)?;
+                        let head = self.load_i64(self.offset(v, 8)?)?;
+                        let n = self.load_i64(self.offset(v, 16)?)?;
+                        let cap = self.load_i64(self.offset(v, 24)?)?;
+                        let size = *size;
+                        let elem = (**elem).clone();
+                        self.count_loop(n, |cx, i| {
+                            let q = cx.ring_slot(buf, head, cap, i, size)?;
+                            cx.finish_parts(q, std::slice::from_ref(&elem))
+                        })?;
+                    }
+                    if !defers(std::slice::from_ref(&**elem)) {
+                        self.free_buffer_at(v, 24)?;
+                    }
+                }
+                Part::Boxed(off, inner) => {
+                    let b = self.load_ptr(self.offset(base, *off)?)?;
+                    let inner = (**inner).clone();
+                    let live = self
+                        .builder
+                        .build_is_not_null(b, "")
+                        .map_err(|e| e.to_string())?;
+                    self.if_then(live, |cx| {
+                        let one = std::slice::from_ref(&inner);
+                        cx.finish_parts(b, one)?;
+                        if defers(one) {
+                            return Ok(());
+                        }
+                        cx.free(b)
+                    })?;
                 }
             }
         }

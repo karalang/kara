@@ -529,3 +529,274 @@ fn enum_and_drop_impl_elements_drain_in_order() {
         assert_eq!(out, TASKS_OUT, "wasm");
     }
 }
+
+/// B-2026-11-18-28, the remainder of -139: handles inside an enum with a
+/// `Drop` body, a `VecDeque`, a `SortedMap`, or a recursive plain enum
+/// (spine recursion through a `Vec`) still released recursively. Drop
+/// bodies over each shape, then each 200000 deep.
+const REMAINDER: &str = r#"enum Kid { Node(E), Num(i64) }
+
+impl Drop for Kid {
+    fn drop(mut ref self) {
+        match self {
+            Kid.Node(e) => println(f"drop Kid.Node {e.name}"),
+            Kid.Num(n) => println(f"drop Kid.Num {n}"),
+        }
+    }
+}
+
+shared struct E { name: String, mut kids: Vec[Kid] }
+
+impl Drop for E {
+    fn drop(mut ref self) {
+        println(f"drop E {self.name}");
+    }
+}
+
+shared struct Q { name: String, mut line: VecDeque[Q], mut sm: SortedMap[i64, Q] }
+
+impl Drop for Q {
+    fn drop(mut ref self) {
+        println(f"drop Q {self.name}");
+    }
+}
+
+enum Tr { Leaf(X), Branch(Vec[Tr]), Lit(i64) }
+
+shared struct X { name: String, mut expr: Tr }
+
+impl Drop for X {
+    fn drop(mut ref self) {
+        println(f"drop X {self.name}");
+    }
+}
+
+enum DKid { Node(DeepE), Num(i64) }
+impl Drop for DKid { fn drop(mut ref self) { } }
+shared struct DeepE { v: i64, mut kids: Vec[DKid] }
+shared struct DeepQ { v: i64, mut line: VecDeque[DeepQ] }
+shared struct DeepS { v: i64, mut sm: SortedMap[i64, DeepS] }
+enum DTr { Leaf(DeepX), Branch(Vec[DTr]), Lit(i64) }
+shared struct DeepX { v: i64, mut expr: DTr }
+
+fn e(s: own String) -> E { E { name: s, kids: Vec.new() } }
+fn q(s: own String) -> Q { Q { name: s, line: VecDeque.new(), sm: SortedMap.new() } }
+fn x(s: own String) -> X { X { name: s, expr: Tr.Lit(0) } }
+
+fn main() {
+    {
+        let root = e("root");
+        let a = e("a");
+        a.kids.push(Kid.Node(e("a0")));
+        a.kids.push(Kid.Num(5));
+        root.kids.push(Kid.Node(a));
+        root.kids.push(Kid.Num(1));
+        root.kids.push(Kid.Node(e("b")));
+        println("dropping E root");
+    }
+    {
+        let root = q("root");
+        let a = q("a");
+        a.line.push_back(q("a0"));
+        a.line.push_front(q("a-1"));
+        root.line.push_back(a);
+        root.line.push_back(q("b"));
+        root.line.push_front(q("first"));
+        root.sm[3] = q("s3");
+        root.sm[1] = q("s1");
+        println("dropping Q root");
+    }
+    {
+        let root = x("root");
+        let inner = x("inner");
+        inner.expr = Tr.Branch([Tr.Leaf(x("deep")), Tr.Lit(2)]);
+        root.expr = Tr.Branch([Tr.Leaf(inner), Tr.Branch([Tr.Lit(1), Tr.Leaf(x("r"))])]);
+        println("dropping X root");
+    }
+    println("done");
+    let e0 = DeepE { v: 0, kids: Vec.new() };
+    let mut c = e0;
+    for i in 1..200000 {
+        let k = DeepE { v: i, kids: Vec.new() };
+        c.kids.push(DKid.Node(k));
+        c = k;
+    }
+    println(f"dropenum {e0.v}");
+    let q0 = DeepQ { v: 0, line: VecDeque.new() };
+    let mut qc = q0;
+    for i in 1..200000 {
+        let k = DeepQ { v: i, line: VecDeque.new() };
+        qc.line.push_back(k);
+        qc = k;
+    }
+    println(f"deque {q0.v}");
+    let s0 = DeepS { v: 0, sm: SortedMap.new() };
+    let mut sc = s0;
+    for i in 1..200000 {
+        let k = DeepS { v: i, sm: SortedMap.new() };
+        sc.sm[i] = k;
+        sc = k;
+    }
+    println(f"sorted {s0.v}");
+    let x0 = DeepX { v: 0, expr: DTr.Lit(0) };
+    let mut xc = x0;
+    for i in 1..200000 {
+        let k = DeepX { v: i, expr: DTr.Lit(i) };
+        xc.expr = DTr.Branch([DTr.Leaf(k)]);
+        xc = k;
+    }
+    println(f"spine {x0.v}");
+}
+"#;
+
+const REMAINDER_OUT: &str = "dropping E root\n\
+drop E root\n\
+drop Kid.Node a\n\
+drop E a\n\
+drop Kid.Node a0\n\
+drop E a0\n\
+drop Kid.Num 5\n\
+drop Kid.Num 1\n\
+drop Kid.Node b\n\
+drop E b\n\
+dropping Q root\n\
+drop Q root\n\
+drop Q s1\n\
+drop Q s3\n\
+drop Q first\n\
+drop Q a\n\
+drop Q a-1\n\
+drop Q a0\n\
+drop Q b\n\
+dropping X root\n\
+drop X root\n\
+drop X inner\n\
+drop X deep\n\
+drop X r\n\
+done\n\
+dropenum 0\n\
+deque 0\n\
+sorted 0\n\
+spine 0\n\
+";
+
+/// A recursive plain enum whose payloads are boxed (`Neg(Ex)`): the checker
+/// refuses that type on `karac build` (E0501), so it is reached only by the
+/// MIR runners; their release takes it through the same worklist.
+const BOXED: &str = r#"enum Kid { Node(E), Num(i64) }
+
+impl Drop for Kid {
+    fn drop(mut ref self) {
+        match self {
+            Kid.Node(e) => println(f"drop Kid.Node {e.name}"),
+            Kid.Num(n) => println(f"drop Kid.Num {n}"),
+        }
+    }
+}
+
+shared struct E { name: String, mut kids: Vec[Kid] }
+
+impl Drop for E {
+    fn drop(mut ref self) {
+        println(f"drop E {self.name}");
+    }
+}
+
+shared struct Q { name: String, mut line: VecDeque[Q], mut sm: SortedMap[i64, Q] }
+
+impl Drop for Q {
+    fn drop(mut ref self) {
+        println(f"drop Q {self.name}");
+    }
+}
+
+enum Ex { Leaf(X), Neg(Ex), Add(Ex, Ex), Lit(i64) }
+
+shared struct X { name: String, mut expr: Ex }
+
+impl Drop for X {
+    fn drop(mut ref self) {
+        println(f"drop X {self.name}");
+    }
+}
+
+fn e(s: own String) -> E { E { name: s, kids: Vec.new() } }
+fn q(s: own String) -> Q { Q { name: s, line: VecDeque.new(), sm: SortedMap.new() } }
+fn x(s: own String) -> X { X { name: s, expr: Ex.Lit(0) } }
+
+fn main() {
+    {
+        let root = e("root");
+        let a = e("a");
+        a.kids.push(Kid.Node(e("a0")));
+        a.kids.push(Kid.Num(5));
+        root.kids.push(Kid.Node(a));
+        root.kids.push(Kid.Num(1));
+        root.kids.push(Kid.Node(e("b")));
+        println("dropping E root");
+    }
+    {
+        let root = q("root");
+        let a = q("a");
+        a.line.push_back(q("a0"));
+        a.line.push_front(q("a-1"));
+        root.line.push_back(a);
+        root.line.push_back(q("b"));
+        root.line.push_front(q("first"));
+        root.sm[3] = q("s3");
+        root.sm[1] = q("s1");
+        println("dropping Q root");
+    }
+    {
+        let root = x("root");
+        let inner = x("inner");
+        inner.expr = Ex.Neg(Ex.Leaf(x("deep")));
+        root.expr = Ex.Add(Ex.Leaf(inner), Ex.Neg(Ex.Add(Ex.Lit(1), Ex.Leaf(x("r")))));
+        println("dropping X root");
+    }
+    println("done");
+}
+"#;
+
+const BOXED_OUT: &str = "dropping E root\n\
+drop E root\n\
+drop Kid.Node a\n\
+drop E a\n\
+drop Kid.Node a0\n\
+drop E a0\n\
+drop Kid.Num 5\n\
+drop Kid.Num 1\n\
+drop Kid.Node b\n\
+drop E b\n\
+dropping Q root\n\
+drop Q root\n\
+drop Q s1\n\
+drop Q s3\n\
+drop Q first\n\
+drop Q a\n\
+drop Q a-1\n\
+drop Q a0\n\
+drop Q b\n\
+dropping X root\n\
+drop X root\n\
+drop X r\n\
+drop X inner\n\
+drop X deep\n\
+done\n\
+";
+
+#[test]
+fn drop_enums_deques_sorted_maps_and_recursive_enums_drain_in_order() {
+    let dir = scratch("remainder");
+    let file = dir.join("main.kara");
+    std::fs::write(&file, REMAINDER).unwrap();
+    assert_eq!(karac(&["__mir-run"], &file), REMAINDER_OUT, "interp");
+    assert_eq!(karac(&["__mir-llvm-run"], &file), REMAINDER_OUT, "llvm");
+    std::fs::write(&file, BOXED).unwrap();
+    assert_eq!(karac(&["__mir-run"], &file), BOXED_OUT, "boxed interp");
+    assert_eq!(karac(&["__mir-llvm-run"], &file), BOXED_OUT, "boxed llvm");
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(out) = on_wasm("remainder", REMAINDER) {
+        assert_eq!(out, REMAINDER_OUT, "wasm");
+    }
+}
