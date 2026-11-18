@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 504 |
-| false-positive | 263 |
+| diagnostics | 505 |
+| false-positive | 264 |
 | missing-feature | 201 |
-| perf | 187 |
+| perf | 188 |
 | other | 113 |
 | soundness | 86 |
 | miscompile | 82 |
 | run-vs-build | 56 |
-| crash | 52 |
+| crash | 53 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
 | leak | 4 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 631 |
-| mir-llvm | 289 |
+| typecheck | 633 |
+| mir-llvm | 291 |
 | mir | 253 |
 | cli | 198 |
 | parser | 117 |
@@ -134,6 +134,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-33 | 2026-11-18 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-exhaustive (E0205 "pattern `_` not covered") though it covers every value | — |
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
 | B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
+| B-2026-11-18-37 | 2026-11-18 | mir-llvm | low | Dropping a deep `shared` structure still recurses once per level when its handles sit inside a library cell (`Mutex`, `RwLock`, `OnceLock`, channels and the rest) or a `Set`; on wasm_wasi node's engine stack ends a 200000-deep one (RangeError: Maximum call stack size exceeded) | — |
+| B-2026-11-18-38 | 2026-11-18 | typecheck | low | Hand-written `impl PartialEq` + `impl Eq`, `impl Ord` or `impl Hash` on a distinct type is ignored by `==`, `T: Eq` / `T: Ord` bounds, `Vec.sort()` and `Map` keys (the derive set alone answers), as Display was before -20 | — |
+| B-2026-11-18-39 | 2026-11-18 | mir-llvm | low | Kata 1197's bench (a breadth-first search over a `VecDeque` and a `Vec[bool]`) executes 1.49x checked Rust's instructions and runs 1.67x its time on x86: `VecDeque` push/pop and `for (dx, dy) in MOVES` over a const `Array` account for about two thirds of the gap | — |
+| B-2026-11-18-40 | 2026-11-18 | typecheck | medium | An associated function or enum variant reached through `Self` (`Self.gcd(a, b)` in an impl, `Self.one()` in a trait's default body, `Self.B(3)` in an enum's impl) is typed as an error with no diagnostic, and `karac check` prints MIR's "a type that failed to check is not lowered yet" (E0516); the pattern `Self.A =>` is refused as "'Self' is a reserved keyword" | — |
 
 ### Relocated
 
