@@ -66,7 +66,24 @@ const CLOSURE_RESULT: &str = "returned from a closure";
 
 const STORE_METHODS: &[&str] = &["push", "push_back", "push_front", "insert", "set", "append"];
 
-pub fn analyze(program: &Program) -> CoreEscape {
+/// The node types a typed caller has, so a method named like a lazy
+/// adaptor on an `Option` or `Result` is seen to run its closure at once.
+pub type NodeTypes = FxHashMap<crate::ids::NodeId, (crate::typechecker::types::Type, u32)>;
+
+/// Whether a receiver of this type runs the closure a method named like a
+/// lazy adaptor is handed at once and keeps nothing: `Option.map`,
+/// `Result.map`, `Option.filter`, `Option.take` (docs/library/core-types.md,
+/// B-2026-11-18-78).
+pub(crate) fn eager_receiver_ty(ty: &crate::typechecker::types::Type) -> bool {
+    use crate::typechecker::types::Type;
+    match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => eager_receiver_ty(inner),
+        Type::Named { name, .. } => name == "Option" || name == "Result",
+        _ => false,
+    }
+}
+
+pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
     let esc = &program.escaping_fn_types;
     let sig_of = |f: &Function| -> Sig {
         f.params
@@ -116,6 +133,7 @@ pub fn analyze(program: &Program) -> CoreEscape {
             scopes: Vec::new(),
             out: &mut out,
             rebound: FxHashMap::default(),
+            types,
         };
         w.walk_fn(f);
     }
@@ -132,6 +150,7 @@ struct Walker<'a> {
     /// A local bound from a non-escaping parameter (`let mut f = g;`), to
     /// the parameter it holds, for the diagnostic (B-2026-11-04-62).
     rebound: FxHashMap<String, String>,
+    types: Option<&'a NodeTypes>,
 }
 
 impl Walker<'_> {
@@ -386,7 +405,15 @@ impl Walker<'_> {
                 // is handed (and the iterator it was called on), so where the
                 // result escapes, both do: a closure returning
                 // `(0..3).map(|c| m + clears[c])` returns that closure.
-                if let (Pos::Escape(why), true) = (pos, LAZY_ADAPTORS.contains(&method.as_str())) {
+                // `Option.map` and `Result.map` share the name but run the
+                // closure at once (B-2026-11-18-78).
+                let eager = self
+                    .types
+                    .and_then(|t| t.get(&object.id))
+                    .is_some_and(|(t, _)| eager_receiver_ty(t));
+                if let (Pos::Escape(why), true) =
+                    (pos, LAZY_ADAPTORS.contains(&method.as_str()) && !eager)
+                {
                     self.walk_expr(object, Pos::Escape(why));
                     for a in args {
                         self.walk_expr(&a.value, Pos::Escape(why));

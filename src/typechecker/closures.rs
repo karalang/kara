@@ -270,7 +270,9 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             CaptureWalkMode::Reading
         };
-        let returned = returned_closure_spans(body);
+        let returned = returned_closure_spans(body, &|object: &Expr| {
+            self.eager_receiver(object, outer_bindings)
+        });
         let saved = self.returned_closure_spans.replace(returned);
         let saved_by_move = self.capture_walk_by_move.replace(0);
         self.walk_capture_consume(
@@ -283,6 +285,25 @@ impl<'a> super::TypeChecker<'a> {
         self.capture_walk_by_move.set(saved_by_move);
         self.returned_closure_spans.replace(saved);
         reason
+    }
+
+    /// Whether `object`, the receiver of a method named like a lazy
+    /// adaptor, is an `Option` or `Result`, whose `map`, `filter` and `take`
+    /// run their closure at once (docs/library/core-types.md) and so return
+    /// no closure (B-2026-11-18-78). An untyped receiver answers false.
+    fn eager_receiver(&self, object: &Expr, env: &HashMap<String, Type>) -> bool {
+        let ty = match &object.kind {
+            ExprKind::Identifier(n) => env.get(n.as_str()).cloned(),
+            ExprKind::SelfValue => env.get("self").cloned(),
+            _ => None,
+        }
+        .or_else(|| {
+            self.node_types
+                .get(&object.id)
+                .map(|(t, _)| resolve_type_var_top(t, &self.env.substitutions))
+        })
+        .map(|t| resolve_type_var_top(&t, &self.env.substitutions));
+        ty.is_some_and(|t| crate::core_escape::eager_receiver_ty(&t))
     }
 
     fn name_is_shadowed(name: &str, shadow_stack: &[HashSet<String>]) -> bool {
@@ -955,7 +976,7 @@ impl<'a> super::TypeChecker<'a> {
 /// The closure literals in the value a closure body returns, followed
 /// through block, `if` and `match` tails, `return`, and tuple, collection
 /// and struct literals, as the MIR builder's `returned_closures_of` does.
-fn returned_closure_spans(body: &Expr) -> HashSet<SpanKey> {
+fn returned_closure_spans(body: &Expr, eager: &dyn Fn(&Expr) -> bool) -> HashSet<SpanKey> {
     let mut out = HashSet::new();
     let mut work = vec![body];
     while let Some(e) = work.pop() {
@@ -990,7 +1011,12 @@ fn returned_closure_spans(body: &Expr) -> HashSet<SpanKey> {
                 method,
                 args,
                 ..
-            } if crate::core_escape::LAZY_ADAPTORS.contains(&method.as_str()) => {
+            } if crate::core_escape::LAZY_ADAPTORS.contains(&method.as_str())
+                // `Option.map` / `Result.map` (and `filter`, `take`) share
+                // a name with an adaptor but run the closure at once and
+                // keep nothing (B-2026-11-18-78).
+                && !eager(object) =>
+            {
                 work.push(object);
                 work.extend(args.iter().map(|a| &a.value));
             }

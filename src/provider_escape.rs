@@ -258,7 +258,7 @@ pub fn check_core_provider_escape(
     effects: &crate::effectchecker::EffectCheckResult,
     types: Option<&TypeCheckResult>,
 ) -> Vec<EscapeError> {
-    let esc = crate::core_escape::analyze(program);
+    let esc = crate::core_escape::analyze(program, types.map(|t| &t.node_types));
     // Function name (bare, or `Type.method`) → the resources its effects
     // reach; an instance method call is matched by its method name alone.
     let mut fn_res: HashMap<String, Vec<String>> = HashMap::new();

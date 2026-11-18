@@ -30,7 +30,7 @@ fn main() {
 
 fn run(backend: &str) -> String {
     let path =
-        std::env::temp_dir().join(format!("karac-b55-{backend}-{}.kara", std::process::id()));
+        std::env::temp_dir().join(format!("karac-b75-{backend}-{}.kara", std::process::id()));
     std::fs::write(&path, SRC).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .arg(backend)

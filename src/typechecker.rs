@@ -5406,7 +5406,7 @@ impl<'a> TypeChecker<'a> {
         }
         let (core_escaping_closures, core_closure_result_only) =
             if self.cli_lint_overrides.strict_core {
-                let esc = crate::core_escape::analyze(self.program);
+                let esc = crate::core_escape::analyze(self.program, Some(&node_types));
                 for (span, message) in esc.errors {
                     self.type_error(message, span, TypeErrorKind::TypeMismatch);
                 }
