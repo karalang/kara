@@ -2946,6 +2946,8 @@ For `match`, the join runs left to right: the first arm sets the running type, a
 
 `CrossTask`, the bound that gates channels and tasks, is computed by the compiler and cannot be implemented by hand ([§9](#9-traits)).
 
+**Comparison and interpolation without the bound (0.8.x).** `==`, `!=`, `<`, `<=`, `>`, `>=` and an f-string interpolation on a value of an unbounded type parameter are errors at the next minor release. In 0.8.x each is a `deprecated` warning at the body whose machine fix adds the bound (`T: PartialEq`, `T: PartialOrd`, `T: Display`) where `T` is declared, and the body still compares or renders by shape. Until then the requirement is checked at each call as if the bound were written: a call that gives `T` a type without the trait, directly or through another generic function that passes its own parameter on, is an error now, naming the call, the type and the trait. So a `Secret[T]`, which has neither `Display` nor `PartialEq`, cannot be printed or compared through an unbounded generic (B-2026-11-18-25).
+
 ### `where` clauses
 
 Bounds may move to a `where` clause after the return type and effects, when they are long or many:

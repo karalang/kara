@@ -1,0 +1,1 @@
+ERROR at line 10: this call gives `same`'s `T` the type `Point`, which does not implement `PartialEq`, and `same` uses `==` on `T` (line 6), which needs `T: PartialEq` (design.md §8). Implement or derive `PartialEq` for `Point`, or pass a type that has it

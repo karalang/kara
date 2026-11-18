@@ -5923,6 +5923,15 @@ impl<'a> super::TypeChecker<'a> {
                     (right, cmp_right),
                     span,
                 ) {
+                } else if let Some(p) =
+                    self.param_lacking_bound(cmp_left, &["PartialEq", "Numeric"])
+                {
+                    let what = if matches!(op, BinOp::Eq) {
+                        "`==`"
+                    } else {
+                        "`!=`"
+                    };
+                    self.report_param_lacks_bound(&p, "PartialEq", what, *span);
                 } else if !self.type_supports_partial_eq(cmp_left) {
                     // B-2026-08-25-30 — name the PARTIAL trait: the
                     // desugaring runs through `PartialEq` (the guard
@@ -6070,6 +6079,16 @@ impl<'a> super::TypeChecker<'a> {
                     (right, cmp_right),
                     span,
                 ) {
+                } else if let Some(p) =
+                    self.param_lacking_bound(cmp_left, &["PartialOrd", "Numeric"])
+                {
+                    let what = match op {
+                        BinOp::Lt => "`<`",
+                        BinOp::LtEq => "`<=`",
+                        BinOp::Gt => "`>`",
+                        _ => "`>=`",
+                    };
+                    self.report_param_lacks_bound(&p, "PartialOrd", what, *span);
                 } else if matches!(cmp_left, Type::Named { name, .. } if self.env.distinct_types.contains_key(name))
                     && !self.type_supports_partial_ord(cmp_left)
                     && !self.ordering_operator_dispatches(cmp_left)

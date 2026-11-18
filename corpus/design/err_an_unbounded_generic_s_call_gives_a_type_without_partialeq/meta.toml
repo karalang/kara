@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "generics", "bounds"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-18-25: an unbounded generic body's `==` is checked at each call as if it declared `T: PartialEq` (design.md §8 Bounds and generic bodies); a call giving T a type without PartialEq is refused, naming the type and the trait. The expected.out wording of an error pin is guidance, not a byte oracle."

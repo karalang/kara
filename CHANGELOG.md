@@ -20,6 +20,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A call that gives an unbounded type parameter a type without
+  `PartialEq`, `PartialOrd` or `Display`, when the generic body uses
+  `==`/`!=`, `<`/`<=`/`>`/`>=` or an f-string interpolation on it, is
+  refused at the call, naming the type and the trait, also through a
+  generic caller that passes its own parameter on. `fn h[T](x: T) ->
+  String { f"{x}" }` called with a struct that has no `Display` printed
+  it by shape, and an unbounded `a == b` compared two `Secret[String]`s
+  by shape, in variable time (printing one gave `<redacted>`). The body itself gets a
+  `deprecated` warning whose machine fix adds the bound; it becomes an
+  error at the next minor release (design.md §8, B-2026-11-18-25).
 - A const generic parameter's name is Const class, as design.md §3 CN-3
   and CN-7 say: `struct Buf[const Cap: i64]` is refused with `CAP`
   suggested, and the spec's `struct Matrix[T, const ROWS: i64, const COLS:

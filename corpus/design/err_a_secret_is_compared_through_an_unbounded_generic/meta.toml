@@ -1,0 +1,9 @@
+source = "docs/library/secret.md"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "generics", "bounds", "secret"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-18-25: Secret[T] has no PartialEq (docs/library/secret.md), and an unbounded generic `==` is checked at the call as if it declared `T: PartialEq` (design.md §8). Before the check, main at 2acf33f426 printed `true`: two secrets compared by shape, in variable time. The expected.out wording of an error pin is guidance, not a byte oracle."

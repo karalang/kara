@@ -1,0 +1,12 @@
+// std.secret: Secret[T] has no PartialEq, so comparing two is not variable
+// time by accident. An unbounded generic `==` is checked at the call as if
+// it declared `T: PartialEq` (design.md §8), so it cannot compare secrets.
+import std.secret.{Secret};
+
+fn same[T](a: T, b: T) -> bool { a == b }
+
+fn main() {
+    let a: Secret[String] = Secret.new("abc");
+    let b: Secret[String] = Secret.new("abc");
+    println(same(a, b));
+}

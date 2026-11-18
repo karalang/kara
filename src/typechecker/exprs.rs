@@ -15902,7 +15902,14 @@ impl<'a> super::TypeChecker<'a> {
                 for part in parts {
                     if let ParsedInterpolationPart::Expr(inner_expr, spec) = part {
                         let ty = self.infer_expr(inner_expr);
-                        if ty != Type::Error && !self.type_supports_display(&ty) {
+                        if let Some(p) = self.param_lacking_bound(&ty, &["Display"]) {
+                            self.report_param_lacks_bound(
+                                &p,
+                                "Display",
+                                "an f-string interpolation",
+                                inner_expr.span,
+                            );
+                        } else if ty != Type::Error && !self.type_supports_display(&ty) {
                             self.type_error(
                                 format!(
                                     "type '{}' does not implement Display; \

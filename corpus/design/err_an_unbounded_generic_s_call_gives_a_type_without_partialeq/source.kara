@@ -1,0 +1,11 @@
+// design.md §8 Bounds and generic bodies: a body uses only what its bounds
+// provide, and bounds are checked at the call. `same` has no `T: PartialEq`
+// (a deprecated warning in 0.8.x), so the call is checked as if it did.
+struct Point { x: i64, y: i64 }
+
+fn same[T](a: T, b: T) -> bool { a == b }
+
+fn main() {
+    println(same(1, 1));
+    println(same(Point { x: 1, y: 2 }, Point { x: 1, y: 2 }));
+}

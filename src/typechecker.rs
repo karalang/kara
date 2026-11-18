@@ -76,6 +76,7 @@ mod exprs;
 mod fields;
 mod gpu_call_graph;
 mod gpu_safe;
+mod implied_param_bounds;
 pub(crate) mod inference;
 mod items;
 mod lowering;
@@ -3850,6 +3851,9 @@ pub struct TypeChecker<'a> {
     /// B-2026-10-27-33: type-parameter declarations already told they
     /// need `CrossTask`.
     pub(super) reported_cross_task_params: FxHashSet<SpanKey>,
+    /// B-2026-11-18-25: the bounds a program function's body implies for its
+    /// type parameters, by function key, checked at each call.
+    pub(super) implied_param_bounds: FxHashMap<String, Vec<implied_param_bounds::ImpliedBound>>,
     /// See [`TypeCheckResult::direct_iter_terminals`].
     pub(super) direct_iter_terminals: FxHashSet<SpanKey>,
     /// MethodCall span → receiver type-parameter name. See the matching field
@@ -4848,6 +4852,7 @@ impl<'a> TypeChecker<'a> {
             reported_table_keys: FxHashSet::default(),
             table_keys_live: false,
             reported_cross_task_params: FxHashSet::default(),
+            implied_param_bounds: FxHashMap::default(),
             direct_iter_terminals: FxHashSet::default(),
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),
@@ -5190,6 +5195,7 @@ impl<'a> TypeChecker<'a> {
         self.reject_unqualifiable_impl_collisions();
         self.check_declared_table_keys();
         self.check_items();
+        self.check_implied_param_bounds();
         // Literals outside any function body (a `const`, a `static`).
         self.default_literal_vars(0);
         self.check_wide_int_literals();

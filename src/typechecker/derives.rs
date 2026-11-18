@@ -842,6 +842,81 @@ impl<'a> super::TypeChecker<'a> {
         Some((param.clone(), edit))
     }
 
+    /// B-2026-11-18-25 — design.md §8: a generic body uses only what its
+    /// bounds provide. When `ty`, under any borrows, is a type parameter of a
+    /// frame in scope and none of its bounds gives any of `traits` (directly
+    /// or as a supertrait), its name. `Self` is left to its trait's
+    /// supertraits.
+    pub(super) fn param_lacking_bound(&self, ty: &Type, traits: &[&str]) -> Option<String> {
+        let mut t = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        let Type::TypeParam(p) = t else {
+            return None;
+        };
+        if p == "Self" || !self.enclosing_bounds.contains_key(p) {
+            return None;
+        }
+        (!traits
+            .iter()
+            .any(|tr| self.type_param_satisfies_bound(p, tr)))
+        .then(|| p.clone())
+    }
+
+    /// The finding for [`Self::param_lacking_bound`]: `what` (an operator or
+    /// an interpolation) on `param` needs `param: add`, with the edit adding
+    /// the bound where the parameter is declared. 0.8.x still compares or
+    /// renders the value by its shape, so this is a `deprecated` warning, as
+    /// a derive over a field that lacks the trait is (B-2026-11-16-330); it
+    /// becomes an error at the next minor release.
+    pub(super) fn report_param_lacks_bound(
+        &mut self,
+        param: &str,
+        add: &str,
+        what: &str,
+        span: Span,
+    ) {
+        self.note_implied_bound(param, add, what, span);
+        let does = if add == "Display" {
+            "renders"
+        } else {
+            "compares"
+        };
+        let message = format!(
+            "{what} on `{param}` needs `{param}: {add}`: a generic body uses only what its \
+             bounds provide (design.md §8), and no bound of `{param}` gives `{add}`. 0.8.x \
+             still {does} the value by its shape; this is deprecated and becomes an error in \
+             the next minor release. Add `{add}` where `{param}` is declared"
+        );
+        let decl = self
+            .param_scopes_at(span.offset)
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g.params.iter())
+            .find(|g| g.name == param && !g.is_const)
+            .map(|g| g.span);
+        let fix = match (self.param_bound_edit(span.offset, param, add), decl) {
+            (Some(edit), Some(d)) => Some(super::FixIt {
+                span: Span {
+                    offset: edit.offset,
+                    length: 0,
+                    line: d.line,
+                    column: d.column + d.length,
+                },
+                replacement: edit.replacement,
+            }),
+            _ => None,
+        };
+        self.type_lint_warning_with_fix(
+            message,
+            span,
+            TypeErrorKind::Deprecated,
+            "deprecated",
+            fix,
+        );
+    }
+
     /// Does the in-scope type parameter `p` carry `trait_name`, directly or
     /// through a supertrait (`Copy` counts as `Clone`)?
     pub(super) fn type_param_satisfies_bound(&self, p: &str, trait_name: &str) -> bool {
