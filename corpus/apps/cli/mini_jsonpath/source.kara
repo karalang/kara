@@ -3808,14 +3808,14 @@ impl W {
     // x[k]
     fn getitem(mut ref self, c: i64, k: i64) -> Result[i64, PyErr] {
         match self.objs[c] {
-            Obj.Dict(d) => {
+            Obj.Dict(ref d) => {
                 let i = self.dict_find(d, k);
                 if i < 0 {
                     return Err(pyerr("KeyError", self.repr(k)));
                 }
                 Ok(d[i].1)
             }
-            Obj.List(xs) => {
+            Obj.List(ref xs) => {
                 let i = match self.int_val(k) {
                     Some(i) => i,
                     None => return Err(type_error(f"list indices must be integers or slices, not {self.type_name(k)}")),
@@ -3826,7 +3826,7 @@ impl W {
                 }
                 Ok(xs[j])
             }
-            Obj.Str(s) => {
+            Obj.Str(ref s) => {
                 let i = match self.int_val(k) {
                     Some(i) => i,
                     None => return Err(type_error(f"string indices must be integers, not '{self.type_name(k)}'")),

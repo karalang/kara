@@ -1,0 +1,39 @@
+// core semantics §4.6: a place reached through a `mut ref` and through no
+// `ref` is a `mut ref` scrutinee, so a plain binding of a non-`Copy` part
+// is a `mut ref` into it. An element (`self.slots[i]`) binds as a field
+// (`self.one`) does (B-2026-11-17-152). An explicit `ref` binding is a
+// shared borrow, so its arm may read `self` while it is live.
+struct V { n: i64 }
+struct P { slots: Vec[Option[V]], one: Option[V], k: i64 }
+impl P {
+    fn bump(mut ref self, i: i64) {
+        match self.slots[i] { Some(v) => v.n += 1, None => {} }
+    }
+    fn bump_if(mut ref self, i: i64) {
+        if let Some(v) = self.slots[i] { v.n += 10; }
+    }
+    fn bump_one(mut ref self) {
+        match self.one { Some(v) => v.n += 100, None => {} }
+    }
+    fn look(ref self, v: ref V) -> i64 { v.n + self.k }
+    fn read_slot(mut ref self, i: i64) -> i64 {
+        match self.slots[i] { Some(ref v) => self.look(v), None => -1 }
+    }
+    fn read_one(mut ref self) -> i64 {
+        if let Some(ref v) = self.one { self.look(v) } else { -1 }
+    }
+}
+fn bump_param(slots: mut ref Vec[Option[V]]) {
+    match slots[0] { Some(v) => v.n += 1000, None => {} }
+}
+fn main() {
+    let mut p = P { slots: [Some(V { n: 1 }), None], one: Some(V { n: 2 }), k: 5 };
+    p.bump(0);
+    p.bump(1);
+    p.bump_if(0);
+    p.bump_one();
+    bump_param(mut p.slots);
+    match p.slots[0] { Some(ref v) => println(f"{v.n}"), None => println("none") }
+    match p.one { Some(ref v) => println(f"{v.n}"), None => println("none") }
+    println(f"{p.read_slot(0)} {p.read_slot(1)} {p.read_one()}");
+}

@@ -2902,7 +2902,8 @@ impl Pipeline {
             };
             let class = crate::typechecker::class_for_type_error_kind(&kind);
             let fix_it = if e.code == "E0516" && self.renames.is_empty() {
-                shared_handle_copy_fix(&src, typed, &e)
+                ref_binding_fix(&src, &e)
+                    .or_else(|| shared_handle_copy_fix(&src, typed, &e))
                     .or_else(|| held_borrow_copy_fix(&src, typed, &e))
                     .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
                     .or_else(|| moved_arg_clone_fix(&src, typed, &e))
@@ -4133,6 +4134,41 @@ fn e0516_shared_referent(
     is_shared_type(typed, inner).then(|| crate::typechecker::types::type_display(inner))
 }
 
+/// The machine-applicable repair for an E0516 whose holder is a pattern
+/// binding of a part of a `mut ref` scrutinee that the arm only reads
+/// (`match self.slots[i] { Some(d) => self.find(d) }` in a `mut ref self`
+/// method): `Some(ref d)`. The binding is then a shared borrow and the
+/// scrutinee is reborrowed shared, so reading `self` beside it is allowed
+/// (core semantics §4.6, §5.6; B-2026-11-17-152).
+fn ref_binding_fix(src: &str, e: &crate::mir::BorrowError) -> Option<crate::typechecker::FixIt> {
+    let name = e.holder_read_only.as_ref()?;
+    let loan = offset_at(src, e.loan_at?)?;
+    let access = offset_at(src, e.at?)?;
+    let between = src.get(loan..access)?;
+    // The binding in the arm's pattern, the last one before the access:
+    // after `(`, `,`, `{`, `|` or a struct field's `name:`, so never a
+    // `let`, a path segment or a binding already marked `ref`/`mut ref`.
+    let bind = regex::Regex::new(&format!(
+        r"(?:^|[^:])[(,{{|:]\s*({})\s*(?:[),}}|]|=>)",
+        regex::escape(name)
+    ))
+    .ok()?;
+    let m = bind.captures_iter(between).last()?.get(1)?;
+    let offset = loan + m.start();
+    let before = &src[..offset];
+    let line = before.matches('\n').count() + 1;
+    let column = offset - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset,
+            length: 0,
+            line,
+            column,
+        },
+        replacement: "ref ".to_string(),
+    })
+}
+
 /// The machine-applicable repair for an E0516 whose holder is bound from a
 /// `ref` to a `shared` value (`Some(e) => { let e2 = e; .. }` over
 /// `m.get(k)`): `let e2 = *e;`. `*e` on a `ref` to a `shared` value is a
@@ -4688,6 +4724,7 @@ mod mir_message_tests {
             place: None,
             loan_at: Some((3, 13)),
             holder: Some("f".to_string()),
+            holder_read_only: None,
             temporary: Some((3, 18)),
         };
         assert_eq!(

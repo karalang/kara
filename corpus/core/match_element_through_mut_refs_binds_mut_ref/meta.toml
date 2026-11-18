@@ -1,0 +1,9 @@
+source = "B-2026-11-17-152"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "ref-binding", "borrow"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "core-semantics.md §4.6 (B-2026-11-17-152): an element reached only through `mut ref`s is a `mut ref` scrutinee, as a field is: a plain binding writes through to the element (match, if let, a `mut ref Vec` parameter), and an explicit `ref` binding is shared, so its arm reads `self` while it is live."

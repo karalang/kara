@@ -285,6 +285,11 @@ pub struct BorrowError {
     /// expression whose value it holds, which the program does not name
     /// (B-2026-10-24-10).
     pub temporary: Option<(usize, usize)>,
+    /// The binding behind the borrow, when it holds a `mut ref` it only
+    /// reads through: a pattern binding of a part of a `mut ref` scrutinee,
+    /// which `ref` turns into a shared borrow, so `karac fix` writes `ref`
+    /// before it (B-2026-11-17-152).
+    pub holder_read_only: Option<String>,
 }
 
 impl BorrowError {
@@ -297,6 +302,7 @@ impl BorrowError {
             place: None,
             loan_at: None,
             holder: None,
+            holder_read_only: None,
             temporary: None,
         }
     }
@@ -473,13 +479,67 @@ pub fn borrow_errors_in(
                             .iter()
                             .filter(|l| o.get(**l).iter().any(|h| h == li))
                             .filter_map(|l| local_name(body, *l).map(|n| (*l, n)))
-                            .max_by_key(|(l, _)| *l)
+                            .max_by_key(|(l, _)| *l);
+                        // The binding the fix would change: the named
+                        // holder, or else a binding holding a reborrow
+                        // through the holding temporary (`Some(d)` over a
+                        // scrutinee reborrowed into one).
+                        let holder_read_only = holder
+                            .clone()
+                            .or_else(|| {
+                                let mut held = vec![li];
+                                let mut holders: Vec<Local> = Vec::new();
+                                while let Some(k) = held.pop() {
+                                    for l in live.iter() {
+                                        if !holders.contains(l) && o.get(*l).iter().any(|h| h == k)
+                                        {
+                                            holders.push(*l);
+                                            held.extend((0..loans.len()).filter(|j| {
+                                                loans[*j].place.local == *l
+                                                    && loans[*j].place.projection.first()
+                                                        == Some(&ProjElem::Deref)
+                                            }));
+                                        }
+                                    }
+                                }
+                                // A temporary holding the loan was reborrowed
+                                // from the binding (`_5 = &(*v)` for a call
+                                // argument after `v`'s last use): walk back
+                                // to the binding.
+                                let mut i = 0;
+                                while i < holders.len() {
+                                    let h = holders[i];
+                                    i += 1;
+                                    if local_name(body, h).is_some() {
+                                        continue;
+                                    }
+                                    for st in body.blocks.iter().flat_map(|b| &b.statements) {
+                                        if let StatementKind::Assign(d, Rvalue::Ref(_, p)) =
+                                            &st.kind
+                                        {
+                                            if d.local == h
+                                                && d.projection.is_empty()
+                                                && p.projection.first() == Some(&ProjElem::Deref)
+                                                && !holders.contains(&p.local)
+                                            {
+                                                holders.push(p.local);
+                                            }
+                                        }
+                                    }
+                                }
+                                holders
+                                    .into_iter()
+                                    .filter_map(|l| local_name(body, l).map(|n| (l, n)))
+                                    .max_by_key(|(l, _)| *l)
+                            })
+                            .filter(|(l, _)| reads_only_through(body, tys, *l))
                             .map(|(_, n)| n);
                         errs.push(BorrowError {
                             access: access_name(access),
                             place: source_place(body, tys, &place),
                             loan_at: source_at(body, loan.at),
-                            holder,
+                            holder: holder.map(|(_, n)| n),
+                            holder_read_only,
                             temporary: temporary_at(body, &place),
                             ..BorrowError::new(text, "E0516", site_at(body, at, Some(loan.at)))
                         });
@@ -1155,6 +1215,45 @@ fn source_ty(tys: &TyInterner, t: Ty) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Whether `l` is a user binding holding a `mut ref` that the body only
+/// reads through: it is never written through, reborrowed mutably, or
+/// passed on whole (where the `mut ref` itself could reach a write), so a
+/// shared borrow serves it as well (B-2026-11-17-152).
+fn reads_only_through(body: &Body, tys: &TyInterner, l: Local) -> bool {
+    let decl = body.local(l);
+    if !matches!(decl.kind, LocalKind::User { .. })
+        || !matches!(tys.kind(decl.ty), TyKind::MutRef(_))
+    {
+        return false;
+    }
+    let whole =
+        |o: &Operand| matches!(o.place(), Some(p) if p.local == l && p.projection.is_empty());
+    let written = |p: &Place| p.local == l && !p.projection.is_empty();
+    body.blocks.iter().all(|b| {
+        b.statements.iter().all(|s| match &s.kind {
+            StatementKind::Assign(dest, rv) => {
+                !written(dest)
+                    && !matches!(rv, Rvalue::Ref(BorrowKind::Mut, p) if p.local == l)
+                    && !super::elaborate::rvalue_operands(rv).into_iter().any(whole)
+            }
+            StatementKind::SetDiscriminant(p, _) | StatementKind::FreeBox(p) => p.local != l,
+            StatementKind::BorrowFlag(FlagOp::Acquire { place, kind, .. }) => {
+                !(place.local == l && *kind == BorrowKind::Mut)
+            }
+            _ => true,
+        }) && match &b.terminator.kind {
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => !whole(func) && !args.iter().any(whole) && !written(destination),
+            TerminatorKind::SwitchInt { discr, .. } => !whole(discr),
+            _ => true,
+        }
+    })
 }
 
 fn local_name(body: &Body, l: Local) -> Option<String> {
@@ -3667,6 +3766,9 @@ fn main() -> () {
         // The build in `built_core_pins_match_their_expected_output` runs
         // them with the library, through the same move and borrow checks.
         let needs_library = [
+            // `self.slots[i]` indexes for writing through the library's
+            // `Vec.index_mut` (B-2026-11-17-152).
+            "match_element_through_mut_refs_binds_mut_ref",
             // A channel's `recv` gives an `Option` only with the library
             // (B-2026-11-17-35).
             "drop_body_suspends_in_a_cancelled_teardown",

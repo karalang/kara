@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::ast::{
     self, BinOp as AstBinOp, Block, CallArg, CompoundOp, EnsuresClause, Expr, ExprKind, Function,
     ImplItem, Item, LiteralPattern, ParLoop, ParsedInterpolationPart, Pattern, PatternKind,
-    SelfParam, Stmt, StmtKind, UnaryOp,
+    RestPattern, SelfParam, Stmt, StmtKind, UnaryOp,
 };
 use crate::def_path::DefPath;
 use crate::def_table::ProgramDefs;
@@ -7041,8 +7041,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                             p.projection.contains(&ProjElem::Deref) || self.inside_shared(&p)
                         } =>
                     {
-                        let mutable = self.binds_mut_ref([pattern]);
-                        let (p, st, by_ref) = self.scrutinee(value, mutable)?;
+                        let (p, st, by_ref) = self.scrutinee(value, [pattern])?;
                         let mut binds = Vec::new();
                         self.bind_pattern(pattern, &p, st, by_ref, &mut binds)?;
                         self.pop_scope()?;
@@ -7122,7 +7121,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .pin_scope
                     .replace((self.scopes.len() - 1, self.loops.len()));
                 self.push_scope();
-                let scrutinee = self.scrutinee(value, self.binds_mut_ref([pattern]));
+                let scrutinee = self.scrutinee(value, [pattern]);
                 self.pin_scope = outer_pin;
                 let (place, st, by_ref) = scrutinee?;
                 let fail = self.b.new_block();
@@ -18329,10 +18328,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (place, st, by_ref) = match &parts {
             // Not read: every arm tests and binds the parts.
             Some(_) => (Place::local(Local(0)), self.unit(), false),
-            None => self.scrutinee(
-                scrutinee,
-                self.binds_mut_ref(arms.iter().map(|a| &a.pattern)),
-            )?,
+            None => self.scrutinee(scrutinee, arms.iter().map(|a| &a.pattern))?,
         };
         let join = self.b.new_block();
         for arm in arms {
@@ -18615,11 +18611,57 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// Whether `p` binds a part by name, without an explicit `ref` or
+    /// `mut ref`: such a binding of a part of a `mut ref` scrutinee is a
+    /// `mut ref` (core semantics §4.6). A unit variant or constant written
+    /// as a name binds nothing.
+    fn binds_by_name(&self, p: &Pattern) -> bool {
+        let named = |s: &Span| !self.lcx.ref_bindings.contains(&SpanKey::from_span(s));
+        match &p.kind {
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
+                false
+            }
+            PatternKind::Binding(_) => {
+                !matches!(self.lcx.res.get(&p.id), Some(Res::Def(_))) && named(&p.span)
+            }
+            PatternKind::AtBinding {
+                pattern, by_ref, ..
+            } => (!*by_ref && named(&p.span)) || self.binds_by_name(pattern),
+            PatternKind::Struct { fields, .. } => fields.iter().any(|f| match &f.pattern {
+                Some(q) => self.binds_by_name(q),
+                None => named(&f.span),
+            }),
+            PatternKind::TupleVariant { patterns, .. }
+            | PatternKind::Tuple(patterns)
+            | PatternKind::Or(patterns) => patterns.iter().any(|q| self.binds_by_name(q)),
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                matches!(rest, Some(RestPattern::Bound(..)))
+                    || prefix.iter().chain(suffix).any(|q| self.binds_by_name(q))
+            }
+        }
+    }
+
     /// The place a pattern is matched against. `mutable` when a pattern
     /// binds a `mut ref` into it (`match v[i] { mut ref p => .. }`), so a
     /// place is reached for writing and reborrowed mutably
     /// (B-2026-10-15-13).
-    fn scrutinee(&mut self, scrutinee: &'a Expr, mutable: bool) -> R<(Place, Ty, bool)> {
+    fn scrutinee<'p>(
+        &mut self,
+        scrutinee: &'a Expr,
+        pats: impl IntoIterator<Item = &'p Pattern> + Clone,
+    ) -> R<(Place, Ty, bool)> {
+        let mutable = self.binds_mut_ref(pats.clone());
+        // A place reached only through `mut ref`s is a `mut ref` scrutinee
+        // (core semantics §4.6) for the plain bindings it gives. When every
+        // binding is an explicit `ref` (or there is none), nothing binds a
+        // `mut ref` into it, so it is reborrowed shared: `Some(ref d)` then
+        // lets the arm read `self` while `d` is live, which is the
+        // machine-applicable E0516 fix (B-2026-11-17-152).
+        let by_name = pats.into_iter().any(|p| self.binds_by_name(p));
         let st = self.expr_ty(scrutinee)?;
         // An element (`v[i]`) is matched where it lies, as a local is: a
         // binding then copies, counts or borrows it out of the collection.
@@ -18634,8 +18676,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let indexed = element(scrutinee);
         let element = indexed || self.through_a_reference(scrutinee);
+        // An element reached only through `mut ref`s (`self.slots[i]` in a
+        // `mut ref self` method) is a `mut ref` scrutinee (core semantics
+        // §4.6): its index is taken for writing, so the place below is
+        // reached through a `mut ref` and reborrowed mutably
+        // (B-2026-11-17-152).
+        let reach_mut = indexed && !mutable && by_name && self.reached_through_mut_refs(scrutinee);
         let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
-            self.expr_place(scrutinee, mutable)?
+            self.expr_place(scrutinee, mutable || reach_mut)?
         } else {
             let l = self.temp_of(scrutinee, st)?;
             Place::local(l)
@@ -18685,7 +18733,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 )
             }) =>
             {
-                let writable = !mutable && self.only_through_mut_refs(&place);
+                let writable = !mutable && by_name && self.only_through_mut_refs(&place);
                 let mutable = mutable || writable;
                 let rt = self.tys().tcx().reference(st, mutable);
                 let r = self.temp(rt);
@@ -18710,6 +18758,32 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ if !value_read && self.inside_shared(&place) => (place, st, true),
             _ => (place, st, false),
         })
+    }
+
+    /// Whether the place expression `e` (fields, tuple elements and
+    /// indexes) is reached through a `mut ref` and through no `ref` or
+    /// `shared` handle on the way down from its root (core semantics §4.6).
+    /// A path rooted at an owned local is not: only the reference makes
+    /// it writable here.
+    fn reached_through_mut_refs(&mut self, e: &Expr) -> bool {
+        let (ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. }) = &e.kind
+        else {
+            return false;
+        };
+        let Ok(t) = self.expr_ty(object) else {
+            return false;
+        };
+        let nested = matches!(
+            object.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } | ExprKind::Index { .. }
+        );
+        match self.tys().tcx().kind(t) {
+            HK::Ref(_) | HK::Shared { .. } => false,
+            HK::MutRef(_) => !nested || self.reached_through_mut_refs(object),
+            _ => nested && self.reached_through_mut_refs(object),
+        }
     }
 
     /// Whether the path to `place` passes through a `shared` handle.
@@ -18893,7 +18967,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         dest: Place,
     ) -> R<()> {
         self.push_scope();
-        let (place, st, by_ref) = self.scrutinee(value, self.binds_mut_ref([pattern]))?;
+        let (place, st, by_ref) = self.scrutinee(value, [pattern])?;
         let else_bb = self.b.new_block();
         let join = self.b.new_block();
         self.test_pattern(pattern, &place, st, else_bb)?;
@@ -19266,7 +19340,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         exit: BasicBlock,
     ) -> R<()> {
         self.push_scope();
-        let (place, st, by_ref) = self.scrutinee(value, self.binds_mut_ref([pattern]))?;
+        let (place, st, by_ref) = self.scrutinee(value, [pattern])?;
         let fail = self.b.new_block();
         self.test_pattern(pattern, &place, st, fail)?;
         let matched = self.cur;
@@ -20115,12 +20189,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
-    /// Does `place` reach its target through a `mut ref`?
-    /// Whether `place` is reached through no index and only through
-    /// `mut ref` dereferences, so it may be written (B-2026-10-18-41).
+    /// Whether `place` is reached only through `mut ref` dereferences, so
+    /// it may be written (B-2026-10-18-41). A collection's element counts
+    /// (`self.slots[i]` in a `mut ref self` method, `slots[0]` with
+    /// `slots: mut ref Vec[..]`, or an element of an owned local): it is a
+    /// place too, and core semantics §4.6 makes a place reached through a
+    /// `mut ref` and through no `ref` a `mut ref` scrutinee
+    /// (B-2026-11-17-152).
     fn only_through_mut_refs(&self, place: &Place) -> bool {
         (0..place.projection.len()).all(|k| match place.projection[k] {
-            ProjElem::Index(_) | ProjElem::ConstIndex(_) => false,
             ProjElem::Deref => {
                 let base = Place {
                     local: place.local,
@@ -31686,6 +31763,7 @@ impl SourceBorrowError {
                 place: None,
                 loan_at: None,
                 holder: None,
+                holder_read_only: None,
                 temporary: None,
             },
         }
