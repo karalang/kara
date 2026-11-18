@@ -13617,6 +13617,19 @@ impl<'a> super::TypeChecker<'a> {
         iterable: &Expr,
         element: bool,
     ) -> Option<super::LiteralLet> {
+        // `for step in [60, 15, 5, 1].iter()` walks the same literals
+        // (B-2026-11-17-143).
+        let iterable = match &iterable.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if !element && args.is_empty() && matches!(method.as_str(), "iter" | "into_iter") => {
+                object.as_ref()
+            }
+            _ => iterable,
+        };
         let ExprKind::ArrayLiteral(elems) = &iterable.kind else {
             return None;
         };
