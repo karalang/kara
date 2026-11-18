@@ -151,7 +151,8 @@ fn a_module_let_in_a_second_module_is_e_module_let_not_a_panic() {
         ],
     );
     let out = karac(&dir, &["check"]);
-    let err = String::from_utf8_lossy(&out.stderr);
+    // Windows prints the path with `\`.
+    let err = String::from_utf8_lossy(&out.stderr).replace('\\', "/");
     assert!(!err.contains("panicked"), "{err}");
     assert!(err.contains("src/util.kara:1:5"), "{err}");
     assert!(err.contains("declare it `const LIMIT`"), "{err}");
