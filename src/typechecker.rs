@@ -8827,6 +8827,39 @@ impl<'a> TypeChecker<'a> {
         (sym.span.offset != span.offset).then(|| (sym.name.clone(), sym.span.line, sym.span.column))
     }
 
+    /// Whether the enclosing item bounds type parameter `name` by `Clone`
+    /// (or `Copy`), directly or through a supertrait.
+    fn type_param_bounded_by_clone(&self, name: &str) -> bool {
+        self.enclosing_bounds.get(name).is_some_and(|bounds| {
+            bounds.iter().any(|b| {
+                b.path.last().is_some_and(|t| {
+                    t == "Clone"
+                        || t == "Copy"
+                        || self
+                            .env
+                            .supertrait_closure_traits(t)
+                            .iter()
+                            .any(|s| s == "Clone" || s == "Copy")
+                })
+            })
+        })
+    }
+
+    /// A use at `span` of a parameter that borrows only because it is bare,
+    /// and where its `own` goes.
+    fn d5_bare_param_at(&self, span: Span) -> Option<(String, Span)> {
+        let id = self
+            .resolve_result
+            .resolutions
+            .get(&SpanKey::from_span(&span))?;
+        let sym = self.resolve_result.symbol_table.get_symbol(*id);
+        if sym.span.offset == span.offset || self.closure_d5_params.contains(sym.name.as_str()) {
+            return None;
+        }
+        let at = *self.current_fn_d5_params.get(sym.name.as_str())?;
+        Some((sym.name.clone(), at))
+    }
+
     fn d5_param_of_local_at(&self, span: Span) -> Option<(String, Span)> {
         let id = self
             .resolve_result
@@ -9797,9 +9830,17 @@ impl<'a> TypeChecker<'a> {
         }
         if self.cli_lint_overrides.strict_core {
             if let Type::Ref(inner) | Type::MutRef(inner) = found {
+                // An unbounded type parameter has no `.clone()`, though the
+                // structural test lets one through (B-2026-11-18-68).
+                let cloneable = self.type_supports_clone(expected)
+                    && match expected {
+                        Type::TypeParam(name) => self.type_param_bounded_by_clone(name),
+                        _ => true,
+                    };
+                let bare_param = self.d5_bare_param_at(span);
                 if **inner == *expected
                     && self.type_cannot_leave_a_borrowed_place(expected)
-                    && self.type_supports_clone(expected)
+                    && (cloneable || bare_param.is_some())
                 {
                     let shown = type_display(expected);
                     let kw = if matches!(found, Type::MutRef(_)) {
@@ -9807,6 +9848,34 @@ impl<'a> TypeChecker<'a> {
                     } else {
                         "ref"
                     };
+                    // A bare parameter handed where an owned value is wanted
+                    // (a generic `own` parameter, whose slot `d5_give_away`
+                    // leaves alone): its `own` is the fix, as there.
+                    if let Some((param, at)) = bare_param {
+                        let copy = if cloneable {
+                            ", or hand on a copy with `.clone()`"
+                        } else {
+                            ""
+                        };
+                        self.errors.push(TypeError {
+                            message: format!(
+                                "cannot give away parameter `{param}`: a bare parameter borrows \
+                                 (core-semantics §4.1), and an owned '{shown}' is wanted here. \
+                                 Take it by value with `{param}: own {shown}`{copy}"
+                            ),
+                            span,
+                            kind: TypeErrorKind::TypeMismatch,
+                            lint_name: None,
+                            fix_it: Some(FixIt {
+                                span: at,
+                                replacement: "own ".to_string(),
+                            }),
+                            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                            expected: Some(shown.clone()),
+                            got: Some(format!("{kw} {shown}")),
+                        });
+                        return false;
+                    }
                     // Kata 2046: a local bound out of a bare parameter
                     // (`let mut cur = head; while let Some(node) = cur ..
                     // Some(node)`) borrows because the parameter does, so

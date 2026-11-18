@@ -7002,9 +7002,13 @@ impl<'a> super::TypeChecker<'a> {
         }
         // B-2026-11-17-125: an initializer computed at run time cannot be a
         // `const`, so the help points at what holds such a value instead.
+        // Judged by the `const` rules the fix would put it under: the
+        // module-binding rules also take `Vec.new()` and its kin, which a
+        // `const` refuses (B-2026-11-18-67).
         let computed = self.errors[before..]
             .iter()
-            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit));
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit))
+            || self.const_rules_refuse(&b.value, &b.name);
         if computed {
             self.type_error(
                 format!(
@@ -7093,6 +7097,20 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => self.type_error(message, b.name_span, TypeErrorKind::ModuleLet),
         }
+    }
+
+    /// Whether a `const` with initializer `e` would be refused as computed
+    /// at run time (E_MODULE_BINDING_EFFECTFUL_INIT). Reports nothing.
+    fn const_rules_refuse(&mut self, e: &Expr, name: &str) -> bool {
+        let before = self.errors.len();
+        let was = std::mem::replace(&mut self.const_init_strict, true);
+        self.check_module_binding_init(e, name);
+        self.const_init_strict = was;
+        let refused = self.errors[before..]
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit));
+        self.errors.truncate(before);
+        refused
     }
 
     fn check_module_binding_decl(&mut self, b: &ModuleBinding) {

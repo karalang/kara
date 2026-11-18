@@ -1762,6 +1762,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `let EMPTY: Vec[i64] = Vec.new();` at module scope is no longer offered
+  a `const` fix that a `const` then refuses (a call is not a constant):
+  its help says to build the value in `main` (B-2026-11-18-67).
+- A bare parameter of an unbounded type parameter handed to a generic
+  `own` parameter (`fn outer[U](y: U) -> U { passthru(y) }`) gets the
+  `y: own U` fix, not a `.clone()` that `U` does not have; `.clone()` is
+  still mentioned when `U: Clone` (B-2026-11-18-68).
 - `karac fix` applies the `lossless_cast`, `redundant_cast` and
   `redundant_clone` fixes in a program with a mutual-recursion group. Those
   fixes wait for a pass with no error, and the group's L0002 note counted
