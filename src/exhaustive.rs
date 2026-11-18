@@ -662,6 +662,19 @@ fn peel_borrow(ty: &Type) -> &Type {
     }
 }
 
+/// A distinct type's base: for matching, a distinct type has exactly its
+/// base type's values, and `T(p)` matches `p` against the base (design.md
+/// § Pattern exhaustiveness; B-2026-11-18-18).
+fn distinct_base<'a>(ty: &Type, env: &'a TypeEnv) -> Option<(&'a str, &'a Type)> {
+    match peel_borrow(ty) {
+        Type::Named { name, .. } => env
+            .distinct_bases
+            .get_key_value(name)
+            .map(|(n, b)| (n.as_str(), b)),
+        _ => None,
+    }
+}
+
 fn is_handled_scrutinee(ty: &Type) -> bool {
     !matches!(
         ty,
@@ -1621,6 +1634,9 @@ fn default_matrix(matrix: &Matrix) -> Matrix {
 }
 
 fn enumerate_ctors(ty: &Type, env: &TypeEnv) -> Option<Vec<PatCtor>> {
+    if let Some((_, base)) = distinct_base(ty, env) {
+        return enumerate_ctors(base, env);
+    }
     match peel_borrow(ty) {
         Type::Bool => Some(vec![PatCtor::Bool(true), PatCtor::Bool(false)]),
         Type::Tuple(_) => Some(vec![PatCtor::Tuple]),
@@ -1682,7 +1698,10 @@ fn ctor_arity(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> usize {
 }
 
 fn ctor_field_types(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> Vec<Type> {
-    let parent_ty = peel_borrow(parent_ty);
+    let parent_ty = match distinct_base(parent_ty, env) {
+        Some((_, base)) => peel_borrow(base),
+        None => peel_borrow(parent_ty),
+    };
     match ctor {
         PatCtor::Bool(_) | PatCtor::Lit(_) | PatCtor::IntRange { .. } => vec![],
         // Route through `variant_payload_types` so the enum's generic
@@ -1736,7 +1755,11 @@ fn render_witness(witness: &Pat, ty: &Type, env: &TypeEnv) -> String {
             .first()
             .map(|a| render_witness(a, ty, env))
             .unwrap_or_else(|| "_".to_string()),
-        Pat::Ctor { ctor, args } => render_ctor(ctor, args, ty, env),
+        // A distinct type's value is written `T(base value)`.
+        Pat::Ctor { ctor, args } => match distinct_base(ty, env) {
+            Some((name, base)) => format!("{name}({})", render_ctor(ctor, args, base, env)),
+            None => render_ctor(ctor, args, ty, env),
+        },
     }
 }
 

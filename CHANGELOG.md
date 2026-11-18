@@ -746,6 +746,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A match on a distinct type over a finite base is exhaustive when its arms
+  cover the base's constructors: `Flag(true)` and `Flag(false)` on a
+  `distinct type Flag = bool`, or each variant on a distinct enum, were
+  E0205 non-exhaustive. A missing case is named with its wrapper,
+  `Flag(false)` (B-2026-11-18-18).
 - A local whose type a later use decides is `Copy` when the solved type
   is: `let mut x = None; x = Some(5); (x, x)`, a `[None; 3]` array, and a
   `scan` state seeded with `[None; 4]` were refused as a use after a move,
