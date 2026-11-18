@@ -367,6 +367,8 @@ mod tests {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
             std::env::temp_dir().join(format!("kara-regproxy-lib-{}-{n}", std::process::id()));
+        // A pid is reused after a container restart: start from empty.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("catalog")).unwrap();
         std::fs::create_dir_all(dir.join("pkg")).unwrap();
         dir
@@ -472,6 +474,9 @@ mod tests {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
             std::env::temp_dir().join(format!("kara-regproxy-src-{}-{n}", std::process::id()));
+        // A pid is reused after a container restart, so an earlier run's
+        // directory of this name may still hold its packages.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
