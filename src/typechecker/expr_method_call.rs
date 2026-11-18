@@ -1837,6 +1837,7 @@ impl<'a> super::TypeChecker<'a> {
         self.call_receiver_roots
             .push(super::exprs::clone_place_root(object).map(str::to_string));
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
+        self.note_open_receiver_call(object, method, &ty, errors_before);
         self.call_receiver_roots.pop();
         self.method_call_ends.pop();
         if method == "collect" && args.is_empty() {

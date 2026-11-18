@@ -100,6 +100,7 @@ mod method_ufcs;
 mod method_user_impl;
 mod method_vec_mutation;
 mod old_read_to_string;
+mod open_receiver;
 mod package_coherence;
 mod patterns;
 mod refinement_elision;
@@ -3917,6 +3918,9 @@ pub struct TypeChecker<'a> {
     /// nothing at the call fixed, with those variables, judged at the end of
     /// `check` (`report_unsolved_call_vars`).
     pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
+    /// B-2026-11-17-144: method calls on a closure parameter nothing had
+    /// typed yet, judged at the end of `check`.
+    pub(super) open_receiver_calls: Vec<open_receiver::OpenReceiverCall>,
     /// B-2026-11-10-8: an operator whose operands are both a variable
     /// nothing has typed yet (`|x, n| x + n`, typed by a later `f(1, 2)`),
     /// judged at the end of `check` (`discharge_deferred_operand_vars`).
@@ -4840,6 +4844,7 @@ impl<'a> TypeChecker<'a> {
             method_call_ends: Vec::new(),
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
+            open_receiver_calls: Vec::new(),
             deferred_operand_vars: Vec::new(),
             unsolved_call_consts: Vec::new(),
             unsolved_array_lens: Vec::new(),
@@ -5331,6 +5336,7 @@ impl<'a> TypeChecker<'a> {
         self.report_pending_buf_sources();
         self.discharge_deferred_operand_vars();
         self.report_unsolved_call_vars();
+        self.report_open_receiver_calls();
         self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();
