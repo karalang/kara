@@ -1,0 +1,169 @@
+// LeetCode #1188: Design Bounded Blocking Queue -- a monitor, as the Java
+// solutions write it with a `ReentrantLock` and two `Condition`s: the
+// values and two lists of waiting tasks under one lock. An enqueue with
+// room pushes its value and wakes the longest-waiting dequeue; with none it
+// joins the producers' list and waits to be woken, then looks again. A
+// dequeue is the mirror image. The lists are of one-shot channels, a
+// waiting task holding the receiving end, since the standard library has
+// no condition variable.
+
+import std.sync.{Mutex, TaskGroup};
+
+struct State {
+    values: VecDeque[i64],
+    producers: VecDeque[Sender[()]],
+    consumers: VecDeque[Sender[()]],
+}
+
+sync struct BoundedBlockingQueue {
+    capacity: i64,
+    state: Mutex[State],
+}
+
+impl BoundedBlockingQueue {
+    fn new(capacity: i64) -> BoundedBlockingQueue {
+        BoundedBlockingQueue {
+            capacity,
+            state: Mutex.new(State { values: VecDeque.new(), producers: VecDeque.new(), consumers: VecDeque.new() }),
+        }
+    }
+
+    fn enqueue(self, element: i64) {
+        loop {
+            let (tx, rx) = channel(1);
+            {
+                let g = self.state.lock();
+                if g.value.values.len() < self.capacity {
+                    g.value.values.push_back(element);
+                    if let Some(waiter) = g.value.consumers.pop_front() {
+                        let _ = waiter.send(());
+                    }
+                    return;
+                }
+                g.value.producers.push_back(tx);
+            }
+            let _ = rx.recv();
+        }
+    }
+
+    fn dequeue(self) -> i64 {
+        loop {
+            let (tx, rx) = channel(1);
+            {
+                let g = self.state.lock();
+                if let Some(element) = g.value.values.pop_front() {
+                    if let Some(waiter) = g.value.producers.pop_front() {
+                        let _ = waiter.send(());
+                    }
+                    return element;
+                }
+                g.value.consumers.push_back(tx);
+            }
+            let _ = rx.recv();
+        }
+    }
+
+    fn size(self) -> i64 {
+        self.state.lock().value.values.len()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's run: `producers` tasks share the enqueues in their order, the
+// `i`th going to task `i % producers`, and `consumers` tasks share
+// `dequeues` calls the same way; each task makes its calls in order. Once
+// every task is done, the run returns what the dequeues gave, in the order
+// they returned, the size, and what is left, dequeued after.
+fn run(capacity: i64, producers: i64, consumers: i64, values: Vec[i64], dequeues: i64) -> (Vec[i64], i64, Vec[i64]) {
+    let queue = BoundedBlockingQueue.new(capacity);
+    let out: Mutex[Vec[i64]] = Mutex.new([]);
+    {
+        let group = TaskGroup.new();
+        for p in 0..producers {
+            let mine: Vec[i64] = (0..values.len()).filter(|i| i % producers == p).map(|i| values[i]).collect();
+            group.spawn(|| {
+                for v in mine.iter() {
+                    queue.enqueue(v);
+                }
+            });
+        }
+        for c in 0..consumers {
+            let calls = (0..dequeues).filter(|i| i % consumers == c).count();
+            group.spawn(|| {
+                for _ in 0..calls {
+                    let v = queue.dequeue();
+                    out.lock().value.push(v);
+                }
+            });
+        }
+    }
+    let got = out.lock().value.clone();
+    let size = queue.size();
+    let rest: Vec[i64] = (0..size).map(|_| queue.dequeue()).collect();
+    (got, size, rest)
+}
+
+// Whether the values that came out, and the ones left, are the ones that
+// went in.
+fn accounted(values: Vec[i64], got: Vec[i64], rest: Vec[i64]) -> bool {
+    let mut went_in = values.clone();
+    went_in.sort();
+    let mut came_out = got.clone();
+    came_out.extend(rest.iter());
+    came_out.sort();
+    came_out == went_in
+}
+
+// With one producer and one consumer the order is fixed, and the run prints
+// LeetCode's answer whole; with more, which value each dequeue returns is
+// not, so it prints how many came out and the size, and whether the values
+// that came out and the ones left are the ones that went in.
+fn show(capacity: i64, producers: i64, consumers: i64, values: Vec[i64], dequeues: i64) -> String {
+    let (got, size, rest) = run(capacity, producers, consumers, values, dequeues);
+    if producers == 1 and consumers == 1 {
+        let parts: Vec[String] = got.iter().map(|v| f"{v}").collect();
+        f"[{parts.join(",")},{size}]"
+    } else {
+        f"{got.len()} dequeued, size {size}, every value accounted for: {accounted(values, got, rest)}"
+    }
+}
+
+fn main() {
+    println(show(2, 1, 1, [1, 0, 2, 3, 4], 3));
+    println(show(3, 3, 4, [1, 0, 2, 3], 3));
+    // one producer and one consumer: the values come out in the order they went in
+    println(show(1, 1, 1, [5, 6, 7, 8], 4));
+    println(show(30, 1, 1, (0..40).map(|i| i % 21).collect(), 10));
+    // 2000 random runs: up to 8 producers and 8 consumers, a capacity of 1
+    // to 30, up to 40 enqueues of 0 to 20 and up to 40 dequeues, never more
+    // dequeues than enqueues nor more left over than the capacity
+    let mut seed = 1188;
+    let mut whole = 0;
+    let mut in_order = 0;
+    let mut left = 0;
+    for _ in 0..2000 {
+        let capacity = next_random(mut seed) % 30 + 1;
+        let producers = next_random(mut seed) % 8 + 1;
+        let consumers = next_random(mut seed) % 8 + 1;
+        let n = next_random(mut seed) % 40 + 1;
+        let values: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 21).collect();
+        let fewest = if n > capacity { n - capacity } else { 0 };
+        let dequeues = fewest + next_random(mut seed) % (n - fewest + 1);
+        let (got, size, rest) = run(capacity, producers, consumers, values, dequeues);
+        left += size;
+        if accounted(values, got, rest) {
+            whole += 1;
+        }
+        // one producer and one consumer: exactly the first `dequeues` values
+        if producers == 1 and consumers == 1 and got == values[0..dequeues].to_vec() {
+            in_order += 1;
+        }
+    }
+    println(f"2000 random runs: {left} left over, {whole} with every value accounted for, {in_order} in order with one of each");
+}

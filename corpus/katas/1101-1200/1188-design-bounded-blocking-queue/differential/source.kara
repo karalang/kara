@@ -1,0 +1,505 @@
+// LeetCode #1188: Design Bounded Blocking Queue -- the five arms against the
+// statement read literally and six more properties, over 400 problems drawn
+// before any arm runs. Generated from the arms; see the README.
+
+import std.sync.{Atomic, Mutex, TaskGroup};
+import std.time.{Duration, sleep};
+
+// ---- arm 0: star --------------------------------------------------------
+sync struct A0Queue {
+    slots: Semaphore,
+    items: Semaphore,
+    values: Mutex[VecDeque[i64]],
+}
+
+impl A0Queue {
+    fn new(capacity: i64) -> A0Queue {
+        A0Queue {
+            slots: Semaphore.new(capacity),
+            items: Semaphore.new(0),
+            values: Mutex.new(VecDeque.new()),
+        }
+    }
+
+    fn enqueue(self, element: i64) {
+        let _ = self.slots.acquire(60000);
+        self.values.lock().value.push_back(element);
+        self.items.release();
+    }
+
+    fn dequeue(self) -> i64 {
+        let _ = self.items.acquire(60000);
+        let element = self.values.lock().value.pop_front().unwrap();
+        self.slots.release();
+        element
+    }
+
+    fn size(self) -> i64 {
+        self.values.lock().value.len()
+    }
+}
+
+// ---- arm 1: channel -----------------------------------------------------
+sync struct A1Queue {
+    channel: (Sender[i64], Receiver[i64]),
+    count: Atomic[i64],
+}
+
+impl A1Queue {
+    fn new(capacity: i64) -> A1Queue {
+        A1Queue { channel: channel(capacity), count: Atomic.new(0) }
+    }
+
+    fn enqueue(self, element: i64) {
+        let _ = self.channel.0.send(element);
+        self.count.fetch_add(1);
+    }
+
+    fn dequeue(self) -> i64 {
+        let element = self.channel.1.recv().unwrap();
+        self.count.fetch_sub(1);
+        element
+    }
+
+    fn size(self) -> i64 {
+        self.count.load()
+    }
+}
+
+// ---- arm 2: waitlist ----------------------------------------------------
+struct A2State {
+    values: VecDeque[i64],
+    producers: VecDeque[Sender[()]],
+    consumers: VecDeque[Sender[()]],
+}
+
+sync struct A2Queue {
+    capacity: i64,
+    state: Mutex[A2State],
+}
+
+impl A2Queue {
+    fn new(capacity: i64) -> A2Queue {
+        A2Queue {
+            capacity,
+            state: Mutex.new(A2State { values: VecDeque.new(), producers: VecDeque.new(), consumers: VecDeque.new() }),
+        }
+    }
+
+    fn enqueue(self, element: i64) {
+        loop {
+            let (tx, rx) = channel(1);
+            {
+                let g = self.state.lock();
+                if g.value.values.len() < self.capacity {
+                    g.value.values.push_back(element);
+                    if let Some(waiter) = g.value.consumers.pop_front() {
+                        let _ = waiter.send(());
+                    }
+                    return;
+                }
+                g.value.producers.push_back(tx);
+            }
+            let _ = rx.recv();
+        }
+    }
+
+    fn dequeue(self) -> i64 {
+        loop {
+            let (tx, rx) = channel(1);
+            {
+                let g = self.state.lock();
+                if let Some(element) = g.value.values.pop_front() {
+                    if let Some(waiter) = g.value.producers.pop_front() {
+                        let _ = waiter.send(());
+                    }
+                    return element;
+                }
+                g.value.consumers.push_back(tx);
+            }
+            let _ = rx.recv();
+        }
+    }
+
+    fn size(self) -> i64 {
+        self.state.lock().value.values.len()
+    }
+}
+
+// ---- arm 3: polling -----------------------------------------------------
+sync struct A3Queue {
+    capacity: i64,
+    values: Mutex[VecDeque[i64]],
+}
+
+impl A3Queue {
+    fn new(capacity: i64) -> A3Queue {
+        A3Queue { capacity, values: Mutex.new(VecDeque.new()) }
+    }
+
+    // Pushes `element` if the queue has room.
+    fn try_enqueue(self, element: i64) -> bool {
+        let g = self.values.lock();
+        if g.value.len() < self.capacity {
+            g.value.push_back(element);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn enqueue(self, element: i64) {
+        while not self.try_enqueue(element) {
+            sleep(Duration.ms(0));
+        }
+    }
+
+    fn dequeue(self) -> i64 {
+        loop {
+            if let Some(element) = self.values.lock().value.pop_front() {
+                return element;
+            }
+            sleep(Duration.ms(0));
+        }
+    }
+
+    fn size(self) -> i64 {
+        self.values.lock().value.len()
+    }
+}
+
+// ---- arm 4: ring --------------------------------------------------------
+struct A4Ring {
+    places: Vec[i64],
+    head: i64,
+    count: i64,
+}
+
+sync struct A4Queue {
+    free: Semaphore,
+    filled: Semaphore,
+    ring: Mutex[A4Ring],
+}
+
+impl A4Queue {
+    fn new(capacity: i64) -> A4Queue {
+        A4Queue {
+            free: Semaphore.new(capacity),
+            filled: Semaphore.new(0),
+            ring: Mutex.new(A4Ring { places: Vec.filled(capacity, 0), head: 0, count: 0 }),
+        }
+    }
+
+    fn enqueue(self, element: i64) {
+        let _ = self.free.acquire(60000);
+        {
+            let g = self.ring.lock();
+            let at = (g.value.head + g.value.count) % g.value.places.len();
+            g.value.places[at] = element;
+            g.value.count += 1;
+        }
+        self.filled.release();
+    }
+
+    fn dequeue(self) -> i64 {
+        let _ = self.filled.acquire(60000);
+        let element = {
+            let g = self.ring.lock();
+            let element = g.value.places[g.value.head];
+            g.value.head = (g.value.head + 1) % g.value.places.len();
+            g.value.count -= 1;
+            element
+        };
+        self.free.release();
+        element
+    }
+
+    fn size(self) -> i64 {
+        self.ring.lock().value.count
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+trait BoundedQueue {
+    fn put(self, element: i64);
+    fn take(self) -> i64;
+    fn count(self) -> i64;
+}
+
+impl BoundedQueue for A0Queue {
+    fn put(self, element: i64) { self.enqueue(element) }
+    fn take(self) -> i64 { self.dequeue() }
+    fn count(self) -> i64 { self.size() }
+}
+
+impl BoundedQueue for A1Queue {
+    fn put(self, element: i64) { self.enqueue(element) }
+    fn take(self) -> i64 { self.dequeue() }
+    fn count(self) -> i64 { self.size() }
+}
+
+impl BoundedQueue for A2Queue {
+    fn put(self, element: i64) { self.enqueue(element) }
+    fn take(self) -> i64 { self.dequeue() }
+    fn count(self) -> i64 { self.size() }
+}
+
+impl BoundedQueue for A3Queue {
+    fn put(self, element: i64) { self.enqueue(element) }
+    fn take(self) -> i64 { self.dequeue() }
+    fn count(self) -> i64 { self.size() }
+}
+
+impl BoundedQueue for A4Queue {
+    fn put(self, element: i64) { self.enqueue(element) }
+    fn take(self) -> i64 { self.dequeue() }
+    fn count(self) -> i64 { self.size() }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Busy work of `steps` steps, so tasks overlap in more ways.
+fn busy(steps: i64) -> i64 {
+    let mut y = steps;
+    for i in 0..steps {
+        y = (y * 31 + i) % 1000003;
+    }
+    y
+}
+
+// A run as LeetCode's: `producers` tasks share `values`, the `i`th going to
+// task `i % producers`, and `consumers` tasks share `dequeues` calls; the
+// `k`th call of every task first does `work[k % work.len()]` steps of busy
+// work. Returns what the dequeues gave, in the order they returned, the
+// size, and what is left, dequeued after.
+fn run[Q: BoundedQueue + CrossTask](queue: Q, producers: i64, consumers: i64, values: Vec[i64], dequeues: i64, work: Vec[i64]) -> (Vec[i64], i64, Vec[i64]) {
+    let out: Mutex[Vec[i64]] = Mutex.new([]);
+    let spent: Atomic[i64] = Atomic.new(0);
+    {
+        let group = TaskGroup.new();
+        for p in 0..producers {
+            let mine: Vec[i64] = (0..values.len()).filter(|i| i % producers == p).map(|i| values[i]).collect();
+            group.spawn(|| {
+                for k in 0..mine.len() {
+                    spent.fetch_add(busy(work[k % work.len()]) % 2);
+                    queue.put(mine[k]);
+                }
+            });
+        }
+        for c in 0..consumers {
+            let calls = (0..dequeues).filter(|i| i % consumers == c).count();
+            group.spawn(|| {
+                for k in 0..calls {
+                    spent.fetch_add(busy(work[(k + 1) % work.len()]) % 2);
+                    let v = queue.take();
+                    out.lock().value.push(v);
+                }
+            });
+        }
+    }
+    let got = out.lock().value.clone();
+    let size = queue.count();
+    let rest: Vec[i64] = (0..size).map(|_| queue.take()).collect();
+    (got, size, rest)
+}
+
+fn same_values(a: Vec[i64], b: Vec[i64]) -> bool {
+    let mut x = a.clone();
+    x.sort();
+    let mut y = b.clone();
+    y.sort();
+    x == y
+}
+
+// Each producer's values, as `p * 1000 + k` for its `k`th, come out of one
+// consumer in its order.
+fn in_producer_order(got: Vec[i64]) -> bool {
+    let mut last: Map[i64, i64] = Map.new();
+    for v in got.iter() {
+        let p = v / 1000;
+        if let Some(prev) = last.get(p) {
+            if prev >= v {
+                return false;
+            }
+        }
+        last.insert(p, v);
+    }
+    true
+}
+
+// An enqueue on a full queue waits: a task fills the queue and enqueues one
+// more, then raises a flag, which must stay down until a dequeue makes room.
+fn waits_when_full[Q: BoundedQueue + CrossTask](queue: Q, capacity: i64) -> bool {
+    let done: Atomic[i64] = Atomic.new(0);
+    let mut early = 0;
+    let mut first = -1;
+    {
+        let group = TaskGroup.new();
+        group.spawn(|| {
+            for v in 0..capacity + 1 {
+                queue.put(v);
+            }
+            done.store(1);
+        });
+        sleep(Duration.ms(3));
+        early = done.load();
+        first = queue.take();
+    }
+    early == 0 and done.load() == 1 and first == 0 and queue.count() == capacity
+}
+
+// A dequeue on an empty queue waits: a task dequeues, then raises a flag,
+// which must stay down until an enqueue gives it a value.
+fn waits_when_empty[Q: BoundedQueue + CrossTask](queue: Q, value: i64) -> bool {
+    let done: Atomic[i64] = Atomic.new(0);
+    let got: Atomic[i64] = Atomic.new(-1);
+    let mut early = 0;
+    {
+        let group = TaskGroup.new();
+        group.spawn(|| {
+            got.store(queue.take());
+            done.store(1);
+        });
+        sleep(Duration.ms(3));
+        early = done.load();
+        queue.put(value);
+    }
+    early == 0 and done.load() == 1 and got.load() == value and queue.count() == 0
+}
+
+// The size after each of a sequence of calls from one task, none of which
+// waits: `ops[i] >= 0` enqueues it, `-1` dequeues.
+fn sizes[Q: BoundedQueue + CrossTask](queue: Q, ops: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = [];
+    for op in ops.iter() {
+        if op >= 0 {
+            queue.put(op);
+        } else {
+            let _ = queue.take();
+        }
+        out.push(queue.count());
+    }
+    out
+}
+
+struct Problem {
+    capacity: i64,
+    producers: i64,
+    consumers: i64,
+    values: Vec[i64],
+    dequeues: i64,
+    work: Vec[i64],
+    tagged: Vec[i64],
+    ops: Vec[i64],
+}
+
+struct Tally {
+    checks: i64,
+    failures: i64,
+    check: i64,
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+fn check_arm[Q: BoundedQueue + CrossTask](t: mut ref Tally, arm: i64, p: Problem, i: i64, make: Fn(i64) -> Q) {
+    let what = f"arm {arm}, problem {i}";
+    let none: Vec[i64] = [0];
+    let n = p.values.len();
+    // P1: the statement read literally: one producer and one consumer, the
+    // dequeues give the first values in order and the rest are left
+    let (got, size, rest) = run(make(p.capacity), 1, 1, p.values, p.dequeues, none);
+    let mut want = p.values.clone();
+    let want_rest = want.split_off(p.dequeues);
+    expect(mut t, 1, got == want and size == n - p.dequeues and rest == want_rest, f"P1 {what}: {got} {size} {rest}");
+    // P2: many producers and consumers: every value accounted for, the size right
+    let (got, size, rest) = run(make(p.capacity), p.producers, p.consumers, p.values, p.dequeues, none);
+    let mut all = got.clone();
+    all.extend(rest.iter());
+    expect(mut t, 2, same_values(all, p.values) and size == n - p.dequeues and got.len() == p.dequeues, f"P2 {what}: {got} {size} {rest}");
+    t.check = (t.check * 131 + got.len() + 3 * size + 1) % 1000000007;
+    // P3: one consumer: each producer's values come out in its order, with busy work
+    let (got, size, rest) = run(make(p.capacity), p.producers, 1, p.tagged, p.dequeues, p.work);
+    let mut all = got.clone();
+    all.extend(rest.iter());
+    expect(mut t, 3, in_producer_order(all) and size == n - p.dequeues, f"P3 {what}: {got} {rest}");
+    // P4: many of each with busy work: every value accounted for
+    let (got, size, rest) = run(make(p.capacity), p.producers, p.consumers, p.values, p.dequeues, p.work);
+    let mut all = got.clone();
+    all.extend(rest.iter());
+    expect(mut t, 4, same_values(all, p.values) and size == n - p.dequeues, f"P4 {what}: {got} {size} {rest}");
+    // P5 and P6 wait for real time, so every tenth problem
+    if i % 10 == 0 {
+        expect(mut t, 5, waits_when_full(make(p.capacity), p.capacity), f"P5 {what}: capacity {p.capacity}");
+        expect(mut t, 6, waits_when_empty(make(p.capacity), p.values[0]), f"P6 {what}");
+    }
+    // P7: the size after each call from one task
+    let mut model: Vec[i64] = [];
+    let mut len = 0;
+    for op in p.ops.iter() {
+        len += if op >= 0 { 1 } else { -1 };
+        model.push(len);
+    }
+    expect(mut t, 7, sizes(make(p.capacity), p.ops) == model, f"P7 {what}: ops {p.ops}");
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: 0, check: 0, by: Vec.filled(8, 0) };
+    // 400 problems: a capacity of 1 to 30, up to 8 producers and 8
+    // consumers, up to 40 values of 0 to 20, never more dequeues than
+    // values nor more left than the capacity, busy work of up to 2000 steps
+    // for each of up to 5 calls in turn, and up to 40 calls from one task
+    // that never wait. Every choice is drawn before any arm answers.
+    let mut seed = 11881;
+    let mut problems: Vec[Problem] = [];
+    for _ in 0..400 {
+        let capacity = next_random(mut seed) % 30 + 1;
+        let producers = next_random(mut seed) % 8 + 1;
+        let consumers = next_random(mut seed) % 8 + 1;
+        let n = next_random(mut seed) % 40 + 1;
+        let values: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 21).collect();
+        let fewest = if n > capacity { n - capacity } else { 0 };
+        let dequeues = fewest + next_random(mut seed) % (n - fewest + 1);
+        let len = next_random(mut seed) % 5 + 1;
+        let work: Vec[i64] = (0..len).map(|_| next_random(mut seed) % 2000).collect();
+        let tagged: Vec[i64] = (0..n).map(|i| i % producers * 1000 + i / producers).collect();
+        let mut ops: Vec[i64] = [];
+        let mut held = 0;
+        for _ in 0..next_random(mut seed) % 40 + 1 {
+            if held < capacity and (held == 0 or next_random(mut seed) % 2 == 0) {
+                ops.push(next_random(mut seed) % 21);
+                held += 1;
+            } else {
+                ops.push(-1);
+                held -= 1;
+            }
+        }
+        problems.push(Problem { capacity, producers, consumers, values, dequeues, work, tagged, ops });
+    }
+    for i in 0..problems.len() {
+        let p = ref problems[i];
+        check_arm(mut t, 0, p, i, |c| A0Queue.new(c));
+        check_arm(mut t, 1, p, i, |c| A1Queue.new(c));
+        check_arm(mut t, 2, p, i, |c| A2Queue.new(c));
+        check_arm(mut t, 3, p, i, |c| A3Queue.new(c));
+        check_arm(mut t, 4, p, i, |c| A4Queue.new(c));
+    }
+    println(f"{problems.len()} problems: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..8).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

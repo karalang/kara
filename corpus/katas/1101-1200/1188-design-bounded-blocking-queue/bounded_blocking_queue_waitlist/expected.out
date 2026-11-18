@@ -1,0 +1,5 @@
+[1,0,2,2]
+3 dequeued, size 1, every value accounted for: true
+[5,6,7,8,0]
+[0,1,2,3,4,5,6,7,8,9,30]
+2000 random runs: 11707 left over, 2000 with every value accounted for, 25 in order with one of each

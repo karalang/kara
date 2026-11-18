@@ -1,0 +1,80 @@
+// LeetCode #1188: Design Bounded Blocking Queue -- the bench, the ★ arm:
+// two counting semaphores and a lock. `slots` starts with a permit for each
+// place in the queue and `items` with none. An enqueue takes a slot, pushes
+// its value under the lock and gives an item; a dequeue takes an item, pops
+// the oldest value under the lock and gives a slot.
+
+import std.sync.{Mutex, TaskGroup};
+
+sync struct BoundedBlockingQueue {
+    slots: Semaphore,
+    items: Semaphore,
+    values: Mutex[VecDeque[i64]],
+}
+
+impl BoundedBlockingQueue {
+    fn new(capacity: i64) -> BoundedBlockingQueue {
+        BoundedBlockingQueue {
+            slots: Semaphore.new(capacity),
+            items: Semaphore.new(0),
+            values: Mutex.new(VecDeque.new()),
+        }
+    }
+
+    fn enqueue(self, element: i64) {
+        let _ = self.slots.acquire(60000);
+        self.values.lock().value.push_back(element);
+        self.items.release();
+    }
+
+    fn dequeue(self) -> i64 {
+        let _ = self.items.acquire(60000);
+        let element = self.values.lock().value.pop_front().unwrap();
+        self.slots.release();
+        element
+    }
+
+    fn size(self) -> i64 {
+        self.values.lock().value.len()
+    }
+}
+
+// ---- bench harness --------------------------------------------------------
+
+// One run: 4 producers each enqueue 2500 values and 4 consumers each
+// dequeue 2500, through a queue of 16 places. Returns the sum of what the
+// consumers took.
+fn run(round: i64) -> i64 {
+    let queue = BoundedBlockingQueue.new(16);
+    let total: Mutex[i64] = Mutex.new(0);
+    {
+        let group = TaskGroup.new();
+        for p in 0..4 {
+            group.spawn(|| {
+                for k in 0..2500 {
+                    queue.enqueue((round * 7919 + p * 10007 + k * 31) % 1000);
+                }
+            });
+        }
+        for _ in 0..4 {
+            group.spawn(|| {
+                let mut sum = 0;
+                for _ in 0..2500 {
+                    sum += queue.dequeue();
+                }
+                *total.lock().value += sum;
+            });
+        }
+    }
+    let sum = *total.lock().value;
+    sum + 1000 * queue.size()
+}
+
+fn main() {
+    let rounds = 100;
+    let mut check = 0;
+    for round in 0..rounds {
+        check = (check * 131 + run(round)) % 1000000007;
+    }
+    println(f"{rounds} rounds of 4 producers and 4 consumers moving 10000 values through 16 places: checksum {check}");
+}
