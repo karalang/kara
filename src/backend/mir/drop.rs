@@ -124,7 +124,7 @@ const SUSPENDING_DROP: &str = "a `Drop` body that suspends was reached from a dr
 
 /// How the release of a `shared` struct reaches the handles of its own type
 /// held in its body ([`Cx::drain_plan`]): each part at its offset in the
-/// struct that holds it.
+/// value that holds it.
 #[derive(Clone)]
 enum Part {
     /// A handle of the type itself (or an `Option` of one, a bare pointer).
@@ -132,20 +132,19 @@ enum Part {
     /// A field whose drop runs no `Drop` body (`weak`, `String`, a `Vec`
     /// of plain data).
     Quiet(u64, Ty),
-    /// A `Vec` whose elements are each `Elem`, `size` bytes apart.
-    Vec(u64, Box<Elem>, u64),
-    /// A `Map` whose values are each `Elem`; its keys drop quietly or not
-    /// at all.
-    Map(u64, Table, Box<Elem>),
+    /// A `Vec` whose elements are each the part (at offset 0), `size`
+    /// bytes apart.
+    Vec(u64, Box<Part>, u64),
+    /// A `Map` whose values are each the part (at offset 0); its keys drop
+    /// quietly or not at all.
+    Map(u64, Table, Box<Part>),
     /// A plain struct (no `Drop` body) whose fields are these parts.
     Struct(u64, Vec<Part>),
-}
-
-/// An element of a `Vec` or a value of a `Map` in a [`Part`].
-#[derive(Clone)]
-enum Elem {
-    Handle,
-    Struct(Vec<Part>),
+    /// A struct with a `Drop` body, whose fields are these parts: its body
+    /// runs as a task off the worklist, in its turn (B-2026-11-17-139).
+    Owned(u64, Ty, AdtId, Vec<Part>),
+    /// A plain enum: for each variant whose fields need a drop, its parts.
+    Enum(u64, Ty, Vec<(u32, Vec<Part>)>),
 }
 
 /// Whether the parts hold a handle anywhere.
@@ -153,13 +152,33 @@ fn holds_handle(parts: &[Part]) -> bool {
     parts.iter().any(|p| match p {
         Part::Handle(_) => true,
         Part::Quiet(..) => false,
-        Part::Vec(_, e, _) | Part::Map(_, _, e) => match &**e {
-            Elem::Handle => true,
-            Elem::Struct(ps) => holds_handle(ps),
-        },
-        Part::Struct(_, ps) => holds_handle(ps),
+        Part::Vec(_, e, _) | Part::Map(_, _, e) => holds_handle(std::slice::from_ref(&**e)),
+        Part::Struct(_, ps) | Part::Owned(_, _, _, ps) => holds_handle(ps),
+        Part::Enum(_, _, vs) => vs.iter().any(|(_, ps)| holds_handle(ps)),
     })
 }
+
+/// Whether the parts hold a struct with a `Drop` body anywhere: its body
+/// runs later, so the memory holding it is freed by a task after it.
+fn defers(parts: &[Part]) -> bool {
+    parts.iter().any(|p| match p {
+        Part::Handle(_) | Part::Quiet(..) => false,
+        Part::Owned(..) => true,
+        Part::Vec(_, e, _) | Part::Map(_, _, e) => defers(std::slice::from_ref(&**e)),
+        Part::Struct(_, ps) => defers(ps),
+        Part::Enum(_, _, vs) => vs.iter().any(|(_, ps)| defers(ps)),
+    })
+}
+
+/// What an entry of the drained release's worklist does with its pointer
+/// ([`Cx::release_drained`]): `HANDLE` releases it, the others free memory
+/// whose contents were waiting on tasks above them, and from `RUN` on,
+/// each runs one [`Part::Owned`]'s `Drop` body and takes its parts.
+const TASK_HANDLE: u64 = 0;
+const TASK_FREE_BUF: u64 = 1;
+const TASK_FREE_MAP: u64 = 2;
+const TASK_FREE_BOX: u64 = 3;
+const TASK_RUN: u64 = 4;
 
 /// The quiet fields of a body ([`Cx::own_handle_fields`]): offset and type.
 type QuietFields = Vec<(u64, Ty)>;
@@ -1116,11 +1135,12 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The parts of the struct `ty` (the body of the `shared` type
-    /// `owner`, or a plain struct inside it) through which the release of
+    /// `owner`, or a struct inside it) through which the release of
     /// `owner` reaches its own handles, in field order: each field needing
-    /// a drop is such a handle, a quiet field, a `Vec` or a `Map` of
-    /// handles or of such structs, or such a struct. `None` when another
-    /// field needs a drop (B-2026-11-17-138).
+    /// a drop is such a handle, a quiet field, a `Vec` or a `Map` of parts,
+    /// a struct (plain, or with a `Drop` body run in its turn) or a plain
+    /// enum of parts. `None` when another field needs a drop
+    /// (B-2026-11-17-138, B-2026-11-17-139).
     fn drain_plan(&self, ty: Ty, owner: Ty, depth: u32) -> R<Option<Vec<Part>>> {
         if depth > 8 {
             return Ok(None);
@@ -1131,42 +1151,32 @@ impl<'ctx> Cx<'ctx, '_> {
         if adt.is_enum {
             return Ok(None);
         }
+        let n = adt.variants[0].fields.len();
+        self.fields_plan(ty, None, n, owner, depth)
+    }
+
+    /// The parts of the fields of `ty` (of its variant `v`, for an enum).
+    fn fields_plan(
+        &self,
+        ty: Ty,
+        v: Option<u32>,
+        n: usize,
+        owner: Ty,
+        depth: u32,
+    ) -> R<Option<Vec<Part>>> {
         let mut parts = Vec::new();
-        for f in 0..adt.variants[0].fields.len() as u32 {
-            let Some(ft) = self.tys.field_ty(ty, None, f) else {
+        for f in 0..n as u32 {
+            let Some(ft) = self.tys.field_ty(ty, v, f) else {
                 return Ok(None);
             };
             if !self.tys.needs_drop(ft) {
                 continue;
             }
-            if layout::boxed_field(self.tys, ty, None, f) {
+            if layout::boxed_field(self.tys, ty, v, f) {
                 return Ok(None);
             }
-            let off = self.field_offset(ty, None, f)?;
-            let part = if self.is_own_handle(ft, owner) {
-                Part::Handle(off)
-            } else if self.is_quiet(ft) {
-                Part::Quiet(off, ft)
-            } else if let TyKind::Intrinsic(IntrinsicTy::Vec(e)) = self.tys.kind(ft) {
-                let Some(elem) = self.drain_elem(e, owner, depth)? else {
-                    return Ok(None);
-                };
-                Part::Vec(off, Box::new(elem), self.layout(e)?.size)
-            } else if let Some(t) = self
-                .table_of(ft)
-                .filter(|_| matches!(self.tys.kind(ft), TyKind::Intrinsic(IntrinsicTy::Map(..))))
-            {
-                let (Some(v), true) = (t.val, !self.tys.needs_drop(t.key) || self.is_quiet(t.key))
-                else {
-                    return Ok(None);
-                };
-                let Some(elem) = self.drain_elem(v, owner, depth)? else {
-                    return Ok(None);
-                };
-                Part::Map(off, t, Box::new(elem))
-            } else if let Some(sub) = self.plain_struct_plan(ft, owner, depth)? {
-                Part::Struct(off, sub)
-            } else {
+            let off = self.field_offset(ty, v, f)?;
+            let Some(part) = self.part_at(ft, off, owner, depth)? else {
                 return Ok(None);
             };
             parts.push(part);
@@ -1174,39 +1184,89 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(parts))
     }
 
-    /// A `Vec` element or `Map` value of type `e` in a drain plan.
-    fn drain_elem(&self, e: Ty, owner: Ty, depth: u32) -> R<Option<Elem>> {
-        if self.is_own_handle(e, owner) {
-            return Ok(Some(Elem::Handle));
+    /// The part a value of type `ft` at `off` is in a drain plan.
+    fn part_at(&self, ft: Ty, off: u64, owner: Ty, depth: u32) -> R<Option<Part>> {
+        if self.is_own_handle(ft, owner) {
+            return Ok(Some(Part::Handle(off)));
         }
-        Ok(self.plain_struct_plan(e, owner, depth)?.map(Elem::Struct))
-    }
-
-    /// The drain plan of `ft` when it is a plain struct: no `Drop` body, not
-    /// a library type, not `shared`.
-    fn plain_struct_plan(&self, ft: Ty, owner: Ty, depth: u32) -> R<Option<Vec<Part>>> {
+        if self.is_quiet(ft) {
+            return Ok(Some(Part::Quiet(off, ft)));
+        }
+        if depth > 8 {
+            return Ok(None);
+        }
+        if let TyKind::Intrinsic(IntrinsicTy::Vec(e)) = self.tys.kind(ft) {
+            let Some(elem) = self.part_at(e, 0, owner, depth + 1)? else {
+                return Ok(None);
+            };
+            return Ok(Some(Part::Vec(off, Box::new(elem), self.layout(e)?.size)));
+        }
+        if matches!(self.tys.kind(ft), TyKind::Intrinsic(IntrinsicTy::Map(..))) {
+            let Some(t) = self.table_of(ft) else {
+                return Ok(None);
+            };
+            let (Some(v), true) = (t.val, !self.tys.needs_drop(t.key) || self.is_quiet(t.key))
+            else {
+                return Ok(None);
+            };
+            let Some(elem) = self.part_at(v, 0, owner, depth + 1)? else {
+                return Ok(None);
+            };
+            return Ok(Some(Part::Map(off, t, Box::new(elem))));
+        }
         let TyKind::Adt(a) = self.tys.kind(ft) else {
             return Ok(None);
         };
-        let adt = self.tys.adt(a);
-        if adt.has_drop_impl
-            || adt.library_name().is_some()
-            || coroutine::frame_owner(&adt.name).is_some()
-        {
+        let def = self.tys.adt(a);
+        if coroutine::frame_owner(&def.name).is_some() {
             return Ok(None);
         }
-        self.drain_plan(ft, owner, depth + 1)
+        let has_drop = def.has_drop_impl;
+        if def.is_enum {
+            if has_drop || !matches!(def.library_name(), None | Some("Option" | "Result")) {
+                return Ok(None);
+            }
+            let Some((adt, _)) = self.tys.tcx().adt_of(ft) else {
+                return Ok(None);
+            };
+            let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
+            let mut vs = Vec::new();
+            for (v, n) in counts.into_iter().enumerate() {
+                let Some(ps) = self.fields_plan(ft, Some(v as u32), n, owner, depth + 1)? else {
+                    return Ok(None);
+                };
+                if !ps.is_empty() {
+                    vs.push((v as u32, ps));
+                }
+            }
+            return Ok(Some(Part::Enum(off, ft, vs)));
+        }
+        if def.library_name().is_some() {
+            return Ok(None);
+        }
+        let Some(ps) = self.drain_plan(ft, owner, depth + 1)? else {
+            return Ok(None);
+        };
+        Ok(Some(if has_drop {
+            Part::Owned(off, ft, a, ps)
+        } else {
+            Part::Struct(off, ps)
+        }))
     }
 
     /// [`Cx::release_last`] for a `shared` struct whose own handles sit in
-    /// `Vec`s, `Map`s or plain structs in its body (an n-ary tree's
-    /// `children`, a trie's map of nodes): a box's handles are pushed on
-    /// one growable stack, last to be released first, its containers and
-    /// quiet fields freed, and the box freed; then handles are popped and
-    /// released, a box whose last handle that was going the same way. Each
-    /// box's handles are released in the order its drop glue releases
-    /// them, each subtree whole before the next, so `Drop` bodies run in
-    /// the recursive release's order (B-2026-11-17-138).
+    /// `Vec`s, `Map`s, structs or enums in its body (an n-ary tree's
+    /// `children`, a trie's map of nodes, an AST's `Vec` of node enums):
+    /// one growable worklist holds what is still to do, last to be done
+    /// first. Releasing a box runs its `Drop` body, pushes its handles and
+    /// its fields' `Drop` bodies (tasks), drops its quiet fields and frees
+    /// what nothing waits on. Each entry is then popped and done: a handle
+    /// released (a box whose last handle that was going the same way), a
+    /// task run (its `Drop` body, then its own parts pushed), or memory a
+    /// finished task's value lived in freed. Each value's parts are done
+    /// in the order its drop glue does them, each whole before the next,
+    /// so `Drop` bodies run in the recursive release's order
+    /// (B-2026-11-17-138, B-2026-11-17-139).
     fn release_drained(
         &mut self,
         b0: PointerValue<'ctx>,
@@ -1220,7 +1280,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .ok_or_else(|| format!("`{}` has no layout", self.tys.display(ty)))?;
         let null = self.ptr_ty().const_null();
         let cur = self.entry_slot(8, "box")?;
-        // The stack of handles still to release, a `Vec` the runtime grows.
+        // The worklist, a `Vec` of (kind, pointer) pairs the runtime grows.
         let stack = self.entry_slot(24, "pending")?;
         self.store(cur, b0.into())?;
         self.store(stack, null.into())?;
@@ -1244,9 +1304,16 @@ impl<'ctx> Cx<'ctx, '_> {
             self.call_drop_body(a, ty, slot)?;
         }
         let body = self.offset(b, off)?;
-        self.push_parts(body, parts, stack)?;
+        let mut tasks: Vec<(Ty, AdtId, Vec<Part>)> = Vec::new();
+        let late = defers(parts);
+        if late {
+            self.push_entry(TASK_FREE_BOX, b, stack)?;
+        }
+        self.push_parts(body, parts, stack, &mut tasks)?;
         self.finish_parts(body, parts)?;
-        self.free_dropped_box(b, ty)?;
+        if !late {
+            self.free_dropped_box(b, ty)?;
+        }
         self.builder
             .build_unconditional_branch(pop)
             .map_err(|e| e.to_string())?;
@@ -1268,28 +1335,77 @@ impl<'ctx> Cx<'ctx, '_> {
         let buf = self.load_ptr(stack)?;
         let at = self
             .builder
-            .build_int_mul(last, self.i64(8), "")
+            .build_int_mul(last, self.i64(16), "")
             .map_err(|e| e.to_string())?;
-        // SAFETY: `last < len`, the stack's length.
+        // SAFETY: `last < len`, the worklist's length.
         let slot = unsafe {
             self.builder
                 .build_in_bounds_gep(self.llcx.i8_type(), buf, &[at], "")
                 .map_err(|e| e.to_string())?
         };
-        let h = self.load_ptr(slot)?;
-        self.release_into(h, cur, top, pop, atomic)?;
+        let kind = self.load_i64(slot)?;
+        let p = self.load_ptr(self.offset(slot, 8)?)?;
+        let handle = self.llcx.append_basic_block(f, "pending.handle");
+        let free_buf = self.llcx.append_basic_block(f, "pending.free_buf");
+        let free_map = self.llcx.append_basic_block(f, "pending.free_map");
+        let free_box = self.llcx.append_basic_block(f, "pending.free_box");
+        let mut arms = vec![
+            (self.i64(TASK_FREE_BUF), free_buf),
+            (self.i64(TASK_FREE_MAP), free_map),
+            (self.i64(TASK_FREE_BOX), free_box),
+        ];
+        self.builder.position_at_end(handle);
+        self.release_into(p, cur, top, pop, atomic)?;
+        self.builder.position_at_end(free_buf);
+        self.free(p)?;
+        self.builder
+            .build_unconditional_branch(pop)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(free_map);
+        self.rt("map_free", &[p.into()])?;
+        self.builder
+            .build_unconditional_branch(pop)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(free_box);
+        self.free_dropped_box(p, ty)?;
+        self.builder
+            .build_unconditional_branch(pop)
+            .map_err(|e| e.to_string())?;
+        let mut k = 0;
+        while k < tasks.len() {
+            let (tty, ta, tparts) = tasks[k].clone();
+            let run = self.llcx.append_basic_block(f, "pending.run");
+            arms.push((self.i64(TASK_RUN + k as u64), run));
+            self.builder.position_at_end(run);
+            let me = self.entry_slot(8, "self")?;
+            self.store(me, p.into())?;
+            self.call_drop_body(ta, tty, me)?;
+            self.push_parts(p, &tparts, stack, &mut tasks)?;
+            self.finish_parts(p, &tparts)?;
+            self.builder
+                .build_unconditional_branch(pop)
+                .map_err(|e| e.to_string())?;
+            k += 1;
+        }
+        self.builder.position_at_end(take);
+        self.builder
+            .build_switch(kind, handle, &arms)
+            .map_err(|e| e.to_string())?;
         self.builder.position_at_end(done);
         self.free_buffer(stack)
     }
 
-    /// Pushes the handles of `parts` (the struct at `base`) on `stack`,
-    /// the one to release last first: fields first to last, each field's
-    /// handles in the reverse of their release order.
+    /// Pushes what `parts` (the value at `base`) leave to do on `stack`,
+    /// the one to do last first: fields first to last, each field's
+    /// entries in the reverse of the order its glue does them. A struct
+    /// with a `Drop` body becomes a task, registered in `tasks` once per
+    /// type; memory holding one is freed by an entry beneath it.
     fn push_parts(
         &mut self,
         base: PointerValue<'ctx>,
         parts: &[Part],
         stack: PointerValue<'ctx>,
+        tasks: &mut Vec<(Ty, AdtId, Vec<Part>)>,
     ) -> R<()> {
         for part in parts {
             match part {
@@ -1302,6 +1418,18 @@ impl<'ctx> Cx<'ctx, '_> {
                     let v = self.offset(base, *off)?;
                     let buf = self.load_ptr(v)?;
                     let n = self.load_i64(self.offset(v, 8)?)?;
+                    let one = std::slice::from_ref(&**elem);
+                    if defers(one) {
+                        let cap = self.load_i64(self.offset(v, 16)?)?;
+                        let has = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, cap, self.i64(0), "")
+                            .map_err(|e| e.to_string())?;
+                        self.if_then(has, |cx| cx.push_entry(TASK_FREE_BUF, buf, stack))?;
+                    }
+                    if !holds_handle(one) && !defers(one) {
+                        continue;
+                    }
                     let size = *size;
                     let elem = (**elem).clone();
                     self.count_loop(n, |cx, i| {
@@ -1323,7 +1451,7 @@ impl<'ctx> Cx<'ctx, '_> {
                                 .build_in_bounds_gep(cx.llcx.i8_type(), buf, &[at], "")
                                 .map_err(|e| e.to_string())?
                         };
-                        cx.push_elem(q, &elem, stack)
+                        cx.push_parts(q, std::slice::from_ref(&elem), stack, tasks)
                     })?;
                 }
                 Part::Map(off, t, elem) => {
@@ -1335,6 +1463,10 @@ impl<'ctx> Cx<'ctx, '_> {
                         .build_is_not_null(h, "")
                         .map_err(|e| e.to_string())?;
                     self.if_then(live, |cx| {
+                        let one = std::slice::from_ref(&elem);
+                        if defers(one) {
+                            cx.push_entry(TASK_FREE_MAP, h, stack)?;
+                        }
                         let voff = cx.val_off(t)?;
                         let n = cx.table_len(h)?;
                         cx.count_loop(n, |cx, i| {
@@ -1348,32 +1480,71 @@ impl<'ctx> Cx<'ctx, '_> {
                                 .map_err(|e| e.to_string())?;
                             let at = cx.walk_at(h, j, t)?;
                             let q = cx.offset(at, voff)?;
-                            cx.push_elem(q, &elem, stack)
+                            cx.push_parts(q, std::slice::from_ref(&elem), stack, tasks)
                         })
                     })?;
                 }
                 Part::Struct(off, sub) => {
                     let q = self.offset(base, *off)?;
-                    self.push_parts(q, sub, stack)?;
+                    self.push_parts(q, sub, stack, tasks)?;
+                }
+                Part::Owned(off, ty, a, sub) => {
+                    let q = self.offset(base, *off)?;
+                    let k = match tasks.iter().position(|(t, _, _)| t == ty) {
+                        Some(k) => k,
+                        None => {
+                            tasks.push((*ty, *a, sub.clone()));
+                            tasks.len() - 1
+                        }
+                    };
+                    self.push_entry(TASK_RUN + k as u64, q, stack)?;
+                }
+                Part::Enum(off, ty, vs) => {
+                    let q = self.offset(base, *off)?;
+                    self.each_variant_part(q, *ty, vs, |cx, ps| {
+                        cx.push_parts(q, ps, stack, tasks)
+                    })?;
                 }
             }
         }
         Ok(())
     }
 
-    fn push_elem(
+    /// Runs `f` on the parts of the active variant of the enum `ty` at
+    /// `q`, when it is one of `vs`.
+    fn each_variant_part(
         &mut self,
         q: PointerValue<'ctx>,
-        elem: &Elem,
-        stack: PointerValue<'ctx>,
+        ty: Ty,
+        vs: &[(u32, Vec<Part>)],
+        mut f: impl FnMut(&mut Self, &[Part]) -> R<()>,
     ) -> R<()> {
-        match elem {
-            Elem::Handle => {
-                let h = self.load_ptr(q)?;
-                self.push_handle(h, stack)
-            }
-            Elem::Struct(sub) => self.push_parts(q, sub, stack),
+        if vs.is_empty() {
+            return Ok(());
         }
+        let tag = self.tag_at(q, ty)?;
+        let it = tag.get_type();
+        let fun = self.cur_fn()?;
+        let join = self.llcx.append_basic_block(fun, "variant.done");
+        let mut arms = Vec::new();
+        for (v, _) in vs {
+            arms.push((
+                it.const_int(u64::from(*v), false),
+                self.llcx.append_basic_block(fun, "variant.parts"),
+            ));
+        }
+        self.builder
+            .build_switch(tag, join, &arms)
+            .map_err(|e| e.to_string())?;
+        for ((_, ps), (_, bb)) in vs.iter().zip(arms) {
+            self.builder.position_at_end(bb);
+            f(self, ps)?;
+            self.builder
+                .build_unconditional_branch(join)
+                .map_err(|e| e.to_string())?;
+        }
+        self.builder.position_at_end(join);
+        Ok(())
     }
 
     /// Pushes the handle `h` on `stack` unless it is null (`None`).
@@ -1382,56 +1553,61 @@ impl<'ctx> Cx<'ctx, '_> {
             .builder
             .build_is_not_null(h, "")
             .map_err(|e| e.to_string())?;
-        self.if_then(some, |cx| {
-            let len = cx.load_i64(cx.offset(stack, 8)?)?;
-            let cap = cx.load_i64(cx.offset(stack, 16)?)?;
-            let full = cx
-                .builder
-                .build_int_compare(IntPredicate::EQ, len, cap, "")
-                .map_err(|e| e.to_string())?;
-            cx.if_then(full, |cx| {
-                cx.rt(
-                    "vec_reserve",
-                    &[stack.into(), cx.i64(1).into(), cx.i64(8).into()],
-                )
-            })?;
-            let buf = cx.load_ptr(stack)?;
-            let at = cx
-                .builder
-                .build_int_mul(len, cx.i64(8), "")
-                .map_err(|e| e.to_string())?;
-            // SAFETY: `len < cap` once reserved.
-            let slot = unsafe {
-                cx.builder
-                    .build_in_bounds_gep(cx.llcx.i8_type(), buf, &[at], "")
-                    .map_err(|e| e.to_string())?
-            };
-            cx.store(slot, h.into())?;
-            let more = cx
-                .builder
-                .build_int_add(len, cx.i64(1), "")
-                .map_err(|e| e.to_string())?;
-            cx.store(cx.offset(stack, 8)?, more.into())
-        })
+        self.if_then(some, |cx| cx.push_entry(TASK_HANDLE, h, stack))
     }
 
-    /// Drops what `parts` leave once their handles are taken: the quiet
-    /// fields, a map's keys, and the containers' own buffers.
+    /// Pushes the entry (`kind`, `p`) on `stack`.
+    fn push_entry(&mut self, kind: u64, p: PointerValue<'ctx>, stack: PointerValue<'ctx>) -> R<()> {
+        let len = self.load_i64(self.offset(stack, 8)?)?;
+        let cap = self.load_i64(self.offset(stack, 16)?)?;
+        let full = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, len, cap, "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(full, |cx| {
+            cx.rt(
+                "vec_reserve",
+                &[stack.into(), cx.i64(1).into(), cx.i64(16).into()],
+            )
+        })?;
+        let buf = self.load_ptr(stack)?;
+        let at = self
+            .builder
+            .build_int_mul(len, self.i64(16), "")
+            .map_err(|e| e.to_string())?;
+        // SAFETY: `len < cap` once reserved.
+        let slot = unsafe {
+            self.builder
+                .build_in_bounds_gep(self.llcx.i8_type(), buf, &[at], "")
+                .map_err(|e| e.to_string())?
+        };
+        self.store(slot, self.i64(kind).into())?;
+        self.store(self.offset(slot, 8)?, p.into())?;
+        let more = self
+            .builder
+            .build_int_add(len, self.i64(1), "")
+            .map_err(|e| e.to_string())?;
+        self.store(self.offset(stack, 8)?, more.into())
+    }
+
+    /// Drops what `parts` leave once their entries are pushed: the quiet
+    /// fields, a map's keys, and the containers' own memory unless a task
+    /// still needs it (an entry beneath that task frees it then).
     fn finish_parts(&mut self, base: PointerValue<'ctx>, parts: &[Part]) -> R<()> {
         for part in parts.iter().rev() {
             match part {
-                Part::Handle(_) => {}
+                Part::Handle(_) | Part::Owned(..) => {}
                 Part::Quiet(off, ft) => {
                     let q = self.offset(base, *off)?;
                     self.call_glue(q, *ft)?;
                 }
                 Part::Vec(off, elem, size) => {
                     let v = self.offset(base, *off)?;
-                    if let Elem::Struct(sub) = &**elem {
+                    if !matches!(**elem, Part::Handle(_) | Part::Owned(..)) {
                         let buf = self.load_ptr(v)?;
                         let n = self.load_i64(self.offset(v, 8)?)?;
                         let size = *size;
-                        let sub = sub.clone();
+                        let elem = (**elem).clone();
                         self.count_loop(n, |cx, i| {
                             let at = cx
                                 .builder
@@ -1443,10 +1619,12 @@ impl<'ctx> Cx<'ctx, '_> {
                                     .build_in_bounds_gep(cx.llcx.i8_type(), buf, &[at], "")
                                     .map_err(|e| e.to_string())?
                             };
-                            cx.finish_parts(q, &sub)
+                            cx.finish_parts(q, std::slice::from_ref(&elem))
                         })?;
                     }
-                    self.free_buffer(v)?;
+                    if !defers(std::slice::from_ref(&**elem)) {
+                        self.free_buffer(v)?;
+                    }
                 }
                 Part::Map(off, t, elem) => {
                     let h = self.load_ptr(self.offset(base, *off)?)?;
@@ -1458,11 +1636,8 @@ impl<'ctx> Cx<'ctx, '_> {
                         .map_err(|e| e.to_string())?;
                     self.if_then(live, |cx| {
                         let kd = cx.tys.needs_drop(t.key);
-                        let sub = match &elem {
-                            Elem::Struct(sub) => Some(sub.clone()),
-                            Elem::Handle => None,
-                        };
-                        if kd || sub.is_some() {
+                        let vd = !matches!(elem, Part::Handle(_) | Part::Owned(..));
+                        if kd || vd {
                             let voff = cx.val_off(t)?;
                             let n = cx.table_len(h)?;
                             cx.count_loop(n, |cx, i| {
@@ -1470,12 +1645,15 @@ impl<'ctx> Cx<'ctx, '_> {
                                 if kd {
                                     cx.call_glue(at, t.key)?;
                                 }
-                                if let Some(sub) = &sub {
+                                if vd {
                                     let q = cx.offset(at, voff)?;
-                                    cx.finish_parts(q, sub)?;
+                                    cx.finish_parts(q, std::slice::from_ref(&elem))?;
                                 }
                                 Ok(())
                             })?;
+                        }
+                        if defers(std::slice::from_ref(&elem)) {
+                            return Ok(());
                         }
                         cx.rt("map_free", &[h.into()])
                     })?;
@@ -1483,6 +1661,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 Part::Struct(off, sub) => {
                     let q = self.offset(base, *off)?;
                     self.finish_parts(q, sub)?;
+                }
+                Part::Enum(off, ty, vs) => {
+                    let q = self.offset(base, *off)?;
+                    self.each_variant_part(q, *ty, vs, |cx, ps| cx.finish_parts(q, ps))?;
                 }
             }
         }

@@ -369,3 +369,163 @@ fn handles_in_vec_map_and_struct_fields_drain_in_order() {
         assert_eq!(out, CONTAINERS_OUT, "wasm");
     }
 }
+
+/// B-2026-11-17-139, the remainder of -138: handles inside a plain enum
+/// (`Vec[Kid]` with `Kid.Node(E)`, an AST's shape) or inside structs with a
+/// `Drop` body (`Vec[Loud]`, a `Map` of them, one nested in a plain struct)
+/// still released recursively. Drop bodies over each shape, then an enum
+/// tree and a `Vec` of `Drop`-impl holders, each 200000 deep. Every map
+/// holds one key, so the order does not depend on the hash seed.
+const TASKS: &str = r#"enum Kid { Node(E), Num(i64), Pair(E, String) }
+
+shared struct E { name: String, mut kids: Vec[Kid] }
+
+impl Drop for E {
+    fn drop(mut ref self) {
+        println(f"drop E {self.name}");
+    }
+}
+
+struct Loud { tag: String, a: Option[D], b: Option[D] }
+
+impl Drop for Loud {
+    fn drop(mut ref self) {
+        println(f"drop Loud {self.tag}");
+    }
+}
+
+shared struct D { name: String, mut items: Vec[Loud], mut solo: Option[Loud] }
+
+impl Drop for D {
+    fn drop(mut ref self) {
+        println(f"drop D {self.name}");
+    }
+}
+
+struct Quiet2 { inner: Loud, n: i64 }
+
+shared struct M { name: String, mut by: Map[i64, Loud2], mut q: Vec[Quiet2] }
+
+struct Loud2 { tag: String, m: Option[M] }
+
+impl Drop for Loud2 {
+    fn drop(mut ref self) {
+        println(f"drop Loud2 {self.tag}");
+    }
+}
+
+impl Drop for M {
+    fn drop(mut ref self) {
+        println(f"drop M {self.name}");
+    }
+}
+
+
+enum Kid2 { Node(Deep), Num(i64) }
+shared struct Deep { v: i64, mut kids: Vec[Kid2] }
+struct Hold { a: Option[Chain], w: i64 }
+impl Drop for Hold { fn drop(mut ref self) { self.w = 0; } }
+shared struct Chain { v: i64, mut items: Vec[Hold] }
+
+fn e(s: own String) -> E { E { name: s, kids: Vec.new() } }
+fn d(s: own String) -> D { D { name: s, items: Vec.new(), solo: None } }
+fn m(s: own String) -> M { M { name: s, by: Map.new(), q: Vec.new() } }
+
+fn main() {
+    let kept = e("kept");
+    {
+        let root = e("root");
+        let a = e("a");
+        a.kids.push(Kid.Node(e("a0")));
+        a.kids.push(Kid.Num(7));
+        a.kids.push(Kid.Pair(kept, "p"));
+        a.kids.push(Kid.Node(e("a3")));
+        root.kids.push(Kid.Node(a));
+        root.kids.push(Kid.Num(1));
+        root.kids.push(Kid.Pair(e("b"), "q"));
+        println("dropping E root");
+    }
+    println(f"kept {kept.name}");
+    {
+        let root = d("root");
+        let x = d("x");
+        x.items.push(Loud { tag: "x0", a: Some(d("x0a")), b: None });
+        x.solo = Some(Loud { tag: "xs", a: None, b: Some(d("xsb")) });
+        root.items.push(Loud { tag: "r0", a: Some(x), b: Some(d("r0b")) });
+        root.items.push(Loud { tag: "r1", a: None, b: None });
+        root.solo = Some(Loud { tag: "rs", a: Some(d("rsa")), b: None });
+        println("dropping D root");
+    }
+    {
+        let root = m("root");
+        let y = m("y");
+        y.q.push(Quiet2 { inner: Loud { tag: "yq", a: Some(d("yqa")), b: None }, n: 1 });
+        root.by[5] = Loud2 { tag: "r5", m: Some(y) };
+        root.q.push(Quiet2 { inner: Loud { tag: "rq", a: None, b: None }, n: 2 });
+        println("dropping M root");
+    }
+    println("done");
+    let e0 = Deep { v: 0, kids: Vec.new() };
+    let mut c = e0;
+    for i in 1..200000 {
+        let k = Deep { v: i, kids: Vec.new() };
+        c.kids.push(Kid2.Num(i));
+        c.kids.push(Kid2.Node(k));
+        c = k;
+    }
+    println(f"enum {e0.v}");
+    let d0 = Chain { v: 0, items: Vec.new() };
+    let mut dc = d0;
+    for i in 1..200000 {
+        let k = Chain { v: i, items: Vec.new() };
+        dc.items.push(Hold { a: Some(k), w: i });
+        dc = k;
+    }
+    println(f"dropimpl {d0.v}");
+}
+"#;
+
+const TASKS_OUT: &str = "dropping E root\n\
+drop E root\n\
+drop E a\n\
+drop E a0\n\
+drop E a3\n\
+drop E b\n\
+kept kept\n\
+dropping D root\n\
+drop D root\n\
+drop Loud rs\n\
+drop D rsa\n\
+drop Loud r0\n\
+drop D r0b\n\
+drop D x\n\
+drop Loud xs\n\
+drop D xsb\n\
+drop Loud x0\n\
+drop D x0a\n\
+drop Loud r1\n\
+dropping M root\n\
+drop M root\n\
+drop Loud rq\n\
+drop Loud2 r5\n\
+drop M y\n\
+drop Loud yq\n\
+drop D yqa\n\
+done\n\
+enum 0\n\
+dropimpl 0\n\
+drop E kept\n\
+";
+
+#[test]
+fn enum_and_drop_impl_elements_drain_in_order() {
+    let dir = scratch("tasks");
+    let file = dir.join("main.kara");
+    std::fs::write(&file, TASKS).unwrap();
+    assert_eq!(karac(&["__mir-run"], &file), TASKS_OUT, "interp");
+    assert_eq!(karac(&["__mir-llvm-run"], &file), TASKS_OUT, "llvm");
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(out) = on_wasm("tasks", TASKS) {
+        assert_eq!(out, TASKS_OUT, "wasm");
+    }
+}
