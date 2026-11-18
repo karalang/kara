@@ -24364,7 +24364,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some(bt) = self.distinct_base(base) {
                 let p = self.expr_place(object, false)?;
                 let (p, _) = self.strip_refs(p);
-                let by_ref = base != t;
+                // A borrowed receiver, or a projection out of a borrowed
+                // root (`w.n.raw()` with a bare `w`), whose call the checker
+                // typed `ref Base`.
+                let rt = self.expr_ty(e)?;
+                let by_ref =
+                    base != t || matches!(self.tys().tcx().kind(rt), HK::Ref(_) | HK::MutRef(_));
                 let op = if self.is_copy(bt) {
                     Operand::Copy(p.field(0, bt))
                 } else if by_ref {

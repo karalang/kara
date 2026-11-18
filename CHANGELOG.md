@@ -753,6 +753,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `karac check` counts `.raw()` on an owned non-`Copy` distinct value as a
+  move of the wrapper, as design.md § Distinct Types says: a later use
+  checked clean and was refused only by `run` and `build`, with no source
+  position. The error names both places, and its help says the `.raw()`
+  gave the wrapper up (offering `n.clone().raw()` when the wrapper has a
+  `.clone()`) instead of advising an `own` that is not there
+  (B-2026-11-18-17).
+- `w.n.raw()` through a bare parameter `w` is a borrow of the base, as
+  `n.raw()` of a bare `n` is; it was refused as a move out of a borrowed
+  place (B-2026-11-18-58).
 - A match on a distinct type over a finite base is exhaustive when its arms
   cover the base's constructors: `Flag(true)` and `Flag(false)` on a
   `distinct type Flag = bool`, or each variant on a distinct enum, were

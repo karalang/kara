@@ -1416,7 +1416,8 @@ impl<'a> UseClassifier<'a> {
                 let receiver_mode = if !receiver_counts
                     && (self.method_consumes_receiver(expr)
                         || (self.core_builtin_consumes_receiver(object, method)
-                            && self.core_receiver_moves(object)))
+                            && self.core_receiver_moves(object))
+                        || self.distinct_raw_consumes(expr, object, method))
                 {
                     Mode::Consuming
                 } else {
@@ -2509,6 +2510,32 @@ impl<'a> UseClassifier<'a> {
 
     /// v2 core C3: whether handing `object` to a by-value `self` moves it:
     /// its type (seen through a `ref`) is neither `Copy` nor a counted handle.
+    /// design.md § Distinct Types: `.raw()` on an owned wrapper gives up
+    /// the base, so the wrapper is moved. Of a borrowed one it yields
+    /// `ref Base` (or a copy of a `Copy` base), which the call's own type
+    /// records, so only a by-value result over a non-`Copy` base consumes
+    /// (B-2026-11-18-17). The call's type is read by node id, since a
+    /// method call's span aliases its receiver's.
+    fn distinct_raw_consumes(&self, call: &Expr, object: &Expr, method: &str) -> bool {
+        if method != "raw" || !crate::ownership::core_rules() {
+            return false;
+        }
+        let Some((ty, _)) = self.tc.node_types.get(&object.id) else {
+            return false;
+        };
+        let Type::Named { name, .. } = ty else {
+            return false;
+        };
+        if !self.tc.distinct_bases.contains_key(name) {
+            return false;
+        }
+        // The call's type is the base with a generic wrapper's arguments
+        // substituted (`Wrap[i64]`'s is `i64`, a copy).
+        self.tc.node_types.get(&call.id).is_some_and(|(t, _)| {
+            !matches!(t, Type::Ref(_) | Type::MutRef(_)) && !self.is_copy_type(t)
+        }) && self.core_receiver_moves(object)
+    }
+
     fn core_receiver_moves(&self, object: &Expr) -> bool {
         let Some((ty, _)) = self.tc.node_types.get(&object.id) else {
             return false;

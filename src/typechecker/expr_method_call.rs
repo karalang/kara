@@ -3554,7 +3554,14 @@ impl<'a> super::TypeChecker<'a> {
             args_close_span,
             &receiver_for_lookup,
             matches!(obj_ty, Type::Ref(_) | Type::MutRef(_))
-                || (matches!(object.kind, ExprKind::SelfValue) && self.current_self_borrowed),
+                || (matches!(object.kind, ExprKind::SelfValue) && self.current_self_borrowed)
+                // A projection out of a borrowed root (`w.n.raw()` with a
+                // bare `w`) is borrowed too, though the field reads as the
+                // wrapper itself.
+                || (matches!(
+                    object.kind,
+                    ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                ) && self.core_receiver_is_borrowed(object)),
         ) {
             return t;
         }

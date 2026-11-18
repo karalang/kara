@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 517 |
-| false-positive | 267 |
+| false-positive | 268 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 114 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 645 |
+| typecheck | 646 |
 | mir-llvm | 293 |
-| mir | 254 |
+| mir | 255 |
 | cli | 200 |
 | parser | 117 |
 | ownership | 108 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-55 | 2026-11-18 | mir+mir-llvm | low | A `std.log` record's `task_id` counts auto-par tasks: two adjacent `info` lines that auto-par runs side by side take ids, so a later `par` block's branches log as task 4 and 5 instead of 1 and 2 | — |
 | B-2026-11-18-56 | 2026-11-18 | typecheck | low | Diagnostics for a `Secret[T]` used where a withheld trait is needed advise deriving that trait on `Secret`, which secret.md forbids: a log field says `derive it with #[derive(Serialize)] on Secret[String]`, `dbg`/`assert_eq` say `add #[derive(Debug)]`, a `Set[Secret[String]]` says a derive on `Secret` holds where its type arguments have the traits | — |
 | B-2026-11-18-57 | 2026-11-18 | typecheck | low | A string literal passed where `std.crypto` / `std.encoding` take `Slice[u8]` (`sha256("abc")`) is E0200 "expected 'Slice[u8]', found 'String'" with no fix, though crypto.md names `.bytes()` as the way | — |
+| B-2026-11-18-58 | 2026-11-18 | typecheck+mir | medium | `w.n.raw()` through a bare (borrowing) parameter `w` is refused as a move out of a borrowed place (E0516), though `n.raw()` of a bare `n` is a borrow of the base | — |
 
 ### Relocated
 

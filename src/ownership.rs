@@ -2249,6 +2249,21 @@ pub(crate) fn clone_step(ty: &str, edit: &crate::resolver::TextEdit) -> String {
     }
 }
 
+/// The use-after-move advice when the move was a `.raw()` on an owned
+/// distinct wrapper, which gives the wrapper up (design.md § Distinct Types,
+/// B-2026-11-18-17): no `own` parameter is involved.
+pub(crate) fn raw_move_advice(binding: &str, supports_clone: bool) -> String {
+    let copy = if supports_clone {
+        format!(", or unwrap a copy (`{binding}.clone().raw()`)")
+    } else {
+        String::new()
+    };
+    format!(
+        "`.raw()` on an owned value gives up '{binding}' (design.md § Distinct Types): keep \
+         the base it returns and use that in place of '{binding}'{copy}"
+    )
+}
+
 /// The derive fix-it's advice for reusing moved `binding`. When the derive
 /// is only the first of several (`first_step`: `Prog { ops: Vec[Op] }` takes
 /// `Copy` on `Op` before `Clone` on `Prog`), it says so rather than claim the
@@ -4356,6 +4371,12 @@ impl<'a> OwnershipChecker<'a> {
                          values): borrow it (`ref {binding}`) instead of moving it, or wrap it \
                          in a `shared` type to give it many holders"
                     )
+                } else if self
+                    .typecheck_result
+                    .distinct_raw_receivers
+                    .contains(&SpanKey::from_span(&w.consume_span))
+                {
+                    raw_move_advice(binding, supports_clone)
                 } else if supports_clone {
                     format!(
                         "clone '{}' at the move site (`{}.clone()`), drop `own` from the \

@@ -70,8 +70,12 @@ impl<'a> super::TypeChecker<'a> {
                     // Of a borrowed value, a borrow of its base, unless the
                     // base is `Copy`: `self.raw()[0]` under a bare `self`
                     // reads through it (B-2026-11-04-48).
-                    if borrowed && !self.is_copy_type_during_check(&base) {
-                        return Some(Type::Ref(Box::new(base)));
+                    if !self.is_copy_type_during_check(&base) {
+                        if borrowed {
+                            return Some(Type::Ref(Box::new(base)));
+                        }
+                        self.distinct_raw_receivers
+                            .insert(crate::resolver::SpanKey::from_span(&object.span));
                     }
                     return Some(base);
                 }

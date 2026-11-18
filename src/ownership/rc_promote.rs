@@ -290,6 +290,12 @@ impl<'a> super::OwnershipChecker<'a> {
                     "clone '{binding}' into a new binding before the closure and capture that, \
                      or restructure to avoid the reuse"
                 )
+            } else if self
+                .typecheck_result
+                .distinct_raw_receivers
+                .contains(&SpanKey::from_span(&entry.consume_span))
+            {
+                crate::ownership::raw_move_advice(&binding, supports_clone)
             } else if supports_clone {
                 format!(
                     "clone '{binding}' at the move site (`{binding}.clone()`), drop `own` from \
