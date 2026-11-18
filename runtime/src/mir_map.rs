@@ -124,6 +124,15 @@ pub struct MirMap {
     free: LeanVec<u32>,
 }
 
+/// A hashed table rebuilds its index, at the size its live slots want,
+/// once more than one cell in this many is a deleted marker. A removal
+/// leaves one where its cell sits in a run of a group's width of taken
+/// cells, and with eight-byte groups those runs are common, so a table
+/// that keeps a sliding window of keys gathered deleted cells until its
+/// misses walked about two groups each, and the branch that ends a probe
+/// went wrong one time in three: kata 220 at a fifth of its 512 cells
+/// deleted ran 1.08 s against checked Rust's 0.86 s (B-2026-11-17-134).
+const DELETED_REBUILD: usize = 16;
 const NO_PAIR: u64 = u64::MAX;
 
 /// The entries a table holds in the header's own allocation, when they
@@ -272,9 +281,11 @@ impl MirMap {
         }
     }
 
-    /// Room in `index` for one more slot.
+    /// Room in `index` for one more slot, and few deleted cells in it
+    /// ([`DELETED_REBUILD`]).
     fn index_reserve(&mut self) {
-        if (self.index_used + 1) * 8 > self.ncells * 7 {
+        let deleted = self.index_used - self.len();
+        if (self.index_used + 1) * 8 > self.ncells * 7 || deleted * DELETED_REBUILD > self.ncells {
             // Room for the live slots and one more, and twice that when
             // they would fill more than half of it: a rebuild then leaves
             // at least as many free cells as live ones, so removals (each
@@ -1744,6 +1755,61 @@ mod tests {
                     // Spread keys free nearly every cell they leave.
                     assert!((*h).index_used < 2 * w as usize, "{}", (*h).index_used);
                 }
+                karac_mir_map_free(h);
+            }
+        }
+    }
+
+    /// A window of scattered keys (kata 220's buckets) leaves a deleted
+    /// cell behind many of its removals; the index is rebuilt before they
+    /// pass [`DELETED_REBUILD`]'s share, one removal's worth aside. Without
+    /// the rebuild, a third of a 128-cell index and two thirds of a 512-cell
+    /// one were deleted cells (B-2026-11-17-134).
+    #[test]
+    fn a_window_of_scattered_keys_keeps_few_deleted_cells() {
+        for w in [38usize, 205] {
+            let mut st = 12345i64;
+            let keys: Vec<i64> = (0..20_000)
+                .map(|_| {
+                    st = (st * 1_103_515_245 + 12_345) & 2_147_483_647;
+                    st % 8_000_000 - 4_000_000
+                })
+                .collect();
+            let mut h: *mut MirMap = std::ptr::null_mut();
+            let find = |h: *mut MirMap, k: i64| {
+                // SAFETY: a live table of `i64` entries.
+                unsafe {
+                    karac_mir_map_find(h, (&k as *const i64).cast(), Some(mix), Some(eq), None)
+                }
+            };
+            for (i, &k) in keys.iter().enumerate() {
+                // SAFETY: a live (or null) table of `i64` entries.
+                unsafe {
+                    karac_mir_map_insert(&mut h, 8, (&k as *const i64).cast(), Some(mix), None)
+                };
+                if i >= w {
+                    let at = find(h, keys[i - w]);
+                    assert!(at >= 0, "key {}", keys[i - w]);
+                    let mut out = 0i64;
+                    // SAFETY: `at` is an index of the table.
+                    unsafe { karac_mir_map_remove(h, at, (&mut out as *mut i64).cast()) };
+                    assert_eq!(out, keys[i - w]);
+                }
+                // SAFETY: as above.
+                let m = unsafe { &*h };
+                let deleted = m.index_used - m.len();
+                assert!(
+                    deleted * DELETED_REBUILD <= m.ncells + DELETED_REBUILD,
+                    "window {w}, step {i}: {deleted} of {} cells deleted",
+                    m.ncells
+                );
+            }
+            for &k in &keys[keys.len() - w..] {
+                assert!(find(h, k) >= 0, "key {k}");
+            }
+            // SAFETY: as above.
+            unsafe {
+                assert_eq!(karac_mir_map_len(h), w as i64);
                 karac_mir_map_free(h);
             }
         }

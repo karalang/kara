@@ -1544,7 +1544,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   11.11G (B-2026-11-17-134). A removal by a scalar key frees the index
   cell the in-line probe found rather than probing for it again: kata 220
   to 10.30G, 146 0.94x, 340 0.95x, 349 0.96x; of the 1,215 kata benches 9
-  build differently, all faster, none printing differently.
+  build differently, all faster, none printing differently. A table that
+  loses and gains scattered keys rebuilds its index once more than a
+  sixteenth of its cells are deleted markers: a window of random keys had
+  let them fill a third to two thirds of the index, so a lookup that
+  missed walked about two groups and its last branch went wrong one time
+  in three. Kata 220 runs 0.78 s against 1.08 s (checked Rust 0.86 s,
+  single-threaded, x86) and 9.70G instructions; lru_cache 0.92x, lfu_cache
+  0.98x; over the 27 kata benches that remove from a `Map` or `Set`, the
+  geomean is 0.995x, the worst 1.012x, and none prints differently.
 - A read-only walk over a `shared` value's `mut` vector field
   (`for child in node.children.iter()`) in a body that writes nothing
   through a `shared` handle checks the field's borrow flag once instead of
