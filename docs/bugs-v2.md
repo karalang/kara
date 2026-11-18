@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 493 |
-| false-positive | 260 |
+| false-positive | 262 |
 | missing-feature | 200 |
 | perf | 187 |
 | other | 113 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 624 |
+| typecheck | 626 |
 | mir-llvm | 289 |
 | mir | 253 |
 | cli | 196 |
@@ -131,6 +131,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-30 | 2026-11-18 | typecheck | low | `karac fix` rewrites a write through `v.last_mut().unwrap()` to an index, but not a method call, field or element reached through it: `v.last_mut().unwrap().push(c)` (a Rust stack of groups) is refused with no fix | — |
 | B-2026-11-18-31 | 2026-11-18 | ownership | low | A bare parameter consumed by a by-value method gets `.clone()` from `karac fix` and no mention of `own`, even when it was Rust's by-value `Vec<T>`: `blocks.into_iter()` becomes `blocks.clone().into_iter()`, an O(n) copy the Rust never made | — |
 | B-2026-11-18-33 | 2026-11-18 | typecheck | low | A distinct type's constructor pattern with a destructuring sub-pattern (`Pt((a, b)) => a + b` over `distinct type Pt = (i64, i64)`) is reported non-exhaustive (E0205 "pattern `_` not covered") though it covers every value | — |
+| B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
+| B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
 
 ### Relocated
 
