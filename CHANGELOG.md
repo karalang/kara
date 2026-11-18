@@ -739,6 +739,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   is: `let mut x = None; x = Some(5); (x, x)`, a `[None; 3]` array, and a
   `scan` state seeded with `[None; 4]` were refused as a use after a move,
   and `karac fix` added a needless `.clone()` (B-2026-11-17-109).
+- `a += b` (and `-=`, `*=`, `/=`, `%=`) on a `#[derive(Arithmetic)]` distinct
+  type runs, on a local, a field, an element or through a `mut ref`; it
+  passed `karac check` and then both backends refused it, and through a
+  `mut ref` it was refused at check (B-2026-11-18-16).
 - A generic struct's parameter left open inside a generic call in one of
   its fields (`Holder { values: Mutex.new(VecDeque.new()) }`,
   `Bag { items: Some(Vec.new()) }`) is solved by a later use, as it is for

@@ -5293,10 +5293,20 @@ impl<'a> super::TypeChecker<'a> {
         // borrow under `and` / `or`, each peeled only when the pointee is the
         // kind the operator takes.
         let (left_ty, right_ty) = match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => (
-                deref_numeric_scalar(left_ty),
-                deref_numeric_scalar(right_ty),
-            ),
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                // A borrowed `Arithmetic` distinct value reads through too:
+                // `x += d` on a `mut ref` of one is `*x = *x + d`
+                // (B-2026-11-18-16).
+                let peel = |t: Type| match &t {
+                    Type::Ref(inner) | Type::MutRef(inner)
+                        if self.distinct_type_has_arithmetic(inner) =>
+                    {
+                        (**inner).clone()
+                    }
+                    _ => deref_numeric_scalar(t),
+                };
+                (peel(left_ty), peel(right_ty))
+            }
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => (
                 deref_integer_scalar(left_ty),
                 deref_integer_scalar(right_ty),

@@ -7711,12 +7711,39 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
         }
+        let bin = compound_binop(&op);
+        // `a += b` on a `distinct type` that derives `Arithmetic`: the
+        // operator on the base values, written back into the wrapper, as
+        // `a = a + b` lowers (B-2026-11-18-16).
+        if matches!(
+            bin,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem
+        ) {
+            let tt = self.expr_ty(target)?;
+            let (_, tb) = self.strip_ty_full(tt);
+            if let Some(bt) = self.distinct_base(tb).filter(|&bt| self.is_copy(bt)) {
+                let pending = self.prepare_place(target)?;
+                let rp = self.expr_place(value, false)?;
+                let (rp, _) = self.strip_refs(rp);
+                let rhs = self.settle(Operand::Copy(rp.field(0, bt)));
+                let mut place = self.finish_place(pending, true)?;
+                // The operator writes the base value, so every borrow on
+                // the way to the wrapper is read through.
+                while let HK::Ref(_) | HK::MutRef(_) =
+                    self.tys().tcx().kind(self.place_type(&place))
+                {
+                    place = place.project(ProjElem::Deref);
+                }
+                let inner = place.field(0, bt);
+                self.arith(bin, Operand::Copy(inner.clone()), rhs, bt, inner);
+                return Ok(());
+            }
+        }
         let pending = self.prepare_place(target)?;
         let (rhs, _) = self.scalar_operand(value)?;
         let rhs = self.settle(rhs);
         let place = self.finish_place(pending, true)?;
         let (place, t) = self.write_through(place, value)?;
-        let bin = compound_binop(&op);
         if !self.is_copy(t) {
             return self.unsupported(target.span, "a compound assignment to a non-scalar");
         }
