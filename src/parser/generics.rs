@@ -273,16 +273,30 @@ impl super::Parser {
                 self.advance();
                 let name = self.expect_identifier()?;
                 let pname_span = self.span_from(&pstart);
-                // Const generic params follow the same Type-class convention
-                // as type generic params (see design.md § Identifiers and
-                // Naming). Single uppercase letters (`N`, `K`) and
-                // PascalCase names both classify as Type-class.
-                self.check_ident_class(
-                    &name,
-                    IdentClass::Type,
-                    "const generic parameter",
-                    pname_span,
-                );
+                // A const generic parameter is Const class, every letter
+                // uppercase, as a `const` item is (design.md §3 CN-3,
+                // CN-7; §8 Const generic parameters): `const ROWS: i64`.
+                // A one-letter `N` is Const class too (CN-7, B-2026-11-18-24).
+                let one_letter = name.len() == 1 && name.chars().all(|c| c.is_ascii_alphabetic());
+                if one_letter && name.chars().all(|c| c.is_ascii_lowercase()) {
+                    let upper = name.to_ascii_uppercase();
+                    self.errors.push(super::ParseError {
+                        kind: super::ParseErrorKind::Syntax,
+                        message: format!(
+                            "`{name}` is Value-class but const generic parameter names must be \
+                             Const-class (SCREAMING_SNAKE_CASE, or one uppercase letter, CN-7); \
+                             consider renaming to `{upper}`"
+                        ),
+                        span: pname_span,
+                    });
+                } else if !one_letter {
+                    self.check_ident_class(
+                        &name,
+                        IdentClass::Const,
+                        "const generic parameter",
+                        pname_span,
+                    );
+                }
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
                 params.push(GenericParam {

@@ -20,6 +20,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A const generic parameter's name is Const class, as design.md §3 CN-3
+  and CN-7 say: `struct Buf[const Cap: i64]` is refused with `CAP`
+  suggested, and the spec's `struct Matrix[T, const ROWS: i64, const COLS:
+  i64]`, refused until now, checks. A one-letter `N` checks as before
+  (B-2026-11-18-24).
 - An unsuffixed float literal is range-checked against the type its
   context gives it, as a suffixed one already was: `let a: f32 = 1e39;`,
   an `f32` argument `1e39`, `let e: f16 = 70000.0;` and the same literal
