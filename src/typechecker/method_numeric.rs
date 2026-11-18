@@ -869,6 +869,11 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(receiver_for_lookup),
                     type_display(&arg_ty)
                 );
+                // `(end as usize).min(v.len() - 1)`: a `usize` meeting the
+                // `i64` a length gives, so the written-`usize` pass retypes
+                // the cast (kata 2254's Rust arm, B-2026-11-17-147).
+                let met = self.resolved_now(&arg_ty);
+                self.note_pointer_int_mix(receiver_for_lookup, &met);
                 // A receiver whose literal kept the default `i64` beside a
                 // narrower argument: the fix is the literal's type, at its
                 // binding (B-2026-11-08-53).

@@ -638,7 +638,12 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
         // `redundant_clone` is the exception that needs the code to compile:
         // it reads a bare parameter as a borrow, and an error's fix in this
         // same pass may write `own` on that parameter, so its fix waits for
-        // a pass with no error (B-2026-11-14-3).
+        // a pass with no error (B-2026-11-14-3). `redundant_cast` and
+        // `lossless_cast` wait the same way: they judge a cast under the
+        // typing the errors left, and an error's fix in this pass may retype
+        // the operand (`0` -> `0i32`), so a cast judged redundant while the
+        // operand was i64 is deleted just as it starts to widen an i32
+        // (B-2026-11-17-140).
         let refused = !t.errors.is_empty()
             || pipeline
                 .ownership
@@ -665,7 +670,12 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
             .iter()
             .any(|e| e.fix_it.is_some() && e.lint_name.as_deref() == Some("redundant_suffix"));
         fixes.anchored(t.warnings.iter().filter_map(|e| {
-            if refused && e.lint_name.as_deref() == Some("redundant_clone") {
+            if refused
+                && matches!(
+                    e.lint_name.as_deref(),
+                    Some("redundant_clone" | "redundant_cast" | "lossless_cast")
+                )
+            {
                 return None;
             }
             if suffix_dropped

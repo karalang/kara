@@ -1854,7 +1854,14 @@ impl super::Parser {
             if self.check(&Token::Colon) {
                 self.advance();
                 let ty = self.parse_type()?;
-                let is_self = |t: &crate::ast::TypeExpr| matches!(&t.kind, TypeKind::Path(p) if p.segments == ["Self"]);
+                // `Self`, or the impl's own type by name (`self: ref
+                // Tournament`, kata 2225, B-2026-11-17-142).
+                let own_name = self.impl_self_name.clone();
+                let is_self = |t: &crate::ast::TypeExpr| {
+                    matches!(&t.kind, TypeKind::Path(p)
+                        if p.segments == ["Self"]
+                            || (p.segments.len() == 1 && own_name.as_ref() == Some(&p.segments[0])))
+                };
                 let (mode, kara) = match &ty.kind {
                     TypeKind::MutRef(inner) if is_self(inner) => {
                         (SelfParam::MutRef, Some("mut ref self"))

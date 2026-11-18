@@ -189,6 +189,7 @@ self.table.entry(key).or_insert_with(Vec.new).push(row);
 | `union` | `fn union(self, other: Set[T, H]) -> Set[T, H]` | |
 | `intersection` | `fn intersection(self, other: Set[T, H]) -> Set[T, H]` | |
 | `difference` | `fn difference(self, other: Set[T, H]) -> Set[T, H]` | Elements of `self` not in `other` |
+| `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred` and drops the rest |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | As `Map.reserve` |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
 

@@ -1081,7 +1081,24 @@ impl super::Parser {
                 return;
             };
             let ty = crate::formatter::render_type_expr(ty);
-            types.push(if p.is_own { format!("own {ty}") } else { ty });
+            // A bare closure parameter borrows, as a `fn`'s does, so the
+            // closure's type is `Fn(ref T)`: an `Fn(T)` annotation takes the
+            // argument owned and moves it out of every caller (kata 2224,
+            // B-2026-11-17-141). A scalar copies either way and stays bare.
+            const SCALARS: &[&str] = &[
+                "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize",
+                "usize", "f32", "f64", "bool", "char",
+            ];
+            types.push(if p.is_own {
+                format!("own {ty}")
+            } else if SCALARS.contains(&ty.as_str())
+                || ty.starts_with("ref ")
+                || ty.starts_with("mut ref ")
+            {
+                ty
+            } else {
+                format!("ref {ty}")
+            });
         }
         let key = crate::resolver::SpanKey::from_span(&arrow);
         let Some(delete) = self.fix_edits.remove(&key) else {

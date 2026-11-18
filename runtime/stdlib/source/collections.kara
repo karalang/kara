@@ -606,6 +606,17 @@ impl[T: Hash + Eq] Set[T] {
         }
         out
     }
+
+    /// Keeps the elements `pred` accepts and drops the rest, as
+    /// `SortedSet.retain` (B-2026-11-17-151).
+    fn retain(mut ref self, pred: own MutFn(T) -> bool) {
+        let mut f = pred;
+        for x in self.drain_entries().into_iter() {
+            if f(x) {
+                self.insert(x);
+            }
+        }
+    }
 }
 
 /// The elements of a deque, front to back, each borrowed.

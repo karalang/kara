@@ -13381,6 +13381,15 @@ impl<'a> super::TypeChecker<'a> {
         )
     }
 
+    /// The bare parameter a `ref` local was bound from, with where its
+    /// `own` goes: `Some` for `let mut s = s;` with `s` a bare `fn`
+    /// parameter, `None` for a closure's parameter or any other borrow.
+    fn own_param_of_local(&self, name: &str) -> Option<(String, Span)> {
+        let param = self.local_scope.part_of(name)?;
+        let at = *self.current_fn_d5_params.get(param)?;
+        (!self.closure_d5_params.contains(param)).then(|| (param.to_string(), at))
+    }
+
     fn reject_owned_value_into_ref_local(&mut self, target: &Expr, value: &Expr, rhs_ty: &Type) {
         if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
             return;
@@ -13461,6 +13470,35 @@ impl<'a> super::TypeChecker<'a> {
             if !owned {
                 return;
             }
+            // Kata 2243: `let mut s = s; .. s = next;` with `s` a bare
+            // parameter. The borrow is the parameter's, and the same pass
+            // already writes `own` on it for its give-away, after which
+            // `s = next` moves cleanly; `s = ref next` would borrow a value
+            // that often dies first (a loop's `next`), and the next round
+            // cloned it. So the fix is the parameter's `own`, as below
+            // (B-2026-11-17-146). Only when `src` is declared deeper than
+            // `name` and dies first: a `t` that lives as long as `name`
+            // keeps the plain `ref` fix.
+            let dies_first = matches!(
+                (self.local_scope.depth_of(src), self.local_scope.depth_of(name)),
+                (Some(a), Some(b)) if a > b
+            );
+            if let Some((param, at)) = dies_first.then(|| self.own_param_of_local(name)).flatten() {
+                self.type_error_with_fix_it(
+                    format!(
+                        "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot \
+                         take `{src}` by value: take `{param}` as `own`",
+                        type_display(&inner),
+                    ),
+                    value.span,
+                    TypeErrorKind::TypeMismatch,
+                    super::FixIt {
+                        span: at,
+                        replacement: "own ".to_string(),
+                    },
+                );
+                return;
+            }
             self.type_error_with_fix_it(
                 format!(
                     "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot take \
@@ -13492,15 +13530,7 @@ impl<'a> super::TypeChecker<'a> {
         // Kata 2046: `let mut cur = head; .. cur = node.next.take();` with
         // `head` a bare parameter. The borrow is the parameter's, so the fix
         // is its `own` (Rust's by-value parameter), named in the message.
-        let own_at = (!of_item)
-            .then(|| self.local_scope.part_of(name))
-            .flatten()
-            .and_then(|param| {
-                self.current_fn_d5_params
-                    .get(param)
-                    .map(|at| (param.to_string(), *at))
-            })
-            .filter(|(param, _)| !self.closure_d5_params.contains(param));
+        let own_at = (!of_item).then(|| self.own_param_of_local(name)).flatten();
         match own_at {
             Some((param, at)) => self.type_error_with_fix_it(
                 format!("{message}: take `{param}` as `own`"),
