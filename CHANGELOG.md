@@ -1751,6 +1751,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A literal array returned through `.to_vec()` or `.clone()` gets the
+  literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
+  from `for x in 0..=50` and returned as `best.to_vec()` from a
+  `Vec[i32]` function had no machine fix, and `karac fix` now writes
+  `[0i32, 0]` and then `0i32..=50` (B-2026-11-18-52).
 - `#[deprecated]` on an enum, a trait or a type alias warns at every use, as
   design.md § `#[deprecated]` says: the alias where it is named, the enum at
   its name, each variant constructor and each pattern, and the trait at each

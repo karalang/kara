@@ -16284,6 +16284,22 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
+                // `best.to_vec()` of a binding whose literal kept the
+                // default carries its elements' type out, so a mismatch on
+                // the call is the binding's (B-2026-11-18-52).
+                if matches!(method.as_str(), "to_vec" | "clone") && args.is_empty() {
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        if let Some(n) = self
+                            .literal_collection_uses
+                            .get(&SpanKey::from_span(&object.span))
+                            .filter(|n| *n == name)
+                            .cloned()
+                        {
+                            self.literal_collection_uses
+                                .insert(SpanKey::from_span(&expr.span), n);
+                        }
+                    }
+                }
                 if method == "unwrap" && args.is_empty() {
                     self.warn_weak_read_unwrap(object, args_close_span);
                 }
