@@ -1431,6 +1431,18 @@ impl TypeEnv {
             // so `impl[T: Display] Slice[T]` (the library's `join`) takes
             // them (B-2026-10-14-67).
             "Display" if display_builtin(ty) => return true,
+            // design.md § `CrossTask`, computed by the compiler and never an
+            // impl-table entry, so answered by the walk the free-fn gate
+            // uses: `impl[T: CrossTask] Q[T]` takes `Q[String]` as
+            // `fn f[T: CrossTask]` takes a `String` (B-2026-11-17-131).
+            "CrossTask" => {
+                return crate::cross_task_safe::is_cross_task_safe_with(
+                    ty,
+                    &self.structs,
+                    &self.enums,
+                )
+                .is_ok()
+            }
             _ => {}
         }
         // An `impl Trait` value is a `Trait`, and so whatever `Trait`'s
