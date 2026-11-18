@@ -422,7 +422,7 @@ fn push_code_point(out: mut ref Vec[u8], cp: i64) {
 // ------------------------------------------------------------ errors and numbers
 
 // A raised exception: its class name and its message.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct IpError {
     kind: String,
     msg: String,

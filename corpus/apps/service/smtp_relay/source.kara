@@ -144,7 +144,7 @@ fn has_mx(domain: Str) -> bool {
 
 struct Exchanger {
     name: String,
-    kind: Str,
+    kind: String,
     connections: i64,
     accepted: i64,
     inbox: Vec[(String, Vec[String], String)],
@@ -155,7 +155,7 @@ impl Exchanger {
     fn new(name: Str, kind: Str) -> Exchanger {
         Exchanger {
             name: name.to_string(),
-            kind,
+            kind: kind.to_string(),
             connections: 0,
             accepted: 0,
             inbox: Vec.new(),
