@@ -9093,6 +9093,53 @@ impl<'a> super::TypeChecker<'a> {
         let Some(owner) = self.shared_field_move_owner(value, ty) else {
             return;
         };
+        self.emit_shared_field_move(value, ty, &owner);
+    }
+
+    /// The `shared`/`par` box a strict-core move out of `value` crosses,
+    /// when the projection's root is an OWNED binding: `h.name` with
+    /// `h: own Holder`, or a `let` of one. Through such a root the place is
+    /// borrowed only because the box lends its fields, so §3.7's "reached
+    /// through `h`, which does not own it" would blame a borrow the program
+    /// does not have; E_SHARED_FIELD_MOVE names the box (B-2026-11-17-135).
+    fn core_shared_box_owner(&self, value: &Expr) -> Option<String> {
+        let ExprKind::Identifier(r) = &Self::projection_root(value).kind else {
+            return None;
+        };
+        if self.current_fn_d5_params.contains_key(r)
+            || self.local_scope.is_view(r)
+            || matches!(
+                self.local_scope.lookup(r),
+                None | Some(Type::Ref(_) | Type::MutRef(_))
+            )
+        {
+            return None;
+        }
+        let mut cur = value;
+        let mut owner = None;
+        while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+            &cur.kind
+        {
+            if let Some(name) = self.rc_place_type_name(object) {
+                if self.name_is_rc_backed_decl(&name) {
+                    owner = Some(name);
+                }
+            }
+            cur = object;
+        }
+        owner
+    }
+
+    /// E_SHARED_FIELD_MOVE at `value`, once per site: the partial-move rule
+    /// and the strict-core projection rule can both reach the same move.
+    fn emit_shared_field_move(&mut self, value: &Expr, ty: &Type, owner: &str) {
+        if self
+            .errors
+            .iter()
+            .any(|e| e.span == value.span && e.message.starts_with("error[E_SHARED_FIELD_MOVE]"))
+        {
+            return;
+        }
         let has_clone = self.type_supports_clone(ty);
         let message = if has_clone {
             format!(
@@ -10098,6 +10145,10 @@ impl<'a> super::TypeChecker<'a> {
         // of a borrowed place, which is an error. Say that, rather than
         // describe a copy the core never makes.
         if self.cli_lint_overrides.strict_core {
+            if let Some(owner) = self.core_shared_box_owner(value) {
+                self.emit_shared_field_move(value, ty, &owner);
+                return;
+            }
             message = if let ExprKind::Identifier(n) = &value.kind {
                 // §4.6: a bare `for` element and a `ref` (or borrowed-place)
                 // pattern binding are both `ref`s; only

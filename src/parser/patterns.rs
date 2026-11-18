@@ -919,7 +919,29 @@ impl super::Parser {
                 .to_string(),
             span: bound_start,
         });
-        None
+        // Skip the refused bound, nesting balanced, up to where the pattern
+        // goes on (`=>`, `|`, `if`, `,`, or the arm list's `}`), and stand a
+        // placeholder in for it: the one error above is the whole story, and
+        // giving up here cascaded into an E0002 at the end of the `match`
+        // (B-2026-11-17-136). A parse error stops the pipeline before any
+        // pass could read the placeholder.
+        let mut depth = 0usize;
+        while !self.is_at_end() {
+            match self.peek_token_ref() {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace if depth > 0 => {
+                    depth -= 1
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => break,
+                Token::FatArrow | Token::Pipe | Token::If | Token::Comma if depth == 0 => break,
+                _ => {}
+            }
+            self.advance();
+        }
+        Some(RangeBound::Path {
+            segments: vec!["_".to_string()],
+            span: self.span_from(&bound_start),
+        })
     }
 
     /// Parse the field list of a struct pattern between `{` and `}`.

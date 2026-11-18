@@ -635,7 +635,9 @@ fn a_field_read_through_a_ref_binding_or_a_handle_is_a_borrow() {
         "out of a borrowed place",
         "let ps = ref x.ps;",
     );
-    // A field of a `shared` value is reached through a handle (§4.6).
+    // A field of a `shared` value is reached through a handle (§4.6). The
+    // binding `b` owns its handle, so the refusal names the box
+    // (E_SHARED_FIELD_MOVE), not a borrow of `b` (B-2026-11-17-135).
     rejected_then_fixed(
         "shared-field",
         "shared struct B { mut name: String }\n\
@@ -644,7 +646,7 @@ fn a_field_read_through_a_ref_binding_or_a_handle_is_a_borrow() {
              let s = b.name;\n\
              println(s);\n\
          }\n",
-        "out of a borrowed place",
+        "error[E_SHARED_FIELD_MOVE]: ",
     );
     // A struct variant of a `shared` enum binds refs too.
     rejected_then_fixed(
@@ -2775,7 +2777,8 @@ fn main() { println(take(|s| s.len(), "ab")); }
 
 /// A closure's tail or `return` moves its value out as a fn's does, so
 /// `|q: S| q.t` over a `shared struct S` moves a field out of a shared
-/// value (core semantics §4.6), and `fix` clones it.
+/// value (core semantics §4.6), and `fix` clones it. The closure owns `q`,
+/// so the refusal names the box, E_SHARED_FIELD_MOVE (B-2026-11-17-135).
 #[test]
 fn a_closure_moving_a_field_out_of_a_shared_value_is_an_error() {
     rejected_then_fixed_in(
@@ -2789,7 +2792,7 @@ fn main() {
     println(k(S { t: "b" }));
 }
 "#,
-        "cannot move a non-`Copy` value out of a borrowed place",
+        "error[E_SHARED_FIELD_MOVE]: ",
         ".clone()",
         2,
     );

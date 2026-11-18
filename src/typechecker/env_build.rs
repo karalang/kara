@@ -3460,7 +3460,7 @@ impl<'a> super::TypeChecker<'a> {
                         "[{}]",
                         target_args
                             .iter()
-                            .map(type_display)
+                            .map(super::types::named_arg_display)
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
@@ -3500,7 +3500,7 @@ impl<'a> super::TypeChecker<'a> {
                         } else {
                             let rendered = target_args
                                 .iter()
-                                .map(type_display)
+                                .map(super::types::named_arg_display)
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             format!("[{}]", rendered)

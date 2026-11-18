@@ -504,7 +504,7 @@ pub fn const_arg_of(t: &Type) -> Option<&ConstArg> {
 }
 
 /// An argument of a `Named` type as written: a const argument by its value.
-fn named_arg_display(t: &Type) -> String {
+pub(crate) fn named_arg_display(t: &Type) -> String {
     match const_arg_of(t) {
         Some(c) => const_arg_display(c),
         None => type_display(t),
