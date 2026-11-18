@@ -752,7 +752,7 @@ pub fn view_results<'b>(
     let mut out = std::collections::HashSet::new();
     for body in bodies {
         let mut erased = Vec::new();
-        erased_parts(tys, body.return_ty(), &mut erased);
+        erased_parts(tys, body.return_ty(), &mut erased, false);
         if erased.is_empty() {
             continue;
         }
@@ -1774,7 +1774,7 @@ impl Cx<'_> {
                         continue;
                     }
                     let mut erased = Vec::new();
-                    erased_parts(self.tys, at.ty, &mut erased);
+                    erased_parts(self.tys, at.ty, &mut erased, false);
                     if erased
                         .iter()
                         .any(|e| has_erased_slot(self.tys, dt.ty, *e, self.closure_sig))
@@ -2448,27 +2448,32 @@ fn contains_ty(tys: &TyInterner, outer: Ty, inner: Ty) -> bool {
 
 /// The closures, function values and `dyn` values a value of type `ty`
 /// carries by value: itself, or in its elements or fields.
-fn erased_parts(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>) {
-    fn go(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>, seen: &mut Vec<Ty>) {
+fn erased_parts(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>, into_shared: bool) {
+    fn go(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>, seen: &mut Vec<Ty>, into_shared: bool) {
         if seen.contains(&ty) {
             return;
         }
         seen.push(ty);
         match tys.kind(ty) {
             TyKind::Closure(..) | TyKind::Fn { .. } | TyKind::Dyn { .. } => out.push(ty),
-            TyKind::Tuple(ts) => ts.iter().for_each(|t| go(tys, *t, out, seen)),
+            TyKind::Tuple(ts) => ts.iter().for_each(|t| go(tys, *t, out, seen, into_shared)),
             TyKind::Array(t, _)
             | TyKind::Intrinsic(
                 IntrinsicTy::Vec(t)
                 | IntrinsicTy::Set(t)
                 | IntrinsicTy::VecDeque(t)
                 | IntrinsicTy::SortedSet(t),
-            ) => go(tys, t, out, seen),
+            ) => go(tys, t, out, seen, into_shared),
             TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
-                go(tys, k, out, seen);
-                go(tys, v, out, seen);
+                go(tys, k, out, seen, into_shared);
+                go(tys, v, out, seen, into_shared);
             }
-            // A `shared` value's fields are parts of it too (B-2026-11-17-92).
+            // A `shared` value's fields are parts of it too, as slots a
+            // closure may be stored in (B-2026-11-17-92). As parts of a
+            // value already made they hold no view: none may be stored in
+            // a `shared` value (§5.7), so a `Vec` of handles whose type has
+            // a function field carries none (B-2026-11-18-75).
+            TyKind::Shared(_) if !into_shared => {}
             TyKind::Adt(a) | TyKind::Shared(a) => {
                 let adt = tys.adt(a);
                 let is_enum = adt.is_enum;
@@ -2476,7 +2481,7 @@ fn erased_parts(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>) {
                 for (v, n) in counts.iter().enumerate() {
                     for f in 0..*n as u32 {
                         if let Some(t) = tys.field_ty(ty, is_enum.then_some(v as u32), f) {
-                            go(tys, t, out, seen);
+                            go(tys, t, out, seen, into_shared);
                         }
                     }
                 }
@@ -2484,7 +2489,7 @@ fn erased_parts(tys: &TyInterner, ty: Ty, out: &mut Vec<Ty>) {
             _ => {}
         }
     }
-    go(tys, ty, out, &mut Vec::new());
+    go(tys, ty, out, &mut Vec::new(), into_shared);
 }
 
 /// Whether a value of type `holder` has, by value, a slot the erased value
@@ -2511,7 +2516,7 @@ fn has_erased_slot(tys: &TyInterner, holder: Ty, e: Ty, closure_sig: &ClosureSig
         _ => false,
     };
     let mut parts = Vec::new();
-    erased_parts(tys, holder, &mut parts);
+    erased_parts(tys, holder, &mut parts, true);
     parts.into_iter().any(fits)
 }
 
