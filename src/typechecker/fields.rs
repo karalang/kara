@@ -1209,6 +1209,44 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Re-type every expression strictly inside `value` whose recorded type
+    /// (or call frame) names one of `foreign`'s out-of-scope parameters with
+    /// that parameter's variable (B-2026-11-17-133).
+    fn reopen_foreign_params_under(
+        &mut self,
+        value: &crate::ast::Expr,
+        foreign: &HashMap<String, SubstValue>,
+    ) {
+        let mut ids: Vec<(crate::ids::NodeId, crate::resolver::SpanKey)> = Vec::new();
+        crate::span_visitor::for_each_expr(value, &mut |e| {
+            if e.id != value.id && !e.id.is_dummy() {
+                ids.push((e.id, crate::resolver::SpanKey::from_span(&e.span)));
+            }
+        });
+        for (id, key) in ids {
+            if let Some((ty, frame)) = self.node_types.get(&id).cloned() {
+                if self.mentions_foreign_param(&ty) {
+                    let opened = substitute_type_params(&ty, foreign);
+                    self.node_types.insert(id, (opened.clone(), frame));
+                    if self.expr_types.get(&key).is_some_and(|t| *t == ty) {
+                        self.expr_types.insert(key, opened);
+                    }
+                }
+            }
+            let reopened: Option<Vec<(String, Type)>> = self.node_call_subs.get(&id).map(|call| {
+                call.iter()
+                    .filter(|(_, t)| self.mentions_foreign_param(t))
+                    .map(|(n, t)| (n.clone(), substitute_type_params(t, foreign)))
+                    .collect()
+            });
+            if let (Some(reopened), Some(call)) = (reopened, self.node_call_subs.get_mut(&id)) {
+                for (n, t) in reopened {
+                    call.insert(n, t);
+                }
+            }
+        }
+    }
+
     pub(super) fn infer_struct_literal(
         &mut self,
         path: &[String],
@@ -1648,6 +1686,14 @@ impl<'a> super::TypeChecker<'a> {
                                     }
                                 }
                                 self.record_node_type(f.value.id, &opened);
+                                // B-2026-11-17-133 — the value's own parts
+                                // took the same out-of-scope `T` from the
+                                // slot: `VecDeque.new()` inside
+                                // `values: Mutex.new(VecDeque.new())` typed
+                                // `VecDeque[T]`, and its call frame said so.
+                                // They take the variable too, or typed HIR
+                                // meets a `T` it cannot lower.
+                                self.reopen_foreign_params_under(&f.value, &foreign);
                                 actual = opened;
                             }
                         }

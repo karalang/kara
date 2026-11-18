@@ -1,0 +1,47 @@
+// design.md § Type inference: a struct literal checks each field against its
+// declared type, and a type parameter the fields leave open is solved by the
+// rest of the body: here inside `Mutex.new(..)` and `Some(..)` (B-2026-11-17-133).
+struct Holder[T] {
+    values: Mutex[VecDeque[T]],
+}
+
+impl[T] Holder[T] {
+    fn put(self, e: own T) {
+        self.values.lock().value.push_back(e);
+    }
+
+    fn size(self) -> i64 {
+        self.values.lock().value.len()
+    }
+}
+
+struct Bag[T] {
+    items: Option[Vec[T]],
+}
+
+impl[T] Bag[T] {
+    fn add(mut ref self, x: own T) {
+        if let Some(mut ref v) = self.items {
+            v.push(x);
+        }
+    }
+
+    fn count(self) -> i64 {
+        match self.items {
+            Some(ref v) => v.len(),
+            None => 0,
+        }
+    }
+}
+
+fn main() {
+    let h = Holder { values: Mutex.new(VecDeque.new()) };
+    h.put(5);
+    h.put(6);
+    println(h.size());
+    let mut b = Bag { items: Some(Vec.new()) };
+    b.add("x".to_string());
+    b.add("y".to_string());
+    b.add("z".to_string());
+    println(b.count());
+}

@@ -730,6 +730,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A generic struct's parameter left open inside a generic call in one of
+  its fields (`Holder { values: Mutex.new(VecDeque.new()) }`,
+  `Bag { items: Some(Vec.new()) }`) is solved by a later use, as it is for
+  a field holding the value directly; it stopped with E0516 "an expression
+  whose type does not lower" (B-2026-11-17-133).
 - A literal lent to a `ref` or `mut ref` parameter is fixed by it, as any
   argument fixes a literal (design.md §8): `let mut best = 0;
   bump(mut best); best` with `bump(x: mut ref i32)` is an `i32`, where it

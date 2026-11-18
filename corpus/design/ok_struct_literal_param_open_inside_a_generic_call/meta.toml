@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "B-2026-11-17-133: a generic struct's parameter left open inside a generic call in a field (`Mutex.new(VecDeque.new())`, `Some(Vec.new())`) is solved by a later method call, as it is for a field holding the value directly (B-2026-10-19-9)."
