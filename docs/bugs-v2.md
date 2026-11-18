@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-144 | 2026-11-17 | typecheck | low | A closure whose parameter has no type and whose body calls a method on it (`let digits = |time| { time.chars()..count() }; digits(a)`) reports only E0516 "a type that failed to check is not lowered yet", naming no cause | — |
 | B-2026-11-17-145 | 2026-11-17 | ownership | low | When a later argument reads a value that an earlier argument moves into an `own` parameter (`push(acc, acc.len() + i)`), the fix clones the moved value; in a `fold` that is a copy per step, where hoisting the read into a `let` is the fix | — |
 | B-2026-11-17-150 | 2026-11-17 | ownership | low | E0235's fix `let best = ref best;` shadows `best` for the rest of a loop body, so a later write `best[next][w] = ..` in that body is refused next round (E0517 through a shared ref); and E0500's "used again here" points at a use before the capture | — |
-| B-2026-11-18-17 | 2026-11-18 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR move check, with no source position | — |
 | B-2026-11-18-21 | 2026-11-18 | typecheck+mir | medium | `#[derive(Serialize, Deserialize)]` on a distinct type generates nothing: a struct field of that type checks clean and then fails at run with "no method 'serialize' on type 'UserId'" | — |
 | B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
@@ -130,7 +129,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-55 | 2026-11-18 | mir+mir-llvm | low | A `std.log` record's `task_id` counts auto-par tasks: two adjacent `info` lines that auto-par runs side by side take ids, so a later `par` block's branches log as task 4 and 5 instead of 1 and 2 | — |
 | B-2026-11-18-56 | 2026-11-18 | typecheck | low | Diagnostics for a `Secret[T]` used where a withheld trait is needed advise deriving that trait on `Secret`, which secret.md forbids: a log field says `derive it with #[derive(Serialize)] on Secret[String]`, `dbg`/`assert_eq` say `add #[derive(Debug)]`, a `Set[Secret[String]]` says a derive on `Secret` holds where its type arguments have the traits | — |
 | B-2026-11-18-57 | 2026-11-18 | typecheck | low | A string literal passed where `std.crypto` / `std.encoding` take `Slice[u8]` (`sha256("abc")`) is E0200 "expected 'Slice[u8]', found 'String'" with no fix, though crypto.md names `.bytes()` as the way | — |
-| B-2026-11-18-58 | 2026-11-18 | typecheck+mir | medium | `w.n.raw()` through a bare (borrowing) parameter `w` is refused as a move out of a borrowed place (E0516), though `n.raw()` of a bare `n` is a borrow of the base | — |
 
 ### Relocated
 
@@ -1700,6 +1698,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-14 | typecheck | low | An unannotated `collect()` handed to a generic parameter (`show(it.collect())`, `show[T: Display]`) still reaches the MIR builder as E0516 "UnsolvedP… | e05a5afee6 |
 | B-2026-11-18-15 | parser | low | In a package's src/main.kara a lowercase top-level `let my_count` is E0001 "top-level statements are not allowed", not E_MODULE_LET with its `const`… | 391a146bcc |
 | B-2026-11-18-16 | typecheck+mir | medium | Compound assignment (`+=`, `-=`, `*=`) on a `#[derive(Arithmetic)]` distinct type passes check and is then refused by both backends; the plain `a = a… | d14ec5899e |
+| B-2026-11-18-17 | typecheck+ownership | medium | `.raw()` on an owned non-Copy distinct value is not a move to `karac check`: a later use of the wrapper checks clean and is refused only by the MIR m… | bdc7412857 |
 | B-2026-11-18-18 | typecheck | low | A match covering `Flag(true)` and `Flag(false)` on a distinct `bool` is E0205 non-exhaustive, though a distinct type has exactly its base's construct… | f452630364 |
 | B-2026-11-18-19 | typecheck | medium | A binding inside a distinct-type pattern (`UserId(n) => n * 2`) is typed `ref <error>`: E0208 "type 'ref <error>' does not implement trait Mul" | 9617e5a664 |
 | B-2026-11-18-20 | typecheck | medium | A hand-written `impl Display for` a distinct type is ignored by f-strings, `println` and `T: Display` bounds (design.md's newtype escape-hatch exampl… | 9617e5a664 |
@@ -1728,6 +1727,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-51 | typecheck | low | A range of literals feeding an `i32` was offered only `as i32`: with `x` from `for x in 0..=50`, `ans = vec![x, y]` into a `Vec<i32>` (LeetCode's Rus… | 9691a6290e |
 | B-2026-11-18-53 | mir-llvm | medium | On mir-llvm a `shared` type used as a `Set` or `Map` key is hashed field by field, never by its own `Hash` impl: a set of keys its `Eq` calls equal k… | 59d6b19b98 |
 | B-2026-11-18-54 | typecheck | high | A range from an unannotated literal binding to an expression over it and a typed value (`let mut at = 0; for i in at..at + k` with `k: i64`) is refus… | 6e9fe3eaf3 |
+| B-2026-11-18-58 | typecheck+mir | medium | `w.n.raw()` through a bare (borrowing) parameter `w` is refused as a move out of a borrowed place (E0516), though `n.raw()` of a bare `n` is a borrow… | bdc7412857 |
 
 </details>
 
