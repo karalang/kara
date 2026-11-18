@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 521 |
+| diagnostics | 527 |
 | false-positive | 269 |
 | missing-feature | 201 |
 | perf | 188 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 650 |
+| typecheck | 655 |
 | mir-llvm | 294 |
 | mir | 255 |
-| cli | 200 |
+| cli | 203 |
 | parser | 117 |
 | ownership | 108 |
 | runtime | 88 |
@@ -116,7 +116,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-25 | 2026-11-18 | typecheck | medium | An unbounded type parameter accepts `==`, `<` and f-string interpolation: `fn f[T](x: T, y: T) -> bool { x == y }` checks clean, and at a type with no PartialEq/Ord/Display it compares and prints structurally | — |
 | B-2026-11-18-34 | 2026-11-18 | typecheck | low | A list of lists keeps `i64` under an annotation on an element read: `let g = [[1, 2], [3, 4]]; let c: i32 = g[1][0]` is refused, as is the inline `[[1, 2], [3, 4]][1][k]` | — |
 | B-2026-11-18-35 | 2026-11-18 | typecheck | low | An indexed inline list as a branch value does not take the other branch's type: with `x: i32`, `let d = if b { [0, 45, 90][k] } else { x };` is refused as incompatible branches `i64` and `i32` | — |
-| B-2026-11-18-52 | 2026-11-18 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut best = [0, 0]; for x in 0..=50 { .. best = [x, y]; } best.to_vec()` returned as `Vec[i32]` | — |
+| B-2026-11-18-65 | 2026-11-18 | cli | medium | `karac fix` declines every `lossless_cast` / `redundant_cast` / `redundant_clone` fix in a program with a mutual-recursion group: the L0002 note sits in the effect errors that `refused` counts | — |
+| B-2026-11-18-66 | 2026-11-18 | typecheck+cli | medium | `karac fix` flips `own` on and off a trait impl method's parameter: E0200's `own` fix meets E0288 (impl may not be stronger than the trait), whose fix removes it | — |
+| B-2026-11-18-67 | 2026-11-18 | typecheck | medium | E_MODULE_LET offers `const` for `let EMPTY: Vec[i64] = Vec.new();`, and the fixed program is E_MODULE_BINDING_EFFECTFUL_INIT | — |
+| B-2026-11-18-68 | 2026-11-18 | typecheck | medium | A bare parameter of an unbounded type parameter handed to a generic `own` parameter is offered `.clone()` (E0236 after the fix) instead of `own` | — |
+| B-2026-11-18-69 | 2026-11-18 | typecheck+cli | low | E0208's derive fix adds `#[derive(PartialOrd, PartialEq)]` to a type that implements `PartialEq` by hand, and the fixed program is E0240 (conflicting impl) | — |
+| B-2026-11-18-70 | 2026-11-18 | typecheck | low | The E0236 fix for `v.iter().chunks(2).collect()` into a `Vec[Vec[i64]]` writes `v.chunks(2).into_iter().collect()`, whose items are slices (E0200 FromIterator[Slice[i64]]) | — |
 
 ### Relocated
 
@@ -1722,6 +1727,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-49 | cli | low | E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY is catalogued but no panic prints it (dropped by design in B-2026-11-16-320, now retired); L0001 does reach the u… | 6721483807 |
 | B-2026-11-18-50 | typecheck | medium | A generic struct literal or enum variant put where its type is already fixed kept a borrowed number as `ref i32`: `Reverse { value: x }` into a `Prio… | 9691a6290e |
 | B-2026-11-18-51 | typecheck | low | A range of literals feeding an `i32` was offered only `as i32`: with `x` from `for x in 0..=50`, `ans = vec![x, y]` into a `Vec<i32>` (LeetCode's Rus… | 9691a6290e |
+| B-2026-11-18-52 | typecheck | low | An array of literals that takes its element type from a range's `i64` through an assignment gets no machine fix at the use that needs `i32`: `let mut… | c52d43047e |
 | B-2026-11-18-53 | mir-llvm | medium | On mir-llvm a `shared` type used as a `Set` or `Map` key is hashed field by field, never by its own `Hash` impl: a set of keys its `Eq` calls equal k… | 59d6b19b98 |
 | B-2026-11-18-54 | typecheck | high | A range from an unannotated literal binding to an expression over it and a typed value (`let mut at = 0; for i in at..at + k` with `k: i64`) is refus… | 6e9fe3eaf3 |
 | B-2026-11-18-55 | mir+mir-llvm | low | A `std.log` record's `task_id` counts auto-par tasks: two adjacent `info` lines that auto-par runs side by side take ids, so a later `par` block's br… | 1438ef926a |
