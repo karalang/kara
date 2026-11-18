@@ -870,6 +870,7 @@ fn run_with(
         snapshots: Default::default(),
         repl_bindings: REPL_BINDINGS.with(|b| b.borrow_mut().take()),
         forgotten: Vec::new(),
+        repl_kept: Vec::new(),
         snapshot_bytes: 0,
         sweep_at: SWEEP_FLOOR,
         bytes_snapshots: Vec::new(),
@@ -1444,6 +1445,9 @@ struct Interp<'a> {
     /// The values `forget` took: what they own stays allocated by design,
     /// so the exit check counts it as held.
     forgotten: Vec<Value>,
+    /// The places of the REPL bindings a cell's snapshot recorded with a
+    /// source form: their drops at the cell's end are skipped.
+    repl_kept: Vec<Addr>,
     /// The bytes `String.bytes` has copied since the last sweep, and the
     /// count that starts the next one.
     snapshot_bytes: usize,
@@ -13993,6 +13997,10 @@ impl<'a> Interp<'a> {
         let name = self.display(name)?;
         let mut ty = body.locals[2].ty;
         let mut v = v.clone();
+        let lent = match &v {
+            Value::Ref(addr) => Some(addr.clone()),
+            _ => None,
+        };
         // The binding is lent to the call (D5): read through the loan.
         if let TyKind::Ref(t) = self.tys.kind(ty) {
             if let Value::Ref(addr) = &v {
@@ -14004,6 +14012,21 @@ impl<'a> Interp<'a> {
             (Some(t), Some(v)) => Some((t, v)),
             _ => None,
         };
+        // A binding the next cell starts from is the same value, so the
+        // session is one `main` (deferred.md § Interactive Evaluation
+        // Model > Cell Scope): its drop at this cell's end is skipped, and
+        // the REPL's session end runs it once.
+        //
+        // A binding with no source form is replayed from its `let`, so the
+        // next cell has its own copy; this one is kept too, so a `Drop` it
+        // runs is not seen once per cell. A task group or handle is not:
+        // keeping one past its cell leaves its tasks' memory behind.
+        let tasks = self.tys.tcx().adt_of(ty).is_some_and(|(adt, _)| {
+            !adt.user && matches!(adt.name.as_str(), "TaskGroup" | "TaskHandle")
+        });
+        if let (Some(addr), false) = (lent, tasks) {
+            self.repl_kept.push(addr);
+        }
         if let Some(b) = self.repl_bindings.as_mut() {
             b.push((name, source));
         }
@@ -16118,6 +16141,14 @@ impl<'a> Interp<'a> {
                     }
                     return Ok(Some(*target));
                 };
+                // A REPL binding the next cell starts from is not dropped
+                // ([`Interp::record_repl_binding`]); what it owns stays
+                // reachable, so it is not reported as leaked.
+                if !self.repl_kept.is_empty() && boxed.is_none() && self.repl_kept.contains(&addr) {
+                    let v = std::mem::replace(self.slot_mut(&addr)?, Value::Uninit);
+                    self.forgotten.push(v);
+                    return Ok(Some(*target));
+                }
                 // A boxed field's box goes with its value.
                 if let (Some(field), Root::Heap(a)) = (boxed, &addr.root) {
                     let a = *a;

@@ -551,6 +551,17 @@ pub(super) fn classify_input(src: &str) -> CellShape {
     if parsed.program.items.is_empty() && parsed.errors.is_empty() {
         return CellShape::Statements;
     }
+    // A statement the top-level parser does not recognise as one, such as
+    // the destructuring `let H { xs, n } = h;`, fails to parse as items and
+    // finds no statement either. It is statements when the same text parses
+    // cleanly as a function body; a broken item (`struct Bad { a: }`) does
+    // not, so it keeps the items path the paragraph above asks for.
+    if parsed.program.items.is_empty() && !parsed.errors.is_empty() {
+        let wrapped = crate::parse(&format!("fn main() {{\n{src}\n}}\n"));
+        if wrapped.errors.is_empty() {
+            return CellShape::Statements;
+        }
+    }
     CellShape::PureItems
 }
 
@@ -601,6 +612,30 @@ pub(super) fn item_name(item: &crate::ast::Item) -> Option<&str> {
 /// recovers the leading bytes by attaching them to the *next* item.
 pub(super) fn item_span(item: &crate::ast::Item) -> &crate::token::Span {
     item.span()
+}
+
+/// The names the errors say are undefined, when every error says only
+/// that (`undefined name 'X'`, `undefined type 'X'`), each once in order;
+/// empty when any error says anything else.
+pub(super) fn unresolved_names(errors: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for e in errors {
+        let head = e.lines().next().unwrap_or("");
+        let Some(name) = ["undefined name '", "undefined type '"]
+            .iter()
+            .find_map(|p| {
+                let at = head.find(p)? + p.len();
+                let len = head[at..].find('\'')?;
+                Some(&head[at..at + len])
+            })
+        else {
+            return Vec::new();
+        };
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
 }
 
 /// Parse a snippet of top-level item source and return the set of names
@@ -866,6 +901,126 @@ pub(super) fn lookup_let_rhs_type(
     None
 }
 
+/// Whether `src` uses the `?` operator: a `?` outside string and char
+/// literals and comments.
+pub(super) fn uses_question(src: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(next) = skip_literal(src, i) {
+            i = next;
+        } else if bytes[i] == b'?' {
+            return true;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// When a line comment, string or char literal starts at byte `i`, the
+/// byte after it. A label (`'d`) has no closing quote and is not one.
+fn skip_literal(src: &str, i: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut i = i;
+    match bytes[i] {
+        b'/' if bytes.get(i + 1) == Some(&b'/') => {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            Some(i)
+        }
+        b'"' => {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += if bytes[i] == b'\\' { 2 } else { 1 };
+            }
+            Some(i + 1)
+        }
+        b'\'' => {
+            let next = src[i + 1..].chars().next();
+            let after = next.map(|c| i + 1 + c.len_utf8());
+            if next == Some('\\') {
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    i += 1;
+                }
+                Some(i + 1)
+            } else {
+                after
+                    .filter(|&at| bytes.get(at) == Some(&b'\''))
+                    .map(|at| at + 1)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The cell's top-level `log.init(..)` statements, each as written. The
+/// logger is the program's own state, which a cell starting from its
+/// bindings' values does not rebuild, so the session replays the last one
+/// (`Session::log_init`).
+pub(super) fn top_level_log_inits(src: &str) -> Vec<String> {
+    const CALL: &str = "log.init(";
+    let bytes = src.as_bytes();
+    let mut found = Vec::new();
+    let mut depth = 0usize;
+    // Whether the code so far ends a statement, so a call here starts one.
+    let mut at_start = true;
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(next) = skip_literal(src, i) {
+            i = next;
+            at_start = false;
+            continue;
+        }
+        let b = bytes[i];
+        if depth == 0 && at_start && src[i..].starts_with(CALL) {
+            let mut d = 0usize;
+            let mut j = i + CALL.len() - 1;
+            while j < bytes.len() {
+                if let Some(next) = skip_literal(src, j) {
+                    j = next;
+                    continue;
+                }
+                match bytes[j] {
+                    b'(' => d += 1,
+                    b')' => {
+                        d -= 1;
+                        if d == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            let end = (j + 1).min(bytes.len());
+            found.push(src[i..end].to_string());
+            i = end;
+            at_start = false;
+            continue;
+        }
+        match b {
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if !b.is_ascii_whitespace() {
+            at_start = matches!(b, b';' | b'{' | b'}');
+        }
+        i += 1;
+    }
+    found
+}
+
+/// Whether `line` continues the statement above it: a method chain's
+/// next call (`.map(..)`, `?.next()`), not a range (`..5`).
+pub(super) fn continues_chain(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('.') && !t.starts_with("..")
+}
+
 /// Cheap structural-balance probe: returns `false` when the input clearly
 /// has more open delimiters than close. Skips characters inside string
 /// literals (`"..."`), char literals (`'.'`), and line comments (`// …`)
@@ -901,16 +1056,25 @@ pub(super) fn is_balanced(src: &str) -> bool {
                 }
                 i += 1;
             }
+            // A char literal (`'x'`, `'\n'`), or a label (`'outer: {`),
+            // which has no closing quote: reading a label as a char
+            // literal swallowed the braces up to the next `'`.
             b'\'' => {
+                let next = src[i + 1..].chars().next();
+                let after = next.map(|c| i + 1 + c.len_utf8());
+                let is_char =
+                    next == Some('\\') || after.is_some_and(|at| bytes.get(at) == Some(&b'\''));
                 i += 1;
-                while i < bytes.len() && bytes[i] != b'\'' {
-                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                        i += 2;
-                    } else {
-                        i += 1;
+                if is_char {
+                    while i < bytes.len() && bytes[i] != b'\'' {
+                        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
                     }
+                    i += 1;
                 }
-                i += 1;
             }
             b'{' => {
                 depth_curly += 1;
@@ -1056,6 +1220,22 @@ mod tests {
     }
 
     #[test]
+    fn uses_question_skips_strings_chars_and_comments() {
+        assert!(uses_question("let n = f()?;"));
+        assert!(!uses_question("println(\"ok?\"); let c = '?'; // why?\n"));
+        assert!(uses_question("let c = '\\''; let n = g()?;"));
+    }
+
+    /// A label is not a char literal: `'d: {` opens a block.
+    #[test]
+    fn balanced_reads_a_label_as_no_literal() {
+        assert!(!is_balanced("let x = 'd: {\n"));
+        assert!(is_balanced("let x = 'd: { break 'd 7; };"));
+        assert!(is_balanced("let c = '{'; let q = '\\''; let e = 'é';"));
+        assert!(!is_balanced("let c = '}'; if true {"));
+    }
+
+    #[test]
     fn strip_main_removes_def() {
         let src = "struct A {}\nfn main() { let x = 1; }\nfn helper() {}\n";
         let stripped = strip_main(src);
@@ -1077,5 +1257,51 @@ mod tests {
         let stripped = strip_main(src);
         assert!(!stripped.contains("fn main"));
         assert!(stripped.contains("fn helper"));
+    }
+
+    #[test]
+    fn classify_destructuring_let_is_statements() {
+        assert!(matches!(
+            classify_input("let H { xs, n } = h;"),
+            CellShape::Statements
+        ));
+        assert!(matches!(
+            classify_input("struct Bad { a: }"),
+            CellShape::PureItems
+        ));
+    }
+
+    #[test]
+    fn unresolved_names_only_when_every_error_is_one() {
+        let e = |s: &str| s.to_string();
+        assert_eq!(
+            unresolved_names(&[
+                e("error[E0100]: cell 2:1:5: undefined name 'leaf'\n  |"),
+                e("error[E0104]: cell 2:1:9: undefined type 'ClkP', did you mean 'Clk'?"),
+                e("error[E0100]: cell 2:3:5: undefined name 'leaf'"),
+            ]),
+            vec!["leaf".to_string(), "ClkP".to_string()]
+        );
+        assert!(unresolved_names(&[
+            e("error[E0100]: cell 2:1:5: undefined name 'leaf'"),
+            e("error[E0308]: cell 2:1:5: mismatched types"),
+        ])
+        .is_empty());
+        assert!(unresolved_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn log_inits_at_top_level_only() {
+        let src = "log.init(log.text_backend(log.Stream.Stdout));\n\
+                   let s = \"log.init(x)\";\n\
+                   if on { log.init(b()); }\n\
+                   log.init(log.json_backend(log.Stream.Stdout), level: Level.Warn)\n";
+        assert_eq!(
+            top_level_log_inits(src),
+            vec![
+                "log.init(log.text_backend(log.Stream.Stdout))".to_string(),
+                "log.init(log.json_backend(log.Stream.Stdout), level: Level.Warn)".to_string(),
+            ]
+        );
     }
 }

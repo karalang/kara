@@ -5,6 +5,8 @@ use karac::repl::{ReplOptions, Session};
 
 #[path = "repl_v2/book_transcript.rs"]
 mod book_transcript;
+#[path = "repl_v2/parity.rs"]
+mod parity;
 
 fn session() -> Session {
     Session::with_options(ReplOptions::default())

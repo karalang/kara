@@ -209,16 +209,27 @@ pub fn run_with_options(opts: ReplOptions) {
         }
     };
 
+    // Piped input (a pasted or redirected program) is read one line ahead,
+    // so a line that continues a method chain (`.map(..)` under `xs`) joins
+    // the cell above it, as it does in the file the program came from. At
+    // a terminal each line runs as it is entered.
+    let piped = !std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let mut ahead: Option<Result<String, ReadlineError>> = None;
     loop {
         let primary = "> ";
         let cont = ".. ";
         let mut buffer = String::new();
         let mut prompt = primary;
 
-        let line = match editor.readline(prompt) {
+        let read = match ahead.take() {
+            Some(r) => r,
+            None => editor.readline(prompt),
+        };
+        let line = match read {
             Ok(l) => l,
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
                 println!();
+                end_session(&mut session);
                 break;
             }
             Err(e) => {
@@ -235,6 +246,7 @@ pub fn run_with_options(opts: ReplOptions) {
         if line.starts_with(':') {
             let _ = editor.add_history_entry(&line);
             if !session.dispatch_meta(line.trim()) {
+                end_session(&mut session);
                 break;
             }
             continue;
@@ -244,25 +256,40 @@ pub fn run_with_options(opts: ReplOptions) {
         buffer.push('\n');
         prompt = cont;
 
-        // Brace/paren balance probe — fall into multi-line mode while the
-        // input is structurally incomplete. Strings and comments are coarse-
-        // tracked so braces inside them don't trip the probe.
-        while !is_balanced(&buffer) {
-            let next = match editor.readline(prompt) {
-                Ok(l) => l,
-                Err(ReadlineError::Interrupted) => {
-                    buffer.clear();
+        loop {
+            // Brace/paren balance probe — fall into multi-line mode while the
+            // input is structurally incomplete. Strings and comments are coarse-
+            // tracked so braces inside them don't trip the probe.
+            while !is_balanced(&buffer) {
+                let next = match editor.readline(prompt) {
+                    Ok(l) => l,
+                    Err(ReadlineError::Interrupted) => {
+                        buffer.clear();
+                        break;
+                    }
+                    Err(ReadlineError::Eof) => break,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        buffer.clear();
+                        break;
+                    }
+                };
+                buffer.push_str(&next);
+                buffer.push('\n');
+            }
+            if !piped || buffer.trim().is_empty() || !is_balanced(&buffer) {
+                break;
+            }
+            match editor.readline(prompt) {
+                Ok(next) if continues_chain(&next) => {
+                    buffer.push_str(&next);
+                    buffer.push('\n');
+                }
+                other => {
+                    ahead = Some(other);
                     break;
                 }
-                Err(ReadlineError::Eof) => break,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    buffer.clear();
-                    break;
-                }
-            };
-            buffer.push_str(&next);
-            buffer.push('\n');
+            }
         }
 
         if buffer.trim().is_empty() {
@@ -272,6 +299,21 @@ pub fn run_with_options(opts: ReplOptions) {
         let _ = editor.add_history_entry(buffer.trim_end());
         session.evaluate_cell(&buffer);
     }
+}
+
+/// [`Session::end`] at the prompt: what the drops print, or why they could
+/// not run.
+fn end_session(session: &mut Session) {
+    use std::io::Write;
+    match session.end() {
+        Ok(out) => print!("{out}"),
+        Err(errs) => {
+            for e in errs {
+                eprintln!("{e}");
+            }
+        }
+    }
+    let _ = std::io::stdout().flush();
 }
 
 /// Result of `Session::dispatch_magic` — the rendered display text
@@ -615,6 +657,22 @@ pub struct Session {
     /// user re-binds the same name in a later cell (capture clears
     /// stale pruning data); cleared entirely by `reset_persistent_lets`.
     pruned_provider_lets: Vec<PrunedProviderLet>,
+    /// Bindings that left the session because a later cell redefined a
+    /// type they were made with, each with the note a later use of the
+    /// name gets (deferred.md § Interactive Evaluation Model > Cell
+    /// Scope): the name, then the note.
+    retired_values: Vec<(String, String)>,
+    /// Item cells refused only because they name items no cell has defined
+    /// yet, in submission order. A file's items may name each other in any
+    /// order, so a program pasted item by item has later items its earlier
+    /// ones call; each held cell joins the session once a later item cell
+    /// defines what it names.
+    /// Each with the names it lacked.
+    held_items: Vec<(String, Vec<String>)>,
+    /// The last top-level `log.init(..)` an accepted cell ran: the logger
+    /// is program state no binding carries, so each cell, and the
+    /// session's end, runs it again before the cell's own code.
+    log_init: Option<String>,
     /// Per-cell structured effect snapshot, aligned 1:1 with
     /// `cell_history`. Entry `i` is the structured form of cell
     /// `i+1`'s inferred effects on `main` — the same data
@@ -706,6 +764,9 @@ impl Session {
             provider_history: Vec::new(),
             persistent_let_provider_scope: Vec::new(),
             pruned_provider_lets: Vec::new(),
+            retired_values: Vec::new(),
+            held_items: Vec::new(),
+            log_init: None,
             cell_effect_history: Vec::new(),
         }
     }
@@ -1401,6 +1462,7 @@ impl Session {
         // blocks, `use` / `import`, `independent`) are never pruned because
         // they have no shadowable name.
         self.prune_shadowed_items(src);
+        self.prune_shadowed_impls(src);
         if !self.items_source.is_empty() && !self.items_source.ends_with('\n') {
             self.items_source.push('\n');
         }
@@ -1463,6 +1525,84 @@ impl Session {
         self.items_source = rebuilt;
     }
 
+    /// An `impl` re-entered shadows the earlier one, as a re-declared name
+    /// does (deferred.md § Interactive Evaluation Model > Cell Scope): a
+    /// trait impl for the same header replaces the earlier block, which
+    /// would otherwise conflict (E0240), and an inherent impl's method
+    /// replaces the earlier method of that name on the same type, which
+    /// would otherwise be ambiguous (E0239). Headers match by their text,
+    /// spaces aside.
+    fn prune_shadowed_impls(&mut self, new_item_src: &str) {
+        fn header(src: &str, imp: &crate::ast::ImplBlock) -> String {
+            let from = imp.span.offset.min(src.len());
+            let to = src[from..].find('{').map_or(src.len(), |at| from + at);
+            src[from..to]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+        fn methods(imp: &crate::ast::ImplBlock) -> impl Iterator<Item = &crate::ast::Function> {
+            imp.items.iter().filter_map(|i| match i {
+                crate::ast::ImplItem::Method(f) => Some(&**f),
+                _ => None,
+            })
+        }
+        let new = crate::parse(new_item_src);
+        let mut incoming: Vec<(String, bool, Vec<String>)> = Vec::new();
+        for item in &new.program.items {
+            if let crate::ast::Item::ImplBlock(imp) = item {
+                incoming.push((
+                    header(new_item_src, imp),
+                    imp.trait_name.is_some(),
+                    methods(imp).map(|f| f.name.clone()).collect(),
+                ));
+            }
+        }
+        if incoming.is_empty() || self.items_source.trim().is_empty() {
+            return;
+        }
+        let parsed = crate::parse(&self.items_source);
+        if !parsed.errors.is_empty() {
+            return;
+        }
+        let mut cut: Vec<(usize, usize)> = Vec::new();
+        for item in &parsed.program.items {
+            let crate::ast::Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            let key = header(&self.items_source, imp);
+            for (h, is_trait, names) in &incoming {
+                if *h != key {
+                    continue;
+                }
+                let shadowed: Vec<&crate::ast::Function> =
+                    methods(imp).filter(|f| names.contains(&f.name)).collect();
+                if *is_trait || (!shadowed.is_empty() && shadowed.len() == imp.items.len()) {
+                    cut.push((imp.span.offset, imp.span.offset + imp.span.length));
+                } else {
+                    for f in shadowed {
+                        cut.push((f.span.offset, f.span.offset + f.span.length));
+                    }
+                }
+            }
+        }
+        if cut.is_empty() {
+            return;
+        }
+        cut.sort();
+        let mut rebuilt = String::with_capacity(self.items_source.len());
+        let mut at = 0;
+        for (from, to) in cut {
+            if from < at {
+                continue;
+            }
+            rebuilt.push_str(&self.items_source[at..from]);
+            at = to.min(self.items_source.len());
+        }
+        rebuilt.push_str(&self.items_source[at..]);
+        self.items_source = rebuilt;
+    }
+
     fn run_with_wrapper(&mut self, cell_src: &str) {
         match self.run_with_wrapper_inner(cell_src, /* capture */ false) {
             Ok(out) => {
@@ -1520,6 +1660,9 @@ impl Session {
                 None => break,
             }
             r = self.run_cell_v2(&src, capture);
+        }
+        if let Err(out) = &r {
+            notes.extend(self.retired_value_notes(&out.errors));
         }
         match &mut r {
             Ok(out) | Err(out) => out.notes.splice(0..0, notes),
@@ -1684,7 +1827,47 @@ impl Session {
     /// join the session when the v2 check accepts them, and otherwise the
     /// cell is rolled back whole, so one bad item does not fail every later
     /// cell. Returns the check's errors.
+    ///
+    /// A cell whose only errors are names no cell defines yet is held
+    /// instead ([`Session::held_items`]), with a note naming them, unless
+    /// it goes in together with the cells already held (mutual recursion).
     fn add_items_v2(&mut self, src: &str) -> Vec<String> {
+        let errs = self.try_items_v2(src);
+        if errs.is_empty() {
+            self.accept_items_v2(src);
+            // Held cells the new items complete but that fail for another
+            // reason are refused now, with that reason.
+            return match self.release_held_items(None) {
+                Ok(_) => Vec::new(),
+                Err((set, errs)) => {
+                    self.held_items.retain(|h| !set.contains(h));
+                    errs
+                }
+            };
+        }
+        self.cell_history.pop();
+        let missing = unresolved_names(&errs);
+        if missing.is_empty() {
+            return errs;
+        }
+        let names: Vec<String> = missing.iter().map(|n| format!("`{n}`")).collect();
+        let cell = (src.to_string(), missing);
+        if self.release_held_items(Some(cell.clone())) == Ok(true) {
+            return Vec::new();
+        }
+        self.held_items.push(cell);
+        vec![format!(
+            "note: no cell defines {} yet; this cell is held, and joins the session \
+             when a later cell defines {}",
+            names.join(", "),
+            if names.len() == 1 { "it" } else { "them" }
+        )]
+    }
+
+    /// Appends `src` to the session's items when the v2 check accepts
+    /// them, and returns the check's errors (named by the newest cell's
+    /// lines) with the items left as they were otherwise.
+    fn try_items_v2(&mut self, src: &str) -> Vec<String> {
         let before = self.items_source.clone();
         self.append_items(src);
         let (checked, errs) = self.check_items_v2();
@@ -1702,13 +1885,105 @@ impl Session {
             }
             None => errs,
         };
-        if errs.is_empty() {
-            self.cell_effect_history.push(CellEffectSnapshot::default());
-        } else {
+        if !errs.is_empty() {
             self.items_source = before;
-            self.cell_history.pop();
         }
         errs
+    }
+
+    /// The bookkeeping for an item cell `try_items_v2` accepted.
+    fn accept_items_v2(&mut self, src: &str) {
+        self.cell_effect_history.push(CellEffectSnapshot::default());
+        // A held cell's items are superseded by the newer definition.
+        let names = collect_top_level_item_names(src);
+        self.held_items
+            .retain(|(h, _)| collect_top_level_item_names(h).is_disjoint(&names));
+        self.drop_values_of_redefined_types(src);
+    }
+
+    /// Adds the held item cells, with `new` (a cell just refused for the
+    /// names it lacks), that the session and each other now define every
+    /// lacking name of, together, so cells that name each other go in at
+    /// once. Returns whether `new` went in, or the cells that were complete
+    /// with the errors that refused them.
+    #[allow(clippy::type_complexity)]
+    fn release_held_items(
+        &mut self,
+        new: Option<(String, Vec<String>)>,
+    ) -> Result<bool, (Vec<(String, Vec<String>)>, Vec<String>)> {
+        let session = collect_top_level_item_names(&self.items_source);
+        let mut set: Vec<(String, Vec<String>)> = self.held_items.clone();
+        set.extend(new.clone());
+        loop {
+            let defined: std::collections::HashSet<String> = set
+                .iter()
+                .flat_map(|(src, _)| collect_top_level_item_names(src))
+                .chain(session.iter().cloned())
+                .collect();
+            let before = set.len();
+            set.retain(|(_, lacks)| lacks.iter().all(|n| defined.contains(n)));
+            if set.len() == before {
+                break;
+            }
+        }
+        if set.is_empty() {
+            return Ok(false);
+        }
+        let joined: Vec<&str> = set.iter().map(|(src, _)| src.as_str()).collect();
+        let errs = self.try_items_v2(&joined.join("\n"));
+        if !errs.is_empty() {
+            return Err((set, errs));
+        }
+        self.held_items.retain(|h| !set.contains(h));
+        for (src, _) in &set {
+            self.cell_history.push(src.clone());
+            self.accept_items_v2(src);
+        }
+        Ok(new.is_some_and(|n| set.contains(&n)))
+    }
+
+    /// A binding whose type names an item the cell `src` redefines was made
+    /// against the earlier definition, so it can no longer be named
+    /// (deferred.md § Interactive Evaluation Model > Cell Scope): it leaves
+    /// the session, instead of every later cell failing to rebuild it under
+    /// the new definition, and a later use of its name says why.
+    fn drop_values_of_redefined_types(&mut self, src: &str) {
+        let names = collect_top_level_item_names(src);
+        let Some(values) = self.v2_values.as_mut() else {
+            return;
+        };
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        let mentions = |ty: &str, n: &str| ty.split(|c: char| !ident(c)).any(|w| w == n);
+        let cell = self.cell_history.len();
+        let retired = &mut self.retired_values;
+        values.retain(|v| {
+            let Some(n) = names.iter().find(|n| mentions(&v.ty, n)) else {
+                return true;
+            };
+            retired.retain(|(name, _)| name != &v.name);
+            retired.push((
+                v.name.clone(),
+                format!(
+                    "note: `{n}` was redefined in cell {cell}; `{}` was made with the \
+                     earlier definition, so it is no longer in scope",
+                    v.name
+                ),
+            ));
+            false
+        });
+    }
+
+    /// The notes for the names in `errors`' "undefined name" errors that
+    /// a type's redefinition took out of scope.
+    fn retired_value_notes(&self, errors: &[String]) -> Vec<String> {
+        self.retired_values
+            .iter()
+            .filter(|(name, _)| {
+                let needle = format!("undefined name '{name}'");
+                errors.iter().any(|e| e.contains(&needle))
+            })
+            .map(|(_, note)| note.clone())
+            .collect()
     }
 
     /// The v2 check of the accumulated items, under an empty
@@ -1766,6 +2041,20 @@ impl Session {
                     Err(errs) => {
                         let moved = moved_at_snapshot(&synthetic, &errs);
                         if moved.is_empty() {
+                            // A use of a value a type's redefinition took
+                            // out of scope is answered here: a replay would
+                            // rebuild the value under the new definition
+                            // and blame the cell that made it.
+                            let names = unresolved_names(&errs);
+                            let retired =
+                                |n: &String| self.retired_values.iter().any(|(r, _)| r == n);
+                            if !names.is_empty() && names.iter().all(retired) {
+                                let errors = errs
+                                    .iter()
+                                    .map(|e| self.relabel_v2(&synthetic, e))
+                                    .collect();
+                                return Err(WrapperOutcome::errors(errors, Vec::new()));
+                            }
                             break;
                         }
                         live.retain(|(n, _)| !moved.contains(n));
@@ -1958,6 +2247,10 @@ impl Session {
                 }
             }
         }
+        if let Some(init) = &self.log_init {
+            s.push_str(init);
+            s.push_str(";\n");
+        }
     }
 
     /// The program a cell runs as. With `snap` (v2), the bindings in scope
@@ -1977,7 +2270,16 @@ impl Session {
         if snap.is_some() || shown.is_some() {
             s.push_str(&format!("fn {snap_fn}[T](name: Str, value: T) {{}}\n"));
         }
-        s.push_str("fn main() {\n");
+        // `?` is legal in any cell: the session is the body of a
+        // `fn main() -> Result[(), AnyError]` (deferred.md § Interactive
+        // Evaluation Model > Cell Scope). Only a program that uses it takes
+        // that `main`, so a cell's bare `return;` keeps working.
+        let fallible = self.cell_history.iter().any(|c| uses_question(c));
+        if fallible {
+            s.push_str("fn main() -> Result[(), AnyError] {\n");
+        } else {
+            s.push_str("fn main() {\n");
+        }
         let mut ranges: Vec<(usize, Range<usize>)> = Vec::new();
         // Under a provider the cell is not recorded, but it still starts
         // from the values; a refused snapshot program falls back to the
@@ -1998,9 +2300,38 @@ impl Session {
         for (name, _) in snap.into_iter().flatten() {
             s.push_str(&format!("{snap_fn}(\"{name}\", {name});\n"));
         }
+        if fallible {
+            s.push_str("Ok(())\n");
+        }
         s.push_str("}\n");
         self.cell_byte_ranges = ranges;
         s
+    }
+
+    /// The session's end, `:quit` or end of input: its bindings go out of
+    /// scope as `main`'s locals do, latest first, so each `Drop` body runs
+    /// once, here and not at the end of the cell that made it. Returns what
+    /// the drops print, or the errors that stopped the program. A session
+    /// whose bindings have no value to start from (none were bound) prints
+    /// nothing.
+    pub fn end(&mut self) -> Result<String, Vec<String>> {
+        if self.persistent_lets.is_empty() && self.v2_values.as_ref().is_none_or(|v| v.is_empty()) {
+            return Ok(String::new());
+        }
+        let mut s = strip_main(&self.items_source);
+        if !s.is_empty() && !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s.push_str("fn main() {\n");
+        let mut ranges = Vec::new();
+        self.push_cell_start(&mut s, &mut ranges, true);
+        self.push_in_scopes(&mut s, &mut ranges, "", true);
+        s.push_str("}\n");
+        self.cell_byte_ranges = ranges;
+        match crate::cli::repl_v2::run_cell(&s) {
+            Ok(ran) => Ok(ran.stdout),
+            Err(f) => Err(f.errors.iter().map(|e| self.relabel_v2(&s, e)).collect()),
+        }
     }
 
     /// Extract every top-level `let` / `let mut` / `let ... else` statement
@@ -2016,6 +2347,9 @@ impl Session {
     /// a span landing inside the replayed slice back to the originating
     /// cell.
     fn capture_new_lets(&mut self, cell_src: &str) {
+        if let Some(last) = top_level_log_inits(cell_src).pop() {
+            self.log_init = Some(last);
+        }
         // A cell under a provider is not recorded: the values stay those
         // the scope opened with, and its `let`s replay after them.
         let pending = self.v2_pending.take();
@@ -2028,6 +2362,11 @@ impl Session {
                 self.v2_replay_from = None;
             }
             self.v2_values = pending;
+            // A name bound again is no longer the retired value's.
+            if let Some(values) = &self.v2_values {
+                self.retired_values
+                    .retain(|(n, _)| !values.iter().any(|v| &v.name == n));
+            }
             if let Some(start) = move_start {
                 self.v2_move_starts.insert(cell_idx, start);
             }
