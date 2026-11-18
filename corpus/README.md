@@ -57,6 +57,7 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `rules` | core-semantics sections the program pins |
 | `backends` | empty = all; otherwise the only backends it applies to |
 | `env` | extra environment for every run |
+| `timeout` | seconds a run may take, for an entry measured slower than the runner's `--timeout` (default 60); the larger of the two holds. The `note` says what was measured |
 | `leaks` | `shared-cycle` when the program builds a cycle of strong `shared` handles, which never frees ([design.md §11](../docs/design.md#cycles-and-weak)); the `mir-llvm-asan` lane then excuses a leak report, but no other sanitizer report |
 | `note` | free text |
 | `bucket` | the classifier rule that decided `class`, or the failure (`mir-gap:<construct>`, `timeout`, `check-refuses:<code>`, ...) |

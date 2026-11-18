@@ -17,3 +17,4 @@ model_exit = 0
 model_rev = "3acf4472"
 model_src = "3e38f181"
 model_verdict = "ORDER"
+v2_reject = "core-semantics §3.2, §3.5: `if let Ok(w) = c` moves `c` on its `Ok` path only, so `c` is maybe-moved at the later `match c`, and a use of a maybe-moved place is refused (karac check: E0514) (corpus refresh, B-2026-11-18-1 follow-up)"

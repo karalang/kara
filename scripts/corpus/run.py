@@ -100,11 +100,15 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         return {**base, "verdict": "SKIP", "why": f"backend {backend} not available yet", "ran": False}
     env = {"KARAC_HASH_SEED": str(args.seed), **meta.get("env", {})}
     orig = not mir and bool(meta.get("fixed_by_classify"))
-    res = run_program(entry, backend, args.karac, args.timeout, env,
+    # An entry measured slower than the default (a large app on the
+    # interpreter, a bench under a sanitizer) names its own `timeout`; the
+    # larger of it and --timeout holds.
+    timeout = max(args.timeout, float(meta.get("timeout", 0)))
+    res = run_program(entry, backend, args.karac, timeout, env,
                       source="source.orig.kara" if orig else "source.kara")
     why = ""
     if res["status"] == "timeout":
-        why = f"timeout after {args.timeout:.0f}s"
+        why = f"timeout after {timeout:.0f}s"
     elif expect == "error" or expect.startswith("error:"):
         code = expect.split(":", 1)[1] if ":" in expect else ""
         if res["status"] != "refused":

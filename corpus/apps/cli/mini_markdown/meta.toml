@@ -8,3 +8,5 @@ rules = []
 backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
 extracted_src = "b01a6348"
+timeout = 240
+note = "timeout: on mir-interp the run matches expected.out in 54 s alone (2026-11-18, release karac), over the default 60 s under a loaded corpus run; mir-llvm takes seconds."
