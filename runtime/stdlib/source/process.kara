@@ -121,12 +121,14 @@ impl Command {
         }
     }
 
+    #[must_use("`arg` returns the command with the option set; discarding it loses every option set on it")]
     fn arg(own self, a: Str) -> Command {
         let mut c = self;
         c.cmd_args.push(a.to_string());
         c
     }
 
+    #[must_use("`args` returns the command with the option set; discarding it loses every option set on it")]
     fn args(own self, a: Slice[Str]) -> Command {
         let mut c = self;
         for x in a.iter() {
@@ -135,18 +137,21 @@ impl Command {
         c
     }
 
+    #[must_use("`env` returns the command with the option set; discarding it loses every option set on it")]
     fn env(own self, key: Str, value: Str) -> Command {
         let mut c = self;
         c.cmd_env.push(EnvVar { key: key.to_string(), value: value.to_string(), op: 0 });
         c
     }
 
+    #[must_use("`env_remove` returns the command with the option set; discarding it loses every option set on it")]
     fn env_remove(own self, key: Str) -> Command {
         let mut c = self;
         c.cmd_env.push(EnvVar { key: key.to_string(), value: String.new(), op: 1 });
         c
     }
 
+    #[must_use("`env_clear` returns the command with the option set; discarding it loses every option set on it")]
     fn env_clear(own self) -> Command {
         let mut c = self;
         c.cmd_env.push(EnvVar { key: String.new(), value: String.new(), op: 2 });
@@ -155,24 +160,28 @@ impl Command {
 
     // The child's working directory. A relative program name is still
     // looked up on `PATH`, not in this directory.
+    #[must_use("`current_dir` returns the command with the option set; discarding it loses every option set on it")]
     fn current_dir(own self, path: Str) -> Command {
         let mut c = self;
         c.cmd_dir = Some(path.to_string());
         c
     }
 
+    #[must_use("`stdin` returns the command with the option set; discarding it loses every option set on it")]
     fn stdin(own self, cfg: own Stdio) -> Command {
         let mut c = self;
         c.cmd_stdin = Some(cfg);
         c
     }
 
+    #[must_use("`stdout` returns the command with the option set; discarding it loses every option set on it")]
     fn stdout(own self, cfg: own Stdio) -> Command {
         let mut c = self;
         c.cmd_stdout = Some(cfg);
         c
     }
 
+    #[must_use("`stderr` returns the command with the option set; discarding it loses every option set on it")]
     fn stderr(own self, cfg: own Stdio) -> Command {
         let mut c = self;
         c.cmd_stderr = Some(cfg);

@@ -117,6 +117,77 @@ fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
     )
 }
 
+/// design.md § `#[must_use]` mandate for the library methods the compiler
+/// provides itself, which have no library source to carry the attribute
+/// (B-2026-11-19-19). Category 4: a builder step, which consumes the builder
+/// and returns it with the option set. Category 5: a method that returns a
+/// value derived from its receiver without changing it, a query included,
+/// since that value is the only reason to call it. Keyed as the type checker
+/// keys a method call (`String` covers `Str`).
+fn builtin_must_use(key: &str) -> Option<String> {
+    let (ty, method) = key.split_once('.')?;
+    let builder = matches!(
+        (ty, method),
+        ("RequestBuilder", "header" | "body" | "timeout")
+            | (
+                "OpenOptions",
+                "append" | "create" | "create_new" | "read" | "truncate" | "write"
+            )
+    );
+    if builder {
+        return Some(format!(
+            "`{method}` returns the builder with the option set; discarding it loses every \
+             option set on it"
+        ));
+    }
+    let derived = match ty {
+        "String" => matches!(
+            method,
+            "to_lowercase"
+                | "to_uppercase"
+                | "replace"
+                | "replacen"
+                | "repeat"
+                | "bytes"
+                | "normalize"
+                | "substring"
+                | "to_string"
+                | "clone"
+                | "as_str"
+                | "split_at"
+                | "len"
+                | "is_empty"
+                | "contains"
+                | "starts_with"
+                | "ends_with"
+        ),
+        "Vec" | "Slice" | "Array" => matches!(
+            method,
+            "to_vec"
+                | "clone"
+                | "concat"
+                | "join"
+                | "repeat"
+                | "len"
+                | "is_empty"
+                | "contains"
+                | "starts_with"
+                | "ends_with"
+        ),
+        "Map" | "SortedMap" => matches!(method, "clone" | "len" | "is_empty" | "contains_key"),
+        "Set" | "SortedSet" | "VecDeque" => {
+            matches!(method, "clone" | "len" | "is_empty" | "contains")
+        }
+        _ => false,
+    };
+    derived.then(|| {
+        format!(
+            "`{method}` returns a value derived from `{ty}` and leaves it as it was, so the \
+             result is the only reason to call it"
+        )
+    })
+}
+
 /// The discard message for a stdlib iterator (design.md § `#[must_use]`
 /// mandate, category 2), the one the `Iterator` pseudo-struct carries.
 const ITERATOR_MUST_USE: &str = "discarding the iterator drops every adapter without running \
@@ -519,8 +590,11 @@ impl Walker<'_> {
             ExprKind::MethodCall { .. } => self.typed.method_callee_types.get(&key)?.clone(),
             _ => return None,
         };
-        let entry = self.typed.must_use_functions.get(&lookup_key)?;
-        Some((lookup_key, entry.clone().unwrap_or_default()))
+        if let Some(entry) = self.typed.must_use_functions.get(&lookup_key) {
+            return Some((lookup_key, entry.clone().unwrap_or_default()));
+        }
+        let msg = builtin_must_use(&lookup_key)?;
+        Some((lookup_key, msg))
     }
 
     fn make_implicit_diag(&self, expr: &Expr, kind: &str, why: &str) -> LintDiagnostic {
