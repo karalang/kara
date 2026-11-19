@@ -1319,7 +1319,7 @@ let t = Token.Integer(42);
 let e = Token.Error { message: describe(), line: 7 };
 ```
 
-A variant is built with its qualified name. In a pattern, the enum name may be left out when the scrutinee's type is known: `Circle { radius }` and `Shape.Circle { radius }` match the same values. The prelude variants `Some`, `None`, `Ok` and `Err` are always written bare.
+A variant is built with its qualified name. In a pattern, the enum name may be left out when the scrutinee's type is known: `Circle { radius }` and `Shape.Circle { radius }` match the same values. The prelude variants `Some`, `None`, `Ok` and `Err` are canonically written bare; the qualified form (`Option.Some(x)`) is accepted, and `karac fix` rewrites it to the bare one (the `qualified_prelude_variant` style lint, [§ `karac fix`](#karac-fix-and-karac-explain)).
 
 **A payload may be any type, another enum included.**
 
@@ -1377,7 +1377,7 @@ enum Option[T] { Some(T), None }
 enum Result[T, E] { Ok(T), Err(E) }
 ```
 
-- Their variants are always written bare: `Some(x)`, `None`, `Ok(v)`, `Err(e)`.
+- Their variants are canonically written bare: `Some(x)`, `None`, `Ok(v)`, `Err(e)`. The qualified form (`Option.Some(x)`, `Result.Err(e)`) is accepted; `karac fix` rewrites it to the bare one.
 - `Option[T]` is `Copy` when `T` is ([core-semantics.md §1.1](core-semantics.md#1-values)). `Result[T, E]` is `Copy` when `T` and `E` both are, and a `Result` of shared handles and `Copy` values is a handle aggregate. An `Option` of shared handles is a handle aggregate ([core-semantics.md §6.1](core-semantics.md#6-sharing-c7)), and `Option[ref T]` is a view ([core-semantics.md §5.2](core-semantics.md#5-references-and-views-c5)).
 - `?` propagates `None` and `Err` ([§10](#results-and-propagation)), and `??` supplies a default in their place ([`?` and `??`](#-and-)). Error handling, the `Error` trait and `AnyError` are in [§10](#10-errors-and-panics). The methods are in [library/core-types.md](library/core-types.md).
 
@@ -7421,7 +7421,8 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 - `manual_compound_assign`: `x = x + e` becomes `x += e`;
 - `needless_return`: a final `return e;` becomes `e`;
 - `redundant_literal_method`: a redundant `.iter()` or `.to_string()` on a literal is removed;
-- `redundant_ref_param`: a redundant `ref` on a parameter is removed: `x: ref T` means the same as `x: T` ([§7](#parameter-modes)).
+- `redundant_ref_param`: a redundant `ref` on a parameter is removed: `x: ref T` means the same as `x: T` ([§7](#parameter-modes));
+- `qualified_prelude_variant`: `Option.Some(x)`, `Option.None`, `Result.Ok(v)` and `Result.Err(e)`, in an expression or a pattern, lose the qualifier.
 
 **`karac explain`** explains a diagnostic code from the code catalogue, and a [concept id](#concept-ids) by the sections that specify it. For an item (`karac explain src/order.kara.process`, a method as `<file>.Type.method`), it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)). A function with a `with` clause is trusted for what it declares, so its derivation ends at the clause.
 

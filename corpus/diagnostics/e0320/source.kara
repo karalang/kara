@@ -1,0 +1,5 @@
+#[deny(qualified_prelude_variant)]
+fn main() {
+    let o = Option.Some(3);
+    println(o.unwrap_or(0));
+}

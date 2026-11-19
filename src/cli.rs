@@ -1781,7 +1781,7 @@ impl Pipeline {
         self.report_style_lints();
     }
 
-    /// The five style lints (B-2026-11-05-31, `crate::style_lints`), on a
+    /// The style lints (B-2026-11-05-31, `crate::style_lints`), on a
     /// program with no type error, each at the level the attributes around
     /// it give it, else the command line's, else its registry default. An `#[expect]` one fulfils retracts
     /// the typechecker's `unfulfilled_lint_expectation` for it, which was

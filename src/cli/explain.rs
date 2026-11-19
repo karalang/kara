@@ -754,6 +754,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0318", lint_own_cp("ffi_float_eq")),
     ("W0319", lint_own_cp("ambiguous_not_comparison")),
     ("E0319", lint_own_cp("ambiguous_not_comparison")),
+    ("W0320", lint_own("qualified_prelude_variant")),
+    ("E0320", lint_own("qualified_prelude_variant")),
     ("E0801", ty("GpuNotSafe", None)),
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),

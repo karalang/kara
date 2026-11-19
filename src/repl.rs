@@ -74,17 +74,35 @@ fn binds_mut(slice: &str, name: &str) -> bool {
 fn v2_values_of(
     live: &[(String, bool)],
     got: &[crate::mir::interp::ReplBinding],
+    held_count: &mut usize,
 ) -> Option<Vec<V2Value>> {
-    if got.len() != live.len() {
+    use crate::mir::interp::REPL_HELD_PREFIX;
+    // A shadowed binding the cell held (`REPL_RETAIN_FN`) stays in the
+    // session under a name no cell can write, in its place among the rest.
+    let named = got.iter().filter(|(n, _)| !n.starts_with(REPL_HELD_PREFIX));
+    if named.clone().count() != live.len()
+        || !named
+            .zip(live)
+            .all(|((got_name, _), (name, _))| got_name == name)
+    {
         return None;
     }
-    live.iter()
-        .zip(got)
-        .map(|((name, mutable), (got_name, source))| {
+    got.iter()
+        .map(|(got_name, source)| {
             let (ty, value) = source.clone()?;
-            (got_name == name).then(|| V2Value {
-                name: name.clone(),
-                mutable: *mutable,
+            let (name, mutable) = match got_name.strip_prefix(REPL_HELD_PREFIX) {
+                Some(shadowed) => {
+                    *held_count += 1;
+                    (format!("__karac_held_{shadowed}_{held_count}"), false)
+                }
+                None => {
+                    let m = live.iter().find(|(n, _)| n == got_name)?.1;
+                    (got_name.clone(), m)
+                }
+            };
+            Some(V2Value {
+                name,
+                mutable,
                 ty,
                 value,
             })
@@ -669,6 +687,14 @@ pub struct Session {
     /// defines what it names.
     /// Each with the names it lacked.
     held_items: Vec<(String, Vec<String>)>,
+    /// How many shadowed bindings the session has held, which names the
+    /// next one ([`crate::mir::interp::REPL_RETAIN_FN`]).
+    held_count: usize,
+    /// The top-level `defer` statements of accepted cells, each with the
+    /// binding made last before it: they run at the session's end, among
+    /// the bindings' drops as in `main` (B-2026-11-19-2), not at the end of
+    /// their cell, which runs with them blanked.
+    session_defers: Vec<(Option<String>, String)>,
     /// The last top-level `log.init(..)` an accepted cell ran: the logger
     /// is program state no binding carries, so each cell, and the
     /// session's end, runs it again before the cell's own code.
@@ -766,6 +792,8 @@ impl Session {
             pruned_provider_lets: Vec::new(),
             retired_values: Vec::new(),
             held_items: Vec::new(),
+            held_count: 0,
+            session_defers: Vec::new(),
             log_init: None,
             cell_effect_history: Vec::new(),
         }
@@ -1647,6 +1675,10 @@ impl Session {
             Some(_) => cell_src.to_string(),
             None => terminated(cell_src),
         };
+        // A top-level `defer` runs at the session's end (`Session::end`).
+        let defers: Vec<Range<usize>> =
+            top_level_defers(&src).into_iter().map(|(r, _)| r).collect();
+        let src = blank_ranges(&src, &defers);
         let mut r = self.run_cell_v2(&src, capture);
         // Each round clones at least one more binding, so a bound on the
         // rounds only stops a cell whose errors keep naming new moves.
@@ -2030,7 +2062,8 @@ impl Session {
                     Ok(()) => {
                         let r = crate::cli::repl_v2::run_checked(&synthetic);
                         if let Ok(ran) = &r {
-                            self.v2_pending = v2_values_of(&live, &ran.bindings);
+                            self.v2_pending =
+                                v2_values_of(&live, &ran.bindings, &mut self.held_count);
                             if moved_any {
                                 self.v2_pending_move_start = self.v2_values.clone();
                             }
@@ -2171,11 +2204,11 @@ impl Session {
             let mut names: Vec<&String> = l.names.iter().collect();
             names.sort();
             for n in names {
+                // A name bound again takes the new binding's place, last:
+                // the session's bindings drop in the order they were made.
                 let m = binds_mut(&l.slice, n);
-                match live.iter_mut().find(|(x, _)| x == n) {
-                    Some(e) => e.1 = m,
-                    None => live.push((n.clone(), m)),
-                }
+                live.retain(|(x, _)| x != n);
+                live.push((n.clone(), m));
             }
         }
         let mut live: Vec<(String, bool)> = Vec::new();
@@ -2267,8 +2300,10 @@ impl Session {
         }
         // A bare final expression's value is recorded to be shown.
         let shown = shown_cell(cell_src);
+        let retain_fn = crate::mir::interp::REPL_RETAIN_FN;
         if snap.is_some() || shown.is_some() {
             s.push_str(&format!("fn {snap_fn}[T](name: Str, value: T) {{}}\n"));
+            s.push_str(&format!("fn {retain_fn}() {{}}\n"));
         }
         // `?` is legal in any cell: the session is the body of a
         // `fn main() -> Result[(), AnyError]` (deferred.md § Interactive
@@ -2297,8 +2332,11 @@ impl Session {
         if cell_idx > 0 {
             ranges.push((cell_idx, body));
         }
-        for (name, _) in snap.into_iter().flatten() {
-            s.push_str(&format!("{snap_fn}(\"{name}\", {name});\n"));
+        if let Some(snap) = snap {
+            for (name, _) in snap {
+                s.push_str(&format!("{snap_fn}(\"{name}\", {name});\n"));
+            }
+            s.push_str(&format!("{retain_fn}();\n"));
         }
         if fallible {
             s.push_str("Ok(())\n");
@@ -2315,7 +2353,10 @@ impl Session {
     /// whose bindings have no value to start from (none were bound) prints
     /// nothing.
     pub fn end(&mut self) -> Result<String, Vec<String>> {
-        if self.persistent_lets.is_empty() && self.v2_values.as_ref().is_none_or(|v| v.is_empty()) {
+        if self.persistent_lets.is_empty()
+            && self.session_defers.is_empty()
+            && self.v2_values.as_ref().is_none_or(|v| v.is_empty())
+        {
             return Ok(String::new());
         }
         let mut s = strip_main(&self.items_source);
@@ -2324,7 +2365,43 @@ impl Session {
         }
         s.push_str("fn main() {\n");
         let mut ranges = Vec::new();
-        self.push_cell_start(&mut s, &mut ranges, true);
+        let defer_line = |s: &mut String, stmt: &str| {
+            s.push_str(stmt);
+            if !stmt.trim_end().ends_with(';') && !stmt.trim_end().ends_with('}') {
+                s.push(';');
+            }
+            s.push('\n');
+        };
+        match &self.v2_values {
+            // Each `defer` after the binding made before it, so it runs
+            // between their drops as it would in `main`.
+            Some(values) => {
+                let placed = |d: &Option<String>| {
+                    d.as_ref()
+                        .is_some_and(|n| values.iter().any(|v| &v.name == n))
+                };
+                for (after, stmt) in &self.session_defers {
+                    if !placed(after) {
+                        defer_line(&mut s, stmt);
+                    }
+                }
+                for v in values {
+                    let m = if v.mutable { "mut " } else { "" };
+                    s.push_str(&format!("let {m}{}: {} = {};\n", v.name, v.ty, v.value));
+                    for (after, stmt) in &self.session_defers {
+                        if after.as_deref() == Some(v.name.as_str()) {
+                            defer_line(&mut s, stmt);
+                        }
+                    }
+                }
+            }
+            None => {
+                self.push_cell_start(&mut s, &mut ranges, true);
+                for (_, stmt) in &self.session_defers {
+                    defer_line(&mut s, stmt);
+                }
+            }
+        }
         self.push_in_scopes(&mut s, &mut ranges, "", true);
         s.push_str("}\n");
         self.cell_byte_ranges = ranges;
@@ -2388,7 +2465,26 @@ impl Session {
             // the provider's closure (`Session::push_in_scopes`).
             // The cell as kept (a `()` final expression has its `;`).
             let kept = self.cell_history.last().map_or(cell_src, String::as_str);
-            self.persistent_lets.push(as_statements(kept));
+            // As the cell ran: a last statement lacking its `;` has it.
+            let kept = match tail_expr(kept) {
+                Some(_) => kept.to_string(),
+                None => terminated(kept),
+            };
+            let kept = kept.as_str();
+            let defers = top_level_defers(kept);
+            let last_before = self
+                .v2_values
+                .as_ref()
+                .and_then(|vs| vs.last())
+                .map(|v| v.name.clone());
+            for (range, lets_before) in &defers {
+                let after = lets_before.last().cloned().or_else(|| last_before.clone());
+                self.session_defers
+                    .push((after, kept[range.clone()].to_string()));
+            }
+            let ranges: Vec<Range<usize>> = defers.into_iter().map(|(r, _)| r).collect();
+            self.persistent_lets
+                .push(as_statements(&blank_ranges(kept, &ranges)));
             self.persistent_let_origin.push(cell_idx);
             self.persistent_let_provider_scope.push(active_scope);
             return;

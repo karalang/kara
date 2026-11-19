@@ -871,6 +871,7 @@ fn run_with(
         repl_bindings: REPL_BINDINGS.with(|b| b.borrow_mut().take()),
         forgotten: Vec::new(),
         repl_kept: Vec::new(),
+        repl_binding_locals: Vec::new(),
         snapshot_bytes: 0,
         sweep_at: SWEEP_FLOOR,
         bytes_snapshots: Vec::new(),
@@ -1002,6 +1003,17 @@ fn run_with(
 /// bindings at its end (`crate::cli::repl_v2`), so the next cell can be
 /// given their values instead of replaying the cells that made them.
 pub const REPL_SNAPSHOT_FN: &str = "__karac_repl_snapshot";
+
+/// The function a REPL cell's program calls last, after its
+/// [`REPL_SNAPSHOT_FN`] calls: each top-level binding still holding a value
+/// that is not one of those, a binding a later `let` shadowed, is held for
+/// the session too, under a name [`REPL_HELD_PREFIX`] starts, so its `Drop`
+/// runs at the session's end as `main`'s would (B-2026-11-19-2).
+pub const REPL_RETAIN_FN: &str = "__karac_repl_retain";
+
+/// What the name of a binding [`REPL_RETAIN_FN`] held starts with, before
+/// the binding's own name.
+pub const REPL_HELD_PREFIX: &str = "\u{1}held:";
 
 /// A binding a REPL cell ended with: its name, and its type and value as
 /// source, or `None` when the value cannot be written so.
@@ -1448,6 +1460,9 @@ struct Interp<'a> {
     /// The places of the REPL bindings a cell's snapshot recorded with a
     /// source form: their drops at the cell's end are skipped.
     repl_kept: Vec<Addr>,
+    /// The local each [`Interp::repl_bindings`] entry was read from, in
+    /// order, which [`REPL_RETAIN_FN`] puts the held bindings among.
+    repl_binding_locals: Vec<usize>,
     /// The bytes `String.bytes` has copied since the last sweep, and the
     /// count that starts the next one.
     snapshot_bytes: usize,
@@ -1805,6 +1820,9 @@ impl<'a> Interp<'a> {
     ) -> R<Value> {
         if self.repl_bindings.is_some() && name.starts_with(REPL_SNAPSHOT_FN) {
             self.record_repl_binding(body, &locals[1..])?;
+        }
+        if self.repl_bindings.is_some() && name.starts_with(REPL_RETAIN_FN) {
+            self.retain_repl_rest()?;
         }
         if self.frames.len() >= MAX_DEPTH {
             // A compiled program's stack guard reports it so and aborts
@@ -14024,13 +14042,139 @@ impl<'a> Interp<'a> {
         let tasks = self.tys.tcx().adt_of(ty).is_some_and(|(adt, _)| {
             !adt.user && matches!(adt.name.as_str(), "TaskGroup" | "TaskHandle")
         });
-        if let (Some(addr), false) = (lent, tasks) {
+        if let (Some(addr), false) = (lent.clone(), tasks) {
             self.repl_kept.push(addr);
         }
         if let Some(b) = self.repl_bindings.as_mut() {
             b.push((name, source));
+            let local = match lent.as_ref().map(|a| &a.root) {
+                Some(Root::Local { local, .. }) => local.index(),
+                _ => usize::MAX,
+            };
+            self.repl_binding_locals.push(local);
         }
         Ok(())
+    }
+
+    /// A call of [`REPL_RETAIN_FN`], from the cell's `main`: each `let`
+    /// binding of `main` still holding all of a value whose drop runs a
+    /// `Drop` body, that no [`REPL_SNAPSHOT_FN`] call recorded, is recorded
+    /// too, as a held binding, in the place its local has among the
+    /// recorded ones (declaration order), and is not dropped at the cell's
+    /// end. Only one whose value can be written as source can be held.
+    fn retain_repl_rest(&mut self) -> R<()> {
+        let Some(main) = self.program.bodies.get("main") else {
+            return Ok(());
+        };
+        let Some(fi) = self.frames.len().checked_sub(1) else {
+            return Ok(());
+        };
+        let id = self.frames[fi].id;
+        let mut held: Vec<(usize, ReplBinding)> = Vec::new();
+        for (i, decl) in main.locals.iter().enumerate() {
+            let crate::mir::syntax::LocalKind::User { name, .. } = &decl.kind else {
+                continue;
+            };
+            let addr = Addr {
+                root: Root::Local {
+                    frame: fi,
+                    id,
+                    local: crate::mir::syntax::Local(i as u32),
+                },
+                path: Path::new(),
+            };
+            if self.repl_kept.contains(&addr) || !self.observable_drop(decl.ty, &mut Vec::new()) {
+                continue;
+            }
+            let Some(v) = self.frames[fi].locals.get(i).cloned() else {
+                continue;
+            };
+            // What is left of a struct a field was moved out of is its
+            // other fields, each dropped on its own, in field order.
+            let parts: Vec<(Option<u32>, Value, Ty)> = match &v {
+                _ if v.fully_init() => vec![(None, v.clone(), decl.ty)],
+                Value::Agg(fs) => fs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, f)| {
+                        let t = self.tys.field_ty(decl.ty, None, k as u32)?;
+                        (f.fully_init() && self.observable_drop(t, &mut Vec::new()))
+                            .then(|| (Some(k as u32), f.clone(), t))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for (field, part, ty) in parts {
+                let (Some(t), Some(src)) = (self.source_ty(ty), self.source_of(&part, ty)) else {
+                    continue;
+                };
+                let mut at = addr.clone();
+                let mut label = name.clone();
+                if let Some(k) = field {
+                    at.path.push(u64::from(k));
+                    label = format!("{name}_{k}");
+                }
+                self.repl_kept.push(at);
+                held.push((i, (format!("{REPL_HELD_PREFIX}{label}"), Some((t, src)))));
+            }
+        }
+        let Some(b) = self.repl_bindings.as_mut() else {
+            return Ok(());
+        };
+        for (local, binding) in held {
+            let at = self
+                .repl_binding_locals
+                .iter()
+                .position(|&l| l > local)
+                .unwrap_or(b.len());
+            b.insert(at, binding);
+            self.repl_binding_locals.insert(at, local);
+        }
+        Ok(())
+    }
+
+    /// Whether dropping a value of `ty` runs a user `Drop` body somewhere
+    /// inside it, for the types [`Interp::source_ty`] can write.
+    fn observable_drop(&self, ty: Ty, outer: &mut Vec<Ty>) -> bool {
+        if outer.contains(&ty) {
+            return false;
+        }
+        outer.push(ty);
+        let r = match self.tys.kind(ty) {
+            TyKind::Tuple(ts) => ts.iter().any(|&t| self.observable_drop(t, outer)),
+            TyKind::Array(e, _) => self.observable_drop(e, outer),
+            TyKind::Intrinsic(i) => match i {
+                IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e) | IntrinsicTy::Set(e) => {
+                    self.observable_drop(e, outer)
+                }
+                IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v) => {
+                    self.observable_drop(k, outer) || self.observable_drop(v, outer)
+                }
+                _ => false,
+            },
+            TyKind::Adt(_) => match self.tys.tcx().adt_of(ty) {
+                None => false,
+                Some((adt, _)) if adt.has_drop_impl => true,
+                Some((adt, _)) => {
+                    let variants: Vec<(Option<u32>, u32)> = adt
+                        .variants
+                        .iter()
+                        .enumerate()
+                        .map(|(k, v)| (adt.is_enum.then_some(k as u32), v.fields.len() as u32))
+                        .collect();
+                    variants.into_iter().any(|(k, n)| {
+                        (0..n).any(|i| {
+                            self.tys
+                                .field_ty(ty, k, i)
+                                .is_some_and(|t| self.observable_drop(t, outer))
+                        })
+                    })
+                }
+            },
+            _ => false,
+        };
+        outer.pop();
+        r
     }
 
     /// `ty` as the program spells it, for a type [`Interp::source_of`] can

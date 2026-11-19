@@ -710,6 +710,69 @@ pub(super) fn scan_top_level_lets(cell_src: &str) -> Vec<CellLet> {
     out
 }
 
+/// Each top-level `defer` statement of a cell, as its byte range in
+/// `cell_src`, with the names the cell's top-level `let`s before it bind,
+/// latest last. Empty when the cell does not parse.
+pub(super) fn top_level_defers(cell_src: &str) -> Vec<(std::ops::Range<usize>, Vec<String>)> {
+    use crate::ast::{Item, StmtKind};
+    let head = "fn __cell() {\n";
+    let wrapper = format!("{head}{cell_src}\n}}\n");
+    let parsed = crate::parse(&wrapper);
+    let mut out = Vec::new();
+    if !parsed.errors.is_empty() {
+        return out;
+    }
+    let Some(f) = parsed.program.items.iter().find_map(|i| match i {
+        Item::Function(f) if f.name == "__cell" => Some(f),
+        _ => None,
+    }) else {
+        return out;
+    };
+    let mut before: Vec<String> = Vec::new();
+    for stmt in &f.body.stmts {
+        match &stmt.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                let mut names = std::collections::HashSet::new();
+                collect_pattern_bindings(&pattern.kind, &mut names);
+                let mut names: Vec<String> = names.into_iter().collect();
+                names.sort();
+                before.extend(names);
+            }
+            StmtKind::Defer { .. } => {
+                let start = stmt.span.offset;
+                let end = start + stmt.span.length;
+                if start < head.len() || end > head.len() + cell_src.len() {
+                    continue;
+                }
+                let (start, mut end) = (start - head.len(), end - head.len());
+                // The statement's `;`, when the span stops before it.
+                let rest = &cell_src[end..];
+                let after = rest.trim_start_matches([' ', '\t']);
+                if after.starts_with(';') {
+                    end += rest.len() - after.len() + 1;
+                }
+                out.push((start..end, before.clone()));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `src` with each of `ranges` blanked: spaces, keeping its newlines, so
+/// every other line and column stays where it was.
+pub(super) fn blank_ranges(src: &str, ranges: &[std::ops::Range<usize>]) -> String {
+    let mut out = String::with_capacity(src.len());
+    for (i, c) in src.char_indices() {
+        if c != '\n' && ranges.iter().any(|r| r.contains(&i)) {
+            out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Walk a pattern, collecting every value-binding name. Used to drop
 /// prior persistent `let`s when a new cell shadows the same name.
 pub(super) fn collect_pattern_bindings(

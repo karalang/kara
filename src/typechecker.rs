@@ -59,6 +59,7 @@ pub mod env;
 mod env_build;
 mod expr_call;
 mod expr_method_call;
+mod recursive_enum;
 pub(crate) use expr_method_call::{
     MAP_BUILTIN_METHODS, SET_BUILTIN_METHODS, SLICE_BUILTIN_METHODS, SORTED_MAP_BUILTIN_METHODS,
     SORTED_SET_BUILTIN_METHODS, VEC_METHOD_NAMES,
@@ -1484,9 +1485,10 @@ pub enum TypeErrorKind {
     /// takes out of the core (`#[gpu]`, `comptime` beyond `#[derive]`),
     /// which compiles and runs as ordinary code today.
     LaterTrack,
-    /// One of the five style lints (B-2026-11-05-31, `crate::style_lints`):
+    /// One of the style lints (B-2026-11-05-31, `crate::style_lints`):
     /// `counter_while_loop`, `manual_compound_assign`, `needless_return`,
-    /// `redundant_literal_method`, `redundant_ref_param`. Reported after
+    /// `redundant_literal_method`, `redundant_ref_param`,
+    /// `qualified_prelude_variant`. Reported after
     /// typechecking, from source text; the entry's `lint_name` says which.
     StyleLint,
     /// `unused_doc_comment` lint (B-2026-11-06-18): a `///` run that
@@ -5154,6 +5156,7 @@ impl<'a> TypeChecker<'a> {
         self.validate_serde_default_constants();
         self.warn_implied_derives();
         self.warn_derived_field_traits();
+        self.warn_recursive_enums_through_wrappers();
         self.refuse_uninferable_type_params();
         self.warn_discarded_doc_comments();
         self.validate_enum_payload_no_nested_enum();

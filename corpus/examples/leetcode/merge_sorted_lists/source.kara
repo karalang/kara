@@ -6,7 +6,7 @@
 // Demonstrates: enum (linked list), recursive pattern matching,
 //               Option, ownership (move semantics)
 
-enum ListNode {
+shared enum ListNode {
     Cons { val: i64, next: Option[ListNode] },
     Nil,
 }

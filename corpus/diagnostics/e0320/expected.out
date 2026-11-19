@@ -1,0 +1,1 @@
+ERROR at line 3: `Option.Some` is canonically written `Some`: the prelude variants `Some`, `None`, `Ok` and `Err` need no qualifier

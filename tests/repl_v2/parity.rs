@@ -208,3 +208,68 @@ fn repl_parity_piped_chain_continues_the_statement() {
         "{stdout}"
     );
 }
+
+const R_DROPS: &str = "struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f\"d{self.id}\") } }";
+
+/// B-2026-11-19-2: a binding a later `let` shadows lives on until the
+/// session ends, as in `main`, and the session's bindings drop latest
+/// first, in the order they were made.
+#[test]
+fn repl_parity_shadowed_binding_drops_at_session_end() {
+    let mut s = session();
+    for cell in [
+        R_DROPS,
+        "let x = R { id: 1 };",
+        "let y = R { id: 5 };",
+        "let x = R { id: x.id + 1 };",
+        "let x = R { id: x.id + 1 };",
+    ] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        assert_eq!(r.stdout, "", "{cell}");
+    }
+    let r = s.evaluate_cell_captured("println(f\"{x.id} {y.id}\");");
+    assert_eq!(r.stdout, "3 5\n");
+    assert_eq!(s.end().expect("session end"), "d3\nd2\nd5\nd1\n");
+}
+
+/// B-2026-11-19-2: what is left of a struct a field moved out of drops at
+/// the session's end, field by field, last first.
+#[test]
+fn repl_parity_partially_moved_struct_drops_at_session_end() {
+    let mut s = session();
+    for cell in [
+        R_DROPS,
+        "struct P { a: R, b: R, c: R }",
+        "let p = P { a: R { id: 7 }, b: R { id: 8 }, c: R { id: 9 } };",
+        "let x = p.b;",
+    ] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        assert_eq!(r.stdout, "", "{cell}");
+    }
+    assert_eq!(s.end().expect("session end"), "d8\nd9\nd7\n");
+}
+
+/// B-2026-11-19-2: a cell's top-level `defer` runs at the session's end,
+/// between the drops of the bindings made before and after it.
+#[test]
+fn repl_parity_defer_runs_at_session_end() {
+    let mut s = session();
+    for cell in [
+        R_DROPS,
+        "let a = R { id: 1 };",
+        "defer { println(\"defer\"); }",
+        "let b = R { id: 2 };",
+    ] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        assert_eq!(r.stdout, "", "{cell}");
+    }
+    assert_eq!(
+        s.evaluate_cell_captured("println(\"body\");").stdout,
+        "body\n"
+    );
+    assert_eq!(s.end().expect("session end"), "d2\ndefer\nd1\n");
+}

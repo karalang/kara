@@ -435,6 +435,13 @@ pub const STARTER_LINTS: &[LintInfo] = &[
     // Off by default in `check`, `build` and `run`; `karac fix` turns them
     // on, and `-W NAME` or `#[warn(NAME)]` shows them.
     LintInfo {
+        name: "qualified_prelude_variant",
+        default_level: LintLevel::Allow,
+        description: "A prelude variant written with its type (`Option.Some(x)`, \
+             `Result.Err(e)`), whose canonical spelling is bare. `karac fix` drops the \
+             qualifier.",
+    },
+    LintInfo {
         name: "counter_while_loop",
         default_level: LintLevel::Allow,
         description: "A `while` loop counts a fresh variable up by one to a bound; \

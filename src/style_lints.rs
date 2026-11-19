@@ -1,5 +1,5 @@
-//! The five style lints of design.md § `karac fix` and `karac explain`
-//! (B-2026-11-05-31), each with a machine-applicable fix:
+//! The six style lints of design.md § `karac fix` and `karac explain`
+//! (B-2026-11-05-31, B-2026-11-19-12), each with a machine-applicable fix:
 //!
 //! - `counter_while_loop`: `let mut i = a; while i < b { ...; i += 1; }`
 //!   becomes `for i in a..b { ... }`;
@@ -9,7 +9,9 @@
 //! - `redundant_literal_method`: `"text".to_string()` and the `.iter()` of
 //!   `for x in [1, 2].iter()` are removed;
 //! - `redundant_ref_param`: `x: ref T` becomes `x: T` ([§7] parameter modes:
-//!   a parameter borrows by default, so the two mean the same).
+//!   a parameter borrows by default, so the two mean the same);
+//! - `qualified_prelude_variant`: `Option.Some(x)` becomes `Some(x)`, and so
+//!   on for `None`, `Ok` and `Err`, in expressions and patterns.
 //!
 //! The pass reads the source text: every fix keeps the author's own spelling
 //! of the operands it moves, and each site checks the text between the parts
@@ -29,14 +31,16 @@ pub const MANUAL_COMPOUND_ASSIGN: &str = "manual_compound_assign";
 pub const NEEDLESS_RETURN: &str = "needless_return";
 pub const REDUNDANT_LITERAL_METHOD: &str = "redundant_literal_method";
 pub const REDUNDANT_REF_PARAM: &str = "redundant_ref_param";
+pub const QUALIFIED_PRELUDE_VARIANT: &str = "qualified_prelude_variant";
 
-/// All five, which `karac fix` turns on.
-pub const LINTS: [&str; 5] = [
+/// All six, which `karac fix` turns on.
+pub const LINTS: [&str; 6] = [
     COUNTER_WHILE_LOOP,
     MANUAL_COMPOUND_ASSIGN,
     NEEDLESS_RETURN,
     REDUNDANT_LITERAL_METHOD,
     REDUNDANT_REF_PARAM,
+    QUALIFIED_PRELUDE_VARIANT,
 ];
 
 /// One site a style lint fires on: where, why, and the edits that fix it.
@@ -107,6 +111,7 @@ pub fn style_hits(program: &Program, typed: &TypeCheckResult, src: &str) -> Vec<
             _ => {}
         }
     }
+    qualified_prelude_variants(items, src, &mut cx.out);
     cx.out.sort_by_key(|h| h.span.offset);
     cx.out
 }
@@ -844,4 +849,115 @@ fn is_block_like(e: &Expr) -> bool {
             | ExprKind::Unsafe(_)
             | ExprKind::LabeledBlock { .. }
     )
+}
+
+/// `qualified_prelude_variant` (B-2026-11-19-12): the prelude variants
+/// `Some`, `None`, `Ok` and `Err` are canonically written bare (design.md),
+/// so `Option.Some(x)` / `Result.Err(e)`, in an expression or a pattern,
+/// gets the fix that drops the qualifier. The qualified form is accepted,
+/// so the lint is off outside `karac fix`, as the other style lints are. A program that declares its
+/// own `Option` or `Result` names its own variants, and is left alone.
+fn qualified_prelude_variants(items: &[Item], src: &str, out: &mut Vec<StyleHit>) {
+    use crate::span_visitor::{walk_item_mut_with, MutVisitor};
+    let own_type = |n: &str| {
+        items.iter().any(|i| match i {
+            Item::EnumDef(e) => e.name == n,
+            Item::StructDef(s) => s.name == n,
+            _ => false,
+        })
+    };
+    let prelude: Vec<(&str, &str)> = [
+        ("Option", "Some"),
+        ("Option", "None"),
+        ("Result", "Ok"),
+        ("Result", "Err"),
+    ]
+    .into_iter()
+    .filter(|(t, _)| !own_type(t))
+    .collect();
+    if prelude.is_empty() {
+        return;
+    }
+    // Where each qualified spelling starts, with its type and variant.
+    struct Sites<'p> {
+        prelude: &'p [(&'p str, &'p str)],
+        found: Vec<(Span, &'p str, &'p str)>,
+    }
+    impl<'p> Sites<'p> {
+        fn check(&mut self, at: Span, segments: &[&str]) {
+            if let [ty, variant] = segments {
+                if let Some(&(t, v)) = self.prelude.iter().find(|(t, v)| t == ty && v == variant) {
+                    self.found.push((at, t, v));
+                }
+            }
+        }
+    }
+    impl MutVisitor for Sites<'_> {
+        fn span(&mut self, _: &mut Span) {}
+        fn expr(&mut self, e: &mut Expr) {
+            match &e.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    if let ExprKind::Identifier(ty) = &object.kind {
+                        self.check(e.span, &[ty.as_str(), field.as_str()]);
+                    }
+                }
+                ExprKind::Path {
+                    segments,
+                    generic_args: None,
+                } => {
+                    let segs: Vec<&str> = segments.iter().map(String::as_str).collect();
+                    self.check(e.span, &segs);
+                }
+                _ => {}
+            }
+        }
+        fn pattern(&mut self, p: &mut Pattern) {
+            match &p.kind {
+                PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                    let segs: Vec<&str> = path.iter().map(String::as_str).collect();
+                    self.check(p.span, &segs);
+                }
+                // A unit variant's path, `Option.None`, is kept joined.
+                PatternKind::Binding(path) if path.contains('.') => {
+                    let segs: Vec<&str> = path.split('.').collect();
+                    self.check(p.span, &segs);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut sites = Sites {
+        prelude: &prelude,
+        found: Vec::new(),
+    };
+    for item in items {
+        walk_item_mut_with(&mut item.clone(), &mut sites);
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (node, ty, variant) in sites.found {
+        let at = node.offset;
+        // Only the spelling this edit was written for: `Option.Some`, with
+        // nothing between its parts.
+        let written = format!("{ty}.{variant}");
+        if !seen.insert(at) || !src.get(at..).is_some_and(|s| s.starts_with(&written)) {
+            continue;
+        }
+        let after = src[at + written.len()..].chars().next();
+        if after.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        out.push(StyleHit {
+            lint: QUALIFIED_PRELUDE_VARIANT,
+            span: Span {
+                length: written.len(),
+                ..node
+            },
+            message: format!(
+                "`{written}` is canonically written `{variant}`: the prelude variants `Some`, \
+                 `None`, `Ok` and `Err` need no qualifier (design.md § Option and Result). \
+                 `karac fix` drops the `{ty}.`"
+            ),
+            edits: vec![edit(at, at + ty.len() + 1, "")],
+        });
+    }
 }
