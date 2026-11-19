@@ -1048,6 +1048,9 @@ fn builtin_construct(key: &str) -> Option<&'static str> {
         "__builtin_expect" => Some("an `expect`"),
         "__builtin_div_rem" => Some("an integer `/` or `%` that can divide by zero"),
         "__builtin_refinement_assert" => Some("a refinement check"),
+        crate::effectchecker::BORROW_FLAG_KEY => {
+            Some("an access to a `shared` value's `mut` field that another handle may hold")
+        }
         _ => None,
     }
 }

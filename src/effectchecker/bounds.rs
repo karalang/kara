@@ -271,7 +271,11 @@ impl<'a> super::EffectChecker<'a> {
                     };
                     for impl_item in &imp.items {
                         if let ImplItem::Method(m) = impl_item {
-                            let key = self.interner.dotted_str(&type_name, &m.name);
+                            let key = self.impl_method_key(
+                                &type_name,
+                                &m.name,
+                                crate::effectchecker::impl_trait_name(imp),
+                            );
                             let bounds = Self::impl_method_bounds(imp, m);
                             if !bounds.is_empty() {
                                 index.insert(key, bounds);
@@ -348,7 +352,12 @@ impl<'a> super::EffectChecker<'a> {
                         if let ImplItem::Method(m) = impl_item {
                             let by_var = scan(m);
                             if !by_var.is_empty() {
-                                index.insert(self.interner.dotted_str(&type_name, &m.name), by_var);
+                                let key = self.impl_method_key(
+                                    &type_name,
+                                    &m.name,
+                                    crate::effectchecker::impl_trait_name(imp),
+                                );
+                                index.insert(key, by_var);
                             }
                         }
                     }

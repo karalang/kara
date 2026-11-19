@@ -412,7 +412,7 @@ impl<'a> super::EffectChecker<'a> {
                         self.interner.intern(&method.name),
                     ))
                     .or_default()
-                    .push(self.interner.intern(&type_name));
+                    .push(self.impl_method_key(&type_name, &method.name, Some(&trait_name)));
             }
         }
 
@@ -444,10 +444,7 @@ impl<'a> super::EffectChecker<'a> {
                     .cloned()
                     .unwrap_or_default();
                 let mut ceiling = EffectSet::new();
-                for &type_sym in &impl_types {
-                    let impl_key = self
-                        .interner
-                        .dotted(type_sym, self.interner.intern(&m.name));
+                for &impl_key in &impl_types {
                     if let Some(impl_set) = self.inferred_effects.get(&impl_key) {
                         for te in &impl_set.effects {
                             if !ceiling.contains(&te.effect) {
@@ -840,6 +837,40 @@ impl<'a> super::EffectChecker<'a> {
     /// Threaded through `collect_calls_in_*` so they can redirect typeparam
     /// dispatch (`T.method()`, bare `method()` against a bound) to the
     /// matching `Trait.method` ceiling key.
+    /// [`Self::collect_calls_in_expr`] over a value stored into a slot
+    /// whose type carries an effect clause: a closure literal, alone or as
+    /// an element of an array literal, is stored, not run, so its body's
+    /// calls are not collected (B-2026-11-19-22).
+    fn collect_calls_storing_closures(
+        &self,
+        expr: &Expr,
+        calls: &mut Vec<(Symbol, Span)>,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
+    ) {
+        match &expr.kind {
+            ExprKind::Closure { .. } => {}
+            ExprKind::ArrayLiteral(items) => {
+                if self.heap_nodes.contains(&expr.id) {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
+                }
+                for item in items {
+                    self.collect_calls_storing_closures(item, calls, bounds);
+                }
+            }
+            // Lowering rewrites a `Vec`-typed `[..]` into this form before
+            // the effect checker runs, so `[|e| record(e)]` arrives here.
+            ExprKind::PrefixCollectionLiteral { items, type_name } => {
+                if type_name != "Array" {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
+                }
+                for item in items {
+                    self.collect_calls_storing_closures(item, calls, bounds);
+                }
+            }
+            _ => self.collect_calls_in_expr(expr, calls, bounds),
+        }
+    }
+
     pub(crate) fn collect_calls_in_block(
         &self,
         block: &Block,
@@ -1836,7 +1867,21 @@ impl<'a> super::EffectChecker<'a> {
             } => {
                 self.collect_calls_in_expr(inner, calls, bounds);
             }
-            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            ExprKind::FieldAccess { object, field } => {
+                self.collect_calls_in_expr(object, calls, bounds);
+                // A read, write or loan of a `shared` value's flagged field
+                // checks or takes its borrow flag, which panics when another
+                // handle holds it (B-2026-11-19-21).
+                let flagged = self
+                    .flag_objects
+                    .get(&object.id)
+                    .and_then(|s| self.flagged_fields.get(s))
+                    .is_some_and(|fields| fields.contains(field.as_str()));
+                if flagged {
+                    calls.push((self.syms.builtin_borrow_flag, expr.span));
+                }
+            }
+            ExprKind::TupleIndex { object, .. } => {
                 self.collect_calls_in_expr(object, calls, bounds);
             }
             ExprKind::Index { object, index } => {
@@ -1864,9 +1909,27 @@ impl<'a> super::EffectChecker<'a> {
                     self.collect_calls_in_expr(val, calls, bounds);
                 }
             }
-            ExprKind::StructLiteral { fields, spread, .. } => {
+            ExprKind::StructLiteral {
+                path,
+                fields,
+                spread,
+                ..
+            } => {
+                let name = path.last().map(String::as_str).unwrap_or_default();
                 for f in fields {
-                    self.collect_calls_in_expr(&f.value, calls, bounds);
+                    // A closure stored into a slot whose type carries an
+                    // effect clause performs none of its effects here: the
+                    // slot's type states them, and a call through it is
+                    // charged them (design.md §12, B-2026-11-19-22).
+                    if self
+                        .clause_slots
+                        .contains(&(name.to_string(), f.name.clone()))
+                        && !self.kept_stores.contains(&expr.id)
+                    {
+                        self.collect_calls_storing_closures(&f.value, calls, bounds);
+                    } else {
+                        self.collect_calls_in_expr(&f.value, calls, bounds);
+                    }
                 }
                 if let Some(ref s) = spread {
                     self.collect_calls_in_expr(s, calls, bounds);

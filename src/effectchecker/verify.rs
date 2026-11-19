@@ -846,7 +846,7 @@ impl<'a> super::EffectChecker<'a> {
                     ImplItem::AssocType(_) => continue,
                 };
 
-                let impl_key = self.interner.dotted_str(&type_name, &method.name);
+                let impl_key = self.impl_method_key(&type_name, &method.name, Some(&trait_name));
                 let trait_key = self.interner.dotted_str(&trait_name, &method.name);
 
                 // Look up the trait method's declared ceiling.

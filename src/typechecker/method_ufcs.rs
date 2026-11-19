@@ -125,10 +125,15 @@ impl<'a> super::TypeChecker<'a> {
         // The call is the method call now: its callee is the impl method
         // the receiver form picks, not the path `Plain.twice`, which names
         // the trait's declaration.
+        // A check against an expected type records the path as the callee
+        // again after this unless the node is marked (B-2026-11-19-14:
+        // `fn r(c: C) -> i64 { Reader.access(c) }` ran an impl method MIR
+        // never built).
         if let Some((node, key)) = self.current_call_node {
             if key == SpanKey::from_span(span) {
                 self.node_call_callees.remove(&node);
                 self.node_method_callees.remove(&node);
+                self.routed_trait_calls.insert(node);
             }
         }
         // design.md § Call-site `mut` markers: a UFCS call marks its

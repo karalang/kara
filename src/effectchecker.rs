@@ -408,6 +408,159 @@ pub fn lowered_builtin_op_is_pure(key: &str) -> bool {
 /// core-semantics §10.1; B-2026-11-04-29).
 pub const INT_OVERFLOW_KEY: &str = "__builtin_int_overflow";
 
+/// The `panics` atom for an access to a `mut` field of a `shared` value that
+/// carries a borrow flag: another handle may hold it (design.md §12 Effect
+/// lattice, core semantics §6.2; B-2026-11-19-21).
+pub const BORROW_FLAG_KEY: &str = "__builtin_borrow_flag";
+
+/// The `(type, method)` pairs a type has from more than one source: two
+/// traits' impls, or a trait's and an inherent one. Each such trait impl's
+/// method is keyed `Type.method#Trait` ([`EffectChecker::impl_method_key`]),
+/// as MIR keys it (`impl_suffix`), so that each is checked against its own
+/// trait and a UFCS call is charged the one it names (design.md §9 Effects
+/// of an ambiguous call, B-2026-11-19-14).
+pub(crate) fn apart_impl_methods(program: &Program) -> FxHashSet<(String, String)> {
+    let mut sources: FxHashMap<(String, String), FxHashSet<Option<String>>> = FxHashMap::default();
+    for item in &program.items {
+        let Item::ImplBlock(imp) = item else {
+            continue;
+        };
+        let TypeKind::Path(p) = &imp.target_type.kind else {
+            continue;
+        };
+        let Some(ty) = p.segments.last() else {
+            continue;
+        };
+        let tr = impl_trait_name(imp).map(str::to_string);
+        for it in &imp.items {
+            if let ImplItem::Method(m) = it {
+                sources
+                    .entry((ty.clone(), m.name.clone()))
+                    .or_default()
+                    .insert(tr.clone());
+            }
+        }
+    }
+    sources
+        .into_iter()
+        .filter(|(_, s)| s.len() > 1)
+        .map(|(k, _)| k)
+        .collect()
+}
+
+/// Each struct's fields whose type holds a function type with an effect
+/// clause (`Fn(Event) with E`, `Vec[Fn(i64) with writes(Db)]`), as
+/// `(struct, field)` ([`EffectChecker::clause_slots`]).
+pub(crate) fn clause_slots(program: &Program) -> FxHashSet<(String, String)> {
+    fn has_clause(t: &TypeExpr) -> bool {
+        match &t.kind {
+            TypeKind::FnType { effect_spec, .. } => effect_spec.is_some(),
+            TypeKind::Path(p) => p.generic_args.iter().flatten().any(|a| match a {
+                GenericArg::Type(t) => has_clause(t),
+                _ => false,
+            }),
+            TypeKind::Tuple(ts) => ts.iter().any(has_clause),
+            TypeKind::Array { element, .. } => has_clause(element),
+            _ => false,
+        }
+    }
+    let mut out = FxHashSet::default();
+    for item in &program.items {
+        if let Item::StructDef(s) = item {
+            for f in &s.fields {
+                if has_clause(&f.ty) {
+                    out.insert((s.name.clone(), f.name.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The struct literals filling a [`clause_slots`] slot inside a function
+/// that also calls through a function value (a field, an element, a local):
+/// there the closures stored are charged to the function as before, since
+/// the call through the slot is not charged the slot's clause here yet
+/// (B-2026-11-19-22; the call itself is B-2026-11-19-38). A function that
+/// only stores is charged nothing.
+pub(crate) fn stores_beside_value_calls(
+    program: &Program,
+    slots: &FxHashSet<(String, String)>,
+) -> FxHashSet<crate::ids::NodeId> {
+    let mut out = FxHashSet::default();
+    if slots.is_empty() {
+        return out;
+    }
+    // A call through a local: a parameter, or a name a `let`, a `for` or a
+    // closure binds. A name nothing binds is a function's.
+    let mut scan = |params: &[Param], body: &Block| {
+        let mut locals: FxHashSet<String> = params
+            .iter()
+            .flat_map(|p| crate::cfg::pattern_bindings(&p.pattern))
+            .collect();
+        crate::span_visitor::for_each_stmt_in_block(body, &mut |st: &Stmt| {
+            if let StmtKind::Let { pattern, .. } = &st.kind {
+                locals.extend(crate::cfg::pattern_bindings(pattern));
+            }
+        });
+        let mut stores = Vec::new();
+        let mut callees = Vec::new();
+        crate::span_visitor::for_each_expr_in_block(body, &mut |e: &Expr| match &e.kind {
+            ExprKind::StructLiteral { path, fields, .. } => {
+                let name = path.last().map(String::as_str).unwrap_or_default();
+                if fields
+                    .iter()
+                    .any(|f| slots.contains(&(name.to_string(), f.name.clone())))
+                {
+                    stores.push(e.id);
+                }
+            }
+            ExprKind::For { pattern, .. } => {
+                locals.extend(crate::cfg::pattern_bindings(pattern));
+            }
+            ExprKind::Closure { params, .. } => {
+                for p in params {
+                    locals.extend(crate::cfg::pattern_bindings(&p.pattern));
+                }
+            }
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => callees.push(Some(n.clone())),
+                ExprKind::FieldAccess { .. } | ExprKind::Index { .. } => callees.push(None),
+                _ => {}
+            },
+            _ => {}
+        });
+        let value_call = callees
+            .iter()
+            .any(|c| c.as_ref().is_none_or(|n| locals.contains(n)));
+        if value_call {
+            out.extend(stores);
+        }
+    };
+    for item in &program.items {
+        match item {
+            Item::Function(f) => scan(&f.params, &f.body),
+            Item::ImplBlock(imp) => {
+                for it in &imp.items {
+                    if let ImplItem::Method(m) = it {
+                        scan(&m.params, &m.body);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The trait an impl block implements, by its last segment.
+pub(crate) fn impl_trait_name(imp: &ImplBlock) -> Option<&str> {
+    imp.trait_name
+        .as_ref()
+        .and_then(|t| t.segments.last())
+        .map(String::as_str)
+}
+
 /// The `allocates(Heap)` a construct performs with no call to charge it to:
 /// an f-string with a hole, a `Vec` / `Map` / `Set` literal
 /// (B-2026-11-04-28).
@@ -974,6 +1127,17 @@ pub struct NodeTypeFacts {
     pub drops: FxHashMap<crate::ids::NodeId, Vec<String>>,
     /// The same, per struct or enum name, for a receiver `own self`.
     pub drops_by_type: FxHashMap<String, Vec<String>>,
+    /// Each `shared` struct's fields that carry a borrow flag: declared
+    /// `mut`, of a type neither `Copy` nor counted (core semantics §6.2).
+    /// An access to one is a `panics` atom, since another handle may hold
+    /// the flag (design.md §12 Effect lattice, B-2026-11-19-21).
+    pub flagged_fields: FxHashMap<String, FxHashSet<String>>,
+    /// Expressions typed by one of those structs, seen through `ref` /
+    /// `mut ref`, each with the struct's name.
+    pub flag_objects: FxHashMap<crate::ids::NodeId, String>,
+    /// The typechecker's `Trait.m(x)` calls, by span, with the name as
+    /// written (`TypeCheckResult::ufcs_calls`).
+    pub ufcs_calls: FxHashMap<SpanKey, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -994,6 +1158,7 @@ pub(crate) struct BuiltinSyms {
     pub(crate) builtin_int_overflow: Symbol,
     pub(crate) builtin_heap_alloc: Symbol,
     pub(crate) builtin_refinement_assert: Symbol,
+    pub(crate) builtin_borrow_flag: Symbol,
     pub(crate) float_trunc_to_int: Symbol,
     pub(crate) try_alloc: Symbol,
     pub(crate) unwrap: Symbol,
@@ -1011,6 +1176,7 @@ impl BuiltinSyms {
             builtin_int_overflow: interner.intern(INT_OVERFLOW_KEY),
             builtin_heap_alloc: interner.intern(HEAP_ALLOC_KEY),
             builtin_refinement_assert: interner.intern("__builtin_refinement_assert"),
+            builtin_borrow_flag: interner.intern(BORROW_FLAG_KEY),
             float_trunc_to_int: interner.intern("float.trunc_to_int"),
             try_alloc: interner.intern(crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY),
             unwrap: interner.intern("unwrap"),
@@ -1319,6 +1485,23 @@ pub struct EffectChecker<'a> {
     pub(crate) drop_nodes: FxHashMap<crate::ids::NodeId, Vec<String>>,
     /// See [`NodeTypeFacts::drops_by_type`].
     pub(crate) drops_by_type: FxHashMap<String, Vec<String>>,
+    /// See [`NodeTypeFacts::flagged_fields`].
+    pub(crate) flagged_fields: FxHashMap<String, FxHashSet<String>>,
+    /// The `(type, method)` pairs of [`apart_impl_methods`]: each trait
+    /// impl's method among them is keyed `Type.method#Trait`.
+    pub(crate) apart_methods: FxHashSet<(String, String)>,
+    /// Each struct's fields whose type holds a function type with an effect
+    /// clause, as `(struct, field)`: a closure stored into one is not run
+    /// (B-2026-11-19-22).
+    pub(crate) clause_slots: FxHashSet<(String, String)>,
+    /// See [`stores_beside_value_calls`].
+    pub(crate) kept_stores: FxHashSet<crate::ids::NodeId>,
+    /// `Trait.m(x)` calls, by span, with the trait as written: the call is
+    /// charged that trait's impl when the type has `m` from more than one
+    /// source (B-2026-11-19-14).
+    pub(crate) ufcs_traits: FxHashMap<SpanKey, String>,
+    /// See [`NodeTypeFacts::flag_objects`].
+    pub(crate) flag_objects: FxHashMap<crate::ids::NodeId, String>,
     /// Per function, the `T.drop` bodies its own drops may run, each with
     /// the site: charged as calls (core semantics §12 default 3,
     /// B-2026-11-17-13). Built by `drop_edges` once the bodies are final.
@@ -1484,6 +1667,12 @@ impl<'a> EffectChecker<'a> {
             provider_regions: std::cell::RefCell::new(Vec::new()),
             drop_nodes: FxHashMap::default(),
             drops_by_type: FxHashMap::default(),
+            flagged_fields: FxHashMap::default(),
+            flag_objects: FxHashMap::default(),
+            apart_methods: apart_impl_methods(program),
+            clause_slots: clause_slots(program),
+            kept_stores: stores_beside_value_calls(program, &clause_slots(program)),
+            ufcs_traits: FxHashMap::default(),
             drop_calls: FxHashMap::default(),
             refinement_type_names,
             errors: Vec::new(),
@@ -1554,6 +1743,9 @@ impl<'a> EffectChecker<'a> {
         self.net_buffer_nodes = facts.net_buffers;
         self.drop_nodes = facts.drops;
         self.drops_by_type = facts.drops_by_type;
+        self.flagged_fields = facts.flagged_fields;
+        self.flag_objects = facts.flag_objects;
+        self.ufcs_traits = facts.ufcs_calls;
         self
     }
 
@@ -1580,10 +1772,44 @@ impl<'a> EffectChecker<'a> {
     /// Resolve the callee key for a `MethodCall` expression's span. Returns
     /// `None` when the typechecker did not populate an entry (e.g. tests that
     /// skip typecheck, builtin/intrinsic dispatch handled outside `infer_method_call`).
+    /// A `Trait.m(x)` call of a method the type has from more than one
+    /// source is the named trait's impl (design.md §9 Effects of an
+    /// ambiguous call, B-2026-11-19-14).
     fn resolve_method_callee_key(&self, span: &Span) -> Option<Symbol> {
-        self.method_callee_types
-            .get(&SpanKey::from_span(span))
-            .copied()
+        let at = SpanKey::from_span(span);
+        let key = self.method_callee_types.get(&at).copied()?;
+        if let Some(tr) = self.ufcs_traits.get(&at) {
+            let text = self.interner.resolve(key).to_string();
+            if let Some((ty, method)) = text.rsplit_once('.') {
+                let apart = self.impl_method_key(ty, method, Some(tr));
+                if apart != key && self.method_bodies.contains_key(&apart) {
+                    return Some(apart);
+                }
+            }
+        }
+        Some(key)
+    }
+
+    /// The key of an impl's method `type_name.method`: `Type.method`, or
+    /// `Type.method#Trait` for a trait impl's method the type also has from
+    /// another source ([`apart_impl_methods`]), as MIR keys it.
+    pub(crate) fn impl_method_key(
+        &self,
+        type_name: &str,
+        method: &str,
+        trait_name: Option<&str>,
+    ) -> Symbol {
+        match trait_name {
+            Some(t)
+                if self
+                    .apart_methods
+                    .contains(&(type_name.to_string(), method.to_string())) =>
+            {
+                self.interner
+                    .dotted_str(type_name, &format!("{method}#{t}"))
+            }
+            _ => self.interner.dotted_str(type_name, method),
+        }
     }
 
     pub fn check(mut self) -> EffectCheckResult {
@@ -1648,6 +1874,8 @@ impl<'a> EffectChecker<'a> {
             // `x as Refined` runtime predicate assertion — panics when the
             // value fails the refinement predicate (phase-9 step 3).
             "__builtin_refinement_assert",
+            // An access to a `shared` value's flagged field (B-2026-11-19-21).
+            BORROW_FLAG_KEY,
             "process.exit",
         ] {
             let mut set = EffectSet::new();
@@ -2759,7 +2987,8 @@ impl<'a> EffectChecker<'a> {
                             ImplItem::Method(m) => m,
                             ImplItem::AssocType(_) => continue,
                         };
-                        let key = self.interner.dotted_str(&type_name, &method.name);
+                        let key =
+                            self.impl_method_key(&type_name, &method.name, impl_trait_name(imp));
                         let decl = self.parse_signature_effects(
                             &method.effects,
                             &method.params,
@@ -3042,7 +3271,10 @@ impl<'a> EffectChecker<'a> {
                             ImplItem::AssocType(_) => continue,
                         };
                         let bare = self.interner.intern(&method.name);
-                        let key = self.interner.dotted(type_sym, bare);
+                        let key = match impl_trait_name(imp) {
+                            Some(tr) => self.impl_method_key(&type_name, &method.name, Some(tr)),
+                            None => self.interner.dotted(type_sym, bare),
+                        };
                         if self
                             .method_bodies
                             .insert(key, FnHandle::Ast(method))

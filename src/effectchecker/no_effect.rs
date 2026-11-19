@@ -44,7 +44,11 @@ impl super::EffectChecker<'_> {
                     for it in &imp.items {
                         if let ImplItem::Method(m) = it {
                             if !m.no_effect.is_empty() {
-                                let key = self.interner.dotted_str(&target, &m.name);
+                                let key = self.impl_method_key(
+                                    &target,
+                                    &m.name,
+                                    crate::effectchecker::impl_trait_name(imp),
+                                );
                                 self.check_one_no_effect(key, m);
                             }
                         }

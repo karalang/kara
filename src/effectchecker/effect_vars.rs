@@ -139,7 +139,12 @@ impl<'a> super::EffectChecker<'a> {
                     }
                 }
                 if !by_var.is_empty() {
-                    index.insert(self.interner.dotted_str(type_name, &m.name), by_var);
+                    let key = self.impl_method_key(
+                        type_name,
+                        &m.name,
+                        crate::effectchecker::impl_trait_name(imp),
+                    );
+                    index.insert(key, by_var);
                 }
             }
         }

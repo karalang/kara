@@ -78,7 +78,11 @@ impl<'a> super::EffectChecker<'a> {
                     let impl_level = attr_level(&imp.attributes);
                     for it in &imp.items {
                         if let ImplItem::Method(m) = it {
-                            let key = self.interner.dotted_str(type_name, &m.name);
+                            let key = self.impl_method_key(
+                                type_name,
+                                &m.name,
+                                crate::effectchecker::impl_trait_name(imp),
+                            );
                             out.extend(self.unused_in(
                                 key,
                                 m,

@@ -3822,8 +3822,9 @@ pub struct TypeChecker<'a> {
     /// Constant shift amounts over a literal whose type is not settled yet,
     /// judged by [`Self::default_literal_vars`] (B-2026-11-16-323).
     pub(super) pending_const_shifts: Vec<(types::TypeVarId, i128, Span)>,
-    /// The `Trait.name(..)` calls an expected type routed to an impl: their
-    /// callee is that impl's, never the trait's declaration the path names.
+    /// The `Trait.name(..)` calls an expected type routed to an impl, and
+    /// the `Trait.m(x)` / `Type.m(x)` calls typed as `x.m()`: their callee
+    /// is the impl's, never the trait's declaration the path names.
     pub(super) routed_trait_calls: FxHashSet<crate::ids::NodeId>,
     /// `TypeCheckResult::node_dyn_coercions` by impl block and span, until
     /// `check` maps them to nodes (`dyn_coercion_nodes`).

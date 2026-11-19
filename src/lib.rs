@@ -765,7 +765,10 @@ pub fn node_type_facts(
     typed: &crate::typechecker::TypeCheckResult,
 ) -> effectchecker::NodeTypeFacts {
     use crate::typechecker::Type;
-    let mut facts = effectchecker::NodeTypeFacts::default();
+    let mut facts = effectchecker::NodeTypeFacts {
+        ufcs_calls: typed.ufcs_calls.clone(),
+        ..Default::default()
+    };
     let mut drops = DropReach::new(typed);
     // A pattern binding that takes its part by value has its type here,
     // not in `node_types` (B-2026-11-17-100).
@@ -821,6 +824,41 @@ pub fn node_type_facts(
         let owned = drops.of_name(&name);
         if !owned.is_empty() {
             facts.drops_by_type.insert(name, owned);
+        }
+    }
+    // A `shared` struct's `mut` fields of a type neither `Copy` nor counted
+    // carry a borrow flag (core semantics §6.2, `mir::flags::takes_flag`),
+    // and an access to one may panic (B-2026-11-19-21). A field typed by a
+    // parameter is flagged at some instances, so it counts.
+    let none = std::collections::HashSet::new();
+    for (name, info) in &typed.struct_info {
+        if !info.is_shared {
+            continue;
+        }
+        let fields: rustc_hash::FxHashSet<String> = info
+            .fields
+            .iter()
+            .filter(|(f, t, _)| {
+                info.mut_fields.contains(f)
+                    && !crate::ownership::is_copy_type_in_scope(t, typed, &none)
+            })
+            .map(|(f, _, _)| f.clone())
+            .collect();
+        if !fields.is_empty() {
+            facts.flagged_fields.insert(name.clone(), fields);
+        }
+    }
+    if !facts.flagged_fields.is_empty() {
+        for (&node, (ty, _)) in &typed.node_types {
+            let mut ty = ty;
+            while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+                ty = inner;
+            }
+            if let Type::Shared(name) | Type::Named { name, .. } = ty {
+                if facts.flagged_fields.contains_key(name) {
+                    facts.flag_objects.insert(node, name.clone());
+                }
+            }
         }
     }
     facts

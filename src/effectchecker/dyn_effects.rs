@@ -220,7 +220,7 @@ impl<'a> super::EffectChecker<'a> {
                         .or_default();
                     for it in &imp.items {
                         if let ImplItem::Method(m) = it {
-                            keys.push(self.interner.dotted_str(type_name, &m.name));
+                            keys.push(self.impl_method_key(type_name, &m.name, Some(trait_name)));
                         }
                     }
                 }
@@ -230,7 +230,7 @@ impl<'a> super::EffectChecker<'a> {
         // A default method the impl does not override runs the trait's body.
         for ((trait_name, type_name), keys) in impl_methods.iter_mut() {
             for (method, key) in defaults.get(trait_name).into_iter().flatten() {
-                let own = self.interner.dotted_str(type_name, method);
+                let own = self.impl_method_key(type_name, method, Some(trait_name));
                 if !keys.contains(&own) {
                     keys.push(*key);
                 }

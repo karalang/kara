@@ -20,6 +20,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A function under `#[no_effect(panics)]` that reads or writes a `mut`
+  field of a `shared` value is refused when the field carries a borrow
+  flag (its type is neither `Copy` nor counted): the access panics
+  "already borrowed" when another handle holds the field, so it is a
+  `panics` atom (design.md §12). `fn g(i: I, j: I) { for x in i.items {
+  j.items.push(x); } }` was accepted and then panicked for `g(a, a)`;
+  `program_effects` now lists `panics` for such a program
+  (B-2026-11-19-21).
 - A call that gives an unbounded type parameter a type without
   `PartialEq`, `PartialOrd` or `Display`, when the generic body uses
   `==`/`!=`, `<`/`<=`/`>`/`>=` or an f-string interpolation on it, is
@@ -820,6 +828,20 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   takes the annotation's element type, as an element of a sequential
   tuple does. It checked clean and then failed MIR validation on every
   lane (B-2026-11-19-24).
+- Two traits' same-named methods on one type are checked apart: each
+  impl against its own trait's ceiling, and a UFCS call is charged only
+  the trait it names, as design.md §9's "Effects of an ambiguous call"
+  says. `impl Reader for C` (`reads(Db)`) was refused for the
+  `Writer` impl's `writes(Db)`. And `Trait.m(x)` checked against an
+  expected type (a function's tail, `return`, an annotated `let`) ran:
+  it stopped with "call of unknown function S.go" (B-2026-11-19-14).
+- Storing a closure into a field whose type carries an effect clause
+  performs none of the closure's effects: `pub fn mk() ->
+  EventBus[with writes(OrderDb)] { EventBus { handlers: [|e| record(e)]
+  } }` no longer needs a `with writes(OrderDb)` of its own; the bus's
+  type states it. A function that also calls through the bus is still
+  charged the closures it stores, since the call through the bus is not
+  yet charged the bus's clause (B-2026-11-19-22, B-2026-11-19-38).
 - `karac check` counts `.raw()` on an owned non-`Copy` distinct value as a
   move of the wrapper, as design.md § Distinct Types says: a later use
   checked clean and was refused only by `run` and `build`, with no source
