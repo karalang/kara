@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 566 |
-| false-positive | 311 |
+| diagnostics | 567 |
+| false-positive | 314 |
 | missing-feature | 211 |
 | perf | 189 |
 | other | 119 |
-| soundness | 102 |
+| soundness | 103 |
 | miscompile | 93 |
-| crash | 61 |
+| crash | 62 |
 | run-vs-build | 59 |
 | codegen-gap | 39 |
 | use-after-free | 10 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 725 |
+| typecheck | 729 |
 | mir-llvm | 310 |
 | mir | 275 |
-| cli | 217 |
+| cli | 218 |
 | parser | 127 |
-| ownership | 120 |
+| ownership | 121 |
 | interp | 94 |
 | runtime | 91 |
 | effect | 49 |
@@ -106,7 +106,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-07-32 | 2026-11-07 | parser | low | Tracker for the next minor release: an f-string inside an f-string's `{..}` becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that writes the inner f-string's text in the hole when the hole is that f-string alone (d978271697, design.md §3 Interpolated strings) | — |
 | B-2026-11-08-73 | 2026-11-08 | mir-llvm | low | arm64: kata 498's zigzag loop in find_diagonal_order is if-converted into about 20 selects on its loop-carried path where Rust keeps a `tbz` branch on the direction, 1.27x checked Rust on the M5; x86 is not affected (0.72x Rust's instructions, 0.8x its time) | — |
 | B-2026-11-09-21 | 2026-11-09 | typecheck | low | Tracker for the next minor release: `is_ok()`/`is_err()` on an `Option` become a compile error; in 0.8.x they are a `deprecated` warning with a `karac fix` to `is_some()`/`is_none()` (85675b25f1, core-types.md 49ba9850cd) | — |
-| B-2026-11-09-22 | 2026-11-09 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattributed | — |
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
@@ -117,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
 | B-2026-11-19-63 | 2026-11-19 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secret'); the declaration-site Serialize field check refuses a user type that lacks Serialize but counts `Secret` as capable | — |
-| B-2026-11-19-64 | 2026-11-19 | mir-llvm | medium | A compiled program on more than one worker sometimes stops with a false "deadlock: every task waits on a channel ..." when a task's last `Sender` is dropped while the receiving task is being polled: the drop's wake is counted before the sender count falls, so the receiver can park on a channel that is already closed | — |
 | B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
 | B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
 | B-2026-11-19-76 | 2026-11-19 | typecheck | medium | A generic `F: Fn`/`MutFn`/`OnceFn` bound's kind and call access are checked on the instance, not the bound: a `MutFn` closure is accepted for `F: Fn() -> i64`, a `MutFn` is called through a bare (shared) `f: F`, and an `OnceFn` through a bare or `mut ref` `F`, whenever the instance happens not to move; the concrete function types refuse all of these (core-semantics §9.6) | — |
@@ -125,7 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-89 | 2026-11-19 | parser | low | A Rust turbofish on a type path in an expression is not carried: `std::collections::HashSet::<char>::new()` is fixed to `Set.new()` with the `char` argument dropped, and the bare `HashSet::<i64>::new()` stops with E0002; remainder of B-2026-11-19-34 | — |
 | B-2026-11-19-94 | 2026-11-19 | effect | low | Two `par` branches calling a generic function-typed parameter (`fn both[F: Fn() -> i64](f: F) -> i64 { let (a, b) = par { f(), f() }; a + b }`) conflict as `unknown (a call through a value)` even when the instance's closure is pure (`both(|| k)`), though core-semantics §12 computes a generic call's effects on the instance and charges a non-escaping parameter's effects at the call site | — |
 | B-2026-11-19-97 | 2026-11-19 | ownership | medium | An escaping closure that reads only a Copy field (`hs.push(|| v.id)`, `H { f: || v.id }`) must capture a copy of that field (review ruling 2026-11-19 on §9.1), but (1) for a binding whose type has a Drop body, check AND every MIR lane move the whole binding (E0514 / `move check main: use of _2.0`), and (2) for a type with no Drop body, check still says `v was moved into an escaping closure` (E0500) while the MIR lanes capture the field alone and run | — |
-| B-2026-11-19-98 | 2026-11-19 | typecheck | low | A trait whose parameter defaults to Self (`trait Tr[X = Self] { fn m(self, x: X) -> i64; }`) is treated as if X were Self at an explicit instance: `dyn Tr[i64]` is refused E_DYN_NOT_DISPATCHABLE (`m` names Self outside the receiver), and under `T: Tr + Tr[i64]` the UFCS `Tr[i64].m(t, 1)` is refused E0233 `ambiguous method 'm' ... Use UFCS Tr[i64].m(receiver, ...)`, the very form written | — |
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
 | B-2026-11-19-103 | 2026-11-19 | ownership+typecheck | low | A borrowed `Fn` parameter cannot be handed to a lazy adaptor (`v.iter().filter(f).count()` is E0516 'cannot be stored as a function value; declare the parameter `escaping`'), and a generic `f: F` cannot be handed to `retain` (E0200 'cannot give away parameter'), though the concrete `f: Fn(..)` can | — |
 | B-2026-11-19-105 | 2026-11-19 | mir | medium | A function that uses a provider cannot be taken as a value under `with_provider` (core-semantics §14.3: 'Taking such a function as a value captures the provider in scope'): `let f = read_clk; f() + 1` passes check and every lane stops `a function used as a value that uses Clk's provider is not lowered yet`; returning it out of the call (`|| { let g = read_clk; g }`) also passes check instead of the §14.5 refusal | — |
@@ -142,6 +139,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-128 | 2026-11-19 | mir-llvm | high | A `dyn Trait` method call with a `Str` or an `f32` parameter passes it wrongly on build, with the impl's modes EQUAL to the trait's: `e.nm("abcd")` with `fn nm(self, p: Str) -> i64 { p.len() + self.k }` panics 'integer overflow' (ASan aborts), and `e.sc(0.5)` with `y: f32` reads 0.0; the interpreter and the generic-bound call are right | — |
 | B-2026-11-19-129 | 2026-11-19 | typecheck | low | §5.10's Copy read through a reference is not applied to an arithmetic operand of a bounded generic `T: Add + Copy`: `for x in v.iter() { s = s + x; }` is refused ('requires both operands to have the same type, found T and ref T'), though the same loop over `Vec[i64]`, a comparison `x > m` and an argument `tk(r)` on the generic T all check | — |
 | B-2026-11-19-130 | 2026-11-19 | typecheck | medium | A `ref` of a `Copy` value returned by a closure literal solves a generic `T` to the value type, not `ref`: `ap[T](f: Fn() -> T)` with `ap(|| ref v)` is `i64`, and `g.spawn(|| ref v)` is `TaskHandle[i64]`, while the closure body still returns `ref i64`. So check accepts it, `h.join()` read as `i64` prints a pointer's bits under `karac run`, and `p = h.join()` with `p: ref i64` stops every lane with invalid MIR | — |
+| B-2026-11-19-133 | 2026-11-19 | ownership | high | Remainder of B-2026-11-19-95: a task or `par` result of a struct with a `ref` FIELD (`struct Hd { r: ref i64 }`, `g.spawn(|| Hd { r: ref v })`, `par { Hd { r: ref v }, 1 }`) still borrows nothing at check, so `p = h.join().r` outlives `v`: heap-use-after-free under ASan | — |
+| B-2026-11-19-134 | 2026-11-19 | typecheck | medium | Assigning a plain value to a `ref` binding passes `karac check` and then stops every lane with invalid MIR: `let mut p: ref i64 = ref e; let x: i64 = 5; p = x;` (and `p = mk()`, `p = h.join()` of a task whose closure `|| ref v` returns i64) gives 'invalid MIR: assigning i64 to _2 of type ref i64' | — |
+| B-2026-11-19-135 | 2026-11-19 | typecheck | medium | An unannotated generic struct literal or variant with an empty list `[]` in a field whose element type mentions the type parameter is refused with the internal E0516 'a type that failed to check is not lowered yet': `struct W[T] { v: T, xs: Vec[T] }` `W { v: 1, xs: [] }` (when xs is later used), and every generic tree `Tr { v: 1, kids: [] }`, `Tree.Node(1, [])`, even inside `fn leaf[T](v: own T) -> Tr[T] { Tr { v: v, kids: [] } }` | — |
+| B-2026-11-19-136 | 2026-11-19 | typecheck | medium | A generic struct with a self-referential `Option` field (`struct Ls[T] { v: T, next: Option[Ls[T]] }`) cannot be built with a literal: `Ls { v: 1, next: None }` is E0200 'field next has type Option[i64], but the type parameter was already bound to Option[Ls[i64]] by an earlier field', also with an annotation, `shared`, and `T = String` | — |
 
 ### Relocated
 
@@ -980,6 +981,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-09-18 | typecheck | low | `c as u8` on a `char` (LeetCode's Rust template for 1079, `count[(c as u8 - b'A') as usize]`) is refused with a help naming `c as u32 as u8` but no m… | 10ef8e8c7a |
 | B-2026-11-09-19 | mir | medium | `v.contains(d)` with a float needle on a `Vec[u8]` (`let d = 1.5`) passes `karac check`; the interpreter then stops with "Eq on Int(1) and Float(1.5)… | 2e41a1c552 |
 | B-2026-11-09-20 | mir | low | A raw pointer cannot reach a non-`Copy` element: `ptr.mut(xs[i])` is refused as a move out of the collection, `p.read()` as a move out of a borrowed… | f6dfaaa342 |
+| B-2026-11-09-22 | mir-llvm | low | Kata 404 (sum of left leaves) runs 1.73x checked Rust's time on the M5 against 1.23x its instructions on x86: the arm64 share of the gap is unattribu… | 0e7a26e08b |
 | B-2026-11-09-24 | typecheck | low | A `pub fn` in an inherent impl of a type that is not `pub` (LeetCode's `struct Solution; impl Solution { pub fn sufficient_subset(root: Option<Rc<Ref… | 52b677beea |
 | B-2026-11-09-25 | typecheck | low | A `char` handed to `replace` or `replacen` (Rust's `rest.replace(c, "")`) is refused with "expects String arguments" and no machine fix, though `find… | 5eee63ee71 |
 | B-2026-11-09-26 | mir-llvm | low | A presized push fill whose trip count is not a constant keeps two exits a trip, its bound and its reservation's reach, so LLVM does not vectorize it:… | 1cbfcd7e92 |
@@ -1836,6 +1838,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-60 | typecheck+mir | low | `TimedOut` (std.time `timeout`) and `TaskFailed` (isolating groups, `try_join`) implement neither `Display` nor `Error`, so `timeout(d, f)?` and `h.t… | d58a0c7cf1 |
 | B-2026-11-19-61 | interp+mir-llvm | low | std.path `parent` of a root followed by a trailing `.` (`"/."`, `"/./"`, `"/./."`) is `Some("/")`, where `components` gives `["/"]`, `parent("/")` is… | 9a3d1848c1 |
 | B-2026-11-19-62 | other | low | secret.md is behind the compiler in two places: `ct_eq` is said to be `Secret[String]` only, but `Secret[Vec[u8]]` compares (`true`) on every lane; a… | c780bee67f |
+| B-2026-11-19-64 | mir-llvm | medium | A compiled program on more than one worker sometimes stops with a false "deadlock: every task waits on a channel ..." when a task's last `Sender` is… | 11949b2cd6 |
 | B-2026-11-19-65 | typecheck | low | An open type variable nested inside the first branch or element of a join is not solved by a later one: `[Some(None), Some(Some(4))]`, `if c { Some(N… | 5fdf9d7035 |
 | B-2026-11-19-66 | typecheck+mir | high | Inside a generic body bounded by a trait with a defaulted parameter (`fn total[T: Combine](a: own T, b: own T) -> T.Output { a.combine(b) }`, `trait… | a29450cdd1 |
 | B-2026-11-19-67 | typecheck | medium | Invariance is not enforced against `Never`: `let w: Vec[i64] = v` with `v: Vec[Never]`, and `set(mut o)` with `o: Option[Never]` into a `mut ref Opti… | 9d21ac8e85 |
@@ -1859,6 +1862,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-93 | typecheck | medium | A partial move out of a generic struct with a `Drop` body passes `karac check` inside a generic function (`impl[T] Drop for Bx[T]`, `fn take[T](b: ow… | afa4bb962f |
 | B-2026-11-19-95 | ownership | high | A view returned from a TaskGroup task (`g.spawn(\|\| v.as_slice())`, then `h.join()`) or from a bare generic `F` closure argument borrows nothing at ch… | d256b15bad |
 | B-2026-11-19-96 | ownership | high | Calling an escaping closure held in a field, `Vec` element, tuple, `Option` or a function's result (`(h.f)()`, `(fs[0])()`, `mk(v)()`) gives the retu… | 3e49d0f149 |
+| B-2026-11-19-98 | typecheck | low | A trait whose parameter defaults to Self (`trait Tr[X = Self] { fn m(self, x: X) -> i64; }`) is treated as if X were Self at an explicit instance: `d… | b332237255 |
 | B-2026-11-19-99 | interp | medium | A closure forwarded through a function parameter into `Vec.retain`, `sort_by` or `sort_by_key` (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool)… | 848f25873b |
 | B-2026-11-19-100 | parser | low | Rust's typed None, `None::<T>` (`None::<Rc<RefCell<TreeNode>>>` in a LeetCode Rust template), stops at E0002 "Expected `)`, found `::`" with no fix,… | ee08f070a |
 | B-2026-11-19-101 | typecheck | low | A `Vec` passed to a library method's `Slice[T]` parameter is refused E0200 "expected 'Slice[i64]', found 'Vec[i64]'" when the receiver's elements are… | ee08f070a |
@@ -1875,6 +1879,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-118 | typecheck | medium | `stdout`/`stderr` `print`/`println` refused a `Str` (expected 'ref String') and `env.set` refused one for both arguments (expected 'String'), though… | 1e48265c69 |
 | B-2026-11-19-119 | typecheck | medium | `Request.header`, the client `Response.header` and `HttpError.header` took the looked-up name as `own String`, so a borrowed name was refused ("canno… | 1e48265c69 |
 | B-2026-11-19-120 | typecheck | low | `StdinLines`, the documented return type of `stdin.lines()` (io.md § Standard streams), could not be named: `fn f() -> StdinLines` was E0104 undefine… | 1e48265c69 |
+| B-2026-11-19-131 | typecheck | low | An indexed list of string literals where a `Str` is wanted (`fn arm_name(a: i64) -> Str { ["one", "two"][a] }`) was refused "expected 'Str', found 'S… | 67cd85419b |
+| B-2026-11-19-132 | cli | low | The E0238 `from_iter` fix for a `collect` compared with a typed value broke the text on a parenthesized range receiver: `seen != (0..n).collect()` wa… | 4e5c719df5 |
 
 </details>
 
