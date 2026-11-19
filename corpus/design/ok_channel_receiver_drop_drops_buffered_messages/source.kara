@@ -1,0 +1,15 @@
+// concurrency.md Closing: when the Receiver drops, send and try_send return
+// Err(Closed(value)), handing the value back.
+struct Tok { n: i64 }
+impl Drop for Tok { fn drop(mut ref self) { println(f"drop tok {self.n}") } }
+
+fn main() {
+    let (tx, rx): (Sender[Tok], Receiver[Tok]) = channel(4);
+    let _ = tx.send(Tok { n: 1 });
+    println("dropping receiver");
+    drop(rx);
+    println("receiver dropped");
+    match tx.send(Tok { n: 2 }) { Err(SendError.Closed(t)) => println(f"closed, got back {t.n}"), _ => println("??") }
+    match tx.try_send(Tok { n: 3 }) { Err(SendError.Closed(t)) => println(f"closed, got back {t.n}"), _ => println("??") }
+    println("end");
+}

@@ -1,0 +1,9 @@
+source = "docs/library/concurrency.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "channel"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "concurrency.md Closing: when the Receiver drops, the messages still buffered drop with it, and later sends and try_sends return Closed with the value handed back. Before the fix every backend kept the buffered message until the last Sender dropped. interp, mir-llvm and ASan agree."

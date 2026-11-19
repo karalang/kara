@@ -1,0 +1,8 @@
+dropping receiver
+drop tok 1
+receiver dropped
+closed, got back 2
+drop tok 2
+closed, got back 3
+drop tok 3
+end

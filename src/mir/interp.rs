@@ -6227,7 +6227,9 @@ impl<'a> Interp<'a> {
                     let c = self.chan_mut(id, name)?;
                     let last = match base {
                         "Sender" => c.senders == 1 && c.receivers == 0,
-                        "Receiver" => c.receivers == 1 && c.senders == 0,
+                        // The last receiver: nothing can take what is
+                        // queued any more (concurrency.md, Closing).
+                        "Receiver" => c.receivers == 1,
                         _ => c.senders == 1 && c.receivers == 1,
                     };
                     if last {
@@ -6384,8 +6386,9 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// One end of channel `id` is gone; with both gone, what is still
-    /// queued drops.
+    /// One end of channel `id` is gone; with every receiver gone, what is
+    /// still queued drops, since nothing can take it any more
+    /// (concurrency.md, Closing).
     fn end_dropped(&mut self, id: i128, sender: bool) -> R<()> {
         self.chan_epoch += 1;
         let c = self.chan_mut(id, "drop")?;
@@ -6395,7 +6398,7 @@ impl<'a> Interp<'a> {
             &mut c.receivers
         };
         *count = count.saturating_sub(1);
-        if c.senders > 0 || c.receivers > 0 {
+        if c.receivers > 0 {
             return Ok(());
         }
         let elem = c.elem;

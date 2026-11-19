@@ -4659,8 +4659,9 @@ pub unsafe extern "C" fn karac_mir_chan_clone(h: *mut MirChan, sender: u8) -> *m
     h
 }
 
-/// One end of the kind `sender` names is gone; with every end gone, the
-/// queued values drop and the channel is freed.
+/// One end of the kind `sender` names is gone. With every receiver gone,
+/// the queued values drop, since nothing can take them any more
+/// (concurrency.md, Closing); with every end gone, the channel is freed.
 ///
 /// # Safety
 /// `h` is null or a live channel, and the end is not used again.
@@ -4670,7 +4671,7 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
         return;
     }
     crate::mir_task::chan_changed();
-    let last = {
+    let (last, orphaned) = {
         // SAFETY: the caller's contract.
         let c = unsafe { &*h };
         let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
@@ -4680,9 +4681,23 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
             &mut s.receivers
         };
         *n = n.saturating_sub(1);
-        s.senders == 0 && s.receivers == 0
+        let last = s.senders == 0 && s.receivers == 0;
+        let orphaned = if !last && s.receivers == 0 {
+            std::mem::take(&mut s.queue)
+        } else {
+            std::collections::VecDeque::new()
+        };
+        (last, orphaned)
     };
     if !last {
+        // Dropped outside the lock: a value's drop may touch the channel.
+        // SAFETY: the channel is live (a sender holds it).
+        if let Some(d) = unsafe { &*h }.drop {
+            for mut b in orphaned {
+                // SAFETY: the bytes are a value the glue drops.
+                unsafe { d(b.as_mut_ptr()) };
+            }
+        }
         return;
     }
     // SAFETY: the last end; the channel came from `Box::into_raw`.
@@ -4712,7 +4727,8 @@ pub unsafe extern "C" fn karac_mir_chan_last_len(h: *mut MirChan, kind: u8) -> i
     let s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
     let last = match kind {
         1 => s.senders == 1 && s.receivers == 0,
-        0 => s.receivers == 1 && s.senders == 0,
+        // The last receiver: what is queued can never be taken.
+        0 => s.receivers == 1,
         _ => s.senders == 1 && s.receivers == 1,
     };
     if last {

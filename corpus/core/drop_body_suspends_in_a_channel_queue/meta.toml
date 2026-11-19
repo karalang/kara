@@ -6,4 +6,4 @@ tags = ["drop", "concurrency"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "design.md § Drop, 'A drop body may suspend' (B-2026-11-17-127): values still queued drop through their glue, oldest first, when the channel's last end goes (a Sender, a Receiver or a BoundedChannel), and not before."
+note = "design.md § Drop, 'A drop body may suspend' (B-2026-11-17-127): values still queued drop through their glue, oldest first, when the channel's last Receiver goes (concurrency.md, Closing: nothing can receive them any more), or with a BoundedChannel; a Sender's drop leaves them alone. Flipped 2026-11-19 by the review ruling that buffered messages drop with the Receiver."

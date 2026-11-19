@@ -48,7 +48,7 @@ Sending returns a `Result` instead of panicking because a panic ends the whole p
 
 **Multiple senders.** `Sender[T]` implements `Clone`, and every clone sends into the same channel. `Receiver[T]` does not implement `Clone`.
 
-**Closing.** The channel closes when the last `Sender` drops: `recv` then drains the buffered messages and returns `None`. When the `Receiver` drops, every later `send`, and any `send` waiting on a full channel, returns `Err(SendError.Closed(value))`.
+**Closing.** The channel closes when the last `Sender` drops: `recv` then drains the buffered messages and returns `None`. When the `Receiver` drops, the messages still buffered drop with it, since nothing can receive them any more, and every later `send`, and any `send` waiting on a full channel, returns `Err(SendError.Closed(value))`.
 
 **Effects.** `tx.send(v)` has `sends(tx)` and `rx.recv()` has `receives(rx)`, keyed by the channel value ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10), item 5), so two channels are two resources. Clones of one `Sender` name the same channel. A function type, whose parameters have no names, writes `sends(Channel)` or `receives(Channel)`, which conflicts with every channel ([design.md](../design.md#value-rooted-resources)). Which `par` branches may use one channel together is [core-semantics.md §11.2](../core-semantics.md#11-concurrency-c9). `send` and `recv` also have `blocks`, because they may wait. On `wasm_wasi`, where tasks run one at a time, a waiting `recv` yields to the other tasks; if no task can run, the program panics with a deadlock message ([design.md §16](../design.md#concurrency-across-targets)).
 
