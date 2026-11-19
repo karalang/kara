@@ -699,6 +699,7 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
                 (e.span.offset, edit)
             })
         }));
+        fixes.lock_trait_params(&t.trait_locked_params);
     }
 }
 
@@ -925,6 +926,37 @@ impl FixSet {
             self.anchors.insert(self.next, key.0);
             self.groups([g]);
         }
+    }
+
+    /// An `own` written on a trait impl method's parameter that the trait
+    /// borrows is refused by E0288, whose fix takes it off again, so the two
+    /// alternate pass after pass (B-2026-11-18-66). Such a fix writes `own`
+    /// on the trait's parameter too, as one fix, or is left out when the
+    /// trait's declaration cannot take it.
+    fn lock_trait_params(&mut self, locked: &rustc_hash::FxHashMap<usize, Option<usize>>) {
+        let mut extra = Vec::new();
+        let mut gone = std::collections::HashSet::new();
+        for (id, e) in &self.edits {
+            if e.length != 0 || e.replacement != "own " {
+                continue;
+            }
+            match locked.get(&e.offset) {
+                Some(Some(at)) => extra.push((
+                    *id,
+                    crate::resolver::TextEdit {
+                        offset: *at,
+                        length: 0,
+                        replacement: "own ".to_string(),
+                    },
+                )),
+                Some(None) => {
+                    gone.insert(*id);
+                }
+                None => {}
+            }
+        }
+        self.edits.extend(extra);
+        self.edits.retain(|(id, _)| !gone.contains(id));
     }
 
     fn singles(&mut self, edits: impl IntoIterator<Item = crate::resolver::TextEdit>) {

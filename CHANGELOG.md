@@ -1784,6 +1784,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   fixes wait for a pass with no error, and the group's L0002 note counted
   as one, so 199 corpus programs that check clean kept the warning after
   `karac fix` (B-2026-11-18-65).
+- `karac fix` no longer writes `own` on a trait impl method's parameter
+  that the trait borrows and then takes it off again (an impl may not take
+  more than its trait, E0288), so a file no longer ends in either state
+  depending on the pass count. When the trait is the program's own and its
+  parameter is bare, the fix writes `own` on the trait's parameter too;
+  otherwise no `own` fix is offered there (B-2026-11-18-66).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a

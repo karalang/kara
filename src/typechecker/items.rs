@@ -5227,11 +5227,36 @@ impl<'a> super::TypeChecker<'a> {
             })
             .collect();
         let mut found = Vec::new();
+        // Only this program's own trait can take the `own` its impl wants
+        // (B-2026-11-18-66).
+        let local_trait =
+            self.program.items.iter().any(
+                |i| matches!(i, Item::TraitDef(t) if t.name == trait_name && !t.stdlib_origin),
+            );
+        // A bare parameter: written with no mode, which D5 reads as a borrow
+        // whose `ref` carries the span of the type it wraps.
+        let bare = |p: &Param| {
+            !p.is_own
+                && match &p.ty.kind {
+                    TypeKind::Ref(inner) => inner.span == p.ty.span,
+                    TypeKind::MutRef(_) | TypeKind::MutSlice(_) => false,
+                    _ => true,
+                }
+        };
+        let mut locked = Vec::new();
         for item in &imp.items {
             let ImplItem::Method(method) = item else {
                 continue;
             };
             let tm = self.find_trait_method(trait_name, &method.name);
+            if let Some(tm) = tm {
+                for (tp, ip) in tm.params.iter().zip(&method.params) {
+                    if !ip.is_own && !tp.is_own {
+                        let trait_at = (local_trait && bare(tp)).then_some(tp.ty.span.offset);
+                        locked.push((ip.ty.span.offset, trait_at));
+                    }
+                }
+            }
             // `Clone` is built in, with no trait declaration to read: its one
             // method is `clone(self)` (design.md §9; B-2026-11-06-27 item 10).
             let builtin_clone = SelfParam::Ref;
@@ -5370,6 +5395,7 @@ impl<'a> super::TypeChecker<'a> {
                 ));
             }
         }
+        self.trait_locked_params.extend(locked);
         for (message, span, fix) in found {
             match fix {
                 Some(fix) => self.type_error_with_fix_it(

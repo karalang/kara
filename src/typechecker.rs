@@ -2423,6 +2423,14 @@ pub struct TypeCheckResult {
     /// resolver's and ownership checker's `error_fix_diffs` are: `karac fix`
     /// applies each, and `--output=json` renders it as `fix_diff`.
     pub error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// A trait impl method's parameter that the trait's declaration
+    /// borrows, keyed by the offset where `own ` would make the impl's
+    /// owned: an impl may not take more than its trait (E0288), so `own`
+    /// written there alone is undone by the next fix pass. The value is
+    /// where `own ` goes on the trait's parameter, when the trait is this
+    /// program's own and its parameter is bare; `None` when the trait's
+    /// declaration cannot be fixed with it (B-2026-11-18-66).
+    pub trait_locked_params: FxHashMap<usize, Option<usize>>,
     /// The statement form of a `par` block refused under the core rules
     /// (§11.1), keyed by the error's span: the block, and each statement's
     /// start and its expression (a `let`'s value), when every statement is
@@ -3880,6 +3888,8 @@ pub struct TypeChecker<'a> {
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// See [`TypeCheckResult::trait_locked_params`].
+    pub(super) trait_locked_params: FxHashMap<usize, Option<usize>>,
     /// See [`TypeCheckResult::par_stmt_branches`].
     pub(super) par_stmt_branches: FxHashMap<SpanKey, ParStmtBranches>,
     /// Each tuple literal's elements by its span (B-2026-11-09-96).
@@ -4866,6 +4876,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
+            trait_locked_params: FxHashMap::default(),
             par_stmt_branches: FxHashMap::default(),
             tuple_literal_elems: FxHashMap::default(),
             end_mut_rewrites: FxHashMap::default(),
@@ -5538,6 +5549,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: self.fn_value_callee_types,
             fn_value_param_types: self.fn_value_param_types,
             error_fix_diffs: self.error_fix_diffs,
+            trait_locked_params: self.trait_locked_params,
             par_stmt_branches: self.par_stmt_branches,
             dbg_arg_types: self.dbg_arg_types,
             impl_trait_captures: self.impl_trait_captures,
