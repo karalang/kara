@@ -42,9 +42,28 @@ pub struct CoreEscape {
 /// non-escaping function type, `None` for any other type.
 type Sig = Vec<Option<bool>>;
 
+/// Per parameter of a generic function: where a parameter whose type is
+/// one of the function's own type parameters goes in its body
+/// (B-2026-11-19-104). A closure handed to such a slot goes there too.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GenSlot {
+    /// Called, borrowed or dropped: the closure stays in the call.
+    Stays,
+    /// Stored (pushed, put in a field, sent): the closure escapes.
+    Stored,
+    /// Handed back: the closure is the call's value, and goes where it goes.
+    Returned,
+}
+
+/// Why a closure handed to a storing generic slot escapes.
+const GENERIC_STORE: &str = "passed to a generic parameter its callee stores";
+
 #[derive(Clone, Copy)]
 enum Bound {
     NonEscParam,
+    /// The function's parameter at this index, typed by one of its own type
+    /// parameters.
+    GenParam(usize),
     Closure(SpanKey),
     Other,
 }
@@ -96,6 +115,8 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
     };
     let mut sigs: FxHashMap<String, Sig> = FxHashMap::default();
     let mut fns: Vec<&Function> = Vec::new();
+    // Free functions, the generic ones of which [`generic_slots`] reads.
+    let mut free: Vec<&Function> = Vec::new();
     let mut enums: FxHashSet<String> = ["Option", "Result"].iter().map(|s| s.to_string()).collect();
     for item in &program.items {
         match item {
@@ -105,6 +126,7 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
             Item::Function(f) => {
                 sigs.insert(f.name.clone(), sig_of(f));
                 fns.push(f);
+                free.push(f);
             }
             Item::ImplBlock(imp) => {
                 let head = match &imp.target_type.kind {
@@ -124,6 +146,7 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
         }
     }
     let mut out = CoreEscape::default();
+    let gen = generic_slots(&free, &sigs, &enums, esc, types);
     // The standard library is checked by its own rules, not the user's.
     for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
         let mut w = Walker {
@@ -134,10 +157,91 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
             out: &mut out,
             rebound: FxHashMap::default(),
             types,
+            gen: &gen,
+            gen_hits: None,
         };
         w.walk_fn(f);
     }
     out
+}
+
+/// Per generic function, where each parameter typed by one of its own type
+/// parameters goes in the body: `fn keep[F](v: mut ref Vec[F], f: own F) {
+/// v.push(f); }` stores `f`, `fn id[T](x: own T) -> T { x }` returns it. A
+/// callee that hands the parameter to another generic slot inherits that
+/// slot's fate, so the walk repeats until nothing changes.
+fn generic_slots(
+    fns: &[&Function],
+    sigs: &FxHashMap<String, Sig>,
+    enums: &FxHashSet<String>,
+    esc: &FxHashSet<SpanKey>,
+    types: Option<&NodeTypes>,
+) -> FxHashMap<String, Vec<GenSlot>> {
+    let mut gen: FxHashMap<String, Vec<GenSlot>> = FxHashMap::default();
+    // (key, function, the indices of its generic-typed parameters)
+    let mut cands: Vec<(String, &Function, Vec<usize>)> = Vec::new();
+    for f in fns {
+        let key = f.name.clone();
+        let Some(gp) = &f.generic_params else {
+            continue;
+        };
+        let names: FxHashSet<&str> = gp.params.iter().map(|p| p.name.as_str()).collect();
+        let idx: Vec<usize> = f
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| match &p.ty.kind {
+                TypeKind::Path(path) => {
+                    path.segments.len() == 1 && names.contains(path.segments[0].as_str())
+                }
+                _ => false,
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if !idx.is_empty() {
+            gen.insert(key.clone(), vec![GenSlot::Stays; f.params.len()]);
+            cands.push((key, f, idx));
+        }
+    }
+    for _ in 0..8 {
+        let mut changed = false;
+        for (key, f, idx) in &cands {
+            let mut scratch = CoreEscape::default();
+            let mut w = Walker {
+                sigs,
+                enums,
+                esc,
+                scopes: Vec::new(),
+                out: &mut scratch,
+                rebound: FxHashMap::default(),
+                types,
+                gen: &gen,
+                gen_hits: Some(Vec::new()),
+            };
+            w.walk_fn_generic(f, idx);
+            let hits = w.gen_hits.take().unwrap_or_default();
+            let mut slots = gen[key].clone();
+            for (i, why) in hits {
+                let new = if why == "returned" {
+                    GenSlot::Returned
+                } else {
+                    GenSlot::Stored
+                };
+                // A parameter both returned and stored is stored.
+                if slots[i] == GenSlot::Stays || new == GenSlot::Stored {
+                    slots[i] = new;
+                }
+            }
+            if slots != gen[key] {
+                gen.insert(key.clone(), slots);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    gen
 }
 
 struct Walker<'a> {
@@ -151,6 +255,11 @@ struct Walker<'a> {
     /// the parameter it holds, for the diagnostic (B-2026-11-04-62).
     rebound: FxHashMap<String, String>,
     types: Option<&'a NodeTypes>,
+    /// [`generic_slots`]'s answer so far.
+    gen: &'a FxHashMap<String, Vec<GenSlot>>,
+    /// While [`generic_slots`] walks a generic function: where each of its
+    /// generic-typed parameters goes, by index and reason.
+    gen_hits: Option<Vec<(usize, &'static str)>>,
 }
 
 impl Walker<'_> {
@@ -191,6 +300,25 @@ impl Walker<'_> {
         self.scopes.pop();
     }
 
+    /// [`Self::walk_fn`] for [`generic_slots`]: the parameters at `idx` are
+    /// followed, and every other one is plain.
+    fn walk_fn_generic(&mut self, f: &Function, idx: &[usize]) {
+        let mut scope = FxHashMap::default();
+        for (i, p) in f.params.iter().enumerate() {
+            let b = if idx.contains(&i) {
+                Bound::GenParam(i)
+            } else {
+                Bound::Other
+            };
+            for n in p.pattern.binding_names() {
+                scope.insert(n, b);
+            }
+        }
+        self.scopes.push(scope);
+        self.walk_block(&f.body, Pos::Escape("returned"));
+        self.scopes.pop();
+    }
+
     fn walk_block(&mut self, b: &Block, tail: Pos) {
         self.scopes.push(FxHashMap::default());
         for s in &b.stmts {
@@ -222,6 +350,7 @@ impl Walker<'_> {
                                 self.rebound.insert(name.clone(), origin);
                                 Bound::NonEscParam
                             }
+                            Some(Bound::GenParam(i)) => Bound::GenParam(i),
                             _ => {
                                 self.walk_expr(value, Pos::Bind);
                                 Bound::Other
@@ -295,6 +424,32 @@ impl Walker<'_> {
         }
     }
 
+    /// A call of a generic function: an argument in a slot its callee stores
+    /// escapes, one in a slot it returns goes where the call's value goes
+    /// (B-2026-11-19-104), and the rest are as [`Self::walk_args`] has them.
+    fn walk_generic_args(
+        &mut self,
+        args: &[CallArg],
+        sig: Option<&Sig>,
+        slots: &[GenSlot],
+        pos: Pos,
+    ) {
+        for (i, a) in args.iter().enumerate() {
+            let p = match slots.get(i) {
+                Some(GenSlot::Stored) => Pos::Escape(GENERIC_STORE),
+                Some(GenSlot::Returned) => match pos {
+                    Pos::Escape(why) => Pos::Escape(why),
+                    _ => Pos::Other,
+                },
+                _ => match sig.and_then(|s| s.get(i).copied().flatten()) {
+                    Some(true) => Pos::Escape("passed to an `escaping` parameter"),
+                    _ => Pos::Other,
+                },
+            };
+            self.walk_expr(&a.value, p);
+        }
+    }
+
     fn walk_expr(&mut self, e: &Expr, pos: Pos) {
         match &e.kind {
             ExprKind::Identifier(n) => match (self.lookup(n), pos) {
@@ -307,6 +462,11 @@ impl Walker<'_> {
                 }
                 (Some(Bound::NonEscParam), Pos::Bind) => {
                     self.non_escaping(e, n, "bound to a variable")
+                }
+                (Some(Bound::GenParam(i)), Pos::Escape(why)) if why != CLOSURE_RESULT => {
+                    if let Some(h) = &mut self.gen_hits {
+                        h.push((i, why));
+                    }
                 }
                 _ => {}
             },
@@ -363,6 +523,10 @@ impl Walker<'_> {
                             self.walk_args(args, None, Some("sent to a task"));
                         } else if matches!(name.as_str(), "Some" | "Ok" | "Err") && !local {
                             self.walk_args(args, None, value_of(pos));
+                        } else if let (false, Some(slots)) = (local, self.gen.get(name)) {
+                            let slots = slots.clone();
+                            let sig = self.sigs.get(name);
+                            self.walk_generic_args(args, sig, &slots, pos);
                         } else {
                             let sig = if local { None } else { self.sigs.get(name) };
                             self.walk_args(args, sig, None);
