@@ -9881,7 +9881,21 @@ impl<'a> super::TypeChecker<'a> {
             // yield `ref` of two open variables, which are one.
             let (required, found) =
                 if self.has_open_literal(&required) || self.has_open_literal(&found) {
-                    self.pair_open_literals(&required, &found);
+                    // `[1].iter().chain(v.iter().map(..))`: `ref` items of an
+                    // open literal against `i32` ones differ by the borrow
+                    // alone, which the `.cloned()` below fixes, so the
+                    // literal takes the other side's items, as it does once
+                    // the fix is in (kata 1629).
+                    let (r, f) = (self.resolved_now(&required), self.resolved_now(&found));
+                    match (&r, &f) {
+                        (Type::Ref(x), y) if !matches!(y, Type::Ref(_)) => {
+                            self.pair_open_literals(x, y)
+                        }
+                        (y, Type::Ref(x)) if !matches!(y, Type::Ref(_)) => {
+                            self.pair_open_literals(y, x)
+                        }
+                        _ => self.pair_open_literals(&required, &found),
+                    }
                     (self.resolved_now(&required), self.resolved_now(&found))
                 } else {
                     (required, found)
