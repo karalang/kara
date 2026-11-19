@@ -4428,10 +4428,22 @@ fn held_borrow_copy_fix(
     let cond_head =
         regex::Regex::new(r"^\s*(?:(\}\s*else\s+)?(while|if)\s+let\s+[^=;{]*?=\s*|match\s+)")
             .unwrap();
-    let conditional = src
-        .get(line_start..loan)
-        .is_some_and(|h| !let_head.is_match(h) && cond_head.is_match(h));
-    let let_head = if conditional { cond_head } else { let_head };
+    // Or a `match` that is itself a `let`'s initializer (`let now = match
+    // m.get(k) {`, kata 1244, B-2026-11-20-81): its arms hold the borrow
+    // as a bare `match`'s do, and the `let` binds whatever they make.
+    let let_match =
+        regex::Regex::new(r"^\s*let\s+(mut\s+)?[A-Za-z_]\w*(\s*:[^=;]*)?\s*=\s*match\s+").unwrap();
+    let head = src.get(line_start..loan);
+    let matched = head.is_some_and(|h| let_match.is_match(h));
+    let conditional =
+        matched || head.is_some_and(|h| !let_head.is_match(h) && cond_head.is_match(h));
+    let let_head = if matched {
+        let_match
+    } else if conditional {
+        cond_head
+    } else {
+        let_head
+    };
     let offset = src
         .get(line_start..loan)
         .and_then(|h| let_head.find(h))
