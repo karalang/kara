@@ -42,6 +42,16 @@ impl Display for SemaphoreError {
     }
 }
 
+// B-2026-11-19-60.
+impl Display for TaskFailed {
+    fn to_string(ref self) -> String {
+        match self {
+            TaskFailed.Panicked { message, location } => f"task panicked at {location}: {message}",
+            TaskFailed.Cancelled => "task cancelled",
+        }
+    }
+}
+
 impl[D: Display] Display for DiscriminantError[D] {
     fn to_string(ref self) -> String {
         match self {

@@ -1,0 +1,9 @@
+source = "B-2026-11-19-60"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "errors", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §10: the standard library's error types implement `Error`. time-random-env.md § Clock: `timeout` returns `Err(TimedOut {})`, and `TimedOut` prints `timed out`. concurrency.md: `TaskFailed` prints `task panicked at <location>: <message>` or `task cancelled`. Each converts into `AnyError` through `?`."

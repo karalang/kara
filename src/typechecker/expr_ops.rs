@@ -734,6 +734,42 @@ impl<'a> super::TypeChecker<'a> {
             || self.env.constants.contains_key(name)
     }
 
+    /// B-2026-11-19-60: `name` is a unit struct in scope (a struct with no
+    /// fields, declared or imported here; an unimported standard-library
+    /// struct is not in `env.structs`) and no local, function or constant.
+    /// A unit struct is built and matched with empty braces (design.md
+    /// § Unit struct), so the bare name is neither its value nor a variant
+    /// of some enum that happens to share the name: `Err(TimedOut)` with
+    /// `std.time.TimedOut` imported read as `RecvTimeoutError.TimedOut`.
+    pub(super) fn bare_unit_struct(&self, name: &str) -> bool {
+        !self.name_shadows_variant(name)
+            && Self::builtin_variant_owner(name).is_none()
+            && !is_prelude_type_or_module_name(name)
+            && self
+                .env
+                .structs
+                .get(name)
+                .is_some_and(|s| s.fields.is_empty())
+    }
+
+    /// The error for a bare unit-struct name, with the braced form as its
+    /// machine fix (B-2026-11-19-60). `pattern` picks the wording.
+    pub(super) fn refuse_bare_unit_struct(&mut self, name: &str, span: &Span, pattern: bool) {
+        let how = if pattern { "matched" } else { "built" };
+        self.type_error_with_fix_it(
+            format!(
+                "`{name}` here is the unit struct `{name}`, which is {how} with empty \
+                 braces: write `{name} {{}}` (design.md § Unit struct)"
+            ),
+            *span,
+            TypeErrorKind::NotCallable,
+            FixIt {
+                span: *span,
+                replacement: format!("{name} {{}}"),
+            },
+        );
+    }
+
     /// Type-directed resolution of a BARE unit-variant name against the type the
     /// context expects (`let x: Second = A;`, `fn f() -> Second { A }`,
     /// `want_second(A)`).

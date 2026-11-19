@@ -233,8 +233,18 @@ impl Add[Duration] for Instant {
 /// What `timeout` gives when its deadline passes first.
 pub struct TimedOut {}
 
+// design.md §10: the standard library's error types implement `Error`, so
+// `timeout(d, f)?` converts into `AnyError` (B-2026-11-19-60).
+impl Display for TimedOut {
+    fn to_string(ref self) -> String {
+        "timed out"
+    }
+}
+
+impl Error for TimedOut { }
+
 /// Runs `f` as a task scope bounded by `d` (core-semantics §11.10): its
-/// value, or `Err(TimedOut)` once `d` has passed, when the scope is
+/// value, or `Err(TimedOut {})` once `d` has passed, when the scope is
 /// cancelled and `f` stops at the wait it is in. `f`'s value crosses back
 /// from the task, so `T: CrossTask` (design.md § `CrossTask`).
 pub fn timeout[T: CrossTask](d: Duration, f: own OnceFn() -> T + CrossTask) -> Result[T, TimedOut] with reads(Clock) blocks suspends {

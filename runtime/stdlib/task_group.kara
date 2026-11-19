@@ -212,6 +212,20 @@ enum TaskFailed {
     Cancelled,
 }
 
+// design.md §10: the standard library's error types implement `Error`, so
+// `try_join()?` and an isolating group's `join()?` convert into `AnyError`
+// (B-2026-11-19-60).
+impl Display for TaskFailed {
+    fn to_string(ref self) -> String {
+        match self {
+            TaskFailed.Panicked { message, location } => f"task panicked at {location}: {message}",
+            TaskFailed.Cancelled => "task cancelled",
+        }
+    }
+}
+
+impl Error for TaskFailed { }
+
 // Close-on-drop for `TaskGroup`. The user-Drop dispatch chain emits
 // `@karac_drop_TaskGroup` at scope exit; slice 5 of this entry
 // hand-rolls the `@TaskGroup.drop` LLVM body in

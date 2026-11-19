@@ -401,6 +401,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `ceiling` (B-2026-11-19-82). `Slice.starts_with(prefix)` and
   `Slice.ends_with(suffix)` compare elements, so a `Vec[u32]` OID is under
   a subtree when `oid.starts_with(base)` (B-2026-11-19-84).
+- `TimedOut` (`std.time.timeout`) and `TaskFailed` (task groups) implement
+  `Display` and `Error`, so `timeout(d, f)?`, `try_join()?` and an isolating
+  group's `join()?` convert into `AnyError`. `TimedOut` prints `timed out`,
+  and `TaskFailed` `task panicked at <location>: <message>` or
+  `task cancelled` (B-2026-11-19-60).
 - A parameter takes any irrefutable pattern, in functions and closures alike
   (design.md § Destructuring parameters): `Req { ref h, body }: own Req` and
   `h: ref hh`, a fixed-array pattern `[a, b, c]: Array[i64, 3]`,
@@ -1949,6 +1954,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A unit struct's bare name, `Err(TimedOut)` or `let u = Marker;`, is E0206
+  naming the struct, with `TimedOut {}` as its machine fix, in expression and
+  pattern position alike. With `std.time.TimedOut` imported, the expression
+  was read as the enum variant `RecvTimeoutError.TimedOut` (E0521 and E0279),
+  and the pattern as an enum-variant pattern on a non-enum (E0273). The library
+  docs now write `Err(TimedOut {})` (B-2026-11-19-60).
 - Rust's array `map` on a list literal, `["a", "b"].map(|u| u.to_string())`,
   gets the `.into_iter()` hop as a fix, and the follow-up fixes collect
   it, as a named list's `.map` does. It was E0236 with no fix

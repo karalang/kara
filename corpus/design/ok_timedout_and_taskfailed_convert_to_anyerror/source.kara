@@ -1,0 +1,57 @@
+// B-2026-11-19-60: `TimedOut` (std.time) and `TaskFailed` (task groups)
+// implement `Display` and `Error`, so `?` converts each into `AnyError`;
+// `TimedOut` is a unit struct, built and matched as `TimedOut {}`.
+import std.time.{timeout, sleep, TimedOut, Duration};
+
+fn slow() -> Result[i64, AnyError] {
+    let v = timeout(Duration.ms(5), || {
+        sleep(Duration.ms(2000));
+        1
+    })?;
+    Ok(v)
+}
+
+fn quick() -> Result[i64, AnyError] {
+    let v = timeout(Duration.ms(5000), || 7)?;
+    Ok(v)
+}
+
+fn joined() -> Result[i64, AnyError] {
+    let v = TaskGroup.new().spawn(|| 3).try_join()?;
+    Ok(v)
+}
+
+fn isolated(fail: bool) -> Result[i64, AnyError] {
+    let g = TaskGroup.isolating();
+    let v = g.spawn(|| {
+        if fail {
+            panic("boom");
+        }
+        4
+    }).join()?;
+    Ok(v)
+}
+
+fn main() {
+    match slow() {
+        Ok(v) => println(v),
+        Err(e) => println(f"slow: {e}"),
+    }
+    println(quick().unwrap());
+    println(joined().unwrap());
+    println(isolated(false).unwrap());
+    match isolated(true) {
+        Ok(v) => println(v),
+        Err(e) => println(f"isolated: {e.to_string().starts_with("task panicked at ")} {e.to_string().ends_with(": boom")}"),
+    }
+    let t = TimedOut {};
+    println(f"{t}");
+    match timeout(Duration.ms(5), || {
+        sleep(Duration.ms(2000));
+        1
+    }) {
+        Ok(v) => println(v),
+        Err(TimedOut {}) => println("late"),
+    }
+    println(f"{TaskFailed.Cancelled}");
+}

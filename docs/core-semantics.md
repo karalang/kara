@@ -680,7 +680,7 @@ Pin: `par_error_runs_siblings`, `par_early_exit_cancels_later` (B-2026-11-07-38)
 - **What is not deterministic.** How far a cancelled branch got before it stopped depends on timing, so its effects up to that point may or may not have happened. The block's value does not depend on timing (§11.7).
 
 **11.10 Deadlines.**
-- `std.time.timeout(d: Duration, f: OnceFn() -> T) -> Result[T, TimedOut]` runs `f` as a task scope. If `d` passes first, the scope is cancelled (§11.9) and the call returns `Err(TimedOut)`. Otherwise it returns `Ok` of `f`'s value. A `?` inside `f` behaves as in any closure.
+- `std.time.timeout(d: Duration, f: OnceFn() -> T) -> Result[T, TimedOut]` runs `f` as a task scope. If `d` passes first, the scope is cancelled (§11.9) and the call returns `Err(TimedOut {})`. Otherwise it returns `Ok` of `f`'s value. A `?` inside `f` behaves as in any closure.
 - `TaskGroup.with_deadline(own self, d: Duration) -> TaskGroup` returns the group with a deadline: once `d` has passed, the group is cancelled.
 - A socket's `set_read_timeout` also bounds a suspended read, which then returns `Err(TimedOut)`, the existing `NetError` arm.
 - Deadlines nest, and the earliest deadline covering a wait is the one that fires.

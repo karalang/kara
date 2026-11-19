@@ -1445,6 +1445,12 @@ impl<'a> super::TypeChecker<'a> {
                         return;
                     }
                 }
+                // B-2026-11-19-60: a unit struct's bare name is matched as
+                // `Name {}`, not read as a variant of an enum it is not.
+                if !name.contains('.') && self.bare_unit_struct(name) {
+                    self.refuse_bare_unit_struct(name, &pattern.span, true);
+                    return;
+                }
                 let variant_name = name.rsplit('.').next().unwrap_or(name);
                 let is_variant_pattern = name.contains('.')
                     || (variant_name

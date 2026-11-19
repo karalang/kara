@@ -16369,6 +16369,16 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let ty = self.resolve_identifier_type(name, &expr.span);
                 let as_callee = std::mem::take(&mut self.fn_item_in_callee);
+                // B-2026-11-19-60: a unit struct's bare name, before the
+                // variant checks would read it as some enum's variant. A
+                // callee (`Unit()`) keeps the struct-call path, whose fix
+                // rewrites the whole call.
+                if !as_callee && self.bare_unit_struct(name) {
+                    // `Type::Error`, as for any type name in value position:
+                    // one diagnostic, no "moved here" or mismatch after it.
+                    self.refuse_bare_unit_struct(name, &expr.span, false);
+                    return Type::Error;
+                }
                 // A generic function item named as a value takes fresh
                 // parameters at each use, solved from where the value goes
                 // (`apply(shout, [7], 1)` uses `shout` at `Vec[i64]`); its
