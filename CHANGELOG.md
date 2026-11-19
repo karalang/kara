@@ -885,6 +885,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   §11.4): `fn doubled(xs: Vec[i64]) -> Vec[i64] { par for x in xs.iter()
   { x * 2 } }` was refused with E0213, the loop read as a statement
   (B-2026-11-19-110).
+- With `trait Tr[X = Self]`, `dyn Tr[i64]` is accepted (its `X` is the
+  written `i64`, not `Self`), and under `T: Tr + Tr[i64]` the UFCS call
+  `Tr[i64].m(t, 1)` runs the `Tr[i64]` impl. Both were refused, the second
+  as ambiguous with a suggestion to write the very call it refused
+  (B-2026-11-19-98).
 - `karac fix`'s rewrite of Rust's `binary_search`, `binary_search_by` and
   `binary_search_by_key` names the LAST of several equal elements in
   `Ok`, as rustc's implementation and Kāra's own `binary_search` do: it

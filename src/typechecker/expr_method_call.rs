@@ -723,6 +723,14 @@ impl<'a> super::TypeChecker<'a> {
                             .as_ref()
                             .is_none_or(|u| args.is_empty() || args == u)
                 });
+                // Of `T: Tr + Tr[i64]`, `Tr[i64].m(t, 1)` names the bound
+                // that writes `i64`, not the bare one, whose arguments are
+                // the trait's defaults (B-2026-11-19-98).
+                if let Some(u) = ufcs_args.as_ref().filter(|u| !u.is_empty()) {
+                    if candidates.iter().any(|(_, args)| args == u) {
+                        candidates.retain(|(_, args)| args == u);
+                    }
+                }
             }
         }
         let instance_names: Vec<String> = candidates

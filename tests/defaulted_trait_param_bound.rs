@@ -150,3 +150,31 @@ fn an_associated_fn_under_a_bare_bound_runs_the_impl_at_the_defaults() {
         "5\n",
     );
 }
+
+const TR_TWO: &str = "trait Tr[X = Self] { fn m(self, x: X) -> i64; }\n\
+     struct A { }\n\
+     impl Tr[i64] for A { fn m(self, x: i64) -> i64 { 11 } }\n\
+     impl Tr for A { fn m(self, x: A) -> i64 { 10 } }\n";
+
+#[test]
+fn a_dyn_type_writing_the_defaulted_argument_dispatches() {
+    // `X = Self` is `Self` only where `X` is not written (B-2026-11-19-98).
+    runs_as(
+        "dyn-written",
+        &format!("{TR_TWO}fn main() {{ let d: dyn Tr[i64] = A {{ }}; println(d.m(1)); }}\n"),
+        "11\n",
+    );
+}
+
+#[test]
+fn ufcs_naming_an_instance_picks_it_over_the_bare_bound() {
+    runs_as(
+        "ufcs-instance",
+        &format!(
+            "{TR_TWO}fn inner[T: Tr](t: T, u: T) -> i64 {{ t.m(u) }}\n\
+             fn outer[T: Tr + Tr[i64]](t: T, u: T) -> i64 {{ inner(t, u) * 100 + Tr[i64].m(t, 1) }}\n\
+             fn main() {{ println(outer(A {{ }}, A {{ }})); }}\n"
+        ),
+        "1011\n",
+    );
+}

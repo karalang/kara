@@ -40,7 +40,9 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             };
             // A parameter defaulting to `Self` is `Self` in a bare
-            // supertrait (`trait T: PartialEq` compares two `Self`s).
+            // supertrait (`trait T: PartialEq` compares two `Self`s). The
+            // `dyn` type's own trait writes every argument (`dyn Tr[i64]`),
+            // so none of its parameters is `Self` (B-2026-11-19-98).
             let self_like: Vec<&str> = def
                 .generic_params
                 .iter()
@@ -51,6 +53,7 @@ impl<'a> super::TypeChecker<'a> {
                     })
                 })
                 .map(|p| p.name.as_str())
+                .filter(|_| t != trait_name)
                 .collect();
             for it in &def.items {
                 let TraitItem::Method(m) = it else { continue };
