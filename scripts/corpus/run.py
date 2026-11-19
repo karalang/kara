@@ -33,7 +33,8 @@ widen. --tag matches a tag only (`--tag par` without every path holding
 On the mir-* backends the expectation is expected.out, then model.out (the
 drop model's output, held to `model_exit`; an ORDER-UNSPEC entry compares its
 lines as a set), then legacy.out. An entry the model rejects (model_verdict
-V2-REJECT) is not run: `karac check` must refuse it. When check accepts it the
+V2-REJECT) is not run: `karac check` must refuse it, and its PASS line says so
+(an expected.out it may carry is the oracle's, never compared). When check accepts it the
 verdict is MREJ ("model rejects, check accepts"), neither a pass nor a fail:
 each one is a checker gap or a model bug. MREJ is judged even before a mir
 backend has a command, since it needs only `karac check`. `error:codegen` says
@@ -96,7 +97,7 @@ def judge(entry: Path, corpus: Path, args) -> dict:
             and not meta.get("model_overruled"):
         # `model_overruled` names the ledger row that ruled the model wrong.
         if check_refuses(entry, args):
-            return {**base, "verdict": "PASS", "why": "", "ran": True}
+            return {**base, "verdict": "PASS", "why": "check refuses it, as the model does: V2-REJECT, not run", "ran": True}
         cur = hashlib.md5((entry / "source.kara").read_bytes()).hexdigest()[:8]
         if meta.get("model_src", None if meta.get("fixed_by_classify") else cur) != cur:
             # classify's e-model-stale: the verdict is for the text before `karac fix`.
@@ -241,7 +242,7 @@ def main() -> int:
         for r in pool.map(lambda e: judge(e, corpus, args), todo):
             results.append(r)
             if r["verdict"] in ("FAIL", "MREJ") or not args.quiet:
-                tail = f"  ({r['why']})" if r["why"] and r["verdict"] in ("FAIL", "MREJ") else ""
+                tail = f"  ({r['why']})" if r["why"] and r["verdict"] in ("FAIL", "MREJ", "PASS") else ""
                 print(f"{r['verdict']} {r['name']}{tail}", flush=True)
 
     def tally(key_fn):

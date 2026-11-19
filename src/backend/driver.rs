@@ -86,10 +86,10 @@ pub(crate) fn wasm_partial_link(
 ///
 /// `wasm-ld` garbage-collects unreferenced sections by default, so the
 /// runtime archive's unused subsystems cost nothing — same effect as
-/// the native path's `-dead_strip`. Stack: 1 MiB (rustc's wasm32
-/// default; wasm-ld's own 64 KiB default is tight for array-heavy Kāra
-/// frames), placed before globals (`--stack-first`) so overflow traps
-/// instead of silently corrupting the data section.
+/// the native path's `-dead_strip`. Stack: [`crate::target::wasm_stack_bytes`] (8 MiB
+/// unless `--wasm-stack-size` says otherwise), placed before globals
+/// (`--stack-first`) so overflow traps instead of silently corrupting the
+/// data section.
 fn link_wasm_executable(
     obj_path: &str,
     exe_path: &str,
@@ -117,7 +117,8 @@ fn link_wasm_executable(
     cmd.arg(obj_path);
     cmd.arg(&runtime_path);
     cmd.arg(&libc);
-    cmd.args(["-z", "stack-size=1048576", "--stack-first"]);
+    let stack = format!("stack-size={}", crate::target::wasm_stack_bytes());
+    cmd.args(["-z", &stack, "--stack-first"]);
     // Phase-10 WASM entry-point discovery: surface each `pub fn` tagged
     // for this target as a wasm module export (`crate::wasm_exports`).
     // `pub` already gives them external linkage; `--export=` keeps them
@@ -232,9 +233,10 @@ pub fn link_wasm_executable_threaded(
     cmd.arg(obj_path);
     cmd.arg(&runtime_path);
     cmd.arg(&libc);
+    let stack = format!("stack-size={}", crate::target::wasm_stack_bytes());
     cmd.args([
         "-z",
-        "stack-size=1048576",
+        &stack,
         "--stack-first",
         "--import-memory",
         "--export-memory",

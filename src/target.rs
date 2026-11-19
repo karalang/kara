@@ -959,3 +959,50 @@ mod f16_capability_tests {
         }
     }
 }
+
+/// The default size of a wasm executable's linear-memory shadow stack: 8 MiB,
+/// the usual `ulimit -s` for a native main thread. The shadow stack, not the host engine's,
+/// holds the frames of a recursion that spills, and running out of it traps as
+/// "memory access out of bounds" (B-2026-11-19-44: at rustc's 1 MiB, six
+/// recursive katas trapped on `wasm_wasi` that pass natively).
+pub const WASM_DEFAULT_STACK_BYTES: u64 = 8 << 20;
+
+/// The largest `--wasm-stack-size` accepted: 1 GiB, a quarter of wasm32's
+/// 4 GiB address space, so the heap keeps the rest.
+pub const WASM_MAX_STACK_BYTES: u64 = 1 << 30;
+
+/// The environment variable `karac build --wasm-stack-size=<bytes>` sets for
+/// the link, as `-O<n>` sets `KARAC_OPT_LEVEL`.
+pub const WASM_STACK_SIZE_ENV: &str = "KARAC_WASM_STACK_SIZE";
+
+/// Checks a `--wasm-stack-size` value: a whole number of bytes, a multiple of
+/// 16 (wasm-ld aligns the stack pointer to 16), from 64 KiB to
+/// [`WASM_MAX_STACK_BYTES`].
+pub fn parse_wasm_stack_size(value: &str) -> Result<u64, String> {
+    let n: u64 = value.trim().parse().map_err(|_| {
+        format!(
+            "--wasm-stack-size takes a number of bytes, such as 16777216 for 16 MiB; got `{value}`"
+        )
+    })?;
+    if !(64 * 1024..=WASM_MAX_STACK_BYTES).contains(&n) {
+        return Err(format!(
+            "--wasm-stack-size must be from 65536 (64 KiB) to {WASM_MAX_STACK_BYTES} (1 GiB) bytes; got {n}"
+        ));
+    }
+    if !n.is_multiple_of(16) {
+        return Err(format!(
+            "--wasm-stack-size must be a multiple of 16 bytes; got {n} (try {})",
+            n.next_multiple_of(16)
+        ));
+    }
+    Ok(n)
+}
+
+/// The shadow stack a wasm link reserves: `KARAC_WASM_STACK_SIZE` when it
+/// names a valid size, else [`WASM_DEFAULT_STACK_BYTES`].
+pub fn wasm_stack_bytes() -> u64 {
+    std::env::var(WASM_STACK_SIZE_ENV)
+        .ok()
+        .and_then(|v| parse_wasm_stack_size(&v).ok())
+        .unwrap_or(WASM_DEFAULT_STACK_BYTES)
+}

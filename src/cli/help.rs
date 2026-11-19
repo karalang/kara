@@ -342,6 +342,11 @@ OPTIONS:
                             component. Ignored on non-WASM targets.
                             Works in single-file and project mode.
                             Accepts `--bindings <mode>` too.
+    --wasm-stack-size=<bytes>
+                            The wasm module's linear-memory stack, which
+                            bounds how deep a recursion can go (default
+                            8388608, 8 MiB; a multiple of 16 from 64 KiB
+                            to 1 GiB). Ignored on non-WASM targets.
     --target-cpu=<name>     CPU baseline override for codegen (e.g.
                             `apple-m4`, `x86-64-v3`, `neoverse-v1`).
                             `--target-cpu=help` lists the supported

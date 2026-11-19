@@ -349,7 +349,7 @@ jobs:
           cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm_regex.a
           cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --crate-type staticlib
           cp target/wasm32-wasip1/release/libkarac_runtime.a target/release/libkarac_runtime_wasm.a
-          cargo test --features llvm --test mir_wasm_opt_in --test mir_wasm_core_corpus
+          cargo test --features llvm --test mir_wasm_opt_in --test mir_wasm_core_corpus --test wasm_stack_size
 
       # A release bundle's karac links wasm with the bundle's own wasi-libc,
       # not the PATH rustc's (B-2026-11-05-12); run under node like the above.

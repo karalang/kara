@@ -910,6 +910,18 @@ fn parse_build_command(args: &[String]) -> Command {
                 process::exit(1);
             }
             std::env::set_var("KARAC_OPT_LEVEL", level);
+        } else if let Some(rest) = arg.strip_prefix("--wasm-stack-size=") {
+            // The wasm link's linear-memory shadow stack, in bytes (default
+            // 8 MiB; design.md § Targets, B-2026-11-19-44). Validated here so
+            // a bad value is an error on any target, then handed to the link
+            // as `-O<n>` hands `KARAC_OPT_LEVEL`.
+            match crate::target::parse_wasm_stack_size(rest) {
+                Ok(n) => std::env::set_var(crate::target::WASM_STACK_SIZE_ENV, n.to_string()),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    process::exit(1);
+                }
+            }
         } else if arg == "--mir" {
             // The redesign's pipeline, which is now the default: kept so a
             // script that asks for it explicitly still works.
