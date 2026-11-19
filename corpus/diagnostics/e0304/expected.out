@@ -1,1 +1,1 @@
-ERROR at line 5: this `while` counts `i` up by one to a bound; write it as `for i in a..b`
+ERROR at line 4: this `while` counts `i` up by one to a bound; write it as `for i in a..b`

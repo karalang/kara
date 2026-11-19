@@ -4344,15 +4344,22 @@ fn lint_attrs_slice1_duplicate_lint_in_single_attribute_rejected() {
 }
 
 #[test]
-fn lint_attrs_slice1_duplicate_in_separate_attrs_currently_allowed() {
-    // Cross-attribute duplicates are accepted at this slice — the
-    // scope cascade (slice 4) will define last-writer-wins
-    // semantics, and de-duping here would preempt that decision.
-    let prog = parse_ok("#[allow(deprecated)]\n#[allow(deprecated)]\nfn f() { }");
-    let Item::Function(f) = &prog.items[0] else {
-        panic!("Expected Function");
-    };
-    assert_eq!(f.lint_overrides.len(), 2);
+fn lint_attrs_slice1_duplicate_in_separate_attrs_refused() {
+    // B-2026-11-19-50: one scope sets a lint's level once, across
+    // attributes as within one, so a second `#[allow(deprecated)]` (or a
+    // `#[warn(x)]` then `#[deny(x)]`) on the same item is refused.
+    for src in [
+        "#[allow(deprecated)]\n#[allow(deprecated)]\nfn f() { }",
+        "#[warn(deprecated)]\n#[deny(deprecated)]\nfn f() { }",
+    ] {
+        let (_prog, errors) = parse_with_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("E_DUPLICATE_LINT_LEVEL")),
+            "Expected E_DUPLICATE_LINT_LEVEL for {src:?}; got: {errors:?}"
+        );
+    }
 }
 
 #[test]

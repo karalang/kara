@@ -1,4 +1,3 @@
-#[warn(manual_compound_assign)]
 #[deny(manual_compound_assign)]
 fn main() {
     let mut x = 1;

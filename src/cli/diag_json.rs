@@ -3170,6 +3170,27 @@ pub(super) fn lint_entries_for_compile_path(
         let is_err = d.level == crate::logical_lint::LintLevel::Error;
         out.push((d.lint_name, is_err, d.message, d.span));
     }
+    // `#[diagnostic::*]` misshapes (design.md §17 The `diagnostic::`
+    // namespace); the lint had no caller (B-2026-11-19-51).
+    for d in crate::diagnostic_attrs_lint::check_diagnostic_attributes(
+        &pipeline.parsed.program,
+        &pipeline.lint_overrides,
+    ) {
+        let is_err = d.level == crate::diagnostic_attrs_lint::LintLevel::Error;
+        // The lint's messages carry their own severity prefix, which every
+        // renderer adds again (B-2026-08-18-25).
+        let message = d
+            .message
+            .strip_prefix("warning[malformed_diagnostic_attribute]: ")
+            .unwrap_or(&d.message)
+            .to_string();
+        out.push((
+            "malformed_diagnostic_attribute".to_string(),
+            is_err,
+            message,
+            d.span,
+        ));
+    }
     // A library item's finding is not the program's: its span is past the
     // program's own text, at a line the user's file does not have
     // (B-2026-11-08-75).

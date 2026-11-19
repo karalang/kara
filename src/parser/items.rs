@@ -1616,15 +1616,20 @@ impl super::Parser {
     /// emission infrastructure lands — silencing today is the
     /// safe choice because `#[allow(removed_lint)]` from older
     /// code must keep building. Cross-attribute duplicates
-    /// (`#[allow(deprecated)]` plus `#[allow(deprecated)]`) are
-    /// not deduplicated either — the scope cascade slice will
-    /// decide last-writer-wins semantics.
+    /// (`#[allow(deprecated)]` plus `#[allow(deprecated)]`) in one scope
+    /// are the same error (B-2026-11-19-50).
     pub(crate) fn scan_lint_level_attrs(
         &mut self,
         attributes: &[Attribute],
     ) -> Vec<crate::lints::LintLevelOverride> {
         use crate::lints::{LintLevel, LintLevelOverride};
         let mut overrides = Vec::new();
+        // One scope: a lint named by two of its attributes
+        // (`#[allow(deprecated)]` then `#[deny(deprecated)]`) is the same
+        // duplicate as one named twice in one (design.md §17 Lint levels,
+        // B-2026-11-19-50).
+        let mut in_scope: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for attr in attributes {
             // Lint-level attributes are bare-name only — `#[allow(...)]`,
             // not `#[diagnostic::allow(...)]`. Multi-segment paths fall
@@ -1708,6 +1713,20 @@ impl super::Parser {
                     });
                     continue;
                 }
+                if let Some(first) = in_scope.get(&name) {
+                    self.errors.push(super::ParseError {
+                        kind: crate::parser::ParseErrorKind::DuplicateLintLevel,
+                        message: format!(
+                            "error[E_DUPLICATE_LINT_LEVEL]: lint \
+                             name `{}` already has a level here, from \
+                             `#[{}]`; one scope sets a lint's level once",
+                            name, first,
+                        ),
+                        span: arg.span,
+                    });
+                    continue;
+                }
+                in_scope.insert(name.clone(), attr.path[0].clone());
                 overrides.push(LintLevelOverride {
                     span: arg.span,
                     level,

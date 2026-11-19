@@ -16,7 +16,6 @@ fn dies(b: own E) -> i64 {
 }
 
 #[allow(partial_move_of_drop_enum)]
-#[allow(partial_move_of_drop_enum)]
 fn refreshed(b: own E) -> i64 {
     let mut h: H = H { f: R { id: 0, tag: f"t0" } };
     match b { E.A(ref r) => { h.f = r.clone(); } E.B => { } }

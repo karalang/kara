@@ -35,6 +35,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   It unified with any type, so such a body checked and its instance failed
   at run with "invalid MIR". No corpus program, kata or example relied on
   it (B-2026-11-19-43).
+- Two attributes of one scope naming the same lint, `#[allow(deprecated)]`
+  then `#[deny(deprecated)]`, are `error[E_DUPLICATE_LINT_LEVEL]`, as one
+  attribute naming it twice already was; the later one silently won
+  (design.md §17 Lint levels, B-2026-11-19-50).
+- An inner attribute `#![...]` at the top of a file is checked against the
+  attribute registry: `#![frobnicate]` is `E_UNKNOWN_ATTRIBUTE`, and a
+  registered attribute other than the lint levels and `rc_budget`
+  (`#![derive(Debug)]`) is refused naming the item it belongs on; both were
+  accepted and ignored (B-2026-11-19-52).
 - A call that gives an unbounded type parameter a type without
   `PartialEq`, `PartialOrd` or `Display`, when the generic body uses
   `==`/`!=`, `<`/`<=`/`>`/`>=` or an f-string interpolation on it, is
@@ -867,6 +876,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `group.spawn(|| { agent.serve(); agent })`, takes the capture by move as
   core semantics §9.1 says: `karac check` passed it and `run` and `build`
   refused it as a move out of a borrowed place (B-2026-11-19-85).
+- `#![allow(...)]`, `#![warn(...)]`, `#![deny(...)]` and `#![expect(...)]`
+  before a file's first item set a lint's level for every item in the
+  file, the module-level position of design.md §17; they parsed and did
+  nothing. An item's own attribute overrides the file's (B-2026-11-19-52).
+- `#[allow(deprecated)]` on a struct, a struct field, an enum, a variant or
+  a type alias covers the deprecated types it names; the field types and
+  payloads still warned (B-2026-11-19-49).
+- `karac check` reports `warning[malformed_diagnostic_attribute]` for a
+  `#[diagnostic::on_unimplemented]` off a trait, with an unknown field or
+  placeholder, or repeated, and for a misplaced
+  `#[diagnostic::do_not_recommend]`; the lint existed but nothing ran it.
+  An allow on the bearing item or the file suppresses it (B-2026-11-19-51).
 - `karac check` counts `.raw()` on an owned non-`Copy` distinct value as a
   move of the wrapper, as design.md § Distinct Types says: a later use
   checked clean and was refused only by `run` and `build`, with no source

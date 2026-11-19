@@ -86,9 +86,39 @@ pub fn check_diagnostic_attributes(
     };
     let mut diags = Vec::new();
     for item in &program.items {
+        // The bearing item's own level, which starts from the file's
+        // `#![...]` levels (design.md §17 Lint levels; B-2026-11-19-51):
+        // a CLI `-A` already returned above.
+        let own = item_lint_overrides(item)
+            .iter()
+            .rev()
+            .find(|ov| ov.lint == "malformed_diagnostic_attribute")
+            .map(|ov| ov.level);
+        let level = match own {
+            Some(crate::lints::LintLevel::Allow | crate::lints::LintLevel::Expect) => continue,
+            Some(crate::lints::LintLevel::Deny) => LintLevel::Error,
+            Some(crate::lints::LintLevel::Warn) => LintLevel::Warning,
+            None => level,
+        };
         walk_item(item, level, &mut diags);
     }
     diags
+}
+
+fn item_lint_overrides(item: &Item) -> &[crate::lints::LintLevelOverride] {
+    match item {
+        Item::Function(f) => &f.lint_overrides,
+        Item::StructDef(s) => &s.lint_overrides,
+        Item::EnumDef(e) => &e.lint_overrides,
+        Item::TraitDef(t) => &t.lint_overrides,
+        Item::TraitAlias(t) => &t.lint_overrides,
+        Item::MarkerTrait(t) => &t.lint_overrides,
+        Item::ImplBlock(i) => &i.lint_overrides,
+        Item::ConstDecl(c) => &c.lint_overrides,
+        Item::TypeAlias(t) => &t.lint_overrides,
+        Item::DistinctType(d) => &d.lint_overrides,
+        _ => &[],
+    }
 }
 
 fn is_on_unimplemented_path(attr: &Attribute) -> bool {

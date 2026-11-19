@@ -279,10 +279,51 @@ pub fn is_recognized_bare_attribute(name: &str) -> bool {
 /// the resolve-phase diagnostics.
 pub fn validate_program_attributes(program: &Program) -> Vec<ResolveError> {
     let mut errors = Vec::new();
+    visit_inner_attrs(&program.inner_attrs, &mut errors);
     for item in &program.items {
         visit_item(item, &mut errors);
     }
     errors
+}
+
+/// `#![...]` at the top of a file, the module-level position (design.md
+/// §17 Lint levels, B-2026-11-19-52): checked against the same registry as
+/// an outer attribute, and only the lint levels and `rc_budget` may stand
+/// there; any other attribute is refused naming the item it belongs on.
+fn visit_inner_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
+    for attr in attrs {
+        let before = errors.len();
+        visit_attrs(std::slice::from_ref(attr), errors);
+        if errors.len() > before || attr.path.len() != 1 {
+            continue;
+        }
+        let name = attr.path[0].as_str();
+        if matches!(name, "allow" | "warn" | "deny" | "expect" | "rc_budget") {
+            continue;
+        }
+        let belongs = match name {
+            "derive" | "repr" | "non_exhaustive" => "the struct or enum it applies to",
+            "default" => "an enum variant",
+            "serde" => "the struct, enum or field it applies to",
+            "track_caller" | "panic_handler" | "no_effect" | "inline" | "cold" => {
+                "the function it applies to"
+            }
+            "kara_name" => "the foreign function or type it names",
+            _ => "the item it applies to",
+        };
+        errors.push(ResolveError {
+            message: format!(
+                "error[E_UNKNOWN_ATTRIBUTE]: `#![{name}]` is not a module-level attribute: only \
+                 the lint levels (`allow`, `warn`, `deny`, `expect`) and `rc_budget` stand at \
+                 the top of a file; write `#[{name}]` on {belongs} (design.md §17 Lint levels)"
+            ),
+            span: attr.span,
+            kind: ResolveErrorKind::UnknownAttribute,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+    }
 }
 
 /// `#[panic_handler]` (design.md § Panic handler): at most one in a

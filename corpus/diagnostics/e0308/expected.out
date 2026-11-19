@@ -1,1 +1,1 @@
-ERROR at line 3: `ref` is redundant on a parameter: a parameter borrows by default, so `x: ref T` means the same as `x: T`
+ERROR at line 2: `ref` is redundant on a parameter: a parameter borrows by default, so `x: ref T` means the same as `x: T`

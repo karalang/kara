@@ -1317,6 +1317,21 @@ impl Parser {
                 }));
             }
         }
+        // `#![allow(..)]` and the other lint levels at the top of a file are
+        // its module-level position (design.md §17 Lint levels,
+        // B-2026-11-19-52): each item of the file starts from them, so its
+        // own attributes, listed after, override them, and they travel with
+        // the items into a package.
+        let module_levels = self.scan_lint_level_attrs(&inner_attrs);
+        if !module_levels.is_empty() {
+            for item in &mut items {
+                if let Some(own) = item_lint_overrides_mut(item) {
+                    let mut levels = module_levels.clone();
+                    levels.append(own);
+                    *own = levels;
+                }
+            }
+        }
         let std_cmp_reverse_import = self.std_cmp_reverse_import(&items);
         let import_insert = self.import_insert(&items);
         Program {
@@ -4730,5 +4745,22 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
         }
         TypeKind::Unit => out.push_str("()"),
         TypeKind::Error => out.push('_'),
+    }
+}
+
+/// The lint levels an item carries, for the kinds that take them.
+fn item_lint_overrides_mut(item: &mut Item) -> Option<&mut Vec<crate::lints::LintLevelOverride>> {
+    match item {
+        Item::Function(f) => Some(&mut f.lint_overrides),
+        Item::StructDef(s) => Some(&mut s.lint_overrides),
+        Item::EnumDef(e) => Some(&mut e.lint_overrides),
+        Item::TraitDef(t) => Some(&mut t.lint_overrides),
+        Item::TraitAlias(t) => Some(&mut t.lint_overrides),
+        Item::MarkerTrait(t) => Some(&mut t.lint_overrides),
+        Item::ImplBlock(i) => Some(&mut i.lint_overrides),
+        Item::ConstDecl(c) => Some(&mut c.lint_overrides),
+        Item::TypeAlias(t) => Some(&mut t.lint_overrides),
+        Item::DistinctType(d) => Some(&mut d.lint_overrides),
+        _ => None,
     }
 }

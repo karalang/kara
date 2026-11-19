@@ -5684,6 +5684,9 @@ impl<'a> TypeChecker<'a> {
                 emissions.push((outer, (*overs).clone()));
             }
         }
+        // A file's `#![allow(..)]` heads every item's levels
+        // (B-2026-11-19-52): an unknown name in it is reported once.
+        let mut seen = FxHashSet::default();
         for (outer, inner) in emissions {
             // Push the cascade frames (impl block first, then item /
             // method) so the innermost frame is the item's own
@@ -5694,7 +5697,9 @@ impl<'a> TypeChecker<'a> {
             }
             self.lint_override_stack.push(inner.clone());
             for ov in &inner {
-                if crate::lints::lint_by_name(&ov.lint).is_none() {
+                if crate::lints::lint_by_name(&ov.lint).is_none()
+                    && seen.insert((ov.span.offset, ov.lint.clone()))
+                {
                     let message = format!(
                         "unknown lint name `{}` in lint-level attribute; remove the attribute \
                          or check the lint registry (`karac lint --list`)",
@@ -5760,6 +5765,10 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // A file's `#![allow(..)]` stands at the head of every item's levels
+        // (B-2026-11-19-52): one attribute, one error.
+        let mut seen = FxHashSet::default();
+        emissions.retain(|(span, lint)| seen.insert((span.offset, lint.clone())));
         for (span, lint_name) in emissions {
             let message = format!(
                 "error[E_FORBIDDEN_LINT_ALLOW]: lint `{lint_name}` was set to `forbid` \
@@ -5807,6 +5816,8 @@ impl<'a> TypeChecker<'a> {
         for (_, overs) in stmt_overrides {
             collect_expect_on_unfulfilled(overs, &mut emissions);
         }
+        let mut seen = FxHashSet::default();
+        emissions.retain(|span| seen.insert(span.offset));
         for span in emissions {
             let message = String::from(
                 "error[E_EXPECT_ON_UNFULFILLED]: `#[expect(unfulfilled_lint_expectation)]` \
@@ -5896,6 +5907,10 @@ impl<'a> TypeChecker<'a> {
                 &mut emissions,
             );
         }
+        // A file's `#![expect(..)]` heads every item's levels
+        // (B-2026-11-19-52): it is one expectation, reported once.
+        let mut seen = FxHashSet::default();
+        emissions.retain(|(_, _, span, lint)| seen.insert((span.offset, lint.clone())));
         for (outer, inner, span, lint_name) in emissions {
             let pushed_outer = !outer.is_empty();
             if pushed_outer {

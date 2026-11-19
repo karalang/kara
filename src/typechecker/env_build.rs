@@ -176,7 +176,9 @@ impl<'a> super::TypeChecker<'a> {
         for item in items {
             if let Item::TypeAlias(t) = item {
                 if early.contains(t.name.as_str()) {
+                    self.lint_override_stack.push(t.lint_overrides.clone());
                     self.env_add_type_alias(t);
+                    self.lint_override_stack.pop();
                 }
             }
         }
@@ -197,9 +199,17 @@ impl<'a> super::TypeChecker<'a> {
             // An item's own lint levels cover its header, which is lowered
             // here first: `#[allow(deprecated)] impl Old` or `fn mk() -> Old`
             // (design.md §17 Lint levels; B-2026-11-19-20).
+            // A struct's, enum's or alias's covers the types it names
+            // (B-2026-11-19-49).
             let header_lints = match item {
                 Item::Function(f) => Some(f.lint_overrides.clone()),
                 Item::ImplBlock(i) => Some(i.lint_overrides.clone()),
+                Item::StructDef(s) => Some(s.lint_overrides.clone()),
+                Item::EnumDef(e) => Some(e.lint_overrides.clone()),
+                Item::TypeAlias(t) => Some(t.lint_overrides.clone()),
+                Item::TraitDef(t) => Some(t.lint_overrides.clone()),
+                Item::ConstDecl(c) => Some(c.lint_overrides.clone()),
+                Item::DistinctType(d) => Some(d.lint_overrides.clone()),
                 _ => None,
             };
             let framed = header_lints.is_some_and(|l| {
@@ -2526,7 +2536,19 @@ impl<'a> super::TypeChecker<'a> {
         let fields: Vec<(String, Type, bool)> = s
             .fields
             .iter()
-            .map(|f| (f.name.clone(), self.lower_type_expr(&f.ty, &gp), f.is_pub))
+            .map(|f| {
+                // A field's own lint levels cover its type (B-2026-11-19-49).
+                let own = crate::lints::levels_in(&f.attributes);
+                let framed = !own.is_empty();
+                if framed {
+                    self.lint_override_stack.push(own);
+                }
+                let ty = self.lower_type_expr(&f.ty, &gp);
+                if framed {
+                    self.lint_override_stack.pop();
+                }
+                (f.name.clone(), ty, f.is_pub)
+            })
             .collect();
         let field_attrs: std::collections::HashMap<String, Vec<String>> = s
             .fields
@@ -2671,6 +2693,13 @@ impl<'a> super::TypeChecker<'a> {
             .variants
             .iter()
             .map(|v| {
+                // A variant's own lint levels cover its payload's types
+                // (B-2026-11-19-49).
+                let own = crate::lints::levels_in(&v.attributes);
+                let framed = !own.is_empty();
+                if framed {
+                    self.lint_override_stack.push(own);
+                }
                 let vtype = match &v.kind {
                     VariantKind::Unit => VariantTypeInfo::Unit,
                     VariantKind::Tuple(types) => VariantTypeInfo::Tuple(
@@ -2683,6 +2712,9 @@ impl<'a> super::TypeChecker<'a> {
                             .collect(),
                     ),
                 };
+                if framed {
+                    self.lint_override_stack.pop();
+                }
                 (v.name.clone(), vtype)
             })
             .collect();

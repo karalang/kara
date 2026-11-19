@@ -680,6 +680,34 @@ pub enum ModuleLintSeverity {
 ///
 /// The order pins that source attributes always beat CLI flags —
 /// the inner scope is the most specific authority.
+/// The lint levels a list of attributes sets, for a position the parser
+/// does not record them for (a struct field): each bare lint name under
+/// `allow`, `warn`, `deny` or `expect`, in order. The parser reports a
+/// malformed list where it scans one; here one is skipped.
+pub fn levels_in(attrs: &[crate::ast::Attribute]) -> Vec<LintLevelOverride> {
+    let mut out = Vec::new();
+    for attr in attrs {
+        if attr.path.len() != 1 {
+            continue;
+        }
+        let Some(level) = LintLevel::from_attr_name(&attr.path[0]) else {
+            continue;
+        };
+        for arg in &attr.args {
+            if let (None, Some(v)) = (&arg.name, &arg.value) {
+                if let crate::ast::ExprKind::Identifier(n) = &v.kind {
+                    out.push(LintLevelOverride {
+                        span: arg.span,
+                        level,
+                        lint: n.clone(),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn effective_level_for_module_lint(
     source_allow: bool,
     source_deny: bool,

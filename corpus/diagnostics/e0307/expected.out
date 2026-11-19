@@ -1,1 +1,1 @@
-ERROR at line 4: `.to_string()` on a string literal is redundant: a string literal is already a `String`
+ERROR at line 3: `.to_string()` on a string literal is redundant: a string literal is already a `String`

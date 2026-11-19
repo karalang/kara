@@ -1,4 +1,3 @@
-#[warn(counter_while_loop)]
 #[deny(counter_while_loop)]
 fn main() {
     let mut i = 0;
