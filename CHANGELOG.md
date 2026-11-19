@@ -1795,6 +1795,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from `for x in 0..=50` and returned as `best.to_vec()` from a
   `Vec[i32]` function had no machine fix, and `karac fix` now writes
   `[0i32, 0]` and then `0i32..=50` (B-2026-11-18-52).
+- The fix for Rust's `match xs.binary_search(v) { Ok(i) => i, Err(i) => i }`
+  is the `partition_point` search alone, and two alike branches drop the
+  test. It wrote `if i < xs.len() and xs[i] == v { i } else { i }`
+  (B-2026-11-19-28).
 - Rust's `0f64`, `1f32` and `1_000f64` are one error whose fix writes the
   float (`0.0f64`), since a literal with neither a point nor an exponent is
   an integer (design.md §3), and the parse goes on as that float. The

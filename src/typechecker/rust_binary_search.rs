@@ -15,6 +15,8 @@
 //! - `match xs.binary_search(v) { Ok(i) => a, Err(j) => b }` and
 //!   `if let Ok(i)`/`Err(i) = xs.binary_search(v) { .. } else { .. }` are
 //!   `{ let i = xs.partition_point(|y| y < v); if i < xs.len() and xs[i] == v { a } else { b } }`.
+//!   When both sides are alike the test is dropped, and
+//!   `Ok(i) => i, Err(i) => i` is the search alone.
 //!
 //! `xs` must be a plain place and `v` free of effects, since the rewrite
 //! names each more than once; otherwise the message says so.
@@ -319,6 +321,13 @@ fn rewrite_branches(e: &Expr) -> Option<(By<'_>, Result<String, String>)> {
     let (find, holds) = search(xs, by, at);
     let text = |s: &Side| bound_branch(s.0, at, &s.1);
     let tail = match (ok.as_ref().map(text), err.as_ref().map(text)) {
+        // `Ok(i) => i, Err(i) => i`: either way the index found, so the
+        // search alone (B-2026-11-19-28).
+        (Some(o), Some(r)) if o == r && o == format!("{{ {at} }}") => {
+            return Some((by, Ok(find)));
+        }
+        // Both sides alike: the test decides nothing.
+        (Some(o), Some(r)) if o == r => o,
         (Some(o), Some(r)) => format!("if {holds} {o} else {r}"),
         (Some(o), None) => format!("if {holds} {o}"),
         (None, Some(r)) => format!("if not ({holds}) {r}"),
