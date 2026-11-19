@@ -1541,10 +1541,10 @@ impl Session {
         }
         // Attach any trailing content (final newline, dangling comments) to
         // the last kept item so it doesn't get dropped.
-        if let Some(last) = keep_ranges.last_mut() {
-            if cursor < total_len {
-                last.1 = total_len;
-            }
+        // Only what follows the last item: extending the last kept range to
+        // the end would bring back a pruned item after it.
+        if !keep_ranges.is_empty() && cursor < total_len {
+            keep_ranges.push((cursor, total_len));
         }
         let mut rebuilt = String::with_capacity(total_len);
         for (start, end) in keep_ranges {
@@ -2003,6 +2003,25 @@ impl Session {
             ));
             false
         });
+        // The `let`s that made only retired bindings go too: a replay
+        // (the fallback for a refused cell) would rebuild them under the
+        // new definition and report the old cell's code against it.
+        let gone: Vec<&String> = self.retired_values.iter().map(|(n, _)| n).collect();
+        let mut i = 0;
+        while i < self.persistent_lets.len() {
+            let names = parse_let_binding_names(&self.persistent_lets[i]);
+            if !names.is_empty() && names.iter().all(|n| gone.contains(&n)) {
+                self.persistent_lets.remove(i);
+                if i < self.persistent_let_origin.len() {
+                    self.persistent_let_origin.remove(i);
+                }
+                if i < self.persistent_let_provider_scope.len() {
+                    self.persistent_let_provider_scope.remove(i);
+                }
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// The notes for the names in `errors`' "undefined name" errors that
@@ -2044,6 +2063,10 @@ impl Session {
         self.v2_pending = None;
         self.v2_pending_move_start = None;
         let mut run = None;
+        // The snapshot program's errors, relabelled, when it was refused:
+        // a replay's errors in an earlier (accepted) cell are its stale
+        // code failing against later items, and are not this cell's.
+        let mut snap_errors: Option<Vec<String>> = None;
         // The cell's program with its bindings recorded at its end, unless
         // a provider scope is open. A binding the cell moved away cannot be
         // recorded: it is left out, as it is out of scope. When the
@@ -2072,6 +2095,11 @@ impl Session {
                         break;
                     }
                     Err(errs) => {
+                        snap_errors = Some(
+                            errs.iter()
+                                .map(|e| self.relabel_v2(&synthetic, e))
+                                .collect(),
+                        );
                         let moved = moved_at_snapshot(&synthetic, &errs);
                         if moved.is_empty() {
                             // A use of a value a type's redefinition took
@@ -2133,11 +2161,20 @@ impl Session {
                 Ok(WrapperOutcome::errors(Vec::new(), Vec::new()))
             }
             Err(f) => {
-                let errors = f
+                let mut errors: Vec<String> = f
                     .errors
                     .iter()
                     .map(|e| self.relabel_v2(&synthetic, e))
                     .collect();
+                if let Some(snap) = snap_errors {
+                    let here = format!("cell {}:", self.cell_history.len());
+                    let mine = |e: &String| e.lines().next().is_some_and(|l| l.contains(&here));
+                    if !errors.iter().any(mine) {
+                        errors = snap;
+                    } else {
+                        errors.retain(mine);
+                    }
+                }
                 let mut out = WrapperOutcome::errors(errors, Vec::new());
                 if capture {
                     out.stdout = lines(&f.stdout);

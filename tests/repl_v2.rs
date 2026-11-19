@@ -3,6 +3,8 @@
 
 use karac::repl::{ReplOptions, Session};
 
+#[path = "repl_v2/baseline.rs"]
+mod baseline;
 #[path = "repl_v2/book_transcript.rs"]
 mod book_transcript;
 #[path = "repl_v2/parity.rs"]
