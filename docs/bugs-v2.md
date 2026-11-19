@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 552 |
+| diagnostics | 553 |
 | false-positive | 289 |
 | missing-feature | 206 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 693 |
+| typecheck | 694 |
 | mir-llvm | 302 |
 | mir | 264 |
 | cli | 210 |
@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-31 | 2026-11-18 | interp+mir-llvm+runtime | low | A deadlock among `Mutex` waits is reported as "every task waits on a channel that no running task sends to or receives from" on every backend, naming a channel when no task waits on one; and when the root task is waiting at a `TaskGroup`'s drop the report carries no location | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-13 | 2026-11-19 | typecheck | low | `#[derive(...)]` accepts what it cannot derive with no diagnostic: an unknown trait name (`#[derive(Frobnicate)]`), a derive on a `fn`, `const` or `trait`, and a trait listed twice all check clean | — |
-| B-2026-11-19-3 | 2026-11-19 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the cells that made it again, so their tasks run and print again; a custom log backend's own state also starts over in each cell | — |
 | B-2026-11-19-32 | 2026-11-19 | typecheck | medium | the fix for a Rust `binary_search` / `binary_search_by` / `binary_search_by_key` takes `Ok`'s index as the FIRST equal element, where rustc's Rust (and Kāra's own `binary_search`) gives the LAST, so a carried solution that reads that index over repeated keys answers differently: kata 1235's search arm fails 278 of 2000 differential cases | — |
 | B-2026-11-19-33 | 2026-11-19 | typecheck | low | A range of literals mapped through an operator with an `i32` (`(0..1 << n).map(|i| start ^ i).collect()` into a `Vec[i32]`, `start: i32`) is refused with a bare `C: FromIterator[i64]` and no fix: §8 keeps the range at `i64` beside a widening operand, but the message names no literal and `karac fix` offers no suffix, so LeetCode's Rust solution to 1238 stalls | — |
 | B-2026-11-19-34 | 2026-11-19 | parser | medium | A Rust `::` path in a type position (`let set: std::collections::HashSet<char> = ..`, a parameter, a return, a field) stops the parse with E0002 "Expected `=`, found `::`" and no fix, though the bare `HashSet<char>` and the same path in an expression are both fixed; LeetCode's Rust solution to 1239 stalls | — |
@@ -137,6 +136,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-59 | 2026-11-19 | typecheck | low | An open type parameter on one side of `<` or on a `None`/`Ok`/`Err` receiver is not unified with the other side: `let a = None; let b = Some(2); a < b` is E0208 (while `a == b` runs), `s == Err(3)` with `s = Ok(String)` is E0208, `None.or(Some(3))` and `Err(1) < Err(2)` are E0516 with the MIR builder's internal `not lowered yet` text, and `None.unwrap_or(4)` is `type 'Option[T]' is not callable` | — |
 | B-2026-11-19-60 | 2026-11-19 | typecheck+mir | low | `TimedOut` (std.time `timeout`) and `TaskFailed` (isolating groups, `try_join`) implement neither `Display` nor `Error`, so `timeout(d, f)?` and `h.try_join()?` into `AnyError` are refused; a remainder of B-2026-11-09-54, whose sweep matched only names ending in `Error`. time-random-env.md's `Err(TimedOut)` also does not check: as an expression it is read as the enum variant `RecvTimeoutError.TimedOut` (E0521/E0279) though the struct is imported, and as a pattern the check says it is not an enum variant without suggesting `TimedOut {}` | — |
 | B-2026-11-19-61 | 2026-11-19 | interp+mir-llvm | low | std.path `parent` of a root followed by a trailing `.` (`"/."`, `"/./"`, `"/./."`) is `Some("/")`, where `components` gives `["/"]`, `parent("/")` is `None` and Rust's std::path gives `None`; a remainder of B-2026-11-16-179 (`"//."` already gives `None`) | — |
+| B-2026-11-19-63 | 2026-11-19 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secret'); the declaration-site Serialize field check refuses a user type that lacks Serialize but counts `Secret` as capable | — |
 
 ### Relocated
 
@@ -1798,6 +1798,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-25 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they d… | be5d113f9e |
 | B-2026-11-19-1 | mir | medium | A method of an impl at concrete type arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`) that nothing calls is borrow-checked with its fields at t… | 11e38661f8 |
 | B-2026-11-19-2 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `def… | 3efb545461 |
+| B-2026-11-19-3 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the ce… | fc81836281 |
 | B-2026-11-19-35 | typecheck | low | Rust's array `map` on a list literal, `["a", "b"].map(\|u\| u.to_string())`, gets E0236 "iterator adaptors require an explicit `.iter()`" with no fix,… | 8c77282690 |
 | B-2026-11-19-36 | ownership | medium | a closure in an assignment's method chain is taken to outlive the statement: `n = xs.iter().filter(\|v\| seen.contains(v)).count();` and any later move… | 8c77282690 |
 | B-2026-11-19-37 | typecheck | low | `dyn Trait` in a signature above the trait's declaration is refused, "`dyn Shape`: `Shape` is not a trait", though items are otherwise order-free (a… | 516ae1c47a |
