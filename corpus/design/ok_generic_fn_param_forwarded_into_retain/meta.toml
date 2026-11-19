@@ -1,0 +1,9 @@
+source = "B-2026-11-19-103"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "core-semantics §9.3: a function-typed parameter may be passed on to another non-escaping parameter. A generic `f: F` with a function-trait bound is handed to `retain`, `sort_by` and `sort_by_key` as the concrete `f: Fn(..)` is; it was refused 'cannot give away parameter `f`'."

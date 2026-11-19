@@ -1,0 +1,11 @@
+// An adaptor holds the function it is handed, so a local bound to
+// `v.into_iter().filter(f)` holds the non-escaping parameter `f` (core
+// semantics §9.3). Returning it stores `f`: it needs `f: escaping Fn(..)`,
+// as returning the adaptor directly does.
+fn mk(v: own Vec[i64], f: Fn(ref i64) -> bool) -> IterFilter[VecIntoIter[i64], Fn(ref i64) -> bool] {
+    let it = v.into_iter().filter(f);
+    it
+}
+fn main() {
+    println(mk([1, 2, 3], |x| *x != 2).count());
+}

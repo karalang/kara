@@ -1,0 +1,27 @@
+// B-2026-11-19-103: a bare `f: F` whose bound is a function trait is a
+// function value, so it is handed on as a bare `f: Fn(..)` is: lent to
+// `retain`, `sort_by` and `sort_by_key`, which call it in place.
+fn keep[F: Fn(ref i64) -> bool](v: mut ref Vec[i64], f: F) {
+    v.retain(f);
+}
+
+fn order[C: Fn(ref i64, ref i64) -> Ordering](v: mut ref Vec[i64], c: C) {
+    v.sort_by(c);
+}
+
+fn order_by_key[K: Fn(ref i64) -> i64](v: mut ref Vec[i64], k: K) {
+    v.sort_by_key(k);
+}
+
+fn main() {
+    let limit = 2;
+    let mut a = [1, 2, 3, 2];
+    keep(mut a, |x| *x != limit);
+    println(a);
+    let mut b = [2, 3, 1];
+    order(mut b, |x, y| y.cmp(x));
+    println(b);
+    let mut c = [5, -7, 1];
+    order_by_key(mut c, |x| x.abs());
+    println(c);
+}

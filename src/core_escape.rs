@@ -159,6 +159,7 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
             scopes: Vec::new(),
             out: &mut out,
             rebound: FxHashMap::default(),
+            closure_holds: FxHashMap::default(),
             types,
             gen: &gen,
             gen_hits: None,
@@ -259,6 +260,10 @@ struct Walker<'a> {
     /// A local bound from a non-escaping parameter (`let mut f = g;`), to
     /// the parameter it holds, for the diagnostic (B-2026-11-04-62).
     rebound: FxHashMap<String, String>,
+    /// A closure bound by `let` that captures non-escaping parameters, to
+    /// those parameters: where the binding escapes, they would be stored
+    /// with it (B-2026-11-19-103).
+    closure_holds: FxHashMap<SpanKey, Vec<String>>,
     types: Option<&'a NodeTypes>,
     /// [`generic_slots`]'s answer so far.
     gen: &'a FxHashMap<String, Vec<GenSlot>>,
@@ -344,7 +349,12 @@ impl Walker<'_> {
                     let b = match &value.kind {
                         ExprKind::Closure { .. } => {
                             self.walk_expr(value, Pos::Other);
-                            Bound::Closure(SpanKey::from_span(&value.span))
+                            let k = SpanKey::from_span(&value.span);
+                            let held = self.captured_params(value);
+                            if !held.is_empty() {
+                                self.closure_holds.insert(k, held);
+                            }
+                            Bound::Closure(k)
                         }
                         ExprKind::Identifier(n) => match self.lookup(n) {
                             Some(Bound::Closure(k)) => Bound::Closure(k),
@@ -376,7 +386,16 @@ impl Walker<'_> {
                         },
                         _ => {
                             self.walk_expr(value, Pos::Other);
-                            Bound::Other
+                            // `let it = v.iter().filter(f)`: the adaptor
+                            // holds `f`, so `it` is held to `f`'s rule
+                            // (B-2026-11-19-103).
+                            match self.adaptor_holds(value) {
+                                Some(p) => {
+                                    self.rebound.insert(name.clone(), p);
+                                    Bound::NonEscParam
+                                }
+                                None => Bound::Other,
+                            }
                         }
                     };
                     self.bind(name.clone(), b);
@@ -471,7 +490,26 @@ impl Walker<'_> {
     fn walk_expr(&mut self, e: &Expr, pos: Pos) {
         match &e.kind {
             ExprKind::Identifier(n) => match (self.lookup(n), pos) {
-                (Some(Bound::Closure(k)), Pos::Escape(why)) => self.escapes(k, why),
+                (Some(Bound::Closure(k)), Pos::Escape(why)) => {
+                    self.escapes(k, why);
+                    // `let g = |x| f(x); g`: the closure stores the
+                    // parameters it captures (B-2026-11-19-103).
+                    if why != CLOSURE_RESULT {
+                        for p in self.closure_holds.get(&k).cloned().unwrap_or_default() {
+                            self.out.errors.push((
+                                e.span,
+                                format!(
+                                    "`{n}` captures parameter `{p}`, which is a non-escaping \
+                                     function value, so `{n}` cannot be {why}: the closure \
+                                     stores it. A function-typed parameter may only be called \
+                                     or passed to another non-escaping parameter. Declare it \
+                                     `{p}: escaping Fn(...)` to store or return it \
+                                     (core-semantics.md §9.3)"
+                                ),
+                            ));
+                        }
+                    }
+                }
                 (None, Pos::Escape(why)) if why != CLOSURE_RESULT && self.sigs.contains_key(n) => {
                     self.out.escaping_fn_values.push((e.span, n.clone(), why));
                 }
@@ -697,6 +735,71 @@ impl Walker<'_> {
                     }
                 }
             }
+        }
+    }
+
+    /// The non-escaping parameters the closure `e` names from outside
+    /// itself, each as the parameter it holds.
+    fn captured_params(&self, e: &Expr) -> Vec<String> {
+        let mut bound: FxHashSet<String> = match &e.kind {
+            ExprKind::Closure { params, .. } => params
+                .iter()
+                .flat_map(|p| p.pattern.binding_names())
+                .collect(),
+            _ => FxHashSet::default(),
+        };
+        let mut names = Vec::new();
+        match &e.kind {
+            ExprKind::Closure { body, .. } => names_in(body, &mut names, &mut bound),
+            _ => return Vec::new(),
+        }
+        let mut out: Vec<String> = Vec::new();
+        for (n, _) in names {
+            if bound.contains(&n) {
+                continue;
+            }
+            if let Some(Bound::NonEscParam) = self.lookup(&n) {
+                let p = self.non_escaping_subject(&n).1;
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
+
+    /// The non-escaping parameter a lazy adaptor chain holds
+    /// (`v.iter().filter(f)`, `xs.map(|x| f(x))`): one handed to an adaptor
+    /// directly or captured by a closure handed to one, or held by the
+    /// value the chain starts from.
+    fn adaptor_holds(&self, e: &Expr) -> Option<String> {
+        match &e.kind {
+            ExprKind::Identifier(n) => match self.lookup(n) {
+                Some(Bound::NonEscParam) => Some(self.non_escaping_subject(n).1),
+                Some(Bound::Closure(k)) => {
+                    self.closure_holds.get(&k).and_then(|v| v.first().cloned())
+                }
+                _ => None,
+            },
+            ExprKind::Closure { .. } => self.captured_params(e).into_iter().next(),
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if LAZY_ADAPTORS.contains(&method.as_str()) => {
+                let eager = self
+                    .types
+                    .and_then(|t| t.get(&object.id))
+                    .is_some_and(|(t, _)| eager_receiver_ty(t));
+                if eager {
+                    return None;
+                }
+                args.iter()
+                    .find_map(|a| self.adaptor_holds(&a.value))
+                    .or_else(|| self.adaptor_holds(object))
+            }
+            _ => None,
         }
     }
 

@@ -1,0 +1,9 @@
+source = "B-2026-11-19-103"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "iterators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "core-semantics §9.3: a function-typed parameter may be passed on to another non-escaping use. A borrowed `f` handed to `filter`, `map`, `any`, `sort_by`, a let-bound local adaptor, a nested forward, a named function, a parameter forwarded again and an erased `Fn` local is erased as `|x| f(x)`; `filter(f)` was E0516 'cannot be stored as a function value'."

@@ -1,0 +1,10 @@
+// A closure bound by `let` and then returned escapes, and stores the
+// non-escaping parameter `f` it captures (core semantics §9.3): it needs
+// `f: escaping Fn(..)`, as returning the closure literal does.
+fn wrap(f: Fn(i64) -> i64) -> Fn(i64) -> i64 {
+    let g = |x| f(x);
+    g
+}
+fn main() {
+    println(wrap(|x| x + 1)(2));
+}

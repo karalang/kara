@@ -563,6 +563,7 @@ fn lower_program_inner<'a>(
         auto_par_groups: Vec::new(),
         auto_par_reduced: Vec::new(),
         closure_queue: Vec::new(),
+        forward_queue: Vec::new(),
         fn_param_tys: FxHashMap::default(),
         own_self_trait_methods: FxHashSet::default(),
         extern_fns: FxHashMap::default(),
@@ -778,6 +779,8 @@ fn lower_program_inner<'a>(
             } else if !has_self && mask != 0 {
                 view_args.insert(name.clone(), mask);
             }
+        } else if let Some(job) = lcx.forward_queue.pop() {
+            lcx.lower_forwarder(job);
         } else if let Some(job) = lcx.closure_queue.pop() {
             let name = job.name.clone();
             lcx.lower_closure(job);
@@ -1573,6 +1576,7 @@ struct Lcx<'a> {
     /// See [`Lowered::auto_par_reductions`].
     auto_par_reduced: Vec<String>,
     closure_queue: Vec<ClosureJob<'a>>,
+    forward_queue: Vec<ForwardJob>,
     /// Instances whose function-typed parameters take a concrete closure
     /// or function type: by instance name, one entry per parameter.
     fn_param_tys: FxHashMap<String, Vec<Option<Ty>>>,
@@ -1614,6 +1618,24 @@ enum CapMode {
     Value,
     Ref,
     Mut,
+}
+
+/// A closure made where a function value reached through a reference is
+/// erased (B-2026-11-19-103): `|x| f(x)` for a borrowed `f`, holding the
+/// reference and calling through it.
+struct ForwardJob {
+    def: DefId,
+    name: String,
+    /// The enclosing instance's type arguments.
+    args: Vec<Ty>,
+    /// The closure's type: one capture, the reference.
+    ty: Ty,
+    /// The reference's type (`ref F` or `mut ref F`).
+    held: Ty,
+    /// The function type the closure is erased to.
+    slot: Ty,
+    env: EnvMode,
+    outer: DefId,
 }
 
 struct ClosureJob<'a> {
@@ -2948,6 +2970,46 @@ impl<'a> Lcx<'a> {
         if r.is_ok() {
             let u = bx.unit();
             bx.assign(Local::RETURN_PLACE, Rvalue::Use(unit_const(u)));
+            let cur = bx.cur;
+            bx.b.terminate(cur, TerminatorKind::Return);
+        }
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
+    }
+
+    /// The body of a forwarding closure (see [`ForwardJob`]): the
+    /// environment, then the erased type's parameters, handed to what the
+    /// held reference points to.
+    fn lower_forwarder(&mut self, job: ForwardJob) {
+        let (params, ret) = match self.tys.tcx().kind(job.slot) {
+            HK::Fn { params, ret, .. } => (self.tys.tcx().list(params).to_vec(), ret),
+            _ => {
+                self.errors
+                    .push(format!("`{}`: a forwarder to a non-function", job.name));
+                return;
+            }
+        };
+        let instance = InstanceId {
+            def: job.def,
+            args: job.args.clone(),
+            name: job.name.clone(),
+        };
+        let mut bx = Bx::new(self, instance, ret, job.args.clone());
+        bx.outer_fn = Some(job.outer);
+        let env_ty = bx.tys().tcx().reference(job.ty, job.env == EnvMode::Mut);
+        let env = bx.b.arg("env", env_ty);
+        let args: Vec<Local> = params
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| bx.b.arg(&format!("a{i}"), t))
+            .collect();
+        let held = Place::local(env)
+            .project(ProjElem::Deref)
+            .field(0, job.held);
+        if bx.forward_call(held, job.held, &args).is_ok() {
             let cur = bx.cur;
             bx.b.terminate(cur, TerminatorKind::Return);
         }
@@ -4460,7 +4522,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // A closure or function item stored in a function-typed slot
             // is erased to that type.
             Rvalue::Use(op) if self.erases(&op, pt) => {
-                Rvalue::Cast(CastKind::Erase, self.erase_source(op), pt)
+                Rvalue::Cast(CastKind::Erase, self.erase_operand(op, pt), pt)
             }
             Rvalue::Use(op) if self.downgrades(&op, pt) => Rvalue::Use(self.downgrade(op, pt)),
             Rvalue::Use(op) if self.reads_through(&op, pt) => {
@@ -4902,10 +4964,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             return false;
         }
         let mut ot = self.operand_ty(op);
+        let mut through = false;
         if let HK::Ref(inner) | HK::MutRef(inner) = tcx.kind(ot) {
             ot = inner;
+            through = true;
         }
-        ot != t
+        // An erased value behind a reference goes in as `|x| f(x)` too (see
+        // `erase_operand`), even into a slot of its own type: it cannot be
+        // moved out (B-2026-11-19-103).
+        (ot != t || through)
             && matches!(
                 tcx.kind(ot),
                 HK::Closure { .. } | HK::FnDef { .. } | HK::Fn { .. }
@@ -4924,6 +4991,136 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => op,
         }
+    }
+
+    /// The operand an `Erase` to `slot` takes (B-2026-11-19-103). A
+    /// parameter borrows, so a function value reached through a reference
+    /// (`filter(f)` with `f: Fn(ref T) -> bool`) cannot be moved into the
+    /// owned slot; it goes in as `|x| f(x)` would, a closure made here
+    /// that holds a reborrow of `f` and calls through it. Made at the
+    /// erasure, every adaptor (`filter`, `map`, `any`, a field, an
+    /// `escaping` parameter) takes it alike, and the reborrow carries the
+    /// borrow as a written closure's capture does: an adaptor that would
+    /// outlive `f` is refused the same way. A function item behind a
+    /// reference is copied out. A `OnceFn`, or a `MutFn` behind a shared
+    /// reference, keeps `erase_source` (and its E0516).
+    fn erase_operand(&mut self, op: Operand, slot: Ty) -> Operand {
+        let tcx = self.tys().tcx();
+        let ot = self.operand_ty(&op);
+        let (inner, mutable) = match tcx.kind(ot) {
+            HK::Ref(i) => (i, false),
+            HK::MutRef(i) => (i, true),
+            _ => return op,
+        };
+        let Some(p) = op.place().cloned() else {
+            return op;
+        };
+        let env = match tcx.kind(inner) {
+            // Forwarded again (`inner(v, f)` in a function that borrowed
+            // `f` itself): the reference the outer one holds.
+            HK::Ref(_) | HK::MutRef(_) => {
+                return self.erase_operand(Operand::Copy(p.project(ProjElem::Deref)), slot);
+            }
+            HK::FnDef { .. } => {
+                let t = self.temp(inner);
+                let bb = self.cur;
+                self.b.assign(
+                    bb,
+                    t,
+                    Rvalue::Use(Operand::Copy(p.project(ProjElem::Deref))),
+                );
+                return Operand::Move(Place::local(t));
+            }
+            HK::Closure { def, .. } => match self.lcx.closures.get(&def).map(|c| c.1) {
+                Some(EnvMode::Ref) => EnvMode::Ref,
+                Some(EnvMode::Mut) if mutable => EnvMode::Mut,
+                _ => return self.erase_source(op),
+            },
+            HK::Fn {
+                once: false,
+                mutable: m,
+                ..
+            } if mutable || !m => {
+                if m {
+                    EnvMode::Mut
+                } else {
+                    EnvMode::Ref
+                }
+            }
+            _ => return self.erase_source(op),
+        };
+        let lend = env == EnvMode::Mut;
+        let def = DefId(self.lcx.next_closure);
+        self.lcx.next_closure += 1;
+        let tcx = self.tys().tcx();
+        let held = tcx.reference(inner, lend);
+        let ty = {
+            let captures = tcx.intern_list(&[held]);
+            tcx.intern(HK::Closure { def, captures })
+        };
+        let name = format!("{}.fw{}", self.name, def.0);
+        self.lcx.closures.insert(def, (name.clone(), env));
+        self.lcx.forward_queue.push(ForwardJob {
+            def,
+            name,
+            args: self.args.clone(),
+            ty,
+            held,
+            slot,
+            env,
+            outer: self.outer_fn.unwrap_or(self.b.instance().def),
+        });
+        let r = self.temp(held);
+        let kind = if lend {
+            BorrowKind::Mut
+        } else {
+            BorrowKind::Shared
+        };
+        let bb = self.cur;
+        self.b
+            .assign(bb, r, Rvalue::Ref(kind, p.project(ProjElem::Deref)));
+        let c = self.temp(ty);
+        self.b.assign(
+            bb,
+            c,
+            Rvalue::Aggregate(
+                AggregateKind::Closure { ty },
+                vec![Operand::Move(Place::local(r))],
+            ),
+        );
+        Operand::Move(Place::local(c))
+    }
+
+    /// A forwarder's call (see [`ForwardJob`]): what `held` (a `ref F` or
+    /// `mut ref F` of a closure or erased function value) points to, called
+    /// on `args`, into the return place.
+    fn forward_call(&mut self, held: Place, held_ty: Ty, args: &[Local]) -> R<()> {
+        let tcx = self.tys().tcx();
+        let inner = match tcx.kind(held_ty) {
+            HK::Ref(i) | HK::MutRef(i) => i,
+            _ => held_ty,
+        };
+        let (func, mut ops) = match tcx.kind(inner) {
+            HK::Closure { def, .. } => {
+                let (env, _, name) = self.env_operand(Span::default(), held, held_ty)?;
+                (self.fn_operand(&name, def, self.args.clone()), vec![env])
+            }
+            HK::Fn { .. } => (Operand::Copy(held), Vec::new()),
+            _ => return self.unsupported(Span::default(), "a forwarder to this value"),
+        };
+        ops.extend(args.iter().map(|&a| Operand::Move(Place::local(a))));
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: Place::local(Local::RETURN_PLACE),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(())
     }
 
     /// An aggregate's parts, each closure or function item going into a
@@ -4949,8 +5146,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             match slot {
                 Some(t) if self.erases(&o, t) => {
                     let l = self.temp(t);
+                    let o = self.erase_operand(o, t);
                     let bb = self.cur;
-                    let o = self.erase_source(o);
                     self.b.assign(bb, l, Rvalue::Cast(CastKind::Erase, o, t));
                     out.push(Operand::Move(Place::local(l)));
                 }
@@ -6962,7 +7159,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let l = self.user_local(name, t, pattern.id);
                         self.note_declared_effects(l, (pattern.id, name), ty.as_ref(), value);
                         let rv = match declared {
-                            Some(d) => Rvalue::Cast(CastKind::Erase, self.erase_source(op), d),
+                            Some(d) => Rvalue::Cast(CastKind::Erase, self.erase_operand(op, d), d),
                             None => Rvalue::Use(op),
                         };
                         self.assign(l, rv);
@@ -9363,6 +9560,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => return self.expr_operand(e),
         };
+        // A function value behind a reference stays one: the caller erases
+        // it as `|x| f(x)` (`erase_operand`, B-2026-11-19-103).
+        if matches!(self.tys().tcx().kind(inner), HK::Fn { .. }) {
+            return self.expr_operand(e);
+        }
         // A reference to a number the slot widens is read too, and the
         // caller widens the value: `add(total, b)` with `b: ref u8` for an
         // `i64` parameter passed the reference (B-2026-11-08-31).
@@ -22697,7 +22899,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A closure or function item passed to an `escaping`
                     // function parameter, as the parameter's type.
                     let l = self.temp(pt);
-                    let o = self.erase_source(op);
+                    let o = self.erase_operand(op, pt);
                     self.assign(l, Rvalue::Cast(CastKind::Erase, o, pt));
                     return Ok(Operand::Move(Place::local(l)));
                 }

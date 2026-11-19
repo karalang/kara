@@ -12613,6 +12613,18 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(ty, Type::Function { .. }) {
             return false;
         }
+        // A type parameter bounded by a function trait is a function value
+        // too: a bare `f: F` hands on what it borrows as a bare `f: Fn(..)`
+        // does (B-2026-11-19-103).
+        if let Type::TypeParam(p) = ty {
+            if self
+                .enclosing_bounds
+                .get(p)
+                .is_some_and(|bs| bs.iter().any(|b| b.fn_sig.is_some()))
+            {
+                return false;
+            }
+        }
         true
     }
 

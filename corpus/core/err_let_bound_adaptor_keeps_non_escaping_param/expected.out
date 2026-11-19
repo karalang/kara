@@ -1,0 +1,1 @@
+error[typecheck]: `it` holds parameter `f`, which is a non-escaping function value and cannot be returned (core-semantics.md §9.3)

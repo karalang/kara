@@ -9035,6 +9035,20 @@ impl<'a> TypeChecker<'a> {
         if self.report_timeout_duration_arg(expected, found, span) {
             return false;
         }
+        // A value of a type parameter with a function-trait bound, bare or
+        // borrowed, where a function type is wanted: it is that bound's
+        // function, as a bare `f: Fn(..)` is (B-2026-11-19-103).
+        if let Type::Function { .. } = expected {
+            let peeled = match found {
+                Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+                t => t,
+            };
+            if let Type::TypeParam(p) = peeled {
+                if let Some(sig) = self.enclosing_fn_bound(p) {
+                    return self.check_assignable(expected, &sig, span);
+                }
+            }
+        }
         // `let s: Str = ref name`: outside a call argument a `ref String` is
         // not a `Str`, and `name.as_str()` is (B-2026-11-13-74).
         if exprs::is_str_view(&inference::resolve_type_var_top(

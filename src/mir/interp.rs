@@ -5066,6 +5066,7 @@ impl<'a> Interp<'a> {
                     body,
                     env: None,
                     lent: None,
+                    erased_at: None,
                     by_value: false,
                     taken: false,
                 })
@@ -5078,6 +5079,23 @@ impl<'a> Interp<'a> {
                 let held = self.slot(&at)?;
                 match (held, self.tys.kind(inner)) {
                     (f @ Value::Fn(_), _) => self.hold_callee(f, inner, name),
+                    // An erased function value (a generic `F` instantiated
+                    // at its bound's function type): each call goes through
+                    // the reference, as a call of `f` itself does.
+                    (Value::Erased { body: fname, .. }, _) => {
+                        let body = program
+                            .bodies
+                            .get(&fname)
+                            .ok_or_else(|| Stop::Error(format!("{name}: no body for {fname}")))?;
+                        Ok(Callee {
+                            body,
+                            env: None,
+                            lent: None,
+                            erased_at: Some(at),
+                            by_value: false,
+                            taken: false,
+                        })
+                    }
                     (_, TyKind::Closure(def, _)) => {
                         let body = program
                             .bodies
@@ -5103,6 +5121,7 @@ impl<'a> Interp<'a> {
                             body,
                             env: None,
                             lent: Some(at),
+                            erased_at: None,
                             by_value: false,
                             taken: false,
                         })
@@ -5131,6 +5150,7 @@ impl<'a> Interp<'a> {
                     body,
                     env: Some(slot),
                     lent: None,
+                    erased_at: None,
                     by_value,
                     taken: false,
                 })
@@ -5140,6 +5160,9 @@ impl<'a> Interp<'a> {
     }
 
     fn call_callee(&mut self, f: &mut Callee<'a>, args: Vec<Value>) -> R<Value> {
+        if let Some(at) = &f.erased_at {
+            return self.call_erased(Value::Ref(at.clone()), args);
+        }
         let mut all = Vec::with_capacity(args.len() + 1);
         if let Some(at) = &f.lent {
             all.push(Value::Ref(at.clone()));
@@ -21092,6 +21115,9 @@ struct Callee<'a> {
     /// A closure's environment where the caller keeps it, lent to each call
     /// (a function value passed on by reference). Never dropped here.
     lent: Option<Addr>,
+    /// An erased function value the caller keeps, called through this
+    /// reference (B-2026-11-19-103). Never dropped here.
+    erased_at: Option<Addr>,
     /// The body takes its environment by value: it can be called once.
     by_value: bool,
     taken: bool,

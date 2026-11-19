@@ -40,6 +40,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   made the shared call legal (B-2026-11-19-74). A `MutFn` in a tuple
   element or a generic field is called only through unique access, as one
   in a struct field already was (B-2026-11-19-75).
+- A local that holds a non-escaping function parameter is held to the
+  parameter's rule (core semantics §9.3): an adaptor bound by `let` (`let
+  it = v.into_iter().filter(f); it`) or a closure bound by `let` that
+  captures it (`let g = |x| f(x); g`) could be returned, stored in a field
+  or pushed into a collection, keeping the borrowed `f` past the call;
+  each is now E0200 naming the local and `f`, as returning the adaptor or
+  closure directly already was (B-2026-11-19-103).
+
 - A call through an escaping function value has the effects its type
   declares (design.md §12): a struct field, a collection element, an
   `escaping` parameter, and a `for` binding over a collection of them is
@@ -866,6 +874,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   is called through. The instance called the reference itself as a
   function: a compiled build overflowed the stack or segfaulted, and the
   interpreter refused it as "not a function value" (B-2026-11-19-71).
+- A function-typed parameter can be handed to a lazy adaptor or another
+  function-typed slot (core semantics §9.3: passed on to a non-escaping
+  use). `fn cnt(v: ref Vec[i64], f: Fn(ref i64) -> bool) -> i64 {
+  v.iter().filter(f).count() }` was E0516 'cannot be stored as a function
+  value'; the borrowed `f` now goes in as `|x| f(x)` would, at the one
+  point where a function value is erased, so `filter`, `map`, `any`, a
+  parameter forwarded again and a named function behind it all take it.
+  A generic `f: F` with a function-trait bound is handed to `retain`,
+  `sort_by` and `sort_by_key` as the concrete `f: Fn(..)` is; it was
+  refused 'cannot give away parameter `f`' (B-2026-11-19-103).
 - A closure literal passed to a generic bare `F` parameter (`fn
   call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) borrows what it captures,
   as one passed to a bare `f: Fn() -> i64` does: a bare parameter is a

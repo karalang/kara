@@ -1,0 +1,34 @@
+// A parameter borrows, so a function-typed parameter `f` is a borrowed
+// function value. Handing it to a lazy adaptor (`filter`, `map`, `any`) or
+// a sort is passing it on to another non-escaping use (core semantics
+// §9.3): it goes in as `|x| f(x)` would, and the adaptor lives inside the
+// function, within `f`'s scope.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+
+fn cnt(v: ref Vec[i64], f: Fn(ref i64) -> bool) -> i64 { v.iter().filter(f).count() }
+fn scaled(v: ref Vec[i64], f: Fn(ref i64) -> i64) -> Vec[i64] { v.iter().map(f).collect() }
+fn has(v: ref Vec[i64], f: Fn(ref i64) -> bool) -> bool { v.iter().any(f) }
+fn order(v: mut ref Vec[i64], f: Fn(ref i64, ref i64) -> Ordering) { v.sort_by(f); }
+fn kept(v: ref Vec[i64], f: Fn(ref i64) -> bool) -> i64 {
+    let it = v.iter().filter(f);
+    it.count()
+}
+fn twice(v: ref Vec[i64], f: Fn(ref i64) -> bool) -> i64 { cnt(v, f) + v.iter().filter(f).count() }
+fn odd(x: ref i64) -> bool { *x % 2 == 1 }
+
+fn main() {
+    let r = R { id: 7 };
+    let mut v = [3, 1, 2];
+    println(cnt(v, |x| *x != 2));
+    println(scaled(v, |x| *x * r.id));
+    println(has(v, |x| *x == 2));
+    order(mut v, |a, b| b.cmp(a));
+    println(v);
+    println(kept(v, |x| *x > 1));
+    println(twice(v, |x| *x != 2));
+    println(cnt(v, odd));
+    let g: Fn(ref i64) -> bool = |x| *x > 2;
+    println(cnt(v, g));
+    println("end");
+}

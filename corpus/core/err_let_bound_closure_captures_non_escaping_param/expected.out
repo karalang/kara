@@ -1,0 +1,1 @@
+error[typecheck]: `g` captures parameter `f`, which is a non-escaping function value, so `g` cannot be returned (core-semantics.md §9.3)
