@@ -13992,6 +13992,45 @@ impl<'a> super::TypeChecker<'a> {
         (!self.closure_d5_params.contains(param)).then(|| (param.to_string(), at))
     }
 
+    /// `p = x` with `p` a `ref T` local and `x` a `Copy` value: the
+    /// borrow is `p = ref x` when `x` is a place, and a temporary has
+    /// nothing to borrow that outlives the statement.
+    fn reject_copy_value_into_ref_local(
+        &mut self,
+        name: &str,
+        inner: &Type,
+        value: &Expr,
+        rhs_ty: &Type,
+    ) {
+        if let ExprKind::Identifier(src) = &value.kind {
+            self.type_error_with_fix_it(
+                format!(
+                    "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot take \
+                     `{src}` by value; write `{name} = ref {src}` to borrow it",
+                    type_display(inner),
+                ),
+                value.span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span: value.span,
+                    replacement: format!("ref {src}"),
+                },
+            );
+            return;
+        }
+        self.type_error(
+            format!(
+                "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot hold this \
+                 `{}` value, which is no borrow; bind it to a variable and write \
+                 `{name} = ref <variable>`, or declare `{name}` without `ref`",
+                type_display(inner),
+                type_display(rhs_ty),
+            ),
+            value.span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
     fn reject_owned_value_into_ref_local(&mut self, target: &Expr, value: &Expr, rhs_ty: &Type) {
         if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
             return;
@@ -14021,8 +14060,18 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(
             rhs_ty,
             Type::Ref(_) | Type::MutRef(_) | Type::Error | Type::Never | Type::TypeVar(_)
-        ) || self.is_copy_type_during_check(rhs_ty)
-        {
+        ) {
+            return;
+        }
+        if self.is_copy_type_during_check(rhs_ty) {
+            // A `Copy` value is no borrow either: `p = x` into a declared
+            // `ref i64` local held the value where the MIR keeps an address,
+            // and every lane stopped with invalid MIR (B-2026-11-19-134).
+            // A view of a `for` item reads its element by value, so only a
+            // local declared or bound as a `ref` is refused.
+            if !of_item {
+                self.reject_copy_value_into_ref_local(name, &inner, value, rhs_ty);
+            }
             return;
         }
         if Self::is_place_expression(value) {

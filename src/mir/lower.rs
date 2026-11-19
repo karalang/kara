@@ -27501,6 +27501,46 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// Create a closure: its environment is an aggregate of the captures,
     /// each moved, copied or borrowed by the mode the body needs (§9.1).
+    /// Whether a value of `t` can hold a `ref` or `mut ref`, directly or
+    /// through a struct or enum field (`struct Hd { r: ref i64 }`).
+    fn reaches_ref(&self, t: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        let mut seen = Vec::new();
+        let mut todo = vec![t];
+        while let Some(t) = todo.pop() {
+            if seen.contains(&t) {
+                continue;
+            }
+            seen.push(t);
+            let mut found = false;
+            tcx.walk(t, &mut |k| found |= matches!(k, HK::Ref(_) | HK::MutRef(_)));
+            if found {
+                return true;
+            }
+            // The fields of each struct or enum `t` names.
+            let mut adts = Vec::new();
+            tcx.walk(t, &mut |k| {
+                if let HK::Adt { def, args } = k {
+                    adts.push(tcx.intern(HK::Adt { def, args }));
+                }
+            });
+            for a in adts {
+                let Some((adt, _)) = tcx.adt_of(a) else {
+                    continue;
+                };
+                for (v, var) in adt.variants.iter().enumerate() {
+                    for f in 0..var.fields.len() as u32 {
+                        let variant = adt.is_enum.then_some(v as u32);
+                        if let Some(ft) = tcx.field_ty(a, variant, f) {
+                            todo.push(ft);
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     fn closure_value(&mut self, e: &'a Expr) -> R<(Operand, Ty)> {
         let ExprKind::Closure {
             body, capture_mode, ..
@@ -27588,12 +27628,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         } else {
             Vec::new()
         };
-        // A task whose result can hold a reference reads its `Copy`
-        // captures through a borrow as §9.1 infers, rather than copying
-        // them in: `g.spawn(|| ref v)` and `par { ref v, .. }` hand back a
-        // reference to `v`, which then must outlive the result, not one
-        // into the task's own copy, which dies with the task
-        // (B-2026-11-19-95).
+        // A task whose result can hold a borrow reads its `Copy` captures
+        // through a borrow as §9.1 infers, rather than copying them in:
+        // `g.spawn(|| ref v)`, `par { ref v, .. }` and a struct with a
+        // `ref` field (`Hd { r: ref v }`) hand back a reference to `v`,
+        // which then must outlive the result, not one into the task's own
+        // copy, which dies with the task (B-2026-11-19-95, B-2026-11-19-133).
         let task_ret_refs = task && {
             let fn_ret = match self
                 .lcx
@@ -27604,13 +27644,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(HK::Fn { ret, .. }) => Some(ret),
                 _ => None,
             };
-            ret.map(|r| r.0).or(fn_ret).is_some_and(|r| {
-                let mut refs = false;
-                self.tys().tcx().walk(r, &mut |k| {
-                    refs |= matches!(k, HK::Ref(_) | HK::MutRef(_));
-                });
-                refs
-            })
+            ret.map(|r| r.0)
+                .or(fn_ret)
+                .is_some_and(|r| self.reaches_ref(r))
         };
         for sym in captured {
             let place = match (self.locals.get(&sym), self.captured.get(&sym)) {
