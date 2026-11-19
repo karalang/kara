@@ -1,0 +1,9 @@
+source = "docs/library/pool.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "pool"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "pool.md with_health_check: chain it off new. With a closure factory whose body leaves E open (`|| Ok(Conn { id: 1 })`) the chain into an annotated let was refused E0238 until B-2026-11-18-74's fix. interp, mir-llvm and ASan agree."

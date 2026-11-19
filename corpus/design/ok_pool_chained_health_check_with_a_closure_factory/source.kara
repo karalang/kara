@@ -1,0 +1,14 @@
+// pool.md with_health_check, with a closure factory: "Chain it off new:
+// Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping())".
+import std.pool.{Pool, PoolError};
+import std.time.{Duration};
+
+struct Conn { id: i64 }
+impl Conn { fn ping(ref self) -> bool { true } }
+enum ConnectError { Refused }
+fn connect() -> Result[Conn, ConnectError] { Ok(Conn { id: 1 }) }
+
+fn main() {
+    let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping());
+    match pool.acquire(Duration.ms(5)) { Ok(c) => println(f"got {c.val.id}"), Err(_) => println("??") }
+}

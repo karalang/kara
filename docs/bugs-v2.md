@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 549 |
-| false-positive | 288 |
+| false-positive | 289 |
 | missing-feature | 205 |
 | perf | 188 |
 | other | 117 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 687 |
+| typecheck | 688 |
 | mir-llvm | 301 |
 | mir | 261 |
 | cli | 209 |
@@ -113,7 +113,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-18-66 | 2026-11-18 | typecheck+cli | medium | `karac fix` flips `own` on and off a trait impl method's parameter: E0200's `own` fix meets E0288 (impl may not be stronger than the trait), whose fix removes it | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
-| B-2026-11-18-74 | 2026-11-18 | typecheck | medium | `let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping());` is refused with E0238 `cannot infer type parameter 'E'`, and its help says to annotate a binding that is already annotated: a type variable that only a closure argument's result mentions is not carried through a chained method's return type | — |
 | B-2026-11-19-29 | 2026-11-18 | typecheck | low | Range literals carried through iterator closures into an `i32` tuple (`(-1..=1).flat_map(|dx| (-1..=1).map(|dy| (dx, dy))).filter_map(|(dx, dy)| (1..8).map(|k| (kx + k * dx, ky + k * dy)).find(|p| placed.contains(p)))` with `kx: i32`, `placed: Set[(i32, i32)]`) are refused at `contains` and at `collect` with no machine fix | — |
 | B-2026-11-19-30 | 2026-11-18 | mir+mir-llvm | low | `Mutex` has no `try_lock`, which Rust (`Mutex::try_lock`), Go (`TryLock`), Java (`ReentrantLock.tryLock`), C (`pthread_mutex_trylock`) and Python (`Lock.acquire(blocking=False)`) all have; the dining philosophers' back-off form gets only "no method 'try_lock' on type 'Mutex'" | — |
 | B-2026-11-19-31 | 2026-11-18 | interp+mir-llvm+runtime | low | A deadlock among `Mutex` waits is reported as "every task waits on a channel that no running task sends to or receives from" on every backend, naming a channel when no task waits on one; and when the root task is waiting at a `TaskGroup`'s drop the report carries no location | — |
@@ -146,6 +145,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-50 | 2026-11-19 | parser | low | Two attributes on one item naming the same lint (`#[allow(deprecated)]` then `#[deny(deprecated)]`) are not `E_DUPLICATE_LINT_LEVEL`: the later one silently wins; only a repeat inside one attribute (`#[allow(deprecated, deprecated)]`) is refused | — |
 | B-2026-11-19-51 | 2026-11-19 | cli | low | `malformed_diagnostic_attribute` never fires: `#[diagnostic::on_unimplemented]` on a function, with an unknown field, with an unknown `{placeholder}`, or twice on one trait checks clean, because `check_diagnostic_attributes` has no caller outside its own test file | — |
 | B-2026-11-19-52 | 2026-11-19 | parser | low | An inner attribute `#![...]` at the top of a file is accepted and ignored: `#![frobnicate]` checks clean though an unknown attribute is E_UNKNOWN_ATTRIBUTE, and `#![allow(unused_mut)]` parses but suppresses nothing | — |
+| B-2026-11-19-53 | 2026-11-19 | typecheck | low | A closure argument whose body builds its result with a call of its own (`W.new(|| Ok(one()), 5)`, slot `Fn() -> Result[T, E]`) is refused E0200 `expected 'Fn() -> Result[i64, _]', found 'Fn() -> Result[i64, E]'`, chained or not; `|| Ok(1)` and `|| Ok(C { id: 1 })` check | — |
 
 ### Relocated
 
@@ -1776,6 +1776,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-70 | typecheck | low | The E0236 fix for `v.iter().chunks(2).collect()` into a `Vec[Vec[i64]]` writes `v.chunks(2).into_iter().collect()`, whose items are slices (E0200 Fro… | 4529cc7ee6 |
 | B-2026-11-18-71 | typecheck | low | A literal list read through `iter()` and an adapter, or a closure that builds a tuple or `Some` from a bound literal list's items, did not take a `co… | dd8b194cd6 |
 | B-2026-11-18-73 | interp+mir-llvm | medium | A `Pool` dropped while one of its loans is still out keeps its IDLE values alive until that loan comes back, on every surface; pool.md says the idle… | 2faf2c5577 |
+| B-2026-11-18-74 | typecheck | medium | `let pool: Pool[Conn, ConnectError] = Pool.new(\|\| Ok(Conn { id: 1 }), 8, 16).with_health_check(\|c\| c.ping());` is refused with E0238 `cannot infer ty… | fdc022de6f |
 | B-2026-11-18-75 | mir | medium | Since B-2026-11-17-92 (ab62be2b9d) a closure that captures a `Vec` of `shared` handles whose type has a function field is refused as carrying a view… | 6a9755a0bc |
 | B-2026-11-18-76 | typecheck | low | E0509 for a view stored in a `Mutex`'s value names the element type (`(i64, E)`), not the `Str` field that makes it a view, and offers no fix | 5f2cad0682 |
 | B-2026-11-18-77 | typecheck | low | E0208 for `==` on `Result[T, E]` (or any generic type) whose argument `E` lacks PartialEq offers no `#[derive(PartialEq)]` edit on `E`, though `==` o… | 5f2cad0682 |
