@@ -2010,6 +2010,29 @@ impl Cx<'_> {
         }
     }
 
+    /// Whether `func` is a reference to an erased function value whose
+    /// result holds a borrow that none of its arguments can supply.
+    fn callee_hands_back_its_env(&self, func: &Operand) -> bool {
+        let Some(p) = func.place() else {
+            return false;
+        };
+        let Ok(pt) = place_ty(self.body, self.tys, p) else {
+            return false;
+        };
+        let (TyKind::Ref(f) | TyKind::MutRef(f)) = self.tys.kind(pt.ty) else {
+            return false;
+        };
+        match self.tys.kind(f) {
+            // Only when no argument can carry a borrow does what comes back
+            // have to come from the environment: an `Fn(ref T) -> ref U` (a
+            // `map` adaptor's) may hand back a part of its argument.
+            TyKind::Fn { params, ret, .. } => {
+                holds_borrow(self.tys, ret) && params.iter().all(|p| !holds_borrow(self.tys, *p))
+            }
+            _ => false,
+        }
+    }
+
     fn transfer_call(&self, o: &mut Origins, func: &Operand, args: &[Operand], dest: &Place) {
         let borrows = match func {
             Operand::Const(Const {
@@ -2130,6 +2153,16 @@ impl Cx<'_> {
         });
         if callee_ref {
             self.pointee_origins(o, func, &mut val);
+            // An erased function value that can hand back a borrow owns
+            // what it captured (a closure stored in a field, an element, a
+            // tuple, an `Option` or returned from a call captures by move,
+            // §9.3), so what it hands back is a view of its own
+            // environment: the result borrows the value called, through the
+            // reference the call takes (§5.4; B-2026-11-19-96: `(h.f)()`
+            // gave a slice of the capture no origins, and it outlived `h`).
+            if self.callee_hands_back_its_env(func) {
+                self.operand_origins(o, func, &mut val);
+            }
         } else {
             self.operand_origins(o, func, &mut val);
         }
