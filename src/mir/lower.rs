@@ -31774,6 +31774,7 @@ impl SourceBorrowError {
                 holder: None,
                 holder_read_only: None,
                 temporary: None,
+                view_field: None,
             },
         }
     }

@@ -5978,7 +5978,25 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(cmp_left),
                                 type_display(unmet_arg.as_ref().unwrap_or(cmp_left))
                             );
-                            self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp)
+                            // The derive on the argument the message names,
+                            // where the program declares it and it compiles
+                            // as written (B-2026-11-18-77).
+                            let fix = unmet_arg
+                                .as_ref()
+                                .filter(|a| self.program_declares(a))
+                                .and_then(|a| self.partial_eq_derive_fix(a));
+                            match fix {
+                                Some(fix) => self.type_error_with_fix_it(
+                                    format!(
+                                        "{msg}; add #[derive(PartialEq)] to '{}'",
+                                        type_display(unmet_arg.as_ref().unwrap_or(cmp_left))
+                                    ),
+                                    *span,
+                                    TypeErrorKind::InvalidBinaryOp,
+                                    fix,
+                                ),
+                                None => self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp),
+                            }
                         }
                         None if self.secret_withheld_hint(cmp_left, "PartialEq").is_some() => {
                             let hint = self

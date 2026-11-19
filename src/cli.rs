@@ -2917,6 +2917,8 @@ impl Pipeline {
                     .or_else(|| held_borrow_copy_fix(&src, typed, &e))
                     .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
                     .or_else(|| moved_arg_clone_fix(&src, typed, &e))
+            } else if e.code == "E0509" && self.renames.is_empty() {
+                view_field_owned_fix(&src, &e)
             } else {
                 None
             };
@@ -4144,6 +4146,50 @@ fn e0516_shared_referent(
     is_shared_type(typed, inner).then(|| crate::typechecker::types::type_display(inner))
 }
 
+/// The machine-applicable repair for an E0509 whose view is a `Str` field
+/// of the program's own struct, stored where no view may go (a `Mutex`'s
+/// value, a `shared` value): the field's declared type becomes `String`
+/// (core semantics §5.7, B-2026-11-18-76). The sites that build the struct
+/// from a `Str` then take `.to_string()`, the next round's own fix.
+fn view_field_owned_fix(
+    src: &str,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    let (adt, field, fty) = e.view_field.as_ref()?;
+    if fty != "Str" || field.contains('.') {
+        return None;
+    }
+    let head =
+        regex::Regex::new(&format!(r"\bstruct\s+{}\b[^{{;]*\{{", regex::escape(adt))).ok()?;
+    let decls: Vec<_> = head.find_iter(src).collect();
+    // One declaration of that name, so the edit cannot land on another.
+    let [decl] = decls.as_slice() else {
+        return None;
+    };
+    let body_start = decl.end();
+    let body_len = src[body_start..].find('}')?;
+    let body = &src[body_start..body_start + body_len];
+    let f = regex::Regex::new(&format!(
+        r"(?:^|[,{{\s])(?:pub\s+)?{}\s*:\s*(Str)\b",
+        regex::escape(field)
+    ))
+    .ok()?;
+    let m = f.captures(body)?.get(1)?;
+    let offset = body_start + m.start();
+    let before = &src[..offset];
+    let line = before.matches('\n').count() + 1;
+    let column = offset - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset,
+            length: 3,
+            line,
+            column,
+        },
+        replacement: "String".to_string(),
+    })
+}
+
 /// The machine-applicable repair for an E0516 whose holder is a pattern
 /// binding of a part of a `mut ref` scrutinee that the arm only reads
 /// (`match self.slots[i] { Some(d) => self.find(d) }` in a `mut ref self`
@@ -4736,6 +4782,7 @@ mod mir_message_tests {
             holder: Some("f".to_string()),
             holder_read_only: None,
             temporary: Some((3, 18)),
+            view_field: None,
         };
         assert_eq!(
             mir_check_message(&e),

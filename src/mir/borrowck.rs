@@ -290,6 +290,11 @@ pub struct BorrowError {
     /// which `ref` turns into a shared borrow, so `karac fix` writes `ref`
     /// before it (B-2026-11-17-152).
     pub holder_read_only: Option<String>,
+    /// For an E0509 that stores a view where none may go: the program's
+    /// struct field whose declared type is the view (`E.kind: Str`), as
+    /// (struct, field, declared type), so the message can name it and
+    /// `karac fix` can give the field its owned type (B-2026-11-18-76).
+    pub view_field: Option<(String, String, String)>,
 }
 
 impl BorrowError {
@@ -304,6 +309,7 @@ impl BorrowError {
             holder: None,
             holder_read_only: None,
             temporary: None,
+            view_field: None,
         }
     }
 }
@@ -1052,6 +1058,63 @@ pub(crate) fn holds_view(tys: &TyInterner, ty: Ty) -> bool {
     go(tys, ty, &mut Vec::new())
 }
 
+/// The program's own struct or enum field, inside a value of type `ty`,
+/// whose declared type is itself a view (`Str`, a slice or a `ref`): the
+/// part that makes `ty` hold one. Returns (type, field, declared type),
+/// the field as `Variant.field` in an enum (B-2026-11-18-76).
+fn view_field(tys: &TyInterner, ty: Ty) -> Option<(String, String, String)> {
+    fn direct(tys: &TyInterner, t: Ty) -> bool {
+        matches!(
+            tys.kind(t),
+            TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Str | TyKind::Slice(_)
+        )
+    }
+    fn go(tys: &TyInterner, ty: Ty, seen: &mut Vec<Ty>) -> Option<(String, String, String)> {
+        if seen.contains(&ty) {
+            return None;
+        }
+        seen.push(ty);
+        match tys.kind(ty) {
+            TyKind::Tuple(ts) => ts.iter().find_map(|t| go(tys, *t, seen)),
+            TyKind::Array(t, _)
+            | TyKind::Intrinsic(
+                IntrinsicTy::Vec(t)
+                | IntrinsicTy::Set(t)
+                | IntrinsicTy::VecDeque(t)
+                | IntrinsicTy::SortedSet(t),
+            ) => go(tys, t, seen),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                go(tys, k, seen).or_else(|| go(tys, v, seen))
+            }
+            TyKind::Adt(a) => {
+                let adt = tys.adt(a);
+                for (vi, var) in adt.variants.iter().enumerate() {
+                    for (fi, (name, _)) in var.fields.iter().enumerate() {
+                        let Some(t) = tys.field_ty(ty, adt.is_enum.then_some(vi as u32), fi as u32)
+                        else {
+                            continue;
+                        };
+                        if adt.user && direct(tys, t) {
+                            let field = if adt.is_enum {
+                                format!("{}.{name}", var.name)
+                            } else {
+                                name.clone()
+                            };
+                            return Some((adt.name.clone(), field, source_ty(tys, t)));
+                        }
+                        if let Some(found) = go(tys, t, seen) {
+                            return Some(found);
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    go(tys, ty, &mut Vec::new())
+}
+
 /// The place where a view may not go ([`no_view_place`]) statement `s`
 /// stores a view-typed value in, with that value's type.
 fn stored_view(
@@ -1100,12 +1163,12 @@ fn view_into_shared_errors(body: &Body, tys: &TyInterner) -> Vec<BorrowError> {
     };
     // A generic instance is named, as §5.8 does: its body is the generic
     // one, which stores no view until a view type fills its parameter.
-    let subject = |t: Ty| {
+    let subject = |t: Ty, inside: &str| {
         if body.instance.args.is_empty() {
-            format!("a view (`{}`) is stored", source_ty(tys, t))
+            format!("a view (`{}`{inside}) is stored", source_ty(tys, t))
         } else {
             format!(
-                "the instance {} stores a view (`{}`)",
+                "the instance {} stores a view (`{}`{inside})",
                 body.instance.name,
                 source_ty(tys, t)
             )
@@ -1145,13 +1208,27 @@ fn view_into_shared_errors(body: &Body, tys: &TyInterner) -> Vec<BorrowError> {
                 (None, NoViewPlace::MutexValue) => kind.describe().to_string(),
                 (None, _) => format!("{}, {}", show_place(body, tys, &field), kind.describe()),
             };
+            // The struct field that makes the value a view, by name, when
+            // the value is not that view itself (B-2026-11-18-76).
+            let vf = view_field(tys, t);
+            let inside = match &vf {
+                Some((adt, f, fty)) => format!(", through its field `{adt}.{f}: {fty}`"),
+                None => String::new(),
+            };
+            let remedy = match &vf {
+                Some((adt, f, fty)) if fty == "Str" => {
+                    format!("give `{adt}.{f}` an owned type (`String`)")
+                }
+                _ => "store an owned copy instead".to_string(),
+            };
             let text = format!(
-                "{}: {} in {place}, where a view may not go; store an owned copy instead (core semantics §5.7, §5.8) [E0509]",
+                "{}: {} in {place}, where a view may not go; {remedy} (core semantics §5.7, §5.8) [E0509]",
                 site(body, (bi, si), None),
-                subject(t),
+                subject(t, &inside),
             );
             errs.push(BorrowError {
                 place: source_place(body, tys, &field),
+                view_field: vf,
                 ..BorrowError::new(text, "E0509", site_at(body, (bi, si), None))
             });
         }

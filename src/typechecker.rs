@@ -3133,6 +3133,10 @@ pub struct TypeChecker<'a> {
     /// Set while a struct pattern's shorthand field (`S { f }`) is checked
     /// as a synthetic binding, so the `ref` fix-it spells `f: ref f`.
     pub(super) core_shorthand_field: bool,
+    /// The value spans of struct-literal shorthand fields (`E { kind }`),
+    /// to the field's name: an edit after such a value writes
+    /// `kind: kind<edit>` (B-2026-11-18-76).
+    pub(super) shorthand_field_values: FxHashMap<SpanKey, String>,
     /// v2 core (strict commands only): how many `shared` types the pattern
     /// being checked has descended into. Above zero, every binding is a
     /// `ref` (`docs/core-semantics.md` §4.6).
@@ -4702,6 +4706,7 @@ impl<'a> TypeChecker<'a> {
             scrutinees_given_ok: FxHashSet::default(),
             core_no_move_out: Vec::new(),
             core_shorthand_field: false,
+            shorthand_field_values: FxHashMap::default(),
             core_shared_depth: 0,
             core_shared_part_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
@@ -10028,7 +10033,14 @@ impl<'a> TypeChecker<'a> {
                             offset: span.offset + span.length,
                             length: 0,
                         },
-                        replacement: ".to_string()".to_string(),
+                        // `E { kind }` becomes `E { kind: kind.to_string() }`.
+                        replacement: match self
+                            .shorthand_field_values
+                            .get(&SpanKey::from_span(&span))
+                        {
+                            Some(name) => format!(": {name}.to_string()"),
+                            None => ".to_string()".to_string(),
+                        },
                     },
                 );
                 return false;

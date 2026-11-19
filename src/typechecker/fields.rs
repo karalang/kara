@@ -1301,6 +1301,14 @@ impl<'a> super::TypeChecker<'a> {
         expected_type_args: Option<&[Type]>,
         has_spread: bool,
     ) -> Type {
+        // A shorthand field's value is its name, so a fix that edits the
+        // value writes the field out first (B-2026-11-18-76).
+        for f in fields.iter().filter(|f| f.shorthand) {
+            self.shorthand_field_values.insert(
+                crate::resolver::SpanKey::from_span(&f.value.span),
+                f.name.clone(),
+            );
+        }
         let struct_name = path.last().cloned().unwrap_or_default();
 
         let struct_info = match self.env.structs.get(&struct_name) {
