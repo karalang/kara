@@ -257,6 +257,11 @@ pub struct Classification {
     /// captures the binding by move, keyed by the use's span: the closure's
     /// span (see [`UseSite::capture_scope`]).
     pub core_capture_scopes: FxHashMap<SpanKey, SpanKey>,
+    /// Reads of a `Copy` field that a by-move capture copies at the
+    /// closure's creation (`hs.push(|| v.id)`), keyed by the read's span:
+    /// recorded where the closure is made, not in its body, which runs
+    /// later (core semantics §9.1, B-2026-11-19-97).
+    pub core_capture_copies: rustc_hash::FxHashSet<SpanKey>,
     /// Closure literals passed to a method of a statement's receiver chain
     /// whose value holds no closure (`let n = h.iter().filter(|u| ..).count();`),
     /// keyed by the literal's span: the statement's offset and length. Every
@@ -704,6 +709,17 @@ impl<'a> CfgBuilder<'a> {
             .core_capture_scopes
             .get(&SpanKey::from_span(&span))
             .copied();
+        let block = match capture_scope {
+            Some(k)
+                if self
+                    .classification
+                    .core_capture_copies
+                    .contains(&SpanKey::from_span(&span)) =>
+            {
+                self.closure_creations.get(&k).copied().unwrap_or(block)
+            }
+            _ => block,
+        };
         // Inner-locals of an active cleanup-site lowering get mangled
         // here so the formal RC predicate doesn't pair their
         // duplicated Consume sites across per-exit-site cleanup

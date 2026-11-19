@@ -28118,18 +28118,25 @@ impl<'l, 'a> Bx<'l, 'a> {
             // §9.1; a type with a `Drop` body moves whole). It took the
             // whole binding, so a later use of another field failed the
             // MIR move check (B-2026-11-14-20).
+            // A type with a `Drop` body or counted handles gives up no part,
+            // so it moves whole unless the closure only copies `Copy` fields
+            // out of it (`|| v.id`), which moves nothing (§9.1,
+            // B-2026-11-19-97).
             if cm == CapMode::Value
                 && self.locals.contains_key(&sym)
                 && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
                 && !self.is_copy(t)
-                && !self.is_handle_aggregate(t)
-                && !self
-                    .tys()
-                    .tcx()
-                    .adt_of(t)
-                    .is_some_and(|(a, _)| a.has_drop_impl)
             {
-                if let Some(names) = self.disjoint_fields(body, sym, t) {
+                let whole = self.is_handle_aggregate(t)
+                    || self
+                        .tys()
+                        .tcx()
+                        .adt_of(t)
+                        .is_some_and(|(a, _)| a.has_drop_impl);
+                let names = self
+                    .disjoint_fields(body, sym, t)
+                    .filter(|names| !whole || names.iter().all(|(_, _, ft)| self.is_copy(*ft)));
+                if let Some(names) = names {
                     for (name, idx, ft) in names {
                         let fp = place.clone().field(idx, ft);
                         let op = if self.is_copy(ft) {

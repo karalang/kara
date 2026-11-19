@@ -1644,13 +1644,22 @@ impl<'a> super::OwnershipChecker<'a> {
                 let path_mutations = self.classify_capture_path_mutations(body, &capture_paths);
                 let mut path_modes: Vec<(CapturePath, OwnershipMode)> =
                     Vec::with_capacity(capture_paths.len());
+                // v2 core §9.3: an escaping closure captures every place by
+                // move, a `Copy` one as a copy, so it holds no borrow of the
+                // binding (B-2026-11-19-97); its moves are the use
+                // classifier's consumes.
+                let escaping = crate::ownership::core_rules()
+                    && self
+                        .typecheck_result
+                        .core_escaping_closures
+                        .contains(&SpanKey::from_span(&expr.span));
                 for path in &capture_paths {
                     // Phase-7-codegen.md line 45 — root-consume signal
                     // routes through the classifier's per-closure
                     // consume map for parity with the per-name mode
                     // path above.
                     let root_consumed = captured_consumes.contains_key(&path.root);
-                    let mode = if path.projection.is_empty() && root_consumed {
+                    let mode = if escaping || (path.projection.is_empty() && root_consumed) {
                         OwnershipMode::Own
                     } else if path_mutations.contains(path) {
                         OwnershipMode::MutRef

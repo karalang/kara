@@ -917,6 +917,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `for x in v.iter() { s = s + x; }` checks on a generic `T: Add[Output =
   T] + Copy` as it does on `i64`. It was refused "found 'T' and 'ref T'"
   (B-2026-11-19-129).
+- An escaping closure that reads only a `Copy` field of a binding
+  (`hs.push(|| v.id)`, `H { f: || v.id }`) copies that field (core
+  semantics §9.1), so the binding stays usable and drops at its own
+  scope's end, also when its type has a `Drop` body. A `Drop` type was
+  moved whole, so a later `v.id` was refused by `karac check` (E0514) and
+  by the MIR move check; for a type without one, `karac check` said `v`
+  was moved (E0500) while the MIR lanes captured the field alone and ran.
+  Taking a non-`Copy` field out of a `Drop` type now moves the whole
+  binding in `karac check` too, as MIR already did: it was accepted, then
+  refused by the MIR move check (B-2026-11-19-97).
 - A function value lent to a generic `mut ref F` parameter
   (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`
   called as `twice(mut g)`), and a named function's value lent to a

@@ -356,6 +356,7 @@ pub fn classify_function_body_with(
         escaping_closure_depth: 0,
         borrow_escaping_depth: 0,
         escaping_closure_flags: Vec::new(),
+        copy_field_read: false,
         task_moved_captures: Vec::new(),
         arm_consumed_names: Vec::new(),
     };
@@ -445,6 +446,9 @@ struct UseClassifier<'a> {
     borrow_escaping_depth: u32,
     /// Whether each closure on `closure_span_stack` escapes.
     escaping_closure_flags: Vec<bool>,
+    /// The place `walk_place` is walking is one `Copy` field of its root
+    /// (`v.id`), read: a by-move capture copies it (B-2026-11-19-97).
+    copy_field_read: bool,
     /// v2 core §9.1/§9.5: for each enclosing `TaskGroup.spawn` closure, the
     /// places it takes by move because they drop before the group.
     task_moved_captures: Vec<Vec<String>>,
@@ -614,6 +618,32 @@ impl<'a> UseClassifier<'a> {
         self.classification
             .core_escaping_borrow_captures
             .push((place.span, text.join(".")));
+    }
+
+    /// v2 core §9.1: a closure that captures by move and reads only a
+    /// `Copy` field of a binding (`hs.push(|| v.id)`) copies that field, so
+    /// the binding is not moved, whether or not its type has a `Drop` body;
+    /// the MIR builder copies just the field into the environment
+    /// (B-2026-11-19-97). Reading a `Copy` field moves nothing otherwise, so
+    /// only a by-move capture's consume is turned back into a read, which
+    /// the CFG places where the closure is made.
+    fn copied_field_capture(&mut self, kind: UseKind, span: &crate::token::Span) -> UseKind {
+        if kind != UseKind::Consume || !self.copy_field_read {
+            return kind;
+        }
+        let key = SpanKey::from_span(span);
+        if self.classification.core_capture_scopes.contains_key(&key) {
+            self.classification.core_capture_copies.insert(key);
+        }
+        UseKind::Read
+    }
+
+    /// Whether the local or parameter `name`'s own type has a `Drop` body.
+    fn has_own_drop_body(&self, name: &str) -> bool {
+        matches!(
+            self.param_types.get(name).or_else(|| self.local_types.get(name)),
+            Some(Type::Named { name: ty, .. }) if self.tc.drop_method_keys.contains_key(ty)
+        )
     }
 
     fn is_closure_local(&self, name: &str) -> bool {
@@ -1569,7 +1599,13 @@ impl<'a> UseClassifier<'a> {
                 if leaf_mode == Mode::Consuming {
                     self.record_projection_consume(expr);
                 }
+                let copy_field = leaf_mode == Mode::Reading
+                    && matches!(&expr.kind, ExprKind::FieldAccess { object, .. }
+                        if matches!(object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue))
+                    && self.expr_is_copy(expr);
+                let prev = std::mem::replace(&mut self.copy_field_read, copy_field);
                 self.walk_place(expr, leaf_mode, &mut PlacePath::new());
+                self.copy_field_read = prev;
             }
             ExprKind::Index { object, index } => {
                 if mode == Mode::Consuming && self.core_moves_out_of_place(expr) {
@@ -1981,9 +2017,22 @@ impl<'a> UseClassifier<'a> {
     fn walk_place(&mut self, expr: &Expr, leaf_mode: Mode, path: &mut PlacePath) {
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                self.record_place_at_root(&expr.span, path);
-                let kind = self.classify_identifier(name, expr, leaf_mode);
-                self.note_capture_scope(name, &expr.span, leaf_mode, kind);
+                // A by-move capture that takes a non-`Copy` field out of a
+                // binding whose type has a `Drop` body takes the whole
+                // binding: the type gives up no part (core semantics §9.1),
+                // and the MIR builder moves it whole (B-2026-11-19-97).
+                if !path.is_empty()
+                    && !self.copy_field_read
+                    && self.captured_by_move(name)
+                    && self.has_own_drop_body(name)
+                {
+                    self.record_place_at_root(&expr.span, &PlacePath::new());
+                } else {
+                    self.record_place_at_root(&expr.span, path);
+                }
+                let raw = self.classify_identifier(name, expr, leaf_mode);
+                self.note_capture_scope(name, &expr.span, leaf_mode, raw);
+                let kind = self.copied_field_capture(raw, &expr.span);
                 self.record(&expr.span, kind);
                 // A place rooted at the closure's own local (`match o.sub`
                 // on a `let o` inside the body) is a fresh move, not a
@@ -1999,8 +2048,9 @@ impl<'a> UseClassifier<'a> {
             }
             ExprKind::SelfValue => {
                 self.record_place_at_root(&expr.span, path);
-                let kind = self.classify_identifier("self", expr, leaf_mode);
-                self.note_capture_scope("self", &expr.span, leaf_mode, kind);
+                let raw = self.classify_identifier("self", expr, leaf_mode);
+                self.note_capture_scope("self", &expr.span, leaf_mode, raw);
+                let kind = self.copied_field_capture(raw, &expr.span);
                 self.record(&expr.span, kind);
                 self.record_closure_capture_consume("self", kind, &expr.span);
             }

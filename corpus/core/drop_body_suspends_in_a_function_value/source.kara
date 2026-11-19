@@ -1,15 +1,17 @@
 import std.time.{Duration, sleep};
 struct Slow { n: i64 }
 impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(1)); println(f"slow drop {self.n}"); } }
+impl Slow { fn value(self) -> i64 { self.n } }
 struct Quick { n: i64 }
 impl Drop for Quick { fn drop(mut ref self) { println(f"quick drop {self.n}"); } }
+impl Quick { fn value(self) -> i64 { self.n } }
 struct Holder { f: Fn() -> i64 }
 fn seven() -> i64 { 7 }
-fn slow_fn(n: i64) -> Fn() -> i64 { let s = Slow { n: n }; || s.n }
-fn quick_fn(n: i64) -> Fn() -> i64 { let q = Quick { n: n }; || q.n * 10 }
+fn slow_fn(n: i64) -> Fn() -> i64 { let s = Slow { n: n }; || s.value() }
+fn quick_fn(n: i64) -> Fn() -> i64 { let q = Quick { n: n }; || q.value() * 10 }
 fn plain_fn() -> Fn() -> i64 { seven }
-fn counter(n: i64) -> MutFn() -> i64 { let s = Slow { n: n }; let mut k = 0; || { k += 1; s.n + k } }
-fn once(n: i64) -> OnceFn() -> i64 { let s = Slow { n: n }; || { let m = s.n; m } }
+fn counter(n: i64) -> MutFn() -> i64 { let s = Slow { n: n }; let mut k = 0; || { k += 1; s.value() + k } }
+fn once(n: i64) -> OnceFn() -> i64 { let s = Slow { n: n }; || { let m = s.value(); m } }
 fn nested(n: i64) -> Fn() -> i64 { let inner = slow_fn(n); || inner() + 100 }
 fn main() {
     {

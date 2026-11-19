@@ -1,11 +1,12 @@
 import std.time.{Duration, sleep};
 struct Slow { n: i64 }
 impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(1)); println(f"slow drop {self.n}"); } }
-fn slow_fn(n: i64) -> Fn() -> i64 { let s = Slow { n: n }; || s.n }
+impl Slow { fn value(self) -> i64 { self.n } }
+fn slow_fn(n: i64) -> Fn() -> i64 { let s = Slow { n: n }; || s.value() }
 fn taker(n: i64) -> OnceFn() -> i64 { let s = Slow { n: n }; || { let t = s; println("taken"); t.n } }
-fn sleeper(n: i64) -> Fn() -> i64 { let s = Slow { n: n }; || { sleep(Duration.ms(1)); s.n } }
+fn sleeper(n: i64) -> Fn() -> i64 { let s = Slow { n: n }; || { sleep(Duration.ms(1)); s.value() } }
 fn run(f: own OnceFn() -> i64) -> i64 { f() }
-fn mk() -> Fn() -> i64 { sleep(Duration.ms(1)); let s = Slow { n: 7 }; || s.n }
+fn mk() -> Fn() -> i64 { sleep(Duration.ms(1)); let s = Slow { n: 7 }; || s.value() }
 fn main() {
     {
         let t = taker(1);
