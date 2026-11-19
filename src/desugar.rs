@@ -36,6 +36,9 @@ pub fn desugar_program(program: &mut Program) {
     // copied default bodies included, become paths through the type's name
     // (B-2026-11-18-40).
     crate::self_paths::desugar_self_paths(program);
+    // A struct literal or struct pattern through a type alias names the
+    // struct (B-2026-11-19-8).
+    crate::alias_paths::desugar_alias_paths(program);
     synthesize_user_hash_byte_wrappers(program);
     propagate_codegen_hints(program);
     desugar_impl_trait_args_in_program(program);

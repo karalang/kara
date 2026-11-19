@@ -63,6 +63,7 @@ pub mod hasher_kind;
 pub mod host_cpu;
 pub mod http1;
 // The HTTP client both backends run; the runtime compiles it by `#[path]`.
+pub mod alias_paths;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod http_client;
 pub mod http_proxy;

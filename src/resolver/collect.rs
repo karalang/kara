@@ -66,6 +66,133 @@ impl<'a> super::Resolver<'a> {
                 | Item::TestCase(_) => {}
             }
         }
+        self.report_type_alias_cycles();
+    }
+
+    /// B-2026-11-19-9: an alias names an existing type and is transparent
+    /// (design.md § Type aliases), so aliases that name each other
+    /// (`type A = Vec[B]; type B = A;`) name no type at all. Checked at the
+    /// declarations, once per cycle, so a program that never uses them is
+    /// refused too, and one that does is not met by a later internal error.
+    fn report_type_alias_cycles(&mut self) {
+        fn names(ty: &TypeExpr, out: &mut Vec<String>) {
+            match &ty.kind {
+                TypeKind::Path(p) => {
+                    if p.segments.len() == 1 {
+                        out.push(p.segments[0].clone());
+                    }
+                    for a in p.generic_args.iter().flatten() {
+                        if let GenericArg::Type(t) = a {
+                            names(t, out);
+                        }
+                    }
+                }
+                TypeKind::Tuple(ts) => ts.iter().for_each(|t| names(t, out)),
+                TypeKind::Array { element, .. } => names(element, out),
+                TypeKind::Pointer { inner, .. }
+                | TypeKind::Ref(inner)
+                | TypeKind::MutRef(inner)
+                | TypeKind::Frozen(inner)
+                | TypeKind::MutSlice(inner)
+                | TypeKind::Weak(inner) => names(inner, out),
+                TypeKind::FnType {
+                    params,
+                    return_type,
+                    ..
+                } => {
+                    params.iter().for_each(|t| names(t, out));
+                    if let Some(r) = return_type {
+                        names(r, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let aliases: Vec<&TypeAliasDef> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::TypeAlias(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        let index: std::collections::HashMap<&str, usize> = aliases
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a.name.as_str(), i))
+            .collect();
+        let edges: Vec<Vec<usize>> = aliases
+            .iter()
+            .map(|a| {
+                let own: Vec<&str> = a
+                    .generic_params
+                    .iter()
+                    .flat_map(|g| g.params.iter().map(|p| p.name.as_str()))
+                    .collect();
+                let mut out = Vec::new();
+                names(&a.ty, &mut out);
+                let mut to: Vec<usize> = out
+                    .iter()
+                    .filter(|n| !own.contains(&n.as_str()))
+                    .filter_map(|n| index.get(n.as_str()).copied())
+                    .collect();
+                to.sort_unstable();
+                to.dedup();
+                to
+            })
+            .collect();
+        let mut reported = vec![false; aliases.len()];
+        for start in 0..aliases.len() {
+            if reported[start] {
+                continue;
+            }
+            // A path from `start` back to itself, if there is one.
+            let mut stack = vec![(start, vec![start])];
+            let mut seen = vec![false; aliases.len()];
+            let mut cycle = None;
+            while let Some((at, path)) = stack.pop() {
+                for &n in &edges[at] {
+                    if n == start {
+                        cycle = Some(path.clone());
+                        break;
+                    }
+                    if !seen[n] {
+                        seen[n] = true;
+                        let mut p = path.clone();
+                        p.push(n);
+                        stack.push((n, p));
+                    }
+                }
+                if cycle.is_some() {
+                    break;
+                }
+            }
+            let Some(cycle) = cycle else { continue };
+            for &i in &cycle {
+                reported[i] = true;
+            }
+            let chain: Vec<String> = cycle
+                .iter()
+                .chain(std::iter::once(&start))
+                .map(|&i| format!("`{}`", aliases[i].name))
+                .collect();
+            let a = aliases[start];
+            self.errors.push(ResolveError {
+                message: format!(
+                    "type alias `{}` names no type: the aliases form a cycle ({}), and an \
+                     alias only renames an existing type (design.md § Type aliases); a \
+                     recursive type is a `struct` or `enum`",
+                    a.name,
+                    chain.join(" -> ")
+                ),
+                span: a.span,
+                kind: ResolveErrorKind::UndefinedType,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+        }
     }
 
     /// Reject `#[deprecated]` placed on an `impl` block per design.md

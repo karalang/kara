@@ -1385,6 +1385,68 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
             }
+            // B-2026-11-19-9: an argument that is the enclosing item's own
+            // parameter needs the bound declared on it, as a bounded
+            // struct's argument does (adt_bounds.rs); the bound is part of
+            // the alias's interface, checked at every use (design.md § Type
+            // aliases).
+            if let Type::TypeParam(p) = arg {
+                if self.enclosing_bounds.contains_key(p)
+                    && path.span.offset < self.program.library_start.unwrap_or(usize::MAX)
+                    && !self.current_fn_stdlib_origin
+                {
+                    let missing: Vec<&str> = param
+                        .bounds
+                        .iter()
+                        .filter_map(|b| b.path.last())
+                        .filter(|t| !self.type_param_satisfies_bound(p, t))
+                        .map(String::as_str)
+                        .collect();
+                    if !missing.is_empty()
+                        && self
+                            .checked_adt_writes
+                            .insert(crate::resolver::SpanKey::from_span(&path.span))
+                    {
+                        let missing = missing.join(" + ");
+                        let message = format!(
+                            "alias '{alias_name}' requires its parameter '{}' to implement \
+                             '{missing}', but the type parameter '{p}' given for it is not \
+                             bounded by '{missing}': declare `{p}: {missing}` where `{p}` is \
+                             declared",
+                            param.name
+                        );
+                        let fix =
+                            self.param_bound_edit(path.span.offset, p, &missing)
+                                .map(|edit| {
+                                    let at = self
+                                        .param_decl_span(path.span.offset, p)
+                                        .unwrap_or(path.span);
+                                    super::FixIt {
+                                        span: Span {
+                                            offset: edit.offset,
+                                            length: edit.length,
+                                            line: at.line,
+                                            column: at.column,
+                                        },
+                                        replacement: edit.replacement,
+                                    }
+                                });
+                        match fix {
+                            Some(f) => self.type_error_with_fix_it(
+                                message,
+                                path.span,
+                                TypeErrorKind::TypeAliasBoundNotSatisfied,
+                                f,
+                            ),
+                            None => self.type_error(
+                                message,
+                                path.span,
+                                TypeErrorKind::TypeAliasBoundNotSatisfied,
+                            ),
+                        }
+                    }
+                }
+            }
             subs.insert(param.name.clone(), SubstValue::Type(arg.clone()));
         }
         substitute_type_params(&body, &subs)
