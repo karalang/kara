@@ -1083,6 +1083,7 @@ impl Session {
         ranges.push((SHOW_CELL, at..at + rest.len()));
         s.push_str("}\n");
         let saved = std::mem::replace(&mut self.cell_byte_ranges, ranges);
+        self.install_line_map(&s);
         let r = crate::cli::repl_v2::run_cell(&self.worker, &s, self.built_take.get());
         let relabel = |me: &Self, text: &str| me.relabel_v2(&s, text);
         let out = match r {
@@ -2137,6 +2138,7 @@ impl Session {
                 }
                 match crate::cli::repl_v2::check(&synthetic) {
                     Ok(()) => {
+                        self.install_line_map(&synthetic);
                         let r = crate::cli::repl_v2::run_checked(
                             &self.worker,
                             &synthetic,
@@ -2197,6 +2199,7 @@ impl Session {
             Some(run) => run,
             None => {
                 let synthetic = self.build_synthetic_cell(cell_src, None);
+                self.install_line_map(&synthetic);
                 let r =
                     crate::cli::repl_v2::run_cell(&self.worker, &synthetic, self.built_take.get());
                 (synthetic, r)
@@ -2270,6 +2273,77 @@ impl Session {
     /// place in `synthetic` that falls in a cell named as that cell's line,
     /// `cell N:LINE:COL`, and a snippet's gutter numbered to match. Places in
     /// the accumulated items keep the program's numbering.
+    /// Names the places of the program `synthetic` a cell is part of by
+    /// the cells they came from, for the panic places the run reports and
+    /// a program reads (`TaskFailed.Panicked`'s `location`): each cell's
+    /// own lines ([`Session::cell_byte_ranges`]) and each item, found in
+    /// the cell that last wrote it, are `cell N:L`, as a diagnostic names
+    /// them (`relabel_v2`); the session's own lines stay `<repl>`.
+    fn install_line_map(&self, synthetic: &str) {
+        let line_of = |text: &str, at: usize| text[..at.min(text.len())].matches('\n').count() + 1;
+        // (first line, last line, file, the file's line at the first).
+        let mut spans: Vec<(usize, usize, String, usize)> = Vec::new();
+        for (cell, r) in self.cell_byte_ranges.iter().filter(|(_, r)| !r.is_empty()) {
+            let file = match *cell {
+                SHOW_CELL => "%show".to_string(),
+                c => format!("cell {c}"),
+            };
+            spans.push((
+                line_of(synthetic, r.start),
+                line_of(synthetic, r.end - 1),
+                file,
+                1,
+            ));
+        }
+        let parsed = crate::parse(synthetic);
+        for item in &parsed.program.items {
+            if item_name(item).is_some_and(|n| n.starts_with("__karac") || n == "main") {
+                continue;
+            }
+            let span = item_span(item);
+            let end = (span.offset + span.length).min(synthetic.len());
+            let Some(text) = synthetic.get(span.offset..end).filter(|t| !t.is_empty()) else {
+                continue;
+            };
+            let found = self
+                .cell_history
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, cell)| cell.find(text).map(|at| (i + 1, line_of(cell, at))));
+            if let Some((cell, line)) = found {
+                let first = line_of(synthetic, span.offset);
+                spans.push((
+                    first,
+                    line_of(synthetic, end - 1),
+                    format!("cell {cell}"),
+                    line,
+                ));
+            }
+        }
+        spans.sort_by_key(|s| s.0);
+        let mut map: Vec<(usize, String, usize)> = Vec::new();
+        let mut covered = 0;
+        for (first, last, file, line) in spans {
+            if first <= covered {
+                continue;
+            }
+            map.push((first, file, line));
+            map.push((last + 1, "<repl>".to_string(), last + 1));
+            covered = last;
+        }
+        // Entries with one first line: the later one is read.
+        map.dedup_by(|b, a| {
+            let same = a.0 == b.0;
+            if same {
+                *a = std::mem::take(b);
+            }
+            same
+        });
+        self.worker
+            .run(move || crate::mir::interp::set_thread_source_map(Some(map)));
+    }
+
     fn relabel_v2(&self, synthetic: &str, text: &str) -> String {
         let line_of = |at: usize| synthetic[..at.min(synthetic.len())].matches('\n').count() + 1;
         let cells: Vec<(usize, usize, usize)> = self
@@ -2617,6 +2691,7 @@ impl Session {
         self.push_in_scopes(&mut s, &mut ranges, "", true);
         s.push_str("}\n");
         self.cell_byte_ranges = ranges;
+        self.install_line_map(&s);
         match crate::cli::repl_v2::run_cell(&self.worker, &s, self.built_take.get()) {
             Ok(ran) => Ok(ran.stdout),
             Err(f) => Err(f.errors.iter().map(|e| self.relabel_v2(&s, e)).collect()),

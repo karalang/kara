@@ -659,6 +659,45 @@ pub fn has_source_map() -> bool {
 /// into it replaces (`Interp::contain`).
 const LIBRARY_PLACE: char = '\u{1}';
 
+/// A line map's entries: `(first line, file, that file's line)`.
+type LineMap = Vec<(usize, &'static str, usize)>;
+
+thread_local! {
+    /// A line map for the programs this thread runs next, in place of
+    /// [`SOURCE_MAP`]: a REPL session's worker names each cell's lines by
+    /// the cell (`cell 3`), whichever program the cell is part of.
+    static THREAD_SOURCE_MAP: std::cell::RefCell<Option<LineMap>> =
+        const { std::cell::RefCell::new(None) };
+    /// The file names [`set_thread_source_map`] has given out, each kept once.
+    static THREAD_FILE_NAMES: std::cell::RefCell<rustc_hash::FxHashSet<&'static str>> =
+        std::cell::RefCell::new(rustc_hash::FxHashSet::default());
+}
+
+/// Installs, for this thread, the line map [`source_at`] reads ahead of
+/// [`SOURCE_MAP`]; `None` removes it. Entries are `(first line, file, that
+/// file's line)`, ascending.
+pub fn set_thread_source_map(map: Option<Vec<(usize, String, usize)>>) {
+    let map = map.map(|m| {
+        THREAD_FILE_NAMES.with(|names| {
+            let mut names = names.borrow_mut();
+            m.into_iter()
+                .map(|(first, file, line)| {
+                    let file: &'static str = match names.get(file.as_str()) {
+                        Some(f) => f,
+                        None => {
+                            let f: &'static str = Box::leak(file.into_boxed_str());
+                            names.insert(f);
+                            f
+                        }
+                    };
+                    (first, file, line)
+                })
+                .collect()
+        })
+    });
+    THREAD_SOURCE_MAP.with(|m| *m.borrow_mut() = map);
+}
+
 /// The file and line a source line names: through the line map when one
 /// was set, otherwise the program's file name (`<unknown>` when unnamed).
 /// What a deadlock's report says the tasks wait on, as the runtime's
@@ -715,6 +754,16 @@ fn deadlock_text(waits: &[(bool, u8, Option<String>)]) -> String {
 }
 
 pub fn source_at(line: usize) -> (&'static str, usize) {
+    let local = THREAD_SOURCE_MAP.with(|m| {
+        let m = m.borrow();
+        let map = m.as_ref()?;
+        let i = map.partition_point(|(first, _, _)| *first <= line);
+        let (first, file, file_line) = map.get(i.checked_sub(1)?)?;
+        Some((*file, file_line + (line - first)))
+    });
+    if let Some(at) = local {
+        return at;
+    }
     if let Some(map) = SOURCE_MAP.get() {
         let i = map.partition_point(|(first, _, _)| *first <= line);
         if let Some((first, file, file_line)) = i.checked_sub(1).and_then(|i| map.get(i)) {
