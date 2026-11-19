@@ -67,9 +67,7 @@ impl Semaphore {
     // Return a permit, making it available to a waiting or the next
     // `acquire`. Not capped at the starting count.
     #[compiler_builtin]
-    fn release(ref self) -> Unit {
-        Unit
-    }
+    fn release(ref self) {}
 }
 
 // Drop-skip-sound: if this Drop never runs, the runtime `KaracSemaphore`

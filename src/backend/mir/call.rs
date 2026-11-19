@@ -2171,8 +2171,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
             }
             ("Secret", "ct_eq") if args.len() == 2 => {
-                // The two secrets' one field, compared by the field type's
-                // equality (no timing to keep constant, as the interpreter).
+                // The two secrets' one field (a `String` or a `Vec[u8]`, the
+                // only types the checker lets `ct_eq` take): both are a data
+                // pointer at 0 and a byte length at 8, handed to the
+                // runtime's constant-time comparison. Never the field type's
+                // `Eq` glue, which exits at the first differing byte.
                 let mut at = Vec::with_capacity(2);
                 let mut sty = None;
                 for a in args {
@@ -2193,17 +2196,41 @@ impl<'ctx> Cx<'ctx, '_> {
                     .tys
                     .field_ty(sty, None, 0)
                     .ok_or("a Secret has no field")?;
+                let bytes = match self.tys.kind(ft) {
+                    TyKind::Intrinsic(IntrinsicTy::String) => true,
+                    TyKind::Intrinsic(IntrinsicTy::Vec(e)) => {
+                        matches!(self.tys.kind(e), TyKind::Int(IntTy::U8))
+                    }
+                    _ => false,
+                };
+                if !bytes {
+                    return Err(
+                        "Secret.ct_eq is defined only for Secret[String] and Secret[Vec[u8]]"
+                            .into(),
+                    );
+                }
                 let off = self.field_offset(sty, None, 0)?;
                 let (x, y) = (self.offset(at[0], off)?, self.offset(at[1], off)?);
-                let eq = self.key_fn(super::key::KeyOp::Eq, ft);
+                let (xp, xn) = (self.load_ptr(x)?, self.load_i64(self.offset(x, 8)?)?);
+                let (yp, yn) = (self.load_ptr(y)?, self.load_i64(self.offset(y, 8)?)?);
+                let i64t = self.llcx.i64_type();
+                let pt = self.ptr_ty();
+                let f = self.extern_fn(
+                    "karac_secret_ct_eq",
+                    i64t.fn_type(&[pt.into(), i64t.into(), pt.into(), i64t.into()], false),
+                );
                 let r = self
                     .builder
-                    .build_call(eq, &[x.into(), y.into()], "")
+                    .build_call(f, &[xp.into(), xn.into(), yp.into(), yn.into()], "")
                     .map_err(e)?
                     .try_as_basic_value()
                     .basic()
-                    .ok_or("eq glue returns nothing")?
+                    .ok_or("karac_secret_ct_eq returns nothing")?
                     .into_int_value();
+                let r = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, r, i64t.const_zero(), "")
+                    .map_err(e)?;
                 self.store_bool(dest, r)?;
                 self.drop_moved(&args[1..])
             }

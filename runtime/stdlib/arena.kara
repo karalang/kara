@@ -106,9 +106,7 @@ impl[T] Arena[T] {
     // checkpoint dangle afterwards (no v1 liveness check). A checkpoint
     // minted by a different arena is ignored.
     #[compiler_builtin]
-    fn rewind_to(ref self, cp: own ArenaCheckpoint) -> Unit {
-        Unit
-    }
+    fn rewind_to(ref self, cp: own ArenaCheckpoint) {}
 
     // Number of items currently live in the arena.
     #[compiler_builtin]

@@ -1998,6 +1998,9 @@ impl<'a> super::TypeChecker<'a> {
             self.note_range_collect(object, &[*span, whole]);
         }
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
+        if method == "ct_eq" && self.errors.len() == errors_before {
+            self.refuse_ct_eq_payload(object, span);
+        }
         self.range_param_sources.truncate(ranges);
         self.leave_fold_seed(fold);
         self.note_open_receiver_call(object, method, &ty, errors_before);
@@ -2033,6 +2036,62 @@ impl<'a> super::TypeChecker<'a> {
             self.explain_rust_binary_search_call(object, method, args, whole, errors_before);
         }
         ty
+    }
+
+    /// `Secret[T].ct_eq` compares bytes in constant time, so it is defined
+    /// only where `T` is bytes: `Secret[String]` and `Secret[Vec[u8]]`
+    /// (secret.md). Any other `T` would compare by its `Eq`, which exits at
+    /// the first difference and leaks where it was. The receiver is judged
+    /// at the end of `check`, once an inferred `T` is settled.
+    fn refuse_ct_eq_payload(&mut self, object: &Expr, span: &Span) {
+        if let Some(recv) = self.expr_types.get(&SpanKey::from_span(&object.span)) {
+            let recv = recv.clone();
+            self.deferred_ct_eq.push((recv, *span));
+        }
+    }
+
+    pub(super) fn discharge_deferred_ct_eq(&mut self) {
+        for (recv, span) in std::mem::take(&mut self.deferred_ct_eq) {
+            let mut recv = self.resolved_now(&recv);
+            while let Type::Ref(inner) | Type::MutRef(inner) = recv {
+                recv = *inner;
+            }
+            let Type::Named { name, args } = &recv else {
+                continue;
+            };
+            if name != "Secret" || args.len() != 1 {
+                continue;
+            }
+            let payload = self.resolved_now(&args[0]);
+            let bytes = match &payload {
+                Type::Str => true,
+                Type::Named { name, args } if name == "Vec" => match args.as_slice() {
+                    [Type::UInt(UIntSize::U8)] => true,
+                    [Type::TypeVar(v)] => super::inference::literal_var_kind(*v).is_none(),
+                    _ => false,
+                },
+                Type::TypeVar(v) => super::inference::literal_var_kind(*v).is_none(),
+                Type::Error => true,
+                _ => false,
+            };
+            if bytes {
+                continue;
+            }
+            let shown = match &payload {
+                Type::TypeVar(v) => match super::inference::literal_var_kind(*v) {
+                    Some(super::inference::LiteralKind::Float) => "Secret[f64]".to_string(),
+                    _ => "Secret[i64]".to_string(),
+                },
+                _ => type_display(&recv),
+            };
+            let msg = format!(
+                "no method 'ct_eq' on type '{shown}': the constant-time comparison is defined \
+                 only for Secret[String] and Secret[Vec[u8]], since it compares bytes; reveal \
+                 the value with `.expose()` and compare it with `==` if its timing need not \
+                 be constant"
+            );
+            self.type_error(msg, span, TypeErrorKind::NoMethodFound);
+        }
     }
 
     /// An unknown method's "did you mean 'len'?" carries the rename, as a

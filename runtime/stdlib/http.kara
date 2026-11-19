@@ -178,7 +178,7 @@ impl Response {
     fn bytes(ref self) -> Vec[u8] { Vec.new() }
 
     #[compiler_builtin]
-    fn header(ref self, name: own String) -> Option[String] { None }
+    fn header(ref self, name: Str) -> Option[String] { None }
 
     // Return every response header as `(name, value)` pairs in the order
     // the server sent them (phase-8 line 39 follow-up). A Vec (not a Map)
@@ -202,7 +202,7 @@ impl HttpError {
     fn status(ref self) -> Option[i64] { None }
 
     #[compiler_builtin]
-    fn header(ref self, name: own String) -> Option[String] { None }
+    fn header(ref self, name: Str) -> Option[String] { None }
 
     #[compiler_builtin]
     fn body(ref self) -> Option[String] { None }
@@ -313,7 +313,7 @@ impl Request {
     // pointer (`karac_runtime_http_request_header` returns null only
     // when no header with the requested name exists).
     #[compiler_builtin]
-    fn header(ref self, name: own String) -> Option[String] { None }
+    fn header(ref self, name: Str) -> Option[String] { None }
 
     // Return every request header as `(name, value)` pairs in
     // request order. A Vec (not a Map) so repeated header names (e.g.

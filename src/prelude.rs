@@ -285,6 +285,9 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // by a `for` loop yielding `Result[String, IoError]` per line. Non-
     // generic at v1 (concrete element type; wrapped reader erased).
     "LinesIter",
+    // `StdinLines` — what `stdin.lines()` returns (io.md § Standard
+    // streams), named so a helper can return or take one.
+    "StdinLines",
     // Phase 8 `BufWriter[W]` — buffered writer wrapper, the Write-side peer
     // of `BufReader`. `BufWriter.new(writer)` / `.with_capacity(writer, cap)`
     // wrap a `File`; `write` / `flush` amortize syscall overhead, flushing

@@ -438,7 +438,7 @@ impl Request {
     fn url(self) -> String
     fn path(self) -> String
     fn query(self) -> Vec[(String, String)]
-    fn header(self, name: String) -> Option[String]
+    fn header(self, name: Str) -> Option[String]
     fn headers(self) -> Vec[(String, String)]
     fn body(self) -> String
     fn bytes(self) -> Vec[u8]
@@ -501,14 +501,14 @@ impl Response {
     fn status(self) -> i64
     fn body(self) -> String
     fn bytes(self) -> Vec[u8]
-    fn header(self, name: String) -> Option[String]
+    fn header(self, name: Str) -> Option[String]
     fn headers(self) -> Vec[(String, String)]
 }
 
 impl HttpError {
     fn message(self) -> String
     fn status(self) -> Option[i64]
-    fn header(self, name: String) -> Option[String]
+    fn header(self, name: Str) -> Option[String]
     fn body(self) -> Option[String]
     fn headers(self) -> Vec[(String, String)]
 }

@@ -61,10 +61,10 @@ struct Stdout { }
 
 impl Stdout {
     #[compiler_builtin]
-    fn print(s: ref String) { }
+    fn print(s: Str) { }
 
     #[compiler_builtin]
-    fn println(s: ref String) { }
+    fn println(s: Str) { }
 
     #[compiler_builtin]
     fn flush() { }
@@ -74,10 +74,10 @@ struct Stderr { }
 
 impl Stderr {
     #[compiler_builtin]
-    fn print(s: ref String) { }
+    fn print(s: Str) { }
 
     #[compiler_builtin]
-    fn println(s: ref String) { }
+    fn println(s: Str) { }
 
     #[compiler_builtin]
     fn flush() { }
@@ -569,7 +569,7 @@ impl Env {
     fn var(name: Str) -> Result[String, VarError] { Err(VarError.NotPresent) }
 
     #[compiler_builtin]
-    fn set(name: own String, value: own String) { }
+    fn set(name: Str, value: Str) { }
 }
 
 struct Clock { }

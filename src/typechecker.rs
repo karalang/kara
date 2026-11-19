@@ -3973,6 +3973,10 @@ pub struct TypeChecker<'a> {
     /// nothing has typed yet (`|x, n| x + n`, typed by a later `f(1, 2)`),
     /// judged at the end of `check` (`discharge_deferred_operand_vars`).
     pub(super) deferred_operand_vars: Vec<(BinOp, types::TypeVarId, Span)>,
+    /// A `Secret[T].ct_eq` call's receiver type, judged at the end of
+    /// `check` once `T` is settled (`discharge_deferred_ct_eq`): `ct_eq` is
+    /// defined only for `Secret[String]` and `Secret[Vec[u8]]`.
+    pub(super) deferred_ct_eq: Vec<(Type, Span)>,
     /// B-2026-11-07-9: the same for a call's `const` parameters only its
     /// result names, judged with them.
     pub(super) unsolved_call_consts: Vec<(Span, Vec<(types::ConstVarId, String)>)>,
@@ -4927,6 +4931,7 @@ impl<'a> TypeChecker<'a> {
             open_receiver_calls: Vec::new(),
             fold_seed_frames: Vec::new(),
             deferred_operand_vars: Vec::new(),
+            deferred_ct_eq: Vec::new(),
             unsolved_call_consts: Vec::new(),
             unsolved_array_lens: Vec::new(),
             view_tail_spans: std::collections::HashSet::new(),
@@ -5425,6 +5430,7 @@ impl<'a> TypeChecker<'a> {
         self.report_pending_atomic_inners();
         self.report_pending_buf_sources();
         self.discharge_deferred_operand_vars();
+        self.discharge_deferred_ct_eq();
         self.report_unsolved_call_vars();
         self.report_open_receiver_calls();
         self.discharge_deferred_assoc_impl_bounds();

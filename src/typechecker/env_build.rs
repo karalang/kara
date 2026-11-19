@@ -1595,10 +1595,16 @@ impl<'a> super::TypeChecker<'a> {
         // alongside `Env.var` / `Env.args`; this lowercase entry mirrors the
         // `env.var` registration above. Carries `writes(Env)` (seeded in
         // `effectchecker::check`) so callers must declare it.
+        let str_view = || Type::Named {
+            name: "StringSlice".to_string(),
+            args: vec![],
+        };
         let set_sig = FunctionSig {
             generic_params: vec![],
             param_names: vec![Some("name".to_string()), Some("value".to_string())],
-            params: vec![Type::Str, Type::Str],
+            // `Str` (time-random-env.md § Environment): a `String` passes
+            // as one, and a `Str` caller is not turned away.
+            params: vec![str_view(), str_view()],
             return_type: Type::Unit,
             where_clause: None,
         };

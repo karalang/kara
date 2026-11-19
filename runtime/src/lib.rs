@@ -9839,6 +9839,28 @@ pub unsafe extern "C" fn karac_secret_ct_eq(
     }
 }
 
+#[cfg(test)]
+mod secret_ct_eq_tests {
+    use super::karac_secret_ct_eq;
+
+    fn ct(a: &[u8], b: &[u8]) -> i64 {
+        unsafe { karac_secret_ct_eq(a.as_ptr(), a.len() as i64, b.as_ptr(), b.len() as i64) }
+    }
+
+    /// The helper `Secret.ct_eq` compiles to: equal only on the same
+    /// length and every byte, a difference in the first or the last byte
+    /// alike, and empty values equal.
+    #[test]
+    fn secret_ct_eq_runtime_helper_compares_every_byte() {
+        assert_eq!(ct(b"hunter2", b"hunter2"), 1);
+        assert_eq!(ct(b"hunter2", b"hunter3"), 0);
+        assert_eq!(ct(b"hunter2", b"xunter2"), 0);
+        assert_eq!(ct(b"hunter2", b"hunt"), 0);
+        assert_eq!(ct(b"", b""), 1);
+        assert_eq!(ct(&[0, 0, 1], &[0, 0, 0]), 0);
+    }
+}
+
 /// Total-order compare on two `f64` values, returning `-1` / `0` / `+1`.
 /// Implements Rust's `f64::total_cmp` semantics: sign-flip the bit pattern
 /// of negative values so the integer compare matches IEEE 754 numeric order

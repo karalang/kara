@@ -633,7 +633,7 @@ impl<'a> super::TypeChecker<'a> {
                 mut_ref_v
             }
             "or_insert_with" => {
-                // `or_insert_with[with E](f: Fn() -> V with E) -> mut ref V
+                // `or_insert_with[with E](f: OnceFn() -> V with E) -> mut ref V
                 // with E`. Closure invoked only on the Vacant arm; effect
                 // propagation through `with E` is handled by the effect
                 // checker reading the closure's effect set.
@@ -650,7 +650,9 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 } else {
-                    let f_ty = Type::Function {
+                    // `OnceFn`: it runs at most once, so a closure that
+                    // gives a captured value away fits (collections.md).
+                    let f_ty = Type::OnceFunction {
                         cross_task: Default::default(),
                         params: vec![],
                         return_type: Box::new(v.clone()),
@@ -660,7 +662,7 @@ impl<'a> super::TypeChecker<'a> {
                 mut_ref_v
             }
             "and_modify" => {
-                // `and_modify[with E](f: Fn(mut ref V) with E) -> Entry[K, V]
+                // `and_modify[with E](f: OnceFn(mut ref V) with E) -> Entry[K, V]
                 // with E`. Closure invoked only on Occupied; receives a
                 // `mut ref V` to the existing slot. Returns self for
                 // chaining (e.g. `.and_modify(...).or_insert(default)`).
@@ -677,7 +679,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 } else {
-                    let f_ty = Type::Function {
+                    let f_ty = Type::OnceFunction {
                         cross_task: Default::default(),
                         params: vec![mut_ref_v.clone()],
                         return_type: Box::new(Type::Unit),
