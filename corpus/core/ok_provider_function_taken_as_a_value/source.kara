@@ -1,0 +1,19 @@
+// core-semantics §14.3: taking a function that uses a resource as a value
+// captures the provider in scope, as a closure does. Called through the
+// name it is bound to, or handed to a function parameter, it reads the
+// provider the enclosing `with_provider` binds (B-2026-11-19-105).
+effect resource Clk: ClkP;
+trait ClkP { fn now(ref self) -> i64; }
+struct F { t: i64 }
+impl ClkP for F { fn now(ref self) -> i64 { self.t } }
+struct G2 { t: i64 }
+impl ClkP for G2 { fn now(ref self) -> i64 { self.t * 100 } }
+
+fn read_clk() -> i64 { Clk.now() }
+fn apply(f: Fn() -> i64) -> i64 { f() }
+
+fn main() {
+    println(with_provider[Clk](F { t: 5 }, || { let f = read_clk; f() + 1 }));
+    println(with_provider[Clk](G2 { t: 3 }, || { let f = read_clk; apply(f) }));
+    println(with_provider[Clk](F { t: 4 }, || apply(read_clk)));
+}

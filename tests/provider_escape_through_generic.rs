@@ -73,3 +73,22 @@ fn main() { println(with_provider[Clk](F { t: 2 }, || { let g = id(|| Clk.now())
         assert!(errors(body).is_empty(), "{body}: {:#?}", errors(body));
     }
 }
+
+/// core-semantics §14.3 with §14.5: a function that uses `Clk`, taken as a
+/// value, carries the provider, so it cannot leave the `with_provider` through
+/// the local it is bound to (B-2026-11-19-105).
+#[test]
+fn provider_escape_of_a_function_value_through_a_local() {
+    refused(
+        "fn read_clk() -> i64 { Clk.now() }
+fn main() { let f = with_provider[Clk](F { t: 5 }, || { let g = read_clk; g }); println(f()); }
+",
+        "function `read_clk`, taken as a value,",
+    );
+    assert!(errors(
+        "fn read_clk() -> i64 { Clk.now() }
+fn main() { println(with_provider[Clk](F { t: 5 }, || { let f = read_clk; f() + 1 })); }
+"
+    )
+    .is_empty());
+}

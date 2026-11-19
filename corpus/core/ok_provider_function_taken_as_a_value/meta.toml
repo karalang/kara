@@ -1,0 +1,13 @@
+source = "corpus/core/ok_provider_function_taken_as_a_value"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["providers", "post-m1:provider"]
+class = "e"
+expected_from = "spec"
+rules = ["14.3"]
+backends = []
+env = {}
+note = "core-semantics §14.3: a function that uses a resource, taken as a value under with_provider, captures the provider in scope. `let f = read_clk; f()` and passing it to an `Fn` parameter read the bound provider; every lane stopped with 'a function used as a value ... is not lowered yet' until B-2026-11-19-105. interp, mir-llvm, ASan and build agree. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "2898cdc89"

@@ -64,6 +64,9 @@ enum Bound {
     /// The function's parameter at this index, typed by one of its own type
     /// parameters.
     GenParam(usize),
+    /// A local holding a named function taken as a value (`let g = f;`),
+    /// whose name [`Walker::fn_alias`] keeps (B-2026-11-19-105).
+    FnValue,
     Closure(SpanKey),
     Other,
 }
@@ -159,6 +162,7 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
             types,
             gen: &gen,
             gen_hits: None,
+            fn_alias: FxHashMap::default(),
         };
         w.walk_fn(f);
     }
@@ -217,6 +221,7 @@ fn generic_slots(
                 types,
                 gen: &gen,
                 gen_hits: Some(Vec::new()),
+                fn_alias: FxHashMap::default(),
             };
             w.walk_fn_generic(f, idx);
             let hits = w.gen_hits.take().unwrap_or_default();
@@ -260,6 +265,8 @@ struct Walker<'a> {
     /// While [`generic_slots`] walks a generic function: where each of its
     /// generic-typed parameters goes, by index and reason.
     gen_hits: Option<Vec<(usize, &'static str)>>,
+    /// The function a [`Bound::FnValue`] local holds.
+    fn_alias: FxHashMap<String, String>,
 }
 
 impl Walker<'_> {
@@ -351,6 +358,17 @@ impl Walker<'_> {
                                 Bound::NonEscParam
                             }
                             Some(Bound::GenParam(i)) => Bound::GenParam(i),
+                            // `let g = read_clk;` takes the function as a
+                            // value; where `g` goes, it goes (§14.3).
+                            None if self.sigs.contains_key(n) => {
+                                self.fn_alias.insert(name.clone(), n.clone());
+                                Bound::FnValue
+                            }
+                            Some(Bound::FnValue) => {
+                                let f = self.fn_alias.get(n).cloned().unwrap_or(n.clone());
+                                self.fn_alias.insert(name.clone(), f);
+                                Bound::FnValue
+                            }
                             _ => {
                                 self.walk_expr(value, Pos::Bind);
                                 Bound::Other
@@ -462,6 +480,10 @@ impl Walker<'_> {
                 }
                 (Some(Bound::NonEscParam), Pos::Bind) => {
                     self.non_escaping(e, n, "bound to a variable")
+                }
+                (Some(Bound::FnValue), Pos::Escape(why)) => {
+                    let f = self.fn_alias.get(n).cloned().unwrap_or(n.clone());
+                    self.out.escaping_fn_values.push((e.span, f, why));
                 }
                 (Some(Bound::GenParam(i)), Pos::Escape(why)) if why != CLOSURE_RESULT => {
                     if let Some(h) = &mut self.gen_hits {

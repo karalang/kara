@@ -366,9 +366,11 @@ pub fn check_core_provider_escape(
                     cands.push((e.span, "this closure".into(), uses(body), why));
                 }
             }
-            ExprKind::Identifier(n) => {
-                if let Some((_, why)) = escaping_fns.get(&SpanKey::from_span(&e.span)) {
-                    if let Some(rs) = fn_res.get(n) {
+            ExprKind::Identifier(_) => {
+                // The function the value is: the name itself, or the one a
+                // local holds (`let g = read_clk; g`, B-2026-11-19-105).
+                if let Some((n, why)) = escaping_fns.get(&SpanKey::from_span(&e.span)) {
+                    if let Some(rs) = fn_res.get(*n) {
                         cands.push((
                             e.span,
                             format!("function `{n}`, taken as a value,"),

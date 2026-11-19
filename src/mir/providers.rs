@@ -1905,11 +1905,17 @@ impl Spec<'_> {
                 continue;
             };
             match rv {
+                // A function item into a place of its own item type
+                // (`let f = read_clk;`) is a name for it: a call of `f`,
+                // and a generic callee given `f`, call `read_clk` directly,
+                // with its hidden provider parameter (§14.3,
+                // B-2026-11-19-105). Only a value erased to a function type
+                // would have to carry the provider.
                 Rvalue::Use(Operand::Const(Const {
-                    kind: ConstKind::FnDef(inst),
+                    kind: ConstKind::FnDef(_),
                     ..
-                }))
-                | Rvalue::Cast(
+                })) => {}
+                Rvalue::Cast(
                     _,
                     Operand::Const(Const {
                         kind: ConstKind::FnDef(inst),
