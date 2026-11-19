@@ -129,3 +129,44 @@ fn extern_declaration_keeps_types_that_cross() {
     let (ok, text) = check(&src);
     assert!(ok, "{text}");
 }
+
+/// B-2026-11-19-138 (review ruling on -56): a by-value struct crosses only
+/// with `#[repr(C)]` (or `transparent`); without it its field order and
+/// padding are unspecified. The refusal carries a fix inserting `#[repr(C)]`.
+#[test]
+fn extern_declaration_refuses_a_struct_without_repr_c() {
+    let src = format!(
+        "struct P {{ x: i32, y: f64 }}\n{DOC}unsafe extern \"C\" {{\n    pure fn f(p: P) -> i32;\n}}\nfn main() {{}}\n"
+    );
+    let (ok, text) = check(&src);
+    assert!(!ok, "{text}");
+    assert!(text.contains("E_EXTERN_TYPE_NOT_FFI_SAFE"), "{text}");
+    assert!(
+        text.contains("the struct `P` has no `#[repr(C)]`"),
+        "{text}"
+    );
+
+    let dir = std::env::temp_dir().join(format!(
+        "karac-repr-extern-fix-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("main.kara");
+    std::fs::write(&f, &src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["fix", f.to_str().unwrap()])
+        .output()
+        .expect("karac");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let fixed = std::fs::read_to_string(&f).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(fixed.starts_with("#[repr(C)]\nstruct P {"), "{fixed}");
+    let (ok, text) = check(&fixed);
+    assert!(ok, "{text}");
+}

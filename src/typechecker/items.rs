@@ -1070,8 +1070,9 @@ impl<'a> super::TypeChecker<'a> {
                     Item::EnumDef(d) if d.name == name && d.span.offset < library => Some(d),
                     _ => None,
                 });
-                let program_struct = self.program.items.iter().any(|it| {
-                    matches!(it, Item::StructDef(d) if d.name == name && d.span.offset < library)
+                let program_struct = self.program.items.iter().find_map(|it| match it {
+                    Item::StructDef(d) if d.name == name && d.span.offset < library => Some(d),
+                    _ => None,
                 });
                 if let Some(d) = program_enum {
                     let c_like = d
@@ -1092,7 +1093,52 @@ impl<'a> super::TypeChecker<'a> {
                     } else {
                         return;
                     }
-                } else if program_struct {
+                } else if let Some(d) = program_struct {
+                    // A by-value struct crosses only with a fixed layout:
+                    // without `#[repr(C)]` its field order and padding are
+                    // unspecified, so C would read it at the wrong offsets
+                    // (review ruling on B-2026-11-19-56). A transparent
+                    // struct crosses as its one field.
+                    let fixed = d.attributes.iter().any(|a| {
+                        a.is_bare("repr")
+                            && a.args.iter().any(|arg| {
+                                matches!(
+                                    arg.value.as_ref().map(|e| &e.kind),
+                                    Some(ExprKind::Identifier(n)) if n == "C" || n == "transparent"
+                                )
+                            })
+                    });
+                    if fixed {
+                        return;
+                    }
+                    let message = format!(
+                        "error[E_EXTERN_TYPE_NOT_FFI_SAFE]: the {position} type of the foreign \
+                         import '{owner}' does not cross to C: the struct `{name}` has no \
+                         `#[repr(C)]`, so its field order and padding are unspecified and C \
+                         would read it at the wrong offsets; add `#[repr(C)]` to `{name}` \
+                         (design.md §15)"
+                    );
+                    let at = d.span;
+                    if at.column >= 1 && at.offset + 1 >= at.column {
+                        let indent = " ".repeat(at.column - 1);
+                        let fix = FixIt {
+                            span: Span {
+                                line: at.line,
+                                column: 1,
+                                offset: at.offset - (at.column - 1),
+                                length: 0,
+                            },
+                            replacement: format!("{indent}#[repr(C)]\n"),
+                        };
+                        self.type_error_with_fix_it(
+                            message,
+                            ty.span,
+                            TypeErrorKind::ExternSignatureInvalid,
+                            fix,
+                        );
+                    } else {
+                        self.type_error(message, ty.span, TypeErrorKind::ExternSignatureInvalid);
+                    }
                     return;
                 } else {
                     match name {
