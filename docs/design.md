@@ -4666,7 +4666,7 @@ fn open_connection(addr: String) -> Result[Connection, AnyError] {
 
 A panic is for a bug or an unrecoverable condition. [core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8) lists what panics and what a panic does: it writes the [panic record](#panic-record) to stderr, runs the program's [custom panic handler](#panic-handler) if it has one, and ends the process with exit code **101**. No `Drop` body, `defer` or `errdefer` runs.
 
-- **There is no way to catch a panic.** Kāra has no unwinding, no `catch_panic` and no `extern "C-unwind"`. A service runs under a supervisor that restarts it; failure isolation per task comes with the services track.
+- **There is no way to catch a panic.** Kāra has no unwinding and no `catch_panic`. The `extern "C-unwind"` ABI is recognized, but every build aborts on a panic, so a `"C-unwind"` declaration is refused with `"C"` as the fix ([§15 `extern "C"`](#extern-c)). A service runs under a supervisor that restarts it; failure isolation per task comes with the services track.
 - **The stream and the exit code are the contract.** On every backend, a panic report goes to stderr, never stdout, and the exit code is 101, never 1, so a script can tell a bug from an error exit (code 1, [below](#the-main-function-and-exit-codes)). The report's fields are in [§17 Panic record](#panic-record); its text is not specified.
 - **Tests** run each in its own process, so a panicking test fails alone ([§14](#14-testing)).
 
@@ -6612,7 +6612,7 @@ unsafe extern "C" {
 }
 ```
 
-`"C"` is the only ABI in v1. Other ABI strings are reserved: writing one is a "not yet supported" compile error, never a silent fallback to `"C"`. A panic never crosses the boundary: a panic aborts the process ([core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8)). Exporting Kāra functions under the C ABI is deferred to the systems track.
+v1 has two ABI strings. `"C"` is the one programs use, and no panic crosses it: a Kāra panic in an exported body aborts the process at the boundary ([core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8)), and a foreign function that unwinds through it breaks its contract. `"C-unwind"` is the ABI that lets an unwinding panic cross, in either direction. It needs a build with `panic = "unwind"`, and every 0.8 build aborts, so each `"C-unwind"` import or export is refused (E0415) with `"C"` as the fix. Any other ABI string is refused where it is written, never read as `"C"`: `"stdcall"`, `"fastcall"`, `"win64"` and `"sysv64"` as reserved for a later release, anything else as unsupported. Exporting Kāra functions under the C ABI is deferred to the systems track.
 
 `usize` and `isize` exist for FFI signatures; idiomatic Kāra uses `i64` for sizes ([§5](#5-types)).
 
