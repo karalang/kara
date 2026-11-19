@@ -3143,6 +3143,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
         let saved_list_lit_lets = std::mem::take(&mut self.list_lit_lets);
         let saved_open_collection_lets = std::mem::take(&mut self.open_collection_lets);
+        let saved_str_list_lets = std::mem::take(&mut self.str_list_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
         let saved_literal_tuple_pushes = std::mem::take(&mut self.literal_tuple_pushes);
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
@@ -3259,6 +3260,7 @@ impl<'a> super::TypeChecker<'a> {
         self.explain_list_lit_lets();
         self.list_lit_lets = saved_list_lit_lets;
         self.open_collection_lets = saved_open_collection_lets;
+        self.str_list_lets = saved_str_list_lets;
         self.literal_lets = saved_literal_lets;
         self.literal_tuple_pushes = saved_literal_tuple_pushes;
         self.read_only_slice_lets = saved_read_only_slice_lets;
@@ -9925,7 +9927,10 @@ impl<'a> super::TypeChecker<'a> {
         let ExprKind::MethodCall { object, method, .. } = &e.kind else {
             return false;
         };
-        if !matches!(method.as_str(), "get" | "floor" | "ceiling") {
+        if !matches!(
+            method.as_str(),
+            "get" | "floor" | "ceiling" | "lower" | "higher"
+        ) {
             return false;
         }
         let Some(mut ty) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
@@ -12805,6 +12810,10 @@ impl<'a> super::TypeChecker<'a> {
                         self.note_str_lit_let(name, pattern.span, value, &expected_ty);
                         self.note_list_lit_let(name, pattern.span, value);
                         self.note_open_collection_let(name, pattern.span, value);
+                        if *is_mut {
+                            // A list that grows may take a `String`.
+                            self.str_list_lets.remove(name.as_str());
+                        }
                         self.note_literal_let(name, pattern.span, value, &expected_ty);
                         self.note_read_only_slice_let(name, value, &expected_ty);
                     } else {
@@ -12813,6 +12822,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.str_lit_lets.remove(name.as_str());
                         self.list_lit_lets.remove(name.as_str());
                         self.open_collection_lets.remove(name.as_str());
+                        self.str_list_lets.remove(name.as_str());
                         self.literal_lets.remove(name.as_str());
                         self.literal_tuple_pushes.remove(name.as_str());
                     }
@@ -13425,6 +13435,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.note_list_lit_assign(target, &rhs_ty);
                 if let ExprKind::Identifier(t) = &target.kind {
                     self.open_collection_lets.remove(t.as_str());
+                    self.str_list_lets.remove(t.as_str());
                 }
                 self.reject_owned_value_into_ref_local(target, value, &rhs_ty);
                 self.reject_plain_assign_through_mut_ref(target, &rhs_ty);

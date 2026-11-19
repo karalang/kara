@@ -70,15 +70,20 @@ fn check_without_fix(tag: &str, src: &str, message: &str) {
 }
 
 #[test]
-fn rust_thread_spawn_names_task_group_and_par_without_a_fix() {
-    check_without_fix(
+fn rust_thread_spawn_names_task_group_and_par() {
+    // In a function body the fix opens a group before the statement
+    // (B-2026-11-19-80); the join's `.unwrap()` has its own fix.
+    check_then_fix(
         "spawn",
         "fn main() { let h = std::thread::spawn(|| 1); println(h.join().unwrap()); }\n",
         "`std::thread::spawn` is Rust: Kāra has no free `spawn`",
+        "fn main() { let group = TaskGroup.new(); let h = group.spawn(|| 1); println(h.join()); }\n",
     );
+    // In a loop body a group there would join each task at the end of
+    // its iteration, which may not be what was meant: no fix.
     check_without_fix(
         "spawn-short",
-        "fn main() { let h = thread::spawn(|| 1); println(h.join()); }\n",
+        "fn main() { for i in 0..2 { let h = thread::spawn(|| i); println(h.join()); } }\n",
         "`let g = TaskGroup.new(); let h = g.spawn(|| ..);`",
     );
     // A `std::` path that is not a spawn keeps its fix.

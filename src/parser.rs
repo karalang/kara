@@ -17,6 +17,7 @@ mod items_effects;
 mod items_extern;
 mod items_trait;
 mod patterns;
+mod rust_bound;
 mod rust_fn_turbofish;
 mod rust_io_import;
 mod rust_rc;
@@ -2519,17 +2520,27 @@ impl Parser {
                     // (B-2026-11-01-8). A hole that is neither (`{0}`, an
                     // expression) has no rewrite.
                     let (captured, spec) = match hole.split_once(':') {
-                        Some((name, spec)) => (name, Some(spec)),
+                        Some((name, spec)) => (name, Some(spec.to_string())),
                         None => (hole.as_str(), None),
                     };
-                    if let Some(spec) = spec {
-                        crate::format_spec::FormatSpec::parse(spec).ok()?;
-                    }
+                    // Rust's alternate form (`{:#04x}`) has no Kāra spec: its
+                    // prefix is written in the text (`0x{n:02x}`).
+                    let mut prefix = "";
+                    let spec = match spec {
+                        Some(s) if crate::format_spec::FormatSpec::parse(&s).is_err() => {
+                            let (p, kara) = crate::format_spec::alternate_as_prefix(&s)?;
+                            crate::format_spec::FormatSpec::parse(&kara).ok()?;
+                            prefix = p;
+                            Some(kara)
+                        }
+                        other => other,
+                    };
                     let is_ident = captured
                         .chars()
                         .next()
                         .is_some_and(|c| c.is_alphabetic() || c == '_')
                         && captured.chars().all(|c| c.is_alphanumeric() || c == '_');
+                    out.push_str(prefix);
                     out.push('{');
                     if captured.is_empty() {
                         // `format!("{}", &w[..i])`: Rust borrows an argument
@@ -2555,7 +2566,7 @@ impl Parser {
                     } else {
                         return None;
                     }
-                    if let Some(spec) = spec {
+                    if let Some(spec) = &spec {
                         out.push(':');
                         out.push_str(spec);
                     }
@@ -3282,11 +3293,13 @@ impl Parser {
         // `std::thread::spawn` / `thread::spawn` / `tokio::spawn`: deleting
         // the module path would leave a free `spawn`, which Kāra does not
         // have (core-semantics §9.3, §11.1), so the fix would lead straight
-        // into a second error. Name the spawning forms instead, with no
-        // machine fix: the rewrite needs a group the program does not yet
-        // have (B-2026-11-07-41).
+        // into a second error. Name the spawning forms instead (B-2026-11-07-41);
+        // where the spawn is a statement of a function's own body, the fix
+        // makes a group on the line before and spawns in it
+        // (B-2026-11-19-80).
         let n = names.len();
         if names[n - 1] == "spawn" && matches!(names[n - 2].as_str(), "thread" | "task" | "tokio") {
+            let fix = self.thread_spawn_group_fix(at, whole);
             let message = format!(
                 "`{written}` is Rust: Kāra has no free `spawn` (core-semantics §11.1); start a \
                  task in a group, `let g = TaskGroup.new(); let h = g.spawn(|| ..);` (joined \
@@ -3294,6 +3307,10 @@ impl Parser {
                  `par {{ .. }}`"
             );
             self.error_at(&message, whole);
+            if let Some(edits) = fix {
+                self.fix_diffs
+                    .insert(crate::resolver::SpanKey::from_span(&whole), edits);
+            }
             for &seg in &segments[..segments.len() - 1] {
                 self.tokens[seg + 1].token = Token::Dot;
             }

@@ -16119,6 +16119,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.open_collection_let_uses
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
+                if self.str_list_lets.contains_key(name.as_str()) {
+                    self.str_list_let_uses
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                }
                 if self.read_only_slice_lets.contains_key(name.as_str()) {
                     self.read_only_slice_let_uses
                         .insert(SpanKey::from_span(&expr.span), name.clone());

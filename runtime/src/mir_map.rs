@@ -1191,8 +1191,9 @@ pub unsafe extern "C" fn karac_mir_map_len(h: *const MirMap) -> i64 {
 
 /// An index into the table at `h` picked by `op` under the key order
 /// `cmp`: 0 the least entry, 1 the greatest, 2 the greatest at most `key`
-/// (floor), 3 the least at least `key` (ceiling), or -1 when there is
-/// none; 4 and 5 (a sorted table only) the number of entries less than,
+/// (floor), 3 the least at least `key` (ceiling), 6 the greatest less than
+/// `key` (lower), 7 the least greater than `key` (higher), or -1 when there
+/// is none; 4 and 5 (a sorted table only) the number of entries less than,
 /// or at most, `key`, the bounds of a range. A sorted table is bisected,
 /// a hashed one scanned.
 ///
@@ -1208,7 +1209,7 @@ pub unsafe extern "C" fn karac_mir_map_pick(
     op: i64,
 ) -> i64 {
     if h.is_null() {
-        return if op >= 4 { 0 } else { -1 };
+        return if matches!(op, 4 | 5) { 0 } else { -1 };
     }
     // SAFETY: the caller's contract.
     let m = unsafe { &*h };
@@ -1233,6 +1234,14 @@ pub unsafe extern "C" fn karac_mir_map_pick(
                 Ok(i) => i as i64 + 1,
                 Err(i) => i as i64,
             },
+            6 => match at(key) {
+                Ok(i) | Err(i) => i as i64 - 1,
+            },
+            7 => match at(key) {
+                Ok(i) if i + 1 < n => i as i64 + 1,
+                Err(i) if i < n => i as i64,
+                _ => -1,
+            },
             _ => -1,
         };
     }
@@ -1243,6 +1252,8 @@ pub unsafe extern "C" fn karac_mir_map_pick(
         let ok = match op {
             2 => c(m.at(i), key) <= 0,
             3 => c(m.at(i), key) >= 0,
+            6 => c(m.at(i), key) < 0,
+            7 => c(m.at(i), key) > 0,
             _ => true,
         };
         if !ok {
@@ -1252,7 +1263,7 @@ pub unsafe extern "C" fn karac_mir_map_pick(
             None => Some(i),
             Some(b) => {
                 let o = c(m.at(i), m.at(b));
-                let greater = matches!(op, 1 | 2);
+                let greater = matches!(op, 1 | 2 | 6);
                 if (greater && o > 0) || (!greater && o < 0) {
                     Some(i)
                 } else {

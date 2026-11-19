@@ -240,6 +240,29 @@ impl super::Parser {
             };
             self.fix_edits
                 .insert(crate::resolver::SpanKey::from_span(&span), edit);
+            return;
+        }
+        // `{n:#04x}`: Rust's alternate form, whose prefix goes in the text
+        // before the hole, `0x{n:02x}`.
+        if let Some((prefix, kara)) = crate::format_spec::alternate_as_prefix(spec) {
+            let open = offset.checked_sub(1);
+            if open.is_some_and(|o| self.source_at(o, 1) == Some("{")) {
+                self.fix_diffs.insert(
+                    crate::resolver::SpanKey::from_span(&span),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: offset - 1,
+                            length: 0,
+                            replacement: prefix.to_string(),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: span.offset,
+                            length: span.length,
+                            replacement: kara,
+                        },
+                    ],
+                );
+            }
         }
     }
 

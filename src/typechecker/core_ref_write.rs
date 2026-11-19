@@ -1600,8 +1600,17 @@ impl Walk<'_, '_> {
                 }
                 self.expr(body);
                 self.scopes.pop();
+                // A closure that also moves a capture out is an `OnceFn`
+                // (§9.6), called once through any binding: its writes do not
+                // make it a `MutFn` (B-2026-11-19-85).
+                let once = self
+                    .tc
+                    .closure_once_reasons
+                    .contains_key(&SpanKey::from_span(&e.span));
                 if let Some((_, Some(name))) = self.closures.pop() {
-                    self.closure_writes.insert(e.span.offset, name);
+                    if !once {
+                        self.closure_writes.insert(e.span.offset, name);
+                    }
                 }
                 return;
             }

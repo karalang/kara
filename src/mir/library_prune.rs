@@ -74,6 +74,9 @@ const ALWAYS_KEPT: &[&str] = &[
     "index",
     "index_mut",
     "contains",
+    // `Slice`'s, beside `Str`'s natives of the same names (B-2026-11-19-84).
+    "starts_with",
+    "ends_with",
     "range",
     "range_inclusive",
     "Range",

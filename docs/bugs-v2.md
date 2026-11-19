@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 553 |
-| false-positive | 292 |
-| missing-feature | 206 |
+| diagnostics | 556 |
+| false-positive | 293 |
+| missing-feature | 208 |
 | perf | 188 |
 | other | 119 |
-| soundness | 93 |
+| soundness | 95 |
 | miscompile | 89 |
 | crash | 60 |
 | run-vs-build | 57 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 699 |
+| typecheck | 706 |
 | mir-llvm | 306 |
-| mir | 268 |
+| mir | 269 |
 | cli | 210 |
-| parser | 121 |
-| ownership | 111 |
-| interp | 91 |
-| runtime | 90 |
+| parser | 124 |
+| ownership | 112 |
+| interp | 92 |
+| runtime | 91 |
 | resolver | 46 |
 | effect | 45 |
 | other | 35 |
@@ -146,6 +146,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-71 | 2026-11-19 | mir+mir-llvm | high | Calling a function value through a generic `mut ref F` parameter (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`, `twice(mut g)`) crashes every lane: compiled is a stack overflow (exit 134) or SIGSEGV (139), ASan reports stack-buffer-overflow / SEGV in `twice[Fn() -> i64]`, and `__mir-run` stops `call through Agg([Ref(..)]), which is not a function value` | — |
 | B-2026-11-19-72 | 2026-11-19 | mir+mir-llvm | high | A closure LITERAL passed to a generic bare `F` parameter (`fn call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) captures by move on every lane: a counter it writes is copied, so `n` reads 0 after two calls (want 2), and a captured `Drop` value is moved and dropped at the end of the call statement (`d5` prints before the result), while `karac check` treats the capture as a borrow and accepts a later use of `r` that the MIR move check then refuses | — |
 | B-2026-11-19-73 | 2026-11-19 | mir-llvm | medium | On wasm_wasi, corpus/design/ok_pool_chained_health_check_with_a_closure_factory (pinned at 0aa814606b) traps `table index is out of bounds` in karac_mir_pool_drop, so tests/mir_wasm_core_corpus.rs fails 1 of 329; native lanes pass | — |
+| B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
+| B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
+| B-2026-11-19-80 | 2026-11-19 | parser | medium | `thread::spawn(move || ..)` has a message naming `TaskGroup` but no fix, so a Rust-shaped server's worker thread stops the Mend loop | — |
+| B-2026-11-19-81 | 2026-11-19 | parser+typecheck | medium | Rust's alternate form `{:#04x}` has no fix, in `format!` (the conversion bails) or in an `f".."` hole | — |
+| B-2026-11-19-82 | 2026-11-19 | parser+typecheck+interp+runtime | medium | `SortedMap` has `floor` and `ceiling` but no strict `lower` / `higher`, so an SNMP GETNEXT and Rust's `range((Bound::Excluded(k), Bound::Unbounded)).next()` have no Kāra spelling | — |
+| B-2026-11-19-83 | 2026-11-19 | typecheck | low | A `Vec[String]` built from string literals (`["a", "b"]`, `Vec.filled(n, "x")`) passed where `Slice[Str]` is taken is refused with no fix | — |
+| B-2026-11-19-84 | 2026-11-19 | typecheck | medium | `Slice` (so `Vec` and `Array`) has no `starts_with` / `ends_with`: "no method 'starts_with' on type 'Vec'" for an OID subtree test | — |
+| B-2026-11-19-85 | 2026-11-19 | mir+typecheck | high | A closure that writes a capture and then moves it out (`|| { agent.serve(); agent }`) checks clean but `run`/`build` refuse it as "cannot move a non-`Copy` value out of a borrowed place" | — |
 
 ### Relocated
 

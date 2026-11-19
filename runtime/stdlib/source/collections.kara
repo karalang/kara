@@ -351,6 +351,44 @@ impl[T] Slice[T] {
     }
 }
 
+impl[T: PartialEq] Slice[T] {
+    /// Whether the slice begins with `prefix`, element for element; an
+    /// empty `prefix` begins every slice (docs/library/collections.md,
+    /// B-2026-11-19-84).
+    fn starts_with(self, prefix: Slice[T]) -> bool {
+        let m = prefix.len();
+        if m > self.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < m {
+            if self[i] != prefix[i] {
+                return false;
+            }
+            i = i + 1;
+        }
+        true
+    }
+
+    /// Whether the slice ends with `suffix`, element for element; an empty
+    /// `suffix` ends every slice.
+    fn ends_with(self, suffix: Slice[T]) -> bool {
+        let m = suffix.len();
+        let n = self.len();
+        if m > n {
+            return false;
+        }
+        let mut i = 0;
+        while i < m {
+            if self[n - m + i] != suffix[i] {
+                return false;
+            }
+            i = i + 1;
+        }
+        true
+    }
+}
+
 impl[T: Display] Slice[T] {
     /// The elements' `Display` forms, with `sep` between each adjacent pair
     /// (B-2026-10-14-4, B-2026-10-14-67).

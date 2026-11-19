@@ -305,12 +305,17 @@ fn rusts_std_thread_sleep_paths_get_one_import() {
 /// import, so `std.thread` never becomes an import line
 /// (B-2026-11-15-152, which flipped this from `import std.thread;`).
 #[test]
-fn use_std_thread_with_a_spawn_is_left_to_the_spawns_diagnostic() {
+fn use_std_thread_with_a_spawn_is_left_to_the_spawns_fix() {
+    // The spawn has its own fix since B-2026-11-19-80: a group opened
+    // before its statement.
     let src = "use std::thread;\n\nfn main() {\n    let h = thread::spawn(|| 1);\n    \
                thread::sleep(std::time::Duration::from_millis(1));\n}\n";
     let (text, ok) = mended("spawn", src);
-    assert!(!ok, "{text}");
+    assert!(ok, "{text}");
     assert!(!text.contains("import std.thread;"), "{text}");
     assert!(text.contains("import std.time.sleep;"), "{text}");
-    assert!(text.contains("thread::spawn(|| 1)"), "{text}");
+    assert!(
+        text.contains("    let group = TaskGroup.new();\n    let h = group.spawn(|| 1);\n"),
+        "{text}"
+    );
 }

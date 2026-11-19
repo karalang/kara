@@ -184,4 +184,103 @@ impl super::Parser {
             replacement: replacement.to_string(),
         })
     }
+
+    /// The fix for a `thread::spawn(..)` (path tokens from `at`, the path
+    /// spanning `whole`) that starts a statement or a `let`'s initializer in
+    /// a function's own body: a group made on the line before, `let group =
+    /// TaskGroup.new();`, and the call written `group.spawn(..)`. The group
+    /// joins its task when it drops at the end of the body, which a Rust
+    /// program that joins its handle has already done; inside a loop or a
+    /// nested block it would join each pass, so there is no fix there.
+    pub(crate) fn thread_spawn_group_fix(
+        &self,
+        at: usize,
+        whole: crate::token::Span,
+    ) -> Option<Vec<TextEdit>> {
+        let token = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let ident = |i: usize| match token(i) {
+            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+        // Where the statement starts: the path itself, or `let [mut] h =`.
+        let before = |k: usize| at.checked_sub(k).and_then(token);
+        let stmt = if matches!(before(1), Some(Token::Equal)) && ident(at.checked_sub(2)?).is_some()
+        {
+            match (before(3), before(4)) {
+                (Some(Token::Let), _) => at - 3,
+                (Some(Token::Mut), Some(Token::Let)) => at - 4,
+                _ => return None,
+            }
+        } else if matches!(
+            before(1),
+            Some(Token::Semicolon | Token::LeftBrace | Token::RightBrace)
+        ) {
+            at
+        } else {
+            return None;
+        };
+        // The innermost block around it, which must be a function's body.
+        let mut depth = 0usize;
+        let mut open = None;
+        for k in (0..stmt).rev() {
+            match token(k) {
+                Some(Token::RightBrace) => depth += 1,
+                Some(Token::LeftBrace) if depth == 0 => {
+                    open = Some(k);
+                    break;
+                }
+                Some(Token::LeftBrace) => depth -= 1,
+                _ => {}
+            }
+        }
+        let open = open?;
+        let mut parens = 0i64;
+        let mut is_fn = false;
+        for k in (0..open).rev() {
+            match token(k) {
+                Some(Token::RightParen | Token::RightBracket) => parens += 1,
+                Some(Token::LeftParen | Token::LeftBracket) => parens -= 1,
+                Some(Token::Semicolon | Token::LeftBrace | Token::RightBrace) if parens == 0 => {
+                    break
+                }
+                Some(Token::Fn) if parens == 0 => {
+                    is_fn = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if !is_fn {
+            return None;
+        }
+        let taken = |n: &str| {
+            self.tokens
+                .iter()
+                .any(|t| matches!(&t.token, Token::Identifier { name, .. } if name == n))
+        };
+        let group = ["group", "tasks", "task_group"]
+            .into_iter()
+            .find(|n| !taken(n))?;
+        let start = self.tokens[stmt].span.offset;
+        let (source, base) = self.source.as_ref()?;
+        let line = source.get(..start.checked_sub(*base)?)?;
+        let indent = &line[line.rfind('\n').map_or(0, |p| p + 1)..];
+        let make = if indent.chars().all(char::is_whitespace) {
+            format!("let {group} = TaskGroup.new();\n{indent}")
+        } else {
+            format!("let {group} = TaskGroup.new(); ")
+        };
+        Some(vec![
+            TextEdit {
+                offset: start,
+                length: 0,
+                replacement: make,
+            },
+            TextEdit {
+                offset: whole.offset,
+                length: whole.length,
+                replacement: format!("{group}.spawn"),
+            },
+        ])
+    }
 }

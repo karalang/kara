@@ -27272,7 +27272,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             let cm = match mode {
                 _ if escapes || by_value.contains(&sym) => CapMode::Value,
                 _ if !explicit && task_moved.contains(&name) => CapMode::Value,
-                Some(OwnershipMode::MutRef) => CapMode::Mut,
+                // A capture the body writes and then moves out
+                // (`|| { agent.serve(); agent }`) is moved in: the move is
+                // the stronger use (§9.1, B-2026-11-19-85).
+                Some(OwnershipMode::MutRef) if explicit || !moved.contains(&sym) => CapMode::Mut,
                 // A capture the body assigns to is lent by `mut ref` (§9.1).
                 _ if !explicit && assigned.contains(&sym) && !moved.contains(&sym) => CapMode::Mut,
                 // A `par` branch's task reads a handle through a borrow and
@@ -27302,7 +27305,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 _ if self.is_copy(t) => CapMode::Value,
                 // Under D5 a capture is moved place by place, as the body
                 // moves it (§9.1).
-                None | Some(OwnershipMode::Ref)
+                None | Some(OwnershipMode::Ref) | Some(OwnershipMode::MutRef)
                     if ((once && !d5_params()) || moved.contains(&sym)) && !explicit =>
                 {
                     CapMode::Value

@@ -369,6 +369,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `SortedMap.lower(k)` and `SortedMap.higher(k)`, the entries with the
+  largest key below `k` and the smallest above it, beside `floor` and
+  `ceiling` (B-2026-11-19-82). `Slice.starts_with(prefix)` and
+  `Slice.ends_with(suffix)` compare elements, so a `Vec[u32]` OID is under
+  a subtree when `oid.starts_with(base)` (B-2026-11-19-84).
 - A parameter takes any irrefutable pattern, in functions and closures alike
   (design.md § Destructuring parameters): `Req { ref h, body }: own Req` and
   `h: ref hh`, a fixed-array pattern `[a, b, c]: Array[i64, 3]`,
@@ -858,6 +863,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   type states it. A function that also calls through the bus is still
   charged the closures it stores, since the call through the bus is not
   yet charged the bus's clause (B-2026-11-19-22, B-2026-11-19-38).
+- A closure that writes a capture and then moves it out,
+  `group.spawn(|| { agent.serve(); agent })`, takes the capture by move as
+  core semantics §9.1 says: `karac check` passed it and `run` and `build`
+  refused it as a move out of a borrowed place (B-2026-11-19-85).
 - `karac check` counts `.raw()` on an owned non-`Copy` distinct value as a
   move of the wrapper, as design.md § Distinct Types says: a later use
   checked clean and was refused only by `run` and `build`, with no source
@@ -1906,6 +1915,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   as `karac run` does, rather than a bare 101 that read as a panic: a
   segmentation fault under ThreadSanitizer showed as exit 101 with no
   output (B-2026-11-19-46).
+- `std::thread::spawn(|| ..)` inside a function body is fixed to a
+  `TaskGroup`: `let group = TaskGroup.new();` before the statement and
+  `group.spawn(|| ..)` in place of the path (B-2026-11-19-80). Rust's alternate
+  form `{:#04x}` in `format!` and in an `f"..."` hole is written
+  `0x{v:02x}`, as Rust's width counts the prefix (B-2026-11-19-81). A
+  `use std::ops::Bound;` whose every use is a neighbour lookup,
+  `m.range((Bound::Excluded(k), Bound::Unbounded)).next()` and its three
+  siblings, is deleted and each lookup becomes `higher(k)`, `ceiling(k)`,
+  `lower(k)` or `floor(k)` (B-2026-11-19-82). A `Vec[String]` built from string
+  literals and passed where `Slice[Str]` is taken gets `: Vec[Str]` on its
+  binding (B-2026-11-19-83).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a

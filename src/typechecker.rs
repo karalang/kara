@@ -4462,6 +4462,12 @@ pub struct TypeChecker<'a> {
     pub(super) open_collection_lets: FxHashMap<String, Span>,
     /// The spans of identifiers that read an `open_collection_lets` binding.
     pub(super) open_collection_let_uses: FxHashMap<SpanKey, String>,
+    /// `let name = ["a", "b"]` / `Vec.filled(n, "a")` with no annotation:
+    /// a list of string literals, whose elements take `String`. A use as a
+    /// `Slice[Str]` offers `: Vec[Str]` on the binding (B-2026-11-19-83).
+    pub(super) str_list_lets: FxHashMap<String, Span>,
+    /// The spans of identifiers that read a `str_list_lets` binding.
+    pub(super) str_list_let_uses: FxHashMap<SpanKey, String>,
     /// The `Peekable[I]` writes already refused (a signature is lowered
     /// more than once).
     pub(super) peekable_arity_reported: FxHashSet<SpanKey>,
@@ -5034,6 +5040,8 @@ impl<'a> TypeChecker<'a> {
             list_lit_let_uses: FxHashMap::default(),
             open_collection_lets: FxHashMap::default(),
             open_collection_let_uses: FxHashMap::default(),
+            str_list_lets: FxHashMap::default(),
+            str_list_let_uses: FxHashMap::default(),
             peekable_arity_reported: FxHashSet::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
@@ -8348,6 +8356,22 @@ impl<'a> TypeChecker<'a> {
         } else {
             self.open_collection_lets.remove(name);
         }
+        let str_lit = |e: &Expr| matches!(e.kind, ExprKind::StringLit(_));
+        let str_list = match &value.kind {
+            ExprKind::ArrayLiteral(items) => !items.is_empty() && items.iter().all(str_lit),
+            ExprKind::Call { callee, args } => {
+                matches!(&callee.kind, ExprKind::Path { segments, .. }
+                    if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled")
+                    && args.len() == 2
+                    && str_lit(&args[1].value)
+            }
+            _ => false,
+        };
+        if str_list {
+            self.str_list_lets.insert(name.to_string(), name_span);
+        } else {
+            self.str_list_lets.remove(name);
+        }
     }
 
     /// `name = value`: another value may have another length, so `: Array`
@@ -10427,6 +10451,35 @@ impl<'a> TypeChecker<'a> {
         if matches!(expected, Type::Slice { element, mutable: false } if str_view(element))
             && owned_strings(found)
         {
+            // `let names = ["a", "b"];` read here: its elements took
+            // `String`, and `: Vec[Str]` on the binding keeps them views.
+            let str_list = self
+                .str_list_let_uses
+                .get(&SpanKey::from_span(&span))
+                .and_then(|n| self.str_list_lets.get(n).map(|s| (n.clone(), *s)));
+            if let Some((name, at)) = str_list {
+                self.type_error_with_fix_it(
+                    format!(
+                        "expected 'Slice[Str]', found 'Vec[String]': each `String` owns its \
+                         text, so a `Vec[String]` lends no `Str` views. The string literals \
+                         `{name}` is built from took `String`, since nothing at its `let` asked \
+                         for views; declare it `{name}: Vec[Str]` (bound at {}:{})",
+                        at.line, at.column
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    FixIt {
+                        span: Span {
+                            line: at.line,
+                            column: at.column + at.length,
+                            offset: at.offset + at.length,
+                            length: 0,
+                        },
+                        replacement: ": Vec[Str]".to_string(),
+                    },
+                );
+                return false;
+            }
             self.type_error_with_types(
                 "expected 'Slice[Str]', found 'Vec[String]': each `String` owns its text, so a \
                  `Vec[String]` lends no `Str` views. Build the list as `Str`s (`let a: \

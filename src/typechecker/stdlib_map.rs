@@ -1144,7 +1144,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 option_kv
             }
-            "floor" | "ceiling" => {
+            "floor" | "ceiling" | "lower" | "higher" => {
                 if args.len() != 1 {
                     self.type_error(
                         format!(

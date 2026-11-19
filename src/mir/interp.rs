@@ -10298,10 +10298,12 @@ impl<'a> Interp<'a> {
             // A sorted table's entries are in key order with no holes, so
             // its bounds are binary searches (B-2026-10-23-1).
             (
-                "range" | "range_inclusive" | "floor" | "ceiling" | "min" | "max" | "first"
-                | "last",
+                "range" | "range_inclusive" | "floor" | "ceiling" | "lower" | "higher" | "min"
+                | "max" | "first" | "last",
                 rest,
-            ) if sorted && (is_map || !matches!(method, "floor" | "ceiling")) => {
+            ) if sorted
+                && (is_map || !matches!(method, "floor" | "ceiling" | "lower" | "higher")) =>
+            {
                 let n = self.vec_elems(id)?.len();
                 let mut bounds = Vec::with_capacity(rest.len());
                 for v in rest {
@@ -10323,6 +10325,15 @@ impl<'a> Interp<'a> {
                     }
                     ("ceiling", [k]) => {
                         let i = self.sorted_bound(id, is_map, key_ty, k, false)?;
+                        i..(i + 1).min(n)
+                    }
+                    // The greatest key below `k`, the least above it.
+                    ("lower", [k]) => {
+                        let i = self.sorted_bound(id, is_map, key_ty, k, false)?;
+                        i.saturating_sub(1)..i
+                    }
+                    ("higher", [k]) => {
+                        let i = self.sorted_bound(id, is_map, key_ty, k, true)?;
                         i..(i + 1).min(n)
                     }
                     ("min" | "first", []) => 0..n.min(1),
@@ -10458,8 +10469,8 @@ impl<'a> Interp<'a> {
                 self.option_of_place(ret, at)
             }
             (
-                "entries" | "range" | "range_inclusive" | "floor" | "ceiling" | "min" | "max"
-                | "first" | "last",
+                "entries" | "range" | "range_inclusive" | "floor" | "ceiling" | "lower" | "higher"
+                | "min" | "max" | "first" | "last",
                 rest,
             ) if is_map => {
                 // Clones of entries as `(K, V)` tuples: all of them, the
@@ -10473,8 +10484,10 @@ impl<'a> Interp<'a> {
                 }
                 // The bounds are ordered with the keys, so a user `cmp`
                 // ranks them together (B-2026-10-06-109).
-                let takes_bounds =
-                    matches!(method, "range" | "range_inclusive" | "floor" | "ceiling");
+                let takes_bounds = matches!(
+                    method,
+                    "range" | "range_inclusive" | "floor" | "ceiling" | "lower" | "higher"
+                );
                 if takes_bounds {
                     for v in rest {
                         let mut v = v.clone();
@@ -10521,6 +10534,22 @@ impl<'a> Interp<'a> {
                             .into_iter()
                             .collect()
                     }
+                    "lower" => {
+                        let k = bound(self, 0)?;
+                        (0..n)
+                            .filter(|&i| key_order(&keys[i], &k) == Less)
+                            .max_by(|&a, &b| key_order(&keys[a], &keys[b]))
+                            .into_iter()
+                            .collect()
+                    }
+                    "higher" => {
+                        let k = bound(self, 0)?;
+                        (0..n)
+                            .filter(|&i| key_order(&keys[i], &k) == Greater)
+                            .min_by(|&a, &b| key_order(&keys[a], &keys[b]))
+                            .into_iter()
+                            .collect()
+                    }
                     "min" | "first" => (0..n)
                         .min_by(|&a, &b| key_order(&keys[a], &keys[b]))
                         .into_iter()
@@ -10530,7 +10559,8 @@ impl<'a> Interp<'a> {
                         .into_iter()
                         .collect(),
                 };
-                let views = matches!(method, "floor" | "ceiling") && self.entry_views(ret);
+                let views = matches!(method, "floor" | "ceiling" | "lower" | "higher")
+                    && self.entry_views(ret);
                 let mut out = Vec::with_capacity(picked.len());
                 for j in picked {
                     let e = Addr {

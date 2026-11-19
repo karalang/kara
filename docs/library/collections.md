@@ -50,6 +50,8 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `first` | `fn first(self) -> Option[ref T]` | `None` if empty |
 | `last` | `fn last(self) -> Option[ref T]` | `None` if empty |
 | `contains` | `fn contains(self, val: T) -> bool where T: PartialEq` | Linear search |
+| `starts_with` | `fn starts_with(self, prefix: Slice[T]) -> bool where T: PartialEq` | Whether the first `prefix.len()` elements equal `prefix`'s; an empty `prefix` begins every slice |
+| `ends_with` | `fn ends_with(self, suffix: Slice[T]) -> bool where T: PartialEq` | Whether the last `suffix.len()` elements equal `suffix`'s |
 | `binary_search` | `fn binary_search(self, val: T) -> Option[i64] where T: Ord` | Index of an element equal to `val`, or `None`. The sequence must be sorted ascending |
 | `partition_point` | `fn partition_point(self, pred: own MutFn(T) -> bool) -> i64` | Index of the first element `pred` rejects, by binary search. The sequence must hold every element `pred` accepts before every one it rejects; `len()` when it accepts all. `v.partition_point(\|x\| x < t)` is where `t` would go in a sorted `v` |
 | `is_sorted` | `fn is_sorted(self) -> bool where T: Ord` | Non-strict ascending check: equal neighbours count as sorted, and 0 or 1 elements are sorted |
@@ -216,6 +218,8 @@ A B-tree map, `K: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `range_inclusive` | `fn range_inclusive(self, from: K, to: K) -> impl Iterator[Item = (ref K, ref V)]` | Entries with keys in `[from, to]`, like `from..=to`. Empty if `from > to` |
 | `floor` | `fn floor(self, key: K) -> Option[(ref K, ref V)]` | The entry with the largest key `<= key` |
 | `ceiling` | `fn ceiling(self, key: K) -> Option[(ref K, ref V)]` | The entry with the smallest key `>= key` |
+| `lower` | `fn lower(self, key: K) -> Option[(ref K, ref V)]` | The entry with the largest key `< key`. Rust's `range(..k).next_back()` |
+| `higher` | `fn higher(self, key: K) -> Option[(ref K, ref V)]` | The entry with the smallest key `> key`. Rust's `range((Excluded(k), Unbounded)).next()`, so an SNMP `GETNEXT` is `mib.higher(oid)` |
 | `first` | `fn first(self) -> Option[(ref K, ref V)]` | The entry with the smallest key. Rust's `first_key_value` |
 | `last` | `fn last(self) -> Option[(ref K, ref V)]` | The entry with the largest key. Rust's `last_key_value` |
 | `pop_first` | `fn pop_first(mut ref self) -> Option[(K, V)]` | Removes and returns the entry with the smallest key |
@@ -262,7 +266,7 @@ let n = keywords.get(src[start..end]) ?? 0     // keywords: Map[String, i64]
 if seen.contains(cand) { ... }                  // seen: Set[String], cand: Str
 ```
 
-A `String` or `Vec[T]` argument still works, borrowed, because a `String` passes as `Str` and a `Vec[T]` as `Slice[T]` at a call boundary ([design.md Strings](../design.md#strings)). Every other key type is looked up by `K`, as the tables above show. Methods that store a key (`insert`, `entry`) still take an owned `K`, and `range`, `floor` and `ceiling` take `K`.
+A `String` or `Vec[T]` argument still works, borrowed, because a `String` passes as `Str` and a `Vec[T]` as `Slice[T]` at a call boundary ([design.md Strings](../design.md#strings)). Every other key type is looked up by `K`, as the tables above show. Methods that store a key (`insert`, `entry`) still take an owned `K`, and `range`, `floor`, `ceiling`, `lower` and `higher` take `K`.
 
 The same holds for the searches of a sequence of `String` or `Vec[T]` elements: `contains` on a `Slice`, `Vec`, `Array` or `VecDeque`, and `binary_search` where it exists, take the element's view, so `["inc", "dec"].contains(cmd)` with `cmd: Str` and `names.contains(s)` on a `Vec[String]` allocate nothing. The literals of such a list stay `String`s; the argument does not change the element type (review-thread ruling 2026-11-08, B-2026-11-08-55).
 

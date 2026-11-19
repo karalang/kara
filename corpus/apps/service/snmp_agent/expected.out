@@ -1,0 +1,184 @@
+== get
+nms: get 3 -> response id 1001, 111 bytes
+nms:   1.3.6.1.2.1.1.1.0 = STRING: "Kara SNMP agent 0.1 on loopback"
+nms:   1.3.6.1.2.1.1.3.0 = Timeticks: (4217) 0 days, 0:00:42.17
+nms:   1.3.6.1.2.1.1.2.0 = OID: 1.3.6.1.4.1.99999.1
+nms: get 5 -> response id 1002, 136 bytes
+nms:   1.3.6.1.2.1.2.2.1.5.2 = Gauge32: 4294967295
+nms:   1.3.6.1.2.1.2.2.1.10.2 = Counter32: 4294967295
+nms:   1.3.6.1.2.1.2.2.1.16.2 = Counter32: 0
+nms:   1.3.6.1.2.1.31.1.1.1.6.1 = Counter64: 1099511627783
+nms:   1.3.6.1.2.1.31.1.1.1.6.2 = Counter64: 18446744073709551615
+nms: get missing (v2c) -> response id 1003, 78 bytes
+nms:   1.3.6.1.2.1.1.9.0 = No Such Object available on this agent at this OID
+nms:   1.3.6.1.2.1.1.5.1 = No Such Instance currently exists at this OID
+nms:   1.3.6.1.2.1.4.20.1.1.127.0.0.1 = IpAddress: 127.0.0.1
+old: get missing (v1) -> response id 1001, 55 bytes, error noSuchName(2) at 2
+old:   1.3.6.1.2.1.1.5.0 = NULL
+old:   1.3.6.1.2.1.1.9.0 = NULL
+== walk
+nms:   1.3.6.1.2.1.1.1.0 = STRING: "Kara SNMP agent 0.1 on loopback"
+nms:   1.3.6.1.2.1.1.2.0 = OID: 1.3.6.1.4.1.99999.1
+nms:   1.3.6.1.2.1.1.3.0 = Timeticks: (4319) 0 days, 0:00:43.19
+nms:   1.3.6.1.2.1.1.4.0 = STRING: "ops@example.invalid"
+nms:   1.3.6.1.2.1.1.5.0 = STRING: "agent-7"
+nms:   1.3.6.1.2.1.1.6.0 = STRING: "rack 4, shelf 2"
+nms:   1.3.6.1.2.1.1.7.0 = INTEGER: 72
+nms: walk 1.3.6.1.2.1.1: 7 objects
+nms:   1.3.6.1.2.1.4.20.1.1.10.0.0.7 = IpAddress: 10.0.0.7
+nms:   1.3.6.1.2.1.4.20.1.1.127.0.0.1 = IpAddress: 127.0.0.1
+nms: walk 1.3.6.1.2.1.4.20: 2 objects
+nms: getnext past the end (v2c) -> response id 1015, 43 bytes
+nms:   1.3.6.1.4.1.99999.2.0 = No more variables left in this MIB View (It is past the end of the MIB tree)
+old: getnext past the end (v1) -> response id 1002, 43 bytes, error noSuchName(2) at 1
+old:   1.3.6.1.4.1.99999.2.0 = NULL
+== bulk
+nms: getbulk 1/3 -> response id 1016, 154 bytes
+nms:   1.3.6.1.2.1.1.7.0 = INTEGER: 72
+nms:   1.3.6.1.2.1.2.2.1.1.1 = INTEGER: 1
+nms:   1.3.6.1.2.1.2.2.1.2.1 = STRING: "lo"
+nms:   1.3.6.1.2.1.2.2.1.1.2 = INTEGER: 2
+nms:   1.3.6.1.2.1.2.2.1.2.2 = STRING: "eth0"
+nms:   1.3.6.1.2.1.2.2.1.2.1 = STRING: "lo"
+nms:   1.3.6.1.2.1.2.2.1.5.1 = Gauge32: 10000000
+nms: getbulk into the end -> response id 1017, 60 bytes
+nms:   1.3.6.1.4.1.99999.2.0 = INTEGER: 0
+nms:   1.3.6.1.4.1.99999.2.0 = No more variables left in this MIB View (It is past the end of the MIB tree)
+nms: getbulk 60, truncated -> response id 1018, 480 bytes
+nms:   1.3.6.1.2.1.1.1.0 = STRING: "Kara SNMP agent 0.1 on loopback"
+nms:   1.3.6.1.2.1.1.2.0 = OID: 1.3.6.1.4.1.99999.1
+nms:   1.3.6.1.2.1.1.3.0 = Timeticks: (4540) 0 days, 0:00:45.40
+nms:   1.3.6.1.2.1.1.4.0 = STRING: "ops@example.invalid"
+nms:   1.3.6.1.2.1.1.5.0 = STRING: "agent-7"
+nms:   1.3.6.1.2.1.1.6.0 = STRING: "rack 4, shelf 2"
+nms:   1.3.6.1.2.1.1.7.0 = INTEGER: 72
+nms:   1.3.6.1.2.1.2.1.0 = INTEGER: 2
+nms:   1.3.6.1.2.1.2.2.1.1.1 = INTEGER: 1
+nms:   1.3.6.1.2.1.2.2.1.1.2 = INTEGER: 2
+nms:   1.3.6.1.2.1.2.2.1.2.1 = STRING: "lo"
+nms:   1.3.6.1.2.1.2.2.1.2.2 = STRING: "eth0"
+nms:   1.3.6.1.2.1.2.2.1.5.1 = Gauge32: 10000000
+nms:   1.3.6.1.2.1.2.2.1.5.2 = Gauge32: 4294967295
+nms:   1.3.6.1.2.1.2.2.1.10.1 = Counter32: 123456
+nms:   1.3.6.1.2.1.2.2.1.10.2 = Counter32: 4294967295
+nms:   1.3.6.1.2.1.2.2.1.16.1 = Counter32: 654321
+nms:   1.3.6.1.2.1.2.2.1.16.2 = Counter32: 0
+nms:   1.3.6.1.2.1.4.20.1.1.10.0.0.7 = IpAddress: 10.0.0.7
+nms:   1.3.6.1.2.1.4.20.1.1.127.0.0.1 = IpAddress: 127.0.0.1
+nms:   1.3.6.1.2.1.11.1.0 = Counter32: 20
+nms: get 20 descriptions, too big -> response id 1019, 313 bytes, error tooBig(1) at 0
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+nms:   1.3.6.1.2.1.1.1.0 = NULL
+old: getbulk on v1 -> no reply
+== set
+ops: set sysName and sysLocation -> response id 1001, 79 bytes
+ops:   1.3.6.1.2.1.1.5.0 = STRING: "agent-7b"
+ops:   1.3.6.1.2.1.1.6.0 = STRING: "rack 5, shelf 1"
+ops: set sysName to an integer -> response id 1002, 43 bytes, error wrongType(7) at 1
+ops:   1.3.6.1.2.1.1.5.0 = INTEGER: 7
+v1ops: set sysName to an integer (v1) -> response id 1001, 43 bytes, error badValue(3) at 1
+v1ops:   1.3.6.1.2.1.1.5.0 = INTEGER: 7
+ops: set sysDescr -> response id 1003, 43 bytes, error notWritable(17) at 1
+ops:   1.3.6.1.2.1.1.1.0 = STRING: "x"
+ops: set a new object -> response id 1004, 43 bytes, error noCreation(11) at 1
+ops:   1.3.6.1.2.1.1.8.0 = INTEGER: 1
+ops: set the halt switch to 9 -> response id 1005, 45 bytes, error wrongValue(10) at 1
+ops:   1.3.6.1.4.1.99999.2.0 = INTEGER: 9
+ops: set sysContact, 300 bytes -> response id 1006, 352 bytes, error wrongLength(8) at 1
+ops:   1.3.6.1.2.1.1.4.0 = STRING: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..." (300 bytes)
+nms: set with the public community -> no reply
+nms: get after set -> response id 1021, 111 bytes
+nms:   1.3.6.1.2.1.1.4.0 = STRING: "ops@example.invalid"
+nms:   1.3.6.1.2.1.1.5.0 = STRING: "agent-7b"
+nms:   1.3.6.1.2.1.1.6.0 = STRING: "rack 5, shelf 1"
+== broken
+probe: wrong community -> no reply
+probe: version 3 -> no reply
+probe: truncated by 3 bytes -> no reply
+probe: trailing byte -> no reply
+probe: 3-byte long length -> no reply
+probe: not a sequence -> no reply
+probe: OID ends mid sub-identifier -> no reply
+probe: a response PDU -> no reply
+probe: request id -5 -> response id -5, 41 bytes
+probe:   1.3.6.1.2.1.1.7.0 = INTEGER: 72
+probe: request id 2147483647 -> response id 2147483647, 44 bytes
+probe:   1.3.6.1.2.1.1.7.0 = INTEGER: 72
+nms: snmp counters -> response id 1022, 103 bytes
+nms:   1.3.6.1.2.1.11.1.0 = Counter32: 42
+nms:   1.3.6.1.2.1.11.3.0 = Counter32: 1
+nms:   1.3.6.1.2.1.11.4.0 = Counter32: 2
+nms:   1.3.6.1.2.1.11.6.0 = Counter32: 5
+nms:   1.3.6.1.2.1.1.3.0 = Timeticks: (4914) 0 days, 0:00:49.14
+== admin
+ops: halt -> response id 1007, 45 bytes
+ops:   1.3.6.1.4.1.99999.2.0 = INTEGER: 1
+== agent log
+nms: v2c get of 3 -> noError
+nms: v2c get of 5 -> noError
+nms: v2c get of 3 -> noError
+old: v1 get of 2 -> noSuchName at 2
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+nms: v2c getnext of 1 -> noError
+old: v1 getnext of 1 -> noSuchName at 1
+nms: v2c getbulk of 3 -> noError
+nms: v2c getbulk of 1 -> noError
+nms: v2c getbulk of 1 -> truncated to 21
+nms: v2c get of 20 -> tooBig
+old: dropped, v1 getbulk
+ops: v2c set of 2 -> noError
+ops: v2c set of 1 -> wrongType at 1
+v1ops: v1 set of 1 -> badValue at 1
+ops: v2c set of 1 -> notWritable at 1
+ops: v2c set of 1 -> noCreation at 1
+ops: v2c set of 1 -> wrongValue at 1
+ops: v2c set of 1 -> wrongLength at 1
+nms: dropped, community 'public' for set
+nms: v2c get of 3 -> noError
+probe: dropped, community 'secret' for get
+probe: dropped, version 3
+probe: dropped, length 38 past the end
+probe: dropped, bytes after the message
+probe: dropped, length of 3 bytes
+probe: dropped, tag 0x04 where 0x30 was expected
+probe: dropped, OID ends mid sub-identifier
+probe: dropped, v2c response
+probe: v2c get of 1 -> noError
+probe: v2c get of 1 -> noError
+nms: v2c get of 5 -> noError
+ops: v2c set of 1 -> noError
+ops: halt
+== counts
+dropped: 10
+get: 9
+getbulk: 3
+getnext: 13
+set: 8

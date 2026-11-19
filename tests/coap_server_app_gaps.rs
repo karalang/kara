@@ -136,8 +136,8 @@ fn main() {
     assert!(!fixed.contains("thread"), "{fixed}");
     assert_eq!(run_stdout(&path), "3\n");
 
-    // With the spawn still there, the line goes and the spawn keeps its own
-    // diagnostic.
+    // With the spawn still there, the line goes and the spawn gets its own
+    // fix, a group opened before it (B-2026-11-19-80).
     let path = scratch(
         "thread-spawn.kara",
         "use std::thread;
@@ -151,12 +151,11 @@ fn main() {
     let fixed = fix_to_fixpoint(&path);
     assert!(!fixed.contains("import std.thread"), "{fixed}");
     assert!(!fixed.contains("use std::thread"), "{fixed}");
-    let check = karac(&["check"], &path);
     assert!(
-        text(&check).contains("Kāra has no free `spawn`"),
-        "{}",
-        text(&check)
+        fixed.contains("    let group = TaskGroup.new();\n    let h = group.spawn(|| 3);\n"),
+        "{fixed}"
     );
+    assert_eq!(run_stdout(&path), "3\n");
 }
 
 #[test]

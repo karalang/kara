@@ -143,6 +143,44 @@ impl SpecError {
     }
 }
 
+/// Rust's alternate form `#x` / `#04x` / `#010b`, which Kāra does not have
+/// (the spec's `#` is refused): the prefix to write before the hole, and the
+/// spec that prints the rest, when the two print what Rust prints. Rust's
+/// width counts the prefix, so `#04x` is `0x` and `02x`. `None` for a width
+/// padded with spaces, a fill, an alignment or a sign, whose padding or sign
+/// would land before the prefix (B-2026-11-19-81).
+pub fn alternate_as_prefix(raw: &str) -> Option<(&'static str, String)> {
+    let rest = raw.strip_prefix('#')?;
+    let t = rest.get(rest.len().checked_sub(1)?..)?;
+    let body = &rest[..rest.len() - 1];
+    let prefix = match t {
+        "x" | "X" => "0x",
+        "o" => "0o",
+        "b" => "0b",
+        _ => return None,
+    };
+    if body.is_empty() {
+        return Some((prefix, t.to_string()));
+    }
+    let digits = body.strip_prefix('0')?;
+    if digits.is_empty() {
+        return Some((prefix, t.to_string()));
+    }
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let width: usize = digits.parse().ok()?;
+    let inner = width.saturating_sub(2);
+    Some((
+        prefix,
+        if inner > 0 {
+            format!("0{inner}{t}")
+        } else {
+            t.to_string()
+        },
+    ))
+}
+
 impl FormatSpec {
     /// Parse a raw specifier string (the text after the hole's `:`). Returns a
     /// human-readable error for an unrecognized spec.

@@ -1339,10 +1339,16 @@ impl<'ctx> Cx<'ctx, '_> {
                 let i = self.pick(h, null, t, op)?;
                 self.store_picked(dest, dty, h, i, t)?;
             }
-            ("floor" | "ceiling", [k]) if is_map => {
+            ("floor" | "ceiling" | "lower" | "higher", [k]) if is_map => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let i = self.pick(h, kp, t, if method == "floor" { 2 } else { 3 })?;
+                let op = match method {
+                    "floor" => 2,
+                    "ceiling" => 3,
+                    "lower" => 6,
+                    _ => 7,
+                };
+                let i = self.pick(h, kp, t, op)?;
                 self.store_picked(dest, dty, h, i, t)?;
                 self.drop_moved(&args[1..])?;
             }

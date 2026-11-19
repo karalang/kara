@@ -1,0 +1,927 @@
+// snmp_agent: an SNMP agent (SNMPv1, RFC 1157, and SNMPv2c, RFCs 1901 and
+// 3416) on loopback UDP, and the managers that query it. Every message is
+// BER-encoded ASN.1 (X.690): a type tag, a length in short or long form,
+// and the contents.
+
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::net::UdpSocket;
+use std::ops::Bound;
+use std::thread;
+use std::time::Duration;
+
+const QUIET_MS: u64 = 150;
+const MAX_SIZE: usize = 484;
+
+const INTEGER: u8 = 0x02;
+const OCTETS: u8 = 0x04;
+const NULL: u8 = 0x05;
+const OID: u8 = 0x06;
+const SEQ: u8 = 0x30;
+const IPADDR: u8 = 0x40;
+const COUNTER32: u8 = 0x41;
+const GAUGE32: u8 = 0x42;
+const TICKS: u8 = 0x43;
+const COUNTER64: u8 = 0x46;
+const NO_OBJECT: u8 = 0x80;
+const NO_INSTANCE: u8 = 0x81;
+const END_OF_VIEW: u8 = 0x82;
+const GET: u8 = 0xA0;
+const GETNEXT: u8 = 0xA1;
+const RESPONSE: u8 = 0xA2;
+const SET: u8 = 0xA3;
+const GETBULK: u8 = 0xA5;
+
+const ERRORS: [&str; 19] = [
+    "noError", "tooBig", "noSuchName", "badValue", "readOnly", "genErr",
+    "noAccess", "wrongType", "wrongLength", "wrongEncoding", "wrongValue",
+    "noCreation", "inconsistentValue", "resourceUnavailable", "commitFailed",
+    "undoFailed", "authorizationError", "notWritable", "inconsistentName",
+];
+
+fn pdu_name(pdu: u8) -> &'static str {
+    match pdu {
+        GET => "get",
+        GETNEXT => "getnext",
+        RESPONSE => "response",
+        SET => "set",
+        GETBULK => "getbulk",
+        _ => "?",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Value {
+    Integer(i64),
+    Octets(Vec<u8>),
+    Null,
+    Oid(Vec<u32>),
+    IpAddress([u8; 4]),
+    Counter32(u32),
+    Gauge32(u32),
+    TimeTicks(u32),
+    Counter64(u64),
+    NoSuchObject,
+    NoSuchInstance,
+    EndOfMibView,
+}
+
+impl Value {
+    fn tag(&self) -> u8 {
+        match self {
+            Value::Integer(_) => INTEGER,
+            Value::Octets(_) => OCTETS,
+            Value::Null => NULL,
+            Value::Oid(_) => OID,
+            Value::IpAddress(_) => IPADDR,
+            Value::Counter32(_) => COUNTER32,
+            Value::Gauge32(_) => GAUGE32,
+            Value::TimeTicks(_) => TICKS,
+            Value::Counter64(_) => COUNTER64,
+            Value::NoSuchObject => NO_OBJECT,
+            Value::NoSuchInstance => NO_INSTANCE,
+            Value::EndOfMibView => END_OF_VIEW,
+        }
+    }
+}
+
+fn show_oid(oid: &[u32]) -> String {
+    oid.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(".")
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Value::Integer(x) => write!(f, "INTEGER: {}", x),
+            Value::Octets(x) => {
+                if x.len() > 32 {
+                    write!(f, "STRING: \"{}...\" ({} bytes)", String::from_utf8_lossy(&x[..32]), x.len())
+                } else {
+                    write!(f, "STRING: \"{}\"", String::from_utf8_lossy(x))
+                }
+            }
+            Value::Null => write!(f, "NULL"),
+            Value::Oid(o) => write!(f, "OID: {}", show_oid(o)),
+            Value::IpAddress(a) => write!(f, "IpAddress: {}.{}.{}.{}", a[0], a[1], a[2], a[3]),
+            Value::Counter32(x) => write!(f, "Counter32: {}", x),
+            Value::Gauge32(x) => write!(f, "Gauge32: {}", x),
+            Value::TimeTicks(x) => {
+                let cs = x % 100;
+                let s = x / 100;
+                write!(f, "Timeticks: ({}) {} days, {}:{:02}:{:02}.{:02}", x, s / 86400, s / 3600 % 24, s / 60 % 60, s % 60, cs)
+            }
+            Value::Counter64(x) => write!(f, "Counter64: {}", x),
+            Value::NoSuchObject => write!(f, "No Such Object available on this agent at this OID"),
+            Value::NoSuchInstance => write!(f, "No Such Instance currently exists at this OID"),
+            Value::EndOfMibView => write!(f, "No more variables left in this MIB View (It is past the end of the MIB tree)"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BerError(String);
+
+// ---- encoding
+
+fn enc_len(n: usize) -> Vec<u8> {
+    if n < 0x80 {
+        return vec![n as u8];
+    }
+    let mut out = Vec::new();
+    let mut n = n;
+    while n > 0 {
+        out.push((n & 0xFF) as u8);
+        n >>= 8;
+    }
+    out.reverse();
+    let mut v = vec![0x80 | out.len() as u8];
+    v.extend(out);
+    v
+}
+
+fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = vec![tag];
+    v.extend(enc_len(body.len()));
+    v.extend_from_slice(body);
+    v
+}
+
+/// Two's complement, as few bytes as keep the sign.
+fn enc_signed(tag: u8, v: i64) -> Vec<u8> {
+    let bytes = v.to_be_bytes();
+    let mut start = 0;
+    while start < 7
+        && ((bytes[start] == 0 && bytes[start + 1] & 0x80 == 0)
+            || (bytes[start] == 0xFF && bytes[start + 1] & 0x80 != 0))
+    {
+        start += 1;
+    }
+    tlv(tag, &bytes[start..])
+}
+
+fn enc_unsigned(tag: u8, v: u64) -> Vec<u8> {
+    let mut body = vec![0u8];
+    body.extend_from_slice(&v.to_be_bytes());
+    let mut start = 0;
+    while start < 8 && body[start] == 0 && body[start + 1] & 0x80 == 0 {
+        start += 1;
+    }
+    tlv(tag, &body[start..])
+}
+
+fn enc_oid(arcs: &[u32]) -> Vec<u8> {
+    let mut body = Vec::new();
+    let mut subs = vec![arcs[0] * 40 + arcs[1]];
+    subs.extend_from_slice(&arcs[2..]);
+    for s in subs {
+        let mut chunk = vec![(s & 0x7F) as u8];
+        let mut s = s >> 7;
+        while s > 0 {
+            chunk.push(0x80 | (s & 0x7F) as u8);
+            s >>= 7;
+        }
+        chunk.reverse();
+        body.extend(chunk);
+    }
+    tlv(OID, &body)
+}
+
+fn enc_value(v: &Value) -> Vec<u8> {
+    match v {
+        Value::Integer(x) => enc_signed(INTEGER, *x),
+        Value::Octets(x) => tlv(OCTETS, x),
+        Value::Oid(o) => enc_oid(o),
+        Value::IpAddress(a) => tlv(IPADDR, a),
+        Value::Counter32(x) => enc_unsigned(COUNTER32, *x as u64),
+        Value::Gauge32(x) => enc_unsigned(GAUGE32, *x as u64),
+        Value::TimeTicks(x) => enc_unsigned(TICKS, *x as u64),
+        Value::Counter64(x) => enc_unsigned(COUNTER64, *x),
+        other => tlv(other.tag(), &[]),
+    }
+}
+
+struct Message {
+    version: i64,
+    community: Vec<u8>,
+    pdu: u8,
+    req_id: i64,
+    a: i64,
+    b: i64,
+    varbinds: Vec<(Vec<u32>, Value)>,
+}
+
+fn enc_message(m: &Message) -> Vec<u8> {
+    let mut vbs = Vec::new();
+    for (oid, v) in &m.varbinds {
+        let mut one = enc_oid(oid);
+        one.extend(enc_value(v));
+        vbs.extend(tlv(SEQ, &one));
+    }
+    let mut body = enc_signed(INTEGER, m.req_id);
+    body.extend(enc_signed(INTEGER, m.a));
+    body.extend(enc_signed(INTEGER, m.b));
+    body.extend(tlv(SEQ, &vbs));
+    let mut top = enc_signed(INTEGER, m.version);
+    top.extend(tlv(OCTETS, &m.community));
+    top.extend(tlv(m.pdu, &body));
+    tlv(SEQ, &top)
+}
+
+// ---- decoding
+
+struct Reader<'a> {
+    buf: &'a [u8],
+    at: usize,
+    end: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(buf: &'a [u8], start: usize, end: usize) -> Reader<'a> {
+        Reader { buf, at: start, end }
+    }
+
+    fn done(&self) -> bool {
+        self.at >= self.end
+    }
+
+    /// One TLV: its tag and the start and end of its contents.
+    fn take(&mut self) -> Result<(u8, usize, usize), BerError> {
+        if self.at + 2 > self.end {
+            return Err(BerError("truncated header".to_string()));
+        }
+        let tag = self.buf[self.at];
+        let mut n = self.buf[self.at + 1] as usize;
+        self.at += 2;
+        if n & 0x80 != 0 {
+            let k = n & 0x7F;
+            if k == 0 || k > 2 {
+                return Err(BerError(format!("length of {} bytes", k)));
+            }
+            if self.at + k > self.end {
+                return Err(BerError("truncated length".to_string()));
+            }
+            n = 0;
+            for i in 0..k {
+                n = (n << 8) | self.buf[self.at + i] as usize;
+            }
+            self.at += k;
+        }
+        if self.at + n > self.end {
+            return Err(BerError(format!("length {} past the end", n)));
+        }
+        let start = self.at;
+        self.at += n;
+        Ok((tag, start, self.at))
+    }
+
+    fn expect(&mut self, tag: u8) -> Result<(usize, usize), BerError> {
+        let (t, s, e) = self.take()?;
+        if t != tag {
+            return Err(BerError(format!("tag {:#04x} where {:#04x} was expected", t, tag)));
+        }
+        Ok((s, e))
+    }
+
+    fn integer(&mut self) -> Result<i64, BerError> {
+        let (s, e) = self.expect(INTEGER)?;
+        dec_signed(&self.buf[s..e])
+    }
+}
+
+fn dec_signed(b: &[u8]) -> Result<i64, BerError> {
+    if b.is_empty() || b.len() > 8 {
+        return Err(BerError(format!("integer of {} bytes", b.len())));
+    }
+    let mut v: i64 = if b[0] & 0x80 != 0 { -1 } else { 0 };
+    for &x in b {
+        v = (v << 8) | x as i64;
+    }
+    Ok(v)
+}
+
+fn dec_unsigned(b: &[u8]) -> Result<u64, BerError> {
+    if b.is_empty() || b.len() > 9 {
+        return Err(BerError(format!("integer of {} bytes", b.len())));
+    }
+    let mut v: u64 = 0;
+    for &x in b {
+        v = (v << 8) | x as u64;
+    }
+    Ok(v)
+}
+
+fn dec_oid(b: &[u8]) -> Result<Vec<u32>, BerError> {
+    if b.is_empty() {
+        return Err(BerError("empty OID".to_string()));
+    }
+    if b[b.len() - 1] & 0x80 != 0 {
+        return Err(BerError("OID ends mid sub-identifier".to_string()));
+    }
+    let mut subs: Vec<u32> = Vec::new();
+    let mut v: u32 = 0;
+    for &x in b {
+        v = (v << 7) | (x & 0x7F) as u32;
+        if x & 0x80 == 0 {
+            subs.push(v);
+            v = 0;
+        }
+    }
+    let first = subs[0];
+    let head = std::cmp::min(first / 40, 2);
+    let mut out = vec![head, first - 40 * head];
+    out.extend_from_slice(&subs[1..]);
+    Ok(out)
+}
+
+fn dec_value(r: &mut Reader) -> Result<Value, BerError> {
+    let (tag, s, e) = r.take()?;
+    let b = &r.buf[s..e];
+    Ok(match tag {
+        INTEGER => Value::Integer(dec_signed(b)?),
+        COUNTER32 => Value::Counter32(dec_unsigned(b)? as u32),
+        GAUGE32 => Value::Gauge32(dec_unsigned(b)? as u32),
+        TICKS => Value::TimeTicks(dec_unsigned(b)? as u32),
+        COUNTER64 => Value::Counter64(dec_unsigned(b)?),
+        OCTETS => Value::Octets(b.to_vec()),
+        OID => Value::Oid(dec_oid(b)?),
+        IPADDR => {
+            if b.len() != 4 {
+                return Err(BerError("IpAddress of the wrong size".to_string()));
+            }
+            Value::IpAddress([b[0], b[1], b[2], b[3]])
+        }
+        NULL => Value::Null,
+        NO_OBJECT => Value::NoSuchObject,
+        NO_INSTANCE => Value::NoSuchInstance,
+        END_OF_VIEW => Value::EndOfMibView,
+        _ => return Err(BerError(format!("value tag {:#04x}", tag))),
+    })
+}
+
+fn dec_message(buf: &[u8]) -> Result<Message, BerError> {
+    let mut top = Reader::new(buf, 0, buf.len());
+    let (s, e) = top.expect(SEQ)?;
+    if !top.done() {
+        return Err(BerError("bytes after the message".to_string()));
+    }
+    let mut r = Reader::new(buf, s, e);
+    let version = r.integer()?;
+    let (cs, ce) = r.expect(OCTETS)?;
+    let community = buf[cs..ce].to_vec();
+    let (pdu, ps, pe) = r.take()?;
+    if pdu_name(pdu) == "?" {
+        return Err(BerError(format!("PDU tag {:#04x}", pdu)));
+    }
+    let mut p = Reader::new(buf, ps, pe);
+    let req_id = p.integer()?;
+    let a = p.integer()?;
+    let b = p.integer()?;
+    let (vs, ve) = p.expect(SEQ)?;
+    let mut v = Reader::new(buf, vs, ve);
+    let mut varbinds = Vec::new();
+    while !v.done() {
+        let (bs, be) = v.expect(SEQ)?;
+        let mut one = Reader::new(buf, bs, be);
+        let (os, oe) = one.expect(OID)?;
+        let oid = dec_oid(&buf[os..oe])?;
+        let value = dec_value(&mut one)?;
+        varbinds.push((oid, value));
+    }
+    Ok(Message { version, community, pdu, req_id, a, b, varbinds })
+}
+
+// ---- the agent
+
+const SYS: [u32; 7] = [1, 3, 6, 1, 2, 1, 1];
+const IFX: [u32; 9] = [1, 3, 6, 1, 2, 1, 2, 2, 1];
+const SNMP: [u32; 7] = [1, 3, 6, 1, 2, 1, 11];
+const HC: [u32; 11] = [1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 6];
+const IPAD: [u32; 10] = [1, 3, 6, 1, 2, 1, 4, 20, 1, 1];
+const HALT: [u32; 9] = [1, 3, 6, 1, 4, 1, 99999, 2, 0];
+
+fn oid(base: &[u32], tail: &[u32]) -> Vec<u32> {
+    let mut v = base.to_vec();
+    v.extend_from_slice(tail);
+    v
+}
+
+fn parse_oid(text: &str) -> Vec<u32> {
+    text.split('.').map(|p| p.parse::<u32>().unwrap()).collect()
+}
+
+struct Agent {
+    sock: UdpSocket,
+    peers: HashMap<String, String>,
+    in_pkts: u32,
+    bad_versions: u32,
+    bad_community: u32,
+    parse_errs: u32,
+    mib: BTreeMap<Vec<u32>, Value>,
+    writable: HashMap<Vec<u32>, u8>,
+    log: Vec<String>,
+    counts: BTreeMap<String, u32>,
+}
+
+impl Agent {
+    fn new(sock: UdpSocket) -> Agent {
+        let s = |t: &str| Value::Octets(t.as_bytes().to_vec());
+        let mut mib = BTreeMap::new();
+        mib.insert(oid(&SYS, &[1, 0]), s("Kara SNMP agent 0.1 on loopback"));
+        mib.insert(oid(&SYS, &[2, 0]), Value::Oid(vec![1, 3, 6, 1, 4, 1, 99999, 1]));
+        mib.insert(oid(&SYS, &[3, 0]), Value::Null);
+        mib.insert(oid(&SYS, &[4, 0]), s("ops@example.invalid"));
+        mib.insert(oid(&SYS, &[5, 0]), s("agent-7"));
+        mib.insert(oid(&SYS, &[6, 0]), s("rack 4, shelf 2"));
+        mib.insert(oid(&SYS, &[7, 0]), Value::Integer(72));
+        mib.insert(vec![1, 3, 6, 1, 2, 1, 2, 1, 0], Value::Integer(2));
+        mib.insert(oid(&IPAD, &[10, 0, 0, 7]), Value::IpAddress([10, 0, 0, 7]));
+        mib.insert(oid(&IPAD, &[127, 0, 0, 1]), Value::IpAddress([127, 0, 0, 1]));
+        mib.insert(oid(&HC, &[1]), Value::Counter64((1u64 << 40) + 7));
+        mib.insert(oid(&HC, &[2]), Value::Counter64(u64::MAX));
+        mib.insert(HALT.to_vec(), Value::Integer(0));
+        for c in [1, 3, 4, 6] {
+            mib.insert(oid(&SNMP, &[c, 0]), Value::Null);
+        }
+        let ifaces = [("lo", 10_000_000u32, 123_456u32, 654_321u32), ("eth0", u32::MAX, u32::MAX, 0)];
+        for (i, (name, speed, rx, tx)) in ifaces.iter().enumerate() {
+            let i = i as u32 + 1;
+            mib.insert(oid(&IFX, &[1, i]), Value::Integer(i as i64));
+            mib.insert(oid(&IFX, &[2, i]), s(name));
+            mib.insert(oid(&IFX, &[5, i]), Value::Gauge32(*speed));
+            mib.insert(oid(&IFX, &[10, i]), Value::Counter32(*rx));
+            mib.insert(oid(&IFX, &[16, i]), Value::Counter32(*tx));
+        }
+        let mut writable = HashMap::new();
+        writable.insert(oid(&SYS, &[4, 0]), OCTETS);
+        writable.insert(oid(&SYS, &[5, 0]), OCTETS);
+        writable.insert(oid(&SYS, &[6, 0]), OCTETS);
+        writable.insert(HALT.to_vec(), INTEGER);
+        Agent {
+            sock,
+            peers: HashMap::new(),
+            in_pkts: 0,
+            bad_versions: 0,
+            bad_community: 0,
+            parse_errs: 0,
+            mib,
+            writable,
+            log: Vec::new(),
+            counts: BTreeMap::new(),
+        }
+    }
+
+    fn value(&self, o: &[u32]) -> Option<Value> {
+        if o == oid(&SYS, &[3, 0]).as_slice() {
+            return Some(Value::TimeTicks(4200 + 17 * self.in_pkts));
+        }
+        if o.len() == 9 && o[..7] == SNMP && self.mib.contains_key(o) {
+            return Some(Value::Counter32(match o[7] {
+                1 => self.in_pkts,
+                3 => self.bad_versions,
+                4 => self.bad_community,
+                _ => self.parse_errs,
+            }));
+        }
+        self.mib.get(o).cloned()
+    }
+
+    fn after(&self, o: &[u32]) -> Option<Vec<u32>> {
+        self.mib
+            .range((Bound::Excluded(o.to_vec()), Bound::Unbounded))
+            .next()
+            .map(|(k, _)| k.clone())
+    }
+
+    /// noSuchInstance when an object of the MIB shares this OID's parent.
+    fn missing(&self, o: &[u32]) -> Value {
+        let parent = &o[..o.len() - 1];
+        if self.mib.keys().any(|k| &k[..k.len() - 1] == parent) {
+            Value::NoSuchInstance
+        } else {
+            Value::NoSuchObject
+        }
+    }
+
+    fn count(&mut self, k: &str) {
+        *self.counts.entry(k.to_string()).or_insert(0) += 1;
+    }
+
+    fn drop_packet(&mut self, peer: &str, why: String) {
+        self.log.push(format!("{}: dropped, {}", peer, why));
+        self.count("dropped");
+    }
+
+    fn serve(&mut self) {
+        let mut buf = [0u8; 2048];
+        loop {
+            let (n, addr) = self.sock.recv_from(&mut buf).unwrap();
+            let peer = self.peers.get(&addr.to_string()).cloned().unwrap_or("?".to_string());
+            self.in_pkts += 1;
+            let m = match dec_message(&buf[..n]) {
+                Ok(m) => m,
+                Err(BerError(why)) => {
+                    self.parse_errs += 1;
+                    self.drop_packet(&peer, why);
+                    continue;
+                }
+            };
+            if m.version != 0 && m.version != 1 {
+                self.bad_versions += 1;
+                self.drop_packet(&peer, format!("version {}", m.version));
+                continue;
+            }
+            let v2 = m.version == 1;
+            let vname = if v2 { "v2c" } else { "v1" };
+            let community = String::from_utf8_lossy(&m.community).to_string();
+            if (community != "public" && community != "private") || (m.pdu == SET && community != "private") {
+                self.bad_community += 1;
+                self.drop_packet(&peer, format!("community '{}' for {}", community, pdu_name(m.pdu)));
+                continue;
+            }
+            if m.pdu == RESPONSE || (m.pdu == GETBULK && !v2) {
+                self.drop_packet(&peer, format!("{} {}", vname, pdu_name(m.pdu)));
+                continue;
+            }
+            let (mut status, index, mut out) = self.answer(v2, &m);
+            let mut reply = Message {
+                version: m.version,
+                community: m.community.clone(),
+                pdu: RESPONSE,
+                req_id: m.req_id,
+                a: status,
+                b: index,
+                varbinds: out.clone(),
+            };
+            let mut bytes = enc_message(&reply);
+            let mut truncated = false;
+            if bytes.len() > MAX_SIZE {
+                if m.pdu == GETBULK {
+                    while bytes.len() > MAX_SIZE {
+                        out.pop();
+                        reply.varbinds = out.clone();
+                        bytes = enc_message(&reply);
+                    }
+                    truncated = true;
+                } else {
+                    status = 1;
+                    reply.a = 1;
+                    reply.b = 0;
+                    reply.varbinds = m.varbinds.clone();
+                    bytes = enc_message(&reply);
+                }
+            }
+            self.sock.send_to(&bytes, &addr).unwrap();
+            let what = if truncated {
+                format!("truncated to {}", out.len())
+            } else if status == 1 {
+                "tooBig".to_string()
+            } else if index != 0 {
+                format!("{} at {}", ERRORS[status as usize], index)
+            } else {
+                ERRORS[status as usize].to_string()
+            };
+            self.log.push(format!("{}: {} {} of {} -> {}", peer, vname, pdu_name(m.pdu), m.varbinds.len(), what));
+            self.count(pdu_name(m.pdu));
+            if m.pdu == SET && status == 0 && m.varbinds.iter().any(|(o, _)| o.as_slice() == HALT) {
+                self.log.push(format!("{}: halt", peer));
+                return;
+            }
+        }
+    }
+
+    fn next_binding(&self, o: &[u32]) -> (Vec<u32>, Value) {
+        match self.after(o) {
+            Some(n) => {
+                let v = self.value(&n).unwrap();
+                (n, v)
+            }
+            None => (o.to_vec(), Value::EndOfMibView),
+        }
+    }
+
+    fn answer(&mut self, v2: bool, m: &Message) -> (i64, i64, Vec<(Vec<u32>, Value)>) {
+        let vbs = &m.varbinds;
+        match m.pdu {
+            GET => {
+                let mut out = Vec::new();
+                for (i, (o, _)) in vbs.iter().enumerate() {
+                    let v = match self.value(o) {
+                        Some(v) => v,
+                        None if !v2 => return (2, i as i64 + 1, vbs.clone()),
+                        None => self.missing(o),
+                    };
+                    out.push((o.clone(), v));
+                }
+                (0, 0, out)
+            }
+            GETNEXT => {
+                let mut out = Vec::new();
+                for (i, (o, _)) in vbs.iter().enumerate() {
+                    if self.after(o).is_none() && !v2 {
+                        return (2, i as i64 + 1, vbs.clone());
+                    }
+                    out.push(self.next_binding(o));
+                }
+                (0, 0, out)
+            }
+            GETBULK => {
+                let non_rep = std::cmp::max(m.a, 0) as usize;
+                let reps = std::cmp::max(m.b, 0);
+                let mut out = Vec::new();
+                for (o, _) in vbs.iter().take(non_rep) {
+                    out.push(self.next_binding(o));
+                }
+                let mut cursors: Vec<Vec<u32>> = vbs.iter().skip(non_rep).map(|(o, _)| o.clone()).collect();
+                for _ in 0..reps {
+                    if cursors.is_empty() {
+                        break;
+                    }
+                    let mut ended = true;
+                    for k in 0..cursors.len() {
+                        let (n, v) = self.next_binding(&cursors[k]);
+                        if v != Value::EndOfMibView {
+                            cursors[k] = n.clone();
+                            ended = false;
+                        }
+                        out.push((n, v));
+                    }
+                    if ended {
+                        break;
+                    }
+                }
+                (0, 0, out)
+            }
+            _ => {
+                // SET: check every binding before writing any.
+                for (i, (o, v)) in vbs.iter().enumerate() {
+                    let at = i as i64 + 1;
+                    let kind = match self.writable.get(o) {
+                        Some(k) => *k,
+                        None => {
+                            if !v2 {
+                                return (2, at, vbs.clone());
+                            }
+                            let code = if self.value(o).is_some() { 17 } else { 11 };
+                            return (code, at, vbs.clone());
+                        }
+                    };
+                    if v.tag() != kind {
+                        return (if v2 { 7 } else { 3 }, at, vbs.clone());
+                    }
+                    match v {
+                        Value::Octets(b) if b.len() > 255 => return (if v2 { 8 } else { 3 }, at, vbs.clone()),
+                        Value::Integer(x) if *x != 0 && *x != 1 => return (if v2 { 10 } else { 3 }, at, vbs.clone()),
+                        _ => {}
+                    }
+                }
+                for (o, v) in vbs {
+                    self.mib.insert(o.clone(), v.clone());
+                }
+                (0, 0, vbs.clone())
+            }
+        }
+    }
+}
+
+// ---- the managers
+
+struct Manager {
+    name: String,
+    agent: String,
+    version: i64,
+    community: String,
+    req_id: i64,
+    sock: UdpSocket,
+}
+
+impl Manager {
+    fn new(name: &str, agent: &str, peers: &mut HashMap<String, String>, version: i64, community: &str) -> Manager {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_read_timeout(Some(Duration::from_millis(QUIET_MS))).unwrap();
+        peers.insert(sock.local_addr().unwrap().to_string(), name.to_string());
+        Manager {
+            name: name.to_string(),
+            agent: agent.to_string(),
+            version,
+            community: community.to_string(),
+            req_id: 1000,
+            sock,
+        }
+    }
+
+    fn say(&self, line: &str) {
+        println!("{}: {}", self.name, line);
+    }
+
+    fn send(&mut self, pdu: u8, varbinds: Vec<(Vec<u32>, Value)>, a: i64, b: i64, req_id: Option<i64>) -> Option<Vec<u8>> {
+        let id = match req_id {
+            Some(id) => id,
+            None => {
+                self.req_id += 1;
+                self.req_id
+            }
+        };
+        let msg = Message {
+            version: self.version,
+            community: self.community.as_bytes().to_vec(),
+            pdu,
+            req_id: id,
+            a,
+            b,
+            varbinds,
+        };
+        self.sock.send_to(&enc_message(&msg), &self.agent).unwrap();
+        let mut buf = [0u8; 2048];
+        match self.sock.recv_from(&mut buf) {
+            Ok((n, _)) => Some(buf[..n].to_vec()),
+            Err(_) => None,
+        }
+    }
+
+    fn report(&self, what: &str, reply: Option<Vec<u8>>) {
+        let bytes = match reply {
+            Some(b) => b,
+            None => {
+                self.say(&format!("{} -> no reply", what));
+                return;
+            }
+        };
+        let m = dec_message(&bytes).unwrap();
+        let head = format!("{} -> {} id {}, {} bytes", what, pdu_name(m.pdu), m.req_id, bytes.len());
+        if m.a != 0 {
+            self.say(&format!("{}, error {}({}) at {}", head, ERRORS[m.a as usize], m.a, m.b));
+        } else {
+            self.say(&head);
+        }
+        for (o, v) in &m.varbinds {
+            self.say(&format!("  {} = {}", show_oid(o), v));
+        }
+    }
+
+    fn nulls(oids: &[&str]) -> Vec<(Vec<u32>, Value)> {
+        oids.iter().map(|o| (parse_oid(o), Value::Null)).collect()
+    }
+
+    fn get(&mut self, what: &str, oids: &[&str]) {
+        let reply = self.send(GET, Manager::nulls(oids), 0, 0, None);
+        self.report(what, reply);
+    }
+
+    fn getnext(&mut self, what: &str, oids: &[&str]) {
+        let reply = self.send(GETNEXT, Manager::nulls(oids), 0, 0, None);
+        self.report(what, reply);
+    }
+
+    fn getbulk(&mut self, what: &str, non_rep: i64, reps: i64, oids: &[&str]) {
+        let reply = self.send(GETBULK, Manager::nulls(oids), non_rep, reps, None);
+        self.report(what, reply);
+    }
+
+    fn set(&mut self, what: &str, pairs: Vec<(&str, Value)>) {
+        let vbs = pairs.into_iter().map(|(o, v)| (parse_oid(o), v)).collect();
+        let reply = self.send(SET, vbs, 0, 0, None);
+        self.report(what, reply);
+    }
+
+    /// snmpwalk: getnext until the answer leaves the subtree.
+    fn walk(&mut self, root: &str) {
+        let base = parse_oid(root);
+        let mut o = base.clone();
+        let mut n = 0;
+        loop {
+            let reply = match self.send(GETNEXT, vec![(o.clone(), Value::Null)], 0, 0, None) {
+                Some(r) => r,
+                None => {
+                    self.say("walk: no reply");
+                    return;
+                }
+            };
+            let m = dec_message(&reply).unwrap();
+            let (next, v) = m.varbinds[0].clone();
+            if m.a != 0 || v == Value::EndOfMibView || !next.starts_with(&base) {
+                break;
+            }
+            self.say(&format!("  {} = {}", show_oid(&next), v));
+            n += 1;
+            o = next;
+        }
+        self.say(&format!("walk {}: {} objects", root, n));
+    }
+
+    fn raw(&self, what: &str, data: &[u8]) {
+        self.sock.send_to(data, &self.agent).unwrap();
+        let mut buf = [0u8; 2048];
+        match self.sock.recv_from(&mut buf) {
+            Ok((n, _)) => self.say(&format!("{} -> {}-byte reply", what, n)),
+            Err(_) => self.say(&format!("{} -> no reply", what)),
+        }
+    }
+}
+
+fn main() {
+    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = sock.local_addr().unwrap().to_string();
+    let mut agent = Agent::new(sock);
+    let mut nms = Manager::new("nms", &addr, &mut agent.peers, 1, "public");
+    let mut old = Manager::new("old", &addr, &mut agent.peers, 0, "public");
+    let mut ops = Manager::new("ops", &addr, &mut agent.peers, 1, "private");
+    let mut v1ops = Manager::new("v1ops", &addr, &mut agent.peers, 0, "private");
+    let mut probe = Manager::new("probe", &addr, &mut agent.peers, 1, "public");
+    let handle = thread::spawn(move || {
+        agent.serve();
+        agent
+    });
+
+    println!("== get");
+    nms.get("get 3", &["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.3.0", "1.3.6.1.2.1.1.2.0"]);
+    nms.get("get 5", &["1.3.6.1.2.1.2.2.1.5.2", "1.3.6.1.2.1.2.2.1.10.2", "1.3.6.1.2.1.2.2.1.16.2",
+                       "1.3.6.1.2.1.31.1.1.1.6.1", "1.3.6.1.2.1.31.1.1.1.6.2"]);
+    nms.get("get missing (v2c)", &["1.3.6.1.2.1.1.9.0", "1.3.6.1.2.1.1.5.1", "1.3.6.1.2.1.4.20.1.1.127.0.0.1"]);
+    old.get("get missing (v1)", &["1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.9.0"]);
+
+    println!("== walk");
+    nms.walk("1.3.6.1.2.1.1");
+    nms.walk("1.3.6.1.2.1.4.20");
+    nms.getnext("getnext past the end (v2c)", &["1.3.6.1.4.1.99999.2.0"]);
+    old.getnext("getnext past the end (v1)", &["1.3.6.1.4.1.99999.2.0"]);
+
+    println!("== bulk");
+    nms.getbulk("getbulk 1/3", 1, 3, &["1.3.6.1.2.1.1.7", "1.3.6.1.2.1.2.2.1.1", "1.3.6.1.2.1.2.2.1.2"]);
+    nms.getbulk("getbulk into the end", 0, 4, &["1.3.6.1.4.1.99999.1"]);
+    nms.getbulk("getbulk 60, truncated", 0, 60, &["1.3.6.1.2.1.1"]);
+    let many = vec!["1.3.6.1.2.1.1.1.0"; 20];
+    nms.get("get 20 descriptions, too big", &many);
+    old.getbulk("getbulk on v1", 0, 2, &["1.3.6.1.2.1.1"]);
+
+    println!("== set");
+    ops.set("set sysName and sysLocation", vec![
+        ("1.3.6.1.2.1.1.5.0", Value::Octets(b"agent-7b".to_vec())),
+        ("1.3.6.1.2.1.1.6.0", Value::Octets("rack 5, shelf 1".as_bytes().to_vec())),
+    ]);
+    ops.set("set sysName to an integer", vec![("1.3.6.1.2.1.1.5.0", Value::Integer(7))]);
+    v1ops.set("set sysName to an integer (v1)", vec![("1.3.6.1.2.1.1.5.0", Value::Integer(7))]);
+    ops.set("set sysDescr", vec![("1.3.6.1.2.1.1.1.0", Value::Octets(b"x".to_vec()))]);
+    ops.set("set a new object", vec![("1.3.6.1.2.1.1.8.0", Value::Integer(1))]);
+    ops.set("set the halt switch to 9", vec![("1.3.6.1.4.1.99999.2.0", Value::Integer(9))]);
+    ops.set("set sysContact, 300 bytes", vec![("1.3.6.1.2.1.1.4.0", Value::Octets(vec![b'x'; 300]))]);
+    nms.set("set with the public community", vec![("1.3.6.1.2.1.1.5.0", Value::Octets(b"evil".to_vec()))]);
+    nms.get("get after set", &["1.3.6.1.2.1.1.4.0", "1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.6.0"]);
+
+    println!("== broken");
+    probe.community = "secret".to_string();
+    probe.get("wrong community", &["1.3.6.1.2.1.1.5.0"]);
+    probe.community = "public".to_string();
+    probe.version = 3;
+    probe.get("version 3", &["1.3.6.1.2.1.1.5.0"]);
+    probe.version = 1;
+    let good = enc_message(&Message {
+        version: 1,
+        community: b"public".to_vec(),
+        pdu: GET,
+        req_id: 77,
+        a: 0,
+        b: 0,
+        varbinds: vec![(parse_oid("1.3.6.1.2.1.1.5.0"), Value::Null)],
+    });
+    probe.raw("truncated by 3 bytes", &good[..good.len() - 3]);
+    let mut trailing = good.clone();
+    trailing.push(0);
+    probe.raw("trailing byte", &trailing);
+    let mut long = vec![0x30, 0x83, 0, 0, 5];
+    long.extend_from_slice(&[0u8; 5]);
+    probe.raw("3-byte long length", &long);
+    probe.raw("not a sequence", b"\x04\x03abc");
+    let mut bad_oid = good.clone();
+    let k = bad_oid.len() - 3;
+    bad_oid[k] |= 0x80;
+    probe.raw("OID ends mid sub-identifier", &bad_oid);
+    let resp = enc_message(&Message {
+        version: 1,
+        community: b"public".to_vec(),
+        pdu: RESPONSE,
+        req_id: 78,
+        a: 0,
+        b: 0,
+        varbinds: vec![],
+    });
+    probe.raw("a response PDU", &resp);
+    let r = probe.send(GET, Manager::nulls(&["1.3.6.1.2.1.1.7.0"]), 0, 0, Some(-5));
+    probe.report("request id -5", r);
+    let r = probe.send(GET, Manager::nulls(&["1.3.6.1.2.1.1.7.0"]), 0, 0, Some(2147483647));
+    probe.report("request id 2147483647", r);
+    nms.get("snmp counters", &["1.3.6.1.2.1.11.1.0", "1.3.6.1.2.1.11.3.0", "1.3.6.1.2.1.11.4.0",
+                               "1.3.6.1.2.1.11.6.0", "1.3.6.1.2.1.1.3.0"]);
+
+    println!("== admin");
+    ops.set("halt", vec![("1.3.6.1.4.1.99999.2.0", Value::Integer(1))]);
+    let agent = handle.join().unwrap();
+
+    println!("== agent log");
+    for line in &agent.log {
+        println!("{}", line);
+    }
+    println!("== counts");
+    for (k, v) in &agent.counts {
+        println!("{}: {}", k, v);
+    }
+}
