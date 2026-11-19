@@ -59,13 +59,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 559 |
-| false-positive | 295 |
+| false-positive | 297 |
 | missing-feature | 208 |
 | perf | 188 |
 | other | 119 |
 | soundness | 100 |
 | miscompile | 90 |
-| crash | 60 |
+| crash | 61 |
 | run-vs-build | 58 |
 | codegen-gap | 39 |
 | use-after-free | 10 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 709 |
+| typecheck | 710 |
 | mir-llvm | 306 |
 | mir | 270 |
 | cli | 211 |
 | parser | 125 |
-| ownership | 116 |
-| interp | 93 |
+| ownership | 117 |
+| interp | 94 |
 | runtime | 91 |
 | effect | 47 |
 | resolver | 46 |
@@ -119,15 +119,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-53 | 2026-11-19 | typecheck | low | A closure argument whose body builds its result with a call of its own (`W.new(|| Ok(one()), 5)`, slot `Fn() -> Result[T, E]`) is refused E0200 `expected 'Fn() -> Result[i64, _]', found 'Fn() -> Result[i64, E]'`, chained or not; `|| Ok(1)` and `|| Ok(C { id: 1 })` check | — |
 | B-2026-11-19-58 | 2026-11-19 | typecheck+mir | medium | `Ok(100) == Err(-100)` (and `Err("x".to_string()) == Ok(1)`) passes `karac check`, then every lane stops with `invalid MIR: field 0 of Result[(), i64] has type (), but the projection says i64`: each operand's open type parameter defaults to `()` on its own instead of being unified across `==` | — |
 | B-2026-11-19-59 | 2026-11-19 | typecheck | low | An open type parameter on one side of `<` or on a `None`/`Ok`/`Err` receiver is not unified with the other side: `let a = None; let b = Some(2); a < b` is E0208 (while `a == b` runs), `s == Err(3)` with `s = Ok(String)` is E0208, `None.or(Some(3))` and `Err(1) < Err(2)` are E0516 with the MIR builder's internal `not lowered yet` text, and `None.unwrap_or(4)` is `type 'Option[T]' is not callable` | — |
-| B-2026-11-19-60 | 2026-11-19 | typecheck+mir | low | `TimedOut` (std.time `timeout`) and `TaskFailed` (isolating groups, `try_join`) implement neither `Display` nor `Error`, so `timeout(d, f)?` and `h.try_join()?` into `AnyError` are refused; a remainder of B-2026-11-09-54, whose sweep matched only names ending in `Error`. time-random-env.md's `Err(TimedOut)` also does not check: as an expression it is read as the enum variant `RecvTimeoutError.TimedOut` (E0521/E0279) though the struct is imported, and as a pattern the check says it is not an enum variant without suggesting `TimedOut {}` | — |
 | B-2026-11-19-61 | 2026-11-19 | interp+mir-llvm | low | std.path `parent` of a root followed by a trailing `.` (`"/."`, `"/./"`, `"/./."`) is `Some("/")`, where `components` gives `["/"]`, `parent("/")` is `None` and Rust's std::path gives `None`; a remainder of B-2026-11-16-179 (`"//."` already gives `None`) | — |
 | B-2026-11-19-63 | 2026-11-19 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secret'); the declaration-site Serialize field check refuses a user type that lacks Serialize but counts `Secret` as capable | — |
 | B-2026-11-19-64 | 2026-11-19 | mir-llvm | medium | A compiled program on more than one worker sometimes stops with a false "deadlock: every task waits on a channel ..." when a task's last `Sender` is dropped while the receiving task is being polled: the drop's wake is counted before the sender count falls, so the receiver can park on a channel that is already closed | — |
 | B-2026-11-19-65 | 2026-11-19 | typecheck | low | An open type variable nested inside the first branch or element of a join is not solved by a later one: `[Some(None), Some(Some(4))]`, `if c { Some(None) } else { Some(Some(4)) }`, the same as a `match`, `[(Some(None), 0), (Some(Some(4)), 1)]` and `[Ok(None), Ok(Some(4)), Err(1)]` are E0238 `cannot infer type parameter 'T'`, while the reversed order, `v.push` of the same two values, an annotation, and a top-level `[None, Some(4)]` all check and run | — |
 | B-2026-11-19-67 | 2026-11-19 | typecheck | medium | Invariance is not enforced against `Never`: `let w: Vec[i64] = v` with `v: Vec[Never]`, and `set(mut o)` with `o: Option[Never]` into a `mut ref Option[i64]` parameter, pass `karac check` (design.md § Subtyping and variance: `Vec` and the `mut ref T` target are invariant); every lane then stops at the MIR validator | — |
 | B-2026-11-19-68 | 2026-11-19 | mir | medium | A covariant `Never` coercion design.md allows (`Option[Never]` to `Option[String]`, `Result[i64, Never]` to `Result[i64, String]`) passes `karac check` and stops at the MIR validator on every lane: `let n: Option[Never] = None; let w: Option[String] = n;` is `invalid MIR: assigning Option[!] to _2 of type Option[String]` | — |
-| B-2026-11-19-69 | 2026-11-19 | typecheck | low | A list literal passed to a generic `Array` parameter is built as a `Vec`: `first([7, 8])` with `fn first[T: Copy, const N: i64](arr: Array[T, N]) -> T` and `g([7, 8])` with `fn g[T](a: Array[T, 2])` are refused `expected 'Array[T, N]', found 'Vec[i64]'`, though a concrete `Array[i64, 2]` parameter takes the same literal | — |
-| B-2026-11-19-70 | 2026-11-19 | typecheck | low | A function with a REQUIRED named parameter is accepted as a value, and the named parameter becomes positional: `fn connect(host: String; port: i64)`, `let c = connect; c("ab".to_string(), 40)` checks and prints 42, and `ap(connect)` into `Fn(String, i64) -> i64` runs; design.md § Function values says such a function cannot be a value | — |
 | B-2026-11-19-71 | 2026-11-19 | mir+mir-llvm | high | Calling a function value through a generic `mut ref F` parameter (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`, `twice(mut g)`) crashes every lane: compiled is a stack overflow (exit 134) or SIGSEGV (139), ASan reports stack-buffer-overflow / SEGV in `twice[Fn() -> i64]`, and `__mir-run` stops `call through Agg([Ref(..)]), which is not a function value` | — |
 | B-2026-11-19-72 | 2026-11-19 | mir+mir-llvm | high | A closure LITERAL passed to a generic bare `F` parameter (`fn call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) captures by move on every lane: a counter it writes is copied, so `n` reads 0 after two calls (want 2), and a captured `Drop` value is moved and dropped at the end of the call statement (`d5` prints before the result), while `karac check` treats the capture as a borrow and accepts a later use of `r` that the MIR move check then refuses | — |
 | B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
@@ -141,6 +138,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-94 | 2026-11-19 | effect | low | Two `par` branches calling a generic function-typed parameter (`fn both[F: Fn() -> i64](f: F) -> i64 { let (a, b) = par { f(), f() }; a + b }`) conflict as `unknown (a call through a value)` even when the instance's closure is pure (`both(|| k)`), though core-semantics §12 computes a generic call's effects on the instance and charges a non-escaping parameter's effects at the call site | — |
 | B-2026-11-19-95 | 2026-11-19 | ownership | high | A view returned from a TaskGroup task (`g.spawn(|| v.as_slice())`, then `h.join()`) or from a bare generic `F` closure argument borrows nothing at check, so the result outlives the viewed value: heap-use-after-free under ASan (two causes: task handles drop their closure's origins; a generic F argument's origins do not reach the §5.4 result) | — |
 | B-2026-11-19-96 | 2026-11-19 | ownership | high | Calling an escaping closure held in a field, `Vec` element, tuple, `Option` or a function's result (`(h.f)()`, `(fs[0])()`, `mk(v)()`) gives the returned view no origins, so a slice of the closure's own capture outlives it: heap-use-after-free under ASan (a let-bound closure called directly is refused correctly) | — |
+| B-2026-11-19-97 | 2026-11-19 | ownership | medium | An escaping closure that reads only a Copy field (`hs.push(|| v.id)`, `H { f: || v.id }`) must capture a copy of that field (review ruling 2026-11-19 on §9.1), but (1) for a binding whose type has a Drop body, check AND every MIR lane move the whole binding (E0514 / `move check main: use of _2.0`), and (2) for a type with no Drop body, check still says `v was moved into an escaping closure` (E0500) while the MIR lanes capture the field alone and run | — |
+| B-2026-11-19-98 | 2026-11-19 | typecheck | low | A trait whose parameter defaults to Self (`trait Tr[X = Self] { fn m(self, x: X) -> i64; }`) is treated as if X were Self at an explicit instance: `dyn Tr[i64]` is refused E_DYN_NOT_DISPATCHABLE (`m` names Self outside the receiver), and under `T: Tr + Tr[i64]` the UFCS `Tr[i64].m(t, 1)` is refused E0233 `ambiguous method 'm' ... Use UFCS Tr[i64].m(receiver, ...)`, the very form written | — |
+| B-2026-11-19-99 | 2026-11-19 | interp | medium | A closure forwarded through a function parameter into `Vec.retain`, `sort_by` or `sort_by_key` (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool) { v.retain(f); }`) stops the MIR interpreter with `cannot call Ref(Addr { .. })`; build and ASan run it correctly | — |
 
 ### Relocated
 
@@ -1829,8 +1829,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-55 | typecheck | low | `#[repr(transparent)]` accepts a zero-sized neighbour whose alignment is not one (`a: Array[u64, 0]` beside `raw: i32`), and the wrapper is then laid… | 99b701d7e3 |
 | B-2026-11-19-56 | typecheck | low | §15 `extern` declarations are not checked where they are written: an ABI string other than "C" (`unsafe extern "system"`, `"Rust"`) passes `karac che… | 99b701d7e3 |
 | B-2026-11-19-57 | cli | low | Eight symbolic codes the specification names for live diagnostics are never emitted and unknown to `karac explain`: E_NO_PROVIDER, E_STATEFUL_DEFAULT… | e34f6e21fe |
+| B-2026-11-19-60 | typecheck+mir | low | `TimedOut` (std.time `timeout`) and `TaskFailed` (isolating groups, `try_join`) implement neither `Display` nor `Error`, so `timeout(d, f)?` and `h.t… | d58a0c7cf1 |
 | B-2026-11-19-62 | other | low | secret.md is behind the compiler in two places: `ct_eq` is said to be `Secret[String]` only, but `Secret[Vec[u8]]` compares (`true`) on every lane; a… | c780bee67f |
 | B-2026-11-19-66 | typecheck+mir | high | Inside a generic body bounded by a trait with a defaulted parameter (`fn total[T: Combine](a: own T, b: own T) -> T.Output { a.combine(b) }`, `trait… | a29450cdd1 |
+| B-2026-11-19-69 | typecheck | low | A list literal passed to a generic `Array` parameter is built as a `Vec`: `first([7, 8])` with `fn first[T: Copy, const N: i64](arr: Array[T, N]) ->… | db4547d2df |
+| B-2026-11-19-70 | typecheck | low | A function with a REQUIRED named parameter is accepted as a value, and the named parameter becomes positional: `fn connect(host: String; port: i64)`,… | db4547d2df |
 | B-2026-11-19-73 | mir-llvm | medium | On wasm_wasi, corpus/design/ok_pool_chained_health_check_with_a_closure_factory (pinned at 0aa814606b) traps `table index is out of bounds` in karac_… | a71dba27cf |
 | B-2026-11-19-80 | parser | medium | `thread::spawn(move \|\| ..)` has a message naming `TaskGroup` but no fix, so a Rust-shaped server's worker thread stops the Mend loop | 53f86eb754 |
 | B-2026-11-19-81 | parser+typecheck | medium | Rust's alternate form `{:#04x}` has no fix, in `format!` (the conversion bails) or in an `f".."` hole | 53f86eb754 |
