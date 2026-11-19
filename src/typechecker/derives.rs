@@ -2940,11 +2940,19 @@ impl super::env::TypeEnv {
             // A map compares its keys' values, a set its elements, order
             // playing no part (docs/library/collections.md § Common traits,
             // B-2026-11-08-82). The keys and elements are `Eq` by the
-            // collections' own bounds.
-            Type::Named { name, args } if (name == "Map" || name == "SortedMap") && args.len() == 2 => {
+            // collections' own bounds. A `Map` or `Set` may carry its
+            // hasher as a last argument (`Map.new()`'s `Map[K, V, H]`),
+            // which plays no part either (B-2026-11-19-59).
+            Type::Named { name, args }
+                if (name == "Map" && (args.len() == 2 || args.len() == 3))
+                    || (name == "SortedMap" && args.len() == 2) =>
+            {
                 self.type_supports_partial_eq(&args[1])
             }
-            Type::Named { name, args } if (name == "Set" || name == "SortedSet") && args.len() == 1 => {
+            Type::Named { name, args }
+                if (name == "Set" && (args.len() == 1 || args.len() == 2))
+                    || (name == "SortedSet" && args.len() == 1) =>
+            {
                 true
             }
             Type::Named { name, args } => {

@@ -3820,6 +3820,79 @@ impl<'a> super::TypeChecker<'a> {
         (left, right)
     }
 
+    /// The operands of a comparison, each bare constructor's parameter that
+    /// nothing decided (`Err(-100)`'s `T` in `Ok(100) == Err(-100)`, a
+    /// `None`'s `T` beside a `Some(2)`) made a variable and solved by the
+    /// other side, as Rust's inference solves it (design.md § Type
+    /// inference). Only when the other side solves every such variable: a
+    /// pair that leaves one open (`Err(1) == Err(2)`) keeps its types
+    /// (B-2026-11-19-58, B-2026-11-19-59).
+    fn solve_open_compare_constructors(
+        &mut self,
+        (left, left_ty): (&Expr, Type),
+        (right, right_ty): (&Expr, Type),
+    ) -> (Type, Type) {
+        let (l_fresh, l_made) = self.freshen_open_enum_params(left_ty.clone());
+        let (r_fresh, r_made) = self.freshen_open_enum_params(right_ty.clone());
+        if l_made.is_empty() && r_made.is_empty() {
+            return (left_ty, right_ty);
+        }
+        let saved = self.env.substitutions.clone();
+        let saved_const = self.env.const_substitutions.clone();
+        let (l, r) = self.unify_open_compare_operands(l_fresh.clone(), r_fresh.clone());
+        let l_open = l_made.iter().any(|id| {
+            matches!(
+                resolve_type_var_top(&Type::TypeVar(*id), &self.env.substitutions),
+                Type::TypeVar(_)
+            )
+        });
+        let solved = l_made.iter().chain(&r_made).all(|id| {
+            !matches!(
+                resolve_type_var_top(&Type::TypeVar(*id), &self.env.substitutions),
+                Type::TypeVar(_)
+            )
+        });
+        if !solved {
+            self.env.substitutions = saved;
+            self.env.const_substitutions = saved_const;
+            // Nothing fixes it (`None == None`, `Err(1) < Err(2)`): the
+            // comparison is refused as a `let` of either operand would be,
+            // whichever the operator (B-2026-11-19-59).
+            let (at, ty) = if !l_made.is_empty() && l_open {
+                (left.span, &left_ty)
+            } else {
+                (right.span, &right_ty)
+            };
+            let mut names = Vec::new();
+            super::expr_method_call::collect_type_param_names(ty, &mut names);
+            let param = names
+                .into_iter()
+                .find(|n| !self.enclosing_bounds.contains_key(n))
+                .unwrap_or_else(|| "T".to_string());
+            self.type_error(
+                format!(
+                    "cannot infer type parameter '{param}' of `{}`, this comparison's operand: \
+                     nothing in the body fixes it (design.md § Type inference); bind one \
+                     operand with a type annotation that names '{param}'",
+                    type_display(ty),
+                ),
+                at,
+                TypeErrorKind::CannotInferTypeParam,
+            );
+            return (left_ty, right_ty);
+        }
+        // Typed HIR reads each operand's type off its node.
+        if !l_made.is_empty() {
+            self.record_node_type(left.id, &l_fresh);
+            self.record_expr_type(&left.span, &l);
+        }
+        if !r_made.is_empty() {
+            self.record_node_type(right.id, &r_fresh);
+            self.record_expr_type(&right.span, &r);
+        }
+        (l, r)
+    }
+
     fn report_compare_mismatch(
         &mut self,
         (left, left_ty): (&Expr, &Type),
@@ -5961,6 +6034,8 @@ impl<'a> super::TypeChecker<'a> {
                 // accumulator's part), are one type: the comparison solves
                 // it, as Rust's does (kata 2038).
                 let (left_ty, right_ty) = self.unify_open_compare_operands(left_ty, right_ty);
+                let (left_ty, right_ty) =
+                    self.solve_open_compare_constructors((left, left_ty), (right, right_ty));
                 // Comparison auto-derefs reference operands so a value can be
                 // compared against a borrow of the same type (`String ==
                 // ref String`); the comparison only reads through the borrow.
@@ -6147,6 +6222,10 @@ impl<'a> super::TypeChecker<'a> {
                 // See `Eq` arm: a literal inside a constructor settles first.
                 let left_ty = self.settle_nested_literals(&left_ty);
                 let right_ty = self.settle_nested_literals(&right_ty);
+                // See `Eq` arm: one open operand is solved by the other.
+                let (left_ty, right_ty) = self.unify_open_compare_operands(left_ty, right_ty);
+                let (left_ty, right_ty) =
+                    self.solve_open_compare_constructors((left, left_ty), (right, right_ty));
                 // See `Eq` arm: reference operands auto-deref for comparison.
                 let cmp_left = strip_refs_for_compare(&left_ty);
                 let cmp_right = strip_refs_for_compare(&right_ty);

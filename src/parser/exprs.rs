@@ -3662,7 +3662,15 @@ impl super::Parser {
                 }
                 self.looks_like_struct_literal_at(brace)
             };
-        if self.check(&Token::Dot) && (starts_upper(&name) || module_qualified_struct_lit) {
+        // `None.unwrap_or(4)`: `None` is a value, so a lowercase name after
+        // it is a method of that value, as after `Some(1)`, not a path
+        // (B-2026-11-19-59).
+        let none_method = name == "None"
+            && matches!(self.peek_token_ref_at(1), Token::Identifier { name: ref seg, .. } if !starts_upper(seg));
+        if self.check(&Token::Dot)
+            && (starts_upper(&name) || module_qualified_struct_lit)
+            && !none_method
+        {
             let mut path = vec![name];
             // A dot before anything but a name is left to the postfix loop:
             // `T_THREE.1` indexes the constant's tuple (B-2026-11-06-21).

@@ -2145,6 +2145,26 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `None`, `Some(x)`, `Ok(x)`, `Err(e)`, written bare.
+    fn is_bare_constructor(e: &Expr) -> bool {
+        fn name(e: &Expr) -> Option<&str> {
+            match &e.kind {
+                ExprKind::Identifier(n) => Some(n),
+                ExprKind::Path {
+                    segments,
+                    generic_args: None,
+                } if segments.len() == 1 => Some(&segments[0]),
+                _ => None,
+            }
+        }
+        match &e.kind {
+            ExprKind::Call { callee, .. } => {
+                matches!(name(callee), Some("Some" | "Ok" | "Err"))
+            }
+            _ => name(e) == Some("None"),
+        }
+    }
+
     fn infer_method_call_inner(
         &mut self,
         object: &Expr,
@@ -2597,6 +2617,16 @@ impl<'a> super::TypeChecker<'a> {
             .is_some_and(|(id, _)| self.literal_held_open(id))
         {
             obj_ty = self.settle_literals(&obj_ty);
+        }
+        // A bare constructor receiver whose own parameter nothing decided
+        // (`None.or(Some(3))`'s `Option[T]`) has it as a variable the
+        // method's arguments solve, as a `let` of it would (B-2026-11-19-59).
+        if Self::is_bare_constructor(object) {
+            let (fresh, made) = self.freshen_open_enum_params(obj_ty.clone());
+            if !made.is_empty() {
+                self.record_node_type(object.id, &fresh);
+                obj_ty = fresh;
+            }
         }
         self.mut_through_param_arg = saved_mut_through;
         if obj_ty == Type::Error {

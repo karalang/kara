@@ -131,6 +131,32 @@ impl<'a> super::TypeChecker<'a> {
                             .first()
                             .map(|a| self.infer_expr(&a.value))
                             .unwrap_or(Type::Error);
+                        // `or`'s alternative holds the receiver's payload, so
+                        // each side solves the other's open variable
+                        // (`None.or(Some(3))`, B-2026-11-19-59); `and`'s holds
+                        // a Result receiver's error.
+                        let shared = match (method, &arg_ty) {
+                            ("or", Type::Named { args: a, .. }) if !a.is_empty() => {
+                                Some((t_ty.clone(), a[0].clone()))
+                            }
+                            ("and", Type::Named { args: a, .. }) if is_result && a.len() == 2 => {
+                                e_ty.clone().map(|e| (e, a[1].clone()))
+                            }
+                            _ => None,
+                        };
+                        if let Some((mine, theirs)) = shared {
+                            let mut subs = self.env.substitutions.clone();
+                            let mut const_subs = self.env.const_substitutions.clone();
+                            if super::inference::unify_types(
+                                &mine,
+                                &theirs,
+                                &mut subs,
+                                &mut const_subs,
+                            ) {
+                                self.env.substitutions = subs;
+                                self.env.const_substitutions = const_subs;
+                            }
+                        }
                         record_src(self, &t_ty);
                         Some(resolve_type_var_top(&arg_ty, &self.env.substitutions))
                     }

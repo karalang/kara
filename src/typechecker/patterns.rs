@@ -595,11 +595,25 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn freshen_unsolved_scrutinee_params(&mut self, ty: Type) -> Type {
+        let (ty, fresh) = self.freshen_open_enum_params(ty);
+        self.freshened_scrutinee_vars.extend(fresh);
+        ty
+    }
+
+    /// An enum value's type with each of the enum's own parameters that
+    /// nothing decided (`Err(3)`'s `Result[T, i64]`, a bare `None`'s
+    /// `Option[T]`) made a fresh variable, and those variables. A parameter
+    /// of the enclosing item is never renamed.
+    pub(super) fn freshen_open_enum_params(
+        &mut self,
+        ty: Type,
+    ) -> (Type, Vec<super::types::TypeVarId>) {
+        let mut made = Vec::new();
         let Type::Named { name, .. } = &ty else {
-            return ty;
+            return (ty, made);
         };
         if !self.env.enums.contains_key(name) {
-            return ty;
+            return (ty, made);
         }
         let in_scope: std::collections::HashSet<String> =
             self.enclosing_bounds.keys().cloned().collect();
@@ -609,7 +623,7 @@ impl<'a> super::TypeChecker<'a> {
                 in_scope.iter().map(String::as_str).collect();
             let Some(param) = find_unbound_type_param(&ty, &in_scope_refs).map(str::to_string)
             else {
-                return ty;
+                return (ty, made);
             };
             // A param seen only as a projection's receiver (`Self` in a
             // trait default body's `Option[Self.Item]`) is not freshened:
@@ -617,11 +631,11 @@ impl<'a> super::TypeChecker<'a> {
             // receiver to that variable, which the next round finds
             // unbound in turn, and the loop never ends.
             if !param_occurs_bare(&ty, &param) {
-                return ty;
+                return (ty, made);
             }
             let var = self.env.fresh_type_var();
             if let Type::TypeVar(id) = var {
-                self.freshened_scrutinee_vars.insert(id);
+                made.push(id);
             }
             let subs: HashMap<String, SubstValue> =
                 std::iter::once((param, SubstValue::Type(var))).collect();
@@ -629,7 +643,7 @@ impl<'a> super::TypeChecker<'a> {
             // A param the substitution cannot reach (inside a projection)
             // would loop forever; leave the type as it was.
             if next == ty {
-                return ty;
+                return (ty, made);
             }
             ty = next;
         }
