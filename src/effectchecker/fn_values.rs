@@ -246,22 +246,19 @@ impl<'a> super::EffectChecker<'a> {
             let key = match clause {
                 None => {
                     let key = self.interner.intern(FN_EVERY_KEY);
-                    if !self.inferred_effects.contains_key(&key) {
-                        let set = super::every_effect_set(EffectOrigin::Direct(Span::default()));
-                        self.inferred_effects.insert(key, set);
-                    }
+                    self.inferred_effects.entry(key).or_insert_with(|| {
+                        super::every_effect_set(EffectOrigin::Direct(Span::default()))
+                    });
                     key
                 }
                 Some(list) => {
                     let text = super::dyn_effects::clause_text(&list);
                     let key = self.interner.intern(&format!("{FN_CLAUSE_PREFIX}{text}]"));
-                    if !self.inferred_effects.contains_key(&key) {
-                        let mut set = EffectSet::new();
-                        for e in self.resolve_effect_list_to_set(&list, None) {
-                            set.add(e, EffectOrigin::Direct(list.span));
-                        }
-                        self.inferred_effects.insert(key, set);
+                    let mut set = EffectSet::new();
+                    for e in self.resolve_effect_list_to_set(&list, None) {
+                        set.add(e, EffectOrigin::Direct(list.span));
                     }
+                    self.inferred_effects.entry(key).or_insert(set);
                     key
                 }
             };

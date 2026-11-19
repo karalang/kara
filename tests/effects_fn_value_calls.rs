@@ -82,7 +82,10 @@ fn fn_value_call_through_a_field_is_charged_its_clause() {
 pub fn fire(j: Job) -> i64 {{ j.go() }}
 fn main() {{ println(fire(Job {{ run: |x| rec(x) }})); }}\n"
         ),
-        &["E0400", "public function 'fire' performs effects [writes(OrderDb)]"],
+        &[
+            "E0400",
+            "public function 'fire' performs effects [writes(OrderDb)]",
+        ],
     );
     let declared = format!(
         "{HEAD}{job}pub fn go(j: Job) -> i64 with writes(OrderDb) {{ (j.run)(3) }}\n{main}"
@@ -122,7 +125,10 @@ pub fn fire(b: EventBus) {{ b.emit(1); }}
 fn main() {{ fire(EventBus {{ handlers: [|e| record(e)] }}); }}
 "
         ),
-        &["E0400", "public function 'fire' performs effects [writes(OrderDb)]"],
+        &[
+            "E0400",
+            "public function 'fire' performs effects [writes(OrderDb)]",
+        ],
     );
     let inferred = format!(
         "{HEAD}{bus}impl EventBus {{
