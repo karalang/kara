@@ -65,8 +65,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 119 |
 | soundness | 92 |
 | miscompile | 87 |
+| crash | 58 |
 | run-vs-build | 57 |
-| crash | 57 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
 | leak | 5 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 694 |
-| mir-llvm | 302 |
+| mir-llvm | 303 |
 | mir | 264 |
 | cli | 210 |
 | parser | 121 |
@@ -137,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-60 | 2026-11-19 | typecheck+mir | low | `TimedOut` (std.time `timeout`) and `TaskFailed` (isolating groups, `try_join`) implement neither `Display` nor `Error`, so `timeout(d, f)?` and `h.try_join()?` into `AnyError` are refused; a remainder of B-2026-11-09-54, whose sweep matched only names ending in `Error`. time-random-env.md's `Err(TimedOut)` also does not check: as an expression it is read as the enum variant `RecvTimeoutError.TimedOut` (E0521/E0279) though the struct is imported, and as a pattern the check says it is not an enum variant without suggesting `TimedOut {}` | — |
 | B-2026-11-19-61 | 2026-11-19 | interp+mir-llvm | low | std.path `parent` of a root followed by a trailing `.` (`"/."`, `"/./"`, `"/./."`) is `Some("/")`, where `components` gives `["/"]`, `parent("/")` is `None` and Rust's std::path gives `None`; a remainder of B-2026-11-16-179 (`"//."` already gives `None`) | — |
 | B-2026-11-19-63 | 2026-11-19 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secret'); the declaration-site Serialize field check refuses a user type that lacks Serialize but counts `Secret` as capable | — |
+| B-2026-11-19-64 | 2026-11-19 | mir-llvm | medium | A compiled program on more than one worker sometimes stops with a false "deadlock: every task waits on a channel ..." when a task's last `Sender` is dropped while the receiving task is being polled: the drop's wake is counted before the sender count falls, so the receiver can park on a channel that is already closed | — |
 
 ### Relocated
 
