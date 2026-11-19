@@ -876,9 +876,47 @@ impl<'a> super::TypeChecker<'a> {
                             reported = true;
                             continue;
                         }
-                        let hint = match as_str {
-                            Some(_) => super::exprs::REF_STRING_BRANCH_HINT.to_string(),
-                            None => Self::branch_unwrap_hint(&result_ty, arm_ty),
+                        // One arm a block of statements, `()`, and another
+                        // a call whose value nothing wants (`Map.insert`'s
+                        // `Option`): the edit discards that value as the
+                        // block arm does, `None => { m.insert(k, v); }`
+                        // (kata 1632). Offered only when the `()` arm comes
+                        // first, so the match reads as a statement.
+                        let discard = (as_str.is_none() && result_ty == Type::Unit)
+                            .then(|| {
+                                arms.iter()
+                                    .zip(arm_types.iter())
+                                    .filter(|(a, t)| {
+                                        !matches!(t, Type::Unit | Type::Never | Type::Error)
+                                            && matches!(
+                                                a.body.kind,
+                                                ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+                                            )
+                                    })
+                                    .flat_map(|(a, _)| {
+                                        let b = &a.body.span;
+                                        [
+                                            crate::resolver::TextEdit {
+                                                offset: b.offset,
+                                                length: 0,
+                                                replacement: "{ ".to_string(),
+                                            },
+                                            crate::resolver::TextEdit {
+                                                offset: b.offset + b.length,
+                                                length: 0,
+                                                replacement: "; }".to_string(),
+                                            },
+                                        ]
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .filter(|e| !e.is_empty());
+                        let hint = match (&as_str, &discard) {
+                            (Some(_), _) => super::exprs::REF_STRING_BRANCH_HINT.to_string(),
+                            (None, Some(_)) => "; the match's value is not used, so the arm \
+                                 can discard its call's value as a block: `{ call; }`"
+                                .to_string(),
+                            (None, None) => Self::branch_unwrap_hint(&result_ty, arm_ty),
                         };
                         self.type_error(
                             format!(
@@ -890,7 +928,7 @@ impl<'a> super::TypeChecker<'a> {
                             *span,
                             TypeErrorKind::BranchTypeMismatch,
                         );
-                        if let Some(edits) = as_str {
+                        if let Some(edits) = as_str.or(discard) {
                             self.error_fix_diffs.insert(SpanKey::from_span(span), edits);
                         }
                         reported = true;

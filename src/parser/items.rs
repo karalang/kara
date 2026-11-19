@@ -3631,7 +3631,10 @@ impl super::Parser {
         self.expect(&Token::Const)?;
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
-        self.check_ident_class(&name, IdentClass::Const, "const", name_span);
+        // A one-letter `const N` is Const class (CN-7).
+        if !crate::lexer::is_one_letter_const(&name) {
+            self.check_ident_class(&name, IdentClass::Const, "const", name_span);
+        }
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
         self.expect(&Token::Equal)?;

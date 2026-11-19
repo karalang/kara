@@ -2440,6 +2440,13 @@ pub enum IdentClass {
     Value,
 }
 
+/// One uppercase ASCII letter, `N`: by the table a Type-class name, but
+/// after `const` a constant's (design.md §3 CN-7: a `const` item, a block
+/// `const` and a const generic parameter may each have such a name).
+pub fn is_one_letter_const(name: &str) -> bool {
+    name.len() == 1 && name.bytes().all(|b| b.is_ascii_uppercase())
+}
+
 /// Classify an identifier by its case pattern. The rules follow CN-1 through
 /// CN-7 in `design.md § Identifiers and Naming`:
 ///

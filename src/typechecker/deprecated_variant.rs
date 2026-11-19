@@ -166,6 +166,16 @@ impl TypeChecker<'_> {
         let found = Self::unwrap_text_after(receiver_end, close);
         let contiguous = found.is_some();
         let at = found.unwrap_or(*close);
+        // An expression the checker types twice (an assignment's value,
+        // `a = a.parent.unwrap()`) warns once (kata 1650).
+        if self
+            .warnings
+            .iter()
+            .chain(&self.errors)
+            .any(|e| e.span == at && e.lint_name.as_deref() == Some("weak_read_unwrap"))
+        {
+            return;
+        }
         let fix = contiguous.then(|| super::FixIt {
             span: at,
             replacement: "expect(\"the referent is alive\")".to_string(),

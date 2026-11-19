@@ -3146,6 +3146,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_str_list_lets = std::mem::take(&mut self.str_list_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
         let saved_literal_tuple_pushes = std::mem::take(&mut self.literal_tuple_pushes);
+        let saved_literal_tuple_sources = std::mem::take(&mut self.literal_tuple_sources);
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_closure_lets = std::mem::take(&mut self.current_fn_closure_lets);
@@ -3263,6 +3264,7 @@ impl<'a> super::TypeChecker<'a> {
         self.str_list_lets = saved_str_list_lets;
         self.literal_lets = saved_literal_lets;
         self.literal_tuple_pushes = saved_literal_tuple_pushes;
+        self.literal_tuple_sources = saved_literal_tuple_sources;
         self.read_only_slice_lets = saved_read_only_slice_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
@@ -12825,6 +12827,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.str_list_lets.remove(name.as_str());
                         self.literal_lets.remove(name.as_str());
                         self.literal_tuple_pushes.remove(name.as_str());
+                        self.literal_tuple_sources.remove(name.as_str());
                     }
                 } else if let PatternKind::Tuple(pats) = &pattern.kind {
                     if ty.is_none() {

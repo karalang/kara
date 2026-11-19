@@ -13846,26 +13846,18 @@ fn not_equal_and_vec_macro_are_not_bang_diagnostics() {
 // ── B-2026-07-31-32: check_ident_class identity suggestions ─────
 
 #[test]
-fn const_single_letter_name_gets_no_identity_suggestion() {
-    // The shared `check_ident_class` family had the same defect as the
-    // resolver's E_MODULE_BINDING_NAMING: `const M = 1;` advised "consider
-    // renaming to `M`". This site carries no machine-applicable edit, so it
-    // was useless rather than loop-inducing — same cause, same fix.
+fn const_single_letter_name_is_a_constant() {
+    // CN-7 (review-thread ruling 2026-11-19, kata 1649): after `const`, a
+    // one-letter uppercase name is Const class, so `const M` is accepted.
+    // It was diagnosed as Type class before.
     let result = karac::parse("const M: i64 = 1;\nfn main() { println(M); }");
-    let err = result
-        .errors
-        .iter()
-        .find(|e| e.message.contains("Const-class"))
-        .expect("single-letter const is still diagnosed");
     assert!(
-        !err.message.contains("renaming to `M`"),
-        "must not suggest the name it already has: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("single letter") && err.message.contains("more than one letter"),
-        "message should explain the rule: {}",
-        err.message
+        !result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("Const-class")),
+        "a one-letter const is accepted: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 

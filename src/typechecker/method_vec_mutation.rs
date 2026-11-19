@@ -184,6 +184,21 @@ impl<'a> super::TypeChecker<'a> {
                                 &elem,
                                 &self.env.substitutions,
                             ))
+                            // And one holding `Some(x)`, `Ok(x)` or `Err(x)`,
+                            // checked against its slot as one pushed alone
+                            // is, so a borrowed `x` is copied in:
+                            // `below.push((r, Some(node)))` into a
+                            // `Vec[(Node, Option[Node])]` (kata 1660).
+                            || (matches!(
+                                resolve_type_var_top(&elem, &self.env.substitutions),
+                                Type::Tuple(ref slots) if slots.len() == es.len()
+                            ) && es.iter().any(|e| match &e.kind {
+                                ExprKind::Call { callee, .. } => matches!(
+                                    &callee.kind,
+                                    ExprKind::Identifier(n) if matches!(n.as_str(), "Some" | "Ok" | "Err")
+                                ),
+                                _ => false,
+                            }))
                     }
                     _ => false,
                 };

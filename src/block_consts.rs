@@ -81,10 +81,12 @@ impl MutVisitor for Found<'_> {
             let PatternKind::Binding(name) = &pattern.kind else {
                 continue;
             };
-            if !is_const_class(name) {
+            let marked = self.marks.contains(&SpanKey::from_span(&pattern.span));
+            // A block `const N` may have a one-letter name (CN-7).
+            let one_letter = marked && crate::lexer::is_one_letter_const(name);
+            if !is_const_class(name) && !one_letter {
                 continue;
             }
-            let marked = self.marks.contains(&SpanKey::from_span(&pattern.span));
             let target = if marked {
                 let fresh = self.fresh_name(name);
                 if let Some(ty) = ty {

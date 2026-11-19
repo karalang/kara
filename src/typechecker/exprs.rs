@@ -1871,6 +1871,48 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// `t`, a tuple literal element's type, with a `ref` to a `Copy` value
+    /// or a shared handle read as its value where `slot` holds the value,
+    /// directly or as an `Option` / `Result` payload (core semantics §5.10;
+    /// kata 1660). Anything else is `t` unchanged.
+    fn read_lent_value(&mut self, t: Type, slot: &Type) -> Type {
+        let slot = resolve_type_var_top(slot, &self.env.substitutions);
+        match resolve_type_var_top(&t, &self.env.substitutions) {
+            Type::Ref(inner)
+                if !matches!(slot, Type::Ref(_) | Type::MutRef(_))
+                    && (((self.is_copy_type_during_check(&inner)
+                        || self.is_shared_handle(&inner))
+                        && super::types::types_compatible(&inner, &slot))
+                        // An open number behind the `ref` takes the slot's.
+                        || (self.unbound_literal_var(&inner).is_some()
+                            && matches!(slot, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+                            && unify_types(
+                                &inner,
+                                &slot,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            ))) =>
+            {
+                slot
+            }
+            Type::Named { name, args }
+                if matches!(name.as_str(), "Option" | "Result")
+                    && matches!(&slot, Type::Named { name: s, args: sa } if *s == name && sa.len() == args.len()) =>
+            {
+                let Type::Named { args: slots, .. } = &slot else {
+                    return t;
+                };
+                let args = args
+                    .into_iter()
+                    .zip(slots.iter())
+                    .map(|(a, s)| self.read_lent_value(a, s))
+                    .collect();
+                Type::Named { name, args }
+            }
+            _ => t,
+        }
+    }
+
     /// Remember a tuple literal's elements by the literal's span, for
     /// [`Self::reject_borrowed_tuple_elements`], which sees only the span.
     fn note_tuple_literal(&mut self, expr: &Expr) {
@@ -3995,6 +4037,16 @@ impl<'a> super::TypeChecker<'a> {
                                 ExprKind::Unary { op: UnaryOp::Deref, .. }
                                     | ExprKind::TupleIndex { .. }))
                         || (matches!(e.kind, ExprKind::Tuple(_)) && tuple_has_dyn_slot(slot))
+                        // `Some(node)` into an `Option[Node]` slot, `node`
+                        // a `ref`: checked against the slot as a `Some(..)`
+                        // pushed alone is, so the reference is copied in
+                        // (kata 1660).
+                        || (library
+                            && matches!(slot, Type::Named { .. })
+                            && matches!(&e.kind, ExprKind::Call { callee, args }
+                                if args.len() == 1
+                                    && matches!(&callee.kind, ExprKind::Identifier(n)
+                                        if matches!(n.as_str(), "Some" | "Ok" | "Err"))))
                         // FX5: a nested tuple or constructor holding an empty
                         // `[]`: `((1i8, []), 2u8)`.
                         || (matches!(e.kind, ExprKind::Tuple(_) | ExprKind::Call { .. })
@@ -4025,6 +4077,15 @@ impl<'a> super::TypeChecker<'a> {
                                 self.infer_expr(e)
                             }
                         })
+                        .collect();
+                    // A place element lending a `Copy` value or a shared
+                    // handle into a value slot is read there (core semantics
+                    // §5.10): `(x, Some(x))` into `(i64, Option[i64])` with
+                    // `x: ref i64`, as `(x, x)` is (kata 1660).
+                    let types: Vec<Type> = types
+                        .into_iter()
+                        .zip(exp_elems.iter())
+                        .map(|(t, slot)| self.read_lent_value(t, slot))
                         .collect();
                     let result = Type::Tuple(types);
                     // Early-return ONLY when the assembled tuple satisfies the
@@ -13537,6 +13598,42 @@ impl<'a> super::TypeChecker<'a> {
                 self.literal_tuple_pushes.remove(name);
             }
         }
+        // `let moves = [(p + a, false)]`, `p` reading a literal: each
+        // position's first element that reads one (kata 1654).
+        let sources = match &value.kind {
+            ExprKind::ArrayLiteral(rows) if !rows.is_empty() => {
+                let width = match &rows[0].kind {
+                    ExprKind::Tuple(xs) => xs.len(),
+                    _ => 0,
+                };
+                let mut slots: Vec<Option<super::LiteralLet>> = vec![None; width];
+                for row in rows {
+                    let ExprKind::Tuple(xs) = &row.kind else {
+                        continue;
+                    };
+                    for (slot, x) in slots.iter_mut().zip(xs) {
+                        if slot.is_none() && !matches!(x.kind, ExprKind::Integer(..)) {
+                            *slot = self
+                                .expr_types
+                                .get(&SpanKey::from_span(&x.span))
+                                .cloned()
+                                .and_then(|t| self.literal_copy(x, &t))
+                                .or_else(|| self.element_copy_source(x));
+                        }
+                    }
+                }
+                slots.iter().any(Option::is_some).then_some(slots)
+            }
+            _ => None,
+        };
+        match sources {
+            Some(s) => {
+                self.literal_tuple_sources.insert(name.to_string(), s);
+            }
+            None => {
+                self.literal_tuple_sources.remove(name);
+            }
+        }
     }
 
     /// For an array literal of tuples of one arity, each position's first
@@ -13690,6 +13787,45 @@ impl<'a> super::TypeChecker<'a> {
                         | Type::UInt(UIntSize::U8 | UIntSize::U16 | UIntSize::U32) => {}
                         _ => return None,
                     }
+                }
+                entry
+            }
+            // `let sum = if k > 0 { pre[a] - pre[b] } else { 0 }`: an `if`
+            // whose branches end in such reads, or in unsuffixed literals,
+            // holds one too (kata 1652).
+            ExprKind::If {
+                then_block,
+                else_branch: Some(else_branch),
+                ..
+            } => {
+                let mut tails = vec![then_block.final_expr.as_deref()?];
+                let mut rest: &Expr = else_branch;
+                loop {
+                    match &rest.kind {
+                        ExprKind::If {
+                            then_block,
+                            else_branch: Some(next),
+                            ..
+                        } => {
+                            tails.push(then_block.final_expr.as_deref()?);
+                            rest = next;
+                        }
+                        ExprKind::Block(b) => {
+                            tails.push(b.final_expr.as_deref()?);
+                            break;
+                        }
+                        _ => {
+                            tails.push(rest);
+                            break;
+                        }
+                    }
+                }
+                let mut entry = None;
+                for tail in tails {
+                    if matches!(tail.kind, ExprKind::Integer(_, None)) {
+                        continue;
+                    }
+                    entry.get_or_insert(self.element_copy_source(tail)?);
                 }
                 entry
             }
@@ -13889,6 +14025,14 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     self.literal_entry(lit, &ty, at, true, false, name)
                 });
+            // Or a position whose element reads a literal binding.
+            let entry = entry.or_else(|| {
+                let root = Self::collection_root_name(iterable)?;
+                self.literal_tuple_sources
+                    .get(root)
+                    .filter(|s| s.len() == pats.len())?[i]
+                    .clone()
+            });
             let prev = match entry {
                 Some(e) => self.literal_lets.insert(name.clone(), e),
                 None => self.literal_lets.remove(name.as_str()),
@@ -19198,11 +19342,39 @@ impl<'a> super::TypeChecker<'a> {
                 if self.block_materializes_scrutinee_copy(pattern, body) {
                     self.warn_scrutinee_projection_copy(value, &scrut_ty);
                 }
+                // `while let Some((pos, back, steps)) = queue.pop_front()`
+                // over a collection literal tuples were pushed into: each
+                // binding reads its position's literal, as a `for` over it
+                // does (kata 1654).
+                let saved_literal_let = match (&pattern.kind, &value.kind) {
+                    (
+                        PatternKind::TupleVariant { path, patterns },
+                        ExprKind::MethodCall {
+                            object,
+                            method,
+                            args,
+                            ..
+                        },
+                    ) if patterns.len() == 1
+                        && path.last().is_some_and(|n| n == "Some")
+                        && args.is_empty()
+                        && matches!(method.as_str(), "pop" | "pop_front" | "pop_back") =>
+                    {
+                        self.note_literal_for_binding(&patterns[0], object)
+                    }
+                    _ => Vec::new(),
+                };
                 // See the `While` arm.
                 self.break_value_types
                     .push(BreakFrame::for_valueless_loop(label.clone()));
                 self.infer_block(body);
                 self.break_value_types.pop();
+                for (n, prev) in saved_literal_let {
+                    match prev {
+                        Some(e) => self.literal_lets.insert(n, e),
+                        None => self.literal_lets.remove(&n),
+                    };
+                }
                 self.local_scope.pop();
                 Type::Unit
             }

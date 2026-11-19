@@ -173,8 +173,6 @@ const OPEN: &[(&str, &str)] = &[];
 const DESCRIPTIVE: &[(&str, &str)] = &[
     // `{p:?}`: Debug formatting is reserved; `{p}` needs a Display impl.
     ("r23_derive_debug_print", "is Debug formatting"),
-    // `const N`: a one-letter name is Type-class whatever its case.
-    ("r24_const_usize", "const names must be Const-class"),
 ];
 
 fn karac(dir: &Path, args: &[&str]) -> (bool, String, String) {

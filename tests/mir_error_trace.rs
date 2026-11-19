@@ -129,7 +129,8 @@ fn main() -> Result[(), i64] {
     );
 }
 
-/// A panic's trace is the error's path that led to it, then its own place.
+/// An `Option`'s `?` records no frame, so a panic on the `None` it
+/// passed on prints only its own place.
 #[test]
 fn mir_error_trace_ends_at_a_panic() {
     let src = r#"fn inner() -> Option[i64] { None }
@@ -146,7 +147,30 @@ fn main() {
         "panic",
         src,
         101,
-        "runtime error: called unwrap() on None\n  at {f}:8:13\nError return trace:\n  {f}:3:13  inner()?\n  {f}:8:13\n",
+        "runtime error: called unwrap() on None\n  at {f}:8:13\n",
+    );
+}
+
+/// A `None` is no error: an `Option`'s `?` records no frame, so the
+/// panic above prints none; a `Result`'s does (review-thread ruling
+/// 2026-11-19, kata 1644).
+#[test]
+fn mir_error_trace_ends_at_a_panic_on_a_result() {
+    let src = r#"fn inner() -> Result[i64, i64] { Err(4) }
+fn middle() -> Result[i64, i64] {
+    let v = inner()?;
+    Ok(v + 1)
+}
+fn main() {
+    let r = middle();
+    println(r.unwrap());
+}
+"#;
+    reports_everywhere(
+        "panic_result",
+        src,
+        101,
+        "runtime error: called unwrap() on Err\n  at {f}:8:13\nError return trace:\n  {f}:3:13  inner()?\n  {f}:8:13\n",
     );
 }
 

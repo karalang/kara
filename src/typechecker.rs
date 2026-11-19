@@ -4504,6 +4504,10 @@ pub struct TypeChecker<'a> {
     /// offers that literal's suffix, which types the position of every
     /// tuple pushed (kata 1129, B-2026-11-12-2).
     pub(super) literal_tuple_pushes: FxHashMap<String, Vec<Option<Expr>>>,
+    /// `let moves = [(p + a, false)]` with `p` a [`LiteralLet`]: each
+    /// tuple position's first element that reads one, by the binding's
+    /// name, for `for (q, dir) in moves` to read back (kata 1654).
+    pub(super) literal_tuple_sources: FxHashMap<String, Vec<Option<LiteralLet>>>,
     /// `let x = <view>` with no annotation whose value is a read-only
     /// `Slice[T]` written as a postfix expression other than a range
     /// subscript (`s.bytes()`), by name: the initializer's span, where
@@ -5037,6 +5041,7 @@ impl<'a> TypeChecker<'a> {
             literal_feeds: FxHashMap::default(),
             literal_pushes: FxHashMap::default(),
             literal_tuple_pushes: FxHashMap::default(),
+            literal_tuple_sources: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
             read_only_slice_let_uses: FxHashMap::default(),
             timeout_duration_args: FxHashMap::default(),

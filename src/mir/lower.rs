@@ -7459,9 +7459,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.expr_operand(value)?
             }
         };
-        let op = self.settle(op);
+        let mut op = self.settle(op);
         let place = self.finish_place(pending, true)?;
         let (place, t) = self.write_through(place, value)?;
+        // `v = v`: the value moves out of the place before the old value
+        // is dropped, so the store does not drop what it is about to store.
+        if let Operand::Move(p) = &op {
+            if p.local == place.local && self.needs_drop(t) {
+                let pt = self.place_type(p);
+                let l = self.temp(pt);
+                self.assign(l, Rvalue::Use(op));
+                op = Operand::Move(Place::local(l));
+            }
+        }
         if self.needs_drop(t) {
             let next = self.b.new_block();
             self.goto_with(
@@ -18286,7 +18296,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             err_bb,
         );
-        let traced = self.traces_question(e.span);
+        // A `None` is no error: an `Option`'s `?` records no frame
+        // (design.md § Error return traces, review-thread ruling
+        // 2026-11-19, kata 1644).
+        let is_result = self
+            .tys()
+            .tcx()
+            .adt_of(it)
+            .is_some_and(|(adt, _)| adt.name == "Result");
+        let traced = is_result && self.traces_question(e.span);
         if traced {
             let context = self.trace_context(inner, &p, it, err);
             self.error_trace("error_trace_push", e.span, context);
