@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 559 |
-| false-positive | 297 |
+| diagnostics | 560 |
+| false-positive | 298 |
 | missing-feature | 208 |
 | perf | 188 |
 | other | 119 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 710 |
+| typecheck | 711 |
 | mir-llvm | 306 |
 | mir | 270 |
 | cli | 211 |
-| parser | 125 |
+| parser | 126 |
 | ownership | 117 |
 | interp | 94 |
 | runtime | 91 |
@@ -1844,6 +1844,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-90 | mir | medium | `v = v` (a binding assigned its own value) is lowered as `drop(v); v = move v`: the old value is dropped before it is moved into the store, and the M… | bd214fffc0 |
 | B-2026-11-19-91 | typecheck | low | A `Some(x)` inside a tuple pushed into a `Vec[(.., Option[T])]`, `x` a borrowed shared handle or `Copy` value (`below.push((right, Some(node)))` with… | bd214fffc0 |
 | B-2026-11-19-92 | cli+interp | low | In `karac repl`, a panic's place names the line of the program the session runs a cell as, not the cell: an item's uncaught panic reports `<repl>:3:5… | 3a088de48e |
+| B-2026-11-19-100 | parser | low | Rust's typed None, `None::<T>` (`None::<Rc<RefCell<TreeNode>>>` in a LeetCode Rust template), stops at E0002 "Expected `)`, found `::`" with no fix,… | ee08f070a |
+| B-2026-11-19-101 | typecheck | low | A `Vec` passed to a library method's `Slice[T]` parameter is refused E0200 "expected 'Slice[i64]', found 'Vec[i64]'" when the receiver's elements are… | ee08f070a |
 
 </details>
 
