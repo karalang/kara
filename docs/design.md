@@ -5724,7 +5724,7 @@ The diagnostic points at the impl method, names the extra effect and quotes the 
 
 **Instances are keyed by types only.** An effect set never distinguishes two instances of a generic: effects change no code.
 
-**`impl Trait`** in argument and return position is specified in [§9](#9-traits), and so are the effects of calls through [`dyn Trait`](#dyn-trait), which follow the rules for function values. A `with` clause on the `trait` header is not in v1 ([deferred.md](deferred.md#dyn)).
+**`impl Trait`** in argument and return position is specified in [§9](#9-traits), and so are the effects of calls through [`dyn Trait`](#dyn-trait), which follow the rules for function values. A `with` clause on the `trait` header is experimental in 0.8: it is accepted and acts as the ceiling of each method that declares none (a method's own clause replaces it), as [deferred.md](deferred.md#dyn) describes (review ruling 2026-11-19, from the effects probe).
 
 ### Design principles
 
