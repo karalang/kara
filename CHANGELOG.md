@@ -828,6 +828,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   takes the annotation's element type, as an element of a sequential
   tuple does. It checked clean and then failed MIR validation on every
   lane (B-2026-11-19-24).
+- A closure in an assignment's method chain ends with the statement, as
+  one under a `let` does: after `n = xs.iter().filter(|v|
+  seen.contains(v)).count();`, any later move of `seen` was refused with
+  E0500 "moved inside a loop", with no loop needed, and `karac fix`
+  cloned `seen` at the move (B-2026-11-19-36).
 - Two traits' same-named methods on one type are checked apart: each
   impl against its own trait's ceiling, and a UFCS call is charged only
   the trait it names, as design.md §9's "Effects of an ambiguous call"
@@ -1855,6 +1860,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Rust's array `map` on a list literal, `["a", "b"].map(|u| u.to_string())`,
+  gets the `.into_iter()` hop as a fix, and the follow-up fixes collect
+  it, as a named list's `.map` does. It was E0236 with no fix
+  (B-2026-11-19-35).
 - `let EMPTY: Vec[i64] = Vec.new();` at module scope is no longer offered
   a `const` fix that a `const` then refuses (a call is not a constant):
   its help says to build the value in `main` (B-2026-11-18-67).

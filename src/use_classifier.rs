@@ -751,6 +751,17 @@ impl<'a> UseClassifier<'a> {
                     extent.1 = else_block.span.offset - stmt.span.offset;
                     value
                 }
+                // An assignment's value is over by the statement's end as a
+                // `let`'s is (`n = xs.iter().filter(|v| seen.contains(v))
+                // .count();`, B-2026-11-19-36).
+                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                    if !self.tc.expr_type(value).is_some_and(|t| {
+                        holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
+                    }) {
+                        return;
+                    }
+                    value
+                }
                 // An `if`'s condition runs before either branch, so a branch
                 // that moves what the condition's closures read lies after them
                 // (`if ps.iter().any(|p| p.name == name) { .. } Ok(P { name })`,

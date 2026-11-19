@@ -286,7 +286,10 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::FieldAccess { .. }
             | ExprKind::TupleIndex { .. }
             | ExprKind::Call { .. }
-            | ExprKind::Index { .. } => object.span.offset + object.span.length,
+            | ExprKind::Index { .. }
+            // A list literal, `["a", "b"].map(..)` (B-2026-11-19-35).
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::PrefixCollectionLiteral { .. } => object.span.offset + object.span.length,
             _ => return None,
         };
         (object.span.length > 0 && end > object.span.offset).then_some(end)
@@ -344,13 +347,18 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// The iterator a `Vec` receiver is walked with: `iter` for a place,
-    /// `into_iter` for a call's result. `pkt.split(p).iter().collect()`
-    /// would lend from a temporary dropped at the end of the statement
-    /// (E0516), where `into_iter` hands its items over (B-2026-11-11-46).
+    /// `into_iter` for a call's result or a list literal.
+    /// `pkt.split(p).iter().collect()` would lend from a temporary dropped
+    /// at the end of the statement (E0516), where `into_iter` hands its
+    /// items over (B-2026-11-11-46); Rust's array `map` takes the items by
+    /// value too (B-2026-11-19-35).
     pub(super) fn iter_hop(object: &Expr) -> &'static str {
         if matches!(
             object.kind,
-            ExprKind::MethodCall { .. } | ExprKind::Call { .. }
+            ExprKind::MethodCall { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. }
         ) {
             "into_iter"
         } else {
