@@ -847,6 +847,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- The bitwise and shift operators `& | ^ << >>` and unary `~` work on a
+  type parameter bounded by their trait (`fn f[T: BitAnd[Output = T]](a:
+  own T, b: own T) -> T { a & b }`, `T: Shl[i64, Output = T]`, `T:
+  Not[Output = T]`) and call the bound's impl, as `+ - * / %` on `T: Add`
+  already did (design.md § Operator traits). They were refused
+  "bitwise operator requires integer type, found 'T'"; that message now
+  names the bound a parameter needs (B-2026-11-19-125).
+- A `ref T` operand of a `T: Copy` (or `T: Numeric`) parameter reads as the
+  `T` under an arithmetic or bitwise operator (core semantics §5.10), so
+  `for x in v.iter() { s = s + x; }` checks on a generic `T: Add[Output =
+  T] + Copy` as it does on `i64`. It was refused "found 'T' and 'ref T'"
+  (B-2026-11-19-129).
 - A function value lent to a generic `mut ref F` parameter
   (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`
   called as `twice(mut g)`), and a named function's value lent to a

@@ -2965,6 +2965,14 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// A type parameter whose bounds make it `Copy` (`T: Copy`, or `T:
+    /// Numeric`, whose instances are primitives): a `ref T` operand of an
+    /// operator reads as the `T` (core semantics §5.10), as a borrowed
+    /// integer does (B-2026-11-19-129).
+    pub(super) fn copy_bounded_param(&self, ty: &Type) -> bool {
+        self.type_param_has_trait_bound(ty, "Copy") || self.type_param_has_numeric_bound(ty)
+    }
+
     /// For an operand of a type parameter bounded by the operator trait `tr`:
     /// the right operand's type when the bound names one (`Add[D]`), and the
     /// result type, the bound's `Output` (design.md § Operator traits): the
@@ -3285,6 +3293,73 @@ impl<'a> super::TypeChecker<'a> {
             TypeErrorKind::TypeMismatch,
             "f16_software_emulated",
         );
+    }
+
+    /// An operator on a type parameter bounded by its operator trait (`T:
+    /// Add`, `T: BitAnd`, `T: Shl[i64]`) calls the bound's impl: the right
+    /// operand is its `Rhs` (`T` unless the bound names one) and the result
+    /// its `Output` (design.md § Operator traits), which is `T` only where
+    /// the bound says so (`Add[Output = T]`). B-2026-10-27-14: the result was
+    /// `T` whatever the impl's `Output`. The bitwise and shift operators take
+    /// this path too (B-2026-11-19-125); they checked for a primitive integer
+    /// first. The two spellings of one parameter count as the same
+    /// (`same_type_param`, B-2026-09-02-18).
+    fn bounded_param_binary(
+        &mut self,
+        tr: &str,
+        what: &str,
+        left_ty: &Type,
+        right_ty: &Type,
+        right: &Expr,
+    ) -> Type {
+        // A refused right operand leaves the result unknown,
+        // so nothing downstream reports it again.
+        let (rhs, output) = self.bounded_operator_types(left_ty, tr);
+        match rhs {
+            Some(rhs) => {
+                // `check_assignable` takes a rigid parameter on
+                // either side for anything, so a parameter must
+                // be the same one.
+                let rigid = (self.type_param_name(&rhs).is_some()
+                    || self.type_param_name(right_ty).is_some())
+                    && rhs != *right_ty
+                    && !self.same_type_param(&rhs, right_ty);
+                if rigid {
+                    self.type_error(
+                        format!(
+                            "expected '{}', found '{}': the bound `{tr}[{}]` \
+                             names the right-hand type",
+                            type_display(&rhs),
+                            type_display(right_ty),
+                            type_display(&rhs)
+                        ),
+                        right.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                if !self.check_assignable(&rhs, right_ty, right.span) {
+                    return Type::Error;
+                }
+            }
+            None if left_ty != right_ty && !self.same_type_param(left_ty, right_ty) => {
+                self.type_error(
+                    format!(
+                        "{what} on a '{tr}'-bounded type parameter requires \
+                         both operands to have the same type, found '{}' and \
+                         '{}'; a bound names another right-hand type as \
+                         `{tr}[R]`",
+                        type_display(left_ty),
+                        type_display(right_ty)
+                    ),
+                    right.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            None => {}
+        }
+        output
     }
 
     /// The operator trait and method a binary operator calls on a user
@@ -5466,7 +5541,8 @@ impl<'a> super::TypeChecker<'a> {
                 // (B-2026-11-18-16).
                 let peel = |t: Type| match &t {
                     Type::Ref(inner) | Type::MutRef(inner)
-                        if self.distinct_type_has_arithmetic(inner) =>
+                        if self.distinct_type_has_arithmetic(inner)
+                            || self.copy_bounded_param(inner) =>
                     {
                         (**inner).clone()
                     }
@@ -5474,10 +5550,15 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 (peel(left_ty), peel(right_ty))
             }
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => (
-                deref_integer_scalar(left_ty),
-                deref_integer_scalar(right_ty),
-            ),
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+                let peel = |t: Type| match &t {
+                    Type::Ref(inner) | Type::MutRef(inner) if self.copy_bounded_param(inner) => {
+                        (**inner).clone()
+                    }
+                    _ => deref_integer_scalar(t),
+                };
+                (peel(left_ty), peel(right_ty))
+            }
             BinOp::And | BinOp::Or => (deref_bool_scalar(left_ty), deref_bool_scalar(right_ty)),
             _ => (left_ty, right_ty),
         };
@@ -5838,67 +5919,8 @@ impl<'a> super::TypeChecker<'a> {
                 } else if Self::arithmetic_operator_trait(op)
                     .is_some_and(|tr| self.type_param_has_trait_bound(&left_ty, tr))
                 {
-                    // Arithmetic on a `T: Add`/`Sub`/`Mul`/`Div`/`Rem` generic
-                    // parameter calls the bound's impl: the right operand is
-                    // its `Rhs` (`T` unless the bound names one) and the
-                    // result its `Output` (design.md § Operator traits), which
-                    // is `T` only where the bound says so (`Add[Output = T]`).
-                    // B-2026-10-27-14: the result was `T` whatever the impl's
-                    // `Output`, so a `T: Sub` body read an `Instant - Instant`
-                    // `Duration` as an `Instant`. The two spellings of one
-                    // parameter count as the same (`same_type_param`,
-                    // B-2026-09-02-18).
                     let tr = Self::arithmetic_operator_trait(op).unwrap_or("");
-                    // A refused right operand leaves the result unknown,
-                    // so nothing downstream reports it again.
-                    let (rhs, output) = self.bounded_operator_types(&left_ty, tr);
-                    match rhs {
-                        Some(rhs) => {
-                            // `check_assignable` takes a rigid parameter on
-                            // either side for anything, so a parameter must
-                            // be the same one.
-                            let rigid = (self.type_param_name(&rhs).is_some()
-                                || self.type_param_name(&right_ty).is_some())
-                                && rhs != right_ty
-                                && !self.same_type_param(&rhs, &right_ty);
-                            if rigid {
-                                self.type_error(
-                                    format!(
-                                        "expected '{}', found '{}': the bound `{tr}[{}]` \
-                                         names the right-hand type",
-                                        type_display(&rhs),
-                                        type_display(&right_ty),
-                                        type_display(&rhs)
-                                    ),
-                                    right.span,
-                                    TypeErrorKind::TypeMismatch,
-                                );
-                                return Type::Error;
-                            }
-                            if !self.check_assignable(&rhs, &right_ty, right.span) {
-                                return Type::Error;
-                            }
-                        }
-                        None if left_ty != right_ty
-                            && !self.same_type_param(&left_ty, &right_ty) =>
-                        {
-                            self.type_error(
-                                format!(
-                                    "arithmetic on a '{tr}'-bounded type parameter requires \
-                                     both operands to have the same type, found '{}' and \
-                                     '{}'; a bound names another right-hand type as \
-                                     `{tr}[R]`",
-                                    type_display(&left_ty),
-                                    type_display(&right_ty)
-                                ),
-                                right.span,
-                                TypeErrorKind::TypeMismatch,
-                            );
-                            return Type::Error;
-                        }
-                        None => {}
-                    }
-                    output
+                    self.bounded_param_binary(tr, "arithmetic", &left_ty, &right_ty, right)
                 } else if let Some((rhs, output, bare)) = Self::arithmetic_operator_trait(op)
                     .and_then(|tr| self.projection_operator_types(&left_ty, tr))
                 {
@@ -6338,10 +6360,33 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Bool
             }
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+                if let Some((tr, _)) = Self::user_operator_trait(op)
+                    .filter(|(tr, _)| self.type_param_has_trait_bound(&left_ty, tr))
+                {
+                    return self.bounded_param_binary(
+                        tr,
+                        "a bitwise operator",
+                        &left_ty,
+                        &right_ty,
+                        right,
+                    );
+                }
                 if !is_integer(&left_ty) {
+                    // A type parameter has the operator through its trait's
+                    // bound (B-2026-11-19-125), so say which bound.
+                    let bound = self
+                        .type_param_name(&left_ty)
+                        .and(Self::user_operator_trait(op))
+                        .map(|(tr, _)| {
+                            format!(
+                                "; a type parameter has it through the bound `{tr}` \
+                                 (design.md § Operator traits)"
+                            )
+                        })
+                        .unwrap_or_default();
                     self.type_error(
                         format!(
-                            "bitwise operator requires integer type, found '{}'",
+                            "bitwise operator requires integer type, found '{}'{bound}",
                             type_display(&left_ty)
                         ),
                         left.span,
@@ -6941,7 +6986,11 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Vector { element, .. }
                         if matches!(**element, Type::Int(_) | Type::UInt(_))
                 );
-                if !is_integer(&ty) && !vec_int {
+                if self.type_param_has_trait_bound(&ty, "Not") {
+                    // `~x` on a `T: Not` is the bound's `Output`, as `-x` on a
+                    // `T: Neg` is (B-2026-11-19-125).
+                    self.bounded_operator_types(&ty, "Not").1
+                } else if !is_integer(&ty) && !vec_int {
                     self.type_error(
                         format!(
                             "unary '~' requires an integer or integer-lane Vector type, \
