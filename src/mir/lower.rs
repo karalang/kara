@@ -35,6 +35,7 @@ use super::syntax::*;
 use super::ty::{AdtId, FloatTy, Ty, TyInterner};
 
 mod dyn_trait;
+mod never_widen;
 
 /// The value of an operator tree made only of unsuffixed integer literals,
 /// when every step is in range. A lone literal is not a tree. A shift amount
@@ -4712,6 +4713,9 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `op` widened into the numeric slot `t`, if it needs it.
     fn widen(&mut self, op: Operand, t: Ty) -> Operand {
+        if let Some(op) = self.never_widen(&op, t) {
+            return op;
+        }
         if self.dyn_cast(&op, t).is_some() {
             return self.coerce_to_dyn(op, t);
         }
@@ -9651,9 +9655,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.diverge(TerminatorKind::Unreachable);
             return Ok(());
         }
+        // A value whose type is the slot's with some parts `Never`
+        // (`let w: Option[String] = n` for `n: Option[Never]`): made at its
+        // own type, then rebuilt at the slot's (B-2026-11-19-68).
+        let dt = self.place_type(&dest);
+        // An expression the checker left untyped is lowered as before.
+        let widened = self.lcx.node_types.get(&e.id).copied().filter(|&et| {
+            self.never_widens(et, dt) && !matches!(self.tys().tcx().kind(et), HK::Never)
+        });
+        if let Some(et) = widened {
+            let l = self.temp(et);
+            self.expr_into(e, Place::local(l))?;
+            self.rebuild_widened(Place::local(l), et, dest, dt);
+            return Ok(());
+        }
         // A concrete value into a `dyn` slot (design.md § `dyn Trait`):
         // made at its own type, then coerced by `assign`.
-        let dt = self.place_type(&dest);
         if self.dyn_under(dt).is_some() {
             let et = self.expr_ty(e)?;
             if self.dyn_under(et).is_none() && !matches!(self.tys().tcx().kind(et), HK::Never) {

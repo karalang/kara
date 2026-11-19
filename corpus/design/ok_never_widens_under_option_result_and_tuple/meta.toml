@@ -1,0 +1,9 @@
+source = "docs/design.md"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "never", "variance"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Subtyping and variance: Option, Result and tuples are covariant and Never ≤ T, so Option[Never] passes as Option[String] (a let, an argument, a return, a push), Result[_, Never] as Result[_, String], and (Option[Never], i64) as (Option[String], i64). check accepted each and every lane stopped at the MIR validator until B-2026-11-19-68's fix, which rebuilds the value at the slot's type. interp, mir-llvm, ASan and build agree."

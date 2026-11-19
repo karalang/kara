@@ -1,0 +1,43 @@
+// design.md § Subtyping and variance: `Never ≤ T`, and `Option`, `Result`
+// and tuples are covariant, so a value whose type holds `Never` passes where
+// the same type with `T` there is wanted (B-2026-11-19-68).
+
+fn show(o: Option[String]) -> bool { o.is_none() }
+
+fn get() -> Option[String] {
+    let n: Option[Never] = None;
+    n
+}
+
+fn mk() -> Result[String, Never] { Ok("kept") }
+
+fn main() {
+    let c = false;
+    let v = if c { Some(todo()) } else { None };
+    let w: Option[String] = v;
+    println(w.is_none());
+
+    let n: Option[Never] = None;
+    println(show(n));
+    println(get().is_none());
+
+    let r: Result[i64, Never] = Ok(3);
+    let r2: Result[i64, String] = r;
+    println(r2.is_ok());
+
+    let s: Result[String, Never] = mk();
+    let s2: Result[String, i64] = s;
+    match s2 {
+        Ok(x) => println(x),
+        Err(e) => println(e),
+    }
+
+    let t: (Option[Never], i64) = (None, 4);
+    let u: (Option[String], i64) = t;
+    println(f"{u.0.is_none()} {u.1}");
+
+    let mut ys: Vec[Option[String]] = Vec.new();
+    let o: Option[Never] = None;
+    ys.push(o);
+    println(ys.len());
+}
