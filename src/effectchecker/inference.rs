@@ -1266,6 +1266,13 @@ impl<'a> super::EffectChecker<'a> {
                 // caller. Concrete-type dispatch (`Wrapper.method()`) and
                 // ordinary free-function calls still use `extract_callee_name`.
                 let trait_keys = self.extract_trait_assoc_fn_keys(callee, bounds);
+                // A call through an escaping function value (a field, an
+                // element, an `escaping` parameter, a `for` binding over a
+                // collection of them) has the effects its type declares
+                // (design.md §12, B-2026-11-19-38).
+                if let Some(key) = self.fn_value_call_key(expr) {
+                    calls.push((key, expr.span));
+                }
                 // B-2026-11-04-29: a built-in integer operator the lowering
                 // wrote as `i64.rem(a, b)` / `i64.neg(a)` is a `panics` atom
                 // (design.md §12): `/` and `%` may divide by zero, and `+`,

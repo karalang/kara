@@ -44,7 +44,7 @@ use super::{
 };
 
 /// A clause as written, for keys and messages: its items in order.
-fn clause_text(list: &EffectList) -> String {
+pub(crate) fn clause_text(list: &EffectList) -> String {
     if list.items.is_empty() {
         return "()".to_string();
     }

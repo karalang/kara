@@ -20,6 +20,7 @@ mod drop_edges;
 mod dyn_effects;
 mod effect_vars;
 mod extern_ffi;
+mod fn_values;
 mod gpu_effect_gate;
 mod inference;
 mod modbind_synth;
@@ -151,6 +152,13 @@ pub(crate) fn every_effect_set(origin: EffectOrigin) -> EffectSet {
 /// [`EVERY_EFFECT_MARK`], so a function draws one finding per such call
 /// rather than one per verb.
 pub(crate) fn every_effect_origin(callee: &str, line: usize) -> String {
+    if callee == fn_values::FN_EVERY_KEY {
+        return format!(
+            " (via a call at line {line} through a function value whose type writes no \
+             `with` clause, which {EVERY_EFFECT_MARK}; write the clause on the type, \
+             `Fn(..) with ...`, or `with ()` for none)"
+        );
+    }
     match callee.strip_prefix("__dyn_every.") {
         Some(method) => format!(
             " (via a call of `{method}` at line {line} through a `dyn` value whose type writes \
@@ -480,9 +488,9 @@ pub(crate) fn clause_slots(program: &Program) -> FxHashSet<(String, String)> {
 /// The struct literals filling a [`clause_slots`] slot inside a function
 /// that also calls through a function value (a field, an element, a local):
 /// there the closures stored are charged to the function as before, since
-/// the call through the slot is not charged the slot's clause here yet
-/// (B-2026-11-19-22; the call itself is B-2026-11-19-38). A function that
-/// only stores is charged nothing.
+/// a call through a slot whose clause names an effect variable is not
+/// charged the clause (B-2026-11-19-22; `fn_values.rs` charges the others,
+/// B-2026-11-19-38). A function that only stores is charged nothing.
 pub(crate) fn stores_beside_value_calls(
     program: &Program,
     slots: &FxHashSet<(String, String)>,
@@ -1135,6 +1143,11 @@ pub struct NodeTypeFacts {
     /// Expressions typed by one of those structs, seen through `ref` /
     /// `mut ref`, each with the struct's name.
     pub flag_objects: FxHashMap<crate::ids::NodeId, String>,
+    /// Expressions typed by a struct with a field of function type, seen
+    /// through `ref` / `mut ref`, each with the struct's name: a call
+    /// through such a field has the effects its type declares
+    /// (B-2026-11-19-38).
+    pub fn_field_objects: FxHashMap<crate::ids::NodeId, String>,
     /// The typechecker's `Trait.m(x)` calls, by span, with the name as
     /// written (`TypeCheckResult::ufcs_calls`).
     pub ufcs_calls: FxHashMap<SpanKey, String>,
@@ -1502,6 +1515,11 @@ pub struct EffectChecker<'a> {
     pub(crate) ufcs_traits: FxHashMap<SpanKey, String>,
     /// See [`NodeTypeFacts::flag_objects`].
     pub(crate) flag_objects: FxHashMap<crate::ids::NodeId, String>,
+    /// See [`NodeTypeFacts::fn_field_objects`].
+    pub(crate) fn_field_objects: FxHashMap<crate::ids::NodeId, String>,
+    /// Each call through an escaping function value, with the seeded key
+    /// it is charged (`fn_values.rs`, B-2026-11-19-38).
+    pub(crate) fn_value_calls: FxHashMap<crate::ids::NodeId, Symbol>,
     /// Per function, the `T.drop` bodies its own drops may run, each with
     /// the site: charged as calls (core semantics §12 default 3,
     /// B-2026-11-17-13). Built by `drop_edges` once the bodies are final.
@@ -1669,6 +1687,8 @@ impl<'a> EffectChecker<'a> {
             drops_by_type: FxHashMap::default(),
             flagged_fields: FxHashMap::default(),
             flag_objects: FxHashMap::default(),
+            fn_field_objects: FxHashMap::default(),
+            fn_value_calls: FxHashMap::default(),
             apart_methods: apart_impl_methods(program),
             clause_slots: clause_slots(program),
             kept_stores: stores_beside_value_calls(program, &clause_slots(program)),
@@ -1745,6 +1765,7 @@ impl<'a> EffectChecker<'a> {
         self.drops_by_type = facts.drops_by_type;
         self.flagged_fields = facts.flagged_fields;
         self.flag_objects = facts.flag_objects;
+        self.fn_field_objects = facts.fn_field_objects;
         self.ufcs_traits = facts.ufcs_calls;
         self
     }
@@ -2730,6 +2751,7 @@ impl<'a> EffectChecker<'a> {
         self.impl_effect_var_positions = self.build_impl_effect_var_positions();
         self.compute_bound_calls();
         self.compute_dyn_tables();
+        self.compute_fn_value_calls();
 
         // Phase B: Infer and verify
         self.infer_effects();
@@ -3663,6 +3685,15 @@ impl<'a> EffectChecker<'a> {
                             fn_name: callee,
                             span,
                         } => {
+                            if let Some(clause) = callee
+                                .strip_prefix(fn_values::FN_CLAUSE_PREFIX)
+                                .and_then(|c| c.strip_suffix(']'))
+                            {
+                                return format!(
+                                    " (via a call at line {} through a function value `with {clause}`)",
+                                    span.line
+                                );
+                            }
                             return format!(" (via call to '{}' at line {})", callee, span.line);
                         }
                     }

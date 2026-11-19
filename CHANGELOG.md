@@ -20,6 +20,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A call through an escaping function value has the effects its type
+  declares (design.md §12): a struct field, a collection element, an
+  `escaping` parameter, and a `for` binding over a collection of them is
+  charged the clause written on its `Fn(..)` type, nothing for `with ()`,
+  and every effect when the type writes no clause. `pub fn go(j: Job) ->
+  i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)`
+  checked clean without a `with` clause; it now needs `with
+  writes(OrderDb)`, and `#[no_effect]` sees the write. The type is read
+  from the source (a field's or parameter's declared type, a `let`'s
+  annotation, the element type of one); a clause naming an effect
+  variable is still solved per instance (B-2026-11-19-38).
 - A function under `#[no_effect(panics)]` that reads or writes a `mut`
   field of a `shared` value is refused when the field carries a borrow
   flag (its type is neither `Copy` nor counted): the access panics
@@ -870,8 +881,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   EventBus[with writes(OrderDb)] { EventBus { handlers: [|e| record(e)]
   } }` no longer needs a `with writes(OrderDb)` of its own; the bus's
   type states it. A function that also calls through the bus is still
-  charged the closures it stores, since the call through the bus is not
-  yet charged the bus's clause (B-2026-11-19-22, B-2026-11-19-38).
+  charged the closures it stores, since a call through a bus whose
+  clause names an effect variable (`EventBus[with E]`) is not charged
+  the clause (B-2026-11-19-22, B-2026-11-19-38).
 - A closure that writes a capture and then moves it out,
   `group.spawn(|| { agent.serve(); agent })`, takes the capture by move as
   core semantics §9.1 says: `karac check` passed it and `run` and `build`

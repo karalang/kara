@@ -1016,6 +1016,15 @@ fn shown_callee(key: &str) -> String {
             return format!("{m} (through a `dyn` value `with {clause}`)");
         }
     }
+    if key == "__fn_every" {
+        return "a function value (its type writes no clause)".to_string();
+    }
+    if let Some(clause) = key
+        .strip_prefix("__fn_clause[")
+        .and_then(|c| c.strip_suffix(']'))
+    {
+        return format!("a function value (its type `with {clause}`)");
+    }
     if let Some(r) = key.strip_prefix("__providers_bind::") {
         return format!("the provider bound for {r}");
     }
@@ -1125,6 +1134,7 @@ pub fn derivation(
                 // declares: its set is the clause, not its body's.
                 let declared = at.starts_with("__bound_ceiling.")
                     || at.starts_with("__dyn_clause[")
+                    || at.starts_with("__fn_clause[")
                     || matches!(
                         effects.declared_effects.get(&at),
                         Some(DeclaredEffects::Explicit(set)) if set.effects.iter().any(|d| d.effect == *effect)

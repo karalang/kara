@@ -861,6 +861,40 @@ pub fn node_type_facts(
             }
         }
     }
+    // A struct with a field of function type: a call through the field has
+    // the effects its declared type writes (B-2026-11-19-38).
+    fn holds_fn(t: &Type) -> bool {
+        match t {
+            Type::Function { .. } | Type::OnceFunction { .. } => true,
+            Type::Named { args, .. } => args.iter().any(holds_fn),
+            Type::Tuple(ts) => ts.iter().any(holds_fn),
+            Type::Array { element, .. }
+            | Type::Vector { element, .. }
+            | Type::Slice { element, .. } => holds_fn(element),
+            Type::Ref(i) | Type::MutRef(i) | Type::Rc(i) | Type::Arc(i) => holds_fn(i),
+            _ => false,
+        }
+    }
+    let fn_structs: rustc_hash::FxHashSet<&str> = typed
+        .struct_info
+        .iter()
+        .filter(|(_, info)| info.fields.iter().any(|(_, t, _)| holds_fn(t)))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    if !fn_structs.is_empty() {
+        for (&node, (ty, _)) in &typed.node_types {
+            let mut ty = ty;
+            while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+                ty = inner;
+            }
+            if let Type::Shared(name) | Type::Named { name, .. } = ty {
+                if fn_structs.contains(name.as_str()) {
+                    let last = name.rsplit('.').next().unwrap_or(name);
+                    facts.fn_field_objects.insert(node, last.to_string());
+                }
+            }
+        }
+    }
     facts
 }
 
