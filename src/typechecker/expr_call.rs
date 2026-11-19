@@ -2215,6 +2215,11 @@ impl<'a> super::TypeChecker<'a> {
         // as a value. Concrete types (`Wrapper.method()`) fall through —
         // `resolve_path_type` already finds their impl methods.
         if let ExprKind::Path { segments, .. } = &callee.kind {
+            if let [p, a, m] = segments.as_slice() {
+                if let Some(ty) = self.try_dispatch_projection_assoc_fn(p, a, m, args, span) {
+                    return ty;
+                }
+            }
             if segments.len() == 2 {
                 if let Some(ty) = self.try_dispatch_typeparam_assoc_fn(
                     &segments[0],

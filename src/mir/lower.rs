@@ -20808,6 +20808,27 @@ impl<'l, 'a> Bx<'l, 'a> {
         // `T` that the checker took the path for (`struct V` against `sum`'s
         // `V.default()`).
         if let ExprKind::Path { segments, .. } = &callee.kind {
+            // `I.Item.default()` under `where I.Item: Default`: the
+            // projection's impl at this instance (B-2026-11-19-15).
+            if let [tp, a, m] = segments.as_slice() {
+                let key = SpanKey::from_span(&e.span);
+                if rc.is_none_or(|rc| matches!(rc.callee, Callee::Builtin(_)))
+                    && self.type_param(tp).is_some()
+                    && self.lcx.tc.method_typeparam_trait_key.contains_key(&key)
+                {
+                    let proj = Type::AssocProjection {
+                        param: tp.clone(),
+                        assoc: a.clone(),
+                        args: Vec::new(),
+                        receiver_args: Vec::new(),
+                        trait_name: None,
+                    };
+                    let Some(t) = self.frame_ty(&proj) else {
+                        return self.unsupported(e.span, "a projection this instance cannot name");
+                    };
+                    return self.type_param_call(e, t, m, args, dest);
+                }
+            }
             if let [tp, m] = segments.as_slice() {
                 // `T.try_from(x)` of a refinement or distinct type with a
                 // `where` predicate has no definition: the checker makes it.
@@ -24994,6 +25015,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             .tc
             .method_typeparam_trait_args
             .get(&SpanKey::from_span(&e.span))?;
+        let mut out = Vec::with_capacity(written.len());
+        for t in written {
+            out.push(self.frame_ty(t)?);
+        }
+        Some(out)
+    }
+
+    /// The checker's type `t`, written in the enclosing function's
+    /// signature frame, at this instance.
+    fn frame_ty(&mut self, t: &Type) -> Option<Ty> {
         let def = self.outer_fn.unwrap_or(self.b.instance().def);
         let key = self.lcx.fn_key(def);
         let frame = self.lcx.tc.fn_return_types.get(&key)?.1;
@@ -25010,12 +25041,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             .node_generic_frame_proj_traits
             .get(frame as usize);
         let args = self.args.clone();
-        let mut out = Vec::with_capacity(written.len());
-        for t in written {
-            let hir = self.lcx.lower_legacy(t, &params, projs).ok()?;
-            out.push(self.lcx.mir_ty(hir, &args).ok()?);
-        }
-        Some(out)
+        let hir = self.lcx.lower_legacy(t, &params, projs).ok()?;
+        self.lcx.mir_ty(hir, &args).ok()
     }
 
     /// `method` of `t`'s impl of the trait a generic bound names: of two

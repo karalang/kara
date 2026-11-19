@@ -769,6 +769,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `for x in iter` over an owned parameter `iter: own I` with `I:
+  Iterator` binds `x` as `I.Item`, the item `iter.next()` returns. It bound
+  the iterator's own type `I`, so `t + x` under `where I.Item: Add[Output
+  = I.Item]` was refused with "expected 'I.Item', found 'I'". An
+  associated function of a projection, `I.Item.default()` under `where
+  I.Item: Default` or `I.Item.zero()` under a user trait's bound, is called
+  through that bound at each instance; it failed in lowering with E0516 "a
+  type that failed to check is not lowered yet", and a projection no bound
+  gives the function is now refused naming the bound to add
+  (B-2026-11-19-15).
 - `karac check` no longer refuses a method of an impl at concrete type
   arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`, or `impl Score
   for Pr[bool]`) that nothing calls yet: its body was checked with its

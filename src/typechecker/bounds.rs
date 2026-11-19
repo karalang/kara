@@ -335,12 +335,39 @@ impl<'a> super::TypeChecker<'a> {
     /// (`it: own I`): `for x in it` yields `T` (design.md § `Iterator` and
     /// `Iterable`, B-2026-11-13-18). A borrowed one is
     /// [`Self::borrowed_iterator_for`]'s.
+    ///
+    /// With no `Item = T` written (`I: Iterator`), the loop binds `I.Item`,
+    /// the projection the parameter's own `next()` returns: before
+    /// B-2026-11-19-15 the loop bound the iterator's own type `I`, so
+    /// `t + x` under `where I.Item: Add[Output = I.Item]` was refused with
+    /// "expected 'I.Item', found 'I'".
     pub(super) fn iterator_param_item(&mut self, ty: &Type) -> Option<Type> {
         let param = self.type_param_name(ty)?.clone();
-        let te = self
-            .enclosing_assoc_eqs
-            .get(&(param, "Item".to_string(), Some("Iterator".to_string())))?
-            .clone();
+        let key = (
+            param.clone(),
+            "Item".to_string(),
+            Some("Iterator".to_string()),
+        );
+        let Some(te) = self.enclosing_assoc_eqs.get(&key).cloned() else {
+            let bounds = self.enclosing_bounds.get(&param)?;
+            let traits = self.assoc_declaring_traits(
+                bounds
+                    .iter()
+                    .filter(|b| b.fn_sig.is_none())
+                    .filter_map(|b| b.path.last().map(String::as_str)),
+                "Item",
+            );
+            if traits.len() != 1 || traits[0] != "Iterator" {
+                return None;
+            }
+            return Some(Type::AssocProjection {
+                param,
+                assoc: "Item".to_string(),
+                args: Vec::new(),
+                receiver_args: Vec::new(),
+                trait_name: Some("Iterator".to_string()),
+            });
+        };
         let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
         Some(self.lower_type_expr(&te, &scope))
     }

@@ -1213,6 +1213,134 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `I.Item.default()`: an associated function of a projection, through
+    /// the trait a `where I.Item: Default` bound names, with `Self` the
+    /// projection (B-2026-11-19-15). The call typed as an error with no
+    /// diagnostic, and lowering failed with E0516 "a type that failed to
+    /// check is not lowered yet". A projection no bound gives the function
+    /// is refused here, naming the bound to add.
+    pub(super) fn try_dispatch_projection_assoc_fn(
+        &mut self,
+        param: &str,
+        assoc: &str,
+        method: &str,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Option<Type> {
+        if self.local_scope.lookup(param).is_some() || !self.enclosing_bounds.contains_key(param) {
+            return None;
+        }
+        let trait_name = self.written_assoc_trait(param, assoc, *call_span)?;
+        let self_ty = Type::AssocProjection {
+            param: param.to_string(),
+            assoc: assoc.to_string(),
+            args: Vec::new(),
+            receiver_args: Vec::new(),
+            trait_name: Some(trait_name.clone()),
+        };
+        // `I.Item.default()` under `I: Iterator[Item = i64]` is `i64`'s.
+        let fixed = self
+            .enclosing_assoc_eqs
+            .get(&(param.to_string(), assoc.to_string(), Some(trait_name)))
+            .cloned()
+            .map(|te| {
+                let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+                self.lower_assoc_eq(&te, &scope)
+            });
+        let bounds = self
+            .enclosing_proj_bounds
+            .get(&(param.to_string(), assoc.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        let found: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
+            .iter()
+            .filter_map(|b| {
+                let m = self.find_trait_method(b.path.last()?, method)?;
+                m.self_param.is_none().then(|| (b.clone(), m.clone()))
+            })
+            .collect();
+        let shown = format!("{param}.{assoc}");
+        // `Default` is a derive-only builtin with no trait declaration, so
+        // its `default` is found by name (design.md § `Default`).
+        if found.is_empty() && method == "default" && args.is_empty() {
+            let bounded = bounds
+                .iter()
+                .any(|b| b.path.last().is_some_and(|t| t == "Default"));
+            let ty = match fixed {
+                Some(t) if bounded || self.type_supports_default(&t) => Some(t),
+                _ => bounded.then(|| self_ty.clone()),
+            };
+            if let Some(ty) = ty {
+                self.method_typeparam_trait_key
+                    .insert(SpanKey::from_span(call_span), "Default.default".to_string());
+                return Some(ty);
+            }
+        }
+        match found.as_slice() {
+            [(bound, trait_method)] => {
+                let trait_name = bound.path.last().cloned().unwrap_or_default();
+                let trait_subs = self.trait_bound_arg_subs(bound);
+                if !trait_subs.is_empty() {
+                    self.method_typeparam_trait_args.insert(
+                        SpanKey::from_span(call_span),
+                        trait_subs.iter().map(|(_, t)| t.clone()).collect(),
+                    );
+                }
+                self.method_typeparam_trait_key.insert(
+                    SpanKey::from_span(call_span),
+                    format!("{trait_name}.{method}"),
+                );
+                let trait_method = trait_method.clone();
+                Some(self.dispatch_trait_method_as(
+                    self_ty,
+                    &trait_method,
+                    &trait_subs,
+                    args,
+                    call_span,
+                ))
+            }
+            [] => {
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                let wanted = if method == "default" {
+                    "Default"
+                } else {
+                    "Trait"
+                };
+                self.type_error(
+                    format!(
+                        "no associated function '{method}' on '{shown}': no bound on \
+                         '{shown}' declares it. Add the trait that does as a bound, \
+                         `where {shown}: {wanted}` (design.md § Associated types)"
+                    ),
+                    *call_span,
+                    TypeErrorKind::NoMethodFound,
+                );
+                Some(Type::Error)
+            }
+            _ => {
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                let traits: Vec<String> = found
+                    .iter()
+                    .filter_map(|(b, _)| b.path.last().map(|t| format!("`{t}`")))
+                    .collect();
+                self.type_error(
+                    format!(
+                        "ambiguous associated function '{method}' on '{shown}': declared by \
+                         {}. Use UFCS `Trait.{method}(...)` to disambiguate.",
+                        traits.join(", ")
+                    ),
+                    *call_span,
+                    TypeErrorKind::AmbiguousAssocFn,
+                );
+                Some(Type::Error)
+            }
+        }
+    }
+
     pub(super) fn try_dispatch_typeparam_assoc_fn(
         &mut self,
         type_name: &str,
