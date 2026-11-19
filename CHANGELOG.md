@@ -827,6 +827,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A function value lent to a generic `mut ref F` parameter
+  (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`
+  called as `twice(mut g)`), and a named function's value lent to a
+  concrete `mut ref Fn() -> i64` one (`let mut h = five; call(mut h)`),
+  is called through. The instance called the reference itself as a
+  function: a compiled build overflowed the stack or segfaulted, and the
+  interpreter refused it as "not a function value" (B-2026-11-19-71).
 - A closure literal passed to a generic bare `F` parameter (`fn
   call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) borrows what it captures,
   as one passed to a bare `f: Fn() -> i64` does: a bare parameter is a

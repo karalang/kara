@@ -22151,6 +22151,62 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// `twice(mut g)` for a parameter `f: mut ref F` (or `ref F`): the
+    /// checker solves `F` to the erased `Fn(..)`, but the argument is a
+    /// reference to the closure itself, which cannot be erased in place. The
+    /// instance is specialised to the closure's type, as one for a `mut ref
+    /// MutFn()` parameter is (B-2026-10-19-68); it called the reference as a
+    /// function value, which overflowed the stack compiled and was refused
+    /// by the interpreter (B-2026-11-19-71).
+    fn closure_ref_inst_args(
+        &mut self,
+        f: &'a Function,
+        args: &'a [CallArg],
+        mut inst: Vec<Ty>,
+    ) -> R<Vec<Ty>> {
+        for (a, p) in args.iter().zip(&f.params) {
+            // Only a parameter written `mut ref F`: a bare borrowed `T` is a
+            // `ref T` here (D5) and takes the erased value as before, which
+            // is how the REPL's snapshot helper receives a closure.
+            if !matches!(p.ty.kind, ast::TypeKind::MutRef(_)) {
+                continue;
+            }
+            let Some(&pt) = self.lcx.node_types.get(&p.pattern.id) else {
+                continue;
+            };
+            let tcx = self.tys().tcx();
+            let i = match tcx.kind(pt) {
+                HK::Ref(x) | HK::MutRef(x) => match tcx.kind(x) {
+                    HK::Param(q) => q.index as usize,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if !inst
+                .get(i)
+                .is_some_and(|&t| matches!(tcx.kind(t), HK::Fn { .. }))
+            {
+                continue;
+            }
+            // A closure literal is lowered for its slot as before; only a
+            // value that already lives somewhere is lent as itself.
+            if matches!(a.value.kind, ExprKind::Closure { .. }) {
+                continue;
+            }
+            let at = self.expr_ty(&a.value)?;
+            let tcx = self.tys().tcx();
+            // `twice(mut g)` types the argument as `g`'s own type.
+            let inner = match tcx.kind(at) {
+                HK::Ref(x) | HK::MutRef(x) => x,
+                _ => at,
+            };
+            if matches!(tcx.kind(inner), HK::Closure { .. } | HK::FnDef { .. }) {
+                inst[i] = inner;
+            }
+        }
+        Ok(inst)
+    }
+
     /// A call of the program's function `d` (`f`) in instance `inst_args`,
     /// with `recv` before the arguments when a path names the receiver.
     #[allow(clippy::too_many_arguments)]
@@ -22167,6 +22223,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if args.len() != f.params.len() {
             return self.unsupported(e.span, "a call that leaves out default arguments");
         }
+        let inst_args = self.closure_ref_inst_args(f, args, inst_args)?;
         let mut ops = Vec::new();
         let mut fn_tys: Vec<Option<Ty>> = Vec::new();
         for (a, p) in args.iter().zip(&f.params) {
@@ -26496,7 +26553,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Ref(i) | HK::MutRef(i) => i,
             _ => at,
         };
-        Ok(matches!(tcx.kind(inner), HK::Closure { .. }))
+        // A local holding a function item (`let mut h = five; call(mut
+        // h)`) is no erased value either (B-2026-11-19-71).
+        Ok(matches!(
+            tcx.kind(inner),
+            HK::Closure { .. } | HK::FnDef { .. }
+        ))
     }
 
     /// A function item as a value: a constant of its `FnDef` type.
