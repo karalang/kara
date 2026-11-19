@@ -1209,6 +1209,11 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A bare empty list literal `[]`.
+    pub(super) fn is_empty_list_literal(e: &crate::ast::Expr) -> bool {
+        matches!(&e.kind, crate::ast::ExprKind::ArrayLiteral(items) if items.is_empty())
+    }
+
     /// Re-type every expression strictly inside `value` whose recorded type
     /// (or call frame) names one of `foreign`'s out-of-scope parameters with
     /// that parameter's variable (B-2026-11-17-133).
@@ -1668,6 +1673,26 @@ impl<'a> super::TypeChecker<'a> {
                                 })
                                 .map(|(p, v)| (p.clone(), v.clone()))
                                 .collect();
+                            // B-2026-11-19-136 — only a value typed by the
+                            // raw slot itself (`Vec.new()` against `Vec[T]`
+                            // hands back `Vec[T]`) holds this struct's `T`.
+                            // Any other shape names a parameter of the value's
+                            // own type that shares the name: a bare `None`'s
+                            // `Option[T]` in a `next: Option[Ls[T]]` slot.
+                            // Opening it to this struct's variable bound
+                            // `Ls[?T]` against `?T`; it takes a fresh variable,
+                            // which the slot then solves.
+                            let own_slot = actual == *expected_ty;
+                            let foreign: HashMap<String, SubstValue> = if own_slot {
+                                foreign
+                            } else {
+                                foreign
+                                    .keys()
+                                    .map(|p| {
+                                        (p.clone(), SubstValue::Type(self.env.fresh_type_var()))
+                                    })
+                                    .collect()
+                            };
                             let opened = substitute_type_params(&actual, &foreign);
                             // FX1 — a parameter of the value's own type that
                             // only shares this struct's parameter's NAME (the
@@ -1688,7 +1713,7 @@ impl<'a> super::TypeChecker<'a> {
                                     _ => false,
                                 };
                             if opened != actual && !cyclic {
-                                for v in foreign.values() {
+                                for v in foreign.values().filter(|_| own_slot) {
                                     if let Some(Type::TypeVar(id)) = v.as_type() {
                                         echoed.insert(*id);
                                     }
@@ -1713,9 +1738,42 @@ impl<'a> super::TypeChecker<'a> {
                             .clone()
                             .unwrap_or_else(|| substitute_type_params(expected_ty, &param_subs));
                         actual = self.copied_out_of_ref(actual, &slot);
+                        // B-2026-11-19-135 — an empty `[]` synthesizes
+                        // `Vec[Error]`: it names no element type of its own.
+                        // In a field whose type mentions the struct's
+                        // parameter (`xs: Vec[T]`, `kids: Vec[Tr[T]]`) it
+                        // takes the slot's, which the other fields solve.
+                        if Self::is_empty_list_literal(&f.value)
+                            && matches!(&actual, Type::Named { name, args }
+                                if name == "Vec" && matches!(args.as_slice(), [Type::Error]))
+                            && matches!(&slot, Type::Named { name, .. } if name == "Vec")
+                        {
+                            actual = slot.clone();
+                            self.record_node_type(f.value.id, &actual);
+                            self.expr_types.insert(
+                                crate::resolver::SpanKey::from_span(&f.value.span),
+                                actual.clone(),
+                            );
+                        }
+                        // A strong handle stored into a `weak` field
+                        // downgrades (design.md § Storing into a `weak`
+                        // field), so it solves the slot as the weak handle it
+                        // becomes: `Bx { v: 2, back: a }` over `mut back:
+                        // weak Bx[T]` (B-2026-11-19-136).
+                        let downgraded;
+                        let actual_for_slot = match (
+                            resolve_type_var_top(&slot, &self.env.substitutions),
+                            &actual,
+                        ) {
+                            (Type::Weak(_), Type::Named { name, .. }) if name != "Option" => {
+                                downgraded = Type::Weak(Box::new(actual.clone()));
+                                &downgraded
+                            }
+                            _ => &actual,
+                        };
                         let unified = unify_types(
                             &slot,
-                            &actual,
+                            actual_for_slot,
                             &mut self.env.substitutions,
                             &mut self.env.const_substitutions,
                         );
@@ -1745,7 +1803,7 @@ impl<'a> super::TypeChecker<'a> {
                                 &empty_cn,
                             );
                             let ract = resolve_type_vars(
-                                &actual,
+                                actual_for_slot,
                                 &self.env.substitutions,
                                 &id_to_name,
                                 &self.env.const_substitutions,

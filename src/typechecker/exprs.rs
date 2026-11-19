@@ -7014,13 +7014,45 @@ impl<'a> super::TypeChecker<'a> {
                     // signature, so resolving reproduces what unify accepted and
                     // leaves everything unify rejected (a shape or name clash
                     // binds nothing) exactly as it was.
-                    let arg_ty = &self.resolve_assoc_projections(&resolve_type_vars(
+                    let mut arg_ty = &self.resolve_assoc_projections(&resolve_type_vars(
                         arg_ty,
                         &self.env.substitutions,
                         &id_to_name,
                         &self.env.const_substitutions,
                         &const_id_to_name,
                     ));
+                    // A bare `[]` minted `Vec[Error]`; for a `Vec` slot the
+                    // other arguments solved (`Tree.Node(1, [])` over
+                    // `Node(T, Vec[Tree[T]])`), it is that slot's list
+                    // (B-2026-11-19-135).
+                    let empty_list_slot;
+                    if Self::is_empty_list_literal(&arg.value)
+                        && matches!(arg_ty, Type::Named { name, args }
+                            if name == "Vec" && matches!(args.as_slice(), [Type::Error]))
+                        && matches!(&resolved, Type::Named { name, .. } if name == "Vec")
+                        && {
+                            // Only a slot the call solved: a callee parameter
+                            // still open reads back as its name.
+                            let mut ids = Vec::new();
+                            type_var_ids(
+                                &resolve_type_vars(
+                                    sub_param_ty,
+                                    &self.env.substitutions,
+                                    &HashMap::new(),
+                                    &self.env.const_substitutions,
+                                    &HashMap::new(),
+                                ),
+                                &mut ids,
+                            );
+                            !ids.iter().any(|id| id_to_name.contains_key(id))
+                        }
+                    {
+                        empty_list_slot = resolved.clone();
+                        self.record_node_type(arg.value.id, &empty_list_slot);
+                        self.expr_types
+                            .insert(SpanKey::from_span(&arg.value.span), empty_list_slot.clone());
+                        arg_ty = &empty_list_slot;
+                    }
                     let given_away = matches!(arg_ty, Type::Ref(_))
                         && self.d5_borrow_for_owned_slot(&arg.value, formal)
                         && self.d5_give_away(&arg.value, &resolved).is_some();
