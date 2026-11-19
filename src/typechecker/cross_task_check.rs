@@ -277,8 +277,9 @@ impl<'a> super::TypeChecker<'a> {
                              and `sync` handles, and views, and a `shared` handle is none of \
                              them){note}\n\
                              help: declare `{leaf}` as a `sync` type, or read what the \
-                             branches need out of `{name}` before the `par`",
+                             branches need out of `{name}` before the `par`{promote}",
                             leaf = path.unsafe_leaf,
+                            promote = self.sync_promotion_note(&path.unsafe_leaf),
                         ),
                         anchor_span,
                         TypeErrorKind::CrossTaskUnsafeCapture,
@@ -295,6 +296,51 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+    }
+
+    /// The `sync` form of the program's `shared struct leaf`, as a note for
+    /// the programmer to review (design.md § From `shared` to `sync`): each
+    /// `mut` field loses `mut` and goes in an `Atomic[T]` (for `bool`,
+    /// `i32`, `i64`, `u32`, `u64`) or a `Mutex[T]`. Never a machine fix: the
+    /// choice between the two, and whether the type should be frozen
+    /// instead, depends on how the tasks use it (B-2026-11-19-17). Empty for
+    /// a generic or library type, or one with no `mut` field.
+    pub(super) fn sync_promotion_note(&self, leaf: &str) -> String {
+        let Some(info) = self.env.structs.get(leaf) else {
+            return String::new();
+        };
+        if !info.is_shared || !info.generic_params.is_empty() || info.mut_fields.is_empty() {
+            return String::new();
+        }
+        let atomic = |t: &Type| {
+            use super::types::{IntSize, UIntSize};
+            matches!(
+                t,
+                Type::Bool
+                    | Type::Int(IntSize::I32 | IntSize::I64)
+                    | Type::UInt(UIntSize::U32 | UIntSize::U64)
+            )
+        };
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for (name, ty, _) in &info.fields {
+            let shown = type_display(ty);
+            if info.mut_fields.contains(name) {
+                before.push(format!("mut {name}: {shown}"));
+                let cell = if atomic(ty) { "Atomic" } else { "Mutex" };
+                after.push(format!("{name}: {cell}[{shown}]"));
+            } else {
+                before.push(format!("{name}: {shown}"));
+                after.push(format!("{name}: {shown}"));
+            }
+        }
+        format!(
+            "\nnote: the `sync` form of `{leaf}`, to review before applying it (each `mut` field \
+             in an `Atomic[T]` or a `Mutex[T]`; if the branches only read `{leaf}`, `freeze` \
+             keeps it `shared`):\n  - shared struct {leaf} {{ {} }}\n  + sync struct {leaf} {{ {} }}",
+            before.join(", "),
+            after.join(", ")
+        )
     }
 
     /// A function value bound from a closure literal in this body is not

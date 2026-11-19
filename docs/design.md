@@ -5002,25 +5002,17 @@ shared struct Session { id: u64, mut request_count: u64, mut last_path: String }
 sync struct Session { id: u64, request_count: Atomic[u64], last_path: Mutex[String] }
 ```
 
-The compiler suggests this conversion when a `shared` handle reaches a task:
+The compiler suggests this conversion when a `shared` handle reaches a task, as a note that shows the declaration before and after:
 
 ```
-error[E_NOT_CROSS_TASK]: `state` (type `Elevator`) cannot cross a task boundary
-  --> src/main.kara:42:9
-   |
-42 |         run_controller(state),
-   |                        ^^^^^ captured by a `par` branch here
-   |
-note: `Elevator` is a shared type
-   = help: declare `Elevator` as a `sync struct` and replace its mut fields with `Mutex[T]` or `Atomic[T]` fields
-   = fix: karac fix --apply=concurrent-promote-shared   (applies the diff below)
-
-   suggested diff:
-   - shared struct Elevator { stops: Vec[i64], mut direction: Direction, mut floor: i64 }
-   + sync struct Elevator { stops: Vec[i64], direction: Mutex[Direction], floor: Atomic[i64] }
+error[E_NOT_CROSS_TASK]: main.kara:42:9: `state` (a `shared` handle of type `Elevator`) cannot enter a `par` branch (core semantics §11.3: a branch takes owned values, `frozen` and `sync` handles, and views, and a `shared` handle is none of them)
+help: declare `Elevator` as a `sync` type, or read what the branches need out of `state` before the `par`
+note: the `sync` form of `Elevator`, to review before applying it (each `mut` field in an `Atomic[T]` or a `Mutex[T]`; if the branches only read `Elevator`, `freeze` keeps it `shared`):
+  - shared struct Elevator { stops: Vec[i64], mut direction: Direction, mut floor: i64 }
+  + sync struct Elevator { stops: Vec[i64], direction: Mutex[Direction], floor: Atomic[i64] }
 ```
 
-The diff puts each `mut` field in an `Atomic[T]` or a `Mutex[T]`. The programmer reviews that choice and applies the diff: a concurrent program carries correctness requirements that depend on context, and no machine-applied fix in this area is safe without review. If the value is only read across tasks, [freezing](#frozen-handles) it is the better fix and the type stays `shared`.
+The note puts each `mut` field of `bool`, `i32`, `i64`, `u32` or `u64` in an `Atomic[T]` and every other one in a `Mutex[T]`. It is not a machine fix, and `karac fix` does not apply it: the programmer reviews that choice and edits the declaration and the code that writes the fields. A concurrent program carries correctness requirements that depend on context, and no machine-applied fix in this area is safe without review. If the value is only read across tasks, [freezing](#frozen-handles) it is the better fix and the type stays `shared`.
 
 **Performance note: types that are mostly single-task.** A `sync` type pays an atomic count on every handle operation, in single-task code too. For a type that is mostly used in one task, keep the mutable state in a plain struct behind one `Mutex`: code holding the guard works on the plain struct with no atomic traffic.
 
