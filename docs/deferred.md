@@ -4829,6 +4829,8 @@ The session's accumulated content behaves as the body of an implicit `fn main() 
 - The session's implicit return type is `Result[(), AnyError]`, matching a `main()` that uses `?`.
 - Effects accumulate on this implicit `main` — see *Effect Semantics* below.
 
+**Type inference stops at the cell boundary.** A binding's type is settled within the cell that makes it: a later cell's use cannot fix a type parameter the making cell left open, because the making cell has already run. So a cell that ends with `let (tx, rx) = channel(4);`, `let mut v = Vec.new();`, `let mut m = Map.new();`, `let z = zeros();` (a const parameter) or `let g = generic_fn;` is refused with `E0238` ("cannot infer type parameter …; add a type annotation to the binding"), though the same lines in one `fn main` compile, since there the later use settles the type. The fix is the one the diagnostic names: annotate the binding (`let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);`, `let mut v: Vec[i64] = Vec.new();`), or put the making and the first use in one cell. This is inherent to evaluating cell by cell, not a gap: a `.kara` file saved from the session (`:save`) carries the annotations and means the same.
+
 #### Ownership Across Cells
 
 Ownership and move semantics operate on the session's accumulating history, not on the cell boundary. A value consumed in cell *N* is gone in cell *N+1*:
