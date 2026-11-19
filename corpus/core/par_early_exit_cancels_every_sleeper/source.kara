@@ -1,0 +1,33 @@
+import std.time.{Duration, sleep};
+
+// An early exit in a `par {}` branch cancels the branches after it at the
+// wait each is suspended in (core-semantics §11.7, §11.9). Every one of
+// these rounds' sleepers is cancelled, so none prints that it woke, however
+// the workers interleave with it: a cancel that came while the sleeper's
+// worker was putting it to sleep used to find it nowhere, and it slept on.
+
+fn round(i: i64) -> i64 {
+    let (a, b) = par {
+        {
+            if i >= 0 {
+                return -1;
+            }
+            0
+        },
+        {
+            sleep(Duration.ms(300));
+            println(f"round {i}: woke");
+            1
+        },
+    };
+    a + b
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 400 {
+        let _ = round(i);
+        i += 1;
+    }
+    println("done");
+}

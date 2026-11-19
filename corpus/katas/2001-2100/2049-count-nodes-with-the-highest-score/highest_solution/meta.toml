@@ -9,3 +9,4 @@ note = "no legacy record (the legacy compiler went at M3); expected.out is the k
 bucket = "e-spec"
 classified_with = "3dcd07637"
 extracted_src = "c169ae17"
+tsan_skip = "recurses 100,000 calls deep on a path; TSan's call stack holds 65,536 frames"

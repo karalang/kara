@@ -612,7 +612,7 @@ fn run_files_via_jit_subprocess_with(
 /// feature there is no runner to spawn, the function is dead, and CI runs the
 /// DEFAULT clippy leg — which is where an ungated version fails.
 #[cfg(feature = "llvm")]
-fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
+pub(super) fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
     }

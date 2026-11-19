@@ -1,0 +1,26 @@
+// A `par` branch that always returns is of type `!`. Bound into an annotated
+// tuple, it takes the annotation's element type, as an element of a
+// sequential tuple does, and the function returns the branch's value
+// (design.md §13, "return and ? are the ways out" of a branch;
+// core-semantics §11.7).
+
+fn first() -> i64 {
+    let (a, b): (i64, i64) = par { { return 9; }, 2 };
+    a + b
+}
+
+fn second() -> String {
+    let (a, b): (i64, String) = par { 1, { return "returned".to_string(); } };
+    f"{a} {b}"
+}
+
+fn neither() -> i64 {
+    let (a, b): (i64, i64) = par { { if false { return 9; } 3 }, 4 };
+    a + b
+}
+
+fn main() {
+    println(first());
+    println(second());
+    println(neither());
+}

@@ -808,6 +808,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `#[allow(deprecated)]` on an impl, a function or a method covers its own
   header: `impl Old` and `fn mk() -> Old` under the allow warned at the
   deprecated `Old` (design.md §17 Lint levels, B-2026-11-19-20).
+- An early exit in a `par {}` branch cancels a later branch that is just
+  going to sleep, on a program run on more than one worker. Between a
+  worker taking back its task's state after a poll and putting the task
+  to sleep, a cancel from another worker found the task in neither place,
+  and the cancelled branch slept its whole sleep and ran on: of 400 rounds
+  of a branch that returns beside one that sleeps, 16 to 63 sleepers woke
+  and printed, by lane (B-2026-11-19-45).
+- A `par` branch that always returns (`{ return 9; }`), bound into an
+  annotated tuple (`let (a, b): (i64, i64) = par { { return 9; }, 2 }`),
+  takes the annotation's element type, as an element of a sequential
+  tuple does. It checked clean and then failed MIR validation on every
+  lane (B-2026-11-19-24).
 - `karac check` counts `.raw()` on an owned non-`Copy` distinct value as a
   move of the wrapper, as design.md § Distinct Types says: a later use
   checked clean and was refused only by `run` and `build`, with no source
@@ -1847,6 +1859,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   with its own `Drop` (`a: D`) checks and moves the field whole; it was
   refused as a move out of `D`. Moving fields out of a base whose own type
   has a `Drop` stays refused (B-2026-11-19-7).
+- The corpus's compiled lanes (`karac __mir-llvm-run`, `__mir-llvm-asan`,
+  `__mir-llvm-tsan`) report a program killed by a signal as `128 + signal`,
+  as `karac run` does, rather than a bare 101 that read as a panic: a
+  segmentation fault under ThreadSanitizer showed as exit 101 with no
+  output (B-2026-11-19-46).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a

@@ -1,0 +1,10 @@
+source = "core-semantics.md §11.7, §11.9"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "control-flow"]
+expected_from = "spec"
+rules = ["11.7", "11.9"]
+backends = []
+env = {}
+note = "An early exit in a `par {}` branch cancels the branches after it at their wait. Before the fix, between a worker taking back its task's state and putting it to sleep (two locks), a cancel from another worker found the task in neither place; of 400 rounds, 63 sleepers woke on mir-llvm-asan, 25 on mir-llvm and 16 on a build, on four workers (B-2026-11-19-45)."

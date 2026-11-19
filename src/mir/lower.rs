@@ -4253,6 +4253,21 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// The MIR type of the node `id` in this instance.
+    /// Whether `want` is the tuple `t` with each `!` element given a type:
+    /// every other element the same.
+    fn fills_never(&self, t: Ty, want: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        let (HK::Tuple(a), HK::Tuple(b)) = (tcx.kind(t), tcx.kind(want)) else {
+            return false;
+        };
+        let (a, b) = (tcx.list(a), tcx.list(b));
+        a.len() == b.len()
+            && a != b
+            && a.iter()
+                .zip(b.iter())
+                .all(|(&x, &y)| x == y || matches!(tcx.kind(x), HK::Never))
+    }
+
     fn node_ty(&mut self, id: NodeId, span: Span) -> R<Ty> {
         if let Some(&l) = self.old_vals.get(&id) {
             return Ok(self.b.local_ty(l));
@@ -7086,7 +7101,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                         (p, t)
                     }
                     None => {
-                        let t = self.expr_ty(value)?;
+                        let mut t = self.expr_ty(value)?;
+                        // An element of type `!` (a `par` branch that always
+                        // returns) takes the annotation's type, as the
+                        // sequential tuple's element does: the bindings read
+                        // the value past a `par` join (B-2026-11-19-24).
+                        if ty.is_some() {
+                            if let Some(&pt) = self.lcx.node_types.get(&pattern.id) {
+                                if self.fills_never(t, pt) {
+                                    t = pt;
+                                }
+                            }
+                        }
                         (Place::local(self.temp_of(value, t)?), t)
                     }
                 };
@@ -13827,9 +13853,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(group_ty) = self.library_struct("TaskGroup", &[]) else {
             return self.unsupported(span, "`par` without the library's `TaskGroup`");
         };
+        // A branch that never finishes (`{ return 9; }`) is of type `!`; its
+        // task's value takes the type the block gives that element, which an
+        // annotation on the binding gave it, as the sequential tuple's does,
+        // so the joined tuple is of one type with `dest` (B-2026-11-19-24).
+        let dest_ty = self.place_type(&dest);
         let mut task_tys = Vec::with_capacity(es.len());
-        for &x in es {
-            task_tys.push(self.par_task_ty(x, err, exits, ret_ty)?);
+        for (k, &x) in es.iter().enumerate() {
+            let want = self.tys().tcx().field_ty(dest_ty, None, k as u32);
+            task_tys.push(self.par_task_ty(x, err, exits, ret_ty, want)?);
         }
         // The joined results wait in slots scheduled before the group: on
         // an early exit the group drops first, and with it the later
@@ -13978,15 +14010,24 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// The type a `par` branch `x`'s task returns, and the exit it leaves
-    /// by when a branch `return`s: [`Self::par_tasks`].
+    /// by when a branch `return`s: [`Self::par_tasks`]. `want` is the
+    /// block's type for this branch's element, which a branch of type `!`
+    /// takes.
     fn par_task_ty(
         &mut self,
         x: &'a Expr,
         err: Option<u32>,
         exits: bool,
         ret_ty: Ty,
+        want: Option<Ty>,
     ) -> R<(Ty, Option<(Ty, u32)>)> {
-        let vt = self.expr_ty(x)?;
+        let never = |me: &Self, t: Ty| matches!(me.tys().tcx().kind(t), HK::Never);
+        let mut vt = self.expr_ty(x)?;
+        if never(self, vt) {
+            if let Some(w) = want.filter(|&w| !never(self, w)) {
+                vt = w;
+            }
+        }
         let mut exit = None;
         let tt = match err {
             None if exits => {

@@ -230,7 +230,9 @@ pub fn parse_args(args: &[String]) -> Command {
                 let _ = std::fs::remove_file(f);
             }
             match status {
-                Ok(s) => process::exit(s.code().unwrap_or(101)),
+                // A signal death reports `128 + signal`, as `karac run` does,
+                // not a bare 101 that reads as a panic (B-2026-11-19-46).
+                Ok(s) => process::exit(super::run_check_cmds::exit_code_of(&s)),
                 Err(e) => {
                     eprintln!("error[mir]: llvm: karac_jit_runner: {e}");
                     process::exit(3);
@@ -330,7 +332,7 @@ pub fn parse_args(args: &[String]) -> Command {
             let status = cmd.status();
             let _ = std::fs::remove_dir_all(&dir);
             match status {
-                Ok(s) => process::exit(s.code().unwrap_or(101)),
+                Ok(s) => process::exit(super::run_check_cmds::exit_code_of(&s)),
                 Err(e) => fail(format!("{san}: {}: {e}", exe.display())),
             }
         }

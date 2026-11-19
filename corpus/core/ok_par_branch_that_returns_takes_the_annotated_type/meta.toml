@@ -1,0 +1,9 @@
+source = "B-2026-11-19-24"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "control-flow"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §13 and core-semantics §11.7: a `return` leaves the function from a `par` branch. A branch of type `!` bound into an annotated tuple takes the annotation's element type (B-2026-11-19-24: the compiled tasks' joined tuple held a `!` element, and MIR validation refused it on every lane). Expected values checked by hand."

@@ -1493,7 +1493,6 @@ pub(crate) fn on_task_end(f: fn(u64)) {
 
 /// Cancels task `id` (core-semantics §11.9), as `TaskGroup.cancel` cancels
 /// each task of its group.
-#[allow(dead_code)] // for the natives that keep per-task state (M4 item 5)
 pub(crate) fn cancel(id: u64) {
     cancel_where(&|t| t.id == id);
 }
@@ -1679,6 +1678,32 @@ fn settle(t: Task) -> bool {
             true
         }
     }
+}
+
+/// [`settle`]s `t`, the task this worker just polled, whose state stays
+/// registered as this worker's running task until then. A `cancel_where`
+/// on another worker looks for a task where it runs and where it waits;
+/// between the two, as the worker took its state back and then put it to
+/// sleep under separate locks, the task was in neither, the cancel was
+/// lost, and a cancelled sleeper slept its whole sleep and ran on (a `par`
+/// branch after an early exit printed that it woke, one run in thirty
+/// under AddressSanitizer). A cancel that came meanwhile marked the state,
+/// so it is applied once the task is where `cancel_where` looks
+/// (B-2026-11-19-45).
+fn settle_polled(t: Task) -> bool {
+    let id = t.id;
+    let queued = settle(t);
+    let late = EXEC.with(|e| e.borrow_mut().cur_mut().take());
+    if late.is_some_and(|c| c.cancel) {
+        cancel(id);
+    }
+    queued
+}
+
+/// Ends this worker's record of the task it just polled, which finished
+/// or is torn down rather than settled.
+fn forget_polled() {
+    EXEC.with(|e| e.borrow_mut().cur_mut().take());
 }
 
 /// Cancels each group whose deadline has passed (§11.10).
@@ -1975,14 +2000,17 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
         let done = unsafe { (t.poll)(t.a, t.b) } != 0;
         t.flags = crate::mir_flags::swap_table(outer_flags);
         t.spans = crate::mir::swap_spans(outer);
+        // The task stays this worker's running one until it is settled
+        // ([`settle_polled`]).
         let (after, cur) = EXEC.with(|e| {
-            let mut e = e.borrow_mut();
-            (e.progress, e.cur_mut().take())
+            let e = e.borrow();
+            (e.progress, e.cur())
         });
         if let Some(cur) = cur {
             t.keep(cur);
         }
         if done {
+            forget_polled();
             task_done(&t);
             finished_polling();
             idle = 0;
@@ -1990,6 +2018,7 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
         }
         // Cancelled while it ran, it is torn down at the wait it reached.
         if t.cancel && !t.torn {
+            forget_polled();
             tear_down(t);
             finished_polling();
             idle = 0;
@@ -2005,7 +2034,7 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             idle += 1;
         }
         t.seen = before;
-        let queued = settle(t);
+        let queued = settle_polled(t);
         finished_polling();
         if !queued {
             continue;
@@ -2216,16 +2245,20 @@ fn worker_loop(w: usize) {
         let done = unsafe { (t.poll)(t.a, t.b) } != 0;
         t.flags = crate::mir_flags::swap_table(outer_flags);
         t.spans = crate::mir::swap_spans(outer);
-        if let Some(cur) = EXEC.with(|e| e.borrow_mut().cur_mut().take()) {
+        // The task stays this worker's running one until it is settled
+        // ([`settle_polled`]).
+        if let Some(cur) = EXEC.with(|e| e.borrow().cur()) {
             t.keep(cur);
         }
         if done {
+            forget_polled();
             task_done(&t);
         } else if t.cancel && !t.torn {
+            forget_polled();
             tear_down(t);
         } else {
             t.seen = before;
-            settle(t);
+            settle_polled(t);
         }
         finished_polling();
     }

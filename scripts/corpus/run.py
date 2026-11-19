@@ -15,7 +15,8 @@ a leak, double free or bad access fails the entry with the report's first
 line, whatever the stdout), mir-llvm-tsan (the same IR under ThreadSanitizer,
 `karac __mir-llvm-tsan`, on four workers (`KARAC_THREADS=4`); a data race
 fails the entry the same way; it needs `libkarac_runtime_tsan.a`, CLAUDE.md
-§ Runtime archives), and mir-build (the same IR compiled ahead of time by
+§ Runtime archives; an entry whose meta.toml sets `tsan_skip` recurses deeper
+than TSan's 65,536-frame call stack and is skipped there), and mir-build (the same IR compiled ahead of time by
 `karac build`, then the binary run).
 
 --filter matches a tag exactly or a substring of the entry path; repeat it to
@@ -72,6 +73,11 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     listed = "mir-llvm" if backend == "mir-llvm-tsan" else backend
     if expect == "skip" or (meta.get("backends") and listed not in meta["backends"]):
         return {**base, "verdict": "SKIP", "why": expect if expect == "skip" else "backend excluded", "ran": False}
+    # TSan keeps its own call stack of 65,536 frames per thread, which does not
+    # grow outside Go: a deeper recursion writes past it and faults or hangs,
+    # differently from run to run. An entry that recurses that deep says so.
+    if backend == "mir-llvm-tsan" and meta.get("tsan_skip"):
+        return {**base, "verdict": "SKIP", "why": f"tsan: {meta['tsan_skip']}", "ran": False}
     mir = backend.startswith("mir-")
     if not mir and meta.get("legacy_expect"):
         expect = meta["legacy_expect"]  # legacy refuses what v2 accepts

@@ -101,6 +101,13 @@ rm -rf target/tsan
   with `-Zbuild-std`. A report that names no `Mutex M…` on a lock-guarded global
   is the sign of a plain-std archive.
 
+- **TSan's call stack holds 65,536 frames per thread** and does not grow
+  outside Go. A deeper recursion writes past it and dies with SIGSEGV (exit
+  139), hangs, or passes, differently from run to run, with no report: a
+  60,000-deep recursion passed three runs in three, 70,000 hung, faulted and
+  passed. That is the sanitizer's limit, not a race. An entry that recurses so
+  deep sets `tsan_skip = "<why>"` in its meta.toml, and the TSan lane skips it.
+
 - **`cargo rustc … --crate-type staticlib`, never `cargo build -p karac-runtime`.**
   The crate is `["staticlib", "rlib"]`; emitting both under fat LTO keeps std's
   backtrace symbolizer alive in every binary (+41% on the smallest). See the
