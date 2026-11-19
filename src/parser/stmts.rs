@@ -591,6 +591,38 @@ impl super::Parser {
         );
     }
 
+    /// A body that declares a value and ends in a `par for` with no `;`
+    /// gives that loop's `Vec` (design.md § `par for`): the loop, parsed
+    /// as a statement since a `for` has no value, becomes the body's tail.
+    /// A body with no declared value keeps it a statement, its `Vec` of
+    /// units unused.
+    pub(crate) fn par_for_tail(&self, body: &mut Block) {
+        if body.final_expr.is_some() {
+            return;
+        }
+        let Some(Stmt {
+            kind: StmtKind::Expr(e),
+            ..
+        }) = body.stmts.last()
+        else {
+            return;
+        };
+        if !matches!(e.kind, ExprKind::For { par: Some(_), .. })
+            || self
+                .expr_stmt_semis
+                .contains_key(&crate::resolver::SpanKey::from_span(&e.span))
+        {
+            return;
+        }
+        if let Some(Stmt {
+            kind: StmtKind::Expr(e),
+            ..
+        }) = body.stmts.pop()
+        {
+            body.final_expr = Some(Box::new(e));
+        }
+    }
+
     fn is_block_expr(&self, expr: &Expr) -> bool {
         // Block-like expressions that don't need semicolons when used as
         // statements, and are never a block's `final_expr`.

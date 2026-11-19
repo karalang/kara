@@ -686,7 +686,13 @@ impl super::Parser {
         let requires = self.parse_requires_clauses();
         let ensures = self.parse_ensures_clauses();
         let where_clause = self.parse_optional_where_clause();
-        let body = self.parse_block()?;
+        let mut body = self.parse_block()?;
+        if return_type.as_ref().is_some_and(|t| {
+            !matches!(&t.kind, TypeKind::Unit | TypeKind::Error)
+                && !matches!(&t.kind, TypeKind::Tuple(v) if v.is_empty())
+        }) {
+            self.par_for_tail(&mut body);
+        }
         self.fix_pattern_muts(muts, body.span, true);
         self.effect_var_stack.pop();
 
