@@ -916,6 +916,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   and `g([7, 8])` with `fn g[T](a: Array[T, 2])` were refused "expected
   'Array[T, N]', found 'Vec[i64]'" (design.md § List literals,
   B-2026-11-19-69).
+- A compiled program on more than one worker no longer stops now and then
+  with a false "deadlock: every task waits on a channel" when a task's last
+  `Sender` drops while its receiver is being polled: the drop counted its
+  change before the sender count fell, so the receiver could park on a
+  channel already closed (B-2026-11-19-64).
 - `for x in iter` over an owned parameter `iter: own I` with `I:
   Iterator` binds `x` as `I.Item`, the item `iter.next()` returns. It bound
   the iterator's own type `I`, so `t + x` under `where I.Item: Add[Output

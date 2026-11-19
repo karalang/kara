@@ -4672,7 +4672,6 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
     if h.is_null() {
         return;
     }
-    crate::mir_task::chan_changed();
     let (last, orphaned) = {
         // SAFETY: the caller's contract.
         let c = unsafe { &*h };
@@ -4691,6 +4690,12 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
         };
         (last, orphaned)
     };
+    // The change is counted once the count has fallen, as `send` and
+    // `recv` count theirs after they land: counted before, a receiver
+    // polled in between saw the new count, found a sender left and parked,
+    // and the fall then woke nobody, so the executor reported a deadlock
+    // on a closed channel (B-2026-11-19-64).
+    crate::mir_task::chan_changed();
     if !last {
         // Dropped outside the lock: a value's drop may touch the channel.
         // SAFETY: the channel is live (a sender holds it).
