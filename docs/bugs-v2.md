@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 527 |
-| false-positive | 272 |
+| diagnostics | 529 |
+| false-positive | 274 |
 | missing-feature | 201 |
 | perf | 188 |
 | other | 114 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 658 |
+| typecheck | 661 |
 | mir-llvm | 295 |
-| mir | 255 |
+| mir | 256 |
 | cli | 203 |
 | parser | 117 |
 | ownership | 108 |
@@ -123,6 +123,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-70 | 2026-11-18 | typecheck | low | The E0236 fix for `v.iter().chunks(2).collect()` into a `Vec[Vec[i64]]` writes `v.chunks(2).into_iter().collect()`, whose items are slices (E0200 FromIterator[Slice[i64]]) | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
 | B-2026-11-18-74 | 2026-11-18 | typecheck | medium | `let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping());` is refused with E0238 `cannot infer type parameter 'E'`, and its help says to annotate a binding that is already annotated: a type variable that only a closure argument's result mentions is not carried through a chained method's return type | — |
+| B-2026-11-18-76 | 2026-11-18 | typecheck | low | E0509 for a view stored in a `Mutex`'s value names the element type (`(i64, E)`), not the `Str` field that makes it a view, and offers no fix | — |
+| B-2026-11-18-77 | 2026-11-18 | typecheck | low | E0208 for `==` on `Result[T, E]` (or any generic type) whose argument `E` lacks PartialEq offers no `#[derive(PartialEq)]` edit on `E`, though `==` on `E` itself does | — |
 
 ### Relocated
 
@@ -1744,6 +1746,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-64 | typecheck | low | `Tensor.zeros([2, 2])` leads with E0238 "cannot infer type parameter 'S' of `Tensor[T, S]`.. | 645615d7b8 |
 | B-2026-11-18-71 | typecheck | low | A literal list read through `iter()` and an adapter, or a closure that builds a tuple or `Some` from a bound literal list's items, did not take a `co… | dd8b194cd6 |
 | B-2026-11-18-73 | interp+mir-llvm | medium | A `Pool` dropped while one of its loans is still out keeps its IDLE values alive until that loan comes back, on every surface; pool.md says the idle… | 2faf2c5577 |
+| B-2026-11-18-75 | mir | medium | Since B-2026-11-17-92 (ab62be2b9d) a closure that captures a `Vec` of `shared` handles whose type has a function field is refused as carrying a view… | 6a9755a0bc |
+| B-2026-11-18-78 | typecheck | medium | Since B-2026-11-15-32 (558a84bb49) `Option.map` / `Result.map` inside a closure is read as a lazy adaptor returning its closure argument, so a captur… | c6256b83b2 |
 
 </details>
 
