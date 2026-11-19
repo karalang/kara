@@ -1839,6 +1839,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   depending on the pass count. When the trait is the program's own and its
   parameter is bare, the fix writes `own` on the trait's parameter too;
   otherwise no `own` fix is offered there (B-2026-11-18-66).
+- `v.split_at_mut(i)` on a `Vec` declared with plain `let` is refused like
+  `v.sort()` (E0510, fixed to `let mut`): its halves write through `v`, and
+  the program used to check and change `v` anyway. With `let mut v`, the
+  unused_mut lint no longer says the `mut` is unneeded (B-2026-11-19-23).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a

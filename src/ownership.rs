@@ -5589,7 +5589,10 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         | "Vec.reverse"
         | "Vec.fill"
         | "Vec.swap"
-        | "Vec.as_slice_mut" => MutRef,
+        | "Vec.as_slice_mut"
+        // The two halves write through the binding, so it needs `let mut`
+        // and its `mut` is used (B-2026-11-19-23), as `Array.split_at_mut`.
+        | "Vec.split_at_mut" => MutRef,
         // Vec[T] read methods — `ref self` / read borrow.
         "Vec.len" | "Vec.is_empty" | "Vec.first" | "Vec.last" | "Vec.get" | "Vec.get_unchecked"
         | "Vec.contains" | "Vec.iter" | "Vec.binary_search" | "Vec.split_at" | "Vec.chunks"
