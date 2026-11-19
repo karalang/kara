@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 544 |
+| diagnostics | 545 |
 | false-positive | 287 |
 | missing-feature | 205 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 684 |
+| typecheck | 685 |
 | mir-llvm | 298 |
 | mir | 261 |
 | cli | 206 |
@@ -149,6 +149,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-38 | 2026-11-19 | effect | medium | A call through an escaping function value (a struct field, a collection element, a `for` binding over one) is charged nothing by the front-end effect check: `pub fn go(j: Job) -> i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)` checks clean without a `with` clause, and a field with no clause is not charged every effect | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
+| B-2026-11-19-42 | 2026-11-19 | typecheck | low | Remainder of B-2026-11-18-57: the `.bytes()` fix on text from an `if`/`match`/block tail that is a temporary (`sha256(if c { a.clone() } else { b })`) views a value that drops at the tail (core-semantics §7.4), so the fixed program is E0516 | — |
 
 ### Relocated
 
