@@ -21,7 +21,7 @@ let (tx, rx): (Sender[Job], Receiver[Job]) = channel(64);
 **Operations.**
 
 ```kara
-impl[T] Sender[T] {
+impl[T: CrossTask] Sender[T] {
     fn send(self, value: own T) -> Result[(), SendError[T]] with sends(self) blocks
     fn try_send(self, value: own T) -> Result[(), SendError[T]] with sends(self)
     fn clone(self) -> Sender[T]
@@ -81,7 +81,7 @@ impl[T] Receiver[T] {
     fn recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError] with receives(self) blocks
 }
 
-impl[T] Sender[T] {
+impl[T: CrossTask] Sender[T] {
     fn send_timeout(self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]] with sends(self) blocks
 }
 

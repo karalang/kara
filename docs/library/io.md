@@ -424,16 +424,16 @@ The servers speak HTTP/1.1 with keep-alive (and WebSocket through `serve_ws`); H
 
 ```kara
 impl Server {
-    fn serve(addr: String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_ws(addr: String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_ws_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve(addr: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_ws(addr: own String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
 }
 
 impl Request {
-    fn new(method: String, url: String) -> Request
-    fn with_header(own self, name: String, value: String) -> Request
-    fn with_body(own self, b: String) -> Request
+    fn new(method: own String, url: own String) -> Request
+    fn with_header(own self, name: own String, value: own String) -> Request
+    fn with_body(own self, b: own String) -> Request
     fn method(self) -> String
     fn url(self) -> String
     fn path(self) -> String
@@ -485,14 +485,14 @@ The client negotiates HTTP/2 through ALPN over `https://`, falling back to HTTP/
 ```kara
 impl Client {
     fn new() -> Client
-    fn get(self, url: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
-    fn post(self, url: String, body: String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
-    fn request(self, method: String, url: String) -> RequestBuilder
+    fn get(self, url: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
+    fn post(self, url: own String, body: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
+    fn request(self, method: own String, url: own String) -> RequestBuilder
 }
 
 impl RequestBuilder {
-    fn header(own self, name: String, value: String) -> RequestBuilder
-    fn body(own self, b: String) -> RequestBuilder
+    fn header(own self, name: own String, value: own String) -> RequestBuilder
+    fn body(own self, b: own String) -> RequestBuilder
     fn timeout(own self, ms: i64) -> RequestBuilder
     fn send(self) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
 }
