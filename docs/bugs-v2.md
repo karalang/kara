@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 558 |
+| diagnostics | 559 |
 | false-positive | 294 |
 | missing-feature | 208 |
 | perf | 188 |
@@ -79,10 +79,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 708 |
 | mir-llvm | 306 |
 | mir | 270 |
-| cli | 210 |
+| cli | 211 |
 | parser | 125 |
 | ownership | 114 |
-| interp | 92 |
+| interp | 93 |
 | runtime | 91 |
 | resolver | 46 |
 | effect | 46 |
@@ -120,7 +120,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-53 | 2026-11-19 | typecheck | low | A closure argument whose body builds its result with a call of its own (`W.new(|| Ok(one()), 5)`, slot `Fn() -> Result[T, E]`) is refused E0200 `expected 'Fn() -> Result[i64, _]', found 'Fn() -> Result[i64, E]'`, chained or not; `|| Ok(1)` and `|| Ok(C { id: 1 })` check | — |
 | B-2026-11-19-55 | 2026-11-19 | typecheck | low | `#[repr(transparent)]` accepts a zero-sized neighbour whose alignment is not one (`a: Array[u64, 0]` beside `raw: i32`), and the wrapper is then laid out as 8 bytes aligned to 8, not as its i32: a `#[repr(C)] struct P { a: u8, q: Q }` is 16 bytes where C's `{ uint8_t; int32_t }` is 8 | — |
 | B-2026-11-19-56 | 2026-11-19 | typecheck | low | §15 `extern` declarations are not checked where they are written: an ABI string other than "C" (`unsafe extern "system"`, `"Rust"`) passes `karac check` and fails only at a call ('call of unknown function abs' on interp, 'native abs is not lowered yet' on build), and a parameter type that may not cross (`String`, a C-like enum without `#[repr]`) passes check until a call, where it is E0516 'not lowered yet' | — |
-| B-2026-11-19-57 | 2026-11-19 | cli | low | Eight symbolic codes the specification names for live diagnostics are never emitted and unknown to `karac explain`: E_NO_PROVIDER, E_STATEFUL_DEFAULT, E_PROVIDER_UNSUPPORTED, E_DYN_PROVIDER (reported as bare E0419, E0420, E0421, E0423), E_MOVE_NOT_USED, E_OPAQUE_TYPE_GENERIC_FORBIDDEN (bare E0001), E_RESERVED_KEYWORD (bare E0003) and E_RAW_IDENT_NOT_ALLOWED (bare E0004) | — |
 | B-2026-11-19-58 | 2026-11-19 | typecheck+mir | medium | `Ok(100) == Err(-100)` (and `Err("x".to_string()) == Ok(1)`) passes `karac check`, then every lane stops with `invalid MIR: field 0 of Result[(), i64] has type (), but the projection says i64`: each operand's open type parameter defaults to `()` on its own instead of being unified across `==` | — |
 | B-2026-11-19-59 | 2026-11-19 | typecheck | low | An open type parameter on one side of `<` or on a `None`/`Ok`/`Err` receiver is not unified with the other side: `let a = None; let b = Some(2); a < b` is E0208 (while `a == b` runs), `s == Err(3)` with `s = Ok(String)` is E0208, `None.or(Some(3))` and `Err(1) < Err(2)` are E0516 with the MIR builder's internal `not lowered yet` text, and `None.unwrap_or(4)` is `type 'Option[T]' is not callable` | — |
 | B-2026-11-19-60 | 2026-11-19 | typecheck+mir | low | `TimedOut` (std.time `timeout`) and `TaskFailed` (isolating groups, `try_join`) implement neither `Display` nor `Error`, so `timeout(d, f)?` and `h.try_join()?` into `AnyError` are refused; a remainder of B-2026-11-09-54, whose sweep matched only names ending in `Error`. time-random-env.md's `Err(TimedOut)` also does not check: as an expression it is read as the enum variant `RecvTimeoutError.TimedOut` (E0521/E0279) though the struct is imported, and as a pattern the check says it is not an enum variant without suggesting `TimedOut {}` | — |
@@ -142,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-86 | 2026-11-19 | ownership | high | A `shared` handle reaches a `TaskGroup` task through a captured PARAMETER: `fn sp(g: TaskGroup, x: own C) -> TaskHandle[i64] { g.spawn(|| { let y = x; 1 }) }` with `shared struct C` passes `karac check`, and 20000 such spawns race on the non-atomic count: `malloc(): unaligned fastbin chunk detected` (2 runs in 6), and the Drop body runs in 1 run in 6 and is leaked otherwise; the same capture of a local is refused E_NOT_CROSS_TASK | — |
 | B-2026-11-19-88 | 2026-11-19 | ownership | low | When an assignment's iterator chain fails to type (E0200, `flat_map` over a closure that returns a `Vec`), a closure in the chain is again taken to outlive the statement: a spurious E0500 on a value it borrows, whose machine fix `karac fix` applies beside the real one, cloning the value | — |
 | B-2026-11-19-89 | 2026-11-19 | parser | low | A Rust turbofish on a type path in an expression is not carried: `std::collections::HashSet::<char>::new()` is fixed to `Set.new()` with the `char` argument dropped, and the bare `HashSet::<i64>::new()` stops with E0002; remainder of B-2026-11-19-34 | — |
+| B-2026-11-19-92 | 2026-11-19 | cli+interp | low | In `karac repl`, a panic's place names the line of the program the session runs a cell as, not the cell: an item's uncaught panic reports `<repl>:3:5` (cell 3:2:5), and `TaskFailed.Panicked`'s `location` reads `35:20` for cell 7's `1:20` | — |
 
 ### Relocated
 
@@ -1826,6 +1826,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-51 | cli | low | `malformed_diagnostic_attribute` never fires: `#[diagnostic::on_unimplemented]` on a function, with an unknown field, with an unknown `{placeholder}`… | 3c58e49558 |
 | B-2026-11-19-52 | parser | low | An inner attribute `#![...]` at the top of a file is accepted and ignored: `#![frobnicate]` checks clean though an unknown attribute is E_UNKNOWN_ATT… | 3c58e49558 |
 | B-2026-11-19-54 | mir | medium | Since B-2026-11-17-152 (b3388ea406) `match w[i]` on a `mut ref Vec[weak N]` is indexed for writing and takes the raw weak slot, so mir-interp stops a… | 8ca791230e |
+| B-2026-11-19-57 | cli | low | Eight symbolic codes the specification names for live diagnostics are never emitted and unknown to `karac explain`: E_NO_PROVIDER, E_STATEFUL_DEFAULT… | e34f6e21fe |
 | B-2026-11-19-62 | other | low | secret.md is behind the compiler in two places: `ct_eq` is said to be `Secret[String]` only, but `Secret[Vec[u8]]` compares (`true`) on every lane; a… | c780bee67f |
 | B-2026-11-19-80 | parser | medium | `thread::spawn(move \|\| ..)` has a message naming `TaskGroup` but no fix, so a Rust-shaped server's worker thread stops the Mend loop | 53f86eb754 |
 | B-2026-11-19-81 | parser+typecheck | medium | Rust's alternate form `{:#04x}` has no fix, in `format!` (the conversion bails) or in an `f".."` hole | 53f86eb754 |
