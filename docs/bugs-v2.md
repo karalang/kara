@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 562 |
-| false-positive | 305 |
-| missing-feature | 209 |
+| diagnostics | 563 |
+| false-positive | 309 |
+| missing-feature | 210 |
 | perf | 189 |
 | other | 119 |
-| soundness | 100 |
+| soundness | 101 |
 | miscompile | 90 |
 | crash | 61 |
 | run-vs-build | 59 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 715 |
-| mir-llvm | 306 |
+| typecheck | 721 |
+| mir-llvm | 307 |
 | mir | 273 |
-| cli | 213 |
+| cli | 214 |
 | parser | 127 |
 | ownership | 120 |
 | interp | 94 |
@@ -138,6 +138,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-105 | 2026-11-19 | mir | medium | A function that uses a provider cannot be taken as a value under `with_provider` (core-semantics §14.3: 'Taking such a function as a value captures the provider in scope'): `let f = read_clk; f() + 1` passes check and every lane stops `a function used as a value that uses Clk's provider is not lowered yet`; returning it out of the call (`|| { let g = read_clk; g }`) also passes check instead of the §14.5 refusal | — |
 | B-2026-11-19-106 | 2026-11-19 | typecheck+mir | low | A `mut ref MutFn(..)` parameter cannot be handed to a lazy adaptor: `fn cnt(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool) -> i64 { v.iter().filter(f).count() }` is refused 'trait bound `FnV: MutFn` is not satisfied; `mut ref Fn(ref i64) -> bool` does not implement `MutFn`' | — |
 | B-2026-11-19-113 | 2026-11-19 | ownership | medium | A closure literal handed to a named call that is itself an argument of another call (`show(twice(|| s.len()))`, `println(twice(|| s.len()))`) is taken to outlive its statement: a later move of what it reads (`let t = s;`) is refused with E0500 "moved inside a loop" in straight-line code, though `let k = twice(|| s.len()); let t = s;` is accepted | — |
+| B-2026-11-19-114 | 2026-11-19 | cli | low | kara-lsp anchors an E0200 'collect the iterator' diagnostic at a zero-width range after the expression (the machine fix's insertion point), where `karac check` anchors it at the expression's start, so the two tools disagree on where the error is | — |
 
 ### Relocated
 
@@ -1858,6 +1859,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-110 | parser | medium | A `par for` at the end of a function's block, with no semicolon, was parsed as a statement, so `fn pages(level: Vec[String], parser: dyn HtmlParser +… | 7980991545 |
 | B-2026-11-19-111 | cli | low | An E0509 for an element of a `let`-bound collection that a bare `for` walks and stores where a view may not go (`for next in links { requests[0].send… | cec16d44a9 |
 | B-2026-11-19-112 | cli | low | An E0516 whose borrow a `TaskGroup` task holds advised taking a copy (`.clone()`, `.cloned()`, `*r`) where the value is borrowed, which does not end… | cec16d44a9 |
+| B-2026-11-19-115 | typecheck+mir-llvm | high | `Secret.ct_eq` was not constant-time in built code (it called the payload's `eq` glue, which exits at the first differing byte) and `karac check` acc… | 1e48265c69 |
+| B-2026-11-19-116 | typecheck | medium | `Entry.or_insert_with` and `Entry.and_modify` refused a once-callable closure (E0235): the checker built their slots as `Fn`, though collections.md d… | 1e48265c69 |
+| B-2026-11-19-117 | typecheck | low | `Semaphore.release` and `Arena.rewind_to` returned the type `Unit`, which is not `()`: `fn r(s: ref Semaphore) -> () { s.release() }` was E0200 "expe… | 1e48265c69 |
+| B-2026-11-19-118 | typecheck | medium | `stdout`/`stderr` `print`/`println` refused a `Str` (expected 'ref String') and `env.set` refused one for both arguments (expected 'String'), though… | 1e48265c69 |
+| B-2026-11-19-119 | typecheck | medium | `Request.header`, the client `Response.header` and `HttpError.header` took the looked-up name as `own String`, so a borrowed name was refused ("canno… | 1e48265c69 |
+| B-2026-11-19-120 | typecheck | low | `StdinLines`, the documented return type of `stdin.lines()` (io.md § Standard streams), could not be named: `fn f() -> StdinLines` was E0104 undefine… | 1e48265c69 |
 
 </details>
 
