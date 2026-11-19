@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 560 |
 | false-positive | 298 |
 | missing-feature | 208 |
-| perf | 188 |
+| perf | 189 |
 | other | 119 |
 | soundness | 100 |
 | miscompile | 90 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 711 |
+| typecheck | 712 |
 | mir-llvm | 306 |
 | mir | 270 |
 | cli | 211 |
@@ -140,6 +140,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-97 | 2026-11-19 | ownership | medium | An escaping closure that reads only a Copy field (`hs.push(|| v.id)`, `H { f: || v.id }`) must capture a copy of that field (review ruling 2026-11-19 on §9.1), but (1) for a binding whose type has a Drop body, check AND every MIR lane move the whole binding (E0514 / `move check main: use of _2.0`), and (2) for a type with no Drop body, check still says `v was moved into an escaping closure` (E0500) while the MIR lanes capture the field alone and run | — |
 | B-2026-11-19-98 | 2026-11-19 | typecheck | low | A trait whose parameter defaults to Self (`trait Tr[X = Self] { fn m(self, x: X) -> i64; }`) is treated as if X were Self at an explicit instance: `dyn Tr[i64]` is refused E_DYN_NOT_DISPATCHABLE (`m` names Self outside the receiver), and under `T: Tr + Tr[i64]` the UFCS `Tr[i64].m(t, 1)` is refused E0233 `ambiguous method 'm' ... Use UFCS Tr[i64].m(receiver, ...)`, the very form written | — |
 | B-2026-11-19-99 | 2026-11-19 | interp | medium | A closure forwarded through a function parameter into `Vec.retain`, `sort_by` or `sort_by_key` (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool) { v.retain(f); }`) stops the MIR interpreter with `cannot call Ref(Addr { .. })`; build and ASan run it correctly | — |
+| B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
 
 ### Relocated
 
