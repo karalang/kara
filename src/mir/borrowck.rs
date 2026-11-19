@@ -3818,6 +3818,10 @@ fn main() -> () {
             // B-2026-11-02-31).
             "err_receiver_method_returns_argument",
             "err_returned_closure_captures_non_escaping_param",
+            // A local that holds a non-escaping parameter, returned: the
+            // escape pass's (§9.3, B-2026-11-19-103).
+            "err_let_bound_adaptor_keeps_non_escaping_param",
+            "err_let_bound_closure_captures_non_escaping_param",
             // The same body check over a view-typed argument (B-2026-11-13-31).
             "err_receiver_method_returns_view_argument",
             // A function value whose environment reaches a `shared` handle

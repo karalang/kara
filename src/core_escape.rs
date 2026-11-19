@@ -219,6 +219,7 @@ fn generic_slots(
                 scopes: Vec::new(),
                 out: &mut scratch,
                 rebound: FxHashMap::default(),
+                closure_holds: FxHashMap::default(),
                 types,
                 gen: &gen,
                 gen_hits: Some(Vec::new()),

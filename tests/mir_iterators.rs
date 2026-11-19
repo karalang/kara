@@ -203,8 +203,10 @@ fn main() {
 /// An adaptor written in Kāra: a default `map2` wraps `self` in a generic
 /// struct whose `It` impl carries `where I: It[Item = T]`. It type checks,
 /// including `let it = self` in a default body and the impl's own methods
-/// called on `self` inside it; the builder stops at the closure stored in
-/// the struct's `MutFn` field, which erased function values will lower.
+/// called on `self` inside it; the borrow check stops at the closure stored
+/// in the struct's `MutFn` field: the instance takes the closure by
+/// reference, and what it stores is `|x| f(x)` over that reference
+/// (B-2026-11-19-103), a view kept where its borrow is not.
 #[test]
 fn a_map_adaptor_in_kara_type_checks_up_to_its_stored_closure() {
     let src = r#"
@@ -245,7 +247,8 @@ fn main() {
 }
 "#;
     match run(src) {
-        Err(e) if e.contains("a function value") => {}
+        Err(e) if e.contains("a view the parameter `f` holds is stored in an escaping closure") => {
+        }
         other => panic!("want the stored-closure refusal, got {other:?}"),
     }
 }
