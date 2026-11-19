@@ -129,6 +129,13 @@ impl<'a> super::EffectChecker<'a> {
             }
         }
         for (function, first, effects) in by_function {
+            // An effect on `*` cannot be written in a clause (the messages
+            // name the callee with every effect instead), so no clause
+            // declares it: a `reads(*)` edit does not parse, and `karac fix`
+            // reported its own edit as broken (kata 1265, B-2026-11-20-84).
+            if effects.iter().any(|e| e.resource == super::EVERY_RESOURCE) {
+                continue;
+            }
             let sym = self.interner.intern(&function);
             let edit = self.with_clause_edit(sym, &clause_text(&effects));
             self.errors[first].replacement = edit;
