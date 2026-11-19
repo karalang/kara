@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 212 |
 | perf | 189 |
 | other | 119 |
-| soundness | 103 |
+| soundness | 104 |
 | miscompile | 93 |
 | crash | 62 |
 | run-vs-build | 59 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 729 |
+| typecheck | 730 |
 | mir-llvm | 310 |
 | mir | 277 |
 | cli | 218 |
@@ -1883,6 +1883,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-120 | typecheck | low | `StdinLines`, the documented return type of `stdin.lines()` (io.md § Standard streams), could not be named: `fn f() -> StdinLines` was E0104 undefine… | 1e48265c69 |
 | B-2026-11-19-131 | typecheck | low | An indexed list of string literals where a `Str` is wanted (`fn arm_name(a: i64) -> Str { ["one", "two"][a] }`) was refused "expected 'Str', found 'S… | 67cd85419b |
 | B-2026-11-19-132 | cli | low | The E0238 `from_iter` fix for a `collect` compared with a typed value broke the text on a parenthesized range receiver: `seen != (0..n).collect()` wa… | 4e5c719df5 |
+| B-2026-11-19-139 | typecheck | medium | A by-value struct without `#[repr(C)]` in an `extern "C"` signature passed `karac check`, though its field order and padding are unspecified, so C re… | ed72632c6e |
 
 </details>
 

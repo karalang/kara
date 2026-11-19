@@ -130,7 +130,7 @@ fn extern_declaration_keeps_types_that_cross() {
     assert!(ok, "{text}");
 }
 
-/// B-2026-11-19-138 (review ruling on -56): a by-value struct crosses only
+/// B-2026-11-19-139 (review ruling on -56): a by-value struct crosses only
 /// with `#[repr(C)]` (or `transparent`); without it its field order and
 /// padding are unspecified. The refusal carries a fix inserting `#[repr(C)]`.
 #[test]
