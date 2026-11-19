@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 557 |
+| diagnostics | 558 |
 | false-positive | 293 |
 | missing-feature | 208 |
 | perf | 188 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 306 |
 | mir | 269 |
 | cli | 210 |
-| parser | 124 |
+| parser | 125 |
 | ownership | 114 |
 | interp | 92 |
 | runtime | 91 |
@@ -112,13 +112,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
-| B-2026-11-19-29 | 2026-11-18 | typecheck | low | Range literals carried through iterator closures into an `i32` tuple (`(-1..=1).flat_map(|dx| (-1..=1).map(|dy| (dx, dy))).filter_map(|(dx, dy)| (1..8).map(|k| (kx + k * dx, ky + k * dy)).find(|p| placed.contains(p)))` with `kx: i32`, `placed: Set[(i32, i32)]`) are refused at `contains` and at `collect` with no machine fix | — |
 | B-2026-11-19-30 | 2026-11-18 | mir+mir-llvm | low | `Mutex` has no `try_lock`, which Rust (`Mutex::try_lock`), Go (`TryLock`), Java (`ReentrantLock.tryLock`), C (`pthread_mutex_trylock`) and Python (`Lock.acquire(blocking=False)`) all have; the dining philosophers' back-off form gets only "no method 'try_lock' on type 'Mutex'" | — |
 | B-2026-11-19-31 | 2026-11-18 | interp+mir-llvm+runtime | low | A deadlock among `Mutex` waits is reported as "every task waits on a channel that no running task sends to or receives from" on every backend, naming a channel when no task waits on one; and when the root task is waiting at a `TaskGroup`'s drop the report carries no location | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-13 | 2026-11-19 | typecheck | low | `#[derive(...)]` accepts what it cannot derive with no diagnostic: an unknown trait name (`#[derive(Frobnicate)]`), a derive on a `fn`, `const` or `trait`, and a trait listed twice all check clean | — |
-| B-2026-11-19-33 | 2026-11-19 | typecheck | low | A range of literals mapped through an operator with an `i32` (`(0..1 << n).map(|i| start ^ i).collect()` into a `Vec[i32]`, `start: i32`) is refused with a bare `C: FromIterator[i64]` and no fix: §8 keeps the range at `i64` beside a widening operand, but the message names no literal and `karac fix` offers no suffix, so LeetCode's Rust solution to 1238 stalls | — |
-| B-2026-11-19-34 | 2026-11-19 | parser | medium | A Rust `::` path in a type position (`let set: std::collections::HashSet<char> = ..`, a parameter, a return, a field) stops the parse with E0002 "Expected `=`, found `::`" and no fix, though the bare `HashSet<char>` and the same path in an expression are both fixed; LeetCode's Rust solution to 1239 stalls | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
 | B-2026-11-19-53 | 2026-11-19 | typecheck | low | A closure argument whose body builds its result with a call of its own (`W.new(|| Ok(one()), 5)`, slot `Fn() -> Result[T, E]`) is refused E0200 `expected 'Fn() -> Result[i64, _]', found 'Fn() -> Result[i64, E]'`, chained or not; `|| Ok(1)` and `|| Ok(C { id: 1 })` check | — |
@@ -146,6 +143,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-86 | 2026-11-19 | ownership | high | A `shared` handle reaches a `TaskGroup` task through a captured PARAMETER: `fn sp(g: TaskGroup, x: own C) -> TaskHandle[i64] { g.spawn(|| { let y = x; 1 }) }` with `shared struct C` passes `karac check`, and 20000 such spawns race on the non-atomic count: `malloc(): unaligned fastbin chunk detected` (2 runs in 6), and the Drop body runs in 1 run in 6 and is leaked otherwise; the same capture of a local is refused E_NOT_CROSS_TASK | — |
 | B-2026-11-19-87 | 2026-11-19 | effect | high | A public inherent method with no `with` clause is never checked against its declaration, and a public caller is charged none of its effects: `impl Job { pub fn go(self) -> i64 { println("x"); self.n } }` and `pub fn fire(j: Job) -> i64 { j.go() }` both check clean | — |
 | B-2026-11-19-88 | 2026-11-19 | ownership | low | When an assignment's iterator chain fails to type (E0200, `flat_map` over a closure that returns a `Vec`), a closure in the chain is again taken to outlive the statement: a spurious E0500 on a value it borrows, whose machine fix `karac fix` applies beside the real one, cloning the value | — |
+| B-2026-11-19-89 | 2026-11-19 | parser | low | A Rust turbofish on a type path in an expression is not carried: `std::collections::HashSet::<char>::new()` is fixed to `Set.new()` with the `char` argument dropped, and the bare `HashSet::<i64>::new()` stops with E0002; remainder of B-2026-11-19-34 | — |
 
 ### Relocated
 
@@ -1785,6 +1783,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-26 | typecheck | low | A named list of tuple literals walked by a tuple pattern (`let dirs = [(-1, 0), (1, 0)]; for (dx, dy) in dirs.iter() { let mut (x, y) = (king[0] + dx… | cc3372dd0f |
 | B-2026-11-19-27 | parser | medium | an integer literal with a float suffix (`0f64`, `1f32`) is an integer by design (design.md §3), but the error is a parse recovery whose fix adds `;`… | d1ab453bcb |
 | B-2026-11-19-28 | typecheck | low | the fix for a Rust `match xs.binary_search(v) { Ok(i) => i, Err(i) => i }` writes `{ let i = xs.partition_point(..); if i < xs.len() and xs[i] == v {… | 4dbf2fe839 |
+| B-2026-11-19-29 | typecheck | low | Range literals carried through iterator closures into an `i32` tuple (`(-1..=1).flat_map(\|dx\| (-1..=1).map(\|dy\| (dx, dy))).filter_map(\|(dx, dy)\| (1..… | b46168e5c8 |
 | B-2026-11-19-4 | typecheck | medium | `.into()` from a `Str` (or a string literal) to `String` is refused, though `String.from(s)` works and design.md §9 lists `impl From[Str] for String`… | 700d4fe00b |
 | B-2026-11-19-5 | typecheck | low | `v[a..b] = other` with a `Vec` (or a list literal) on the right is refused "expected 'Slice[i64]', found 'Vec[i64]'"; only a slice expression is acce… | 700d4fe00b |
 | B-2026-11-19-7 | typecheck | medium | A struct update `P { b: 3, ..x }` whose base supplies a field of a type with its own `impl Drop` is refused as `partial_move_of_drop_struct` 'cannot… | ad1246f40d |
@@ -1809,6 +1808,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-2 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `def… | 3efb545461 |
 | B-2026-11-19-3 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the ce… | fc81836281 |
 | B-2026-11-19-32 | typecheck | medium | the fix for a Rust `binary_search` / `binary_search_by` / `binary_search_by_key` takes `Ok`'s index as the FIRST equal element, where rustc's Rust (a… | a402330c7a |
+| B-2026-11-19-33 | typecheck | low | A range of literals mapped through an operator with an `i32` (`(0..1 << n).map(\|i\| start ^ i).collect()` into a `Vec[i32]`, `start: i32`) is refused… | b46168e5c8 |
+| B-2026-11-19-34 | parser | medium | A Rust `::` path in a type position (`let set: std::collections::HashSet<char> = ..`, a parameter, a return, a field) stops the parse with E0002 "Exp… | dd2915d1ae |
 | B-2026-11-19-35 | typecheck | low | Rust's array `map` on a list literal, `["a", "b"].map(\|u\| u.to_string())`, gets E0236 "iterator adaptors require an explicit `.iter()`" with no fix,… | 8c77282690 |
 | B-2026-11-19-36 | ownership | medium | a closure in an assignment's method chain is taken to outlive the statement: `n = xs.iter().filter(\|v\| seen.contains(v)).count();` and any later move… | 8c77282690 |
 | B-2026-11-19-37 | typecheck | low | `dyn Trait` in a signature above the trait's declaration is refused, "`dyn Shape`: `Shape` is not a trait", though items are otherwise order-free (a… | 516ae1c47a |
