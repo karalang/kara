@@ -1020,7 +1020,21 @@ fn insert_group_ends(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
         if !is_task_group(tys, pt) {
             continue;
         }
-        let (place, unwind, si) = (place.clone(), *unwind, t.source_info);
+        // A drop at a scope's end has no place of its own; the wait for
+        // the group's tasks is then at the group's binding, which a
+        // deadlock names (B-2026-11-19-31).
+        let mut si = t.source_info;
+        if si.span.line == 0 {
+            if let Some(d) = place
+                .projection
+                .is_empty()
+                .then(|| &body.locals[place.local.index()])
+                .filter(|d| d.source_info.span.line > 0)
+            {
+                si.span = d.source_info.span;
+            }
+        }
+        let (place, unwind) = (place.clone(), *unwind);
         let mut new_local = |ty: Ty| {
             body.locals.push(LocalDecl {
                 ty,

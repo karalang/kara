@@ -3446,9 +3446,11 @@ static ROOT_WAIT_LEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 
 /// The root task (or a program with no executor) is about to wait at `at`
 /// (`file:line:col`, `n` bytes; null for no place): where a deadlock
-/// reports it waits (B-2026-11-16-202). Other tasks' waits are not kept.
+/// reports it waits (B-2026-11-16-202). Every task's wait is kept with
+/// it too, for the report's list of the others (B-2026-11-19-31).
 #[no_mangle]
 pub extern "C" fn karac_mir_wait_site(at: *const u8, n: u64) {
+    crate::mir_task::note_site(at, n);
     if !crate::mir_task::in_root() {
         return;
     }

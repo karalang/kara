@@ -138,6 +138,80 @@ enum Wait {
     TaskBy(Instant),
 }
 
+/// What a task waiting on another task's progress (`Wait::Task`) waits
+/// for, which a deadlock names (B-2026-11-19-31).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum On {
+    /// Not a wait on another task.
+    Other,
+    /// A `Mutex` that a task holds.
+    Lock,
+    /// A channel to send to or receive from, or a `select` over channels.
+    Channel,
+    /// A spawned task to return: a join, or a group's end.
+    Task,
+    /// Room under a `TaskGroup`'s limit for a spawn.
+    Slot,
+}
+
+impl On {
+    fn noun(self) -> &'static str {
+        match self {
+            On::Other => "another task",
+            On::Lock => "a lock",
+            On::Channel => "a channel",
+            On::Task => "a task",
+            On::Slot => "room in a task group",
+        }
+    }
+}
+
+/// What the deadlock report says the tasks wait on (B-2026-11-19-31): the
+/// old channel sentence when every wait is on a channel, else the kinds
+/// waited on; then, for the tasks other than the root (whose place is the
+/// report's location), what each waits on and where, in order of place.
+fn deadlock_text(waits: &[(bool, On, Option<&str>)]) -> String {
+    let mut kinds: Vec<On> = waits.iter().map(|&(_, on, _)| on).collect();
+    kinds.sort();
+    kinds.dedup();
+    let mut text = if kinds.iter().all(|&k| k == On::Channel) {
+        "every task waits on a channel that no running task sends to or receives from".to_string()
+    } else {
+        let nouns: Vec<&str> = kinds.iter().map(|k| k.noun()).collect();
+        let list = match nouns.split_last() {
+            Some((last, [])) => last.to_string(),
+            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+            None => "another task".to_string(),
+        };
+        format!("every task waits on {list} that no running task can free")
+    };
+    let mut others: Vec<String> = waits
+        .iter()
+        .filter(|&&(root, _, _)| !root)
+        .map(|&(_, on, at)| match at {
+            Some(at) => format!("{} at {at}", on.noun()),
+            None => on.noun().to_string(),
+        })
+        .collect();
+    if !others.is_empty() {
+        others.sort();
+        const SHOWN: usize = 8;
+        let more = others.len().saturating_sub(SHOWN);
+        others.truncate(SHOWN);
+        let mut list = others.join(", ");
+        if more > 0 {
+            list.push_str(&format!(" and {more} more"));
+        }
+        let who = if waits.iter().filter(|w| !w.0).count() == 1 {
+            "the other task waits on"
+        } else {
+            "the other tasks wait on"
+        };
+        text.push_str(&format!("; {who} {list}"));
+    }
+    text
+}
+
 /// A `TaskGroup` (B-2026-10-15-30): how many of its tasks may run at once
 /// and how many do. Its handle is a pointer to this, freed once the group
 /// has dropped and its last task has returned. Its fields change under the
@@ -253,6 +327,11 @@ struct Task {
     /// at once.
     slept: bool,
     wait: Wait,
+    /// What its `Wait::Task` waits for, and the place of that wait
+    /// (`file:line:col` text and length; 0 for none), which a deadlock
+    /// reports (B-2026-11-19-31).
+    on: On,
+    at: (usize, u64),
     /// The socket of a `connect` it has under way ([`set_inflight`]).
     inflight: Option<i32>,
     /// Its active span stack, swapped into the thread's while it runs: span
@@ -310,6 +389,9 @@ struct Cur {
     deadline: Option<Instant>,
     slept: bool,
     wait: Wait,
+    /// See [`Task::on`].
+    on: On,
+    at: (usize, u64),
     inflight: Option<i32>,
     cancel: bool,
     torn: bool,
@@ -331,6 +413,8 @@ impl Task {
             deadline: self.deadline,
             slept: self.slept,
             wait: Wait::None,
+            on: On::Other,
+            at: (0, 0),
             inflight: self.inflight,
             cancel: self.cancel,
             torn: self.torn,
@@ -343,6 +427,8 @@ impl Task {
         self.deadline = c.deadline;
         self.slept = c.slept;
         self.wait = c.wait;
+        self.on = c.on;
+        self.at = c.at;
         self.inflight = c.inflight;
         self.cancel = c.cancel;
         self.torn = c.torn;
@@ -1308,7 +1394,11 @@ pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
             false
         }
     });
-    note(ready, Wait::Task(0))
+    note_on(
+        ready,
+        Wait::Task(0),
+        if end != 0 { On::Task } else { On::Slot },
+    )
 }
 
 /// Task `t` ended, returned or torn down: its group runs one task fewer,
@@ -1873,6 +1963,8 @@ unsafe fn spawn(group: *mut u8, poll: TaskPoll, a: *mut u8, b: *mut u8, site: Op
             deadline: None,
             slept: false,
             wait: Wait::None,
+            on: On::Other,
+            at: (0, 0),
             inflight: None,
             spans: crate::mir::current_spans(),
             flags: Default::default(),
@@ -2303,10 +2395,29 @@ fn block(quiet: u64) {
         return;
     }
     if !idle_wait(by) {
-        crate::mir::deadlock(
-            "every task waits on a channel that no running task sends to or receives from",
-        );
+        crate::mir::deadlock(&EXEC.with(|e| {
+            let e = e.borrow();
+            let waits: Vec<(bool, On, Option<&str>)> = e
+                .queue
+                .iter()
+                .filter(|t| matches!(t.wait, Wait::Task(_)))
+                .map(|t| (t.root || t.id == 1, t.on, site_text(t.at)))
+                .collect();
+            deadlock_text(&waits)
+        }));
     }
+}
+
+/// The `file:line:col` text of a wait's place, as `karac_mir_wait_site`
+/// was given it.
+fn site_text((at, n): (usize, u64)) -> Option<&'static str> {
+    if at == 0 || n == 0 {
+        return None;
+    }
+    // SAFETY: a place codegen gave `karac_mir_wait_site`, a constant of
+    // `n` bytes of UTF-8 that lives as long as the program.
+    let bytes = unsafe { std::slice::from_raw_parts(at as *const u8, n as usize) };
+    std::str::from_utf8(bytes).ok()
 }
 
 /// Waits until `by`, the nearest sleeper's deadline or a parked
@@ -2746,6 +2857,11 @@ pub(crate) fn in_root() -> bool {
 }
 
 fn note(ready: bool, wait: Wait) -> u8 {
+    note_on(ready, wait, On::Other)
+}
+
+/// [`note`], for a wait on another task's progress of kind `on`.
+fn note_on(ready: bool, wait: Wait, on: On) -> u8 {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
         let Some(cur) = e.cur_mut().as_mut() else {
@@ -2753,20 +2869,32 @@ fn note(ready: bool, wait: Wait) -> u8 {
         };
         if ready {
             cur.wait = Wait::None;
+            cur.on = On::Other;
             e.progress += 1;
             1
         } else {
             cur.wait = wait;
+            cur.on = on;
             0
         }
     })
+}
+
+/// The running task is about to wait at `at` (`n` bytes): kept with the
+/// task, for a deadlock's report (B-2026-11-19-31).
+pub(crate) fn note_site(at: *const u8, n: u64) {
+    EXEC.with(|e| {
+        if let Some(cur) = e.borrow_mut().cur_mut().as_mut() {
+            cur.at = (at as usize, n);
+        }
+    });
 }
 
 /// `__ready` of a join or a channel operation, whose readiness codegen
 /// worked out: only another task can change it.
 #[no_mangle]
 pub extern "C" fn karac_mir_ready(ready: u8) -> u8 {
-    note(ready != 0, Wait::Task(0))
+    note_on(ready != 0, Wait::Task(0), On::Channel)
 }
 
 /// `__ready` of a join, whose readiness codegen worked out: the task waits
@@ -2774,7 +2902,7 @@ pub extern "C" fn karac_mir_ready(ready: u8) -> u8 {
 /// names (design.md § Debugger contract, element 3; B-2026-11-05-36).
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_join(block: *mut u8, ready: u8) -> u8 {
-    note(ready != 0, Wait::Task(block as usize))
+    note_on(ready != 0, Wait::Task(block as usize), On::Task)
 }
 
 /// `__ready("sleep_ms", ms)`: whether the running task's pause is over,
@@ -2898,7 +3026,7 @@ pub extern "C" fn karac_mir_ready_select(epoch: i64, until: i64) -> u8 {
     } else {
         Wait::Task(0)
     };
-    note(ready, wait)
+    note_on(ready, wait, On::Channel)
 }
 
 /// `__select_park(epoch, until)`. Under the executor its `__ready` waited.
@@ -3021,7 +3149,7 @@ pub extern "C" fn karac_mir_mutex_ready(cell: *mut u8) -> u8 {
         }
         free
     });
-    note(free, Wait::Task(0))
+    note_on(free, Wait::Task(0), On::Lock)
 }
 
 /// `Mutex[T].acquire`, run once its `__ready` saw the mutex free: marks it

@@ -1934,6 +1934,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   gets the `.into_iter()` hop as a fix, and the follow-up fixes collect
   it, as a named list's `.map` does. It was E0236 with no fix
   (B-2026-11-19-35).
+- A deadlock says what its tasks wait on: two tasks each holding one
+  `Mutex` and waiting for the other's were reported as "every task waits
+  on a channel that no running task sends to or receives from", naming a
+  channel no task waited on. The report now names the kinds of wait (a
+  lock, a channel, a task, room in a task group), lists where each task
+  other than the root waits (`a lock at main.kara:8:78, ...`), and places
+  a root waiting for a `TaskGroup`'s tasks at the group's `let`, where it
+  had no place at all; on every backend (B-2026-11-19-31).
 - `let EMPTY: Vec[i64] = Vec.new();` at module scope is no longer offered
   a `const` fix that a `const` then refuses (a call is not a constant):
   its help says to build the value in `main` (B-2026-11-18-67).

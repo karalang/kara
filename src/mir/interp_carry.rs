@@ -989,6 +989,7 @@ impl Clone for TaskSlot {
             log_up: self.log_up,
             log_seq: self.log_seq,
             log_done: self.log_done,
+            wait_at: self.wait_at,
         }
     }
 }

@@ -661,6 +661,59 @@ const LIBRARY_PLACE: char = '\u{1}';
 
 /// The file and line a source line names: through the line map when one
 /// was set, otherwise the program's file name (`<unknown>` when unnamed).
+/// What a deadlock's report says the tasks wait on, as the runtime's
+/// `deadlock_text` says it (runtime/src/mir_task.rs, B-2026-11-19-31):
+/// each wait is (the root's, its kind: 1 a lock, 2 a channel, 3 a task,
+/// 4 room in a task group, 0 another task; its place).
+fn deadlock_text(waits: &[(bool, u8, Option<String>)]) -> String {
+    let noun = |k: u8| match k {
+        1 => "a lock",
+        2 => "a channel",
+        3 => "a task",
+        4 => "room in a task group",
+        _ => "another task",
+    };
+    let mut kinds: Vec<u8> = waits.iter().map(|w| w.1).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let mut text = if kinds.iter().all(|&k| k == 2) {
+        "every task waits on a channel that no running task sends to or receives from".to_string()
+    } else {
+        let nouns: Vec<&str> = kinds.iter().map(|&k| noun(k)).collect();
+        let list = match nouns.split_last() {
+            Some((last, [])) => last.to_string(),
+            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+            None => "another task".to_string(),
+        };
+        format!("every task waits on {list} that no running task can free")
+    };
+    let mut others: Vec<String> = waits
+        .iter()
+        .filter(|w| !w.0)
+        .map(|(_, on, at)| match at {
+            Some(at) => format!("{} at {at}", noun(*on)),
+            None => noun(*on).to_string(),
+        })
+        .collect();
+    if !others.is_empty() {
+        others.sort();
+        const SHOWN: usize = 8;
+        let more = others.len().saturating_sub(SHOWN);
+        others.truncate(SHOWN);
+        let mut list = others.join(", ");
+        if more > 0 {
+            list.push_str(&format!(" and {more} more"));
+        }
+        let who = if waits.iter().filter(|w| !w.0).count() == 1 {
+            "the other task waits on"
+        } else {
+            "the other tasks wait on"
+        };
+        text.push_str(&format!("; {who} {list}"));
+    }
+    text
+}
+
 pub fn source_at(line: usize) -> (&'static str, usize) {
     if let Some(map) = SOURCE_MAP.get() {
         let i = map.partition_point(|(first, _, _)| *first <= line);
@@ -2531,8 +2584,16 @@ impl<'a> Interp<'a> {
                 let r = self.ready(&args)?;
                 // The root's wait is the place a deadlock reports
                 // (B-2026-11-16-202).
-                if self.cur_task == self.root_task && matches!(r, Value::Bool(false)) {
-                    self.root_wait_at = Some(self.user_call_span);
+                if matches!(r, Value::Bool(false)) {
+                    if self.cur_task == self.root_task {
+                        self.root_wait_at = Some(self.user_call_span);
+                    }
+                    // Every task's, for the report's list of the others
+                    // (B-2026-11-19-31).
+                    let at = self.user_call_span;
+                    if let Some(t) = self.tasks.get_mut(self.cur_task) {
+                        t.wait_at = Some(at);
+                    }
                 }
                 Ok(r)
             }
@@ -8921,6 +8982,7 @@ impl<'a> Interp<'a> {
             log_up,
             log_seq: log_seq.unwrap_or(0),
             log_done: false,
+            wait_at: None,
         });
         self.spawned.push(self.tasks.len() - 1);
         Ok(Value::Agg(vec![Value::Int(handle as i128), Value::Unit]))
@@ -17333,6 +17395,7 @@ impl<'a> Interp<'a> {
             log_up: None,
             log_seq: 0,
             log_done: false,
+            wait_at: None,
         });
         self.run_tasks(entry)
     }
@@ -17513,10 +17576,30 @@ impl<'a> Interp<'a> {
         let step = std::time::Duration::from_millis(1);
         let pause = match (nearest, io) {
             (None, false) => {
-                return Err(self.deadlock(
-                    "every task waits on a channel that no running task sends to or receives from",
-                    false,
-                ));
+                let waits: Vec<(bool, u8, Option<String>)> = parked
+                    .iter()
+                    .map(|(t, w)| {
+                        let on = match w {
+                            Wait::Lock(_) => 1,
+                            Wait::Recv(_) | Wait::Send(_) | Wait::Select(..) => 2,
+                            Wait::Join(_) | Wait::Group(_, true) => 3,
+                            Wait::Group(_, false) => 4,
+                            _ => 0,
+                        };
+                        let at = self
+                            .tasks
+                            .get(*t)
+                            .and_then(|s| s.wait_at)
+                            .filter(|s| s.line > 0)
+                            .map(|span| {
+                                let (file, line) = source_at(span.line);
+                                format!("{file}:{line}:{}", span.column)
+                            });
+                        (*t == self.root_task, on, at)
+                    })
+                    .collect();
+                let what = deadlock_text(&waits);
+                return Err(self.deadlock(&what, false));
             }
             (None, true) => step,
             (Some(at), io) => {
@@ -20545,6 +20628,9 @@ struct TaskSlot {
     log_up: Option<usize>,
     log_seq: usize,
     log_done: bool,
+    /// The place of its last wait that could not go on at once, which a
+    /// deadlock reports (B-2026-11-19-31).
+    wait_at: Option<crate::token::Span>,
 }
 
 /// A spawned task's handle under the executor: its result once the task
