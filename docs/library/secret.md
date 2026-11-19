@@ -35,7 +35,7 @@ let inner_mut: mut ref String = tok.expose_mut(); // in-place change
 | `new` | `fn new(value: own T) -> Secret[T]` | Wraps a value |
 | `expose` | `fn expose(self) -> ref T` | Read access to the inner value |
 | `expose_mut` | `fn expose_mut(mut ref self) -> mut ref T` | Write access to the inner value |
-| `ct_eq` | `fn ct_eq(ref self, other: ref Secret[T]) -> bool` | Constant-time equality: every byte is compared, with no early exit at the first difference. `Secret[String]` only for now |
+| `ct_eq` | `fn ct_eq(ref self, other: ref Secret[T]) -> bool` | Constant-time equality: every byte is compared, with no early exit at the first difference. `Secret[String]` and `Secret[Vec[u8]]` only for now |
 
 `expose` and `expose_mut` are the only ways to reach `T`. Both are easy to search for and stand out in code review. Copying the value out (`tok.expose().clone()` into a plain `T`) gives a value that is no longer zeroized on drop: an explicit choice, visible at the call site.
 
@@ -72,7 +72,6 @@ struct User {
 - `Clone` on `Secret[T]`.
 - The `#[derive(Serialize)]` error: `karac check` accepts a derive over a type that contains a `Secret`, and the MIR backends then refuse it for lack of `Secret.serialize`.
 - `Zeroize` and `ConstantTimeEq` as importable, nameable items: `std.secret` exports only `Secret`, so a user `impl Zeroize` cannot be written yet (B-2026-11-07-24). Dropping a `Secret[String]`, or a `Secret[Vec[I]]` over an integer type `I`, zeros the whole buffer before it is freed (B-2026-11-16-192); a `Secret` of any other type, including `Array[u8, N]` and the integers held in place, is not zeroized.
-- The refusal of a forbidden trait impl on `Secret[T]` (`E_SECRET_TRAIT_FORBIDDEN`) names design.md § Secret Type rather than this section.
 - `serialize_expose` and `deserialize_wrap`.
 
 These are tracked as the `std.secret` items of [phase-11-stdlib-longtail.md](../implementation_checklist/phase-11-stdlib-longtail.md).
