@@ -884,6 +884,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   A generic `f: F` with a function-trait bound is handed to `retain`,
   `sort_by` and `sort_by_key` as the concrete `f: Fn(..)` is; it was
   refused 'cannot give away parameter `f`' (B-2026-11-19-103).
+- A reference to a function value can be handed to a lazy adaptor
+  (core semantics §9.6: a `ref` is called as an `Fn`, a `mut ref` as a
+  `MutFn`). `fn cnt(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool)
+  -> i64 { v.iter().filter(f).count() }` was refused 'trait bound `FnV:
+  MutFn` is not satisfied'; a type parameter with a function-trait bound
+  is now solved as the function the reference reaches, and the adaptor
+  holds `|x| f(x)` over it, so the closure keeps its writes and an adaptor
+  that outlives it is refused at the caller. A `mut ref` for an `Fn` bound
+  stays refused (B-2026-11-19-106).
 - A closure literal passed to a generic bare `F` parameter (`fn
   call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) borrows what it captures,
   as one passed to a bare `f: Fn() -> i64` does: a bare parameter is a

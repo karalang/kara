@@ -1,0 +1,18 @@
+// A `mut ref MutFn(..)` parameter is a reference to a function value, which
+// is called through (core semantics §9.6). Handed to a lazy adaptor whose
+// type parameter is bound `MutFn` (`filter`, `take_while`), it goes in as
+// `|x| f(x)` would; so does a `ref Fn(..)` parameter for `map`. The closure
+// behind `mut g` keeps its writes: `filter` calls it once per element.
+fn cnt(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool) -> i64 { v.iter().filter(f).count() }
+fn tw(v: ref Vec[i64], f: ref Fn(ref i64) -> i64) -> Vec[i64] { v.iter().map(f).collect() }
+fn tk(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool) -> Vec[i64] { v.iter().take_while(f).cloned().collect() }
+fn main() {
+    let mut n = 0;
+    let mut g = |x: ref i64| { n += 1; *x > 1 };
+    println(cnt([1, 2, 3], mut g));
+    let h = |x: ref i64| *x * 3;
+    println(tw([1, 2], h));
+    let mut lt = |x: ref i64| *x < 3;
+    println(tk([1, 2, 3, 1], mut lt));
+    println(n);
+}

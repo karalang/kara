@@ -6764,6 +6764,16 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     t => t,
                 };
+                // A reference to a function value (`f: mut ref MutFn(..)`)
+                // for a slot whose type parameter has a function-trait bound
+                // solves it as the function it reaches: MIR hands the slot
+                // `|x| f(x)` over the reference (`erase_operand`), as it does
+                // a bare `f: Fn(..)` (B-2026-11-19-106).
+                let arg_ty = match fn_reached_for_bound(peel_slot_ref(formal), arg_ty, where_clause)
+                {
+                    Some(inner) => inner,
+                    None => arg_ty,
+                };
                 // An unannotated collection's element or key takes a
                 // `Copy` reference's value (B-2026-11-08-19).
                 if self.solve_collection_var_by_value(sub_param_ty, arg_ty) {
@@ -6983,8 +6993,14 @@ impl<'a> super::TypeChecker<'a> {
                     let given_away = matches!(arg_ty, Type::Ref(_))
                         && self.d5_borrow_for_owned_slot(&arg.value, formal)
                         && self.d5_give_away(&arg.value, &resolved).is_some();
-                    if !given_away && !(is_str_view(&resolved) && is_string_place_type(arg_ty)) {
-                        self.check_assignable(&resolved, arg_ty, arg.value.span);
+                    // A reference to a function value for a function-trait
+                    // bound's slot is checked as the function it reaches,
+                    // as pass 1 solved it (B-2026-11-19-106).
+                    let through_fn =
+                        fn_reached_for_bound(peel_slot_ref(formal), arg_ty, where_clause).cloned();
+                    let checked = through_fn.as_ref().unwrap_or(arg_ty);
+                    if !given_away && !(is_str_view(&resolved) && is_string_place_type(checked)) {
+                        self.check_assignable(&resolved, checked, arg.value.span);
                     }
                     self.note_arg_slot(&arg.value, arg_ty, &resolved);
                     // B-2026-08-08-9 — a slot the EXPECTATION bound still owes
@@ -20467,5 +20483,42 @@ fn prefix_fix_type_is_spellable(ty: &Type) -> bool {
         | Type::Str
         | Type::Unit => true,
         _ => false,
+    }
+}
+
+/// The function value a reference argument reaches, when its slot is a type
+/// parameter with a function-trait bound the reference can be called as:
+/// a `ref` to a function for any of `Fn`, `MutFn` and `OnceFn`, a `mut ref`
+/// for `MutFn` and `OnceFn` (core semantics §9.6). MIR hands the slot
+/// `|x| f(x)` over the reference (`erase_operand`, B-2026-11-19-106).
+fn fn_reached_for_bound<'t>(
+    formal: &Type,
+    arg: &'t Type,
+    where_clause: Option<&WhereClause>,
+) -> Option<&'t Type> {
+    let Type::TypeParam(p) = formal else {
+        return None;
+    };
+    let (inner, unique) = match arg {
+        Type::Ref(inner) => (inner.as_ref(), false),
+        Type::MutRef(inner) => (inner.as_ref(), true),
+        _ => return None,
+    };
+    if !matches!(inner, Type::Function { .. }) {
+        return None;
+    }
+    let kind = where_clause?.constraints.iter().find_map(|c| match c {
+        WhereConstraint::TypeBound {
+            type_name, bounds, ..
+        } if type_name == p => bounds
+            .iter()
+            .find(|b| b.fn_sig.is_some())
+            .and_then(|b| b.path.last().cloned()),
+        _ => None,
+    })?;
+    match kind.as_str() {
+        "Fn" if !unique => Some(inner),
+        "MutFn" | "OnceFn" => Some(inner),
+        _ => None,
     }
 }

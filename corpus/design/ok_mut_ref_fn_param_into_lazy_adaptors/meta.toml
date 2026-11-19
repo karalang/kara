@@ -1,0 +1,9 @@
+source = "B-2026-11-19-106"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "iterators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "core-semantics §9.6: a `mut ref` to a function value is called as a `MutFn`, a `ref` as an `Fn`. A `f: mut ref MutFn(..)` parameter handed to `filter` and `take_while`, and a `f: ref Fn(..)` to `map`, solve the adaptor's function type parameter as the function they reach; `filter(f)` was refused 'trait bound `FnV: MutFn` is not satisfied; `mut ref Fn(ref i64) -> bool` does not implement `MutFn`'."
