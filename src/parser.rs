@@ -3193,7 +3193,9 @@ impl Parser {
     /// `std::` / `core::` path deleted, every other `::` written `.`), and
     /// rewrite those `::` tokens to `.` so the parse goes on as the fixed
     /// text would (B-2026-11-04-5). Leaves turbofish (`f::<T>`) alone.
-    pub(crate) fn rewrite_rust_path(&mut self) {
+    /// Answers how many leading segments the fix deletes, so a type path can
+    /// step past them (B-2026-11-19-34).
+    pub(crate) fn rewrite_rust_path(&mut self) -> usize {
         let is_segment = |t: Option<&Token>| matches!(t, Some(Token::Identifier { .. }));
         let at = self.pos;
         if !is_segment(self.tokens.get(at).map(|t| &t.token))
@@ -3203,7 +3205,7 @@ impl Parser {
             )
             || !is_segment(self.tokens.get(at + 2).map(|t| &t.token))
         {
-            return;
+            return 0;
         }
         // The segments, at token indices `at`, `at + 2`, ..; the `::`
         // between them at the odd offsets.
@@ -3329,7 +3331,7 @@ impl Parser {
             for &seg in &segments[..segments.len() - 1] {
                 self.tokens[seg + 1].token = Token::Dot;
             }
-            return;
+            return 0;
         }
         let sleep_import = if thread_sleep {
             self.std_time_sleep_import()
@@ -3362,6 +3364,7 @@ impl Parser {
         for &seg in &segments[..segments.len() - 1] {
             self.tokens[seg + 1].token = Token::Dot;
         }
+        dropped
     }
 
     /// `Self::count(d, n)` inside `impl Solution`, the Rust template's call

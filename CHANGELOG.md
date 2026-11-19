@@ -1969,6 +1969,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `lower(k)` or `floor(k)` (B-2026-11-19-82). A `Vec[String]` built from string
   literals and passed where `Slice[Str]` is taken gets `: Vec[Str]` on its
   binding (B-2026-11-19-83).
+- A Rust `::` path in a type (`let set: std::collections::HashSet<char>`,
+  a parameter, a return type, a field, `std::cmp::Ordering`) is reported and
+  fixed as the same path in an expression is, its module prefix deleted;
+  the parse used to stop there with "Expected `=`, found `::`" and no fix
+  (B-2026-11-19-34).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a

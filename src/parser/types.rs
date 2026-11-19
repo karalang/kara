@@ -1239,6 +1239,13 @@ impl super::Parser {
     }
 
     pub(crate) fn parse_path_type(&mut self) -> Option<PathExpr> {
+        // `std::collections::HashSet<char>`: Rust's `::` path in a type stopped
+        // the parse at the `::` with no fix. It is reported and fixed as the
+        // same path in an expression is, its module prefix deleted, and the
+        // parse goes on at the name the fix keeps, so the renames that follow
+        // (`HashSet` to `Set`, `<char>` to `[char]`) apply (B-2026-11-19-34).
+        let dropped = self.rewrite_rust_path();
+        self.pos += 2 * dropped;
         let start = self.current_span();
         let segments = self.parse_path_segments()?;
         if self.check(&Token::LessThan) && !self.cast_type {
