@@ -11822,6 +11822,14 @@ impl<'a> super::TypeChecker<'a> {
     /// that is not a named place: the chain's root is a fresh temp, so the type
     /// comes from the one already recorded for `expr`.
     fn drop_impl_type_name_of_fresh_projection(&self, expr: &Expr) -> Option<String> {
+        // A named place's type is its scope's, which `drop_impl_type_name_of`
+        // has read. A struct update's base shares its span with the field
+        // read `..x` becomes, so the type recorded there is the field's: `D`
+        // for `P { b: 3, ..x }`, whose `a: D` then read as a move out of a
+        // `D` (B-2026-11-19-7).
+        if self.place_named_type(expr).is_some() {
+            return None;
+        }
         let name = match self.expr_types.get(&SpanKey::from_span(&expr.span))? {
             Type::Named { name, .. } => name.clone(),
             _ => return None,

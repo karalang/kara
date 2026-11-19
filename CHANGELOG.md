@@ -1843,6 +1843,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `v.sort()` (E0510, fixed to `let mut`): its halves write through `v`, and
   the program used to check and change `v` anyway. With `let mut v`, the
   unused_mut lint no longer says the `mut` is unneeded (B-2026-11-19-23).
+- A struct update `P { b: 3, ..x }` whose base supplies a field of a type
+  with its own `Drop` (`a: D`) checks and moves the field whole; it was
+  refused as a move out of `D`. Moving fields out of a base whose own type
+  has a `Drop` stays refused (B-2026-11-19-7).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a
