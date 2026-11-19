@@ -87,6 +87,12 @@ fn write(tag: &str) -> PathBuf {
 /// Run `karac <cmd> <path>` with `units` codegen units, and say whether
 /// any handoff file the run named after its pid is still there afterwards.
 fn run(cmd: &str, path: &PathBuf, units: &str, handoff: &str) -> (Output, Vec<String>) {
+    // A killed `karac` (a timeout elsewhere) leaves its handoff file behind,
+    // and pids wrap at 32768, so this child can inherit a stale
+    // `karac-mir-<pid>.ll` it never wrote. Only a file written since the
+    // spawn is this child's.
+    // Two seconds of slack: the file clock is coarser than `now()`.
+    let started = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
     let child = Command::new(env!("CARGO_BIN_EXE_karac"))
         .env("KARAC_MIR_CODEGEN_UNITS", units)
         .env("KARAC_MIR_TIME", "1")
@@ -103,6 +109,11 @@ fn run(cmd: &str, path: &PathBuf, units: &str, handoff: &str) -> (Output, Vec<St
     let left = std::fs::read_dir(std::env::temp_dir())
         .unwrap()
         .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t >= started)
+        })
         .map(|e| e.file_name().to_string_lossy().into_owned())
         // The pid must end where the prefix does: another process's
         // `karac-mir-8803.ll` is not this child 880's.
