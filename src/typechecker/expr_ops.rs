@@ -6494,7 +6494,10 @@ impl<'a> super::TypeChecker<'a> {
             Type::Ref(inner) if !types_compatible(expected, &args[0]) => inner.as_ref(),
             t => t,
         };
-        if !types_compatible(expected, payload) {
+        // A `Never` payload is compatible with everything and unwraps to
+        // nothing: an `Option[Never]` where an `Option[i64]` must be is an
+        // invariance refusal (B-2026-11-19-67), not a forgotten unwrap.
+        if matches!(payload, Type::Never) || !types_compatible(expected, payload) {
             return String::new();
         }
         format!(

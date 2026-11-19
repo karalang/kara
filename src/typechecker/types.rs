@@ -1644,7 +1644,9 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
         // warning) but rejected by `karac build` — the run/build divergence
         // tracked as B-2026-06-17-4.
         (Type::Ref(s), Type::MutRef(b)) => is_subtype(s, b),
-        (Type::MutRef(s), Type::MutRef(b)) => is_subtype(s, b) && is_subtype(b, s),
+        (Type::MutRef(s), Type::MutRef(b)) => {
+            is_subtype(s, b) && is_subtype(b, s) && !never_against_a_type(s, b)
+        }
         // Owned-to-ref coercion: a `ref T` slot accepts an owned `T` value.
         // design.md Feature 4 Part 3 § Explicit ref for Borrow Returns — the
         // borrow source is inferred from context (function-return tail, call
@@ -1668,7 +1670,7 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
         // through the borrow into the caller's owned binding, so a
         // widened slot could store a refinement-violating value.
         (Type::MutRef(inner), sub) if !matches!(sub, Type::Ref(_) | Type::MutRef(_)) => {
-            is_subtype(inner, sub) && is_subtype(sub, inner)
+            is_subtype(inner, sub) && is_subtype(sub, inner) && !never_against_a_type(inner, sub)
         }
         _ => types_compatible(super_ty, sub_ty),
     }
@@ -1851,7 +1853,44 @@ pub(super) fn generic_arg_compatible(variance: crate::ast::Variance, a: &Type, b
     match variance {
         crate::ast::Variance::Covariant => types_compatible(a, b),
         crate::ast::Variance::Contravariant => types_compatible(b, a),
-        crate::ast::Variance::Invariant => types_compatible(a, b) && types_compatible(b, a),
+        crate::ast::Variance::Invariant => {
+            types_compatible(a, b) && types_compatible(b, a) && !never_against_a_type(a, b)
+        }
+    }
+}
+
+/// Whether `a` and `b` hold `Never` in one place where the other holds a
+/// type (B-2026-11-19-67). `Never ≤ T` is a rule about a VALUE: it holds at
+/// the top of a covariant position, never under an invariant one, so a
+/// `Vec[Never]` is not a `Vec[i64]` and an `Option[Never]` is not the
+/// `Option[i64]` a `mut ref` parameter writes through (design.md § Subtyping
+/// and variance). `types_compatible`'s symmetric `Never` arm cannot tell the
+/// two apart; this walk is the invariant slot's half. An unsolved part (a
+/// type variable or parameter) and `Error` decide nothing.
+fn never_against_a_type(a: &Type, b: &Type) -> bool {
+    let open = |t: &Type| {
+        matches!(
+            t,
+            Type::Never | Type::Error | Type::TypeVar(_) | Type::TypeParam(_)
+        )
+    };
+    match (a, b) {
+        (Type::Never, t) | (t, Type::Never) => !open(t),
+        (Type::Named { name: x, args: xs }, Type::Named { name: y, args: ys }) => {
+            x == y
+                && xs.len() == ys.len()
+                && xs.iter().zip(ys).any(|(x, y)| never_against_a_type(x, y))
+        }
+        (Type::Tuple(xs), Type::Tuple(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).any(|(x, y)| never_against_a_type(x, y))
+        }
+        (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+        | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. })
+        | (Type::Ref(x), Type::Ref(y))
+        | (Type::MutRef(x), Type::MutRef(y))
+        | (Type::Rc(x), Type::Rc(y))
+        | (Type::Arc(x), Type::Arc(y)) => never_against_a_type(x, y),
+        _ => false,
     }
 }
 
