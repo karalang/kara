@@ -43,4 +43,6 @@ fn main() {
     println(join("/", "x"));
     println(join("a//", "/"));
     println(join("a", "b/"));
+    // B-2026-11-19-61: a root then a trailing `.` has no parent, as `"/"` has none.
+    println(f"{q(parent("/."))} {q(parent("/./"))} {q(parent("/./."))} {q(parent("//."))} {q(parent("/a/."))}");
 }

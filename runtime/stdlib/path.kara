@@ -23,7 +23,7 @@ fn path_trimmed(p: Str) -> Str {
         while end > 1 and p.slice(0, end).ends_with("/") {
             end = end - 1;
         }
-        if end > 2 and p.slice(0, end).ends_with("/.") {
+        if end >= 2 and p.slice(0, end).ends_with("/.") {
             end = end - 1;
         } else {
             break;
