@@ -1,0 +1,9 @@
+source = "B-2026-11-19-107"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "concurrency", "post-m1:par"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-19-107: a task captures a for binding, a match arm's binding or an if-let's binding by move, since each drops before a group declared ahead of it (core semantics §9.1, §9.5)."

@@ -1,0 +1,33 @@
+// Core semantics §9.1, §9.5: a captured place that drops before the group is
+// moved into the task. A `for` binding, a `match` arm's binding and an
+// `if let`'s are places of the loop body or the arm, so each drops before a
+// group declared ahead of them, and the task takes it by move, as it takes a
+// `let` in the loop body.
+
+fn show(s: String) -> i64 {
+    s.len()
+}
+
+fn main() {
+    let group = TaskGroup.new();
+    let mut hs: Vec[TaskHandle[i64]] = Vec.new();
+    let names = ["a".to_string(), "bb".to_string(), "ccc".to_string()];
+    for s in names.into_iter() {
+        hs.push(group.spawn(|| show(s)));
+    }
+    let words = [Some("dddd".to_string()), None];
+    for w in words.into_iter() {
+        match w {
+            Some(v) => hs.push(group.spawn(|| show(v))),
+            None => hs.push(group.spawn(|| 0)),
+        }
+    }
+    if let Some(v) = Some("eeeee".to_string()) {
+        hs.push(group.spawn(|| show(v)));
+    }
+    let mut total = 0;
+    for h in hs.into_iter() {
+        total = total + h.join();
+    }
+    println(total);
+}

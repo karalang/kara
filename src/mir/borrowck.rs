@@ -3881,6 +3881,10 @@ fn main() -> () {
         // The build in `built_core_pins_match_their_expected_output` runs
         // them with the library, through the same move and borrow checks.
         let needs_library = [
+            // Which task captures move is the typechecker's core_taskgroup
+            // table, built only under the library-source check
+            // (B-2026-11-19-107).
+            "ok_taskgroup_pattern_binding_moved",
             // `self.slots[i]` indexes for writing through the library's
             // `Vec.index_mut` (B-2026-11-17-152).
             "match_element_through_mut_refs_binds_mut_ref",

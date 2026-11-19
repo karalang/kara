@@ -211,6 +211,17 @@ impl Walk<'_, '_> {
         }
     }
 
+    /// Walk `inner` with `pattern`'s bindings declared in a scope of their
+    /// own.
+    fn bound(&mut self, pattern: &Pattern, inner: impl FnOnce(&mut Self)) {
+        self.scopes.push(Vec::new());
+        for (n, at) in pattern.binding_name_spans() {
+            self.declare(n, at);
+        }
+        inner(self);
+        self.scopes.pop();
+    }
+
     fn block(&mut self, b: &Block) {
         self.scopes.push(Vec::new());
         let depth = self.scopes.len();
@@ -392,6 +403,55 @@ impl Walk<'_, '_> {
                 self.scopes.pop();
             }
             ExprKind::Block(b) => self.block(b),
+            // A pattern's bindings are places of their own, declared where
+            // the pattern is: a `for` binding or a match arm's drops before
+            // a group declared ahead of the loop or the match, so a task
+            // captures it by move (§9.5), as it does a `let` in the body.
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                self.expr(iterable);
+                self.loop_depth += 1;
+                self.bound(pattern, |w| w.block(body));
+                self.loop_depth -= 1;
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                self.loop_depth += 1;
+                self.expr(value);
+                self.bound(pattern, |w| w.block(body));
+                self.loop_depth -= 1;
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                self.expr(value);
+                self.bound(pattern, |w| w.block(then_block));
+                if let Some(e) = else_branch {
+                    self.expr(e);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.expr(scrutinee);
+                for arm in arms {
+                    self.bound(&arm.pattern, |w| {
+                        if let Some(g) = &arm.guard {
+                            w.expr(g);
+                        }
+                        w.expr(&arm.body);
+                    });
+                }
+            }
             ExprKind::Identifier(n) => {
                 if let Some(decl) = self.lookup(n) {
                     self.uses.push(Write {
