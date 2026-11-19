@@ -27386,6 +27386,30 @@ impl<'l, 'a> Bx<'l, 'a> {
         } else {
             Vec::new()
         };
+        // A task whose result can hold a reference reads its `Copy`
+        // captures through a borrow as §9.1 infers, rather than copying
+        // them in: `g.spawn(|| ref v)` and `par { ref v, .. }` hand back a
+        // reference to `v`, which then must outlive the result, not one
+        // into the task's own copy, which dies with the task
+        // (B-2026-11-19-95).
+        let task_ret_refs = task && {
+            let fn_ret = match self
+                .lcx
+                .node_types
+                .get(&e.id)
+                .map(|&t| self.tys().tcx().kind(t))
+            {
+                Some(HK::Fn { ret, .. }) => Some(ret),
+                _ => None,
+            };
+            ret.map(|r| r.0).or(fn_ret).is_some_and(|r| {
+                let mut refs = false;
+                self.tys().tcx().walk(r, &mut |k| {
+                    refs |= matches!(k, HK::Ref(_) | HK::MutRef(_));
+                });
+                refs
+            })
+        };
         for sym in captured {
             let place = match (self.locals.get(&sym), self.captured.get(&sym)) {
                 (Some(&l), _) => Place::local(l),
@@ -27457,7 +27481,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 // A task copies them: its group outlives a loop body's
                 // locals, which is the usual place to spawn from.
-                _ if !explicit && !task && self.is_copy(t) => CapMode::Ref,
+                _ if !explicit && (!task || task_ret_refs) && self.is_copy(t) => CapMode::Ref,
                 Some(OwnershipMode::Own) => CapMode::Value,
                 _ if self.is_copy(t) => CapMode::Value,
                 // Under D5 a capture is moved place by place, as the body
@@ -32156,6 +32180,19 @@ fn result_borrows(
 ) -> crate::mir::ResultBorrows {
     if closure_results.contains(&i.name) {
         return crate::mir::ResultBorrows::EnvAndArgs;
+    }
+    // A task's handle holds what its closure holds, for `join` to hand
+    // back: `g.spawn(|| v.as_slice()).join()` is a view of `v`, not of
+    // nothing (B-2026-11-19-95).
+    if matches!(i.name.as_str(), "TaskGroup.spawn" | "IsolatingGroup.spawn") {
+        return crate::mir::ResultBorrows::ArgsAfterReceiver;
+    }
+    if i.name == "spawn" {
+        return crate::mir::ResultBorrows::Args;
+    }
+    // ... and `join` hands back what the handle it consumes holds.
+    if i.name.starts_with("TaskHandle[") && i.name.ends_with("].join") {
+        return crate::mir::ResultBorrows::Receiver;
     }
     if let Some(&mask) = view_args.get(&i.name) {
         return crate::mir::ResultBorrows::ViewArgs(mask);

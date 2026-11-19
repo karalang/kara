@@ -233,6 +233,11 @@ pub enum ResultBorrows {
     /// Str` returns a view of the text `c.src` views (core semantics §5.4,
     /// "Results borrow what a view parameter views"; B-2026-11-13-79).
     ViewArgs(u64),
+    /// What every argument after the receiver holds: a task group's
+    /// `spawn` hands back a handle holding what the task's closure holds,
+    /// for `join` to pass on, not a borrow of the group, which the
+    /// task-group scope already bounds (B-2026-11-19-95).
+    ArgsAfterReceiver,
 }
 
 /// Checks `body`; the errors name each conflicting access by block and
@@ -2197,6 +2202,11 @@ impl Cx<'_> {
                 }
             }
             ResultBorrows::ReceiverValue => self.pointee_origins(o, &args[0], &mut val),
+            ResultBorrows::ArgsAfterReceiver => {
+                for a in args.iter().skip(1) {
+                    self.arg_origins(o, a, dest, &mut val);
+                }
+            }
             ResultBorrows::ViewArgs(mask) => {
                 for (i, a) in args.iter().enumerate() {
                     if i < 64 && mask >> i & 1 != 0 {
@@ -2332,6 +2342,13 @@ pub(crate) fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
                 // runtime keeps out of its declared fields (§9.5).
                 if is_task_group(tys, ty) {
                     return true;
+                }
+                // A task's handle holds what its closure holds, for `join`
+                // to hand back as the task's result (B-2026-11-19-95).
+                if adt.name == "TaskHandle" {
+                    if let Some((_, args)) = tys.tcx().adt_of(ty) {
+                        return args.iter().any(|t| go(tys, *t, false, seen));
+                    }
                 }
                 let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
                 let is_enum = adt.is_enum;
