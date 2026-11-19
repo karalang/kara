@@ -22469,6 +22469,93 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(inst)
     }
 
+    /// A function item (or a local holding one) passed for a parameter
+    /// whose type is a bare type parameter the checker solved to an erased
+    /// `Fn(..)` (`twice(read_clk)` for `fn twice[G: Fn() -> i64](g: G)`):
+    /// the call is instantiated at the item's own type, as an `Fn` parameter
+    /// is, so the callee calls the item directly and a provider it uses
+    /// follows the call as a hidden parameter (core semantics §14.3,
+    /// B-2026-11-19-138). Only when no other parameter and not the return
+    /// type name that type parameter, so nothing else needs the erased type.
+    fn fn_item_inst_args(
+        &mut self,
+        f: &'a Function,
+        args: &'a [CallArg],
+        mut inst: Vec<Ty>,
+    ) -> R<Vec<Ty>> {
+        let Some(gp) = &f.generic_params else {
+            return Ok(inst);
+        };
+        // Per parameter: the type parameter it is written as (bare, or
+        // borrowed under D5), and the argument's own item type if it is a
+        // function item or a local holding one.
+        let mut slots: Vec<Option<(usize, Option<Ty>)>> = Vec::with_capacity(args.len());
+        for (a, p) in args.iter().zip(&f.params) {
+            let Some(&pt) = self.lcx.node_types.get(&p.pattern.id) else {
+                slots.push(None);
+                continue;
+            };
+            let tcx = self.tys().tcx();
+            let pt = match tcx.kind(pt) {
+                HK::Ref(x) => x,
+                _ => pt,
+            };
+            let HK::Param(q) = tcx.kind(pt) else {
+                slots.push(None);
+                continue;
+            };
+            let i = q.index as usize;
+            let erased = inst
+                .get(i)
+                .is_some_and(|&t| matches!(tcx.kind(t), HK::Fn { .. }));
+            if !erased || !matches!(a.value.kind, ExprKind::Identifier(_)) {
+                slots.push(Some((i, None)));
+                continue;
+            }
+            // A function item named directly is typed by the checker as
+            // the erased `Fn` its slot wants; its own type is the item's.
+            let at = match self.lcx.res.get(&a.value.id) {
+                Some(&Res::Def(d)) if self.lcx.fns.contains_key(&d) => {
+                    self.fn_item_value(&a.value, d, None)?.1
+                }
+                _ => self.expr_ty(&a.value)?,
+            };
+            let item = matches!(self.tys().tcx().kind(at), HK::FnDef { .. }).then_some(at);
+            slots.push(Some((i, item)));
+        }
+        for (i, g) in gp.params.iter().enumerate() {
+            let tcx = self.tys().tcx();
+            if !inst
+                .get(i)
+                .is_some_and(|&t| matches!(tcx.kind(t), HK::Fn { .. }))
+            {
+                continue;
+            }
+            // Every parameter naming `G` is a bare `G` given one and the
+            // same item (`pair(read_clk, read_clk)`), and the result does
+            // not name it; otherwise the erased type stays.
+            let mut item: Option<Ty> = None;
+            let mut ok = f
+                .return_type
+                .as_ref()
+                .is_none_or(|r| !type_expr_names(r, &g.name));
+            for (k, p) in f.params.iter().enumerate() {
+                match slots.get(k).copied().flatten() {
+                    Some((j, Some(t))) if j == i => {
+                        ok &= item.is_none_or(|x| x == t);
+                        item = Some(t);
+                    }
+                    Some((j, None)) if j == i => ok = false,
+                    _ => ok &= !type_expr_names(&p.ty, &g.name),
+                }
+            }
+            if let (true, Some(t)) = (ok, item) {
+                inst[i] = t;
+            }
+        }
+        Ok(inst)
+    }
+
     /// A call of the program's function `d` (`f`) in instance `inst_args`,
     /// with `recv` before the arguments when a path names the receiver.
     #[allow(clippy::too_many_arguments)]
@@ -22486,6 +22573,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.unsupported(e.span, "a call that leaves out default arguments");
         }
         let inst_args = self.closure_ref_inst_args(f, args, inst_args)?;
+        let inst_args = self.fn_item_inst_args(f, args, inst_args)?;
         let mut ops = Vec::new();
         let mut fn_tys: Vec<Option<Ty>> = Vec::new();
         for (a, p) in args.iter().zip(&f.params) {
@@ -22504,6 +22592,33 @@ impl<'l, 'a> Bx<'l, 'a> {
                 continue;
             }
             let pt = self.callee_param_ty(p, &inst_args)?;
+            // A function item for a slot [`Self::fn_item_inst_args`] gave
+            // the item's own type: the item itself, borrowed where the slot
+            // borrows, never erased (B-2026-11-19-138).
+            if let Some(&Res::Def(d)) = self.lcx.res.get(&a.value.id) {
+                let tcx = self.tys().tcx();
+                let (inner, by_ref) = match tcx.kind(pt) {
+                    HK::Ref(x) => (x, true),
+                    _ => (pt, false),
+                };
+                if matches!(tcx.kind(inner), HK::FnDef { .. }) && self.lcx.fns.contains_key(&d) {
+                    let (op, t) = self.fn_item_value(&a.value, d, None)?;
+                    if t == inner {
+                        let op = if by_ref {
+                            let v = self.temp(t);
+                            self.assign(v, Rvalue::Use(op));
+                            let r = self.temp(pt);
+                            self.assign(r, Rvalue::Ref(BorrowKind::Shared, Place::local(v)));
+                            Operand::Move(Place::local(r))
+                        } else {
+                            op
+                        };
+                        ops.push(PendingRecv::Ready(op));
+                        fn_tys.push(None);
+                        continue;
+                    }
+                }
+            }
             self.closure_arg_nonescaping = self.closure_arg_borrows(&a.value, p);
             let arg = self.arg_pending(&a.value, pt);
             self.closure_arg_nonescaping = false;
@@ -33437,6 +33552,19 @@ fn stderr_print(callee: &Expr) -> Option<&'static str> {
 fn is_self_path(te: &ast::TypeExpr) -> bool {
     matches!(&te.kind, ast::TypeKind::Path(q)
         if q.generic_args.is_none() && q.segments.len() == 1 && q.segments[0] == "Self")
+}
+
+/// Whether the written type `t` mentions the name `n` anywhere.
+fn type_expr_names(t: &ast::TypeExpr, n: &str) -> bool {
+    let mut found = false;
+    let text = format!("{:?}", t.kind);
+    for w in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        if w == n {
+            found = true;
+            break;
+        }
+    }
+    found
 }
 
 #[cfg(test)]

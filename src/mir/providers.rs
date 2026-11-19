@@ -630,6 +630,12 @@ impl Spec<'_> {
         if let Some(c) = self.carried.get(&fx.body.instance.name).cloned() {
             // Its providers are in its environment, after the captures.
             fx.body.instance.def = c.def;
+            // A function item's copy is given the environment a closure
+            // body has, as its first parameter (B-2026-11-19-138).
+            if self.sigs.get(template).is_some_and(|s| s.closure.is_none()) {
+                let et = self.tys.tcx().reference(c.ty, false);
+                fx.prepend_env(et);
+            }
             let env_l = Local(1);
             let t = fx.body.local(env_l).ty;
             let (ty, by_ref) = match self.tys.tcx().kind(t) {
@@ -1704,8 +1710,12 @@ impl Spec<'_> {
         if let Some(c) = self.carried.get(&name) {
             return Ok((c.ty, name));
         }
-        let SK::Closure { captures, .. } = self.tys.tcx().kind(from) else {
-            return Err(format!("providers: `{template}` is not a closure body"));
+        // A function item (B-2026-11-19-138) captures nothing of its own:
+        // its copy takes an environment of the providers alone.
+        let captures = match self.tys.tcx().kind(from) {
+            SK::Closure { captures, .. } => self.tys.tcx().list(captures),
+            _ if self.sigs.get(template).is_some_and(|s| s.closure.is_none()) => Vec::new(),
+            _ => return Err(format!("providers: `{template}` is not a closure body")),
         };
         // A `Fn` value that writes a provider (`twice(|| { Clk.bump(); .. })`)
         // keeps a `mut ref` to it, which its body writes through although
@@ -1715,7 +1725,7 @@ impl Spec<'_> {
         // tasks, or a task and its spawner, using one provider while one of
         // them writes it are refused by the effect pass
         // (`effects::TaskConflict`, §14.9).
-        let mut caps = self.tys.tcx().list(captures);
+        let mut caps = captures;
         let mut fields = Vec::new();
         for (r, mutable) in bound {
             let Some(Binding::Bound(pt)) = env.get(r).copied() else {
@@ -1744,12 +1754,29 @@ impl Spec<'_> {
                 out.push(st);
                 continue;
             };
+            let info = st.source_info;
+            if let Operand::Const(Const {
+                kind: ConstKind::FnDef(inst),
+                ty: item_ty,
+            }) = op
+            {
+                match self.carried_item(fx, &mut out, &inst.name, *item_ty)? {
+                    Some(v) => out.push(Statement {
+                        kind: StatementKind::Assign(
+                            dst.clone(),
+                            Rvalue::Cast(CastKind::Erase, Operand::Move(Place::local(v)), *to),
+                        ),
+                        source_info: info,
+                    }),
+                    None => out.push(st),
+                }
+                continue;
+            }
             let (Operand::Move(src) | Operand::Copy(src)) = op else {
                 out.push(st);
                 continue;
             };
             let copy = matches!(op, Operand::Copy(_));
-            let info = st.source_info;
             let Some(v) = self.carried_value(fx, &mut out, src, copy, info)? else {
                 out.push(st);
                 continue;
@@ -1822,6 +1849,61 @@ impl Spec<'_> {
     /// When `src` is a closure that reaches a bound resource: its copy
     /// carrying the providers, built into a new local by statements pushed
     /// to `out`, its captures moved (or copied) from `src`.
+    /// When the function item `name` (of type `item_ty`) reaches a bound
+    /// resource: a closure value of its copy carrying the providers, built
+    /// into a new local by statements pushed to `out` (core semantics
+    /// §14.3: taking it as a value captures the provider, B-2026-11-19-138).
+    fn carried_item(
+        &mut self,
+        fx: &mut Fx,
+        out: &mut Vec<Statement>,
+        name: &str,
+        item_ty: Ty,
+    ) -> Result<Option<Local>, String> {
+        if !self.sigs.contains_key(name) || self.sigs[name].library {
+            return Ok(None);
+        }
+        let Some(needs) = self.needs.get(name) else {
+            return Ok(None);
+        };
+        let bound: Vec<(String, bool)> = needs
+            .iter()
+            .filter(|(r, _)| matches!(fx.env.get(*r), Some(Binding::Bound(_))))
+            .map(|(r, a)| (r.clone(), *a == Access::Writes))
+            .collect();
+        if bound.is_empty() {
+            return Ok(None);
+        }
+        let env = fx.env.clone();
+        let (ty, _) = self.carry_request(name, item_ty, &env, &bound)?;
+        let info = fx.body.locals[0].source_info;
+        let mut ops = Vec::new();
+        for (r, mutable) in &bound {
+            let p = fx.src[r].clone();
+            let pt = place_ty(fx.body, self.tys, &p)?.ty;
+            let l = fx.temp(self.tys.tcx().reference(pt, *mutable));
+            let kind = if *mutable {
+                BorrowKind::Mut
+            } else {
+                BorrowKind::Shared
+            };
+            out.push(Statement {
+                kind: StatementKind::Assign(Place::local(l), Rvalue::Ref(kind, p)),
+                source_info: info,
+            });
+            ops.push(Operand::Move(Place::local(l)));
+        }
+        let v = fx.temp(ty);
+        out.push(Statement {
+            kind: StatementKind::Assign(
+                Place::local(v),
+                Rvalue::Aggregate(AggregateKind::Closure { ty }, ops),
+            ),
+            source_info: info,
+        });
+        Ok(Some(v))
+    }
+
     fn carried_value(
         &mut self,
         fx: &mut Fx,
@@ -1953,6 +2035,27 @@ pub fn is_provider_param(d: &LocalDecl) -> bool {
 impl Fx<'_> {
     /// Adds `params` after the body's own parameters, moving its other
     /// locals up.
+    /// Makes `ty` the body's first parameter, an environment, moving every
+    /// other local up.
+    fn prepend_env(&mut self, ty: Ty) {
+        let shift = |l: Local| if l.0 >= 1 { Local(l.0 + 1) } else { l };
+        renumber(self.body, &shift);
+        let info = self.body.locals[0].source_info;
+        self.body.locals.insert(
+            1,
+            LocalDecl {
+                ty,
+                mutability: Mutability::Not,
+                kind: LocalKind::Arg {
+                    name: "env".to_string(),
+                    node: NodeId::DUMMY,
+                },
+                source_info: info,
+            },
+        );
+        self.body.arg_count += 1;
+    }
+
     fn add_params(&mut self, params: &[(String, Ty)]) {
         let n = self.body.arg_count as u32;
         let k = params.len() as u32;

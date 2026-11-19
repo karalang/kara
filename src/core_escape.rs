@@ -511,7 +511,9 @@ impl Walker<'_> {
                         }
                     }
                 }
-                (None, Pos::Escape(why)) if why != CLOSURE_RESULT && self.sigs.contains_key(n) => {
+                (None, Pos::Escape(why)) if self.sigs.contains_key(n) => {
+                    // A closure's result is a value it hands out, a function
+                    // taken as a value too (`|| Some(read_clk)`, B-2026-11-19-138).
                     self.out.escaping_fn_values.push((e.span, n.clone(), why));
                 }
                 (Some(Bound::NonEscParam), Pos::Escape(why)) if why != CLOSURE_RESULT => {

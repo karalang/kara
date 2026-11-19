@@ -1,0 +1,38 @@
+// core-semantics §14.3: a function that uses a resource, taken as a value,
+// captures the provider in scope, as a closure does. Handed to a generic
+// with an `Fn` bound it is called directly; erased (two different functions
+// for one `G`, an `Option`, an annotated `let`, an `if` choosing one) it
+// carries the provider with it. A function that writes its provider writes
+// the one in scope (B-2026-11-19-138).
+effect resource Clk: ClkP;
+trait ClkP { fn now(ref self) -> i64; fn bump(mut ref self) {} }
+struct F { t: i64 }
+impl ClkP for F {
+    fn now(ref self) -> i64 { self.t }
+    fn bump(mut ref self) { self.t = self.t + 1; }
+}
+
+fn read_clk() -> i64 { Clk.now() }
+fn read2() -> i64 { Clk.now() + 1 }
+fn scaled(k: i64) -> i64 { Clk.now() * k }
+fn tick(k: i64) -> i64 { Clk.bump(); Clk.now() + k }
+fn plain(k: i64) -> i64 { k + 100 }
+
+fn twice[G: Fn() -> i64](g: G) -> i64 { g() * 2 }
+fn pair[G: Fn() -> i64](a: G, b: G) -> i64 { a() + b() }
+fn both[G: Fn(i64) -> i64](a: G, b: G, x: i64) -> i64 { a(x) + b(x) }
+
+fn main() {
+    println(with_provider[Clk](F { t: 5 }, || twice(read_clk)));
+    println(with_provider[Clk](F { t: 5 }, || { let f = read_clk; twice(f) + pair(f, f) }));
+    println(with_provider[Clk](F { t: 5 }, || pair(read_clk, read2)));
+    println(with_provider[Clk](F { t: 5 }, || { let o = Some(read2); o.unwrap()() }));
+    println(with_provider[Clk](F { t: 5 }, || { let c = if false { read_clk } else { read2 }; c() }));
+    let r = with_provider[Clk](F { t: 3 }, || {
+        let s: Fn(i64) -> i64 = scaled;
+        let a = both(scaled, plain, 2);
+        let b = both(tick, tick, 1);
+        s(10) + a * 1000 + b * 100000
+    });
+    println(r);
+}

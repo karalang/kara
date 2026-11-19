@@ -1,0 +1,11 @@
+source = "corpus/core/ok_provider_function_value_erased_or_generic"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["providers", "post-m1:provider"]
+class = "unknown"
+expected_from = "spec"
+rules = ["14.3"]
+backends = []
+env = {}
+note = "core-semantics §14.3: a function that uses a resource, taken as a value under with_provider, captures the provider. In a generic's bare G slot it is called directly (the call is instantiated at the item's type); erased (two functions for one G, an Option, an annotated let, an if) it carries the provider as an erased closure does. Every form stopped with 'a function used as a value ... is not lowered yet' until B-2026-11-19-138. 1208050: a = scaled(2)+plain(2) = 108, b = tick(1)+tick(1) = 5+6 = 11 with t 3 -> 5, then s(10) = 50."

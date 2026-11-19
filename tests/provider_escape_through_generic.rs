@@ -92,3 +92,15 @@ fn main() { println(with_provider[Clk](F { t: 5 }, || { let f = read_clk; f() + 
     )
     .is_empty());
 }
+
+/// A function taken as a value inside the value a `with_provider` body
+/// returns leaves with it, as a closure does (B-2026-11-19-138).
+#[test]
+fn provider_escape_of_a_function_value_inside_the_bodys_result() {
+    refused(
+        "fn read_clk() -> i64 { Clk.now() }
+fn main() { let o = with_provider[Clk](F { t: 5 }, || Some(read_clk)); println(o.unwrap()()); }
+",
+        "function `read_clk`, taken as a value,",
+    );
+}
