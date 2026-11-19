@@ -24934,6 +24934,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.call_native("char.to_string", vec![op], dest);
             return Ok(true);
         }
+        // `s.into()` of a `Str` view (or a `ref` to one) into a `String`:
+        // the library's `From[Str] for String`, the copy `String.from`
+        // makes (B-2026-11-19-4).
+        if let (HK::StaticStr, view) = self.strip_ty_full(st) {
+            if self.tys().display(dt) == "String" {
+                let op = match &object.kind {
+                    ExprKind::StringLit(s) => self.static_str(s),
+                    _ => self.operand_at(object, view)?,
+                };
+                self.call_native("String.from", vec![op], dest);
+                return Ok(true);
+            }
+        }
         if let Some((adt, _)) = tcx.adt_of(dt) {
             let wrap = adt
                 .variants

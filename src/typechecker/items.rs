@@ -2838,6 +2838,10 @@ impl<'a> super::TypeChecker<'a> {
         self_type: Option<&Type>,
         enclosing_generics: &[String],
     ) {
+        // The function's own lint levels cover its signature, lowered
+        // below before the body's frame is pushed: `#[allow(deprecated)]
+        // fn mk() -> Old` (design.md §17 Lint levels; B-2026-11-19-20).
+        self.lint_override_stack.push(f.lint_overrides.clone());
         self.local_scope = LocalTypeScope::new();
         self.warn_return_clause_on_fn(
             f.return_type.as_ref(),
@@ -3102,8 +3106,8 @@ impl<'a> super::TypeChecker<'a> {
 
         // Lint-level slice 4b — push this function's lint overrides
         // as the innermost cascade frame. Popped on exit so sibling
-        // / outer items don't inherit it.
-        self.lint_override_stack.push(f.lint_overrides.clone());
+        // / outer items don't inherit it. (The signature's frame, pushed on
+        // entry, stays as this one.)
         self.check_deprecated_trait_uses(f.generic_params.as_ref(), f.where_clause.as_ref(), None);
 
         // `impl Trait` slice 4 — compute the capture set for every
@@ -5815,6 +5819,12 @@ impl<'a> super::TypeChecker<'a> {
         if self.env.opaque_foreign_types.contains(&type_name) {
             return;
         }
+        // Lint-level slice 4b — push the impl block's lint overrides
+        // so per-method `check_function` calls inherit the impl's
+        // overrides via the cascade, and so they cover the impl's own
+        // header, lowered below: `#[allow(deprecated)] impl Old`
+        // (B-2026-11-19-20). Popped at the end of the impl.
+        self.lint_override_stack.push(imp.lint_overrides.clone());
         if self.cli_lint_overrides.strict_core && imp.trait_name.is_none() {
             self.check_core_shared_receivers(imp, &type_name);
         }
@@ -6254,10 +6264,6 @@ impl<'a> super::TypeChecker<'a> {
         self.enclosing_proj_bounds
             .extend(Self::collect_proj_bounds(&imp.where_clause));
 
-        // Lint-level slice 4b — push the impl block's lint overrides
-        // so per-method `check_function` calls inherit the impl's
-        // overrides via the cascade. Popped at the end of the impl.
-        self.lint_override_stack.push(imp.lint_overrides.clone());
         self.check_deprecated_trait_uses(
             imp.generic_params.as_ref(),
             imp.where_clause.as_ref(),
@@ -8678,6 +8684,51 @@ impl<'a> super::TypeChecker<'a> {
             self.env.substitutions.insert(root, opened.clone());
         }
         opened
+    }
+
+    /// The type `other` is checked against in `v[a..b] = other`: the copy
+    /// reads it as a slice, the conversion a call boundary makes (design.md
+    /// § Index and IndexMut), so a `Vec` or an array of the range's element
+    /// type is taken as it is, and a list literal builds one
+    /// (B-2026-11-19-5). Anything else is checked against the range's
+    /// slice type.
+    fn range_assign_source_slot(&mut self, target: &Expr, value: &Expr, slot: Type) -> Type {
+        let ExprKind::Index { index, .. } = &target.kind else {
+            return slot;
+        };
+        if !matches!(index.kind, ExprKind::Range { .. }) {
+            return slot;
+        }
+        let Type::Slice { element, .. } = &slot else {
+            return slot;
+        };
+        if matches!(&value.kind, ExprKind::ArrayLiteral(es) if !es.is_empty()) {
+            return Type::Named {
+                name: "Vec".to_string(),
+                args: vec![element.as_ref().clone()],
+            };
+        }
+        let Some(found) = self
+            .expr_types
+            .get(&SpanKey::from_span(&value.span))
+            .cloned()
+        else {
+            return slot;
+        };
+        let mut have = self.resolved_now(&found);
+        while let Type::Ref(inner) | Type::MutRef(inner) = have {
+            have = *inner;
+        }
+        let found_elem = match &have {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => &args[0],
+            Type::Array { element, .. } => element.as_ref(),
+            _ => return slot,
+        };
+        if self.resolved_now(found_elem) == self.resolved_now(element) {
+            found
+        } else {
+            slot
+        }
     }
 
     /// `v[a..b] = other` copies elements in, so it needs `T: Copy`
@@ -13435,6 +13486,7 @@ impl<'a> super::TypeChecker<'a> {
                     _ => target_ty.clone(),
                 };
                 let slot_ty = self.solve_open_slot_from(value, slot_ty);
+                let slot_ty = self.range_assign_source_slot(target, value, slot_ty);
                 // A cast stored into a binding no use has fixed yet is what
                 // fixes it: `letter = b[j] as i64` after `let mut letter = -1`
                 // makes `letter` an `i64`, and without the cast a `u8` that

@@ -182,6 +182,21 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         for item in items {
+            // An item's own lint levels cover its header, which is lowered
+            // here first: `#[allow(deprecated)] impl Old` or `fn mk() -> Old`
+            // (design.md §17 Lint levels; B-2026-11-19-20).
+            let header_lints = match item {
+                Item::Function(f) => Some(f.lint_overrides.clone()),
+                Item::ImplBlock(i) => Some(i.lint_overrides.clone()),
+                _ => None,
+            };
+            let framed = header_lints.is_some_and(|l| {
+                let some = !l.is_empty();
+                if some {
+                    self.lint_override_stack.push(l);
+                }
+                some
+            });
             match item {
                 Item::StructDef(s) => self.env_add_struct(s),
                 Item::UnionDef(u) => self.env_add_union(u),
@@ -245,6 +260,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 _ => {}
+            }
+            if framed {
+                self.lint_override_stack.pop();
             }
         }
 
@@ -3233,6 +3251,9 @@ impl<'a> super::TypeChecker<'a> {
                 .iter()
                 .map(|p: &Param| p.name().map(|s| s.to_string()))
                 .collect();
+            // The method's own lint levels cover its signature
+            // (B-2026-11-19-20).
+            self.lint_override_stack.push(method.lint_overrides.clone());
             let params: Vec<Type> = method
                 .params
                 .iter()
@@ -3243,6 +3264,7 @@ impl<'a> super::TypeChecker<'a> {
                 .as_ref()
                 .map(|t| self.lower_type_expr(t, &lowering_scope))
                 .unwrap_or(Type::Unit);
+            self.lint_override_stack.pop();
             // `Self` in an impl of a non-generic `shared` / `sync` struct is
             // the handle type its name lowers to, `Type::Shared`; left as
             // `Self` a call's result read as a plain `Node` and was "expected

@@ -31,10 +31,44 @@ pub(crate) struct Comment {
 pub(super) fn collect_comments(source: &str) -> Vec<Comment> {
     let mut out = Vec::new();
     let mut prev_end = 0;
+    // The attribute being read (`#` offset, bracket depth), and the last
+    // one closed by the previous token.
+    let mut attr: Option<(usize, usize)> = None;
+    let mut closed_attr: Option<usize> = None;
     for tok in crate::tokenize(source) {
         let start = tok.span.offset.min(source.len());
         if start > prev_end {
+            let first = out.len();
             scan_gap(source, prev_end, start, &mut out);
+            // `#[derive(Copy)] // why`: a comment ending an attribute's line
+            // goes above the attribute, as its own line, rather than onto
+            // the end of whatever precedes the item (B-2026-11-19-47).
+            if let (Some(at), Some(c)) = (closed_attr, out.get_mut(first)) {
+                if !c.own_line {
+                    // Just before the `#`, so whatever starts at the
+                    // attribute (a field, a variant) is preceded by it.
+                    c.start = at.saturating_sub(1);
+                    c.own_line = true;
+                    let line_start = source[..at].rfind('\n').map_or(0, |n| n + 1);
+                    c.blank_before = blank_line_before(source, line_start);
+                    c.blank_after = false;
+                }
+            }
+        }
+        closed_attr = None;
+        match (&tok.token, attr.as_mut()) {
+            (Token::Pound, None) => attr = Some((start, 0)),
+            (Token::LeftBracket, Some((_, depth))) => *depth += 1,
+            (Token::RightBracket, Some((at, depth))) => {
+                *depth = depth.saturating_sub(1);
+                if *depth == 0 {
+                    closed_attr = Some(*at);
+                    attr = None;
+                }
+            }
+            (Token::Bang, Some((_, 0))) => {}
+            (_, Some((_, 0))) => attr = None,
+            _ => {}
         }
         let end = (tok.span.offset + tok.span.length).min(source.len());
         if matches!(tok.token, Token::DocComment(_) | Token::ModuleDocComment(_)) {
@@ -87,13 +121,18 @@ fn scan_gap(source: &str, lo: usize, hi: usize, out: &mut Vec<Comment>) {
     }
 }
 
+/// A blank line directly above the line starting at `line_start`.
+fn blank_line_before(source: &str, line_start: usize) -> bool {
+    line_start > 0 && {
+        let prev_start = source[..line_start - 1].rfind('\n').map_or(0, |n| n + 1);
+        prev_start > 0 && source[prev_start..line_start - 1].trim().is_empty()
+    }
+}
+
 fn push_comment(source: &str, s: usize, e: usize, is_line: bool, out: &mut Vec<Comment>) {
     let line_start = source[..s].rfind('\n').map_or(0, |n| n + 1);
     let own_line = source[line_start..s].trim().is_empty();
-    let blank_before = own_line && line_start > 0 && {
-        let prev_start = source[..line_start - 1].rfind('\n').map_or(0, |n| n + 1);
-        prev_start > 0 && source[prev_start..line_start - 1].trim().is_empty()
-    };
+    let blank_before = own_line && blank_line_before(source, line_start);
     let blank_after = own_line && {
         let rest = &source[e..];
         let line_end = rest.find('\n');

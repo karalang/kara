@@ -634,7 +634,16 @@ impl<'a> super::OwnershipChecker<'a> {
                             }
                         }
                     }
-                    self.check_expr_consuming(value, states, param_types, param_usage);
+                    // `v[a..b] = other` copies `other`'s elements in and
+                    // reads it as a slice, so a `Vec` or an array there is
+                    // read, not moved (B-2026-11-19-5).
+                    if matches!(&target.kind, ExprKind::Index { index, .. }
+                        if matches!(index.kind, ExprKind::Range { .. }))
+                    {
+                        self.check_expr_reading(value, states, param_types, param_usage);
+                    } else {
+                        self.check_expr_consuming(value, states, param_types, param_usage);
+                    }
                 }
             }
             StmtKind::CompoundAssign { target, value, .. } => {

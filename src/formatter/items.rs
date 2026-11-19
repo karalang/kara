@@ -689,7 +689,7 @@ impl super::Formatter {
                 if i > 0 {
                     self.write_str(" + ");
                 }
-                self.write_path(&bound.path);
+                self.format_trait_bound(bound);
             }
         }
         self.format_where_clause(&t.where_clause);
@@ -735,7 +735,7 @@ impl super::Formatter {
                 if i > 0 {
                     self.write_str(" + ");
                 }
-                self.write_path(&bound.path);
+                self.format_trait_bound(bound);
             }
         }
         self.format_effects(&t.trait_effects);

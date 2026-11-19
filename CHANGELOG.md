@@ -786,6 +786,28 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   non-`Copy` value (E0516) and `if self.x` a view stored where its borrow
   is not kept (E0509), until a call anywhere made both go away
   (B-2026-11-19-1).
+- `karac fmt` keeps a supertrait bound's arguments: `trait PartialOrd[Rhs =
+  Self]: PartialEq[Rhs]` was written back as `: PartialEq`, a different
+  trait (B-2026-11-19-48). A comment ending an attribute's line
+  (`#[derive(Copy)] // why`) goes on its own line above the attribute; it
+  moved onto the end of the item before, and two such comments in a row did
+  not format to a fixed point (B-2026-11-19-47).
+- `.into()` converts a `Str` (or a string literal) to a `String`, the
+  `impl From[Str] for String` design.md §9 lists: `let t: String =
+  s.into()` and `Err("op".into())` were refused with "no `impl From[Str]
+  for String`". A library method's parameter fixes the target as a user
+  method's does: `v.push("mn".into())` on a `Vec[String]`, and
+  `insert`, `push_back` and `push_front`, check (B-2026-11-19-4).
+- `v[a..b] = other` takes a `Vec`, an array or a list literal on the
+  right, read as a slice and not moved (design.md §9 Index and
+  IndexMut): `v[1..3] = [7, 8]` was refused "expected 'Slice[i64]',
+  found 'Vec[i64]'" (B-2026-11-19-5).
+- A list literal under a `SortedSet[T]` builds a `SortedSet`, as under a
+  `Set[T]`: `let s: SortedSet[i64] = [3, 1, 2]` was refused
+  (B-2026-11-19-10).
+- `#[allow(deprecated)]` on an impl, a function or a method covers its own
+  header: `impl Old` and `fn mk() -> Old` under the allow warned at the
+  deprecated `Old` (design.md §17 Lint levels, B-2026-11-19-20).
 - `karac check` counts `.raw()` on an owned non-`Copy` distinct value as a
   move of the wrapper, as design.md § Distinct Types says: a later use
   checked clean and was refused only by `run` and `build`, with no source

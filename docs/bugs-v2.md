@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 287 |
 | missing-feature | 205 |
 | perf | 188 |
-| other | 115 |
+| other | 117 |
 | soundness | 91 |
 | miscompile | 87 |
 | run-vs-build | 57 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 686 |
 | mir-llvm | 301 |
 | mir | 261 |
-| cli | 206 |
+| cli | 208 |
 | parser | 119 |
 | ownership | 111 |
 | interp | 90 |
@@ -146,6 +146,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-44 | 2026-11-19 | mir-llvm | low | On wasm_wasi a deep recursion that a native build runs exhausts the module's own 1 MiB shadow stack and traps as a bare `RuntimeError: memory access out of bounds`, not a stack overflow; design.md's wasm note says only the host engine's stack bounds recursion depth | — |
 | B-2026-11-19-45 | 2026-11-19 | mir-llvm | medium | An early exit in a `par {}` branch misses a later branch that is just going to sleep when the program runs on more than one worker: the cancelled branch sleeps its whole sleep and runs on (16 to 63 of 400 rounds, by lane) | — |
 | B-2026-11-19-46 | 2026-11-19 | mir-llvm | low | `karac __mir-llvm-run` and the sanitizer lanes report a child killed by a signal as a bare exit code 101, which reads as a Kara panic, where `karac run` reports 128 + signal | — |
+| B-2026-11-19-47 | 2026-11-19 | cli | low | `karac fmt` moves a comment that ends an attribute's line (`#[derive(Copy)] // why`) onto the end of whatever precedes the item, and two such items in a row do not format to a fixed point | — |
+| B-2026-11-19-48 | 2026-11-19 | cli | medium | `karac fmt` drops a supertrait bound's arguments: `trait PartialOrd[Rhs = Self]: PartialEq[Rhs]` is written back as `: PartialEq`, which names a different trait, so formatting changes what the program means | — |
 
 ### Relocated
 

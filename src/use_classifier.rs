@@ -971,7 +971,17 @@ impl<'a> UseClassifier<'a> {
                 // Walk the RHS first so reads of `target`'s binding inside
                 // `value` see the pre-assignment state (mirrors the legacy
                 // ownership.rs handler at ownership.rs:866).
-                self.walk_expr(value, Mode::Consuming);
+                // `v[a..b] = other` copies `other`'s elements in, reading it
+                // as a slice: a `Vec` there is read, not moved
+                // (B-2026-11-19-5).
+                let range_target = matches!(&target.kind, ExprKind::Index { index, .. }
+                    if is_range_index(index));
+                let mode = if range_target {
+                    Mode::Reading
+                } else {
+                    Mode::Consuming
+                };
+                self.walk_expr(value, mode);
                 // Round 12.19: a bare-identifier LHS rebinds the variable.
                 // Tag its span with `UseKind::Reassign` so the predicate
                 // pipeline treats it as a kill of any prior consume.

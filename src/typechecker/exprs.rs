@@ -4499,10 +4499,12 @@ impl<'a> super::TypeChecker<'a> {
         // type: with an `Array[T, N]` or `Set[T]` annotation it builds that
         // type" (B-2026-11-04-58; a `Set` was refused as "found 'Vec'"). MIR
         // builds it as the prefix literal `Set[a, b, c]`, adding in order.
+        // A `SortedSet[T]` takes one the same way (B-2026-11-19-10).
         if let ExprKind::ArrayLiteral(items) = &expr.kind {
             let wanted = Self::peel_borrow(expected);
             if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
-                && matches!(wanted, Type::Named { name, args } if name == "Set" && args.len() == 1)
+                && matches!(wanted, Type::Named { name, args }
+                    if (name == "Set" || name == "SortedSet") && args.len() == 1)
             {
                 let Type::Named { args, .. } = wanted else {
                     unreachable!()
@@ -11927,6 +11929,23 @@ impl<'a> super::TypeChecker<'a> {
                 .is_some()
         {
             src_ty = self.check_expr(object, &str_view);
+        }
+        // `impl From[Str] for String` is the library's (design.md §
+        // Conversion traits), with no impl entry: `String.from` is built in.
+        // So `s.into()` from a `Str`, and a literal's, is `String.from(s)`
+        // (B-2026-11-19-4).
+        if matches!(expected, Type::Str) {
+            let src = self.resolved_now(&src_ty);
+            let src = match src {
+                Type::Ref(inner) | Type::MutRef(inner) => *inner,
+                other => other,
+            };
+            if matches!(src, Type::Str) || src == str_view {
+                self.into_conversions
+                    .insert(SpanKey::from_span(&expr.span), "String".to_string());
+                self.record_expr_type(&expr.span, expected);
+                return Some(expected.clone());
+            }
         }
         // The resolved impl's dispatch segment, not the bare target — see
         // `resolved_impl_dispatch_segment` (B-2026-08-27-1).

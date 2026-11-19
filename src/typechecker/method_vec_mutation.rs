@@ -776,6 +776,11 @@ impl<'a> super::TypeChecker<'a> {
             // A tuple literal holding one (B-2026-10-23-7).
             &arg.kind,
             ExprKind::Tuple(es) if es.iter().any(super::exprs::is_collection_literal)
+        ) || matches!(
+            // `.into()` takes its target from the slot, as under an annotated
+            // `let` (`v.push("mn".into())` on a `Vec[String]`; B-2026-11-19-4).
+            &arg.kind,
+            ExprKind::MethodCall { method, args, .. } if method == "into" && args.is_empty()
         );
         let slot = resolve_type_var_top(elem, &self.env.substitutions);
         // A cast to the element type is a widening the slot makes itself,
