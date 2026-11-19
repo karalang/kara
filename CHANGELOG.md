@@ -1974,6 +1974,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   fixed as the same path in an expression is, its module prefix deleted;
   the parse used to stop there with "Expected `=`, found `::`" and no fix
   (B-2026-11-19-34).
+- A range of integer literals whose items meet a narrower integer in an
+  iterator closure, and are refused far away as `i64`s, now gets the fix that
+  suffixes each range's first literal: `(0..1 << n).map(|i| start ^ i)
+  .collect()` into a `Vec[i32]` (`0i32..1 << n`), and the three ranges of a
+  `flat_map` / `filter_map` chain whose tuples reach a `Set[(i32, i32)]`.
+  Both used to stop with no fix (B-2026-11-19-33, B-2026-11-19-29).
 - A literal array returned through `.to_vec()` or `.clone()` gets the
   literal-suffix fix the bare binding gets: `let mut best = [0, 0]` filled
   from `for x in 0..=50` and returned as `best.to_vec()` from a

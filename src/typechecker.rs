@@ -106,6 +106,7 @@ mod old_read_to_string;
 mod open_receiver;
 mod package_coherence;
 mod patterns;
+mod range_literal_sources;
 mod refinement_elision;
 mod rust_binary_search;
 mod rust_last_mut;
@@ -3902,6 +3903,13 @@ pub struct TypeChecker<'a> {
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// See [`TypeCheckResult::trait_locked_params`].
     pub(super) trait_locked_params: FxHashMap<usize, Option<usize>>,
+    /// The closure parameters in scope that hold items of literal ranges,
+    /// innermost last, with each range's first literal
+    /// (`range_literal_sources`, B-2026-11-19-29 / -33).
+    pub(super) range_param_sources: Vec<(String, Vec<range_literal_sources::RangeLiteral>)>,
+    /// A use of such a parameter, or a `collect` over such items, by span:
+    /// a narrowing refused there offers the ranges' suffixes.
+    pub(super) range_source_uses: FxHashMap<SpanKey, Vec<range_literal_sources::RangeLiteral>>,
     /// See [`TypeCheckResult::par_stmt_branches`].
     pub(super) par_stmt_branches: FxHashMap<SpanKey, ParStmtBranches>,
     /// Each tuple literal's elements by its span (B-2026-11-09-96).
@@ -4897,6 +4905,8 @@ impl<'a> TypeChecker<'a> {
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
             trait_locked_params: FxHashMap::default(),
+            range_param_sources: Vec::new(),
+            range_source_uses: FxHashMap::default(),
             par_stmt_branches: FxHashMap::default(),
             tuple_literal_elems: FxHashMap::default(),
             end_mut_rewrites: FxHashMap::default(),
@@ -9592,13 +9602,21 @@ impl<'a> TypeChecker<'a> {
                     .zip(fs)
                     .any(|(e, f)| !types::numeric_args_agree(e, &read(f)))
             {
-                let msg = nested_numeric_mismatch_message(expected, found).unwrap_or_else(|| {
-                    format!(
-                        "expected '{}', found '{}'",
+                let mut msg =
+                    nested_numeric_mismatch_message(expected, found).unwrap_or_else(|| {
+                        format!(
+                            "expected '{}', found '{}'",
+                            type_display(expected),
+                            type_display(found),
+                        )
+                    });
+                if let Some(why) = self.range_literal_suffix_fix(&span, expected, found) {
+                    msg = format!(
+                        "expected '{}', found '{}'{why}",
                         type_display(expected),
-                        type_display(found),
-                    )
-                });
+                        type_display(found)
+                    );
+                }
                 self.type_error_with_types(msg, span, TypeErrorKind::TypeMismatch, expected, found);
                 return false;
             }

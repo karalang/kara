@@ -1986,7 +1986,19 @@ impl<'a> super::TypeChecker<'a> {
         self.call_receiver_roots
             .push(super::exprs::clone_place_root(object).map(str::to_string));
         let fold = self.enter_fold_seed(method, args);
+        let ranges = self.enter_range_closures(object, method, args);
+        if method == "collect" && args.is_empty() {
+            // Before the call is checked: its `FromIterator` bound is
+            // refused inside.
+            let end = args_close_span.offset + args_close_span.length;
+            let whole = Span {
+                length: end.saturating_sub(object.span.offset),
+                ..object.span
+            };
+            self.note_range_collect(object, &[*span, whole]);
+        }
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
+        self.range_param_sources.truncate(ranges);
         self.leave_fold_seed(fold);
         self.note_open_receiver_call(object, method, &ty, errors_before);
         self.call_receiver_roots.pop();

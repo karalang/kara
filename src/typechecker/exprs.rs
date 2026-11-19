@@ -8637,6 +8637,24 @@ impl<'a> super::TypeChecker<'a> {
                                 );
                                 continue;
                             }
+                            // Items of literal ranges kept at `i64` beside a
+                            // narrower integer (B-2026-11-19-33).
+                            if let ([w], [have]) = (want.as_slice(), offered.as_slice()) {
+                                if let [have] = have.as_slice() {
+                                    let (have, w) = (have.clone(), w.clone());
+                                    if let Some(why) =
+                                        self.range_literal_suffix_fix(&d.span, &have, &w)
+                                    {
+                                        message.push_str(&why);
+                                        self.type_error(
+                                            message,
+                                            d.span,
+                                            TypeErrorKind::TypeMismatch,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
                         }
                         // Integer items a wider integer collection holds
                         // (`u8`s into a `Vec[i64]`): `collect` gathers
@@ -9391,10 +9409,22 @@ impl<'a> super::TypeChecker<'a> {
                             let render = |v: &[Type]| {
                                 v.iter().map(type_display).collect::<Vec<_>>().join(", ")
                             };
+                            // `collect` over items of literal ranges kept at
+                            // `i64` (B-2026-11-19-33).
+                            let why = match (
+                                trait_name.as_str(),
+                                want.as_slice(),
+                                impl_args.as_slice(),
+                            ) {
+                                ("FromIterator", [w], [have]) => self
+                                    .range_literal_suffix_fix(discharge_span, have, w)
+                                    .unwrap_or_default(),
+                                _ => String::new(),
+                            };
                             self.type_error(
                                 format!(
                                     "trait bound `{}: {}[{}]` is not satisfied; `{}` implements \
-                                     `{}[{}]`, not `{}[{}]`",
+                                     `{}[{}]`, not `{}[{}]`{why}",
                                     type_name,
                                     trait_name,
                                     render(&want),
@@ -12761,6 +12791,7 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
         self.note_call_args(expr);
+        self.note_range_param_use(expr);
         // A value a closure gives its callee's open return type is open, as
         // a `let`'s is (`TypeChecker::open_closure_values`).
         if self.open_closure_values.contains(&expr.id) {
