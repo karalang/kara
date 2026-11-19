@@ -59,10 +59,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 535 |
-| false-positive | 283 |
-| missing-feature | 203 |
+| false-positive | 284 |
+| missing-feature | 204 |
 | perf | 188 |
-| other | 114 |
+| other | 115 |
 | soundness | 89 |
 | miscompile | 85 |
 | run-vs-build | 56 |
@@ -78,8 +78,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 675 |
 | mir-llvm | 296 |
-| mir | 258 |
-| cli | 204 |
+| mir | 259 |
+| cli | 206 |
 | parser | 117 |
 | ownership | 110 |
 | interp | 89 |
@@ -116,8 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-69 | 2026-11-18 | typecheck+cli | low | E0208's derive fix adds `#[derive(PartialOrd, PartialEq)]` to a type that implements `PartialEq` by hand, and the fixed program is E0240 (conflicting impl) | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
 | B-2026-11-18-74 | 2026-11-18 | typecheck | medium | `let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping());` is refused with E0238 `cannot infer type parameter 'E'`, and its help says to annotate a binding that is already annotated: a type variable that only a closure argument's result mentions is not carried through a chained method's return type | — |
-| B-2026-11-18-76 | 2026-11-18 | typecheck | low | E0509 for a view stored in a `Mutex`'s value names the element type (`(i64, E)`), not the `Str` field that makes it a view, and offers no fix | — |
-| B-2026-11-18-77 | 2026-11-18 | typecheck | low | E0208 for `==` on `Result[T, E]` (or any generic type) whose argument `E` lacks PartialEq offers no `#[derive(PartialEq)]` edit on `E`, though `==` on `E` itself does | — |
 | B-2026-11-19-4 | 2026-11-19 | typecheck | medium | `.into()` from a `Str` (or a string literal) to `String` is refused, though `String.from(s)` works and design.md §9 lists `impl From[Str] for String`; a remainder of B-2026-11-15-72, whose fix covers only user `From[Str]` impls | — |
 | B-2026-11-19-5 | 2026-11-19 | typecheck | low | `v[a..b] = other` with a `Vec` (or a list literal) on the right is refused "expected 'Slice[i64]', found 'Vec[i64]'"; only a slice expression is accepted | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
@@ -139,6 +137,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-21 | 2026-11-19 | effect | medium | An access to a `mut` field of a `shared` value that carries a borrow flag is not a `panics` atom: `#[no_effect(panics)]` accepts a function that then panics 'already borrowed' at run time, and `program_effects` omits `panics` for it | — |
 | B-2026-11-19-23 | 2026-11-19 | ownership | medium | `v.split_at_mut(i)` on a binding declared without `mut` checks clean and the halves write through it (`let v = [1, 2, 3, 4]; let (l, r) = v.split_at_mut(2); l[0] = 0;` prints [0, 2, 3, 4] on every lane); with `let mut v` the unused_mut lint says `v` is never borrowed as `mut`, so following it produces the unsound form | — |
 | B-2026-11-19-24 | 2026-11-19 | mir | low | A `par` branch that always returns (`{ return 9; }`) bound into an annotated tuple, `let (a, b): (i64, i64) = par { { return 9; }, 2 }; a + b`, checks clean and then fails MIR validation on every lane ('binary operands of different types ! and i64'); without the annotation `karac check` refuses `a + b` with "type '!' does not implement trait Add" | — |
+| B-2026-11-19-1 | 2026-11-19 | mir | medium | A method of an impl at concrete type arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`) that nothing calls is borrow-checked with its fields at the struct's parameter `T`: `self.x` is a move of a non-`Copy` value (E0516), `if self.x` a view stored where its borrow is not kept (E0509); one call anywhere makes both go away | — |
+| B-2026-11-19-2 | 2026-11-19 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `defer` run at the end of that cell, not at the session's end as they do in the program's `main` | — |
+| B-2026-11-19-3 | 2026-11-19 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the cells that made it again, so their tasks run and print again; a custom log backend's own state also starts over in each cell | — |
 
 ### Relocated
 
@@ -1768,6 +1769,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-71 | typecheck | low | A literal list read through `iter()` and an adapter, or a closure that builds a tuple or `Some` from a bound literal list's items, did not take a `co… | dd8b194cd6 |
 | B-2026-11-18-73 | interp+mir-llvm | medium | A `Pool` dropped while one of its loans is still out keeps its IDLE values alive until that loan comes back, on every surface; pool.md says the idle… | 2faf2c5577 |
 | B-2026-11-18-75 | mir | medium | Since B-2026-11-17-92 (ab62be2b9d) a closure that captures a `Vec` of `shared` handles whose type has a function field is refused as carrying a view… | 6a9755a0bc |
+| B-2026-11-18-76 | typecheck | low | E0509 for a view stored in a `Mutex`'s value names the element type (`(i64, E)`), not the `Str` field that makes it a view, and offers no fix | 5f2cad0682 |
+| B-2026-11-18-77 | typecheck | low | E0208 for `==` on `Result[T, E]` (or any generic type) whose argument `E` lacks PartialEq offers no `#[derive(PartialEq)]` edit on `E`, though `==` o… | 5f2cad0682 |
 | B-2026-11-18-78 | typecheck | medium | Since B-2026-11-15-32 (558a84bb49) `Option.map` / `Result.map` inside a closure is read as a lazy adaptor returning its closure argument, so a captur… | c6256b83b2 |
 | B-2026-11-19-25 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they d… | be5d113f9e |
 
