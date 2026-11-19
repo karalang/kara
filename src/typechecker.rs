@@ -8688,6 +8688,30 @@ impl<'a> TypeChecker<'a> {
     /// `ty` when it names a type parameter of the enclosing item (rigid in
     /// its body), not one a call is solving.
     fn rigid_param(&self, ty: &Type) -> Option<String> {
+        // B-2026-11-19-43: a projection of the item's own parameter
+        // (`I.Item` under `I: Iterator`) is as rigid as the parameter, unless
+        // a `where I.Item = T` equality fixes it. It unified with anything,
+        // so `let s: bool = x` with `x: I.Item` checked and the instance
+        // failed as invalid MIR.
+        if let Type::AssocProjection {
+            param,
+            assoc,
+            args,
+            receiver_args,
+            ..
+        } = ty
+        {
+            let fixed = self
+                .enclosing_assoc_eqs
+                .keys()
+                .any(|(p, a, _)| p == param && a == assoc);
+            return (param != "Self"
+                && args.is_empty()
+                && receiver_args.is_empty()
+                && self.enclosing_bounds.contains_key(param)
+                && !fixed)
+                .then(|| type_display(ty));
+        }
         let name = self.type_param_name(ty)?;
         (name != "Self" && self.enclosing_bounds.contains_key(name)).then(|| name.clone())
     }

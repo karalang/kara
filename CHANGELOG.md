@@ -28,6 +28,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   j.items.push(x); } }` was accepted and then panicked for `g(a, a)`;
   `program_effects` now lists `panics` for such a program
   (B-2026-11-19-21).
+- Inside a generic item, a projection of its own parameter (`I.Item`
+  under `I: Iterator`) is a type of its own, as the parameter is: a value
+  of it is refused where a concrete type is wanted (`let s: bool = x` with
+  `x` from `it.next()`), unless a `where I.Item = T` equality fixes it.
+  It unified with any type, so such a body checked and its instance failed
+  at run with "invalid MIR". No corpus program, kata or example relied on
+  it (B-2026-11-19-43).
 - A call that gives an unbounded type parameter a type without
   `PartialEq`, `PartialOrd` or `Display`, when the generic body uses
   `==`/`!=`, `<`/`<=`/`>`/`>=` or an f-string interpolation on it, is
