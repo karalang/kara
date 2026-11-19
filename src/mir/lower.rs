@@ -9693,7 +9693,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A reference to a number the slot widens is read too, and the
         // caller widens the value: `add(total, b)` with `b: ref u8` for an
         // `i64` parameter passed the reference (B-2026-11-08-31).
-        if inner != want && !(self.widening(inner, want).is_some() && self.lossless(inner, want)) {
+        // So is a counted handle a `dyn` slot takes, and the caller makes the
+        // `dyn` from the counted copy: `Some(m)` into an `Option[dyn T]`, `m`
+        // bound out of a borrowed `Option[Node]`, would otherwise put the
+        // reference itself in the `dyn` (kata 1265, B-2026-11-20-83).
+        let handle_to_dyn = matches!(self.tys().tcx().kind(want), HK::Dyn { .. })
+            && (self.is_handle(inner) || self.is_handle_aggregate(inner));
+        if inner != want
+            && !handle_to_dyn
+            && !(self.widening(inner, want).is_some() && self.lossless(inner, want))
+        {
             return self.expr_operand(e);
         }
         // A reference a call returns is read through its temporary.
@@ -10001,6 +10010,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.dyn_under(dt).is_some() {
             let et = self.expr_ty(e)?;
             if self.dyn_under(et).is_none() && !matches!(self.tys().tcx().kind(et), HK::Never) {
+                // A borrowed handle (`fn f(n: Node) -> dyn T { n }`) makes
+                // the `dyn` from a counted copy, not from the reference.
+                if let (HK::Dyn { .. }, HK::Ref(inner) | HK::MutRef(inner)) =
+                    (self.tys().tcx().kind(dt), self.tys().tcx().kind(et))
+                {
+                    if self.is_handle(inner) || self.is_handle_aggregate(inner) {
+                        let op = self.owned_operand(e, dt)?;
+                        self.assign(dest, Rvalue::Use(op));
+                        return Ok(());
+                    }
+                }
                 let l = self.temp(et);
                 self.expr_into(e, Place::local(l))?;
                 self.assign(dest, Rvalue::Use(Operand::Move(Place::local(l))));

@@ -10794,6 +10794,21 @@ impl<'a> super::TypeChecker<'a> {
         {
             return;
         }
+        // `ty` is the slot's type, which a coercion can make other than the
+        // value's: `Some(m)` into an `Option[dyn Trait]`, with `m` a `shared`
+        // handle bound out of a borrowed `Option`, makes the `dyn` from a
+        // retain of the handle all the same (kata 1265, B-2026-11-20-83).
+        // So a binding whose own type is a counted handle is exempt
+        // whatever the slot.
+        if let ExprKind::Identifier(n) = &value.kind {
+            if self
+                .local_scope
+                .lookup(n.as_str())
+                .is_some_and(|own| self.copy_is_only_an_rc_retain(own))
+            {
+                return;
+            }
+        }
         // An unsubstituted type parameter is not known to copy: a `T: Copy`
         // instantiation of the same body does not, and this lint's whole
         // value is that its claim is true at the site it points at. Declining
