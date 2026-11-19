@@ -22732,9 +22732,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(self.slice_view_of(p, ct, slice_t, mutable));
         };
         let s = self.temp(slice_t);
+        // A bound that is a `ref` to an integer (`nums[a..=b]` with `a` and
+        // `b` from `l.iter().zip(r.iter())`) is read through, as a plain
+        // index is (kata 1630).
         let lo = match start {
             Some(x) => {
-                let o = self.expr_operand(x)?;
+                let (o, _) = self.scalar_operand(x)?;
                 self.cast_index(o, usize_t)
             }
             None => Operand::Const(Const {
@@ -22745,7 +22748,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let hi = match end {
             // `a..=b` ends after `b`.
             Some(x) if inclusive => {
-                let o = self.expr_operand(x)?;
+                let (o, _) = self.scalar_operand(x)?;
                 let o = self.cast_index(o, usize_t);
                 let h = self.temp(usize_t);
                 self.assign(
@@ -22762,7 +22765,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Operand::Copy(Place::local(h))
             }
             Some(x) => {
-                let o = self.expr_operand(x)?;
+                let (o, _) = self.scalar_operand(x)?;
                 self.cast_index(o, usize_t)
             }
             None => {
