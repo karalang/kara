@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 535 |
-| false-positive | 284 |
-| missing-feature | 204 |
+| diagnostics | 543 |
+| false-positive | 286 |
+| missing-feature | 205 |
 | perf | 188 |
 | other | 115 |
-| soundness | 89 |
-| miscompile | 85 |
+| soundness | 90 |
+| miscompile | 86 |
 | run-vs-build | 56 |
 | crash | 54 |
 | codegen-gap | 38 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 675 |
-| mir-llvm | 296 |
-| mir | 259 |
+| typecheck | 682 |
+| mir-llvm | 298 |
+| mir | 260 |
 | cli | 206 |
-| parser | 117 |
-| ownership | 110 |
-| interp | 89 |
-| runtime | 89 |
+| parser | 119 |
+| ownership | 111 |
+| interp | 90 |
+| runtime | 90 |
 | resolver | 46 |
-| effect | 44 |
+| effect | 45 |
 | other | 34 |
 | codegen | 22 |
 | autopar | 7 |
@@ -116,6 +116,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-69 | 2026-11-18 | typecheck+cli | low | E0208's derive fix adds `#[derive(PartialOrd, PartialEq)]` to a type that implements `PartialEq` by hand, and the fixed program is E0240 (conflicting impl) | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
 | B-2026-11-18-74 | 2026-11-18 | typecheck | medium | `let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping());` is refused with E0238 `cannot infer type parameter 'E'`, and its help says to annotate a binding that is already annotated: a type variable that only a closure argument's result mentions is not carried through a chained method's return type | — |
+| B-2026-11-19-26 | 2026-11-18 | typecheck | low | A named list of tuple literals walked by a tuple pattern (`let dirs = [(-1, 0), (1, 0)]; for (dx, dy) in dirs.iter() { let mut (x, y) = (king[0] + dx, king[1] + dy); ans.push([x, y]); }` with `king: Vec[i32]`, `ans: Vec[Vec[i32]]`) gets E0200 narrowing at each use and no machine fix | — |
+| B-2026-11-19-27 | 2026-11-18 | parser | medium | an integer literal with a float suffix (`0f64`, `1f32`) is an integer by design (design.md §3), but the error is a parse recovery whose fix adds `;` after it -- and inside Rust's `vec![vec![0f64; t + 1]; n + 1]` the fix corrupts the program to `vec![vec![0f64; t + 1;]; n + 1;]` | — |
+| B-2026-11-19-28 | 2026-11-18 | typecheck | low | the fix for a Rust `match xs.binary_search(v) { Ok(i) => i, Err(i) => i }` writes `{ let i = xs.partition_point(..); if i < xs.len() and xs[i] == v { i } else { i } }`, a test whose two branches are the same, where the search alone is the answer | — |
+| B-2026-11-19-29 | 2026-11-18 | typecheck | low | Range literals carried through iterator closures into an `i32` tuple (`(-1..=1).flat_map(|dx| (-1..=1).map(|dy| (dx, dy))).filter_map(|(dx, dy)| (1..8).map(|k| (kx + k * dx, ky + k * dy)).find(|p| placed.contains(p)))` with `kx: i32`, `placed: Set[(i32, i32)]`) are refused at `contains` and at `collect` with no machine fix | — |
+| B-2026-11-19-30 | 2026-11-18 | mir+mir-llvm | low | `Mutex` has no `try_lock`, which Rust (`Mutex::try_lock`), Go (`TryLock`), Java (`ReentrantLock.tryLock`), C (`pthread_mutex_trylock`) and Python (`Lock.acquire(blocking=False)`) all have; the dining philosophers' back-off form gets only "no method 'try_lock' on type 'Mutex'" | — |
+| B-2026-11-19-31 | 2026-11-18 | interp+mir-llvm+runtime | low | A deadlock among `Mutex` waits is reported as "every task waits on a channel that no running task sends to or receives from" on every backend, naming a channel when no task waits on one; and when the root task is waiting at a `TaskGroup`'s drop the report carries no location | — |
 | B-2026-11-19-4 | 2026-11-19 | typecheck | medium | `.into()` from a `Str` (or a string literal) to `String` is refused, though `String.from(s)` works and design.md §9 lists `impl From[Str] for String`; a remainder of B-2026-11-15-72, whose fix covers only user `From[Str]` impls | — |
 | B-2026-11-19-5 | 2026-11-19 | typecheck | low | `v[a..b] = other` with a `Vec` (or a list literal) on the right is refused "expected 'Slice[i64]', found 'Vec[i64]'"; only a slice expression is accepted | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
@@ -140,6 +146,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-1 | 2026-11-19 | mir | medium | A method of an impl at concrete type arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`) that nothing calls is borrow-checked with its fields at the struct's parameter `T`: `self.x` is a move of a non-`Copy` value (E0516), `if self.x` a view stored where its borrow is not kept (E0509); one call anywhere makes both go away | — |
 | B-2026-11-19-2 | 2026-11-19 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `defer` run at the end of that cell, not at the session's end as they do in the program's `main` | — |
 | B-2026-11-19-3 | 2026-11-19 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the cells that made it again, so their tasks run and print again; a custom log backend's own state also starts over in each cell | — |
+| B-2026-11-19-32 | 2026-11-19 | typecheck | medium | the fix for a Rust `binary_search` / `binary_search_by` / `binary_search_by_key` takes `Ok`'s index as the FIRST equal element, where rustc's Rust (and Kāra's own `binary_search`) gives the LAST, so a carried solution that reads that index over repeated keys answers differently: kata 1235's search arm fails 278 of 2000 differential cases | — |
+| B-2026-11-19-33 | 2026-11-19 | typecheck | low | A range of literals mapped through an operator with an `i32` (`(0..1 << n).map(|i| start ^ i).collect()` into a `Vec[i32]`, `start: i32`) is refused with a bare `C: FromIterator[i64]` and no fix: §8 keeps the range at `i64` beside a widening operand, but the message names no literal and `karac fix` offers no suffix, so LeetCode's Rust solution to 1238 stalls | — |
+| B-2026-11-19-34 | 2026-11-19 | parser | medium | A Rust `::` path in a type position (`let set: std::collections::HashSet<char> = ..`, a parameter, a return, a field) stops the parse with E0002 "Expected `=`, found `::`" and no fix, though the bare `HashSet<char>` and the same path in an expression are both fixed; LeetCode's Rust solution to 1239 stalls | — |
+| B-2026-11-19-35 | 2026-11-19 | typecheck | low | Rust's array `map` on a list literal, `["a", "b"].map(|u| u.to_string())`, gets E0236 "iterator adaptors require an explicit `.iter()`" with no fix, though the same call on a named list is fixed through to `.iter().map(..).collect()` with the binding's type | — |
+| B-2026-11-19-36 | 2026-11-19 | ownership | medium | a closure in an assignment's method chain is taken to outlive the statement: `n = xs.iter().filter(|v| seen.contains(v)).count();` and any later move of `seen` is refused with E0500 "moved inside a loop" (no loop needed), and `karac fix` clones `seen` at the move; the same chain under a `let` checks clean | — |
+| B-2026-11-19-37 | 2026-11-19 | typecheck | low | `dyn Trait` in a signature above the trait's declaration is refused, "`dyn Shape`: `Shape` is not a trait", though items are otherwise order-free (a `[S: Shape]` bound above the trait checks and runs) | — |
+| B-2026-11-19-38 | 2026-11-19 | effect | medium | A call through an escaping function value (a struct field, a collection element, a `for` binding over one) is charged nothing by the front-end effect check: `pub fn go(j: Job) -> i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)` checks clean without a `with` clause, and a field with no clause is not charged every effect | — |
 
 ### Relocated
 
