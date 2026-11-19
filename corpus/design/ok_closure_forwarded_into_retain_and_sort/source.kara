@@ -1,0 +1,53 @@
+// B-2026-11-19-99: a closure forwarded through a parameter into a Vec
+// method that calls it (`retain`, `sort_by`, `sort_by_key`) is called in
+// place, on every backend; its captures are read, not moved or dropped.
+struct R {
+    id: i64,
+}
+
+impl Drop for R {
+    fn drop(mut ref self) {
+        println("d" + self.id.to_string());
+    }
+}
+
+fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool) {
+    v.retain(f);
+}
+
+fn keep_owned(v: mut ref Vec[i64], f: own Fn(ref i64) -> bool) {
+    v.retain(f);
+}
+
+fn order(v: mut ref Vec[i64], f: Fn(ref i64, ref i64) -> Ordering) {
+    v.sort_by(f);
+}
+
+fn order_by_key(v: mut ref Vec[i64], f: Fn(ref i64) -> i64) {
+    v.sort_by_key(f);
+}
+
+fn keep_generic[T](v: mut ref Vec[T], f: Fn(ref T) -> bool) {
+    v.retain(f);
+}
+
+fn main() {
+    let limit = 3;
+    let mut a = [1, 5, 2, 4, 3];
+    keep(mut a, |x| *x <= limit);
+    println(a);
+    let mut b = [1, 2, 3, 4];
+    keep_owned(mut b, |x| *x % 2 == 0);
+    println(b);
+    let mut c = [3, 1, 2];
+    order(mut c, |x, y| y.cmp(x));
+    println(c);
+    let offset = 10;
+    let mut d = [-3, 1, -2];
+    order_by_key(mut d, |x| (*x - offset).abs());
+    println(d);
+    let mut e = [R { id: 6 }, R { id: 7 }, R { id: 8 }];
+    keep_generic(mut e, |r| r.id != 7);
+    println(e.len());
+    println(limit + offset);
+}

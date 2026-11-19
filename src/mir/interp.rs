@@ -5065,9 +5065,50 @@ impl<'a> Interp<'a> {
                 Ok(Callee {
                     body,
                     env: None,
+                    lent: None,
                     by_value: false,
                     taken: false,
                 })
+            }
+            // A function value the caller holds by reference: a parameter
+            // forwarded on (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) ->
+            // bool) { v.retain(f) }`, B-2026-11-19-99). The callee reads it
+            // in place; nothing moves and nothing is dropped after.
+            (Value::Ref(at), TyKind::Ref(inner) | TyKind::MutRef(inner)) => {
+                let held = self.slot(&at)?;
+                match (held, self.tys.kind(inner)) {
+                    (f @ Value::Fn(_), _) => self.hold_callee(f, inner, name),
+                    (_, TyKind::Closure(def, _)) => {
+                        let body = program
+                            .bodies
+                            .values()
+                            .find(|b| b.instance.def == def)
+                            .ok_or_else(|| {
+                                Stop::Error(format!("{name}: no body for closure {def:?}"))
+                            })?;
+                        let env_ty =
+                            body.args()
+                                .next()
+                                .map(|l| body.local(l).ty)
+                                .ok_or_else(|| {
+                                    Stop::Error(format!("{name}: a closure body with no env"))
+                                })?;
+                        if !matches!(self.tys.kind(env_ty), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                            return err(format!(
+                                "{name}: a closure that takes its environment by value \
+                                 cannot be called through a reference"
+                            ));
+                        }
+                        Ok(Callee {
+                            body,
+                            env: None,
+                            lent: Some(at),
+                            by_value: false,
+                            taken: false,
+                        })
+                    }
+                    (v, _) => err(format!("{name}: cannot call {v:?}")),
+                }
             }
             (v, TyKind::Closure(def, _)) => {
                 let body = program
@@ -5089,6 +5130,7 @@ impl<'a> Interp<'a> {
                 Ok(Callee {
                     body,
                     env: Some(slot),
+                    lent: None,
                     by_value,
                     taken: false,
                 })
@@ -5099,6 +5141,9 @@ impl<'a> Interp<'a> {
 
     fn call_callee(&mut self, f: &mut Callee<'a>, args: Vec<Value>) -> R<Value> {
         let mut all = Vec::with_capacity(args.len() + 1);
+        if let Some(at) = &f.lent {
+            all.push(Value::Ref(at.clone()));
+        }
         if let Some(slot) = f.env {
             if f.by_value {
                 if f.taken {
@@ -21044,6 +21089,9 @@ struct Callee<'a> {
     body: &'a Body,
     /// The heap slot holding a closure's environment.
     env: Option<AllocId>,
+    /// A closure's environment where the caller keeps it, lent to each call
+    /// (a function value passed on by reference). Never dropped here.
+    lent: Option<Addr>,
     /// The body takes its environment by value: it can be called once.
     by_value: bool,
     taken: bool,

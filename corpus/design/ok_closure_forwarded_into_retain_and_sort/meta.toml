@@ -1,0 +1,9 @@
+source = "B-2026-11-19-99"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "drop"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Function values: a closure passed on through a parameter is the same function value. Forwarded into `retain`, `sort_by` and `sort_by_key` it filters and orders as when passed directly, and the rejected element drops at the `retain`. The MIR interpreter stopped with `cannot call Ref(..)` while build and ASan ran it."

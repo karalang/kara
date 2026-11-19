@@ -863,6 +863,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   for M`, the call ran whichever impl came first, reading an `M` as the
   `i64` in compiled code, and `T.Output` was read from whichever came last
   (B-2026-11-19-66).
+- `karac __mir-run` and the REPL call a closure that reaches `Vec.retain`,
+  `sort_by` or `sort_by_key` through a parameter (`fn keep(v: mut ref
+  Vec[i64], f: Fn(ref i64) -> bool) { v.retain(f); }`). The MIR interpreter
+  stopped with `cannot call Ref(..)`, while `karac build` and the ASan lane
+  ran it (B-2026-11-19-99).
 - A list literal handed to a generic `Array` parameter builds that `Array`,
   as it does for a concrete one, and an open length is solved from it:
   `first([7, 8])` with `fn first[T: Copy, const N: i64](arr: Array[T, N])`
