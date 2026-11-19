@@ -6599,7 +6599,7 @@ distinct type DisplayVec = Vec[i64];
 impl Display for DisplayVec { /* ... */ }
 ```
 
-**Derives.** `#[derive(...)]` on a transparent carrier follows the carrier's own rules: derives that walk the fields (`Eq`, `PartialEq`, `Hash`, `Clone`, `Copy`, `Debug`) work as on the underlying carrier. `Display` is not derivable. On a `distinct type`, the distinct-type derive rules apply ([§5](#5-types)).
+**Derives.** `#[derive(...)]` on a transparent carrier follows the carrier's own rules: derives that walk the fields (`Eq`, `PartialEq`, `Hash`, `Clone`, `Copy`, `Debug`) work as on the underlying carrier. `Display` derives as on any struct ([§9](#9-traits)), as `TypeName { field: value }`; it does not forward to the carrier's own `Display`, so a type that should print as its carrier implements `Display` by hand. On a `distinct type`, the distinct-type derive rules apply ([§5](#5-types)).
 
 ### `extern "C"`
 
