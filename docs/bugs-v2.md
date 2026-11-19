@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 560 |
-| false-positive | 299 |
+| false-positive | 300 |
 | missing-feature | 209 |
 | perf | 189 |
 | other | 119 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 713 |
+| typecheck | 714 |
 | mir-llvm | 306 |
-| mir | 271 |
+| mir | 272 |
 | cli | 211 |
 | parser | 126 |
 | ownership | 119 |
@@ -129,16 +129,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-86 | 2026-11-19 | ownership | high | A `shared` handle reaches a `TaskGroup` task through a captured PARAMETER: `fn sp(g: TaskGroup, x: own C) -> TaskHandle[i64] { g.spawn(|| { let y = x; 1 }) }` with `shared struct C` passes `karac check`, and 20000 such spawns race on the non-atomic count: `malloc(): unaligned fastbin chunk detected` (2 runs in 6), and the Drop body runs in 1 run in 6 and is leaked otherwise; the same capture of a local is refused E_NOT_CROSS_TASK | — |
 | B-2026-11-19-88 | 2026-11-19 | ownership | low | When an assignment's iterator chain fails to type (E0200, `flat_map` over a closure that returns a `Vec`), a closure in the chain is again taken to outlive the statement: a spurious E0500 on a value it borrows, whose machine fix `karac fix` applies beside the real one, cloning the value | — |
 | B-2026-11-19-89 | 2026-11-19 | parser | low | A Rust turbofish on a type path in an expression is not carried: `std::collections::HashSet::<char>::new()` is fixed to `Set.new()` with the `char` argument dropped, and the bare `HashSet::<i64>::new()` stops with E0002; remainder of B-2026-11-19-34 | — |
-| B-2026-11-19-93 | 2026-11-19 | typecheck | medium | A partial move out of a generic struct with a `Drop` body passes `karac check` inside a generic function (`impl[T] Drop for Bx[T]`, `fn take[T](b: own Bx[T]) -> T { b.v }`) and is refused only when an instance is lowered (`elaborate take[R]: Bx[R] is partly moved but has a Drop body`); the non-generic body and a generic struct moved in `main` are refused at check | — |
 | B-2026-11-19-94 | 2026-11-19 | effect | low | Two `par` branches calling a generic function-typed parameter (`fn both[F: Fn() -> i64](f: F) -> i64 { let (a, b) = par { f(), f() }; a + b }`) conflict as `unknown (a call through a value)` even when the instance's closure is pure (`both(|| k)`), though core-semantics §12 computes a generic call's effects on the instance and charges a non-escaping parameter's effects at the call site | — |
 | B-2026-11-19-95 | 2026-11-19 | ownership | high | A view returned from a TaskGroup task (`g.spawn(|| v.as_slice())`, then `h.join()`) or from a bare generic `F` closure argument borrows nothing at check, so the result outlives the viewed value: heap-use-after-free under ASan (two causes: task handles drop their closure's origins; a generic F argument's origins do not reach the §5.4 result) | — |
-| B-2026-11-19-96 | 2026-11-19 | ownership | high | Calling an escaping closure held in a field, `Vec` element, tuple, `Option` or a function's result (`(h.f)()`, `(fs[0])()`, `mk(v)()`) gives the returned view no origins, so a slice of the closure's own capture outlives it: heap-use-after-free under ASan (a let-bound closure called directly is refused correctly) | — |
 | B-2026-11-19-97 | 2026-11-19 | ownership | medium | An escaping closure that reads only a Copy field (`hs.push(|| v.id)`, `H { f: || v.id }`) must capture a copy of that field (review ruling 2026-11-19 on §9.1), but (1) for a binding whose type has a Drop body, check AND every MIR lane move the whole binding (E0514 / `move check main: use of _2.0`), and (2) for a type with no Drop body, check still says `v was moved into an escaping closure` (E0500) while the MIR lanes capture the field alone and run | — |
 | B-2026-11-19-98 | 2026-11-19 | typecheck | low | A trait whose parameter defaults to Self (`trait Tr[X = Self] { fn m(self, x: X) -> i64; }`) is treated as if X were Self at an explicit instance: `dyn Tr[i64]` is refused E_DYN_NOT_DISPATCHABLE (`m` names Self outside the receiver), and under `T: Tr + Tr[i64]` the UFCS `Tr[i64].m(t, 1)` is refused E0233 `ambiguous method 'm' ... Use UFCS Tr[i64].m(receiver, ...)`, the very form written | — |
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
 | B-2026-11-19-103 | 2026-11-19 | ownership+typecheck | low | A borrowed `Fn` parameter cannot be handed to a lazy adaptor (`v.iter().filter(f).count()` is E0516 'cannot be stored as a function value; declare the parameter `escaping`'), and a generic `f: F` cannot be handed to `retain` (E0200 'cannot give away parameter'), though the concrete `f: Fn(..)` can | — |
 | B-2026-11-19-104 | 2026-11-19 | ownership | medium | `karac check` misses §14.5 when a closure that uses a provider leaves its `with_provider` through a GENERIC function: `keep(mut hs, || Clk.now())` with `fn keep[Fx](v: mut ref Vec[Fx], f: own Fx) { v.push(f); }`, and `with_provider[Clk](F { t: 1 }, || id(|| Clk.now()))` with `fn id[T](x: own T) -> T`, pass check; every lane then refuses in the MIR borrow check (E0509 / E0516) | — |
 | B-2026-11-19-105 | 2026-11-19 | mir | medium | A function that uses a provider cannot be taken as a value under `with_provider` (core-semantics §14.3: 'Taking such a function as a value captures the provider in scope'): `let f = read_clk; f() + 1` passes check and every lane stops `a function used as a value that uses Clk's provider is not lowered yet`; returning it out of the call (`|| { let g = read_clk; g }`) also passes check instead of the §14.5 refusal | — |
+| B-2026-11-19-106 | 2026-11-19 | typecheck+mir | low | A `mut ref MutFn(..)` parameter cannot be handed to a lazy adaptor: `fn cnt(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool) -> i64 { v.iter().filter(f).count() }` is refused 'trait bound `FnV: MutFn` is not satisfied; `mut ref Fn(ref i64) -> bool` does not implement `MutFn`' | — |
 
 ### Relocated
 
@@ -1847,6 +1846,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-90 | mir | medium | `v = v` (a binding assigned its own value) is lowered as `drop(v); v = move v`: the old value is dropped before it is moved into the store, and the M… | bd214fffc0 |
 | B-2026-11-19-91 | typecheck | low | A `Some(x)` inside a tuple pushed into a `Vec[(.., Option[T])]`, `x` a borrowed shared handle or `Copy` value (`below.push((right, Some(node)))` with… | bd214fffc0 |
 | B-2026-11-19-92 | cli+interp | low | In `karac repl`, a panic's place names the line of the program the session runs a cell as, not the cell: an item's uncaught panic reports `<repl>:3:5… | 3a088de48e |
+| B-2026-11-19-93 | typecheck | medium | A partial move out of a generic struct with a `Drop` body passes `karac check` inside a generic function (`impl[T] Drop for Bx[T]`, `fn take[T](b: ow… | afa4bb962f |
+| B-2026-11-19-96 | ownership | high | Calling an escaping closure held in a field, `Vec` element, tuple, `Option` or a function's result (`(h.f)()`, `(fs[0])()`, `mk(v)()`) gives the retu… | 3e49d0f149 |
 | B-2026-11-19-99 | interp | medium | A closure forwarded through a function parameter into `Vec.retain`, `sort_by` or `sort_by_key` (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool)… | 848f25873b |
 | B-2026-11-19-100 | parser | low | Rust's typed None, `None::<T>` (`None::<Rc<RefCell<TreeNode>>>` in a LeetCode Rust template), stops at E0002 "Expected `)`, found `::`" with no fix,… | ee08f070a |
 | B-2026-11-19-101 | typecheck | low | A `Vec` passed to a library method's `Slice[T]` parameter is refused E0200 "expected 'Slice[i64]', found 'Vec[i64]'" when the receiver's elements are… | ee08f070a |
