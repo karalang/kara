@@ -1370,6 +1370,17 @@ fn walk_fresh_insert_into_field<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) -> bool {
     true
 }
 
+/// Library types whose `new()` makes an empty value holding no handle.
+const EMPTY_CONSTRUCTORS: &[&str] = &[
+    "Vec",
+    "VecDeque",
+    "Map",
+    "Set",
+    "SortedMap",
+    "SortedSet",
+    "String",
+];
+
 /// An expression that can hold no handle to an existing value: a literal, a
 /// composite literal of such, arithmetic on them, or a `Copy` local.
 fn holds_no_handle(e: &Expr, tc: &TypeCheckResult, calls: bool) -> bool {
@@ -1392,6 +1403,26 @@ fn holds_no_handle(e: &Expr, tc: &TypeCheckResult, calls: bool) -> bool {
         }
         ExprKind::StructLiteral { fields, spread, .. } => {
             spread.is_none() && fields.iter().all(|f| holds_no_handle(&f.value, tc, calls))
+        }
+        // An empty collection or text made right here (`Vec.new()`,
+        // `Map.new()`, `String.new()`): it holds nothing yet, so a struct
+        // literal of one is as fresh as a call (B-2026-11-19-16).
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } if args.is_empty() && method == "new" => {
+            matches!(&object.kind, ExprKind::Identifier(n) if EMPTY_CONSTRUCTORS.contains(&n.as_str()))
+        }
+        ExprKind::Call { callee, args }
+            if args.is_empty()
+                && matches!(&callee.kind, ExprKind::Path { segments, .. }
+                    if segments.len() == 2
+                        && segments[1] == "new"
+                        && EMPTY_CONSTRUCTORS.contains(&segments[0].as_str())) =>
+        {
+            true
         }
         // A function item called with only such arguments: everything its
         // result reaches was made by the call (`r.kids.push(leaf(2))`,
@@ -2030,6 +2061,26 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
         return;
     }
 
+    // A `Copy` field read off a non-frozen local (`println(r.val)`) copies
+    // a scalar out and makes no second name for `r`, so it does not cost a
+    // later `freeze r` its uniqueness (B-2026-11-19-16). Typed by node id:
+    // a postfix expression shares its receiver's span.
+    if let ExprKind::FieldAccess { .. } = &e.kind {
+        let mut root: &Expr = e;
+        while let ExprKind::FieldAccess { object, .. } = &root.kind {
+            root = object;
+        }
+        if let ExprKind::Identifier(n) = &root.kind {
+            let copy = cx
+                .tc
+                .node_types
+                .get(&e.id)
+                .is_some_and(|(t, _)| super::is_copy_type_basic(t));
+            if copy && !cx.container_candidates.contains_key(n.as_str()) {
+                return;
+            }
+        }
+    }
     match &e.kind {
         // Reached only for a NON-frozen identifier or receiver — a frozen one
         // is consumed by the prologue above.
