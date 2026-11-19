@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 208 |
 | perf | 188 |
 | other | 119 |
-| soundness | 96 |
+| soundness | 97 |
 | miscompile | 89 |
 | crash | 60 |
 | run-vs-build | 57 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 269 |
 | cli | 210 |
 | parser | 124 |
-| ownership | 112 |
+| ownership | 113 |
 | interp | 92 |
 | runtime | 91 |
 | resolver | 46 |
@@ -123,10 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-38 | 2026-11-19 | effect | medium | A call through an escaping function value (a struct field, a collection element, a `for` binding over one) is charged nothing by the front-end effect check: `pub fn go(j: Job) -> i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)` checks clean without a `with` clause, and a field with no clause is not charged every effect | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
-| B-2026-11-19-49 | 2026-11-19 | typecheck | low | `#[allow(deprecated)]` on a struct, a struct field, an enum or a type alias does not cover a deprecated type named in its fields, payloads or body; a remainder of B-2026-11-19-20, which covered functions, impls and methods | — |
-| B-2026-11-19-50 | 2026-11-19 | parser | low | Two attributes on one item naming the same lint (`#[allow(deprecated)]` then `#[deny(deprecated)]`) are not `E_DUPLICATE_LINT_LEVEL`: the later one silently wins; only a repeat inside one attribute (`#[allow(deprecated, deprecated)]`) is refused | — |
-| B-2026-11-19-51 | 2026-11-19 | cli | low | `malformed_diagnostic_attribute` never fires: `#[diagnostic::on_unimplemented]` on a function, with an unknown field, with an unknown `{placeholder}`, or twice on one trait checks clean, because `check_diagnostic_attributes` has no caller outside its own test file | — |
-| B-2026-11-19-52 | 2026-11-19 | parser | low | An inner attribute `#![...]` at the top of a file is accepted and ignored: `#![frobnicate]` checks clean though an unknown attribute is E_UNKNOWN_ATTRIBUTE, and `#![allow(unused_mut)]` parses but suppresses nothing | — |
 | B-2026-11-19-53 | 2026-11-19 | typecheck | low | A closure argument whose body builds its result with a call of its own (`W.new(|| Ok(one()), 5)`, slot `Fn() -> Result[T, E]`) is refused E0200 `expected 'Fn() -> Result[i64, _]', found 'Fn() -> Result[i64, E]'`, chained or not; `|| Ok(1)` and `|| Ok(C { id: 1 })` check | — |
 | B-2026-11-19-55 | 2026-11-19 | typecheck | low | `#[repr(transparent)]` accepts a zero-sized neighbour whose alignment is not one (`a: Array[u64, 0]` beside `raw: i32`), and the wrapper is then laid out as 8 bytes aligned to 8, not as its i32: a `#[repr(C)] struct P { a: u8, q: Q }` is 16 bytes where C's `{ uint8_t; int32_t }` is 8 | — |
 | B-2026-11-19-56 | 2026-11-19 | typecheck | low | §15 `extern` declarations are not checked where they are written: an ABI string other than "C" (`unsafe extern "system"`, `"Rust"`) passes `karac check` and fails only at a call ('call of unknown function abs' on interp, 'native abs is not lowered yet' on build), and a parameter type that may not cross (`String`, a C-like enum without `#[repr]`) passes check until a call, where it is E0516 'not lowered yet' | — |
@@ -149,6 +145,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
 | B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
 | B-2026-11-19-76 | 2026-11-19 | typecheck | medium | A generic `F: Fn`/`MutFn`/`OnceFn` bound's kind and call access are checked on the instance, not the bound: a `MutFn` closure is accepted for `F: Fn() -> i64`, a `MutFn` is called through a bare (shared) `f: F`, and an `OnceFn` through a bare or `mut ref` `F`, whenever the instance happens not to move; the concrete function types refuse all of these (core-semantics §9.6) | — |
+| B-2026-11-19-86 | 2026-11-19 | ownership | high | A `shared` handle reaches a `TaskGroup` task through a captured PARAMETER: `fn sp(g: TaskGroup, x: own C) -> TaskHandle[i64] { g.spawn(|| { let y = x; 1 }) }` with `shared struct C` passes `karac check`, and 20000 such spawns race on the non-atomic count: `malloc(): unaligned fastbin chunk detected` (2 runs in 6), and the Drop body runs in 1 run in 6 and is leaked otherwise; the same capture of a local is refused E_NOT_CROSS_TASK | — |
 
 ### Relocated
 
@@ -1822,6 +1819,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-46 | mir-llvm | low | `karac __mir-llvm-run` and the sanitizer lanes report a child killed by a signal as a bare exit code 101, which reads as a Kara panic, where `karac r… | 50c01040a4 |
 | B-2026-11-19-47 | cli | low | `karac fmt` moves a comment that ends an attribute's line (`#[derive(Copy)] // why`) onto the end of whatever precedes the item, and two such items i… | 700d4fe00b |
 | B-2026-11-19-48 | cli | medium | `karac fmt` drops a supertrait bound's arguments: `trait PartialOrd[Rhs = Self]: PartialEq[Rhs]` is written back as `: PartialEq`, which names a diff… | 700d4fe00b |
+| B-2026-11-19-49 | typecheck | low | `#[allow(deprecated)]` on a struct, a struct field, an enum or a type alias does not cover a deprecated type named in its fields, payloads or body; a… | 3c58e49558 |
+| B-2026-11-19-50 | parser | low | Two attributes on one item naming the same lint (`#[allow(deprecated)]` then `#[deny(deprecated)]`) are not `E_DUPLICATE_LINT_LEVEL`: the later one s… | 3c58e49558 |
+| B-2026-11-19-51 | cli | low | `malformed_diagnostic_attribute` never fires: `#[diagnostic::on_unimplemented]` on a function, with an unknown field, with an unknown `{placeholder}`… | 3c58e49558 |
+| B-2026-11-19-52 | parser | low | An inner attribute `#![...]` at the top of a file is accepted and ignored: `#![frobnicate]` checks clean though an unknown attribute is E_UNKNOWN_ATT… | 3c58e49558 |
 | B-2026-11-19-54 | mir | medium | Since B-2026-11-17-152 (b3388ea406) `match w[i]` on a `mut ref Vec[weak N]` is indexed for writing and takes the raw weak slot, so mir-interp stops a… | 8ca791230e |
 | B-2026-11-19-62 | other | low | secret.md is behind the compiler in two places: `ct_eq` is said to be `Secret[String]` only, but `Secret[Vec[u8]]` compares (`true`) on every lane; a… | c780bee67f |
 | B-2026-11-19-80 | parser | medium | `thread::spawn(move \|\| ..)` has a message naming `TaskGroup` but no fix, so a Rust-shaped server's worker thread stops the Mend loop | 53f86eb754 |
