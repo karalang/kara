@@ -17,8 +17,19 @@ fn parse_ok(source: &str) -> Program {
     result.program
 }
 
+/// The program and its parse errors, each message without the
+/// `error[E_RESERVED_KEYWORD]: ` / `error[E_RAW_IDENT_NOT_ALLOWED]: ` its
+/// family's symbolic code opens it with (B-2026-11-19-57; pinned in
+/// tests/spec_symbol_codes.rs), so the wording pins read the words.
 fn parse_with_errors(source: &str) -> (Program, Vec<karac::parser::ParseError>) {
-    let result = parse(source);
+    let mut result = parse(source);
+    for e in &mut result.errors {
+        if let Some(symbol) = e.kind.symbol() {
+            if let Some(rest) = e.message.strip_prefix(&format!("error[{symbol}]: ")) {
+                e.message = rest.to_string();
+            }
+        }
+    }
     (result.program, result.errors)
 }
 
@@ -1760,7 +1771,8 @@ fn test_keyword_named_local_reports_each_use_and_fixes_to_raw_ident() {
                }\n\
                fn main() { println(count(\"abca\")); }\n";
     let result = parse(src);
-    let msgs: Vec<&str> = result.errors.iter().map(|e| e.message.as_str()).collect();
+    let (_p, errors) = parse_with_errors(src);
+    let msgs: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
     let kw = "'type' is a reserved keyword and cannot be used as an identifier; \
               write `r#type` to use it as an ordinary identifier";
     assert_eq!(

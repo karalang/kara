@@ -2661,7 +2661,7 @@ impl super::Parser {
             Token::Move if matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) => {
                 let at = self.current_span();
                 self.error(
-                    "the `move` keyword is not used in Kāra: delete it. A closure's captures \
+                    "error[E_MOVE_NOT_USED]: the `move` keyword is not used in Kāra: delete it. A closure's captures \
                      are inferred from its body (core semantics §9.6); clone a value before \
                      the closure to give the closure its own copy",
                 );

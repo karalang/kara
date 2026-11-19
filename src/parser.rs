@@ -84,6 +84,19 @@ impl ParseErrorKind {
             ParseErrorKind::DuplicateLintLevel => "E0006",
         }
     }
+
+    /// The symbolic code the specification gives the whole family, which a
+    /// record carries as its code with [`Self::code`] as its `parent_code`
+    /// (design.md § 17; B-2026-11-19-57): design.md § 3's
+    /// `error[E_RESERVED_KEYWORD] (E0003)` and § Raw Identifiers'
+    /// `E_RAW_IDENT_NOT_ALLOWED`.
+    pub fn symbol(self) -> Option<&'static str> {
+        match self {
+            ParseErrorKind::ReservedKeyword => Some("E_RESERVED_KEYWORD"),
+            ParseErrorKind::RawIdentNotAllowed => Some("E_RAW_IDENT_NOT_ALLOWED"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1053,6 +1066,13 @@ impl Parser {
     pub fn parse(mut self) -> ParseResult {
         let mut program = self.parse_program();
         crate::node_ids::assign_node_ids(&mut program);
+        for e in &mut self.errors {
+            if let Some(symbol) = e.kind.symbol() {
+                if !e.message.starts_with("error[E_") {
+                    e.message = format!("error[{symbol}]: {}", e.message);
+                }
+            }
+        }
         ParseResult {
             program,
             errors: self.errors,

@@ -1,0 +1,1 @@
+ERROR at line 3: the `move` keyword is not used in Kāra: delete it. A closure's captures are inferred from its body (core semantics §9.6); clone a value before the closure to give the closure its own copy

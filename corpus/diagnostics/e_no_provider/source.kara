@@ -1,0 +1,13 @@
+trait Source {
+    fn load(ref self) -> i64;
+}
+
+effect resource UserDB: Source;
+
+fn fetch_users() -> i64 {
+    UserDB.load()
+}
+
+fn main() {
+    println(f"{fetch_users()}");
+}

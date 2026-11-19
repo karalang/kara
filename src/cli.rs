@@ -2981,23 +2981,26 @@ impl Pipeline {
                     ),
                     crate::effectchecker::EffectErrorKind::ParBranchConflict,
                 ),
-                crate::mir::lower::SourceEffectError::NoProvider => {
-                    (text, crate::effectchecker::EffectErrorKind::NoProvider)
-                }
-                crate::mir::lower::SourceEffectError::StatefulDefault => {
-                    (text, crate::effectchecker::EffectErrorKind::StatefulDefault)
-                }
+                crate::mir::lower::SourceEffectError::NoProvider => (
+                    format!("error[E_NO_PROVIDER]: {text}"),
+                    crate::effectchecker::EffectErrorKind::NoProvider,
+                ),
+                crate::mir::lower::SourceEffectError::StatefulDefault => (
+                    format!("error[E_STATEFUL_DEFAULT]: {text}"),
+                    crate::effectchecker::EffectErrorKind::StatefulDefault,
+                ),
                 crate::mir::lower::SourceEffectError::ProviderUnsupported => (
-                    text,
+                    format!("error[E_PROVIDER_UNSUPPORTED]: {text}"),
                     crate::effectchecker::EffectErrorKind::ProviderUnsupported,
                 ),
                 crate::mir::lower::SourceEffectError::HandleUsesOverride => (
                     text,
                     crate::effectchecker::EffectErrorKind::HandleUsesOverride,
                 ),
-                crate::mir::lower::SourceEffectError::DynProvider => {
-                    (text, crate::effectchecker::EffectErrorKind::DynProvider)
-                }
+                crate::mir::lower::SourceEffectError::DynProvider => (
+                    format!("error[E_DYN_PROVIDER]: {text}"),
+                    crate::effectchecker::EffectErrorKind::DynProvider,
+                ),
                 crate::mir::lower::SourceEffectError::TaskConflict => (
                     text,
                     crate::effectchecker::EffectErrorKind::TaskProviderConflict,

@@ -202,7 +202,7 @@ test \"a router of dyn handlers under the fake\" {
         assert_ne!(out.status.code(), Some(0), "{lane:?}: {stdout}");
         assert!(
             stdout.contains(&format!(
-                "\"code\":\"E0423\",\"category\":\"effects\",\"concept\":\"effects/providers\",\"file\":\"src/main_test.kara\",\"line\":{line},"
+                "\"code\":\"E_DYN_PROVIDER\",\"parent_code\":\"E0423\",\"category\":\"effects\",\"concept\":\"effects/providers\",\"file\":\"src/main_test.kara\",\"line\":{line},"
             )),
             "{lane:?}: {stdout}"
         );

@@ -1,0 +1,5 @@
+unsafe extern "C" {
+    type Foo[T];
+}
+
+fn main() {}

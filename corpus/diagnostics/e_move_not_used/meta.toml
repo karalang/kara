@@ -1,0 +1,9 @@
+source = "B-2026-11-19-57"
+dedup_of = []
+expect = "error:E_MOVE_NOT_USED"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-19-57: the smallest program that produces E_MOVE_NOT_USED (its record's parent_code is E0001), the example behind `karac explain E_MOVE_NOT_USED`. tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

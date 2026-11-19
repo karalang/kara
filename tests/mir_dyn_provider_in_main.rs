@@ -72,7 +72,11 @@ fn a_dyn_main_makes_is_refused_at_the_coercion_as_a_dyn_provider() {
     let found = check("p27", &src);
     assert_eq!(found.len(), 1, "{found:?}");
     let (code, line, col, msg) = &found[0];
-    assert_eq!((code.as_str(), *line, *col), ("E0423", 12, 29), "{msg}");
+    assert_eq!(
+        (code.as_str(), *line, *col),
+        ("E_DYN_PROVIDER", 12, 29),
+        "{msg}"
+    );
     assert!(
         msg.contains(
             "`S` as a `dyn At` cannot carry a provider, and its `S.at` uses `Clk`, \
@@ -98,7 +102,7 @@ fn a_plain_call_in_main_stays_a_no_provider_error() {
         .iter()
         .map(|(c, l, k, _)| (c.as_str(), *l, *k))
         .collect();
-    assert_eq!(at, [("E0419", 12, 35)], "{found:?}");
+    assert_eq!(at, [("E_NO_PROVIDER", 12, 35)], "{found:?}");
     let callee = format!(
         "{PRELUDE}fn mk() -> i64 {{ let d: dyn At = S {{}}; d.at() }}\n\
          fn main() {{ let r = with_provider[Clk](F {{ t: 9 }}, || mk()); println(r); }}\n"
@@ -108,5 +112,5 @@ fn a_plain_call_in_main_stays_a_no_provider_error() {
         .iter()
         .map(|(c, l, k, _)| (c.as_str(), *l, *k))
         .collect();
-    assert_eq!(at, [("E0423", 12, 34)], "{found:?}");
+    assert_eq!(at, [("E_DYN_PROVIDER", 12, 34)], "{found:?}");
 }

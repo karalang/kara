@@ -1,0 +1,9 @@
+source = "B-2026-11-19-57"
+dedup_of = []
+expect = "error:E_PROVIDER_UNSUPPORTED"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-19-57: the smallest program that produces E_PROVIDER_UNSUPPORTED (its record's parent_code is E0421), the example behind `karac explain E_PROVIDER_UNSUPPORTED`. tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

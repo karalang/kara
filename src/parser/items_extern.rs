@@ -371,7 +371,8 @@ impl super::Parser {
         // the wrapper type carries the parameter (per design.md).
         if self.check(&Token::LeftBracket) {
             self.error(
-                "opaque foreign type declarations cannot be generic. \
+                "error[E_OPAQUE_TYPE_GENERIC_FORBIDDEN]: opaque foreign type declarations \
+                 cannot be generic. \
                  C does not have generic types — if the binding needs to \
                  be parameterised on the Kāra side, declare a wrapper type \
                  (`distinct type` or `struct`) that carries the parameter \

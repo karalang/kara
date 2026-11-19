@@ -1,0 +1,1 @@
+ERROR at line 2: 'yield' is a reserved keyword and cannot be used as an identifier; write `r#yield` to use it as an ordinary identifier

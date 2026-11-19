@@ -1,0 +1,1 @@
+ERROR at line 13: `S` as a `dyn At` cannot carry a provider, and its `S.at` uses `Clk`, which has no default, so only a provider supplies it (design.md §9, E_DYN_PROVIDER): take a generic parameter (`[T: At]`) instead

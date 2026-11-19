@@ -821,6 +821,17 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("ExpectOnUnfulfilled", Some(DiagnosticClass::LintWarning)),
     ),
     ("E_NOT_CROSS_TASK", ty("CrossTaskUnsafeCapture", None)),
+    // The spec's names for diagnostics reported under a number: the record
+    // carries the name as its code and the number as its `parent_code`, and
+    // the prose is the number's ([`SPEC_SYMBOLS`], B-2026-11-19-57).
+    ("E_RESERVED_KEYWORD", parse("ReservedKeyword")),
+    ("E_RAW_IDENT_NOT_ALLOWED", parse("RawIdentNotAllowed")),
+    ("E_MOVE_NOT_USED", parse("Syntax")),
+    ("E_OPAQUE_TYPE_GENERIC_FORBIDDEN", parse("Syntax")),
+    ("E_NO_PROVIDER", eff("NoProvider", None)),
+    ("E_STATEFUL_DEFAULT", eff("StatefulDefault", None)),
+    ("E_PROVIDER_UNSUPPORTED", eff("ProviderUnsupported", None)),
+    ("E_DYN_PROVIDER", eff("DynProvider", None)),
     // ── effect ──────────────────────────────────────────────────
     //
     // `L0001` is a NOTE, not an error, and its `L` prefix puts it outside the
@@ -2550,6 +2561,24 @@ const CODE_PROSE: &[(&str, &str)] = &[
          than reservable keywords, and `r#` does not apply to them \
          (design.md § Raw identifiers). Pick another name, such as `this` \
          or `own_self`.",
+    ),
+    (
+        "E_MOVE_NOT_USED",
+        "`move |...|` is Rust's way to make a closure own its captures; Kāra \
+         has no capture prefix (design.md § 3, core-semantics.md § 9.6). A \
+         closure's captures are inferred from its body: it takes ownership of \
+         a value it moves and borrows the rest. Delete `move` (`karac fix` \
+         does), and clone a value before the closure to give the closure its \
+         own copy.",
+    ),
+    (
+        "E_OPAQUE_TYPE_GENERIC_FORBIDDEN",
+        "An opaque foreign type in an `unsafe extern` block (`type Foo;`) \
+         names a C type whose layout is private to the library, and C has \
+         no generic types, so `type Foo[T];` describes nothing (design.md \
+         § 15). Declare the opaque type without parameters, and carry the \
+         parameter on a Kāra wrapper (`distinct type` or `struct`) that \
+         holds a `*mut Foo`.",
     ),
     (
         "E0005",
@@ -4617,9 +4646,35 @@ const CROSS_TASK_PROSE: &str =
      `+ CrossTask`. `E_NOT_CROSS_TASK` in a message and `E0254` in \
      `--output=json` are the same rule.";
 
-/// The prose for `code`, if it has any.
+/// The symbolic codes design.md, core-semantics.md and the library docs
+/// give diagnostics reported under a number, with that number: a record
+/// carries the name as `code` and the number as `parent_code`, and `karac
+/// explain` gives the number's prose for the name (B-2026-11-19-57).
+const SPEC_SYMBOLS: &[(&str, &str)] = &[
+    ("E_RESERVED_KEYWORD", "E0003"),
+    ("E_RAW_IDENT_NOT_ALLOWED", "E0004"),
+    ("E_MOVE_NOT_USED", "E0001"),
+    ("E_OPAQUE_TYPE_GENERIC_FORBIDDEN", "E0001"),
+    ("E_NO_PROVIDER", "E0419"),
+    ("E_STATEFUL_DEFAULT", "E0420"),
+    ("E_PROVIDER_UNSUPPORTED", "E0421"),
+    ("E_DYN_PROVIDER", "E0423"),
+];
+
+/// The prose for `code`, if it has any: a [`SPEC_SYMBOLS`] name's is its
+/// number's, unless it has its own.
 fn code_prose(code: &str) -> Option<&'static str> {
-    CODE_PROSE.iter().find(|(c, _)| *c == code).map(|(_, p)| *p)
+    CODE_PROSE
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, p)| *p)
+        .or_else(|| {
+            let (_, number) = SPEC_SYMBOLS.iter().find(|(c, _)| *c == code)?;
+            CODE_PROSE
+                .iter()
+                .find(|(c, _)| c == number)
+                .map(|(_, p)| *p)
+        })
 }
 
 /// `code` is catalogued: `karac explain` reads `e0500` as `E0500`

@@ -1,0 +1,4 @@
+fn main() {
+    let r#self = 1;
+    println(f"{r#self}");
+}

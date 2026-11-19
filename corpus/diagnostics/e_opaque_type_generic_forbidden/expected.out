@@ -1,0 +1,1 @@
+ERROR at line 2: opaque foreign type declarations cannot be generic. C does not have generic types — if the binding needs to be parameterised on the Kāra side, declare a wrapper type (`distinct type` or `struct`) that carries the parameter and stores a `*mut Foo` internally.

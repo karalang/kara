@@ -1,0 +1,1 @@
+ERROR at line 12: no provider for `UserDB`: this needs one and nothing supplies it, since `main` takes no hidden provider parameter (core semantics §14.6); run it inside `with_provider[UserDB](provider, || ...)`

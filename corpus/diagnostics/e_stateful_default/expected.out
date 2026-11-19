@@ -1,0 +1,1 @@
+ERROR at line 24: `bump` calls a `mut ref self` method of `Ids`, but `Ids`'s default has fields, so outside an override the call would write a global every task shares (E_STATEFUL_DEFAULT, core semantics §14.14): make the method take `self`, or run the call inside `with_provider[Ids](provider, || ...)`

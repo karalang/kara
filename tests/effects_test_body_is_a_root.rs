@@ -51,7 +51,7 @@ fn karac_test(dir: &Path) -> (bool, String) {
 /// The `E0419` diagnostics in `out`, as `file:line:column`.
 fn no_provider_sites(out: &str) -> Vec<String> {
     out.lines()
-        .filter(|l| l.contains("\"code\":\"E0419\""))
+        .filter(|l| l.contains("\"code\":\"E_NO_PROVIDER\",\"parent_code\":\"E0419\""))
         .map(|l| {
             let field = |k: &str| {
                 let at = l.find(&format!("\"{k}\":")).unwrap() + k.len() + 3;

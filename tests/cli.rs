@@ -1484,7 +1484,8 @@ fn test_json_clean_program() {
 #[test]
 fn parse_error_kind_codes_reach_json() {
     // The ParseErrorKind families must survive to the JSON surface as
-    // distinct codes — E0003 (reserved keyword as identifier) here; the
+    // distinct codes — E0003 (reserved keyword as identifier) here, as the
+    // parent of the spec's E_RESERVED_KEYWORD (B-2026-11-19-57); the
     // E0002 leg is pinned by test_json_parse_error_snapshot below. Guards
     // against a regression to the flat historical E0001.
     let dir = std::env::temp_dir().join(format!("karac-parse-kind-{}", std::process::id()));
@@ -1499,8 +1500,8 @@ fn parse_error_kind_codes_reach_json() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"code\":\"E0003\""),
-        "reserved-keyword parse error should carry E0003: {stdout}"
+        stdout.contains("\"code\":\"E_RESERVED_KEYWORD\",\"parent_code\":\"E0003\""),
+        "reserved-keyword parse error should carry E_RESERVED_KEYWORD under E0003: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

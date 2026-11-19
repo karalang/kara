@@ -76,7 +76,11 @@ fn provider_refuses_a_server_under_a_network_override() {
     let found = check("serve", SERVE);
     assert_eq!(found.len(), 1, "{found:?}");
     let (code, line, col, msg) = &found[0];
-    assert_eq!((code.as_str(), *line, *col), ("E0421", 8, 17), "{msg}");
+    assert_eq!(
+        (code.as_str(), *line, *col),
+        ("E_PROVIDER_UNSUPPORTED", 8, 17),
+        "{msg}"
+    );
     assert!(
         msg.contains("`Server.serve` is not served by a `Network` provider"),
         "{msg}"
@@ -124,7 +128,11 @@ fn provider_refuses_udp_and_tls_reached_under_a_network_override() {
             (c, l, k)
         })
         .collect();
-    let want = [("E0421", 5, 11), ("E0421", 19, 25), ("E0421", 23, 17)];
+    let want = [
+        ("E_PROVIDER_UNSUPPORTED", 5, 11),
+        ("E_PROVIDER_UNSUPPORTED", 19, 25),
+        ("E_PROVIDER_UNSUPPORTED", 23, 17),
+    ];
     let want: Vec<(String, u64, u64)> = want
         .iter()
         .map(|(c, l, k)| (c.to_string(), *l, *k))
@@ -318,7 +326,11 @@ fn provider_refuses_a_dyn_made_under_an_override_it_would_use() {
         .collect();
     assert_eq!(
         at,
-        [("E0423", 11, 26), ("E0423", 15, 28), ("E0423", 20, 32)],
+        [
+            ("E_DYN_PROVIDER", 11, 26),
+            ("E_DYN_PROVIDER", 15, 28),
+            ("E_DYN_PROVIDER", 20, 32)
+        ],
         "{found:?}"
     );
     for (_, _, _, msg) in &found {
@@ -367,7 +379,11 @@ fn provider_refuses_a_dyn_reaching_a_provider_rooted_resource() {
     let found = check("dyn-rooted", DYN_PROVIDER_ROOTED);
     assert_eq!(found.len(), 1, "{found:?}");
     let (code, line, col, msg) = &found[0];
-    assert_eq!((code.as_str(), *line, *col), ("E0423", 18, 27), "{msg}");
+    assert_eq!(
+        (code.as_str(), *line, *col),
+        ("E_DYN_PROVIDER", 18, 27),
+        "{msg}"
+    );
     assert!(
         msg.contains("its `L.look` uses `Db`, which has no default"),
         "{msg}"
