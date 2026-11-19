@@ -542,9 +542,22 @@ impl<'a> super::EffectChecker<'a> {
             if self.fn_uses_with_underscore.contains(&sym) {
                 continue;
             }
-            let (allowed, poly) = match self.declared_effects.get(&sym) {
-                Some(DeclaredEffects::Explicit(set)) => (set.effect_set(), false),
-                Some(DeclaredEffects::PolymorphicWithFixed(fixed)) => (fixed.effect_set(), true),
+            // A public method with no clause declares none (design.md §12:
+            // public items declare their effects), and its callers are
+            // charged that empty set; it was never verified against it
+            // (B-2026-11-19-87).
+            let (allowed, poly, clauseless) = match self.declared_effects.get(&sym) {
+                Some(DeclaredEffects::Explicit(set)) => (set.effect_set(), false, false),
+                Some(DeclaredEffects::PolymorphicWithFixed(fixed)) => {
+                    (fixed.effect_set(), true, false)
+                }
+                Some(DeclaredEffects::None) | None
+                    if is_pub
+                        && what == "method"
+                        && self.public_effects_policy != PublicEffectsPolicy::Inferred =>
+                {
+                    (Default::default(), false, true)
+                }
                 _ => continue,
             };
             let Some(inferred) = self.inferred_effects.get(&sym) else {
@@ -579,15 +592,29 @@ impl<'a> super::EffectChecker<'a> {
                 // the fix (B-2026-11-14-33, B-2026-11-14-34).
                 let advice = if te.effect.resource == super::EVERY_RESOURCE {
                     String::new()
+                } else if clauseless {
+                    format!(
+                        "; add `with {}` to its signature or remove the call",
+                        te.effect
+                    )
                 } else {
                     format!("; add {} to the clause or remove the call", te.effect,)
                 };
-                new_errors.push(EffectError {
-                    message: format!(
+                let message = if clauseless {
+                    format!(
+                        "public method '{name}' performs {}{origin_msg} but has no effect \
+                         declaration, so its callers are charged none of it{advice}",
+                        te.effect,
+                    )
+                } else {
+                    format!(
                         "{what} '{name}' performs {}{origin_msg} but its `with` clause does \
                          not declare it{advice}",
                         te.effect,
-                    ),
+                    )
+                };
+                new_errors.push(EffectError {
+                    message,
                     span,
                     kind: EffectErrorKind::MissingEffectDeclaration,
                     subtype_trace: None,

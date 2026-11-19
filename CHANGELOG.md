@@ -31,6 +31,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from the source (a field's or parameter's declared type, a `let`'s
   annotation, the element type of one); a clause naming an effect
   variable is still solved per instance (B-2026-11-19-38).
+- A public inherent method with no `with` clause is checked against the
+  effects it declares, none, as a public function is (design.md §12):
+  `impl Job { pub fn go(self) -> i64 { println("x"); self.n } }` checked
+  clean, and so did a public `fire` that calls it, which was charged none
+  of `go`'s effects. The error's machine fix writes the clause, and
+  `karac fix` then declares the public callers too. No corpus program,
+  kata or example relied on it (B-2026-11-19-87).
 - A function under `#[no_effect(panics)]` that reads or writes a `mut`
   field of a `shared` value is refused when the field carries a borrow
   flag (its type is neither `Copy` nor counted): the access panics
