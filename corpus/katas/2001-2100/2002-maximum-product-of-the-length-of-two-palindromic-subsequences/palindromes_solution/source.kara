@@ -26,7 +26,7 @@ impl Solution {
                 pals.push((mask, idx.len() as i32));
             }
         }
-        let mut best = 0;
+        let mut best: i32 = 0;
         for x in 0..pals.len() {
             for y in x + 1..pals.len() {
                 if pals[x].0 & pals[y].0 == 0 {

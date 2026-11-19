@@ -23,7 +23,7 @@ fn top_k_frequent_words(words: ref Vec[String], k: i64) -> Vec[String] {
 
     let mut keys: Vec[String] = Vec.new();
     for w in counts.keys() {
-        keys.push(w);
+        keys.push(w.clone());
     }
 
     // Insertion sort by (count desc, word asc).
