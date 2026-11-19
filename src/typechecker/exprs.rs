@@ -6676,7 +6676,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        let undecided_variant: Vec<bool> = args
+        let mut undecided_variant: Vec<bool> = args
             .iter()
             .zip(arg_tys.iter())
             .map(|(arg, t)| {
@@ -6685,6 +6685,39 @@ impl<'a> super::TypeChecker<'a> {
                         .is_some_and(|t| self.is_undecided_unit_variant(&arg.value, t))
             })
             .collect();
+        // A slot that is the callee's bare parameter (`Some(None)`,
+        // `Ok(None)`) holds the argument as it is, so the argument's own parameters become fresh
+        // variables the slot takes: `Some(None)` is an `Option[Option[?]]`
+        // a sibling (`[Some(None), Some(Some(4))]`) or a later use solves.
+        // Skipped, the callee's `T` stayed open and was named back, and
+        // `Some(None)` read as an `Option[T]`, one level short
+        // (B-2026-11-19-65).
+        // Not where a closure argument is still to be checked against the
+        // slot (`fold(None, |acc: Option[i64], x| ..)`): its annotation and
+        // tail solve the parameter as before (B-2026-11-09-36, kata 2036).
+        if !args
+            .iter()
+            .any(|a| matches!(a.value.kind, ExprKind::Closure { .. }))
+        {
+            for (((arg, t), undecided), slot) in args
+                .iter()
+                .zip(arg_tys.iter_mut())
+                .zip(undecided_variant.iter_mut())
+                .zip(sub_params.iter())
+            {
+                if !*undecided || !matches!(slot, Type::TypeVar(_)) {
+                    continue;
+                }
+                if let Some(ty) = t.as_mut() {
+                    let fresh = self.freshen_scrutinee(&arg.value, ty.clone());
+                    if fresh != *ty {
+                        self.record_expr_type(&arg.value.span, &fresh);
+                        *ty = fresh;
+                        *undecided = false;
+                    }
+                }
+            }
+        }
         for ((((sub_param_ty, arg_ty_opt), formal), undecided), arg) in sub_params
             .iter()
             .zip(arg_tys.iter())
