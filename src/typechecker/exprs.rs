@@ -13447,6 +13447,47 @@ impl<'a> super::TypeChecker<'a> {
                 self.literal_lets.remove(name);
             }
         }
+        // `let dirs = [(-1, 0), (1, 0), ..]`: each position's first
+        // unsuffixed literal, which `for (dx, dy) in dirs.iter()` reads back
+        // as a pushed tuple's (kata 1222's Rust arm, B-2026-11-19-26).
+        match Self::literal_tuple_slots(value) {
+            Some(slots) => {
+                self.literal_tuple_pushes.insert(name.to_string(), slots);
+            }
+            None => {
+                self.literal_tuple_pushes.remove(name);
+            }
+        }
+    }
+
+    /// For an array literal of tuples of one arity, each position's first
+    /// unsuffixed integer literal (negated or not).
+    fn literal_tuple_slots(value: &Expr) -> Option<Vec<Option<Expr>>> {
+        let ExprKind::ArrayLiteral(elems) = &value.kind else {
+            return None;
+        };
+        let arity = match &elems.first()?.kind {
+            ExprKind::Tuple(xs) => xs.len(),
+            _ => return None,
+        };
+        let mut slots: Vec<Option<Expr>> = vec![None; arity];
+        for e in elems {
+            let ExprKind::Tuple(xs) = &e.kind else {
+                return None;
+            };
+            if xs.len() != arity {
+                return None;
+            }
+            for (slot, x) in slots.iter_mut().zip(xs) {
+                let bare = matches!(x.kind, ExprKind::Integer(_, None))
+                    || matches!(&x.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
+                        if matches!(operand.kind, ExprKind::Integer(_, None)));
+                if slot.is_none() && bare {
+                    *slot = Some(x.clone());
+                }
+            }
+        }
+        slots.iter().any(Option::is_some).then_some(slots)
     }
 
     /// The value a fill repeats: `v` of `[v; n]` or `Vec.filled(n, v)`.
@@ -13720,7 +13761,17 @@ impl<'a> super::TypeChecker<'a> {
         let PatternKind::Tuple(pats) = &pattern.kind else {
             return Vec::new();
         };
-        let rows: Option<Vec<&Vec<Expr>>> = match &iterable.kind {
+        // `[..].iter()` and `[..].into_iter()` walk the literal itself.
+        let literal = match &iterable.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() && matches!(method.as_str(), "iter" | "into_iter") => object,
+            _ => iterable,
+        };
+        let rows: Option<Vec<&Vec<Expr>>> = match &literal.kind {
             ExprKind::ArrayLiteral(elems) => elems
                 .iter()
                 .map(|e| match &e.kind {
@@ -14016,6 +14067,11 @@ impl<'a> super::TypeChecker<'a> {
                         ..lit.span
                     };
                     self.literal_entry(lit, &tys[i], at, true, false, name)
+                        // `let (x, y) = (king[0] + dx, king[1] + dy)` with
+                        // `dx` a literal binding: `x` is an `i64` only
+                        // because of it, as `let x = king[0] + dx` is
+                        // (kata 1222's Rust arm, B-2026-11-19-26).
+                        .or_else(|| self.literal_copy(lit, &tys[i]))
                 }
                 _ => None,
             };

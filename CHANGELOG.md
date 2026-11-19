@@ -1795,6 +1795,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from `for x in 0..=50` and returned as `best.to_vec()` from a
   `Vec[i32]` function had no machine fix, and `karac fix` now writes
   `[0i32, 0]` and then `0i32..=50` (B-2026-11-18-52).
+- A list of tuple literals walked by a tuple pattern beside an `i32`
+  (`let dirs = [(-1, 0), (1, 0)]; for (dx, dy) in dirs.iter() { let (x, y)
+  = (king[0] + dx, king[1] + dy); ans.push([x, y]); }`) is offered the
+  `i32` suffix on the first literal in each position, through `.iter()`
+  and through a tuple `let` as through a plain one. The E0200 narrowing at
+  each use had no fix (B-2026-11-19-26).
 - `#[deprecated]` on an enum, a trait or a type alias warns at every use, as
   design.md § `#[deprecated]` says: the alias where it is named, the enum at
   its name, each variant constructor and each pattern, and the trait at each

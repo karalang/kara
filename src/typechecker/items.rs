@@ -12637,6 +12637,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.list_lit_lets.remove(name.as_str());
                         self.open_collection_lets.remove(name.as_str());
                         self.literal_lets.remove(name.as_str());
+                        self.literal_tuple_pushes.remove(name.as_str());
                     }
                 } else if let PatternKind::Tuple(pats) = &pattern.kind {
                     if ty.is_none() {
