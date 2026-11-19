@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 568 |
 | false-positive | 314 |
-| missing-feature | 211 |
+| missing-feature | 212 |
 | perf | 189 |
 | other | 119 |
 | soundness | 103 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 729 |
 | mir-llvm | 310 |
-| mir | 276 |
+| mir | 277 |
 | cli | 218 |
 | parser | 127 |
 | ownership | 121 |
@@ -124,7 +124,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-97 | 2026-11-19 | ownership | medium | An escaping closure that reads only a Copy field (`hs.push(|| v.id)`, `H { f: || v.id }`) must capture a copy of that field (review ruling 2026-11-19 on §9.1), but (1) for a binding whose type has a Drop body, check AND every MIR lane move the whole binding (E0514 / `move check main: use of _2.0`), and (2) for a type with no Drop body, check still says `v was moved into an escaping closure` (E0500) while the MIR lanes capture the field alone and run | — |
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
 | B-2026-11-19-103 | 2026-11-19 | ownership+typecheck | low | A borrowed `Fn` parameter cannot be handed to a lazy adaptor (`v.iter().filter(f).count()` is E0516 'cannot be stored as a function value; declare the parameter `escaping`'), and a generic `f: F` cannot be handed to `retain` (E0200 'cannot give away parameter'), though the concrete `f: Fn(..)` can | — |
-| B-2026-11-19-105 | 2026-11-19 | mir | medium | A function that uses a provider cannot be taken as a value under `with_provider` (core-semantics §14.3: 'Taking such a function as a value captures the provider in scope'): `let f = read_clk; f() + 1` passes check and every lane stops `a function used as a value that uses Clk's provider is not lowered yet`; returning it out of the call (`|| { let g = read_clk; g }`) also passes check instead of the §14.5 refusal | — |
 | B-2026-11-19-106 | 2026-11-19 | typecheck+mir | low | A `mut ref MutFn(..)` parameter cannot be handed to a lazy adaptor: `fn cnt(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool) -> i64 { v.iter().filter(f).count() }` is refused 'trait bound `FnV: MutFn` is not satisfied; `mut ref Fn(ref i64) -> bool` does not implement `MutFn`' | — |
 | B-2026-11-19-113 | 2026-11-19 | ownership | medium | A closure literal handed to a named call that is itself an argument of another call (`show(twice(|| s.len()))`, `println(twice(|| s.len()))`) is taken to outlive its statement: a later move of what it reads (`let t = s;`) is refused with E0500 "moved inside a loop" in straight-line code, though `let k = twice(|| s.len()); let t = s;` is accepted | — |
 | B-2026-11-19-121 | 2026-11-19 | cli | medium | kara-lsp references and rename see only the declaration of a method or an enum variant, and miss a unit variant in a pattern and a type argument in an expression path: renaming a method, variant, enum or struct leaves uses behind, so the renamed program no longer checks (36 of 296 corpus renames) | — |
@@ -142,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-135 | 2026-11-19 | typecheck | medium | An unannotated generic struct literal or variant with an empty list `[]` in a field whose element type mentions the type parameter is refused with the internal E0516 'a type that failed to check is not lowered yet': `struct W[T] { v: T, xs: Vec[T] }` `W { v: 1, xs: [] }` (when xs is later used), and every generic tree `Tr { v: 1, kids: [] }`, `Tree.Node(1, [])`, even inside `fn leaf[T](v: own T) -> Tr[T] { Tr { v: v, kids: [] } }` | — |
 | B-2026-11-19-136 | 2026-11-19 | typecheck | medium | A generic struct with a self-referential `Option` field (`struct Ls[T] { v: T, next: Option[Ls[T]] }`) cannot be built with a literal: `Ls { v: 1, next: None }` is E0200 'field next has type Option[i64], but the type parameter was already bound to Option[Ls[i64]] by an earlier field', also with an annotation, `shared`, and `T = String` | — |
 | B-2026-11-19-137 | 2026-11-19 | mir | low | Inside a closure body, a borrowck conflict on a captured variable names neither the place nor the holder: 'mutable borrow of (*a temporary value) while it is borrowed', where the same code in a `for` loop says 'cannot mutably borrow `seen` while `more` still holds a borrow of it' | — |
+| B-2026-11-19-138 | 2026-11-19 | mir | low | A function that uses a provider, erased to a function type (`twice(read_clk)` with `fn twice[G: Fn() -> i64](g: G)`), still stops every lane with `a function used as a value that uses Clk's provider is not lowered yet`; it should carry the provider as an erased closure does | — |
 
 ### Relocated
 
@@ -1867,6 +1867,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-100 | parser | low | Rust's typed None, `None::<T>` (`None::<Rc<RefCell<TreeNode>>>` in a LeetCode Rust template), stops at E0002 "Expected `)`, found `::`" with no fix,… | ee08f070a |
 | B-2026-11-19-101 | typecheck | low | A `Vec` passed to a library method's `Slice[T]` parameter is refused E0200 "expected 'Slice[i64]', found 'Vec[i64]'" when the receiver's elements are… | ee08f070a |
 | B-2026-11-19-104 | ownership | medium | `karac check` misses §14.5 when a closure that uses a provider leaves its `with_provider` through a GENERIC function: `keep(mut hs, \|\| Clk.now())` wi… | 3f88b4f807 |
+| B-2026-11-19-105 | mir | medium | A function that uses a provider cannot be taken as a value under `with_provider` (core-semantics §14.3: 'Taking such a function as a value captures t… | 138a8f8115 |
 | B-2026-11-19-107 | typecheck+mir | medium | A `TaskGroup` task that captures a `for` binding, a `while let` or `if let` binding, or a `match` arm's binding borrowed it instead of taking it by m… | b03a13d177 |
 | B-2026-11-19-108 | effect | medium | A `par for` that calls a method of a `dyn` parameter or local whose type declares its effects (`dyn T + CrossTask with ()`, or a trait method with it… | 6dd4c8f6fc |
 | B-2026-11-19-109 | effect | medium | A `par for` calling a method of a non-escaping `dyn` parameter whose type declares no effects (`t: ref dyn T + CrossTask`) was refused as conflicting… | 77f1c15163 |
