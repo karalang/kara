@@ -533,6 +533,7 @@ fn lower_program_inner<'a>(
         self_tys: FxHashMap::default(),
         queue: Vec::new(),
         queued: FxHashSet::default(),
+        dyn_shim_queue: Vec::new(),
         program: interp::Program::default(),
         errors: Vec::new(),
         variants: FxHashMap::default(),
@@ -807,6 +808,10 @@ fn lower_program_inner<'a>(
             lcx.lower_derived_cmp(t, partial, ret, &name);
         } else if let Some((t, h, name)) = lcx.hash_queue.pop() {
             lcx.lower_derived_hash(t, h, &name);
+        } else if let Some((name, target, m, concrete)) = lcx.dyn_shim_queue.pop() {
+            // Last: the impl instance it calls is lowered by now, and its
+            // parameters' types are read off its body.
+            lcx.lower_dyn_mode_shim(&name, &target, m, concrete);
         } else if !lcx.note_table_hashes() {
             let Some(roots) = later_roots.take() else {
                 break;
@@ -1506,6 +1511,10 @@ struct Lcx<'a> {
     self_tys: FxHashMap<DefId, Ty>,
     queue: Vec<(DefId, Vec<Ty>, String)>,
     queued: FxHashSet<String>,
+    /// `dyn` slots whose impl method takes a parameter or its receiver in
+    /// a weaker mode than the trait declares (§4.7): the shim's name, the
+    /// impl instance it calls, and the trait's method (B-2026-11-19-126).
+    dyn_shim_queue: Vec<(String, String, &'a ast::TraitMethod, Ty)>,
     program: interp::Program,
     errors: Vec<String>,
     /// A variant's enum and its index there.
@@ -3013,6 +3022,43 @@ impl<'a> Lcx<'a> {
             let cur = bx.cur;
             bx.b.terminate(cur, TerminatorKind::Return);
         }
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
+    }
+
+    /// The `dyn` slot `name` for the impl instance `target` whose method
+    /// takes a parameter or its receiver in a weaker mode than the trait's
+    /// `m` declares (§4.7: a borrow for `own`, a shared borrow for `mut
+    /// ref`): it takes each argument in the trait's convention, the one a
+    /// call through the table passes, hands it to `target` in the impl's,
+    /// and drops what it took owned and only lent (B-2026-11-19-126).
+    fn lower_dyn_mode_shim(
+        &mut self,
+        name: &str,
+        target: &str,
+        m: &'a ast::TraitMethod,
+        concrete: Ty,
+    ) {
+        let Some(tb) = self.program.bodies.get(target) else {
+            self.errors.push(format!(
+                "no body for `{target}`, the `dyn` slot `{name}` calls"
+            ));
+            return;
+        };
+        let ret = tb.locals[0].ty;
+        let to: Vec<Ty> = (1..=tb.arg_count).map(|i| tb.locals[i].ty).collect();
+        let callee = tb.instance.clone();
+        let f = self.fns.get(&callee.def).map(|i| i.f);
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, ret, Vec::new());
+        let _ = bx.dyn_mode_shim_body(f, m, concrete, &to, callee);
         let (body, errors) = bx.finish();
         self.errors.extend(errors);
         if let Some(body) = body {
@@ -22559,28 +22605,60 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Whether `object.m()`, calling the impl method `d`, names a trait
     /// method declared `own self` through a generic receiver.
     fn moves_into_borrowing_impl(&self, object: &Expr, d: DefId) -> bool {
+        self.bound_trait_of(object, d).is_some_and(|tr| {
+            self.lcx
+                .own_self_trait_methods
+                .contains(&(tr.to_string(), self.lcx.fns[&d].f.name.clone()))
+        })
+    }
+
+    /// The trait whose method `object.m()` calls through a generic
+    /// receiver, as the impl method `d` it resolved to names it.
+    fn bound_trait_of(&self, object: &Expr, d: DefId) -> Option<&'l str> {
         let generic = self
             .lcx
             .node_types
             .get(&object.id)
             .is_some_and(|&t| matches!(self.tys().tcx().kind(t), HK::Param(_)));
         if !generic {
-            return false;
+            return None;
         }
         let segs = &self.lcx.defs.table.get(d).path.segments;
         let n = segs.len();
-        let Some(tr) = segs
+        let tr = segs
             .get(n.wrapping_sub(2))
             .and_then(|l| l.strip_prefix("impl "))
             .and_then(|l| l.rsplit_once('#'))
-            .map(|(t, _)| t)
+            .map(|(t, _)| t)?;
+        Some(tr.split('[').next().unwrap_or(tr))
+    }
+
+    /// The parameters the trait method that `object.m()` calls through a
+    /// generic receiver declares `own`, when the impl method `d` borrows
+    /// them instead (§4.7): each is moved, and the moved value is the
+    /// call's temporary (B-2026-11-19-127).
+    fn args_moved_into_borrowing_impl(&self, object: &Expr, d: DefId) -> Vec<bool> {
+        let f = self.lcx.fns[&d].f;
+        let Some(m) = self
+            .bound_trait_of(object, d)
+            .and_then(|tr| self.lcx.trait_defs.get(tr))
+            .and_then(|t| {
+                t.items.iter().find_map(|it| match it {
+                    ast::TraitItem::Method(m) if m.name == f.name => Some(m),
+                    _ => None,
+                })
+            })
         else {
-            return false;
+            return Vec::new();
         };
-        let tr = tr.split('[').next().unwrap_or(tr);
-        self.lcx
-            .own_self_trait_methods
-            .contains(&(tr.to_string(), self.lcx.fns[&d].f.name.clone()))
+        m.params
+            .iter()
+            .zip(&f.params)
+            .map(|(t, i)| {
+                // A bare parameter reads as a `ref` one here (D5).
+                t.is_own && !i.is_own && !matches!(i.ty.kind, ast::TypeKind::MutRef(_))
+            })
+            .collect()
     }
 
     /// The receiver mode a body takes: under D5 a bare `self` of a
@@ -26061,7 +26139,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 };
                 let mut rest = Vec::with_capacity(args.len());
                 let mut fn_tys: Vec<Option<Ty>> = Vec::with_capacity(args.len());
-                for (a, p) in args.iter().zip(&f.params) {
+                let moved = self.args_moved_into_borrowing_impl(object, d);
+                for (i, (a, p)) in args.iter().zip(&f.params).enumerate() {
                     // A function-typed parameter takes the closure or function
                     // item itself, and the instance is specialised to it, as
                     // for a free function's call.
@@ -26080,6 +26159,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                         continue;
                     }
                     let pt = self.callee_param_ty(p, &inst_args)?;
+                    // Moved as the trait declares, lent as the impl takes
+                    // it: a named value becomes the call's temporary, so it
+                    // drops at the end of the statement (§4.7, §7.4).
+                    if moved.get(i).copied().unwrap_or(false) && self.is_place(&a.value) {
+                        if let HK::Ref(inner) = self.tys().tcx().kind(pt) {
+                            let at = self.expr_ty(&a.value)?;
+                            if at == inner {
+                                let l = self.temp_of(&a.value, at)?;
+                                rest.push(PendingRecv::Borrow(Place::local(l), at, false));
+                                fn_tys.push(None);
+                                continue;
+                            }
+                        }
+                    }
                     self.closure_arg_nonescaping = self.closure_arg_borrows(&a.value, p);
                     let arg = self.arg_pending(&a.value, pt);
                     self.closure_arg_nonescaping = false;

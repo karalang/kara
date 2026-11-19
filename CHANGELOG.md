@@ -972,6 +972,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Sender` drops while its receiver is being polled: the drop counted its
   change before the sender count fell, so the receiver could park on a
   channel already closed (B-2026-11-19-64).
+- A call through `dyn Trait` to an impl method that takes a parameter or
+  its receiver in a weaker mode than the trait (§4.7: borrowed where the
+  trait says `own`, a shared borrow or a value where it says `mut ref`)
+  gets the impl the argument as it takes it. A built program read the
+  owned value as a borrow (`784` for a 3-byte `String`'s length, a
+  pointer for an `i64`) or crashed, and the interpreter stopped with
+  "deref of non-reference"; the table now holds a shim in the trait's
+  convention (B-2026-11-19-126).
+- A named value moved through a generic bound into an impl that borrows it
+  (the trait takes `own`) drops at the end of the call's statement, as the
+  moved receiver already did (§4.7, §7.4): `let v = e.eat(r);
+  println("after");` printed `after` before `r`'s `Drop`, which ran at the
+  end of the function (B-2026-11-19-127).
 - `for x in iter` over an owned parameter `iter: own I` with `I:
   Iterator` binds `x` as `I.Item`, the item `iter.next()` returns. It bound
   the iterator's own type `I`, so `t + x` under `where I.Item: Add[Output

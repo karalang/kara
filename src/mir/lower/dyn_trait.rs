@@ -158,7 +158,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.lcx.fns[&d].impl_params == 0 && Some(d) != shim {
                 self.lcx.self_tys.entry(d).or_insert(concrete);
             }
-            slots.push(self.lcx.instance(d, inst));
+            let target = self.lcx.instance(d, inst);
+            // An impl method weaker than the trait's (§4.7) is called
+            // through a shim in the trait's convention (B-2026-11-19-126).
+            let weaker = Some(d) != shim && modes_differ(m, self.lcx.fns[&d].f);
+            if weaker {
+                let name = format!("{target}#dyn");
+                if self.lcx.queued.insert(name.clone()) {
+                    self.lcx
+                        .dyn_shim_queue
+                        .push((name.clone(), target, m, concrete));
+                }
+                slots.push(name);
+            } else {
+                slots.push(target);
+            }
         }
         // A trait under `Clone` makes the `dyn` value `Clone`: the table
         // carries the concrete value's clone, which a clone of the `dyn`
@@ -185,6 +199,119 @@ impl<'l, 'a> Bx<'l, 'a> {
             starts,
         });
         Ok((self.lcx.program.vtables.len() - 1) as u32)
+    }
+
+    /// The body of the `dyn` slot shim for an impl method `f` weaker than
+    /// the trait's `m` (`Lcx::lower_dyn_mode_shim`): each argument taken
+    /// as the trait declares it and passed to `callee`, whose parameters
+    /// are `to`, as the impl takes it.
+    pub(super) fn dyn_mode_shim_body(
+        &mut self,
+        f: Option<&'a Function>,
+        m: &'a ast::TraitMethod,
+        concrete: Ty,
+        to: &[Ty],
+        callee: InstanceId,
+    ) -> R<()> {
+        let span = f.map_or(m.span, |f| f.span);
+        let Some(f) = f.filter(|f| f.params.len() + 1 == to.len()) else {
+            return self.unsupported(span, "a `dyn` slot shim whose method has no receiver");
+        };
+        let tcx = self.tys().tcx();
+        let recv = if m.self_is_own {
+            concrete
+        } else {
+            match m.self_param {
+                Some(ast::SelfParam::MutRef) => tcx.reference(concrete, true),
+                Some(ast::SelfParam::Ref) => tcx.reference(concrete, false),
+                _ if self.is_copy(concrete) => concrete,
+                _ => tcx.reference(concrete, false),
+            }
+        };
+        let mut from = vec![recv];
+        for ((tp, ip), &t) in m.params.iter().zip(&f.params).zip(&to[1..]) {
+            // The type under the impl's borrow, written or (D5) bare.
+            let base = match tcx.kind(t) {
+                HK::Ref(inner) | HK::MutRef(inner)
+                    if matches!(ip.ty.kind, ast::TypeKind::Ref(_) | ast::TypeKind::MutRef(_))
+                        || (!ip.is_own && self.param_mode_ty(ip, inner) == t) =>
+                {
+                    inner
+                }
+                _ => t,
+            };
+            from.push(match &tp.ty.kind {
+                ast::TypeKind::Ref(_) => tcx.reference(base, false),
+                ast::TypeKind::MutRef(_) => tcx.reference(base, true),
+                _ => self.param_mode_ty(tp, base),
+            });
+        }
+        self.push_scope();
+        let mut ops = Vec::with_capacity(to.len());
+        // Every argument is declared before the first temporary.
+        let mut locals = Vec::with_capacity(from.len());
+        for (i, &ft) in from.iter().enumerate() {
+            let l = self.b.arg(if i == 0 { "self" } else { "arg" }, ft);
+            if self.needs_drop(ft) {
+                self.schedule(ScopeEntry::Drop(Place::local(l)));
+            }
+            locals.push(l);
+        }
+        for ((&l, &ft), &tt) in locals.iter().zip(&from).zip(to) {
+            let p = Place::local(l);
+            let op = if ft == tt {
+                Operand::Move(p)
+            } else {
+                let kinds = {
+                    let tcx = self.tys().tcx();
+                    (tcx.kind(ft), tcx.kind(tt))
+                };
+                match kinds {
+                    // Owned, lent: the shim drops it after the call.
+                    (_, HK::Ref(inner)) if inner == ft => {
+                        let r = self.temp(tt);
+                        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+                        Operand::Move(Place::local(r))
+                    }
+                    (HK::MutRef(a), HK::Ref(b)) if a == b => {
+                        let r = self.temp(tt);
+                        self.assign(
+                            r,
+                            Rvalue::Ref(BorrowKind::Shared, p.project(ProjElem::Deref)),
+                        );
+                        Operand::Move(Place::local(r))
+                    }
+                    // A borrow of a `Copy` value the impl takes by value.
+                    (HK::Ref(a) | HK::MutRef(a), _) if a == tt && self.is_copy(tt) => {
+                        Operand::Copy(p.project(ProjElem::Deref))
+                    }
+                    _ => {
+                        let what = format!(
+                            "a `dyn` call passing `{}` to an impl taking `{}`",
+                            self.tys().display(ft),
+                            self.tys().display(tt)
+                        );
+                        return self.unsupported(span, &what);
+                    }
+                }
+            };
+            ops.push(op);
+        }
+        let func = self.fn_operand(&callee.name.clone(), callee.def, callee.args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: Place::local(Local::RETURN_PLACE),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        self.return_exit()?;
+        self.scopes.clear();
+        Ok(())
     }
 
     /// The value of `op` in the slot type `t` when that is a coercion into
@@ -662,4 +789,20 @@ fn checker_library_trait(tr: &str) -> Option<&'static ast::TraitDef> {
         ast::Item::TraitDef(t) if t.name == tr => Some(t),
         _ => None,
     })
+}
+
+/// Whether the impl method `f` takes its receiver or a parameter in
+/// another mode than the trait's `m` declares (§4.7 allows a weaker one).
+fn modes_differ(m: &ast::TraitMethod, f: &ast::Function) -> bool {
+    let kind = |p: &ast::Param| match p.ty.kind {
+        ast::TypeKind::Ref(_) => 1,
+        ast::TypeKind::MutRef(_) => 2,
+        _ => 0,
+    };
+    m.self_is_own != f.self_is_own
+        || m.self_param != f.self_param
+        || m.params
+            .iter()
+            .zip(&f.params)
+            .any(|(t, i)| t.is_own != i.is_own || kind(t) != kind(i))
 }
