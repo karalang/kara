@@ -1417,7 +1417,18 @@ impl<'a> super::TypeChecker<'a> {
         else {
             return;
         };
-        if method != "collect" || !args.is_empty() || !self.cli_lint_overrides.strict_core {
+        if method != "collect" || !args.is_empty() {
+            return;
+        }
+        self.collect_receiver_ends.insert(
+            SpanKey::from_span(&expr.span),
+            Span {
+                offset: object.span.offset + object.span.length,
+                length: 0,
+                ..object.span
+            },
+        );
+        if !self.cli_lint_overrides.strict_core {
             return;
         }
         if !matches!(expected, Type::Named { name, args } if name == "Vec" && args.len() == 1 && args[0] == Type::Str)
@@ -8666,6 +8677,44 @@ impl<'a> super::TypeChecker<'a> {
                                 "; collect the pieces into a `Vec[String]` and join them, \
                                  `pieces.join(\"\")`",
                             );
+                        }
+                        // B-2026-11-18-70: slices (`chunks` / `windows`)
+                        // collected where the target holds `Vec`s are
+                        // copied into `Vec`s first.
+                        if trait_name == "FromIterator" {
+                            let slice_of = match want.as_slice() {
+                                [Type::Slice { element, .. }] => Some((**element).clone()),
+                                _ => None,
+                            };
+                            let site = slice_of
+                                .filter(|el| {
+                                    let as_vec = Type::Named {
+                                        name: "Vec".to_string(),
+                                        args: vec![el.clone()],
+                                    };
+                                    offered.iter().any(|a| a.as_slice() == [as_vec.clone()])
+                                })
+                                .and_then(|_| {
+                                    self.collect_receiver_ends
+                                        .get(&SpanKey::from_span(&d.span))
+                                        .copied()
+                                });
+                            if let Some(span) = site {
+                                message.push_str(
+                                    "; each item is a slice, so copy it into a `Vec` before \
+                                     `.collect()`: `.map(|c| c.to_vec())`",
+                                );
+                                self.type_error_with_fix_it(
+                                    message,
+                                    d.span,
+                                    TypeErrorKind::TypeMismatch,
+                                    FixIt {
+                                        span,
+                                        replacement: ".map(|c| c.to_vec())".to_string(),
+                                    },
+                                );
+                                continue;
+                            }
                         }
                         // B-2026-10-18-35: lent pieces collected into owned
                         // `String`s are copied first.

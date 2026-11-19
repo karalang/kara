@@ -3164,6 +3164,10 @@ pub struct TypeChecker<'a> {
     /// The edit that copies each `Str` piece before a `collect` into a
     /// `Vec[String]`, by the call's span (B-2026-10-18-35).
     pub(super) collect_strings_fixes: FxHashMap<SpanKey, FixIt>,
+    /// B-2026-11-18-70: each argument-less `collect()`, keyed by its span,
+    /// to where its receiver ends, for a `.map(|c| c.to_vec())` when the
+    /// items turn out to be slices of a `Vec` the target holds.
+    pub(super) collect_receiver_ends: FxHashMap<SpanKey, Span>,
     /// Where a `collect` call's items can be widened, by the call's span:
     /// the end of its receiver, and the body of the receiver's `map`
     /// closure when that is one expression (B-2026-11-14-12).
@@ -4701,6 +4705,7 @@ impl<'a> TypeChecker<'a> {
             core_ref_results: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
             collect_strings_fixes: FxHashMap::default(),
+            collect_receiver_ends: FxHashMap::default(),
             collect_widen_sites: FxHashMap::default(),
             collect_literal_fixes: FxHashMap::default(),
             into_iter_sites: FxHashMap::default(),
