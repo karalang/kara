@@ -70,7 +70,6 @@ struct User {
 ## Not yet implemented
 
 - `Clone` on `Secret[T]`.
-- The `#[derive(Serialize)]` error: `karac check` accepts a derive over a type that contains a `Secret`, and the MIR backends then refuse it for lack of `Secret.serialize`.
 - `Zeroize` and `ConstantTimeEq` as importable, nameable items: `std.secret` exports only `Secret`, so a user `impl Zeroize` cannot be written yet (B-2026-11-07-24). Dropping a `Secret[String]`, or a `Secret[Vec[I]]` over an integer type `I`, zeros the whole buffer before it is freed (B-2026-11-16-192); a `Secret` of any other type, including `Array[u8, N]` and the integers held in place, is not zeroized.
 - `serialize_expose` and `deserialize_wrap`.
 

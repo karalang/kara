@@ -1534,6 +1534,30 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         for (owner, part, ty, span) in parts {
+            // design.md § Secret Type: a `Secret` is never serialized
+            // implicitly. The library's `Secret` has no serde impl, so the
+            // derive checked and every lane refused its code with "no method
+            // 'serialize' on type 'Secret'" (B-2026-11-19-63).
+            if self.serde_secret_part(&ty) {
+                self.type_error(
+                    format!(
+                        "{owner} derives {trait_name} but {part} has type '{}', which holds a \
+                         `Secret`: a secret is never {} by a derive (design.md § Secret \
+                         Type). Write `impl {trait_name}` for {owner} by hand, deciding what \
+                         the secret field becomes on the wire, or derive it on a non-secret \
+                         mirror type",
+                        type_display(&ty),
+                        if trait_name == "Serialize" {
+                            "serialized"
+                        } else {
+                            "deserialized"
+                        },
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                continue;
+            }
             let Some(missing) = self.serde_missing_part(&ty, trait_name) else {
                 continue;
             };
@@ -1548,6 +1572,31 @@ impl<'a> super::TypeChecker<'a> {
                 span,
                 TypeErrorKind::TypeMismatch,
             );
+        }
+    }
+
+    /// Whether `ty` holds a `std.secret.Secret` anywhere a derive would
+    /// serialize it.
+    fn serde_secret_part(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Named { name, args } => {
+                (name == "Secret"
+                    && self
+                        .env
+                        .structs
+                        .get("Secret")
+                        .is_some_and(|i| i.defining_stdlib_origin))
+                    || args.iter().any(|a| self.serde_secret_part(a))
+            }
+            Type::Tuple(elems) => elems.iter().any(|e| self.serde_secret_part(e)),
+            Type::Array { element, .. }
+            | Type::Slice { element, .. }
+            | Type::Vector { element, .. } => self.serde_secret_part(element),
+            Type::Ref(inner) | Type::MutRef(inner) | Type::Rc(inner) | Type::Arc(inner) => {
+                self.serde_secret_part(inner)
+            }
+            Type::Refinement { base, .. } => self.serde_secret_part(base),
+            _ => false,
         }
     }
 

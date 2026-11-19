@@ -20,6 +20,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `#[derive(Serialize)]` or `#[derive(Deserialize)]` over a type that
+  holds a `std.secret.Secret` (a field, or inside an `Option`, a `Vec`,
+  a tuple) is refused at the declaration, naming the field: a secret is
+  never serialized implicitly (design.md § Secret Type). `karac check`
+  accepted it and every backend then failed with "no method 'serialize'
+  on type 'Secret'". Write the impl by hand, or derive on a non-secret
+  mirror type (B-2026-11-19-63).
 - A generic `F`'s function-trait bound decides how it is called and what
   it takes, as a written function type does (core semantics §9.6): a bare
   `f: F` under `F: MutFn(..)` or `F: OnceFn(..)` is a borrow and cannot be
