@@ -28,10 +28,16 @@ use super::syntax::*;
 use super::ty::{AdtId, FloatTy, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
 use super::validate::validate;
 
+#[path = "interp_carry.rs"]
+mod carry;
 #[path = "comptime_natives.rs"]
 pub mod comptime;
 #[path = "interp_fast.rs"]
 mod fast;
+pub use carry::{
+    carry_bodies_used, carry_commit, carry_forget, carry_on, carry_take, CARRIED, CARRY_REFUSED,
+    REPL_TAKE_FN,
+};
 
 /// The functions of a program, by instance name, and the `Drop` body of
 /// each ADT that has one.
@@ -872,6 +878,8 @@ fn run_with(
         forgotten: Vec::new(),
         repl_kept: Vec::new(),
         repl_binding_locals: Vec::new(),
+        repl_carry: None,
+        repl_take: Vec::new(),
         snapshot_bytes: 0,
         sweep_at: SWEEP_FLOOR,
         bytes_snapshots: Vec::new(),
@@ -955,10 +963,21 @@ fn run_with(
         requeue: Vec::new(),
         outer_tasks: Vec::new(),
         cur_task: 0,
+        root_task: 0,
+        waiting_tasks: Vec::new(),
         wait: None,
     };
     if comptime::active_now() {
         it.max_steps = it.max_steps.min(crate::comptime::STEP_LIMIT);
+    }
+    if let Err(e) = carry::carry_in(&mut it) {
+        return RunResult {
+            output: String::new(),
+            stderr: String::new(),
+            events: Vec::new(),
+            outcome: Outcome::Error(format!("{CARRY_REFUSED}: {e}")),
+            resumes: 0,
+        };
     }
     let task = coroutines && program.bodies.contains_key(&coroutine::resume_name(entry));
     let outcome = if !problems.is_empty() {
@@ -978,6 +997,8 @@ fn run_with(
         match ret.and_then(|v| it.main_result(entry, v)) {
             // A comptime root's result is read out, not dropped.
             Ok(done) if comptime => done,
+            // A carried run's values outlive it, in the session.
+            Ok(done) if it.repl_carry.is_some() => done,
             Ok(done) => match it.leaks() {
                 Some(leaks) => Outcome::Error(leaks),
                 None => done,
@@ -987,6 +1008,7 @@ fn run_with(
             Err(Stop::Error(e)) => Outcome::Error(e),
         }
     };
+    carry::carry_out(&mut it, matches!(outcome, Outcome::Returned(_)));
     if let Some(b) = it.repl_bindings.take() {
         REPL_BINDINGS.with(|r| *r.borrow_mut() = Some(b));
     }
@@ -1014,6 +1036,10 @@ pub const REPL_RETAIN_FN: &str = "__karac_repl_retain";
 /// What the name of a binding [`REPL_RETAIN_FN`] held starts with, before
 /// the binding's own name.
 pub const REPL_HELD_PREFIX: &str = "\u{1}held:";
+
+/// What the name a REPL cell records its shown value under starts with
+/// (`crate::cli::repl_v2::SHOWN_VALUE`): not a binding, so not carried.
+pub const REPL_SHOWN_PREFIX: &str = "__karac_shown";
 
 /// A binding a REPL cell ended with: its name, and its type and value as
 /// source, or `None` when the value cannot be written so.
@@ -1286,6 +1312,7 @@ struct Flag {
     at: Option<String>,
 }
 
+#[derive(Clone)]
 struct HeapObj {
     count: u32,
     /// The `weak` handles to a `shared` value (core semantics §6.5). At
@@ -1353,7 +1380,7 @@ const COMPACT_MIN_HOLES: usize = 32;
 pub const SMALL_SORT: usize = 20;
 
 /// A table's removed-entry slots ([`Interp::table_holes`]).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Holes {
     at: rustc_hash::FxHashSet<usize>,
     /// The holes, the latest last: the next insert fills the latest, as
@@ -1463,6 +1490,12 @@ struct Interp<'a> {
     /// The local each [`Interp::repl_bindings`] entry was read from, in
     /// order, which [`REPL_RETAIN_FN`] puts the held bindings among.
     repl_binding_locals: Vec<usize>,
+    /// In carry mode (the REPL's, B-2026-11-19-3), what each
+    /// [`Interp::repl_bindings`] entry carries to the next cell, `None` for
+    /// one that cannot be carried ([`carry`]).
+    repl_carry: Option<Vec<Option<(String, Value)>>>,
+    /// The carried bindings this run's cell takes ([`REPL_TAKE_FN`]).
+    repl_take: Vec<(String, Value)>,
     /// The bytes `String.bytes` has copied since the last sweep, and the
     /// count that starts the next one.
     snapshot_bytes: usize,
@@ -1581,6 +1614,12 @@ struct Interp<'a> {
     outer_tasks: Vec<usize>,
     /// The task the executor is running.
     cur_task: usize,
+    /// The task `main` runs as: the first, unless a REPL cell's run starts
+    /// with the session's earlier tasks ([`carry`]).
+    root_task: usize,
+    /// The tasks a REPL cell's run left queued or parked, carried to the
+    /// next cell's run ([`carry`]).
+    waiting_tasks: Vec<(usize, Option<Wait>)>,
     /// What the running task's last `__ready` reported it waits for.
     wait: Option<Wait>,
     /// The borrow flags each suspended coroutine frame holds, by its address.
@@ -1739,7 +1778,7 @@ struct HttpBuilder {
 }
 
 /// One `Interner`'s strings.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Interned {
     strings: Vec<String>,
     ids: rustc_hash::FxHashMap<String, usize>,
@@ -1818,11 +1857,24 @@ impl<'a> Interp<'a> {
         decoded: Option<std::rc::Rc<fast::Decoded>>,
         mut locals: Vec<Value>,
     ) -> R<Value> {
+        if self.repl_carry.is_some() && name.starts_with(REPL_TAKE_FN) {
+            let which = match locals.get(1) {
+                Some(v) => self.display(&v.clone())?,
+                None => String::new(),
+            };
+            locals.clear();
+            self.spare_locals.push(locals);
+            return self.repl_take_value(&which);
+        }
         if self.repl_bindings.is_some() && name.starts_with(REPL_SNAPSHOT_FN) {
             self.record_repl_binding(body, &locals[1..])?;
         }
         if self.repl_bindings.is_some() && name.starts_with(REPL_RETAIN_FN) {
-            self.retain_repl_rest()?;
+            let cell = match locals.get(1) {
+                Some(v) => self.display(&v.clone())?,
+                None => "main".to_string(),
+            };
+            self.retain_repl_rest(&cell)?;
         }
         if self.frames.len() >= MAX_DEPTH {
             // A compiled program's stack guard reports it so and aborts
@@ -2479,7 +2531,7 @@ impl<'a> Interp<'a> {
                 let r = self.ready(&args)?;
                 // The root's wait is the place a deadlock reports
                 // (B-2026-11-16-202).
-                if self.cur_task == 0 && matches!(r, Value::Bool(false)) {
+                if self.cur_task == self.root_task && matches!(r, Value::Bool(false)) {
                     self.root_wait_at = Some(self.user_call_span);
                 }
                 Ok(r)
@@ -14026,10 +14078,26 @@ impl<'a> Interp<'a> {
             }
             ty = t;
         }
-        let source = match (self.source_ty(ty), self.source_of(&v, ty)) {
+        let mut source = match (self.source_ty(ty), self.source_of(&v, ty)) {
             (Some(t), Some(v)) => Some((t, v)),
             _ => None,
         };
+        // In carry mode the value itself goes on to the next cell, with
+        // its type as source; its source form, when it has one, is the
+        // fallback. A shown value (the cell's own, or `%show`'s) is not a
+        // binding.
+        let shown = name.starts_with(REPL_SHOWN_PREFIX) || name == "__karac_show";
+        let carry = self.repl_carry.is_some() && !shown;
+        let carried = match carry {
+            true => self.repl_carried(v.clone(), ty)?,
+            false => None,
+        };
+        if let Some((_, t)) = &carried {
+            let text = source
+                .take()
+                .map_or_else(|| CARRIED.to_string(), |(_, s)| s);
+            source = Some((t.clone(), text));
+        }
         // A binding the next cell starts from is the same value, so the
         // session is one `main` (deferred.md § Interactive Evaluation
         // Model > Cell Scope): its drop at this cell's end is skipped, and
@@ -14042,8 +14110,21 @@ impl<'a> Interp<'a> {
         let tasks = self.tys.tcx().adt_of(ty).is_some_and(|(adt, _)| {
             !adt.user && matches!(adt.name.as_str(), "TaskGroup" | "TaskHandle")
         });
-        if let (Some(addr), false) = (lent.clone(), tasks) {
+        // A carried `shared` handle is a handle of the session's own: the
+        // binding's is dropped at the cell's end as any other, which a drop
+        // that suspends needs (its drop is a call, not a `Drop` the kept
+        // places skip).
+        let shared = match (&carried, carry) {
+            (Some((Value::Shared(a), _)), true) => Some(*a),
+            _ => None,
+        };
+        if let Some(a) = shared {
+            self.live(a)?.count += 1;
+        } else if let (Some(addr), false) = (lent.clone(), tasks && !carry) {
             self.repl_kept.push(addr);
+        }
+        if let (Some(c), true) = (self.repl_carry.as_mut(), carry) {
+            c.push(carried.map(|(v, _)| (name.clone(), v)));
         }
         if let Some(b) = self.repl_bindings.as_mut() {
             b.push((name, source));
@@ -14062,15 +14143,18 @@ impl<'a> Interp<'a> {
     /// too, as a held binding, in the place its local has among the
     /// recorded ones (declaration order), and is not dropped at the cell's
     /// end. Only one whose value can be written as source can be held.
-    fn retain_repl_rest(&mut self) -> R<()> {
-        let Some(main) = self.program.bodies.get("main") else {
+    fn retain_repl_rest(&mut self, cell: &str) -> R<()> {
+        let program: &'a Program = self.program;
+        let Some(main) = program.bodies.get(cell) else {
             return Ok(());
         };
+        let carry = self.repl_carry.is_some();
         let Some(fi) = self.frames.len().checked_sub(1) else {
             return Ok(());
         };
         let id = self.frames[fi].id;
-        let mut held: Vec<(usize, ReplBinding)> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut held: Vec<(usize, ReplBinding, Option<(String, Value)>)> = Vec::new();
         for (i, decl) in main.locals.iter().enumerate() {
             let crate::mir::syntax::LocalKind::User { name, .. } = &decl.kind else {
                 continue;
@@ -14105,8 +14189,17 @@ impl<'a> Interp<'a> {
                 _ => Vec::new(),
             };
             for (field, part, ty) in parts {
-                let (Some(t), Some(src)) = (self.source_ty(ty), self.source_of(&part, ty)) else {
-                    continue;
+                let source = self.source_ty(ty).zip(self.source_of(&part, ty));
+                let carried = match carry {
+                    true => self.repl_carried(part.clone(), ty)?,
+                    false => None,
+                };
+                let (t, src) = match (&carried, source) {
+                    (Some((_, t)), s) => {
+                        (t.clone(), s.map_or_else(|| CARRIED.to_string(), |s| s.1))
+                    }
+                    (None, Some(s)) => s,
+                    (None, None) => continue,
                 };
                 let mut at = addr.clone();
                 let mut label = name.clone();
@@ -14115,13 +14208,15 @@ impl<'a> Interp<'a> {
                     label = format!("{name}_{k}");
                 }
                 self.repl_kept.push(at);
-                held.push((i, (format!("{REPL_HELD_PREFIX}{label}"), Some((t, src)))));
+                let held_name = format!("{REPL_HELD_PREFIX}{label}");
+                let carried = carried.map(|(v, _)| (held_name.clone(), v));
+                held.push((i, (held_name, Some((t, src))), carried));
             }
         }
         let Some(b) = self.repl_bindings.as_mut() else {
             return Ok(());
         };
-        for (local, binding) in held {
+        for (local, binding, carried) in held {
             let at = self
                 .repl_binding_locals
                 .iter()
@@ -14129,6 +14224,9 @@ impl<'a> Interp<'a> {
                 .unwrap_or(b.len());
             b.insert(at, binding);
             self.repl_binding_locals.insert(at, local);
+            if let Some(c) = self.repl_carry.as_mut() {
+                c.insert(at.min(c.len()), carried);
+            }
         }
         Ok(())
     }
@@ -16290,7 +16388,10 @@ impl<'a> Interp<'a> {
                 // reachable, so it is not reported as leaked.
                 if !self.repl_kept.is_empty() && boxed.is_none() && self.repl_kept.contains(&addr) {
                     let v = std::mem::replace(self.slot_mut(&addr)?, Value::Uninit);
-                    self.forgotten.push(v);
+                    // A carried value is the session's ([`carry`]).
+                    if self.repl_carry.is_none() {
+                        self.forgotten.push(v);
+                    }
                     return Ok(Some(*target));
                 }
                 // A boxed field's box goes with its value.
@@ -17168,6 +17269,7 @@ impl<'a> Interp<'a> {
             return err(format!("{resume} does not take its frame"));
         };
         let mut frame = self.fresh_frame(frame_ty);
+        self.root_task = self.tasks.len();
         if let Value::Agg(fs) = &mut frame {
             // The arguments are the frame's first locals after the state.
             for (i, a) in args.into_iter().enumerate() {
@@ -17212,10 +17314,28 @@ impl<'a> Interp<'a> {
     /// are woken in the order they parked. The run ends when every task has
     /// finished, with the root's result.
     fn run_tasks(&mut self, entry: &str) -> R<Value> {
-        let mut queue = std::collections::VecDeque::from([0usize]);
+        let root_task = self.root_task;
+        let mut queue = std::collections::VecDeque::from([root_task]);
         let mut parked: Vec<(usize, Wait)> = Vec::new();
+        // The tasks a REPL session's earlier cells left waiting to run
+        // ([`carry`]) go on after this cell's root.
+        for (t, w) in std::mem::take(&mut self.waiting_tasks) {
+            match w {
+                Some(w) => parked.push((t, w)),
+                None => queue.push_back(t),
+            }
+        }
         let mut root = None;
         loop {
+            // A REPL cell's run ends with its root: the tasks it leaves
+            // run when a later cell waits for them, as they would in the
+            // one `main` the session is.
+            if root.is_some() && self.repl_carry.is_some() {
+                self.waiting_tasks = queue.into_iter().map(|t| (t, None)).collect();
+                self.waiting_tasks
+                    .extend(parked.into_iter().map(|(t, w)| (t, Some(w))));
+                break;
+            }
             self.fire_deadlines()?;
             if !self.torn.is_empty() {
                 let torn = std::mem::take(&mut self.torn);
@@ -17265,7 +17385,7 @@ impl<'a> Interp<'a> {
             queue.extend(std::mem::take(&mut self.spawned));
             match polled {
                 Value::Variant(0, mut fs) if fs.len() == 1 => {
-                    if t == 0 {
+                    if t == root_task {
                         let frame = self.live(slot)?.value.clone();
                         if let Some(field) = self.frame_holds(&frame, frame_ty) {
                             return err(format!(
@@ -17279,7 +17399,7 @@ impl<'a> Interp<'a> {
                     }
                 }
                 Value::Variant(1, _) => {
-                    if t == 0 {
+                    if t == root_task {
                         self.resumes += 1;
                         if self.cancel_after == Some(self.resumes) {
                             let drop = coroutine::drop_frame_name(entry);
@@ -19791,7 +19911,7 @@ impl<'a> Interp<'a> {
     /// The running task's `std.log` id: positive inside a task, 0 outside
     /// every task.
     fn log_task_id(&self) -> i128 {
-        if self.cur_task != 0 && self.cur_task != usize::MAX {
+        if self.cur_task != self.root_task && self.cur_task != usize::MAX {
             if let Some(t) = self.tasks.get(self.cur_task) {
                 return t.log_id;
             }
@@ -20399,6 +20519,7 @@ struct TaskSlot {
 
 /// A spawned task's handle under the executor: its result once the task
 /// returns, until `join` takes it.
+#[derive(Clone)]
 struct HandleSlot {
     held: Ty,
     result: Option<Value>,
@@ -20410,6 +20531,7 @@ struct HandleSlot {
 }
 
 /// A `TaskGroup`: its limit on running tasks, and how many run.
+#[derive(Clone)]
 struct GroupSlot {
     limit: i128,
     live: i128,
@@ -20702,6 +20824,7 @@ const VEC_MORE_METHODS: &[&str] = &[
 /// One `RateLimiter`: a token bucket per key, each holding up to
 /// `capacity` tokens and refilled at `rate` a second, with the time of its
 /// last refill.
+#[derive(Clone)]
 struct Limiter {
     rate: f64,
     capacity: f64,
@@ -20732,6 +20855,7 @@ fn pool_free(p: &PoolEntry) -> bool {
     p.closed || !p.slots.is_empty() || p.active < p.max
 }
 
+#[derive(Clone)]
 struct PoolEntry {
     /// The connection type `T`.
     elem: Ty,
@@ -20825,6 +20949,7 @@ enum Fail {
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).
 /// A channel's queue: its element type, its capacity (0 is unbounded for a
 /// `Channel`), and how many of each end are live.
+#[derive(Clone)]
 struct Chan {
     queue: std::collections::VecDeque<Value>,
     elem: Ty,

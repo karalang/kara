@@ -13,12 +13,21 @@
 //! - Last expression in a cell auto-prints if it's not `Unit`.
 //!
 //! Bindings across cells (v2):
-//! - A cell's program ends by recording each top-level binding it leaves
-//!   (`crate::mir::interp::REPL_SNAPSHOT_FN`), and the next cell starts from
-//!   those values written as source, so no earlier cell runs again
-//!   (`Session::v2_values`). A value with no source form (a function, a
-//!   `shared` value, a handle) makes the next cell replay the earlier cells
-//!   instead, dropping what the replay prints.
+//! - Every cell runs in the session's one interpreter, on its own worker
+//!   thread (B-2026-11-19-3): a cell's program ends by recording each
+//!   top-level binding it leaves (`crate::mir::interp::REPL_SNAPSHOT_FN`),
+//!   and the interpreter keeps the values themselves, with its heap, its
+//!   tasks and its logger, for the next cell to take
+//!   (`crate::mir::interp::REPL_TAKE_FN`). So no earlier cell runs again,
+//!   a task spawned once runs once, and a closure, a `shared` value or a
+//!   handle is the same value in every later cell. Each cell is a function
+//!   of its own (`__karac_cell_N`) that later programs keep, so a carried
+//!   closure's or task's body is still there.
+//! - Where the carry cannot be given to a cell (a value that borrows from a
+//!   cell's frame, a type redefined under it, a program built differently)
+//!   the cell starts from the values written as source
+//!   (`Session::v2_values`), and replays the earlier cells when one has no
+//!   source form, dropping what the replay prints.
 //! - A binding a cell moved away is left out; a later use of it is refused
 //!   naming the cell that moved it, unless `--auto-clone` /
 //!   `%set auto-clone on` clones it there (`Session::auto_clone_moves`).
@@ -710,6 +719,29 @@ pub struct Session {
     /// snapshot (they don't run main). Rolled back in lockstep with
     /// `cell_history` on diagnostic-side failure.
     cell_effect_history: Vec<CellEffectSnapshot>,
+    /// The thread the session's programs run on, which keeps the
+    /// interpreter's carry: the session's heap, tasks and logger
+    /// (B-2026-11-19-3).
+    worker: crate::cli::repl_v2::Worker,
+    /// Whether the worker's committed carry holds [`Session::v2_values`]:
+    /// a cell then starts from the values themselves
+    /// ([`crate::mir::interp::REPL_TAKE_FN`]), and nothing replays.
+    carry_live: bool,
+    /// Each accepted cell's function, as its program defined it.
+    cell_fns: BTreeMap<usize, String>,
+    /// The cells whose functions the carry still calls into (a closure or
+    /// a task one made): a later program defines them again.
+    carry_cells: std::collections::BTreeSet<usize>,
+    /// The session's own functions (by plain name) whose values the carry
+    /// holds: `fn` items a binding stored, which each later program names
+    /// so it builds their bodies.
+    carry_items: Vec<String>,
+    /// The function the running cell's program defines, until it is
+    /// accepted.
+    pending_cell_fn: Option<(usize, String)>,
+    /// Whether the program last built starts from the carried state
+    /// ([`Session::push_cell_start`]).
+    built_take: std::cell::Cell<bool>,
 }
 
 /// Per-cell structured effect snapshot used by the line 773 cross-cell
@@ -796,6 +828,13 @@ impl Session {
             session_defers: Vec::new(),
             log_init: None,
             cell_effect_history: Vec::new(),
+            worker: crate::cli::repl_v2::Worker::new(),
+            carry_live: false,
+            cell_fns: BTreeMap::new(),
+            carry_cells: Default::default(),
+            carry_items: Vec::new(),
+            pending_cell_fn: None,
+            built_take: std::cell::Cell::new(false),
         }
     }
 
@@ -1033,8 +1072,9 @@ impl Session {
         if !s.is_empty() && !s.ends_with('\n') {
             s.push('\n');
         }
-        s.push_str(&format!("fn {snap_fn}[T](name: Str, value: T) {{}}\n"));
+        s.push_str(&self.program_stubs());
         s.push_str("fn main() {\n");
+        s.push_str(&self.keep_cell_fns());
         let mut ranges = Vec::new();
         self.push_cell_start(&mut s, &mut ranges, true);
         let head = "let __karac_show = (\n";
@@ -1043,7 +1083,7 @@ impl Session {
         ranges.push((SHOW_CELL, at..at + rest.len()));
         s.push_str("}\n");
         let saved = std::mem::replace(&mut self.cell_byte_ranges, ranges);
-        let r = crate::cli::repl_v2::run_cell(&s);
+        let r = crate::cli::repl_v2::run_cell(&self.worker, &s, self.built_take.get());
         let relabel = |me: &Self, text: &str| me.relabel_v2(&s, text);
         let out = match r {
             Ok(ran) => {
@@ -1788,6 +1828,17 @@ impl Session {
                 .map(|vs| (first, vs.clone())),
         };
         self.v2_values = None;
+        // The carried values are the moved ones: the replay starts from
+        // source, and from the first cell when a start value has none.
+        self.carry_live = false;
+        let carried = |vs: &Vec<V2Value>| vs.iter().any(|v| v.value == crate::mir::interp::CARRIED);
+        if self
+            .v2_replay_from
+            .as_ref()
+            .is_some_and(|(_, vs)| carried(vs))
+        {
+            self.v2_replay_from = None;
+        }
         Some(notes)
     }
 
@@ -2007,6 +2058,9 @@ impl Session {
         // (the fallback for a refused cell) would rebuild them under the
         // new definition and report the old cell's code against it.
         let gone: Vec<&String> = self.retired_values.iter().map(|(n, _)| n).collect();
+        let forget: Vec<String> = gone.iter().map(|n| n.to_string()).collect();
+        self.worker
+            .run(move || crate::mir::interp::carry_forget(&forget));
         let mut i = 0;
         while i < self.persistent_lets.len() {
             let names = parse_let_binding_names(&self.persistent_lets[i]);
@@ -2083,7 +2137,11 @@ impl Session {
                 }
                 match crate::cli::repl_v2::check(&synthetic) {
                     Ok(()) => {
-                        let r = crate::cli::repl_v2::run_checked(&synthetic);
+                        let r = crate::cli::repl_v2::run_checked(
+                            &self.worker,
+                            &synthetic,
+                            self.built_take.get(),
+                        );
                         if let Ok(ran) = &r {
                             self.v2_pending =
                                 v2_values_of(&live, &ran.bindings, &mut self.held_count);
@@ -2095,11 +2153,10 @@ impl Session {
                         break;
                     }
                     Err(errs) => {
-                        snap_errors = Some(
-                            errs.iter()
-                                .map(|e| self.relabel_v2(&synthetic, e))
-                                .collect(),
-                        );
+                        let relabelled: Vec<String> = errs
+                            .iter()
+                            .map(|e| self.relabel_v2(&synthetic, e))
+                            .collect();
                         let moved = moved_at_snapshot(&synthetic, &errs);
                         if moved.is_empty() {
                             // A use of a value a type's redefinition took
@@ -2116,6 +2173,18 @@ impl Session {
                                     .collect();
                                 return Err(WrapperOutcome::errors(errors, Vec::new()));
                             }
+                            // An error outside the cell, in a program that
+                            // takes carried values, is the carry's (a type it
+                            // wrote, an earlier cell's function): the cell
+                            // starts again without it.
+                            let here = format!("cell {}:", self.cell_history.len());
+                            let outside =
+                                |e: &String| !e.lines().next().is_some_and(|l| l.contains(&here));
+                            if self.carry_live && relabelled.iter().any(outside) {
+                                self.drop_carry();
+                                return self.run_cell_v2(cell_src, capture);
+                            }
+                            snap_errors = Some(relabelled);
                             break;
                         }
                         live.retain(|(n, _)| !moved.contains(n));
@@ -2128,10 +2197,20 @@ impl Session {
             Some(run) => run,
             None => {
                 let synthetic = self.build_synthetic_cell(cell_src, None);
-                let r = crate::cli::repl_v2::run_cell(&synthetic);
+                let r =
+                    crate::cli::repl_v2::run_cell(&self.worker, &synthetic, self.built_take.get());
                 (synthetic, r)
             }
         };
+        let refused = |f: &crate::cli::repl_v2::Failed| {
+            f.errors
+                .iter()
+                .any(|e| e.contains(crate::mir::interp::CARRY_REFUSED))
+        };
+        if matches!(&r, Err(f) if refused(f)) && self.carry_live {
+            self.drop_carry();
+            return self.run_cell_v2(cell_src, capture);
+        }
         match r {
             Ok(mut ran) => {
                 ran.stderr = self.relabel_v2(&synthetic, &ran.stderr);
@@ -2289,9 +2368,11 @@ impl Session {
             (None, Some((k, vs))) => (*k, Some(vs)),
             (None, None) => (0, None),
         };
+        let take = self.carry_live && from == usize::MAX;
+        self.built_take.set(take);
         for v in values.into_iter().flatten() {
             let m = if v.mutable { "mut " } else { "" };
-            s.push_str(&format!("let {m}{}: {} = {};\n", v.name, v.ty, v.value));
+            s.push_str(&self.start_let(v, m, take));
         }
         for (i, prior_let) in self.persistent_lets.iter().enumerate() {
             let scoped = self
@@ -2317,9 +2398,94 @@ impl Session {
                 }
             }
         }
-        if let Some(init) = &self.log_init {
+        // A carried session keeps its logger; otherwise it is made again.
+        if let (Some(init), false) = (&self.log_init, take) {
             s.push_str(init);
             s.push_str(";\n");
+        }
+    }
+
+    /// The `let` a program starts binding `v` with: taking the carried
+    /// value, or building it from its source form.
+    fn start_let(&self, v: &V2Value, m: &str, take: bool) -> String {
+        match take {
+            true => format!(
+                "let {m}{}: {} = {}(\"{}\");\n",
+                v.name,
+                v.ty,
+                crate::mir::interp::REPL_TAKE_FN,
+                v.name
+            ),
+            false => format!("let {m}{}: {} = {};\n", v.name, v.ty, v.value),
+        }
+    }
+
+    /// The functions every program of the session defines before its own
+    /// code: the REPL's hooks into the interpreter, and, while the session
+    /// is carried, the earlier cells' functions the carry calls into.
+    fn program_stubs(&self) -> String {
+        use crate::mir::interp::{REPL_RETAIN_FN, REPL_SNAPSHOT_FN, REPL_TAKE_FN};
+        let mut s = format!(
+            "fn {REPL_TAKE_FN}[T](name: Str) -> T {{ panic(\"the REPL carries this value\") }}\n\
+             fn {REPL_SNAPSHOT_FN}[T](name: Str, value: T) {{}}\n\
+             fn {REPL_RETAIN_FN}(cell: Str) {{}}\n\
+             fn __karac_repl_never() -> bool {{ false }}\n"
+        );
+        if self.carry_live {
+            for j in &self.carry_cells {
+                if let Some(f) = self.cell_fns.get(j) {
+                    s.push_str(f);
+                }
+            }
+        }
+        s
+    }
+
+    /// The statements `main` starts with so the earlier cells' functions
+    /// [`Session::program_stubs`] defines are part of the program, as
+    /// called from it (they never are): only what `main` reaches is built,
+    /// and how a panic in a task leaves it depends on the calls that reach
+    /// it.
+    fn keep_cell_fns(&self) -> String {
+        if !self.carry_live {
+            return String::new();
+        }
+        let mut s: String = self
+            .carry_cells
+            .iter()
+            .filter(|j| self.cell_fns.contains_key(j))
+            .map(|j| format!("if __karac_repl_never() {{ let _ = __karac_cell_{j}(); }}\n"))
+            .collect();
+        for f in &self.carry_items {
+            s.push_str(&format!("if __karac_repl_never() {{ let _ = {f}; }}\n"));
+        }
+        // How the program is built depends on whether it makes an
+        // isolating group or cancels anywhere: once a cell has, every
+        // later program does too (never at run time), so the carried
+        // tasks' and closures' bodies are built as when they were made.
+        // The logger the session set up is called from no later cell's
+        // code: its backend is part of every program the same way.
+        if let Some(init) = &self.log_init {
+            s.push_str(&format!("if __karac_repl_never() {{ {init}; }}\n"));
+        }
+        let used = |w: &str| self.cell_fns.values().any(|f| f.contains(w));
+        if used("isolating") {
+            s.push_str("if __karac_repl_never() { let _ = TaskGroup.isolating(); }\n");
+        }
+        if used(".cancel(") || used("deadline") {
+            s.push_str("if __karac_repl_never() { let g = TaskGroup.new(); g.cancel(); }\n");
+        }
+        s
+    }
+
+    /// The session carries no values any more: a cell starts from their
+    /// source forms, or replays when one has none.
+    fn drop_carry(&mut self) {
+        self.carry_live = false;
+        let carried_only =
+            |vs: &Vec<V2Value>| vs.iter().any(|v| v.value == crate::mir::interp::CARRIED);
+        if self.v2_values.as_ref().is_some_and(carried_only) {
+            self.v2_values = None;
         }
     }
 
@@ -2338,20 +2504,22 @@ impl Session {
         // A bare final expression's value is recorded to be shown.
         let shown = shown_cell(cell_src);
         let retain_fn = crate::mir::interp::REPL_RETAIN_FN;
-        if snap.is_some() || shown.is_some() {
-            s.push_str(&format!("fn {snap_fn}[T](name: Str, value: T) {{}}\n"));
-            s.push_str(&format!("fn {retain_fn}() {{}}\n"));
-        }
+        s.push_str(&self.program_stubs());
         // `?` is legal in any cell: the session is the body of a
         // `fn main() -> Result[(), AnyError]` (deferred.md § Interactive
         // Evaluation Model > Cell Scope). Only a program that uses it takes
         // that `main`, so a cell's bare `return;` keeps working.
         let fallible = self.cell_history.iter().any(|c| uses_question(c));
-        if fallible {
-            s.push_str("fn main() -> Result[(), AnyError] {\n");
+        let ret = if fallible {
+            " -> Result[(), AnyError]"
         } else {
-            s.push_str("fn main() {\n");
-        }
+            ""
+        };
+        // The cell is a function of its own, which a later program defines
+        // again while the carry holds a closure or task it made.
+        let cell_fn = format!("__karac_cell_{}", self.cell_history.len());
+        let fn_start = s.len();
+        s.push_str(&format!("fn {cell_fn}(){ret} {{\n"));
         let mut ranges: Vec<(usize, Range<usize>)> = Vec::new();
         // Under a provider the cell is not recorded, but it still starts
         // from the values; a refused snapshot program falls back to the
@@ -2373,12 +2541,15 @@ impl Session {
             for (name, _) in snap {
                 s.push_str(&format!("{snap_fn}(\"{name}\", {name});\n"));
             }
-            s.push_str(&format!("{retain_fn}();\n"));
+            s.push_str(&format!("{retain_fn}(\"{cell_fn}\");\n"));
         }
         if fallible {
             s.push_str("Ok(())\n");
         }
         s.push_str("}\n");
+        self.pending_cell_fn = Some((cell_idx, s[fn_start..].to_string()));
+        let keep = self.keep_cell_fns();
+        s.push_str(&format!("fn main(){ret} {{\n{keep}{cell_fn}()\n}}\n"));
         self.cell_byte_ranges = ranges;
         s
     }
@@ -2400,7 +2571,9 @@ impl Session {
         if !s.is_empty() && !s.ends_with('\n') {
             s.push('\n');
         }
+        s.push_str(&self.program_stubs());
         s.push_str("fn main() {\n");
+        s.push_str(&self.keep_cell_fns());
         let mut ranges = Vec::new();
         let defer_line = |s: &mut String, stmt: &str| {
             s.push_str(stmt);
@@ -2409,6 +2582,8 @@ impl Session {
             }
             s.push('\n');
         };
+        self.built_take
+            .set(self.carry_live && self.v2_values.is_some());
         match &self.v2_values {
             // Each `defer` after the binding made before it, so it runs
             // between their drops as it would in `main`.
@@ -2424,7 +2599,7 @@ impl Session {
                 }
                 for v in values {
                     let m = if v.mutable { "mut " } else { "" };
-                    s.push_str(&format!("let {m}{}: {} = {};\n", v.name, v.ty, v.value));
+                    s.push_str(&self.start_let(v, m, self.carry_live));
                     for (after, stmt) in &self.session_defers {
                         if after.as_deref() == Some(v.name.as_str()) {
                             defer_line(&mut s, stmt);
@@ -2442,7 +2617,7 @@ impl Session {
         self.push_in_scopes(&mut s, &mut ranges, "", true);
         s.push_str("}\n");
         self.cell_byte_ranges = ranges;
-        match crate::cli::repl_v2::run_cell(&s) {
+        match crate::cli::repl_v2::run_cell(&self.worker, &s, self.built_take.get()) {
             Ok(ran) => Ok(ran.stdout),
             Err(f) => Err(f.errors.iter().map(|e| self.relabel_v2(&s, e)).collect()),
         }
@@ -2476,6 +2651,7 @@ impl Session {
                 self.v2_replay_from = None;
             }
             self.v2_values = pending;
+            self.commit_carry(cell_idx);
             // A name bound again is no longer the retired value's.
             if let Some(values) = &self.v2_values {
                 self.retired_values
@@ -2540,6 +2716,52 @@ impl Session {
         }
     }
 
+    /// Accepts the last run's carry, as cell `cell_idx` left it, when it
+    /// carried every binding [`Session::v2_values`] holds.
+    fn commit_carry(&mut self, cell_idx: usize) {
+        let names: Vec<Option<String>> = match &self.v2_values {
+            Some(vs) => vs.iter().map(|v| Some(v.name.clone())).collect(),
+            None => Vec::new(),
+        };
+        let some = self.v2_values.is_some();
+        let committed = self
+            .worker
+            .run(move || some && crate::mir::interp::carry_commit(&names))
+            .unwrap_or(false);
+        if let Some((idx, f)) = self.pending_cell_fn.take() {
+            if idx == cell_idx {
+                self.cell_fns.insert(idx, f);
+            }
+        }
+        if !committed {
+            self.drop_carry();
+            return;
+        }
+        self.carry_live = true;
+        let used = self
+            .worker
+            .run(crate::mir::interp::carry_bodies_used)
+            .unwrap_or_default();
+        self.carry_items = used
+            .iter()
+            .filter(|n| {
+                !n.starts_with("__karac")
+                    && n.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    && self.items_source.contains(&format!("fn {n}"))
+            })
+            .cloned()
+            .collect();
+        self.carry_items.sort();
+        self.carry_cells = used
+            .iter()
+            .filter_map(|n| {
+                let rest = n.strip_prefix("__karac_cell_")?;
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+            .collect();
+    }
+
     /// Drop every persistent `let` binding accumulated so far. Items
     /// (`fn` / `struct` / etc.) and cell history are left intact. Also
     /// clears the value-snapshot cache so a subsequent re-bind starts
@@ -2547,6 +2769,10 @@ impl Session {
     /// nothing to override on the next cell anyway, but the explicit
     /// clear keeps the two stores in sync).
     pub fn reset_persistent_lets(&mut self) {
+        self.worker.run(|| crate::mir::interp::carry_on(true));
+        self.carry_live = false;
+        self.carry_cells.clear();
+        self.carry_items.clear();
         self.persistent_lets.clear();
         self.v2_values = Some(Vec::new());
         self.v2_move_starts.clear();
@@ -2579,7 +2805,9 @@ impl Session {
         if !s.is_empty() && !s.ends_with('\n') {
             s.push('\n');
         }
+        s.push_str(&self.program_stubs());
         s.push_str("fn main() {\n");
+        s.push_str(&self.keep_cell_fns());
         let mut ranges = Vec::new();
         self.push_cell_start(&mut s, &mut ranges, true);
         let body = format!("let __t = {};", expr.trim());
@@ -3097,13 +3325,15 @@ impl Session {
                 synth.push('\n');
             }
         }
+        synth.push_str(&self.program_stubs());
         synth.push_str("fn main() {\n");
+        synth.push_str(&self.keep_cell_fns());
         let mut ranges = Vec::new();
         self.push_cell_start(&mut synth, &mut ranges, true);
         self.push_in_scopes(&mut synth, &mut ranges, &inner, false);
         synth.push_str("}\n");
 
-        crate::cli::repl_v2::run_cell(&synth)
+        crate::cli::repl_v2::run_cell(&self.worker, &synth, self.built_take.get())
             .map(|_| ())
             .map_err(|f| {
                 format!(

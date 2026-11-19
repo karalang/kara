@@ -48,40 +48,94 @@ pub(crate) fn check(source: &str) -> Result<(), Vec<String>> {
 
 /// Checks `source` and runs its `main` on the MIR interpreter. The output
 /// before the [`CELL_START`] line is the replay's and is dropped.
-pub(crate) fn run_cell(source: &str) -> Result<Ran, Failed> {
+pub(crate) fn run_cell(worker: &Worker, source: &str, take: bool) -> Result<Ran, Failed> {
     check(source).map_err(|errors| Failed {
         stdout: String::new(),
         errors,
     })?;
-    run_checked(source)
+    run_checked(worker, source, take)
 }
 
-/// [`run_cell`] of a program [`check`] has accepted.
-pub(crate) fn run_checked(source: &str) -> Result<Ran, Failed> {
+/// A job for a session's [`Worker`].
+type Job = Box<dyn FnOnce() + Send>;
+
+/// The thread a REPL session's programs run on, one after another: the
+/// interpreter's carry (B-2026-11-19-3, `crate::mir::interp::carry_on`)
+/// lives on it, so the session is one heap and one task pool. The MIR
+/// interpreter drops a long chain by recursion, so the thread has room for
+/// that, as `karac run --interp`'s does.
+pub(crate) struct Worker {
+    tx: Option<std::sync::mpsc::Sender<Job>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    pub(crate) fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        let thread = std::thread::Builder::new()
+            .name("karac-repl".to_string())
+            .stack_size(1 << 30)
+            .spawn(move || {
+                crate::mir::interp::carry_on(true);
+                for job in rx {
+                    job();
+                }
+            })
+            .ok();
+        Worker {
+            tx: Some(tx),
+            thread,
+        }
+    }
+
+    /// `f`'s result, run on the worker; `None` when it panicked or the
+    /// worker is gone.
+    pub(crate) fn run<T: Send + 'static>(
+        &self,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (rtx, rrx) = std::sync::mpsc::channel();
+        let job: Job = Box::new(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            let _ = rtx.send(r.ok());
+        });
+        self.tx.as_ref()?.send(job).ok()?;
+        rrx.recv().ok().flatten()
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.tx = None;
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// [`run_cell`] of a program [`check`] has accepted, on `worker`. With
+/// `take`, the program starts from the session's carried state, and takes
+/// its bindings ([`crate::mir::interp::REPL_TAKE_FN`]).
+pub(crate) fn run_checked(worker: &Worker, source: &str, take: bool) -> Result<Ran, Failed> {
     let failed = |errors: Vec<String>| Failed {
         stdout: String::new(),
         errors,
     };
-    crate::mir::interp::set_source_name("<repl>");
     let source = source.to_string();
-    // The MIR interpreter drops a long chain by recursion, so it runs on a
-    // thread with room for that, as `karac run --interp` does.
-    let run = std::thread::Builder::new()
-        .stack_size(1 << 30)
-        .spawn(move || {
-            let l = crate::mir::lower::build_source(&source)
-                .map(crate::mir::lower::Lowered::for_this_pool)?;
-            crate::mir::lower::par_check(&l)?;
-            Ok::<_, String>(crate::mir::interp::collect_repl_bindings(|| {
-                crate::mir::interp::run_untraced(&l.program, &l.tys, "main", vec![])
-            }))
-        })
-        .expect("failed to spawn the MIR interpreter thread")
-        .join();
+    let run = worker.run(move || {
+        crate::mir::interp::set_source_name("<repl>");
+        crate::mir::interp::carry_take(take);
+        let l = crate::mir::lower::build_source(&source)
+            .map(crate::mir::lower::Lowered::for_this_pool)?;
+        crate::mir::lower::par_check(&l)?;
+        Ok::<_, String>(crate::mir::interp::collect_repl_bindings(|| {
+            crate::mir::interp::run_untraced(&l.program, &l.tys, "main", vec![])
+        }))
+    });
     let (r, mut bindings) = match run {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(failed(vec![format!("error[mir]: {e}")])),
-        Err(_) => {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return Err(failed(vec![format!("error[mir]: {e}")])),
+        None => {
             return Err(failed(vec![
                 "error[mir]: the interpreter stopped without a result".to_string(),
             ]))

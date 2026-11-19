@@ -7,6 +7,8 @@ use karac::repl::{ReplOptions, Session};
 mod baseline;
 #[path = "repl_v2/book_transcript.rs"]
 mod book_transcript;
+#[path = "repl_v2/carry.rs"]
+mod carry;
 #[path = "repl_v2/parity.rs"]
 mod parity;
 
@@ -350,13 +352,15 @@ fn repl_v2_carries_each_kind_of_value() {
          1 x\n-3 q\n0.1\nbad\n"
     );
     assert_eq!(appended(&path), 1, "an earlier cell ran again");
-    // A closure cannot be written as source: the cell after it replays.
+    // A closure has no source form, but the session's one interpreter
+    // carries it as a value: nothing replays (B-2026-11-19-3; the replay
+    // appended a second time).
     s.evaluate_cell_captured("let add = |x: i64| x + 1;");
     assert_eq!(
         s.evaluate_cell_captured("println(add(s.len()));").stdout,
         "7\n"
     );
-    assert_eq!(appended(&path), 2);
+    assert_eq!(appended(&path), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
