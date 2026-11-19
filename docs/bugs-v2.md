@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 208 |
 | perf | 188 |
 | other | 119 |
-| soundness | 95 |
+| soundness | 96 |
 | miscompile | 89 |
 | crash | 60 |
 | run-vs-build | 57 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 706 |
+| typecheck | 707 |
 | mir-llvm | 306 |
 | mir | 269 |
 | cli | 210 |
@@ -148,12 +148,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-73 | 2026-11-19 | mir-llvm | medium | On wasm_wasi, corpus/design/ok_pool_chained_health_check_with_a_closure_factory (pinned at 0aa814606b) traps `table index is out of bounds` in karac_mir_pool_drop, so tests/mir_wasm_core_corpus.rs fails 1 of 329; native lanes pass | — |
 | B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
 | B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
-| B-2026-11-19-80 | 2026-11-19 | parser | medium | `thread::spawn(move || ..)` has a message naming `TaskGroup` but no fix, so a Rust-shaped server's worker thread stops the Mend loop | — |
-| B-2026-11-19-81 | 2026-11-19 | parser+typecheck | medium | Rust's alternate form `{:#04x}` has no fix, in `format!` (the conversion bails) or in an `f".."` hole | — |
-| B-2026-11-19-82 | 2026-11-19 | parser+typecheck+interp+runtime | medium | `SortedMap` has `floor` and `ceiling` but no strict `lower` / `higher`, so an SNMP GETNEXT and Rust's `range((Bound::Excluded(k), Bound::Unbounded)).next()` have no Kāra spelling | — |
-| B-2026-11-19-83 | 2026-11-19 | typecheck | low | A `Vec[String]` built from string literals (`["a", "b"]`, `Vec.filled(n, "x")`) passed where `Slice[Str]` is taken is refused with no fix | — |
-| B-2026-11-19-84 | 2026-11-19 | typecheck | medium | `Slice` (so `Vec` and `Array`) has no `starts_with` / `ends_with`: "no method 'starts_with' on type 'Vec'" for an OID subtree test | — |
-| B-2026-11-19-85 | 2026-11-19 | mir+typecheck | high | A closure that writes a capture and then moves it out (`|| { agent.serve(); agent }`) checks clean but `run`/`build` refuse it as "cannot move a non-`Copy` value out of a borrowed place" | — |
+| B-2026-11-19-76 | 2026-11-19 | typecheck | medium | A generic `F: Fn`/`MutFn`/`OnceFn` bound's kind and call access are checked on the instance, not the bound: a `MutFn` closure is accepted for `F: Fn() -> i64`, a `MutFn` is called through a bare (shared) `f: F`, and an `OnceFn` through a bare or `mut ref` `F`, whenever the instance happens not to move; the concrete function types refuse all of these (core-semantics §9.6) | — |
 
 ### Relocated
 
@@ -1829,6 +1824,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-48 | cli | medium | `karac fmt` drops a supertrait bound's arguments: `trait PartialOrd[Rhs = Self]: PartialEq[Rhs]` is written back as `: PartialEq`, which names a diff… | 700d4fe00b |
 | B-2026-11-19-54 | mir | medium | Since B-2026-11-17-152 (b3388ea406) `match w[i]` on a `mut ref Vec[weak N]` is indexed for writing and takes the raw weak slot, so mir-interp stops a… | 8ca791230e |
 | B-2026-11-19-62 | other | low | secret.md is behind the compiler in two places: `ct_eq` is said to be `Secret[String]` only, but `Secret[Vec[u8]]` compares (`true`) on every lane; a… | c780bee67f |
+| B-2026-11-19-80 | parser | medium | `thread::spawn(move \|\| ..)` has a message naming `TaskGroup` but no fix, so a Rust-shaped server's worker thread stops the Mend loop | 53f86eb754 |
+| B-2026-11-19-81 | parser+typecheck | medium | Rust's alternate form `{:#04x}` has no fix, in `format!` (the conversion bails) or in an `f".."` hole | 53f86eb754 |
+| B-2026-11-19-82 | parser+typecheck+interp+runtime | medium | `SortedMap` has `floor` and `ceiling` but no strict `lower` / `higher`, so an SNMP GETNEXT and Rust's `range((Bound::Excluded(k), Bound::Unbounded)).… | 53f86eb754 |
+| B-2026-11-19-83 | typecheck | low | A `Vec[String]` built from string literals (`["a", "b"]`, `Vec.filled(n, "x")`) passed where `Slice[Str]` is taken is refused with no fix | 53f86eb754 |
+| B-2026-11-19-84 | typecheck | medium | `Slice` (so `Vec` and `Array`) has no `starts_with` / `ends_with`: "no method 'starts_with' on type 'Vec'" for an OID subtree test | 53f86eb754 |
+| B-2026-11-19-85 | mir+typecheck | high | A closure that writes a capture and then moves it out (`\|\| { agent.serve(); agent }`) checks clean but `run`/`build` refuse it as "cannot move a non-… | 53f86eb754 |
 
 </details>
 
