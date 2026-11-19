@@ -959,8 +959,8 @@ pub(crate) struct IterLet {
     ty: Type,
     /// The bound name; `: Vec[T]` goes at its end.
     name: Span,
-    /// Where `.collect()` goes: the end of the initializer.
-    init_end: Span,
+    /// The initializer's own span: the error is placed on it.
+    init: Span,
     /// Whether it is used as a `Vec`, so the fix is offered at the end of
     /// the function.
     used: bool,
@@ -8212,18 +8212,12 @@ impl<'a> TypeChecker<'a> {
             self.iter_lets.remove(name);
             return;
         }
-        let end = |s: &Span| Span {
-            line: s.line,
-            column: s.column,
-            offset: s.offset + s.length,
-            length: 0,
-        };
         self.iter_lets.insert(
             name.to_string(),
             IterLet {
                 ty: ty.clone(),
                 name: name_span,
-                init_end: end(value),
+                init: *value,
                 used: false,
                 want: None,
             },
@@ -8530,10 +8524,17 @@ impl<'a> TypeChecker<'a> {
                     "`{name}` is used as a `{vec}`: collect the iterator into one with \
                      `{suffix}`"
                 ),
-                rec.init_end,
+                // On the initializer, as `karac check` reports it; the
+                // edit inserts after it (B-2026-11-19-114: a zero-width
+                // span here was where kara-lsp put the squiggle).
+                rec.init,
                 TypeErrorKind::TypeMismatch,
                 FixIt {
-                    span: rec.init_end,
+                    span: Span {
+                        offset: rec.init.offset + rec.init.length,
+                        length: 0,
+                        ..rec.init
+                    },
                     replacement: suffix.to_string(),
                 },
             );
