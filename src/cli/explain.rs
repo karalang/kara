@@ -1128,6 +1128,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     ("E_TEST_REQUIRES", res("TestRequiresInvalid", None)),
     ("E_EXTERN_REF_PARAM", ty("ExternSignatureInvalid", None)),
+    (
+        "E_EXTERN_TYPE_NOT_FFI_SAFE",
+        ty("ExternSignatureInvalid", None),
+    ),
     ("E_EXTERN_REF_RETURN", ty("ExternSignatureInvalid", None)),
     (
         "E_PTR_CONST_REQUIRES_PLACE",
@@ -1690,6 +1694,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     (
         "E_REPR_TRANSPARENT_EXCLUSIVE",
+        ty("ReprTransparentInvalid", None),
+    ),
+    (
+        "E_REPR_TRANSPARENT_NEIGHBOUR_ALIGN",
         ty("ReprTransparentInvalid", None),
     ),
     (
@@ -3391,6 +3399,15 @@ const CODE_PROSE: &[(&str, &str)] = &[
          = Set.new();`).",
     ),
     (
+        "E_EXTERN_TYPE_NOT_FFI_SAFE",
+        "A foreign function's parameter or result is a type that does not \
+         cross to C (design.md §15, What crosses). An integer, `bool`, \
+         `char`, `f32`, `f64`, a raw pointer, a C-like enum with \
+         `#[repr(C)]` or `#[repr(intN)]`, and a plain-data struct cross. \
+         `String` and the collections do not: pass a raw pointer (text as \
+         `*const u8` with `s.as_ptr()`), and give a C-like enum a repr.",
+    ),
+    (
         "E_EXTERN_REF_PARAM",
         "`ref` and `mut ref` are Kāra borrows, checked by the compiler, and \
          have no C representation, so a foreign function's parameter cannot \
@@ -3703,6 +3720,15 @@ const CODE_PROSE: &[(&str, &str)] = &[
          `#[repr(transparent)]`). A transparent type has exactly its one \
          field's layout, which leaves nothing for a second repr to decide. \
          Keep `transparent` alone, or drop it and use `#[repr(C)]`.",
+    ),
+    (
+        "E_REPR_TRANSPARENT_NEIGHBOUR_ALIGN",
+        "A zero-sized field beside a `#[repr(transparent)]` struct's data \
+         field is aligned above one byte, such as `Array[u64, 0]` (design.md \
+         § `#[repr(transparent)]`). It would raise the wrapper's alignment \
+         above its data field's, so the wrapper would no longer have its \
+         field's layout. Use an alignment-one neighbour such as `()`, \
+         `PhantomData[T]` or `Array[u8, 0]`.",
     ),
     (
         "E_REPR_TRANSPARENT_REQUIRES_FIELD",

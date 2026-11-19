@@ -1,0 +1,1 @@
+ERROR at line 2: the zero-sized field 'a' of a `#[repr(transparent)]` struct is aligned above one byte, which would raise the wrapper's alignment above its data field's; a neighbour must have size zero and alignment one, such as `()`, `PhantomData[T]` or `Array[u8, 0]`

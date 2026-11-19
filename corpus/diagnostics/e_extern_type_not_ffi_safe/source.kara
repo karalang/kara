@@ -1,0 +1,9 @@
+/// Writes a line.
+///
+/// # Safety
+///
+/// `s` must be NUL-terminated.
+unsafe extern "C" {
+    fn puts(s: String) -> i32;
+}
+fn main() {}

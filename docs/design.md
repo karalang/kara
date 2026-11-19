@@ -6558,7 +6558,7 @@ The compiler does not check that the `match` literals equal the declared discrim
 - an `enum` with more than one variant, or with a payload-less variant: `error[E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT]`;
 - `#[repr(transparent)]` combined with any other repr (`#[repr(C)]`, `#[repr(intN)]`): `error[E_REPR_TRANSPARENT_EXCLUSIVE]`. `transparent` *is* the layout claim; another repr would contradict or duplicate it.
 
-**Zero-sized neighbours.** A transparent struct may carry further fields **only if each has size zero and alignment one**: `()`, `Array[T, 0]`, an empty unit struct. The non-zero-sized field's layout becomes the struct's layout; the companions matter only to the type system (for example, a unit-struct field tags the wrapper with what its number means). The rule is per field: two non-zero-sized fields are rejected even if their sizes add up to one field's worth.
+**Zero-sized neighbours.** A transparent struct may carry further fields **only if each has size zero and alignment one**: `()`, `PhantomData[T]`, an empty unit struct, or `Array[T, 0]` when `T` is aligned to one byte (`Array[u8, 0]`; `Array[u64, 0]` is 8-aligned and refused, as Rust refuses it). The non-zero-sized field's layout becomes the struct's layout; the companions matter only to the type system (for example, a unit-struct field tags the wrapper with what its number means). The rule is per field: two non-zero-sized fields are rejected even if their sizes add up to one field's worth.
 
 ```kara
 struct Celsius {}

@@ -84,7 +84,21 @@ impl super::Parser {
         // Reserved-but-unimplemented calling conventions (`"stdcall"`, … ) get
         // the targeted "reserved at v1" diagnostic here too, so the frozen
         // syntax is rejected consistently on the import surface.
-        self.reserved_abi_diagnostic(&abi, abi_span);
+        // Anything else (`"system"`, `"Rust"`, a typo) is refused here too,
+        // where it is written, not at a call as "unknown function"
+        // (B-2026-11-19-56).
+        if !self.reserved_abi_diagnostic(&abi, abi_span)
+            && !matches!(abi.as_str(), "C" | "C-unwind" | "host")
+        {
+            self.error_at(
+                &format!(
+                    "unsupported ABI \"{abi}\" on an `extern` block: \"C\" (or \"C-unwind\") \
+                     is the only ABI in 0.8, and another ABI string is never read as \"C\" \
+                     (design.md § FFI)"
+                ),
+                abi_span,
+            );
+        }
 
         self.expect(&Token::LeftBrace)?;
 

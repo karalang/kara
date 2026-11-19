@@ -1041,10 +1041,94 @@ impl<'a> super::TypeChecker<'a> {
         }
         for p in &e.params {
             self.check_extern_type_expr_ffi_safe(&p.ty, &e.name, false);
+            self.check_extern_value_crosses(&p.ty, &e.name, false);
         }
         if let Some(ref rt) = e.return_type {
             self.check_extern_type_expr_ffi_safe(rt, &e.name, true);
+            self.check_extern_value_crosses(rt, &e.name, true);
         }
+    }
+
+    /// A by-value parameter or result of a foreign import is a type that
+    /// crosses to C (design.md §15 "What crosses"), checked where the
+    /// declaration is written. B-2026-11-19-56: `String` and a C-like enum
+    /// with no `#[repr]` passed `karac check` and failed only at a call, as
+    /// E0516 "not lowered yet". The check refuses only what is never a C
+    /// type: the library's owned text and collections, a non-empty tuple, and
+    /// a program enum that carries data or has no `#[repr]` to fix its tag.
+    /// Structs are left to lowering, whose plain-data rule decides them.
+    fn check_extern_value_crosses(&mut self, ty: &TypeExpr, owner: &str, is_return: bool) {
+        let position = if is_return { "return" } else { "parameter" };
+        let why = match &ty.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => {
+                "a tuple has no C layout; pass a `#[repr(C)]` struct".to_string()
+            }
+            TypeKind::Path(p) if p.segments.len() == 1 => {
+                let name = p.segments[0].as_str();
+                let library = self.program.library_start.unwrap_or(usize::MAX);
+                let program_enum = self.program.items.iter().find_map(|it| match it {
+                    Item::EnumDef(d) if d.name == name && d.span.offset < library => Some(d),
+                    _ => None,
+                });
+                let program_struct = self.program.items.iter().any(|it| {
+                    matches!(it, Item::StructDef(d) if d.name == name && d.span.offset < library)
+                });
+                if let Some(d) = program_enum {
+                    let c_like = d
+                        .variants
+                        .iter()
+                        .all(|v| matches!(v.kind, VariantKind::Unit));
+                    let repr = d.attributes.iter().any(|a| a.is_bare("repr"));
+                    if !c_like {
+                        format!(
+                            "the enum `{name}` carries data, and only a C-like enum crosses \
+                             (as its `#[repr(C)]` or `#[repr(intN)]` tag)"
+                        )
+                    } else if !repr {
+                        format!(
+                            "the enum `{name}` has no `#[repr]`, so its tag has no fixed C \
+                             type; add `#[repr(C)]` or an integer repr such as `#[repr(i32)]`"
+                        )
+                    } else {
+                        return;
+                    }
+                } else if program_struct {
+                    return;
+                } else {
+                    match name {
+                        "String" | "Str" => {
+                            if is_return {
+                                "Kāra's `String` is owned text with no C layout; return `*const u8` \
+                             and read the C string inside an `unsafe` block"
+                                .to_string()
+                            } else {
+                                format!(
+                                    "Kāra's `String` is owned text with no C layout; take \
+                                 `*const u8` and pass `s.as_ptr()` (`{owner}(s.as_ptr())`)"
+                                )
+                            }
+                        }
+                        "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet" | "VecDeque"
+                        | "Option" | "Result" | "Box" | "Slice" => format!(
+                            "`{name}` is a Kāra library type with no C layout; pass a raw \
+                             pointer (and a length) instead"
+                        ),
+                        _ => return,
+                    }
+                }
+            }
+            _ => return,
+        };
+        self.type_error(
+            format!(
+                "error[E_EXTERN_TYPE_NOT_FFI_SAFE]: the {position} type of the foreign import \
+                 '{owner}' does not cross to C: {why}. What crosses is an integer, `bool`, \
+                 `char`, `f32`, `f64`, a raw pointer, a C-like enum with `#[repr(C)]` or \
+                 `#[repr(intN)]`, or a plain-data struct (design.md §15)"
+            ),
+            ty.span,
+            TypeErrorKind::ExternSignatureInvalid,
+        );
     }
 
     /// One position of an extern signature. Reports the OUTERMOST borrow only —
@@ -3867,12 +3951,82 @@ impl<'a> super::TypeChecker<'a> {
                 if head == "PhantomData" {
                     return true;
                 }
+                // `Array[T, N]` is zero-sized only at `N == 0`; its library
+                // entry has no fields, so the unit-struct test below would
+                // take every array as a companion.
+                if let Some((_, size)) = Self::array_path_parts(p) {
+                    return size == Some(0);
+                }
                 // An empty unit struct (`struct Empty {}`) — zero fields.
                 self.env
                     .structs
                     .get(head)
                     .map(|info| info.fields.is_empty())
                     .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
+    /// `Array[T, N]` written as a path: its element type and, when `N` is an
+    /// integer literal, its length.
+    fn array_path_parts(p: &PathExpr) -> Option<(Option<&TypeExpr>, Option<i128>)> {
+        if p.segments.len() != 1 || p.segments[0] != "Array" {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let elem = match args.first() {
+            Some(GenericArg::Type(t)) => Some(t),
+            _ => None,
+        };
+        let size = match args.get(1) {
+            Some(GenericArg::Const(e)) => match &e.kind {
+                ExprKind::Integer(n, _) => Some(*n),
+                _ => None,
+            },
+            _ => None,
+        };
+        Some((elem, size))
+    }
+
+    /// `true` when a value of `ty` is aligned to 1 byte, so a zero-sized field
+    /// of it beside a transparent struct's data field leaves the layout alone
+    /// (B-2026-11-19-55: `Array[u64, 0]` is zero-sized but 8-aligned, and the
+    /// wrapper took its alignment). Conservative: a type it cannot see through
+    /// (a type parameter, a pointer, a wide integer) is not alignment-one.
+    fn is_alignment_one(&self, ty: &TypeExpr, depth: u32) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        match &ty.kind {
+            TypeKind::Unit => true,
+            TypeKind::Tuple(elems) => elems.iter().all(|e| self.is_alignment_one(e, depth + 1)),
+            TypeKind::Array { element, .. } => self.is_alignment_one(element, depth + 1),
+            TypeKind::Path(p) => {
+                let head = p.segments.last().map(|s| s.as_str()).unwrap_or("");
+                if p.segments.len() == 1 && matches!(head, "u8" | "i8" | "bool") {
+                    return true;
+                }
+                if head == "PhantomData" {
+                    return true;
+                }
+                if let Some((elem, _)) = Self::array_path_parts(p) {
+                    return elem.is_some_and(|e| self.is_alignment_one(e, depth + 1));
+                }
+                // A struct of alignment-one fields (an empty one included),
+                // unless a repr raises it.
+                match self.env.structs.get(head) {
+                    Some(info) => info.fields.iter().all(|(_, fty, _)| {
+                        matches!(
+                            fty,
+                            Type::Unit
+                                | Type::Bool
+                                | Type::UInt(UIntSize::U8)
+                                | Type::Int(IntSize::I8)
+                        )
+                    }),
+                    None => false,
+                }
             }
             _ => false,
         }
@@ -3911,6 +4065,22 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::ReprTransparentInvalid,
             ),
             1 => {
+                for f in s.fields.iter() {
+                    if self.is_zero_sized_companion(&f.ty) && !self.is_alignment_one(&f.ty, 0) {
+                        self.type_error(
+                            format!(
+                                "error[E_REPR_TRANSPARENT_NEIGHBOUR_ALIGN]: the zero-sized field \
+                                 '{}' of a `#[repr(transparent)]` struct is aligned above one \
+                                 byte, which would raise the wrapper's alignment above its \
+                                 data field's; a neighbour must have size zero and alignment \
+                                 one, such as `()`, `PhantomData[T]` or `Array[u8, 0]`",
+                                f.name
+                            ),
+                            f.span,
+                            TypeErrorKind::ReprTransparentInvalid,
+                        );
+                    }
+                }
                 if Self::is_bare_type_param(&data_fields[0].ty, gp) {
                     self.type_error(
                         format!(

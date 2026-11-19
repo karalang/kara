@@ -1,0 +1,1 @@
+ERROR at line 7: the parameter type of the foreign import 'puts' does not cross to C: Kāra's `String` is owned text with no C layout; take `*const u8` and pass `s.as_ptr()` (`puts(s.as_ptr())`). What crosses is an integer, `bool`, `char`, `f32`, `f64`, a raw pointer, a C-like enum with `#[repr(C)]` or `#[repr(intN)]`, or a plain-data struct (design.md §15)

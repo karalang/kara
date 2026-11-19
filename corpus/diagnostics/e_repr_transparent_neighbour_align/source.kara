@@ -1,0 +1,3 @@
+#[repr(transparent)]
+struct Q { raw: i32, a: Array[u64, 0] }
+fn main() {}
