@@ -3468,6 +3468,31 @@ impl<'a> super::TypeChecker<'a> {
                 return want;
             }
         }
+        // `["one", "two"][k]` where a `Str` is wanted (`-> Str`, a `Str`
+        // binding): the literals take `Str` as each would alone, so the
+        // element read out of the list is a `Str` view of static data, not
+        // a `String` moved out of a temporary (kata 1662's arm names).
+        if let ExprKind::Index { object, index } = &expr.kind {
+            if let ExprKind::ArrayLiteral(items) = &object.kind {
+                let want = resolve_type_var_top(expected, &self.env.substitutions);
+                if is_str_view(&want)
+                    && !items.is_empty()
+                    && items
+                        .iter()
+                        .all(|e| matches!(e.kind, ExprKind::StringLit(_)))
+                    && !matches!(index.kind, ExprKind::Range { .. })
+                {
+                    let list = Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![want.clone()],
+                    };
+                    self.check_expr(object, &list);
+                    self.check_expr(index, &Type::Int(IntSize::I64));
+                    self.record_expr_type(&expr.span, &want);
+                    return want;
+                }
+            }
+        }
         // A payload-free variant of a generic enum (`None`) against that enum
         // with a borrowed argument (`Option[ref T]`) takes the context's type.
         // It synthesizes as the enum's own `Option[T]`, and a borrow of a type

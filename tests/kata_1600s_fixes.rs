@@ -158,3 +158,15 @@ fn a_vec_passed_to_an_open_literal_slice_slot_coerces() {
         "true\ntrue\nfalse\n",
     );
 }
+
+/// A list of string literals indexed where a `Str` is wanted reads a
+/// `Str` (kata 1662's arm names, `["a", "b"][k]` from a `-> Str`); before,
+/// the element was a `String`, and the `.as_str()` fix led to E0509.
+#[test]
+fn an_indexed_list_of_string_literals_is_a_str() {
+    runs(
+        "str_list_index",
+        "fn name(k: i64) -> Str {\n    [\"a\", \"bc\"][k]\n}\nfn main() {\n    let s: Str = [\"x\", \"y\", \"z\"][2];\n    println(f\"{name(1)} {s}\");\n}\n",
+        "bc z\n",
+    );
+}
