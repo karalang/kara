@@ -38,6 +38,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   of `go`'s effects. The error's machine fix writes the clause, and
   `karac fix` then declares the public callers too. No corpus program,
   kata or example relied on it (B-2026-11-19-87).
+- A function whose named parameter has no default is refused as a value:
+  `fn connect(host: String; port: i64)` then `let c = connect;` or
+  `ap(connect)` is E0215, naming `port` and the closure to write,
+  `|host| connect(host, port: …)` (design.md § Function values). The value
+  took `port` by position, so `c("ab", 40)` ran without its label
+  (B-2026-11-19-70).
 - A function under `#[no_effect(panics)]` that reads or writes a `mut`
   field of a `shared` value is refused when the field carries a borrow
   flag (its type is neither `Copy` nor counted): the access panics
@@ -850,6 +856,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   for M`, the call ran whichever impl came first, reading an `M` as the
   `i64` in compiled code, and `T.Output` was read from whichever came last
   (B-2026-11-19-66).
+- A list literal handed to a generic `Array` parameter builds that `Array`,
+  as it does for a concrete one, and an open length is solved from it:
+  `first([7, 8])` with `fn first[T: Copy, const N: i64](arr: Array[T, N])`
+  and `g([7, 8])` with `fn g[T](a: Array[T, 2])` were refused "expected
+  'Array[T, N]', found 'Vec[i64]'" (design.md § List literals,
+  B-2026-11-19-69).
 - `for x in iter` over an owned parameter `iter: own I` with `I:
   Iterator` binds `x` as `I.Item`, the item `iter.next()` returns. It bound
   the iterator's own type `I`, so `t + x` under `where I.Item: Add[Output

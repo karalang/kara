@@ -752,6 +752,35 @@ impl<'a> super::TypeChecker<'a> {
                 .is_some_and(|s| s.fields.is_empty())
     }
 
+    /// B-2026-11-19-70: the refusal for a free function named as a value
+    /// when one of its named parameters has no default (design.md § Function
+    /// values: such a function is a value only if every named parameter has
+    /// one). Names the first such parameter and the closure that passes it.
+    pub(super) fn required_named_fn_value_message(&self, name: &str) -> Option<String> {
+        let info = self.named_fns.get(name)?;
+        let n = info.names.len();
+        let required = (info.named_from..n).find(|&i| info.defaults[i].is_none())?;
+        let label = info.names[required].clone()?;
+        let positional: Vec<String> = (0..info.named_from)
+            .map(|i| info.names[i].clone().unwrap_or_else(|| format!("a{i}")))
+            .collect();
+        let mut call_args = positional.clone();
+        for i in info.named_from..n {
+            if info.defaults[i].is_none() {
+                if let Some(l) = &info.names[i] {
+                    call_args.push(format!("{l}: …"));
+                }
+            }
+        }
+        Some(format!(
+            "`{name}` has a named parameter `{label}` with no default, so it cannot be a \
+             function value: a value's arguments are positional (design.md § Function \
+             values); pass a closure that names it, `|{}| {name}({})`",
+            positional.join(", "),
+            call_args.join(", ")
+        ))
+    }
+
     /// The error for a bare unit-struct name, with the braced form as its
     /// machine fix (B-2026-11-19-60). `pattern` picks the wording.
     pub(super) fn refuse_bare_unit_struct(&mut self, name: &str, span: &Span, pattern: bool) {

@@ -1,0 +1,9 @@
+source = "B-2026-11-19-70"
+dedup_of = []
+expect = "error:E0215"
+exit = 1
+tags = ["design", "named-params"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Function values: a function with named parameters can be a value only if every named parameter has a default; `connect` has a required `port`, so `let c = connect;` is refused, naming the parameter and the closure that passes it. The expected.out wording of an error pin is guidance, not a byte oracle."

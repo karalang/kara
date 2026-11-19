@@ -1,0 +1,10 @@
+// B-2026-11-19-70: design.md § Function values: a function with named
+// parameters can be a value only if every named parameter has a default.
+fn connect(host: String; port: i64) -> i64 {
+    host.len() + port
+}
+
+fn main() {
+    let c = connect;
+    println(c("ab".to_string(), 40));
+}

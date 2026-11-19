@@ -1,0 +1,1 @@
+ERROR at line 8: `connect` has a named parameter `port` with no default, so it cannot be a function value: a value's arguments are positional (design.md § Function values); pass a closure that names it, `|host| connect(host, port: …)`

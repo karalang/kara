@@ -1,0 +1,9 @@
+source = "B-2026-11-19-69"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "const-generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § List literals: a list literal follows the expected type, so an `Array[T, N]` parameter with `T` or `N` open is built as that Array; § Const generics, Inference: `N` is solved from the literal's length."

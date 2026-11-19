@@ -1,0 +1,30 @@
+// B-2026-11-19-69: design.md § List literals: `[a, b, c]` follows the
+// expected type, so handed to a generic `Array[T, N]` parameter it builds
+// that `Array`, and § Const generics, Inference: `N` is solved from it.
+fn first[T: Copy, const N: i64](arr: Array[T, N]) -> T {
+    arr[0]
+}
+
+fn len_of[const N: i64](a: Array[i64, N]) -> i64 {
+    N
+}
+
+fn pair_size[T](a: Array[T, 2]) -> i64 {
+    2
+}
+
+fn ends[const N: i64](a: Array[f64, N]) -> f64 {
+    a[0] + a[N - 1]
+}
+
+fn main() {
+    println(first([7, 8]));
+    println(len_of([7, 8, 9]));
+    println(pair_size([7, 8]));
+    println(pair_size(["a", "b"]));
+    println(ends([1.5, 2.5, 4.0]));
+    let n = 3;
+    println(first([n * 2, n]));
+    let w: Array[Array[i64, 2], 2] = [[1, 2], [3, 4]];
+    println(first(w)[1]);
+}

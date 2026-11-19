@@ -1048,6 +1048,54 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-19-69: a list literal handed to a generic `Array[T, N]`
+    /// slot builds that `Array`, as it does for a concrete one (design.md
+    /// § List literals: the expected type decides). The slot's length is
+    /// the literal's, which solves an open `N` (§ Const generics,
+    /// Inference); its element stays the slot's own, so checking the items
+    /// against it solves `T`. A fixed length the literal does not have is
+    /// kept, so the check reports the count. `None` when the slot is not an
+    /// `Array`.
+    pub(super) fn open_array_slot_for_literal(&mut self, arg: &Expr, slot: &Type) -> Option<Type> {
+        let ExprKind::ArrayLiteral(items) = &arg.kind else {
+            return None;
+        };
+        if items.is_empty() {
+            return None;
+        }
+        // A bare parameter borrows (D5), so the slot is usually `ref Array`;
+        // the literal is built as the array, which the call lends, as it does
+        // for a concrete `ref Array[i64, 2]` slot.
+        let inner = match resolve_type_var_top(slot, &self.env.substitutions) {
+            Type::Ref(t) | Type::MutRef(t) => resolve_type_var_top(&t, &self.env.substitutions),
+            t => t,
+        };
+        let Type::Array { element, size } = inner else {
+            return None;
+        };
+        let len = i64::try_from(items.len()).ok()?;
+        let size = match size {
+            // A fixed length: the literal is checked against it, so a wrong
+            // count reads "array literal has 3 element(s), expected 2".
+            ConstArg::Literal(n) => n,
+            ConstArg::ConstVar(id) => match self.env.const_substitutions.get(&id) {
+                None => {
+                    self.env
+                        .const_substitutions
+                        .insert(id, ConstArg::Literal(len));
+                    len
+                }
+                Some(ConstArg::Literal(n)) => *n,
+                Some(_) => return None,
+            },
+            _ => return None,
+        };
+        Some(Type::Array {
+            element,
+            size: ConstArg::Literal(size),
+        })
+    }
+
     pub(super) fn literal_needs_array_slot(e: &Expr, slot: &Type) -> bool {
         match (&e.kind, slot) {
             (ExprKind::ArrayLiteral(_) | ExprKind::RepeatLiteral { .. }, Type::Array { .. }) => {
@@ -6441,7 +6489,9 @@ impl<'a> super::TypeChecker<'a> {
                             .iter()
                             .all(|id| inference::literal_var_kind(*id).is_some())
                         && !contains_type_param(&resolved);
-                    (open_literals || expectation_is_concrete(&resolved)).then_some(resolved)
+                    (open_literals || expectation_is_concrete(&resolved))
+                        .then_some(resolved)
+                        .or_else(|| self.open_array_slot_for_literal(&arg.value, &sub_params[idx]))
                 } else if matches!(
                     &arg.value.kind,
                     ExprKind::ArrayLiteral(_)
@@ -6485,7 +6535,9 @@ impl<'a> super::TypeChecker<'a> {
                     // defaulting, so `nv.push([3])` on a `Vec[Vec[u64]]` (a
                     // receiver that fixed `T` already) builds a `Vec[u64]`, as
                     // `take([3])` does for a `Vec[u64]` parameter.
-                    expectation_is_concrete(&resolved).then_some(resolved)
+                    expectation_is_concrete(&resolved)
+                        .then_some(resolved)
+                        .or_else(|| self.open_array_slot_for_literal(&arg.value, &sub_params[idx]))
                 } else {
                     None
                 };
@@ -16378,6 +16430,15 @@ impl<'a> super::TypeChecker<'a> {
                     // one diagnostic, no "moved here" or mismatch after it.
                     self.refuse_bare_unit_struct(name, &expr.span, false);
                     return Type::Error;
+                }
+                // B-2026-11-19-70: a function whose named parameter has no
+                // default is no value (design.md § Function values): the
+                // value would take that parameter by position, unlabelled.
+                if !as_callee && self.local_scope.lookup(name).is_none() {
+                    if let Some(msg) = self.required_named_fn_value_message(name) {
+                        self.type_error(msg, expr.span, TypeErrorKind::LabelMismatch);
+                        return Type::Error;
+                    }
                 }
                 // A generic function item named as a value takes fresh
                 // parameters at each use, solved from where the value goes
