@@ -528,6 +528,21 @@ impl Lexer {
                 None => self.make_spanned(Token.Error("Invalid float literal".to_string())),
             }
         } else {
+            // Rust's `0f64` / `1f32`: a literal with neither a point nor an
+            // exponent is an integer (design.md §3), so a float suffix cannot
+            // type it; the suffix joins this token and the error names the
+            // float (mirrors `src/lexer.rs`, B-2026-11-19-27).
+            let digits_end = self.current;
+            let fsfx = self.try_float_suffix();
+            if fsfx != "" {
+                let lit = self.src.substring(self.start, self.current);
+                let mut digits = self.src.substring(self.start, digits_end);
+                while digits.ends_with("_") {
+                    digits = digits.substring(0, digits.len() - 1);
+                }
+                let fixed = f"{digits}.0{fsfx}";
+                return self.make_spanned(Token.Error(f"number literal `{lit}`: a literal with neither a point nor an exponent is an integer (design.md §3), so write `{fixed}`"));
+            }
             let text = strip_underscores(self.src.substring(self.start, self.current));
             let sfx = self.try_int_suffix();
             // `i64.parse` consumes `text`, and the out-of-range path needs the

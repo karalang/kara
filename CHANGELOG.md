@@ -1795,6 +1795,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from `for x in 0..=50` and returned as `best.to_vec()` from a
   `Vec[i32]` function had no machine fix, and `karac fix` now writes
   `[0i32, 0]` and then `0i32..=50` (B-2026-11-18-52).
+- Rust's `0f64`, `1f32` and `1_000f64` are one error whose fix writes the
+  float (`0.0f64`), since a literal with neither a point nor an exponent is
+  an integer (design.md §3), and the parse goes on as that float. The
+  lexer left `f64` to the parser as an identifier, whose recovery asked
+  for a `;` after each operand, and in `vec![vec![0f64; t + 1]; n + 1]`
+  `karac fix` applied them, corrupting the line (B-2026-11-19-27).
 - A list of tuple literals walked by a tuple pattern beside an `i32`
   (`let dirs = [(-1, 0), (1, 0)]; for (dx, dy) in dirs.iter() { let (x, y)
   = (king[0] + dx, king[1] + dy); ans.push([x, y]); }`) is offered the

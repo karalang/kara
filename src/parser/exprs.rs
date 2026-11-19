@@ -1637,6 +1637,21 @@ impl super::Parser {
                 })
             }
 
+            // A number literal the lexer refused with a fix (`0f64`, `1__0`):
+            // its error and fix are reported once, and the parse goes on as
+            // the fixed literal, so that what follows it (`vec![0f64; n]`)
+            // is read as written rather than recovered, whose `;`
+            // suggestions `karac fix` would apply (B-2026-11-19-27).
+            Token::ErrorWithFix { fixed, .. } if fixed_number(fixed).is_some() => {
+                let kind = fixed_number(fixed).expect("guarded");
+                self.error("");
+                self.advance();
+                Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind,
+                })
+            }
             // Literals
             &Token::Integer(n, sfx) => {
                 self.advance();
@@ -5740,4 +5755,16 @@ fn top_level_semicolon(text: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// The literal a number token's fix writes, when the fix is one integer or
+/// float literal and nothing more.
+fn fixed_number(fixed: &str) -> Option<ExprKind> {
+    let mut lexer = crate::lexer::Lexer::new(fixed);
+    let kind = match lexer.next_token().token {
+        Token::Integer(n, sfx) => ExprKind::Integer(n, sfx),
+        Token::Float(n, sfx) => ExprKind::Float(n, sfx),
+        _ => return None,
+    };
+    (lexer.next_token().token == Token::EOF).then_some(kind)
 }

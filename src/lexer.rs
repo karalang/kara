@@ -643,6 +643,25 @@ impl<'a> Lexer<'a> {
                 Err(_) => self.make_spanned(Token::Error("Invalid float literal".to_string())),
             }
         } else {
+            // Rust's `0f64` / `1f32` / `1_000f64`: a literal with neither a
+            // point nor an exponent is an integer (design.md §3), so a float
+            // suffix cannot type it. Read the suffix into this token and
+            // offer the float, rather than leave `f64` to the parser as an
+            // identifier, whose recovery suggested a `;` after each operand
+            // and `karac fix` applied them (kata 1230, B-2026-11-19-27).
+            let digits_end = self.current;
+            if self.try_float_suffix().is_some() {
+                let lit = self.token_text().to_string();
+                let digits = lit[..digits_end - self.start].trim_end_matches('_');
+                let fixed = format!("{digits}.0{}", &lit[digits_end - self.start..]);
+                return self.make_spanned(Token::ErrorWithFix {
+                    message: format!(
+                        "number literal `{lit}`: a literal with neither a point nor an \
+                         exponent is an integer (design.md §3), so write `{fixed}`"
+                    ),
+                    fixed,
+                });
+            }
             let text: String = self.token_text().chars().filter(|&c| c != '_').collect();
             let suffix = self.try_int_suffix();
             match text.parse::<i64>() {
