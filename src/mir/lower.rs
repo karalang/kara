@@ -5833,7 +5833,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     };
                     let args = self.args.clone();
                     let def = self.b.instance().def;
-                    match self.lcx.fn_self_written(def, &args).filter(|_| n > 0) {
+                    // An impl at concrete arguments (`impl Pr[bool]` of
+                    // `struct Pr[T]`) has no parameters to fill them, so its
+                    // `self` is the written target too: built with no call
+                    // (a check builds every function), the target's own
+                    // parameters gave its fields the type `T`
+                    // (B-2026-11-19-1).
+                    match self.lcx.fn_self_written(def, &args) {
                         Some(Ok(t)) => t,
                         Some(Err(e)) => return self.unsupported(f.span, &e),
                         None => {

@@ -769,6 +769,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `karac check` no longer refuses a method of an impl at concrete type
+  arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`, or `impl Score
+  for Pr[bool]`) that nothing calls yet: its body was checked with its
+  fields at the struct's parameter `T`, so `self.x` was a move of a
+  non-`Copy` value (E0516) and `if self.x` a view stored where its borrow
+  is not kept (E0509), until a call anywhere made both go away
+  (B-2026-11-19-1).
 - `karac check` counts `.raw()` on an owned non-`Copy` distinct value as a
   move of the wrapper, as design.md § Distinct Types says: a later use
   checked clean and was refused only by `run` and `build`, with no source
