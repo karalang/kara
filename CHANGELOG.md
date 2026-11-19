@@ -856,6 +856,22 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (design.md § `dyn Trait`). Two iterations calling `t.g(x)` on `t: dyn
   T + CrossTask with ()` were refused as conflicting on `calls(p2.g)`
   (B-2026-11-19-108).
+- A `par for` that calls a method of a `dyn` parameter whose type
+  declares no effects is checked with the value each caller passes, as a
+  generic parameter's is in each instance (design.md § `dyn Trait`: a
+  parameter that does not escape has the effects of the value passed).
+  `fn v(xs: Vec[i64], t: ref dyn T + CrossTask) -> Vec[i64] { par for x
+  in xs.iter() { t.g(x) } }` was refused as conflicting on `calls(p2.g)`
+  while the same function generic over `[P: T + CrossTask]` passed; it now
+  passes when every caller's value has a pure `g`, and a caller passing
+  one whose `g` writes a resource is refused, the message naming the
+  caller and its line. A function reached as a value is still refused,
+  since its callers cannot be listed (B-2026-11-19-109).
+- A `par for` at the end of a function's block, with no semicolon, is the
+  function's value, as a `for` is in a value position (core semantics
+  §11.4): `fn doubled(xs: Vec[i64]) -> Vec[i64] { par for x in xs.iter()
+  { x * 2 } }` was refused with E0213, the loop read as a statement
+  (B-2026-11-19-110).
 - `karac fix`'s rewrite of Rust's `binary_search`, `binary_search_by` and
   `binary_search_by_key` names the LAST of several equal elements in
   `Ok`, as rustc's implementation and Kāra's own `binary_search` do: it
@@ -1997,6 +2013,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   was read as the enum variant `RecvTimeoutError.TimedOut` (E0521 and E0279),
   and the pattern as an enum-variant pattern on a non-enum (E0273). The library
   docs now write `Err(TimedOut {})` (B-2026-11-19-60).
+- An E0509 for an element of a `let`-bound collection that a bare `for`
+  walks (`for next in links { queue.push_back(next) }`: the loop borrows
+  each element) has a machine fix when nothing names the collection after
+  the loop: `karac fix` walks it with `.into_iter()`, which moves the
+  elements out (B-2026-11-19-111).
+- An E0516 whose borrow a `TaskGroup` task holds says the borrow lasts
+  until the group drops and joins its tasks (core semantics §9.5), and to
+  put the group in an inner block that ends first, rather than advising a
+  `.clone()` where the value is borrowed, which does not end the borrow
+  (B-2026-11-19-112).
 - Rust's array `map` on a list literal, `["a", "b"].map(|u| u.to_string())`,
   gets the `.into_iter()` hop as a fix, and the follow-up fixes collect
   it, as a named list's `.map` does. It was E0236 with no fix

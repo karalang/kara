@@ -2918,11 +2918,27 @@ impl Pipeline {
                     .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
                     .or_else(|| moved_arg_clone_fix(&src, typed, &e))
             } else if e.code == "E0509" && self.renames.is_empty() {
-                view_field_owned_fix(&src, &e)
+                view_field_owned_fix(&src, &e).or_else(|| for_into_iter_fix(&src, typed, &e))
             } else {
                 None
             };
             let mut message = mir_check_message(&e);
+            // A group's borrow ends when the group drops and joins its
+            // tasks, which a copy elsewhere does not change (kata 1242).
+            if e.code == "E0516" {
+                if let Some(group) = e.holder.as_deref().filter(|h| is_task_group(&src, h)) {
+                    message = message.replace(
+                        "Finish using the borrow first, or take a copy of the value (`.clone()`, \
+                         `.cloned()`, `*r` for a `Copy` value) where it is borrowed",
+                        &format!(
+                            "A task spawned into `{group}` keeps the borrow until `{group}` \
+                             drops, which joins its tasks (core-semantics.md §9.5): put \
+                             `{group}` in an inner block that ends before this, so its tasks \
+                             are joined first, or give the task a copy of the value"
+                        ),
+                    );
+                }
+            }
             // A `ref` to a `shared` value is copied by `*r`, a counted
             // handle, not by a deep `.clone()` (the probe's LRU cache).
             if e.code == "E0516" {
@@ -4147,6 +4163,103 @@ fn e0516_shared_referent(
         _ => return None,
     };
     is_shared_type(typed, inner).then(|| crate::typechecker::types::type_display(inner))
+}
+
+/// Whether `name` is bound to a `TaskGroup` in `src`: `let group =
+/// TaskGroup.new()` (or `.isolating()`), or a parameter `group: ref
+/// TaskGroup`.
+fn is_task_group(src: &str, name: &str) -> bool {
+    let n = regex::escape(name);
+    regex::Regex::new(&format!(
+        r"\blet\s+(?:mut\s+)?{n}\s*(?::\s*(?:Isolating|Task)Group\s*)?=\s*(?:TaskGroup\s*\.\s*(?:new|isolating)|IsolatingGroup\s*\.\s*new)\s*\(|[(,]\s*{n}\s*:\s*(?:mut\s+)?(?:ref\s+)?(?:Task|Isolating)Group\b"
+    ))
+    .is_ok_and(|r| r.is_match(src))
+}
+
+/// The byte offset of the `}` closing the `{` at `open`, skipping string
+/// and character literals.
+fn closing_brace(src: &str, open: usize) -> Option<usize> {
+    let b = src.as_bytes();
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The machine-applicable repair for an E0509 whose view is an element of
+/// an owned collection a bare `for` walks, stored where no view may go
+/// (`for next in links { tx.send(next) }`, kata 1242): a bare `for`
+/// borrows what it walks (core semantics §4.5), and `.into_iter()` moves
+/// the elements out. Only for a `let`-bound local of a collection type
+/// that the function does not name after the loop.
+fn for_into_iter_fix(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    use crate::typechecker::types::Type;
+    let name = e.place.as_deref()?;
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let loan = offset_at(src, e.loan_at?)?;
+    let n = regex::escape(name);
+    let head = regex::Regex::new(&format!(r"^for\s+[^{{]*?\s+in\s+({n})\s*\{{")).ok()?;
+    let rest = src.get(loan..)?;
+    let at = head.captures(rest)?.get(1)?;
+    let iterable = loan + at.start();
+    let owned = typed
+        .expr_types
+        .iter()
+        .any(|(k, t)| k.0 == iterable && k.1 == name.len() && matches!(t, Type::Named { .. }));
+    if !owned {
+        return None;
+    }
+    // Bound by a `let` in this function, before the loop.
+    let fn_start = src[..loan].rfind("fn ")?;
+    let bound = regex::Regex::new(&format!(r"\blet\s+[^=;]*\b{n}\b[^=;]*=")).ok()?;
+    if !bound.is_match(&src[fn_start..loan]) {
+        return None;
+    }
+    // Not named after the loop, up to the function's end.
+    let close = closing_brace(src, loan + head.find(rest)?.end() - 1)?;
+    let after = &src[close + 1..];
+    let fn_end = after.find("\n}").map_or(after.len(), |i| i + 1);
+    let named = regex::Regex::new(&format!(r"\b{n}\b")).ok()?;
+    if named.is_match(&after[..fn_end]) {
+        return None;
+    }
+    let offset = loan + at.end();
+    let before = &src[..offset];
+    let line = before.matches('\n').count() + 1;
+    let column = offset - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset,
+            length: 0,
+            line,
+            column,
+        },
+        replacement: ".into_iter()".to_string(),
+    })
 }
 
 /// The machine-applicable repair for an E0509 whose view is a `Str` field
