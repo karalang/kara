@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 624 |
-| false-positive | 330 |
+| diagnostics | 635 |
+| false-positive | 333 |
 | missing-feature | 224 |
 | perf | 190 |
 | other | 125 |
-| soundness | 106 |
-| miscompile | 98 |
+| soundness | 107 |
+| miscompile | 99 |
 | crash | 64 |
 | run-vs-build | 61 |
 | codegen-gap | 40 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 774 |
-| mir-llvm | 313 |
-| mir | 290 |
+| typecheck | 786 |
+| mir-llvm | 314 |
+| mir | 291 |
 | cli | 243 |
-| parser | 140 |
+| parser | 142 |
 | ownership | 123 |
 | runtime | 101 |
 | interp | 95 |
@@ -110,6 +110,22 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
+| B-2026-11-18-79 | 2026-11-18 | typecheck | medium | A Rust `scan` closure whose tail yields a pair, `|count, end| { *count += ..; Some((end, *count)) }`, is taken for Kāra's `Some((next_state, item))` and gets two "drop the `*`" fixes, whose result threads `end` as the state and yields the count, instead of the Rust-scan explanation and the rewrite `Some((count, (end, count)))` | — |
+| B-2026-11-18-80 | 2026-11-18 | typecheck | low | A narrowing at the call of a closure whose tail is an unannotated literal binding (`let cost = |v| { let mut ans = 0; ..; ans }; cost(a).min(cost(b))` in an `i32` tail) gets only the bare narrowing message, where the same `ans` in a function's own tail gets the literal explanation and the fix `ans: i32` | — |
+| B-2026-11-18-81 | 2026-11-18 | mir-llvm | high | `Vec.filled(n, 0)` into a `Vec[u128]` reads 16 bytes from an 8-byte `i64` constant under the compiled backend: every element after the first gets whatever lies past the constant as its high half (ASan: stack-buffer-overflow), while the interpreter is right | — |
+| B-2026-11-18-82 | 2026-11-18 | typecheck | low | A narrowing at a use of a loop's element over an unannotated literal fill (`let mut cnt = vec![0; 26]` carried to `Vec.filled(26, 0)`, then `for (i, c) in cnt.iter().enumerate() { ans += c * (i as i32 / 9 + 1) }` with `ans: i32`) gets only `as i32` advice, though the same line written `cnt[i] * ..` is offered the fill's suffix `0i32` | — |
+| B-2026-11-18-83 | 2026-11-18 | typecheck | low | `PriorityQueue.min_first()` is refused "no associated function 'min_first' on type 'PriorityQueue'" with no hint, though the name is the natural mirror of `max_first()` and `PriorityQueue.new()` is the smallest-first queue it means | — |
+| B-2026-11-18-84 | 2026-11-18 | typecheck | medium | `m.into_iter().max_by_key(|(name, total)| (total, name))` passes `karac check` and then fails MIR borrowck inside the library's `max_by_key` (E0516, write/move of the item while it is borrowed): a key holding a borrow of an owned item cannot be kept while the item moves, and check said nothing | — |
+| B-2026-11-18-85 | 2026-11-18 | typecheck | high | `let m: Vec[ref String] = w.into_iter().collect()` passes `karac check`: owned items are gathered into a collection of references, each item is dropped as it is gathered, and a build writes past the stack under AddressSanitizer (`Vec[ref i64]` from `i64`s fails with invalid MIR) | — |
+| B-2026-11-18-86 | 2026-11-18 | parser | low | `.collect[Vec[String]]()` is read as a field `collect` indexed by `Vec[String]` ("no field 'collect'") and the deprecated `Vec[..]` prefix-literal fix then deletes `Vec`, leaving `.collect[[String]]()`; it should be refused as a call-site type argument with the turbofish's explanation | — |
+| B-2026-11-18-87 | 2026-11-18 | typecheck | low | An annotated closure parameter that is a tuple pattern, `|(stack, most): (Vec[(i64, i64)], i64), x|` as a `fold` accumulator, gets a bare "expected `Vec[?T1]`, found `ref Vec`" and a plain E0517 with no `own` advice or fix, where a closure parameter that is one name gets `|acc: own T|` and its machine fix | — |
+| B-2026-11-18-88 | 2026-11-18 | typecheck | medium | `self.left.len().saturating_sub(10)`, carried from Rust where `len()` is a `usize` and the subtraction floors at 0, passes `karac check` and `karac fix` in Kāra, where `len()` is an `i64` and `saturating_sub` floors at `i64.MIN`: with fewer than ten letters the slice starts at a negative index and the program panics | — |
+| B-2026-11-18-89 | 2026-11-18 | mir | medium | `[0, 1, 2].into_iter().min_by_key(|i| ref names[i])` is refused by the MIR borrow check inside the library's `min_by_key` ("write of _9 while it is borrowed"): the key, a `ref String` borrowed from the closure's capture, is taken to borrow the `i64` item it was computed from | — |
+| B-2026-11-18-90 | 2026-11-18 | typecheck | low | A `fold` with a bare `0` seed over an adapter chain of `i32` items in an `i32` tail (`nums.into_iter().skip(1).fold(0, |a, b| a | b)`) is refused as a narrowing from `i64`: the expected `i32` does not reach the seed through `skip`, `take`, `filter` or `map`, though it does with no adapter | — |
+| B-2026-11-18-91 | 2026-11-18 | parser | low | Rust's `let (x, y, z);` followed by assignments in each branch is first told to add a type (`let x: T;`), and following that advice (`let (x, y, z): (i32, i32, i32);`) only gets the second refusal that a destructuring `let` needs an initializer | — |
+| B-2026-11-18-92 | 2026-11-18 | typecheck | low | A narrowing at `r + dirs[d].0` with `r: i32` and `dirs` an unannotated list of literal pairs gets only the bare `as i32` advice and no fix, where the same literal in a plain `let k = 1` is named and offered `k: i32` | — |
+| B-2026-11-18-93 | 2026-11-18 | typecheck | low | `f([(1..=10).collect()].to_vec())` with `f`'s parameter a `Vec[Vec[i64]]` is refused with the MIR builder's internal text "an expression whose type does not lower (Type(UnknownParam(\"C\"))) is not lowered yet", though the same expression under `let g: Vec[Vec[i64]] =` type-checks and runs | — |
+| B-2026-11-18-94 | 2026-11-18 | typecheck | low | Rust's `[node.left, node.right].iter().filter_map(|child| child)` is refused with a bare "expected 'Option[_]', found 'ref Option[TreeNode]'" at the closure's body and no hint toward `into_iter()` or a copy | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |

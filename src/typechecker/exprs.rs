@@ -2436,7 +2436,10 @@ impl<'a> super::TypeChecker<'a> {
         } else if self.closure_d5_params.contains(name) {
             (
                 format!("closure parameter `{name}`"),
-                format!("`|{name}: own {shown}|`"),
+                self.closure_d5_spellings
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| format!("`|{name}: own {shown}|`")),
             )
         } else {
             (
@@ -2826,20 +2829,57 @@ impl<'a> super::TypeChecker<'a> {
         }
         if self.cli_lint_overrides.strict_core && crate::d5_params::on() {
             for p in params {
-                let (Some(t), PatternKind::Binding(n)) = (&p.ty, &p.pattern.kind) else {
+                let Some(t) = &p.ty else {
                     continue;
+                };
+                // A tuple pattern's bindings borrow through the one written
+                // type, as a single name does (`|(stack, most): (Vec[i64],
+                // i64), x|`): each is named with that type's `own` span
+                // (kata 2289, B-2026-11-18-87).
+                let bound = match &p.pattern.kind {
+                    PatternKind::Binding(n) => vec![n.clone()],
+                    PatternKind::Tuple(_) => p.pattern.binding_names(),
+                    _ => continue,
                 };
                 if let TypeKind::Ref(inner) = &t.kind {
                     // The D5 rewrite reuses the written type's span.
                     if inner.span == t.span {
-                        map.insert(
-                            n.clone(),
-                            Span {
-                                length: 0,
-                                ..t.span
-                            },
-                        );
-                        names.insert(n.clone());
+                        let spelling = match &p.pattern.kind {
+                            PatternKind::Tuple(parts) => {
+                                let names: Vec<String> = parts
+                                    .iter()
+                                    .map(|q| match &q.kind {
+                                        PatternKind::Binding(n) => n.clone(),
+                                        PatternKind::Wildcard => "_".to_string(),
+                                        _ => "..".to_string(),
+                                    })
+                                    .collect();
+                                Some(format!(
+                                    "`|({}): own {}|`",
+                                    names.join(", "),
+                                    crate::formatter::render_type_expr(inner)
+                                ))
+                            }
+                            _ => None,
+                        };
+                        for n in bound {
+                            match &spelling {
+                                Some(sp) => {
+                                    self.closure_d5_spellings.insert(n.clone(), sp.clone());
+                                }
+                                None => {
+                                    self.closure_d5_spellings.remove(&n);
+                                }
+                            }
+                            map.insert(
+                                n.clone(),
+                                Span {
+                                    length: 0,
+                                    ..t.span
+                                },
+                            );
+                            names.insert(n);
+                        }
                     }
                 }
             }
@@ -8868,6 +8908,7 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                     let want: Vec<Type> = want.iter().map(|t| self.resolved_now(t)).collect();
+                    let raw_want = want.clone();
                     // An item is read as a value (`ItemValues`): a `ref` to a
                     // `Copy` part is the part (`(x, x * 2)` over `v.iter()`).
                     let want: Vec<Type> = want.iter().map(|t| self.read_as_value(t)).collect();
@@ -8924,6 +8965,7 @@ impl<'a> super::TypeChecker<'a> {
                             .iter()
                             .flatten()
                             .all(|t| type_is_fully_concrete(t) && !contains_type_param(t));
+                    let raw_offered = offered.clone();
                     // A hasher a `Map` / `Set` item leaves unnamed is the
                     // default on either side: `Set.new()` items make a
                     // `Vec[Set[i64]]` (B-2026-11-12-14).
@@ -8953,6 +8995,19 @@ impl<'a> super::TypeChecker<'a> {
                             .collect()
                     };
                     let only_borrowed = offered.iter().any(|a| unref(a) == unref(&want));
+                    // Kata 2284: the other way round, owned items for a
+                    // collection of references (`Vec[ref String]` from
+                    // `into_iter()`'s `String`s) would keep a borrow of each
+                    // item `collect` consumes. It passed check, and a build
+                    // wrote past the stack (B-2026-11-18-85).
+                    if trait_name == "FromIterator" && decidable {
+                        if let Some(message) =
+                            self.owned_items_for_refs(&concrete, &raw_offered, &raw_want, &d.span)
+                        {
+                            self.type_error(message, d.span, TypeErrorKind::TypeMismatch);
+                            continue;
+                        }
+                    }
                     if decidable && !only_borrowed && !offered.contains(&want) {
                         for a in &offered {
                             for (x, y) in a.iter().zip(&want) {
@@ -9177,6 +9232,66 @@ impl<'a> super::TypeChecker<'a> {
             offered.push(args.iter().map(|t| self.read_as_value(t)).collect());
         }
         (!offered.is_empty()).then_some(offered)
+    }
+
+    /// Kata 2284: `collect` of owned items into a collection whose element
+    /// is (or holds) a reference, `Vec[ref String]` from `String`s. Each item
+    /// is dropped as it is gathered, so the reference would outlive it: the
+    /// message, or `None` when some impl takes the items as they are
+    /// (B-2026-11-18-85).
+    fn owned_items_for_refs(
+        &self,
+        concrete: &Type,
+        offered: &[Vec<Type>],
+        want: &[Type],
+        at: &Span,
+    ) -> Option<String> {
+        // `want` reads a `ref` to a `Copy` part or a handle as the value
+        // (`read_as_value`), so a `Vec[ref i64]` of `v.iter()`'s items looks
+        // like one of owned `i64`s. The items as the iterator yields them,
+        // where `collect` recorded them, tell the two apart; without them
+        // such a part is given the benefit of the doubt.
+        let real = self
+            .collect_items
+            .get(&SpanKey::from_span(at))
+            .map(|t| self.resolved_now(t));
+        let exact = real.is_some();
+        let want: Vec<Type> = match (&real, want) {
+            (Some(item), [_]) => vec![item.clone()],
+            _ => want.to_vec(),
+        };
+        fn ref_lost(tc: &super::TypeChecker<'_>, exact: bool, o: &Type, w: &Type) -> bool {
+            match (o, w) {
+                (Type::Ref(_) | Type::MutRef(_), Type::Ref(_) | Type::MutRef(_)) => false,
+                (Type::Ref(_) | Type::MutRef(_), Type::TypeVar(_) | Type::Error) => false,
+                (Type::Ref(inner) | Type::MutRef(inner), _) => exact || !tc.reads_as_value(inner),
+                (Type::Tuple(os), Type::Tuple(ws)) if os.len() == ws.len() => {
+                    os.iter().zip(ws).any(|(o, w)| ref_lost(tc, exact, o, w))
+                }
+                _ => false,
+            }
+        }
+        if offered.iter().any(|a| a.as_slice() == want.as_slice()) {
+            return None;
+        }
+        let lost = offered.iter().find(|a| {
+            a.len() == want.len()
+                && a.iter()
+                    .zip(&want)
+                    .any(|(o, w)| ref_lost(self, exact, o, w))
+        })?;
+        let want = want.as_slice();
+        let render = |v: &[Type]| v.iter().map(type_display).collect::<Vec<_>>().join(", ");
+        Some(format!(
+            "trait bound `{}: FromIterator[{}]` is not satisfied: it gathers `{}`, \
+             a reference, and `collect` drops each owned `{}` item as it gathers it, so the \
+             reference would outlive its value. Collect into a collection of the values, or \
+             walk the source with `.iter()` so the items are borrowed from it",
+            type_display(concrete),
+            render(want),
+            render(lost),
+            render(want),
+        ))
     }
 
     /// `collect` into `Option[C]` or `Result[C, E]` (any depth of them) from
@@ -13919,6 +14034,36 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Note `let cost = |..| { let mut ans = 0; ..; ans }`: a closure whose
+    /// body ends in a literal binding that kept the default, under the
+    /// closure's name (see `TypeChecker::closure_tail_lets`). The body is
+    /// checked by now, so the binding's entry is the one inside it.
+    pub(super) fn note_closure_tail_let(&mut self, name: &str, value: &Expr) {
+        let tail = match &value.kind {
+            ExprKind::Closure { body, .. } => match &body.kind {
+                ExprKind::Block(block) => block.final_expr.as_deref(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let entry = match tail.map(|t| &t.kind) {
+            Some(ExprKind::Identifier(t)) => self
+                .literal_lets
+                .get(t.as_str())
+                .filter(|e| !e.suffix && e.depth == 0 && e.root == *t)
+                .cloned(),
+            _ => None,
+        };
+        match entry {
+            Some(e) => {
+                self.closure_tail_lets.insert(name.to_string(), e);
+            }
+            None => {
+                self.closure_tail_lets.remove(name);
+            }
+        }
+    }
+
     /// Note `let name = <integer literal>` with no annotation, and
     /// `let name = [<literal>; n]` / `Vec.filled(n, <literal>)`, whose
     /// elements take the literal's type (see `TypeChecker::literal_lets`).
@@ -14278,6 +14423,27 @@ impl<'a> super::TypeChecker<'a> {
             })
     }
 
+    /// `for c in cnt`, `for c in cnt.iter()` or the item of `for (i, c) in
+    /// cnt.iter().enumerate()`, over an unannotated flat fill whose literal
+    /// took the default: `c` is one of its elements, so a narrowing at a use
+    /// of `c` offers the fill's suffix, as `cnt[i]` there does (kata 2268's
+    /// Rust arm, B-2026-11-18-82).
+    fn literal_fill_for_entry(&self, iterable: &Expr) -> Option<super::LiteralLet> {
+        let root = Self::collection_root_name(iterable)?;
+        let e = self.literal_lets.get(root)?;
+        let settled = e.element
+            && e.suffix
+            && e.depth == 1
+            && e.var.is_none_or(|v| {
+                let t = Type::TypeVar(v);
+                self.resolved_now(&t) == Type::Int(IntSize::I64) || self.is_open_literal(&t)
+            });
+        settled.then(|| super::LiteralLet {
+            depth: 0,
+            ..e.clone()
+        })
+    }
+
     /// The binding a collection expression is rooted at: `left` of `left`,
     /// `left[k]`, `ref left[k]`, `left[k].iter()`.
     fn collection_root_name(e: &Expr) -> Option<&str> {
@@ -14392,7 +14558,8 @@ impl<'a> super::TypeChecker<'a> {
         let entry = self
             .literal_pushed_entry(iterable, 1)
             .or_else(|| self.literal_array_entry(name, iterable, false))
-            .or_else(|| self.literal_range_for_entry(iterable, name));
+            .or_else(|| self.literal_range_for_entry(iterable, name))
+            .or_else(|| self.literal_fill_for_entry(iterable));
         let prev = match entry {
             Some(e) => self.literal_lets.insert(name.clone(), e),
             None => self.literal_lets.remove(name.as_str()),
@@ -14438,6 +14605,18 @@ impl<'a> super::TypeChecker<'a> {
             .and_then(|root| self.literal_tuple_pushes.get(root))
             .filter(|slots| slots.len() == pats.len())
             .cloned();
+        // `for (i, c) in cnt.iter().enumerate()`: `c` is an element.
+        let enumerated = match &iterable.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "enumerate" && args.is_empty() && pats.len() == 2 => {
+                self.literal_fill_for_entry(object)
+            }
+            _ => None,
+        };
         let mut saved = Vec::new();
         for (i, p) in pats.iter().enumerate() {
             let PatternKind::Binding(name) = &p.kind else {
@@ -14463,13 +14642,15 @@ impl<'a> super::TypeChecker<'a> {
                     self.literal_entry(lit, &ty, at, true, false, name)
                 });
             // Or a position whose element reads a literal binding.
-            let entry = entry.or_else(|| {
-                let root = Self::collection_root_name(iterable)?;
-                self.literal_tuple_sources
-                    .get(root)
-                    .filter(|s| s.len() == pats.len())?[i]
-                    .clone()
-            });
+            let entry = entry
+                .or_else(|| {
+                    let root = Self::collection_root_name(iterable)?;
+                    self.literal_tuple_sources
+                        .get(root)
+                        .filter(|s| s.len() == pats.len())?[i]
+                        .clone()
+                })
+                .or_else(|| enumerated.clone().filter(|_| i == 1));
             let prev = match entry {
                 Some(e) => self.literal_lets.insert(name.clone(), e),
                 None => self.literal_lets.remove(name.as_str()),
@@ -15143,10 +15324,26 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             }
         }
-        // Each with how many indexes deep it is read (`g[i][j]` is 2).
+        // Each with how many indexes deep it is read (`g[i][j]` is 2), or
+        // `CALLED` for a closure called by name (`cost(nums)`), which reads
+        // the literal binding its body ends in (B-2026-11-18-80).
+        const CALLED: usize = usize::MAX;
         fn names<'e>(e: &'e Expr, out: &mut Vec<(&'e str, usize)>) {
             match &e.kind {
                 ExprKind::Identifier(n) => out.push((n.as_str(), 0)),
+                // `min(firsts, seconds) * less`: the free `min` and `max`
+                // keep their arguments' type, as the methods do (kata
+                // 1717's counts arm, B-2026-11-20-45).
+                ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Identifier(f) if f == "min" || f == "max") => {
+                    for a in args {
+                        names(&a.value, out);
+                    }
+                }
+                ExprKind::Call { callee, .. } => {
+                    if let ExprKind::Identifier(c) = &callee.kind {
+                        out.push((c.as_str(), CALLED));
+                    }
+                }
                 ExprKind::MethodCall { .. } if element_of(e).is_some() => out.extend(element_of(e)),
                 ExprKind::Index { .. } => {
                     if let Some(read) = super::TypeChecker::element_read_root(e) {
@@ -15157,14 +15354,6 @@ impl<'a> super::TypeChecker<'a> {
                 ExprKind::Binary { left, right, .. } => {
                     names(left, out);
                     names(right, out);
-                }
-                // `min(firsts, seconds) * less`: the free `min` and `max`
-                // keep their arguments' type, as the methods do (kata
-                // 1717's counts arm, B-2026-11-20-45).
-                ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Identifier(f) if f == "min" || f == "max") => {
-                    for a in args {
-                        names(&a.value, out);
-                    }
                 }
                 // `(total - a).abs()`: a numeric method keeps its
                 // receiver's type. Not past a walk of a collection, whose
@@ -15183,9 +15372,14 @@ impl<'a> super::TypeChecker<'a> {
             // `right[i][j]` after `right[size].push(b)`, reads what was
             // pushed; the push stored how many indexes reach it
             // (B-2026-11-20-69, B-2026-11-20-11).
-            let entry = match self.literal_lets.get(name) {
-                Some(e) => e,
-                None => self.literal_pushes.get(name)?,
+            let (entry, depth) = if depth == CALLED {
+                (self.closure_tail_lets.get(name)?, 0)
+            } else {
+                let entry = match self.literal_lets.get(name) {
+                    Some(e) => e,
+                    None => self.literal_pushes.get(name)?,
+                };
+                (entry, depth)
             };
             let name = entry.root.as_str();
             if entry.depth != depth

@@ -2051,6 +2051,34 @@ impl<'a> super::TypeChecker<'a> {
                 // `Vec.filled(n, v)`: a fixed array is the repeat literal.
                 // Kata 2164: Rust's `VecDeque::from(v)`, which Kāra builds by
                 // `collect`, named instead of a bare refusal.
+                // Kata 2279: `PriorityQueue.min_first_from(v)`, the mirror of
+                // `max_first_from(v)`, is `from(v)`, which is already
+                // smallest first (B-2026-11-18-83); `min_first()` itself is
+                // named with the other constructor guesses above.
+                let smallest = match (type_name.as_str(), member.as_str()) {
+                    ("PriorityQueue", "min_first_from") => Some(("from", "max_first_from")),
+                    _ => None,
+                };
+                if let Some((k, other)) = smallest {
+                    let path = Span {
+                        length: span.length.min(type_name.len() + 1 + member.len()),
+                        ..*span
+                    };
+                    self.type_error_with_fix_it(
+                        format!(
+                            "no associated function '{member}' on type 'PriorityQueue': \
+                             `PriorityQueue.{k}` is already smallest first, and \
+                             `{other}` is the other way (library/collections.md)"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span: path,
+                            replacement: format!("PriorityQueue.{k}"),
+                        },
+                    );
+                    return Type::Error;
+                }
                 let hint = match (type_name.as_str(), member.as_str()) {
                     ("Array", "filled" | "new" | "with_capacity") => {
                         ": a fixed array is built with the repeat literal `[v; N]`, N a \

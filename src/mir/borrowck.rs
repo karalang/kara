@@ -1984,6 +1984,9 @@ impl Cx<'_> {
     /// of what it captures ([`fn_type_hands_back`]) still gives what it
     /// holds, since the callee can put that in the result.
     fn arg_origins(&self, o: &Origins, a: &Operand, dest: &Place, into: &mut LoanSet) {
+        if self.scalar_ref_cannot_reach(a, dest) {
+            return;
+        }
         let Some((f, lent, sig)) = self.fn_arg(a) else {
             self.operand_origins(o, a, into);
             return;
@@ -2002,6 +2005,36 @@ impl Cx<'_> {
         } else {
             self.operand_origins(o, a, into);
         }
+    }
+
+    /// Whether `a` is a reference to a number, a `bool` or a `char` that
+    /// a result of reference type cannot point into: a scalar has no
+    /// parts, so a `ref String` handed back by a call given `ref i64`
+    /// points elsewhere, at what the callee or a closure's captures hold.
+    /// The key of `min_by_key(|i| ref names[i])` borrows `names`, not the
+    /// item it is computed from, and the next item may replace that one
+    /// while the key is kept (kata 2284).
+    fn scalar_ref_cannot_reach(&self, a: &Operand, dest: &Place) -> bool {
+        let scalar = |t: Ty| {
+            matches!(
+                self.tys.kind(t),
+                TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_) | TyKind::Unit
+            )
+        };
+        let Some(t) = a
+            .place()
+            .and_then(|p| place_ty(self.body, self.tys, p).ok())
+            .and_then(|pt| match self.tys.kind(pt.ty) {
+                TyKind::Ref(t) | TyKind::MutRef(t) if scalar(t) => Some(t),
+                _ => None,
+            })
+        else {
+            return false;
+        };
+        place_ty(self.body, self.tys, dest).is_ok_and(|d| match self.tys.kind(d.ty) {
+            TyKind::Ref(u) | TyKind::MutRef(u) => u != t && !contains_ty(self.tys, u, t),
+            _ => false,
+        })
     }
 
     /// A function argument's function type (the closure's, for a closure

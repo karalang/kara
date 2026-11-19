@@ -1,0 +1,1 @@
+ERROR at line 4: `v.len().saturating_sub(10)` clamps at `i64.MIN`, not at 0

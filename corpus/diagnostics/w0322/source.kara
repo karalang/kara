@@ -1,0 +1,5 @@
+fn main() {
+    let v = [1, 2, 3].to_vec();
+    let from = v.len().saturating_sub(10);
+    println(from);
+}

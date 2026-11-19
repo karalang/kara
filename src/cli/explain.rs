@@ -758,6 +758,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0320", lint_own("qualified_prelude_variant")),
     ("W0321", lint_own("vec_per_element")),
     ("E0321", lint_own("vec_per_element")),
+    ("W0322", lint_own("len_saturating_sub")),
+    ("E0322", lint_own("len_saturating_sub")),
     ("E0801", ty("GpuNotSafe", None)),
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),

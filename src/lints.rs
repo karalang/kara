@@ -335,6 +335,13 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              disambiguate with explicit parentheses.",
     },
     LintInfo {
+        name: "len_saturating_sub",
+        default_level: LintLevel::Warn,
+        description: "`x.len().saturating_sub(n)` (or `count()`): a length is an `i64`, so \
+             this clamps at `i64.MIN`, not at 0 as Rust's `usize` does. `karac fix` writes \
+             `(x.len() - n).max(0)`.",
+    },
+    LintInfo {
         name: "weak_read_unwrap",
         default_level: LintLevel::Warn,
         description:

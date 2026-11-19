@@ -3578,6 +3578,7 @@ pub(crate) const LINT_CODES: &[(&str, &str, &str)] = &[
     ("ambiguous_not_comparison", "W0319", "E0319"),
     ("qualified_prelude_variant", "W0320", "E0320"),
     ("vec_per_element", "W0321", "E0321"),
+    ("len_saturating_sub", "W0322", "E0322"),
 ];
 
 /// The code of lint `lint` at `severity` (`"warning"` or `"error"`), when it

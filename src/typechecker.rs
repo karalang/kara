@@ -3729,6 +3729,10 @@ pub struct TypeChecker<'a> {
     /// The names in `current_fn_d5_params` that are a closure literal's
     /// parameters, so the give-away diagnostic spells the fix `|x: own T|`.
     pub(super) closure_d5_params: FxHashSet<String>,
+    /// For a binding of a closure's annotated tuple-pattern parameter, how
+    /// its `own` fix is spelled (`|(stack, most): own (Vec[i64], i64)|`),
+    /// in place of the single name's `|x: own T|` (B-2026-11-18-87).
+    pub(super) closure_d5_spellings: FxHashMap<String, String>,
     /// Spans at which a `frozen` PARAMETER was read as a value. B-2026-08-08-11.
     ///
     /// `frozen T` lowers to `TypeKind::Ref(T)` at parse time (B-2026-08-01-33 —
@@ -4591,6 +4595,11 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-08-53). A copy, `let y = x`, is
     /// noted with `x`'s entry, whose `root` names `x` as the binding to fix.
     pub(super) literal_lets: FxHashMap<String, LiteralLet>,
+    /// A closure bound by an unannotated `let` whose body's tail is a
+    /// literal binding of `literal_lets`, by the closure's name, with that
+    /// binding's entry: a narrowing refused at a call of the closure is
+    /// fixed on the binding inside it (B-2026-11-18-80).
+    pub(super) closure_tail_lets: FxHashMap<String, LiteralLet>,
     /// The literal bindings an assignment to a literal binding reads, by the
     /// assigned binding's fix offset: `best = best.max(positive)` notes
     /// `positive` under `best`. Typing `best` makes each of them refused in
@@ -4937,6 +4946,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_mut_self: false,
             current_fn_d5_params: FxHashMap::default(),
             closure_d5_params: FxHashSet::default(),
+            closure_d5_spellings: FxHashMap::default(),
             frozen_param_use_spans: FxHashSet::default(),
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),
@@ -5150,6 +5160,7 @@ impl<'a> TypeChecker<'a> {
             iter_let_uses: FxHashMap::default(),
             str_lit_lets: FxHashMap::default(),
             literal_lets: FxHashMap::default(),
+            closure_tail_lets: FxHashMap::default(),
             literal_feeds: FxHashMap::default(),
             literal_pushes: FxHashMap::default(),
             literal_tuple_pushes: FxHashMap::default(),

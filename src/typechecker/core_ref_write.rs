@@ -1670,7 +1670,11 @@ impl Walk<'_, '_> {
                 self.scopes.push(Vec::new());
                 for p in params {
                     let own_fix = match (&p.ty, &p.pattern.kind) {
-                        (Some(t), PatternKind::Binding(_)) if crate::d5_params::on() => {
+                        // A tuple pattern borrows through its one type too
+                        // (kata 2289, B-2026-11-18-87).
+                        (Some(t), PatternKind::Binding(_) | PatternKind::Tuple(_))
+                            if crate::d5_params::on() =>
+                        {
                             match &t.kind {
                                 // The D5 rewrite reuses the written type's span.
                                 TypeKind::Ref(inner) if inner.span == t.span => Some(FixIt {

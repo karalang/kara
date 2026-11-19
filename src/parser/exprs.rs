@@ -4597,6 +4597,16 @@ impl super::Parser {
             && matches!(self.peek_token_ref_at(2), Token::RightBracket)
             && matches!(self.peek_token_ref_at(3), Token::LeftParen)
             && matches!(self.peek_token_ref_at(4), Token::RightParen);
+        // `it.collect[Vec[String]]()`, and `sum` / `product` the same way:
+        // a type in brackets, which read as the field `collect` indexed by
+        // `Vec[String]`, and `karac fix` then took the deprecated `Vec[..]`
+        // literal's fix-it and wrote `.collect[[String]]()`. Taken only when
+        // the bracket holds a type's name (a capital or a primitive) and the
+        // empty call follows its `]` (kata 2288, B-2026-11-18-86).
+        let bracketed = bracketed
+            || (matches!(method.as_str(), "collect" | "sum" | "product")
+                && self.check(&Token::LeftBracket)
+                && self.bracketed_type_then_empty_call());
         if !bracketed
             && (!self.check(&Token::ColonColon)
                 || !matches!(
@@ -4653,6 +4663,11 @@ impl super::Parser {
         let last = self.tokens[self.pos - 1].span;
         let end = last.offset + last.length;
         let ty = self.turbofish_binding_type(open, self.pos);
+        let what = if bracketed {
+            "a type in brackets after a method name is a call-site type argument"
+        } else {
+            "`::<..>` after a method name is Rust's turbofish"
+        };
         // A `collect` / `sum` / `product` whose result is the receiver of a
         // further call (`it.collect::<Vec<String>>().join(", ")`): its type
         // cannot come from where it is used, so deleting the list leaves an
@@ -4675,7 +4690,7 @@ impl super::Parser {
                     let close = self.tokens[self.pos + 1].span;
                     self.error_at(
                         &format!(
-                            "`::<..>` after a method name is Rust's turbofish; Kāra has no \
+                            "{what}; Kāra has no \
                              call-site type arguments, and this `collect`'s result is the \
                              receiver of a further call -- the collection is named before \
                              the call: `{t}.from_iter(it)`"
@@ -4705,7 +4720,7 @@ impl super::Parser {
             let shown = ty.clone().unwrap_or_else(|| "T".to_string());
             self.error_at(
                 &format!(
-                    "`::<..>` after a method name is Rust's turbofish; Kāra has no call-site \
+                    "{what}; Kāra has no call-site \
                      type arguments, and this `{method}`'s result is the receiver of a \
                      further call, so its type cannot be inferred from its use: bind it \
                      first with a typed `let` (`let v: {shown} = it.{method}();`) and call \
@@ -4730,7 +4745,7 @@ impl super::Parser {
                 let close = self.tokens[self.pos + 1].span;
                 self.error_at(
                     &format!(
-                        "`::<..>` after a method name is Rust's turbofish; Kāra has no \
+                        "{what}; Kāra has no \
                          call-site type arguments, and a comparison does not fix what \
                          `collect` builds -- name the collection before the call, as the \
                          receiver of its `from_iter`: `{t}.from_iter(it)`"
@@ -4780,11 +4795,6 @@ impl super::Parser {
                 && matches!(self.peek_token_ref_at(1), Token::RightParen)
             {
                 let close = self.tokens[self.pos + 1].span;
-                let what = if bracketed {
-                    "a type in brackets after a method name is a call-site type argument"
-                } else {
-                    "`::<..>` after a method name is Rust's turbofish"
-                };
                 self.error_at(
                     &format!(
                         "{what}; Kāra has no call-site type arguments -- the type to parse \
@@ -4813,9 +4823,10 @@ impl super::Parser {
         }
         self.turbofishes.push((start, method, self.pos, ty));
         self.error_at(
-            "`::<..>` after a method name is Rust's turbofish; Kāra has no call-site type \
-             arguments -- remove it and annotate the binding instead \
-             (`let v: Vec[i64] = it.collect();`)",
+            &format!(
+                "{what}; Kāra has no call-site type arguments -- remove it and annotate \
+                 the binding instead (`let v: Vec[i64] = it.collect();`)"
+            ),
             start,
         );
         self.fix_edits.insert(
@@ -4826,6 +4837,61 @@ impl super::Parser {
                 replacement: String::new(),
             },
         );
+    }
+
+    /// At a `[`: whether it holds a type's name (a capitalised name or a
+    /// primitive's) up to its matching `]`, and `()` follows.
+    fn bracketed_type_then_empty_call(&self) -> bool {
+        let typeish = match self.peek_token_ref_at(1) {
+            Token::Identifier { name, .. } => {
+                name.starts_with(|c: char| c.is_ascii_uppercase())
+                    || matches!(
+                        name.as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "i128"
+                            | "isize"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "u128"
+                            | "usize"
+                            | "f32"
+                            | "f64"
+                            | "bool"
+                            | "char"
+                    )
+            }
+            _ => false,
+        };
+        if !typeish {
+            return false;
+        }
+        let mut depth: i64 = 0;
+        for i in self.pos..self.tokens.len() {
+            match self.tokens[i].token {
+                Token::LeftBracket => depth += 1,
+                Token::RightBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(
+                            self.tokens.get(i + 1).map(|t| &t.token),
+                            Some(Token::LeftParen)
+                        ) && matches!(
+                            self.tokens.get(i + 2).map(|t| &t.token),
+                            Some(Token::RightParen)
+                        );
+                    }
+                }
+                Token::EOF | Token::Semicolon | Token::LeftBrace | Token::RightBrace => {
+                    return false
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Whether the call whose `(` is the current token is followed by a

@@ -182,7 +182,7 @@ fn in_place_scan(closure: &Expr, name: &str) -> Option<RustScan> {
     let ExprKind::Block(b) = &body.kind else {
         return None;
     };
-    if !some_item(b.final_expr.as_deref()?) {
+    if !some_item(b.final_expr.as_deref()?, name) {
         return None;
     }
     let mut found = RustScan {
@@ -206,12 +206,17 @@ fn in_place_scan(closure: &Expr, name: &str) -> Option<RustScan> {
     Some(found)
 }
 
-/// `Some(item)` with `item` not already a pair.
-fn some_item(e: &Expr) -> bool {
+/// `Some(item)` with `item` not already Kāra's `(state, item)` pair. A
+/// pair whose first half is anything but the bare state is Rust's item,
+/// as kata 2261's `Some((end, *count))` is: the end of a subarray with
+/// the running count, which Kāra's shape carries as
+/// `Some((count, (end, count)))` (B-2026-11-18-79).
+fn some_item(e: &Expr, name: &str) -> bool {
     matches!(&e.kind, ExprKind::Call { callee, args }
         if matches!(&callee.kind, ExprKind::Identifier(n) if n == "Some")
             && args.len() == 1
-            && !matches!(&args[0].value.kind, ExprKind::Tuple(t) if t.len() == 2))
+            && !matches!(&args[0].value.kind, ExprKind::Tuple(t)
+                if t.len() == 2 && matches!(&t[0].kind, ExprKind::Identifier(n) if n == name)))
 }
 
 fn compound_binop(op: &CompoundOp) -> BinOp {
@@ -289,7 +294,7 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         ExprKind::Block(b) => b.final_expr.as_deref()?,
         _ => body,
     };
-    if !some_item(tail) {
+    if !some_item(tail, name) {
         return None;
     }
     let mut found = RustScan {

@@ -2089,6 +2089,9 @@ impl<'a> super::TypeChecker<'a> {
                 self.collect_items.insert(SpanKey::from_span(&whole), item);
             }
         }
+        if matches!(method, "min_by_key" | "max_by_key") && args.len() == 1 {
+            self.check_key_borrows_item(object, method, &args[0].value);
+        }
         if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
             self.explain_rust_scan(args, errors_before);
         }
@@ -2159,6 +2162,77 @@ impl<'a> super::TypeChecker<'a> {
                  be constant"
             );
             self.type_error(msg, span, TypeErrorKind::NoMethodFound);
+        }
+    }
+
+    /// Kata 2284: `m.into_iter().max_by_key(|(name, total)| (total, name))`.
+    /// The key borrows the item it is given, and `min_by_key` /
+    /// `max_by_key` keep the best key beside the best item while they move
+    /// the item, so a key holding a borrow of an owned item cannot be kept.
+    /// It passed check and failed borrowck inside the library's body. A
+    /// borrowed part of the key's tail that is a binding of the closure's
+    /// parameter gets `.clone()` (B-2026-11-18-84).
+    fn check_key_borrows_item(&mut self, object: &Expr, method: &str, key: &Expr) {
+        let Some(item) = self.library_iter_item(object) else {
+            return;
+        };
+        if matches!(item, Type::Ref(_) | Type::MutRef(_)) {
+            return;
+        }
+        let ExprKind::Closure { params, body, .. } = &key.kind else {
+            return;
+        };
+        let names: Vec<String> = params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+        let mut tail = body.as_ref();
+        while let ExprKind::Block(b) = &tail.kind {
+            match &b.final_expr {
+                Some(e) => tail = e,
+                None => return,
+            }
+        }
+        let parts: Vec<&Expr> = match &tail.kind {
+            ExprKind::Tuple(items) => items.iter().collect(),
+            _ => vec![tail],
+        };
+        for part in parts {
+            let ExprKind::Identifier(n) = &part.kind else {
+                continue;
+            };
+            if !names.contains(n) {
+                continue;
+            }
+            let Some(ty) = self.expr_types.get(&SpanKey::from_span(&part.span)) else {
+                continue;
+            };
+            let (Type::Ref(inner) | Type::MutRef(inner)) =
+                resolve_type_var_top(ty, &self.env.substitutions)
+            else {
+                continue;
+            };
+            if self.reads_as_value(&inner) {
+                continue;
+            }
+            self.type_error_with_fix_it(
+                format!(
+                    "`{method}`'s key cannot keep a borrow of the item it is given: `{n}` is a \
+                     `ref {}` into an item `{method}` moves while it keeps the best key. \
+                     Write `{n}.clone()` to key on a copy",
+                    type_display(&inner)
+                ),
+                part.span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span: Span {
+                        offset: part.span.offset + part.span.length,
+                        length: 0,
+                        ..part.span
+                    },
+                    replacement: ".clone()".to_string(),
+                },
+            );
         }
     }
 

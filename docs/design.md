@@ -1046,7 +1046,7 @@ Attribute regions that change the default for a function or block (`#[wrapping]`
 
 #### Checked, wrapping, saturating and overflowing arithmetic
 
-Every integer primitive (`i8` to `i128`, `u8` to `u128`, `isize`, `usize`) has four method families, `checked_`, `wrapping_`, `saturating_` and `overflowing_`, which cover every arithmetic operation that can overflow or shift out of range. They are listed in [library/core-types.md](library/core-types.md#numbers).
+Every integer primitive (`i8` to `i128`, `u8` to `u128`, `isize`, `usize`) has four method families, `checked_`, `wrapping_`, `saturating_` and `overflowing_`, which cover every arithmetic operation that can overflow or shift out of range. They are listed in [library/core-types.md](library/core-types.md#numbers). A length is an `i64`, so `v.len().saturating_sub(n)` clamps at `i64.MIN`, not at 0 as Rust's `usize` does; the `len_saturating_sub` lint (warn by default, W0322) says so on a `len()` or `count()` receiver, and `karac fix` writes `(v.len() - n).max(0)`.
 
 **`abs()`** is the magnitude of a signed integer or a float, returning `Self`. `iN.MIN.abs()` has no representable result and traps as integer overflow, like unary `-iN.MIN`. Float `abs` follows IEEE 754. Unsigned integers have no `abs`: calling it is a `no method 'abs' on type 'uN'` error.
 

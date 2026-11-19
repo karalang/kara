@@ -3275,6 +3275,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_open_collection_lets = std::mem::take(&mut self.open_collection_lets);
         let saved_str_list_lets = std::mem::take(&mut self.str_list_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
+        let saved_closure_tail_lets = std::mem::take(&mut self.closure_tail_lets);
         let saved_literal_tuple_pushes = std::mem::take(&mut self.literal_tuple_pushes);
         let saved_literal_tuple_sources = std::mem::take(&mut self.literal_tuple_sources);
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
@@ -3394,6 +3395,7 @@ impl<'a> super::TypeChecker<'a> {
         self.open_collection_lets = saved_open_collection_lets;
         self.str_list_lets = saved_str_list_lets;
         self.literal_lets = saved_literal_lets;
+        self.closure_tail_lets = saved_closure_tail_lets;
         self.literal_tuple_pushes = saved_literal_tuple_pushes;
         self.literal_tuple_sources = saved_literal_tuple_sources;
         self.read_only_slice_lets = saved_read_only_slice_lets;
@@ -13169,6 +13171,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.str_list_lets.remove(name.as_str());
                         }
                         self.note_literal_let(name, pattern.span, value, &expected_ty);
+                        self.note_closure_tail_let(name, value);
                         self.note_read_only_slice_let(name, value, &expected_ty);
                     } else {
                         self.read_only_slice_lets.remove(name.as_str());
@@ -13180,6 +13183,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.literal_lets.remove(name.as_str());
                         self.literal_tuple_pushes.remove(name.as_str());
                         self.literal_tuple_sources.remove(name.as_str());
+                        self.closure_tail_lets.remove(name.as_str());
                     }
                 } else if let PatternKind::Tuple(pats) = &pattern.kind {
                     if ty.is_none() {

@@ -24775,7 +24775,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                     }
                     ops.push(match elem {
-                        Some(el) if i == 1 => self.operand_filling_holes(&a.value, el)?,
+                        // A literal fill is fitted to the element: the
+                        // native copies the element's size from it, and an
+                        // `i64` constant read as a `u128` reads past its
+                        // slot (B-2026-11-18-81, kata 2267).
+                        Some(el) if i == 1 => {
+                            let op = self.operand_filling_holes(&a.value, el)?;
+                            self.widen(op, el)
+                        }
                         _ => self.expr_operand(&a.value)?,
                     });
                 }

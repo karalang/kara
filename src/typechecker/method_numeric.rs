@@ -675,6 +675,9 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Some(Type::Error);
                 }
+                if method == "saturating_sub" {
+                    self.note_len_saturating_sub(object, arg, args_close_span, receiver_for_lookup);
+                }
                 let self_ty = receiver_for_lookup.clone();
                 return Some(if checked {
                     Type::Named {
@@ -1429,5 +1432,64 @@ impl<'a> super::TypeChecker<'a> {
             });
         }
         None
+    }
+
+    /// Kata 2296's Rust template: `self.left.len().saturating_sub(10)`. A
+    /// length is an `i64` in Kāra, so `saturating_sub` clamps at `i64.MIN`,
+    /// not at 0 as Rust's `usize` does: a length of 3 gives -7, and the
+    /// slice `v[from..]` that Rust code takes from it fails at run time. The
+    /// lint `len_saturating_sub` names that and fixes the call to
+    /// `(x.len() - n).max(0)` (B-2026-11-18-88).
+    fn note_len_saturating_sub(
+        &mut self,
+        object: &Expr,
+        arg: &Expr,
+        args_close_span: &Span,
+        receiver: &Type,
+    ) {
+        if !matches!(receiver, Type::Int(_)) {
+            return;
+        }
+        let ExprKind::MethodCall {
+            method: inner,
+            args: inner_args,
+            ..
+        } = &object.kind
+        else {
+            return;
+        };
+        if !matches!(inner.as_str(), "len" | "count") || !inner_args.is_empty() {
+            return;
+        }
+        let length = crate::formatter::render_expr(object);
+        let rendered = crate::formatter::render_expr(arg);
+        let amount = match arg.kind {
+            ExprKind::Identifier(_)
+            | ExprKind::Integer(..)
+            | ExprKind::Call { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::FieldAccess { .. } => rendered.clone(),
+            _ => format!("({rendered})"),
+        };
+        let span = Span {
+            offset: object.span.offset,
+            length: args_close_span.offset + args_close_span.length - object.span.offset,
+            ..object.span
+        };
+        self.type_lint_warning_with_fix(
+            format!(
+                "`{length}.saturating_sub({rendered})` clamps at `i64.MIN`, not at 0: \
+                 a length is an `i64` here, where Rust's is a `usize` that stops at 0, \
+                 so a length below `{rendered}` gives a negative number. Write \
+                 `({length} - {amount}).max(0)` for the floor at 0"
+            ),
+            span,
+            TypeErrorKind::TypeMismatch,
+            "len_saturating_sub",
+            Some(super::FixIt {
+                span,
+                replacement: format!("({length} - {amount}).max(0)"),
+            }),
+        );
     }
 }
