@@ -1230,7 +1230,7 @@ An array is written as a list literal with an `Array` expected type, or with the
 
 ### Collection literals
 
-**List literals.** `[a, b, c]` is a `Vec` by default and follows the expected type: with an `Array[T, N]` or `Set[T]` annotation it builds that type. The repeat form `[v; n]` always builds an `Array`, and `n` must be a constant. A `Vec` of `n` copies is `Vec.filled(n, v)`.
+**List literals.** `[a, b, c]` is a `Vec` by default and follows the expected type: with an `Array[T, N]`, `Set[T]` or `SortedSet[T]` annotation it builds that type (B-2026-11-19-10). The repeat form `[v; n]` always builds an `Array`, and `n` must be a constant. A `Copy` value is copied into each slot; any other value must be `Clone`, and the slots after the first hold clones of `v`. A `Vec` of `n` copies is `Vec.filled(n, v)`.
 
 ```kara
 let v = [1, 2, 3];                    // Vec[i64]
