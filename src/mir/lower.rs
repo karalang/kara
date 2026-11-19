@@ -26437,9 +26437,16 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// that is not `escaping`: the callee may only call it (core semantics
     /// §9.3), so its captures are inferred, not moved, even where the slot
     /// erases it (a library function's `own OnceFn` such as `with_span`).
+    ///
+    /// A bare generic parameter (`f: F` with `F: MutFn()`) borrows too: the
+    /// D5 rewrite wraps it in a `Ref` with the parameter's own span, and the
+    /// callee can only call it, so a closure literal handed to it captures
+    /// by reference rather than moving its captures in (B-2026-11-19-72).
     fn closure_arg_borrows(&self, a: &Expr, p: &ast::Param) -> bool {
+        let implied_borrow =
+            matches!(&p.ty.kind, ast::TypeKind::Ref(inner) if inner.span == p.ty.span);
         matches!(a.kind, ExprKind::Closure { .. })
-            && matches!(p.ty.kind, ast::TypeKind::FnType { .. })
+            && (matches!(p.ty.kind, ast::TypeKind::FnType { .. }) || implied_borrow)
             && !self.fn_param_owned(p)
     }
 

@@ -816,6 +816,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A closure literal passed to a generic bare `F` parameter (`fn
+  call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) borrows what it captures,
+  as one passed to a bare `f: Fn() -> i64` does: a bare parameter is a
+  borrow and the callee can only call it (core semantics §9.1, §9.3). It
+  moved every capture in on every lane, so a captured `Drop` value was
+  dropped at the end of the call statement, a later use of it was refused
+  by the move check after `karac check` had accepted it, and a counter a
+  `MutFn` closure wrote was a copy, reading 0 after two calls
+  (B-2026-11-19-72).
 - `karac fix`'s rewrite of Rust's `binary_search`, `binary_search_by` and
   `binary_search_by_key` names the LAST of several equal elements in
   `Ok`, as rustc's implementation and Kāra's own `binary_search` do: it
