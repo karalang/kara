@@ -1,0 +1,4 @@
+#[derive(Clone)]
+fn helper() {}
+
+fn main() {}

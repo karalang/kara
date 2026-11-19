@@ -1,0 +1,1 @@
+ERROR at line 1: `Clone` is listed twice in this derive; a type derives a trait once, so remove the second

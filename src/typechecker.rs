@@ -54,6 +54,7 @@ mod core_ref_write;
 mod core_taskgroup;
 mod cross_task_check;
 mod deprecated_variant;
+mod derive_names;
 mod derives;
 pub mod env;
 mod env_build;
@@ -5182,6 +5183,7 @@ impl<'a> TypeChecker<'a> {
         self.validate_derive_clone_allocates();
         self.validate_derived_traits_recursive();
         self.validate_derive_lists();
+        self.validate_derive_names();
         self.validate_bound_assoc_bindings();
         self.validate_serde_default_constants();
         self.warn_implied_derives();

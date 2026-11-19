@@ -1338,6 +1338,18 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
     ),
     (
+        "E_DERIVE_DUPLICATE",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_DERIVE_TARGET",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
+        "E_DERIVE_UNKNOWN",
+        ty("TypeMismatch", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
         "E_DISCRIMINANT_OUT_OF_RANGE",
         ty("DiscriminantInvalid", None),
     ),
@@ -3024,6 +3036,29 @@ const CODE_PROSE: &[(&str, &str)] = &[
          `0` is not positive. Nothing checks the predicate at the derive, so \
          the derive is refused. Write `impl Default for Pos { fn default() \
          -> Pos { Pos(1) } }` with a value that satisfies the predicate.",
+    ),
+    (
+        "E_DERIVE_DUPLICATE",
+        "A trait is listed twice in one `#[derive(..)]`. A type derives a \
+         trait once, so the second is removed: `#[derive(PartialEq, \
+         PartialEq)]` becomes `#[derive(PartialEq)]`.",
+    ),
+    (
+        "E_DERIVE_TARGET",
+        "`#[derive(..)]` generates trait impls from a type's fields, so it \
+         goes on a `struct`, an `enum` or a distinct type. On a function, a \
+         `const`, a trait or any other item there is nothing to derive from; \
+         remove the attribute, or write the impl by hand.",
+    ),
+    (
+        "E_DERIVE_UNKNOWN",
+        "Derive takes a closed table of built-in traits (`PartialEq`, `Eq`, \
+         `PartialOrd`, `Ord`, `Hash`, `Clone`, `Copy`, `Default`, `Display`, \
+         `Debug`, `Serialize`, `Deserialize`, `Arithmetic`, `Pod`) and any \
+         trait a `comptime fn derive_<name>` in scope generates. Any other \
+         name is refused rather than ignored, so a typo such as \
+         `#[derive(PartilEq)]` is caught at the derive instead of at a \
+         distant use; the fix offers the nearest built-in name.",
     ),
     (
         "E_DISCRIMINANT_OUT_OF_RANGE",

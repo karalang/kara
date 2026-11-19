@@ -1,0 +1,1 @@
+ERROR at line 1: `Clnoe` is not derivable: did you mean `Clone`? derive takes the built-in traits (PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Default, Display, Debug, Serialize, Deserialize, Arithmetic, Pod) or a trait a `comptime fn derive_clnoe` generates (design.md §9 Derive)

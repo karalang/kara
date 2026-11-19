@@ -1,0 +1,1 @@
+ERROR at line 1: `#[derive(..)]` on a function: derive generates trait impls from a type's fields, so it goes on a `struct`, an `enum` or a distinct type; remove the attribute, or write the impl by hand (design.md §9 Derive)
