@@ -6943,9 +6943,23 @@ impl<'a> super::TypeChecker<'a> {
                     // descends into the return type). Mirrors pass 1's
                     // non-closure unify; a no-op when the slot was already
                     // solved from another argument.
+                    //
+                    // The closure was checked against the slot with this
+                    // call's unsolved variables named back, so a part its
+                    // body leaves open (`E` of `|| Ok(1)` against
+                    // `Fn() -> Result[T, E]`) still reads the callee's
+                    // name. That name is the call's variable again here:
+                    // unified as a name, the variable was fixed to it, and
+                    // a later use that fixes it (`.with_health_check(..)`
+                    // into an annotated `let`) could not (B-2026-11-18-74).
+                    let back: HashMap<String, SubstValue> = names
+                        .iter()
+                        .map(|(id, n)| (n.clone(), SubstValue::Type(Type::TypeVar(*id))))
+                        .collect();
+                    let arg_back = substitute_type_params(&arg_ty, &back);
                     unify_types(
                         sub_param_ty,
-                        &arg_ty,
+                        &arg_back,
                         &mut self.env.substitutions,
                         &mut self.env.const_substitutions,
                     );
