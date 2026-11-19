@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 558 |
-| false-positive | 293 |
+| false-positive | 294 |
 | missing-feature | 208 |
 | perf | 188 |
 | other | 119 |
 | soundness | 98 |
-| miscompile | 89 |
+| miscompile | 90 |
 | crash | 60 |
 | run-vs-build | 57 |
 | codegen-gap | 39 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 707 |
+| typecheck | 708 |
 | mir-llvm | 306 |
-| mir | 269 |
+| mir | 270 |
 | cli | 210 |
 | parser | 125 |
 | ownership | 114 |
@@ -1834,6 +1834,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-83 | typecheck | low | A `Vec[String]` built from string literals (`["a", "b"]`, `Vec.filled(n, "x")`) passed where `Slice[Str]` is taken is refused with no fix | 53f86eb754 |
 | B-2026-11-19-84 | typecheck | medium | `Slice` (so `Vec` and `Array`) has no `starts_with` / `ends_with`: "no method 'starts_with' on type 'Vec'" for an OID subtree test | 53f86eb754 |
 | B-2026-11-19-85 | mir+typecheck | high | A closure that writes a capture and then moves it out (`\|\| { agent.serve(); agent }`) checks clean but `run`/`build` refuse it as "cannot move a non-… | 53f86eb754 |
+| B-2026-11-19-90 | mir | medium | `v = v` (a binding assigned its own value) is lowered as `drop(v); v = move v`: the old value is dropped before it is moved into the store, and the M… | bd214fffc0 |
+| B-2026-11-19-91 | typecheck | low | A `Some(x)` inside a tuple pushed into a `Vec[(.., Option[T])]`, `x` a borrowed shared handle or `Copy` value (`below.push((right, Some(node)))` with… | bd214fffc0 |
 
 </details>
 
