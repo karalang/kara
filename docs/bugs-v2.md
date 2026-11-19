@@ -58,34 +58,34 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 529 |
-| false-positive | 276 |
-| missing-feature | 201 |
+| diagnostics | 535 |
+| false-positive | 283 |
+| missing-feature | 203 |
 | perf | 188 |
 | other | 114 |
-| soundness | 87 |
+| soundness | 89 |
 | miscompile | 85 |
 | run-vs-build | 56 |
-| crash | 53 |
+| crash | 54 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
-| leak | 4 |
+| leak | 5 |
 | double-free | 2 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| typecheck | 664 |
-| mir-llvm | 295 |
-| mir | 256 |
-| cli | 203 |
+| typecheck | 675 |
+| mir-llvm | 296 |
+| mir | 258 |
+| cli | 204 |
 | parser | 117 |
-| ownership | 108 |
-| interp | 88 |
-| runtime | 88 |
+| ownership | 110 |
+| interp | 89 |
+| runtime | 89 |
 | resolver | 46 |
-| effect | 41 |
+| effect | 44 |
 | other | 34 |
 | codegen | 22 |
 | autopar | 7 |
@@ -122,6 +122,25 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-4 | 2026-11-19 | typecheck | medium | `.into()` from a `Str` (or a string literal) to `String` is refused, though `String.from(s)` works and design.md §9 lists `impl From[Str] for String`; a remainder of B-2026-11-15-72, whose fix covers only user `From[Str]` impls | — |
 | B-2026-11-19-5 | 2026-11-19 | typecheck | low | `v[a..b] = other` with a `Vec` (or a list literal) on the right is refused "expected 'Slice[i64]', found 'Vec[i64]'"; only a slice expression is accepted | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
+| B-2026-11-19-7 | 2026-11-19 | typecheck | medium | A struct update `P { b: 3, ..x }` whose base supplies a field of a type with its own `impl Drop` is refused as `partial_move_of_drop_struct` 'cannot move a non-Copy field out of `D`', though `P` has no Drop and the field moves whole | — |
+| B-2026-11-19-8 | 2026-11-19 | typecheck | medium | A type alias of a struct cannot build or match it: `type Q = P; Q { a: 1 }` is E0207 "'Q' is not a struct", and `match p { IntPair { a, b } => .. }` is E0205 non-exhaustive, though an alias is transparent | — |
+| B-2026-11-19-9 | 2026-11-19 | typecheck | low | Type alias declarations are not checked on their own: a cycle (`type A = Vec[B]; type B = A;`) passes check until used, then gives E0516 'no definition for type `B` is not lowered yet'; and an alias bound is not enforced on a generic parameter (`fn f[T](v: SortedVec[T])` with `type SortedVec[T: Ord]`) | — |
+| B-2026-11-19-10 | 2026-11-19 | typecheck | low | A list literal with a `SortedSet[T]` expected type is refused (`let s: SortedSet[i64] = [3, 1, 2]`), though `SortedMap` takes a map literal; review ruled it builds a SortedSet like `Set[T]` does | — |
+| B-2026-11-19-11 | 2026-11-19 | typecheck | low | A plain enum recursive through `Option` (`enum L { Nil, Cons(i64, Option[L]) }`) is accepted and runs, though design.md says a plain enum containing itself directly is a compile error and requires `shared enum`; review ruled a deprecation warning now with the `shared enum` fix, an error at the next minor | — |
+| B-2026-11-19-12 | 2026-11-19 | typecheck | low | A prelude variant written qualified (`Option.Some(1)`, `Result.Ok(v)`) is accepted silently, though design.md says the prelude variants are always written bare; review ruled a warning with a machine fix to the bare form | — |
+| B-2026-11-19-13 | 2026-11-19 | typecheck | low | `#[derive(...)]` accepts what it cannot derive with no diagnostic: an unknown trait name (`#[derive(Frobnicate)]`), a derive on a `fn`, `const` or `trait`, and a trait listed twice all check clean | — |
+| B-2026-11-19-14 | 2026-11-19 | effect+mir | medium | design.md §9's 'Effects of an ambiguous call' example is refused: when two traits' same-named methods with different effects are implemented on one type, the effect checks merge them as one `C.access` (E0230 on the reads impl, E0400 on the UFCS caller), and `__mir-run` stops with 'call of unknown function C.access' | — |
+| B-2026-11-19-15 | 2026-11-19 | typecheck | medium | Under `where I.Item: Add[Output = I.Item]`, `t + x` with `x` from `for x in iter` is refused "expected 'I.Item', found 'I': the bound `Add` on 'I.Item' names the right-hand type": the bound's default `Rhs = Self` resolves to `I`, not to `I.Item`; and `I.Item.default()` under `where I.Item: Default` is E0516 'a type that failed to check is not lowered yet' | — |
+| B-2026-11-19-16 | 2026-11-19 | ownership | low | Remainder of B-2026-11-17-27: `freeze r` is still refused (E0512 'its source is used before the `freeze`') after `r.kids.push(Node { val: 2, kids: Vec.new() })` with a struct literal holding no handle, where the same push of a fresh call `leaf(2)` is accepted; and after a scalar read of the source (`println(r.val);`) | — |
+| B-2026-11-19-17 | 2026-11-19 | cli | low | design.md §11 From `shared` to `sync` shows E_NOT_CROSS_TASK carrying a suggested diff and `fix: karac fix --apply=concurrent-promote-shared`; karac's E_NOT_CROSS_TASK has a prose help only, no diff, and `karac fix` has no `--apply` option | — |
+| B-2026-11-19-18 | 2026-11-19 | typecheck | low | A field typed `Option[weak P]` is accepted at the definition though design.md says the field is `weak P`, not `Option[weak P]`; every store into it is then refused with a bare "expected 'weak P', found 'P'" that names neither rule | — |
+| B-2026-11-19-19 | 2026-11-19 | typecheck | low | Remainder of B-2026-11-04-71: the §11 #[must_use] mandate is unmet for builder steps (a discarded `Command.arg(..)` or `RequestBuilder.header(..)`, which consumes the builder) and for pure transformations design.md names (`String.to_lowercase()`, `String.replace(..)`), plus `to_uppercase`, `repeat`, `bytes`, `Vec.to_vec`; all check with no warning | — |
+| B-2026-11-19-20 | 2026-11-19 | typecheck | low | `#[allow(deprecated)]` on an item does not cover the item's own header: a deprecated struct named in `impl Old { .. }` under `#[allow(deprecated)]` on the impl, or in the return type of `#[allow(deprecated)] fn mk() -> Old`, still warns, so the defining package cannot write a deprecated struct's impl without the warning | — |
+| B-2026-11-19-22 | 2026-11-19 | effect | low | A pub fn that only stores a closure into an effect-typed slot (`pub fn mk() -> EventBus[with writes(OrderDb)]`) and never calls it is made to declare `with writes(OrderDb)` (E0400); review ruled storing performs no effect, so the declaration is not required | — |
+| B-2026-11-19-21 | 2026-11-19 | effect | medium | An access to a `mut` field of a `shared` value that carries a borrow flag is not a `panics` atom: `#[no_effect(panics)]` accepts a function that then panics 'already borrowed' at run time, and `program_effects` omits `panics` for it | — |
+| B-2026-11-19-23 | 2026-11-19 | ownership | medium | `v.split_at_mut(i)` on a binding declared without `mut` checks clean and the halves write through it (`let v = [1, 2, 3, 4]; let (l, r) = v.split_at_mut(2); l[0] = 0;` prints [0, 2, 3, 4] on every lane); with `let mut v` the unused_mut lint says `v` is never borrowed as `mut`, so following it produces the unsound form | — |
+| B-2026-11-19-24 | 2026-11-19 | mir | low | A `par` branch that always returns (`{ return 9; }`) bound into an annotated tuple, `let (a, b): (i64, i64) = par { { return 9; }, 2 }; a + b`, checks clean and then fails MIR validation on every lane ('binary operands of different types ! and i64'); without the annotation `karac check` refuses `a + b` with "type '!' does not implement trait Add" | — |
+| B-2026-11-19-25 | 2026-11-19 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they drop with the Receiver, and concurrency.md now says so | — |
 
 ### Relocated
 
