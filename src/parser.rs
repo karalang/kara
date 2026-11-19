@@ -3480,6 +3480,20 @@ impl Parser {
         if source.get(end..end + 1) == Some("\n") {
             end += 1;
         }
+        // The blank line that set the `fn` off from the code after it goes
+        // too when nothing is left above it: the block's `{` line, or
+        // another blank line. Otherwise the block opens on a blank line, or
+        // keeps two in a row (kata 1627's `impl Solution`).
+        let above = source.get(..line_start.saturating_sub(1))?;
+        let above = above.rsplit('\n').next().unwrap_or("").trim();
+        if above.is_empty() || above.ends_with('{') {
+            let rest = source.get(end..)?;
+            if let Some(nl) = rest.find('\n') {
+                if rest[..nl].trim().is_empty() {
+                    end += nl + 1;
+                }
+            }
+        }
         let (consts, mut edits) = self.hoisted_consts(item, at, text)?;
         edits.extend([
             crate::resolver::TextEdit {
