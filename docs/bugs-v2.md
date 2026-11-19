@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 205 |
 | perf | 188 |
 | other | 115 |
-| soundness | 90 |
+| soundness | 91 |
 | miscompile | 86 |
 | run-vs-build | 56 |
 | crash | 55 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 685 |
+| typecheck | 686 |
 | mir-llvm | 298 |
 | mir | 261 |
 | cli | 206 |
@@ -110,7 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-10-36 | 2026-11-10 | ownership | low | Tracker for the next minor release: an unmarked argument at a method's `mut ref` parameter becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that inserts `mut ` (e705e5be7e, design.md § Call-site `mut` markers) | — |
 | B-2026-11-11-81 | 2026-11-11 | typecheck | low | Tracker for the next minor release: `concat()` joining the `Display` forms of elements that are neither sequences nor text becomes a compile error; in 0.8.x it is a `deprecated` warning whose `karac fix` writes `join("")` (design.md § Vec) | — |
 | B-2026-11-16-335 | 2026-11-16 | typecheck | low | Tracker for the next minor release: a derived `Clone`, `Debug` or `Display` on a type with a field that lacks the trait becomes a compile error; in 0.8.x it is a `deprecated` warning naming the field and its type (design.md §9 Derive) | — |
-| B-2026-11-17-72 | 2026-11-17 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WORK`) stay in order: a group needs two statements of weight 2, and a single loop is weight 1 whatever its literal trip count | — |
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-18-66 | 2026-11-18 | typecheck+cli | medium | `karac fix` flips `own` on and off a trait impl method's parameter: E0200's `own` fix meets E0288 (impl may not be stronger than the trait), whose fix removes it | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
@@ -125,7 +124,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-10 | 2026-11-19 | typecheck | low | A list literal with a `SortedSet[T]` expected type is refused (`let s: SortedSet[i64] = [3, 1, 2]`), though `SortedMap` takes a map literal; review ruled it builds a SortedSet like `Set[T]` does | — |
 | B-2026-11-19-13 | 2026-11-19 | typecheck | low | `#[derive(...)]` accepts what it cannot derive with no diagnostic: an unknown trait name (`#[derive(Frobnicate)]`), a derive on a `fn`, `const` or `trait`, and a trait listed twice all check clean | — |
 | B-2026-11-19-14 | 2026-11-19 | effect+mir | medium | design.md §9's 'Effects of an ambiguous call' example is refused: when two traits' same-named methods with different effects are implemented on one type, the effect checks merge them as one `C.access` (E0230 on the reads impl, E0400 on the UFCS caller), and `__mir-run` stops with 'call of unknown function C.access' | — |
-| B-2026-11-19-15 | 2026-11-19 | typecheck | medium | Under `where I.Item: Add[Output = I.Item]`, `t + x` with `x` from `for x in iter` is refused "expected 'I.Item', found 'I': the bound `Add` on 'I.Item' names the right-hand type": the bound's default `Rhs = Self` resolves to `I`, not to `I.Item`; and `I.Item.default()` under `where I.Item: Default` is E0516 'a type that failed to check is not lowered yet' | — |
 | B-2026-11-19-16 | 2026-11-19 | ownership | low | Remainder of B-2026-11-17-27: `freeze r` is still refused (E0512 'its source is used before the `freeze`') after `r.kids.push(Node { val: 2, kids: Vec.new() })` with a struct literal holding no handle, where the same push of a fresh call `leaf(2)` is accepted; and after a scalar read of the source (`println(r.val);`) | — |
 | B-2026-11-19-17 | 2026-11-19 | cli | low | design.md §11 From `shared` to `sync` shows E_NOT_CROSS_TASK carrying a suggested diff and `fix: karac fix --apply=concurrent-promote-shared`; karac's E_NOT_CROSS_TASK has a prose help only, no diff, and `karac fix` has no `--apply` option | — |
 | B-2026-11-19-18 | 2026-11-19 | typecheck | low | A field typed `Option[weak P]` is accepted at the definition though design.md says the field is `weak P`, not `Option[weak P]`; every store into it is then refused with a bare "expected 'weak P', found 'P'" that names neither rule | — |
@@ -134,7 +132,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-21 | 2026-11-19 | effect | medium | An access to a `mut` field of a `shared` value that carries a borrow flag is not a `panics` atom: `#[no_effect(panics)]` accepts a function that then panics 'already borrowed' at run time, and `program_effects` omits `panics` for it | — |
 | B-2026-11-19-23 | 2026-11-19 | ownership | medium | `v.split_at_mut(i)` on a binding declared without `mut` checks clean and the halves write through it (`let v = [1, 2, 3, 4]; let (l, r) = v.split_at_mut(2); l[0] = 0;` prints [0, 2, 3, 4] on every lane); with `let mut v` the unused_mut lint says `v` is never borrowed as `mut`, so following it produces the unsound form | — |
 | B-2026-11-19-24 | 2026-11-19 | mir | low | A `par` branch that always returns (`{ return 9; }`) bound into an annotated tuple, `let (a, b): (i64, i64) = par { { return 9; }, 2 }; a + b`, checks clean and then fails MIR validation on every lane ('binary operands of different types ! and i64'); without the annotation `karac check` refuses `a + b` with "type '!' does not implement trait Add" | — |
-| B-2026-11-19-1 | 2026-11-19 | mir | medium | A method of an impl at concrete type arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`) that nothing calls is borrow-checked with its fields at the struct's parameter `T`: `self.x` is a move of a non-`Copy` value (E0516), `if self.x` a view stored where its borrow is not kept (E0509); one call anywhere makes both go away | — |
 | B-2026-11-19-3 | 2026-11-19 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the cells that made it again, so their tasks run and print again; a custom log backend's own state also starts over in each cell | — |
 | B-2026-11-19-32 | 2026-11-19 | typecheck | medium | the fix for a Rust `binary_search` / `binary_search_by` / `binary_search_by_key` takes `Ok`'s index as the FIRST equal element, where rustc's Rust (and Kāra's own `binary_search`) gives the LAST, so a carried solution that reads that index over repeated keys answers differently: kata 1235's search arm fails 278 of 2000 differential cases | — |
 | B-2026-11-19-33 | 2026-11-19 | typecheck | low | A range of literals mapped through an operator with an `i32` (`(0..1 << n).map(|i| start ^ i).collect()` into a `Vec[i32]`, `start: i32`) is refused with a bare `C: FromIterator[i64]` and no fix: §8 keeps the range at `i64` beside a widening operand, but the message names no literal and `karac fix` offers no suffix, so LeetCode's Rust solution to 1238 stalls | — |
@@ -145,6 +142,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-38 | 2026-11-19 | effect | medium | A call through an escaping function value (a struct field, a collection element, a `for` binding over one) is charged nothing by the front-end effect check: `pub fn go(j: Job) -> i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)` checks clean without a `with` clause, and a field with no clause is not charged every effect | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
+| B-2026-11-19-43 | 2026-11-19 | typecheck | medium | Inside a generic body a value of a projection is accepted where a concrete type is wanted (`let s: bool = x` with `x: I.Item`, from `it.next()` or a `for`), and the instance fails at run with "invalid MIR: assigning i64 to _9 of type bool" instead of a check error | — |
 
 ### Relocated
 
@@ -1637,6 +1635,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-69 | typecheck | low | A bare `ref String` arm beside a `Str` arm is refused with no fix: `match p.split_once(" ") { Some((w, _)) => w, None => p }` over `p` from `phrases.… | cf35bf7d49 |
 | B-2026-11-17-70 | parser | low | `karac fix` opens `from_iter(` inside a parenthesized receiver: `(0..n).flat_map(..).collect::<BTreeSet<_>>().into_iter()` becomes `(SortedSet.from_i… | cf35bf7d49 |
 | B-2026-11-17-71 | cli | medium | kara-lsp answers null to every hover, definition and completion in a file that imports a sibling module (`import util.{Point, helper};`), in a packag… | c9b436d014 |
+| B-2026-11-17-72 | autopar | low | Auto-par's cost rule weighs a statement by loop nesting only, so `parallax_lite`'s three provider writes (one 50M-trip loop each, behind a `const WOR… | 708569c8b1 |
 | B-2026-11-17-73 | typecheck | low | E0252 on assigning a module-level binding suggests declaring it `let mut`, which E_MODULE_LET refuses: the fix it names is itself an error | 1a718ba8ca |
 | B-2026-11-17-74 | runtime | low | Typed Json.deserialize's "too few values in a variant's payload" error (`{"Tup":[1]}` into a two-field tuple variant) carries no line/column, unlike… | 48b0b3857c |
 | B-2026-11-17-76 | effect | low | A value moved on one path and dropped on another is not charged its Drop body's effects: the AST drop walk (src/effectchecker/drop_edges.rs) counts a… | 2f2b64d135 |
@@ -1785,8 +1784,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-9 | typecheck | low | Type alias declarations are not checked on their own: a cycle (`type A = Vec[B]; type B = A;`) passes check until used, then gives E0516 'no definiti… | 8ca9a74cbc |
 | B-2026-11-19-11 | typecheck | low | A plain enum recursive through `Option` (`enum L { Nil, Cons(i64, Option[L]) }`) is accepted and runs, though design.md says a plain enum containing… | 3efb545461 |
 | B-2026-11-19-12 | typecheck | low | A prelude variant written qualified (`Option.Some(1)`, `Result.Ok(v)`) is accepted silently, though design.md says the prelude variants are always wr… | 3efb545461 |
+| B-2026-11-19-15 | typecheck | medium | Under `where I.Item: Add[Output = I.Item]`, `t + x` with `x` from `for x in iter` is refused "expected 'I.Item', found 'I': the bound `Add` on 'I.Ite… | 2be9f2b012 |
 | B-2026-11-19-19 | typecheck | low | Remainder of B-2026-11-04-71: the §11 #[must_use] mandate is unmet for builder steps (a discarded `Command.arg(..)` or `RequestBuilder.header(..)`, w… | 6220867c70 |
 | B-2026-11-19-25 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they d… | be5d113f9e |
+| B-2026-11-19-1 | mir | medium | A method of an impl at concrete type arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`) that nothing calls is borrow-checked with its fields at t… | 11e38661f8 |
 | B-2026-11-19-2 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `def… | 3efb545461 |
 | B-2026-11-19-40 | mir | medium | A slice range whose bounds are `ref` integers (`nums[a..=b]` with `a`, `b` from `l.iter().zip(r.iter())`, or `nums[a..]` with `a` a closure's `ref i3… | 60902ec48a |
 | B-2026-11-19-42 | typecheck | low | Remainder of B-2026-11-18-57: the `.bytes()` fix on text from an `if`/`match`/block tail that is a temporary (`sha256(if c { a.clone() } else { b })`… | 44a1949fa0 |
