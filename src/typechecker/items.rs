@@ -11456,14 +11456,26 @@ impl<'a> super::TypeChecker<'a> {
         }
         // A `Copy` field is read, not moved: the struct keeps every field and
         // the drop body still sees them all. Same exemptions as the borrow
-        // twin — a `shared` read RETAINS, a function value is a fat pointer,
-        // and an unsubstituted type parameter is not known either way.
+        // twin — a `shared` read RETAINS, and a function value is a fat
+        // pointer. A type parameter is a copy only when bounded by `Copy`:
+        // otherwise some instance moves it, and every instance shares the
+        // one body, so the move is refused here rather than when an
+        // instance is elaborated (B-2026-11-19-93, core-semantics §3.7).
         if matches!(ty, Type::Error | Type::Never)
             || self.is_copy_type_during_check(ty)
             || self.copy_is_only_an_rc_retain(ty)
-            || matches!(ty, Type::Function { .. } | Type::TypeParam(_))
+            || matches!(ty, Type::Function { .. })
         {
             return None;
+        }
+        if let Type::TypeParam(p) = ty {
+            let copy_bound = self.enclosing_bounds.get(p.as_str()).is_some_and(|bs| {
+                bs.iter()
+                    .any(|b| b.path.last().is_some_and(|l| l == "Copy"))
+            });
+            if copy_bound {
+                return None;
+            }
         }
         // B-2026-09-03-20 — a BORROW-typed position takes no ownership, so
         // nothing leaves the struct and the drop body still finds every field.
