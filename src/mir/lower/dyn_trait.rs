@@ -299,7 +299,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut rest = Vec::with_capacity(args.len());
         for (a, p) in args.iter().zip(&m.params) {
             let at = self.expr_ty(&a.value)?;
-            let pt = self.dyn_param_ty(p, at);
+            let pt = self.dyn_param_ty(p, at, dyn_ty, &slots[slot].0);
             rest.push(self.arg_pending(&a.value, pt)?);
         }
         let mut rest = self.finish_args(rest)?;
@@ -573,17 +573,77 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// argument's type: every impl's parameter has the trait's type, so its
     /// mode follows the declaration (`ref`, `mut ref`, or D5's borrow of a
     /// bare non-`Copy` parameter).
-    fn dyn_param_ty(&self, p: &ast::Param, at: Ty) -> Ty {
+    fn dyn_param_ty(&self, p: &ast::Param, at: Ty, dyn_ty: Ty, tr: &str) -> Ty {
         let tcx = self.tys().tcx();
         let base = match tcx.kind(at) {
             HK::Ref(inner) | HK::MutRef(inner) => inner,
             _ => at,
         };
+        // A `Str` or scalar parameter is passed as the slot's impl takes
+        // it, whatever the argument was typed before it met the parameter:
+        // a string literal is a `String` constant and `0.5` an `f64` until
+        // then (B-2026-11-19-128).
         match &p.ty.kind {
-            ast::TypeKind::Ref(_) => tcx.reference(base, false),
-            ast::TypeKind::MutRef(_) => tcx.reference(base, true),
-            _ => self.param_mode_ty(p, at),
+            ast::TypeKind::Ref(w) => {
+                tcx.reference(self.written_scalar(w, dyn_ty, tr).unwrap_or(base), false)
+            }
+            ast::TypeKind::MutRef(w) => {
+                tcx.reference(self.written_scalar(w, dyn_ty, tr).unwrap_or(base), true)
+            }
+            _ => self.param_mode_ty(p, self.written_scalar(&p.ty, dyn_ty, tr).unwrap_or(at)),
         }
+    }
+
+    /// The `Str` or scalar type `te` writes, by name or as a type
+    /// parameter of `dyn_ty`'s own trait `tr`.
+    fn written_scalar(&self, te: &ast::TypeExpr, dyn_ty: Ty, tr: &str) -> Option<Ty> {
+        let tcx = self.tys().tcx();
+        let ast::TypeKind::Path(q) = &te.kind else {
+            return None;
+        };
+        let [n] = q.segments.as_slice() else {
+            return None;
+        };
+        if q.generic_args.is_some() || n == "String" {
+            return None;
+        }
+        if n == "Str" {
+            return Some(tcx.intern(HK::StaticStr));
+        }
+        self.lcx
+            .primitive(n)
+            .or_else(|| self.dyn_trait_arg(dyn_ty, tr, n))
+            .filter(|&t| {
+                matches!(
+                    tcx.kind(t),
+                    HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char | HK::StaticStr
+                )
+            })
+    }
+
+    /// The argument `dyn_ty` gives its own trait `tr`'s type parameter
+    /// `name`: `f32` for `X` in `dyn G[f32]` of `trait G[X]`.
+    fn dyn_trait_arg(&self, dyn_ty: Ty, tr: &str, name: &str) -> Option<Ty> {
+        let tcx = self.tys().tcx();
+        let HK::Dyn { trait_, args, .. } = tcx.kind(dyn_ty) else {
+            return None;
+        };
+        if self.lcx.def_name(trait_) != tr {
+            return None;
+        }
+        let def = self
+            .lcx
+            .trait_defs
+            .get(tr)
+            .copied()
+            .or_else(|| checker_library_trait(tr))?;
+        let i = def
+            .generic_params
+            .as_ref()?
+            .params
+            .iter()
+            .position(|g| g.name == name)?;
+        tcx.list(args).get(i).copied()
     }
 }
 
