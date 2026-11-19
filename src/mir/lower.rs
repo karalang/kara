@@ -18744,7 +18744,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         // §4.6): its index is taken for writing, so the place below is
         // reached through a `mut ref` and reborrowed mutably
         // (B-2026-11-17-152).
-        let reach_mut = indexed && !mutable && by_name && self.reached_through_mut_refs(scrutinee);
+        // Not an element of a `weak` collection (`Vec[weak N]`): reading
+        // one upgrades it to an `Option[N]` value, which is no place to
+        // write through (B-2026-11-19-54).
+        let reach_mut = indexed
+            && !mutable
+            && by_name
+            && !self.indexes_weak(scrutinee)
+            && self.reached_through_mut_refs(scrutinee);
         let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
             self.expr_place(scrutinee, mutable || reach_mut)?
         } else {
@@ -18828,6 +18835,31 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `shared` handle on the way down from its root (core semantics §4.6).
     /// A path rooted at an owned local is not: only the reference makes
     /// it writable here.
+    /// Whether `e` indexes a collection whose elements are `weak`
+    /// (`w[i]` on a `Vec[weak N]`): its read is an upgrade, not a place.
+    fn indexes_weak(&mut self, e: &Expr) -> bool {
+        let ExprKind::Index { object, .. } = &e.kind else {
+            return false;
+        };
+        let Ok(mut t) = self.expr_ty(object) else {
+            return false;
+        };
+        let tcx = self.tys().tcx();
+        while let HK::Ref(i) | HK::MutRef(i) = tcx.kind(t) {
+            t = i;
+        }
+        match tcx.kind(t) {
+            HK::Adt { args, .. } | HK::Intrinsic { args, .. } => tcx
+                .list(args)
+                .iter()
+                .any(|a| matches!(tcx.kind(*a), HK::Weak(_))),
+            HK::Array { elem, .. } | HK::Slice { elem, .. } => {
+                matches!(tcx.kind(elem), HK::Weak(_))
+            }
+            _ => false,
+        }
+    }
+
     fn reached_through_mut_refs(&mut self, e: &Expr) -> bool {
         let (ExprKind::FieldAccess { object, .. }
         | ExprKind::TupleIndex { object, .. }
