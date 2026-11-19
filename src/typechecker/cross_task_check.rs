@@ -207,6 +207,15 @@ impl<'a> super::TypeChecker<'a> {
             let Some(ty) = outer_snapshot.get(&name) else {
                 continue;
             };
+            // A value of a type parameter enters a branch only where the
+            // parameter is bounded `CrossTask`, as at a spawn: a caller may
+            // give it a `shared` handle (B-2026-11-19-86).
+            let ty_owned = ty.clone();
+            self.check_cross_task_params(
+                &ty_owned,
+                &format!("capture of `{name}` by a `par` branch"),
+                &anchor_span,
+            );
             if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums)
                 .or_else(|p| self.fn_value_in_sight(&name, p))
             {

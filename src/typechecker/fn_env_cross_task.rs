@@ -223,6 +223,7 @@ impl<'a> super::TypeChecker<'a> {
                 fn_items: &fn_items,
                 call_subs,
                 closure_results: FxHashMap::default(),
+                unbounded: self.params_without_cross_task(f),
             };
             let tail = w.block_value(&f.body);
             if ret_marked {
@@ -286,6 +287,36 @@ fn opaque_message(what: &str) -> String {
 }
 
 impl super::TypeChecker<'_> {
+    /// The type parameters in scope in `f` (its own, its impl's or trait's)
+    /// that no bound or `where` clause makes `CrossTask`.
+    fn params_without_cross_task(&self, f: &Function) -> Vec<String> {
+        let names_cross_task = |b: &TraitBound| {
+            let t = b.path.last().cloned().unwrap_or_default();
+            t == "CrossTask"
+                || self
+                    .env
+                    .supertrait_closure_traits(&t)
+                    .iter()
+                    .any(|st| st == "CrossTask")
+        };
+        let mut out = Vec::new();
+        for g in self.param_scopes_at(f.span.offset).into_iter().flatten() {
+            for p in &g.params {
+                if p.is_const || p.name == "Self" || p.bounds.iter().any(names_cross_task) {
+                    continue;
+                }
+                let in_where = f.where_clause.iter().flat_map(|w| &w.constraints).any(|c| {
+                    matches!(c, WhereConstraint::TypeBound { type_name, bounds, .. }
+                        if *type_name == p.name && bounds.iter().any(names_cross_task))
+                });
+                if !in_where {
+                    out.push(p.name.clone());
+                }
+            }
+        }
+        out
+    }
+
     /// Whether `t` names a function type written `+ CrossTask` (`marked`),
     /// or one not written so (`!marked`).
     fn type_expr_marks_fn(&self, t: &TypeExpr, marked: bool) -> bool {
@@ -374,9 +405,23 @@ struct Walk<'w, 't, 'a> {
     call_subs: &'w FxHashMap<NodeId, FxHashMap<String, Type>>,
     /// What each closure literal's result reaches, and where its result is.
     closure_results: FxHashMap<NodeId, (Taint, Span)>,
+    /// The type parameters in scope with no `CrossTask` bound: a value of
+    /// one may be a `shared` handle (B-2026-11-19-86).
+    unbounded: Vec<String>,
 }
 
 impl<'w> Walk<'w, '_, '_> {
+    /// The first type parameter with no `CrossTask` bound that `ty` holds
+    /// as a value (not inside a function type, whose own rule applies).
+    fn unbounded_param_in(&self, ty: &Type) -> Option<String> {
+        if self.unbounded.is_empty() {
+            return None;
+        }
+        let mut names = Vec::new();
+        super::expr_method_call::collect_type_param_names(ty, &mut names);
+        names.into_iter().find(|n| self.unbounded.contains(n))
+    }
+
     fn lookup(&self, name: &str) -> Option<(usize, &Taint)> {
         self.scopes
             .iter()
@@ -416,6 +461,23 @@ impl<'w> Walk<'w, '_, '_> {
                 l.via_fn = true;
             }
             t
+        } else if let Some(p) = self.unbounded_param_in(ty) {
+            Taint {
+                leak: Some(Leak {
+                    name: name.to_string(),
+                    ty: ty.clone(),
+                    path: CrossTaskUnsafePath {
+                        root: name.to_string(),
+                        path: Vec::new(),
+                        unsafe_leaf: p,
+                        fix_it: CrossTaskUnsafeFixIt::ParamCrossTask,
+                    },
+                    via_fn: false,
+                }),
+                opaque: false,
+                fix_at: None,
+                frozen: false,
+            }
         } else {
             match is_cross_task_safe_with(ty, &self.tc.env.structs, &self.tc.env.enums) {
                 Ok(()) => return,

@@ -108,6 +108,9 @@ pub enum CrossTaskUnsafeFixIt {
     /// `Fn(..) -> R` → `Fn(..) -> R + CrossTask`: an erased function type
     /// hides its environment, so only the marked form may cross.
     FnCrossTask,
+    /// A type parameter with no `CrossTask` bound: a caller may give it a
+    /// `shared` value, so the bound goes where the parameter is declared.
+    ParamCrossTask,
 }
 
 impl CrossTaskUnsafeFixIt {
@@ -136,6 +139,10 @@ impl CrossTaskUnsafeFixIt {
                 "write `{} + CrossTask` where the type is declared, so that each function \
                  value coerced into it is checked to be `CrossTask` (core semantics §6.3)",
                 unsafe_leaf
+            ),
+            CrossTaskUnsafeFixIt::ParamCrossTask => format!(
+                "declare `{unsafe_leaf}: CrossTask` where `{unsafe_leaf}` is declared: \
+                 a caller may give it a `shared` value (design.md § CrossTask)"
             ),
             CrossTaskUnsafeFixIt::DynCrossTask => format!(
                 "write `{} + CrossTask`, so that each value coerced into it is checked \

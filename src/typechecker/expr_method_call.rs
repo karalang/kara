@@ -2387,10 +2387,13 @@ impl<'a> super::TypeChecker<'a> {
         // idempotent for an already-typechecked identifier (the
         // expr_types entry is just re-asserted), so the pre-inference
         // here has no side-effect downstream of the dispatch fallthrough.
+        // A group handed in as a parameter is read through its borrow
+        // (`g: TaskGroup` is a `ref TaskGroup`), and its tasks are the same
+        // boundary (B-2026-11-19-86).
         if method == "spawn" && args.len() == 1 {
             if let ExprKind::Closure { .. } = &args[0].value.kind {
                 let recv_ty = self.infer_expr(object);
-                if let Type::Named { name, .. } = &recv_ty {
+                if let Type::Named { name, .. } = Self::peel_borrow(&recv_ty) {
                     if name == "TaskGroup" || name == "IsolatingGroup" {
                         let what = format!("{name}.spawn");
                         self.check_cross_task_safe_captures(&args[0].value, span, &what);
@@ -2398,7 +2401,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
             } else {
                 let recv_ty = self.infer_expr(object);
-                if let Type::Named { name, .. } = &recv_ty {
+                if let Type::Named { name, .. } = Self::peel_borrow(&recv_ty) {
                     if name == "TaskGroup" || name == "IsolatingGroup" {
                         let what = format!("{name}.spawn");
                         self.check_spawned_fn_value(&args[0].value, span, &what);
