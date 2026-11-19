@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 543 |
+| diagnostics | 544 |
 | false-positive | 286 |
 | missing-feature | 205 |
 | perf | 188 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 682 |
+| typecheck | 683 |
 | mir-llvm | 298 |
 | mir | 260 |
 | cli | 206 |
@@ -126,8 +126,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-8 | 2026-11-19 | typecheck | medium | A type alias of a struct cannot build or match it: `type Q = P; Q { a: 1 }` is E0207 "'Q' is not a struct", and `match p { IntPair { a, b } => .. }` is E0205 non-exhaustive, though an alias is transparent | — |
 | B-2026-11-19-9 | 2026-11-19 | typecheck | low | Type alias declarations are not checked on their own: a cycle (`type A = Vec[B]; type B = A;`) passes check until used, then gives E0516 'no definition for type `B` is not lowered yet'; and an alias bound is not enforced on a generic parameter (`fn f[T](v: SortedVec[T])` with `type SortedVec[T: Ord]`) | — |
 | B-2026-11-19-10 | 2026-11-19 | typecheck | low | A list literal with a `SortedSet[T]` expected type is refused (`let s: SortedSet[i64] = [3, 1, 2]`), though `SortedMap` takes a map literal; review ruled it builds a SortedSet like `Set[T]` does | — |
-| B-2026-11-19-11 | 2026-11-19 | typecheck | low | A plain enum recursive through `Option` (`enum L { Nil, Cons(i64, Option[L]) }`) is accepted and runs, though design.md says a plain enum containing itself directly is a compile error and requires `shared enum`; review ruled a deprecation warning now with the `shared enum` fix, an error at the next minor | — |
-| B-2026-11-19-12 | 2026-11-19 | typecheck | low | A prelude variant written qualified (`Option.Some(1)`, `Result.Ok(v)`) is accepted silently, though design.md says the prelude variants are always written bare; review ruled a warning with a machine fix to the bare form | — |
 | B-2026-11-19-13 | 2026-11-19 | typecheck | low | `#[derive(...)]` accepts what it cannot derive with no diagnostic: an unknown trait name (`#[derive(Frobnicate)]`), a derive on a `fn`, `const` or `trait`, and a trait listed twice all check clean | — |
 | B-2026-11-19-14 | 2026-11-19 | effect+mir | medium | design.md §9's 'Effects of an ambiguous call' example is refused: when two traits' same-named methods with different effects are implemented on one type, the effect checks merge them as one `C.access` (E0230 on the reads impl, E0400 on the UFCS caller), and `__mir-run` stops with 'call of unknown function C.access' | — |
 | B-2026-11-19-15 | 2026-11-19 | typecheck | medium | Under `where I.Item: Add[Output = I.Item]`, `t + x` with `x` from `for x in iter` is refused "expected 'I.Item', found 'I': the bound `Add` on 'I.Item' names the right-hand type": the bound's default `Rhs = Self` resolves to `I`, not to `I.Item`; and `I.Item.default()` under `where I.Item: Default` is E0516 'a type that failed to check is not lowered yet' | — |
@@ -141,7 +139,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-23 | 2026-11-19 | ownership | medium | `v.split_at_mut(i)` on a binding declared without `mut` checks clean and the halves write through it (`let v = [1, 2, 3, 4]; let (l, r) = v.split_at_mut(2); l[0] = 0;` prints [0, 2, 3, 4] on every lane); with `let mut v` the unused_mut lint says `v` is never borrowed as `mut`, so following it produces the unsound form | — |
 | B-2026-11-19-24 | 2026-11-19 | mir | low | A `par` branch that always returns (`{ return 9; }`) bound into an annotated tuple, `let (a, b): (i64, i64) = par { { return 9; }, 2 }; a + b`, checks clean and then fails MIR validation on every lane ('binary operands of different types ! and i64'); without the annotation `karac check` refuses `a + b` with "type '!' does not implement trait Add" | — |
 | B-2026-11-19-1 | 2026-11-19 | mir | medium | A method of an impl at concrete type arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`) that nothing calls is borrow-checked with its fields at the struct's parameter `T`: `self.x` is a move of a non-`Copy` value (E0516), `if self.x` a view stored where its borrow is not kept (E0509); one call anywhere makes both go away | — |
-| B-2026-11-19-2 | 2026-11-19 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `defer` run at the end of that cell, not at the session's end as they do in the program's `main` | — |
 | B-2026-11-19-3 | 2026-11-19 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the cells that made it again, so their tasks run and print again; a custom log backend's own state also starts over in each cell | — |
 | B-2026-11-19-32 | 2026-11-19 | typecheck | medium | the fix for a Rust `binary_search` / `binary_search_by` / `binary_search_by_key` takes `Ok`'s index as the FIRST equal element, where rustc's Rust (and Kāra's own `binary_search`) gives the LAST, so a carried solution that reads that index over repeated keys answers differently: kata 1235's search arm fails 278 of 2000 differential cases | — |
 | B-2026-11-19-33 | 2026-11-19 | typecheck | low | A range of literals mapped through an operator with an `i32` (`(0..1 << n).map(|i| start ^ i).collect()` into a `Vec[i32]`, `start: i32`) is refused with a bare `C: FromIterator[i64]` and no fix: §8 keeps the range at `i64` beside a widening operand, but the message names no literal and `karac fix` offers no suffix, so LeetCode's Rust solution to 1238 stalls | — |
@@ -150,6 +147,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-36 | 2026-11-19 | ownership | medium | a closure in an assignment's method chain is taken to outlive the statement: `n = xs.iter().filter(|v| seen.contains(v)).count();` and any later move of `seen` is refused with E0500 "moved inside a loop" (no loop needed), and `karac fix` clones `seen` at the move; the same chain under a `let` checks clean | — |
 | B-2026-11-19-37 | 2026-11-19 | typecheck | low | `dyn Trait` in a signature above the trait's declaration is refused, "`dyn Shape`: `Shape` is not a trait", though items are otherwise order-free (a `[S: Shape]` bound above the trait checks and runs) | — |
 | B-2026-11-19-38 | 2026-11-19 | effect | medium | A call through an escaping function value (a struct field, a collection element, a `for` binding over one) is charged nothing by the front-end effect check: `pub fn go(j: Job) -> i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)` checks clean without a `with` clause, and a field with no clause is not charged every effect | — |
+| B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 
 ### Relocated
 
@@ -1785,7 +1783,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-26 | typecheck | low | A named list of tuple literals walked by a tuple pattern (`let dirs = [(-1, 0), (1, 0)]; for (dx, dy) in dirs.iter() { let mut (x, y) = (king[0] + dx… | cc3372dd0f |
 | B-2026-11-19-27 | parser | medium | an integer literal with a float suffix (`0f64`, `1f32`) is an integer by design (design.md §3), but the error is a parse recovery whose fix adds `;`… | d1ab453bcb |
 | B-2026-11-19-28 | typecheck | low | the fix for a Rust `match xs.binary_search(v) { Ok(i) => i, Err(i) => i }` writes `{ let i = xs.partition_point(..); if i < xs.len() and xs[i] == v {… | 4dbf2fe839 |
+| B-2026-11-19-11 | typecheck | low | A plain enum recursive through `Option` (`enum L { Nil, Cons(i64, Option[L]) }`) is accepted and runs, though design.md says a plain enum containing… | 3efb545461 |
+| B-2026-11-19-12 | typecheck | low | A prelude variant written qualified (`Option.Some(1)`, `Result.Ok(v)`) is accepted silently, though design.md says the prelude variants are always wr… | 3efb545461 |
 | B-2026-11-19-25 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they d… | be5d113f9e |
+| B-2026-11-19-2 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `def… | 3efb545461 |
 
 </details>
 
