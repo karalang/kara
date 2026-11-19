@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 189 |
 | other | 119 |
 | soundness | 104 |
-| miscompile | 93 |
+| miscompile | 94 |
 | crash | 62 |
 | run-vs-build | 59 |
 | codegen-gap | 39 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 730 |
-| mir-llvm | 310 |
+| mir-llvm | 311 |
 | mir | 277 |
 | cli | 218 |
 | parser | 127 |
@@ -142,6 +142,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-136 | 2026-11-19 | typecheck | medium | A generic struct with a self-referential `Option` field (`struct Ls[T] { v: T, next: Option[Ls[T]] }`) cannot be built with a literal: `Ls { v: 1, next: None }` is E0200 'field next has type Option[i64], but the type parameter was already bound to Option[Ls[i64]] by an earlier field', also with an annotation, `shared`, and `T = String` | — |
 | B-2026-11-19-137 | 2026-11-19 | mir | low | Inside a closure body, a borrowck conflict on a captured variable names neither the place nor the holder: 'mutable borrow of (*a temporary value) while it is borrowed', where the same code in a `for` loop says 'cannot mutably borrow `seen` while `more` still holds a borrow of it' | — |
 | B-2026-11-19-138 | 2026-11-19 | mir | low | A function that uses a provider, erased to a function type (`twice(read_clk)` with `fn twice[G: Fn() -> i64](g: G)`), still stops every lane with `a function used as a value that uses Clk's provider is not lowered yet`; it should carry the provider as an erased closure does | — |
+| B-2026-11-19-140 | 2026-11-19 | mir-llvm | high | A write through a `mut ref` to a view (`Str`, `Slice`) is lost in compiled code: `set(mut v, "b")` with `fn set(s: mut ref Str, t: Str) { *s = t; }`, `w[1] = "m"` on a `Vec[Str]` and `sl[0] = xs[0..2]` on a `Vec[Slice[i64]]` leave the old value on run, build and ASan; the MIR interpreter is right | — |
 
 ### Relocated
 
