@@ -169,6 +169,12 @@ impl MutVisitor for Rename<'_> {
                 segments,
                 generic_args: None,
             } if segments.len() == 1 => self.rename(&mut segments[0], offset),
+            // A method called on it, `DIRS.iter()`, reads as a path whose
+            // first segment is the constant, as for a module-scope one
+            // (kata 1631's Rust template).
+            ExprKind::Path { segments, .. } if segments.len() > 1 => {
+                self.rename(&mut segments[0], offset)
+            }
             _ => {}
         }
     }
