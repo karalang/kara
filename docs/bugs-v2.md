@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 115 |
 | soundness | 91 |
 | miscompile | 86 |
-| run-vs-build | 56 |
+| run-vs-build | 57 |
 | crash | 55 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 686 |
-| mir-llvm | 298 |
+| mir-llvm | 299 |
 | mir | 261 |
 | cli | 206 |
 | parser | 119 |
@@ -143,6 +143,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
 | B-2026-11-19-43 | 2026-11-19 | typecheck | medium | Inside a generic body a value of a projection is accepted where a concrete type is wanted (`let s: bool = x` with `x: I.Item`, from `it.next()` or a `for`), and the instance fails at run with "invalid MIR: assigning i64 to _9 of type bool" instead of a check error | — |
+| B-2026-11-19-44 | 2026-11-19 | mir-llvm | low | On wasm_wasi a deep recursion that a native build runs exhausts the module's own 1 MiB shadow stack and traps as a bare `RuntimeError: memory access out of bounds`, not a stack overflow; design.md's wasm note says only the host engine's stack bounds recursion depth | — |
 
 ### Relocated
 
