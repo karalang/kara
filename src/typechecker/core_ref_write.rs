@@ -122,6 +122,9 @@ struct Walk<'t, 'a> {
     /// it, which a borrow cannot (design.md §7: "A MutFn or OnceFn
     /// parameter is declared own"; B-2026-11-04-69).
     shared_once_fn_params: FxHashMap<String, Option<FixIt>>,
+    /// Parameters typed by a generic `F` with a function-trait bound, and
+    /// the `F` they name (B-2026-11-19-76).
+    generic_fn_param_types: FxHashMap<String, String>,
     /// Calls of a `MutFn` through a shared borrow (§9.6).
     shared_mut_fn_calls: Vec<(Span, String, Option<FixIt>)>,
     /// See [`super::TypeCheckResult::mut_fn_local_calls`].
@@ -366,6 +369,7 @@ impl<'a> TypeChecker<'a> {
             mut_fn_params: FxHashSet::default(),
             shared_mut_fn_params: FxHashMap::default(),
             shared_once_fn_params: FxHashMap::default(),
+            generic_fn_param_types: FxHashMap::default(),
             shared_mut_fn_calls: Vec::new(),
             mut_fn_local_calls: FxHashSet::default(),
             mut_fn_place_calls: FxHashSet::default(),
@@ -463,6 +467,25 @@ impl<'a> TypeChecker<'a> {
                 .filter(|p| !p.is_own)
                 .filter_map(|p| {
                     let fix = match &p.ty.kind {
+                        // A bare `f: F` under `F: MutFn(..)`: the D5 rewrite's
+                        // borrow carries the parameter's own span.
+                        TypeKind::Ref(inner)
+                            if inner.span == p.ty.span
+                                && generic_fn_bound(f, inner).is_some_and(|b| w.is_mut_fn(b)) =>
+                        {
+                            Some(FixIt {
+                                span: Span {
+                                    length: 0,
+                                    ..p.ty.span
+                                },
+                                replacement: "own ".to_string(),
+                            })
+                        }
+                        TypeKind::Ref(inner)
+                            if generic_fn_bound(f, inner).is_some_and(|b| w.is_mut_fn(b)) =>
+                        {
+                            None
+                        }
                         TypeKind::Ref(inner) if w.is_mut_fn(inner) => None,
                         _ if crate::d5_params::on() && w.is_mut_fn(&p.ty) => {
                             let escaping =
@@ -488,30 +511,70 @@ impl<'a> TypeChecker<'a> {
                         .map(move |n| (n, fix.clone()))
                 })
                 .collect();
+            w.generic_fn_param_types = f
+                .params
+                .iter()
+                .filter_map(|p| {
+                    let mut t = &p.ty;
+                    while let TypeKind::Ref(i) | TypeKind::MutRef(i) = &t.kind {
+                        t = i;
+                    }
+                    generic_fn_bound(f, t)?;
+                    let TypeKind::Path(path) = &t.kind else {
+                        return None;
+                    };
+                    Some((p, path.segments.join(".")))
+                })
+                .flat_map(|(p, g)| {
+                    p.pattern
+                        .binding_names()
+                        .into_iter()
+                        .map(move |n| (n, g.clone()))
+                })
+                .collect();
             w.shared_once_fn_params = f
                 .params
                 .iter()
                 .filter(|p| !p.is_own && crate::d5_params::on())
-                .filter(|p| {
-                    matches!(p.ty.kind, TypeKind::FnType { is_once: true, .. })
-                        && !w
-                            .tc
-                            .program
-                            .escaping_fn_types
-                            .contains(&SpanKey::from_span(&p.ty.span))
-                })
-                .flat_map(|p| {
-                    let fix = FixIt {
+                .filter_map(|p| {
+                    let own = FixIt {
                         span: Span {
                             length: 0,
                             ..p.ty.span
                         },
                         replacement: "own ".to_string(),
                     };
+                    let once_bound = |t: &TypeExpr| {
+                        generic_fn_bound(f, t).is_some_and(|b| {
+                            matches!(b.kind, TypeKind::FnType { is_once: true, .. })
+                        })
+                    };
+                    match &p.ty.kind {
+                        TypeKind::FnType { is_once: true, .. }
+                            if !w
+                                .tc
+                                .program
+                                .escaping_fn_types
+                                .contains(&SpanKey::from_span(&p.ty.span)) =>
+                        {
+                            Some((p, Some(own)))
+                        }
+                        // `f: F` under `F: OnceFn(..)` (B-2026-11-19-76).
+                        TypeKind::Ref(inner) if inner.span == p.ty.span && once_bound(inner) => {
+                            Some((p, Some(own)))
+                        }
+                        // `f: ref F` or `f: mut ref F`: a call moves it.
+                        TypeKind::Ref(inner) | TypeKind::MutRef(inner) if once_bound(inner) => {
+                            Some((p, None))
+                        }
+                        _ => None,
+                    }
+                })
+                .flat_map(|(p, fix)| {
                     p.pattern
                         .binding_names()
                         .into_iter()
-                        .map(move |n| (n, Some(fix.clone())))
+                        .map(move |n| (n, fix.clone()))
                 })
                 .collect();
             w.block(&f.body);
@@ -1210,6 +1273,9 @@ impl Walk<'_, '_> {
                     }
                 }
                 self.note_mut_fn_move(pattern, value);
+                if let Some(t) = ty {
+                    self.check_slot_kinds(value, t);
+                }
             }
             StmtKind::LetElse {
                 pattern,
@@ -1630,6 +1696,93 @@ impl Walk<'_, '_> {
         if let ExprKind::MethodCall { args, .. } = &e.kind {
             self.check_method_kinds(e, args);
         }
+        if let ExprKind::StructLiteral { path, fields, .. } = &e.kind {
+            let tc = self.tc;
+            let def = path.last().and_then(|name| {
+                tc.program.items.iter().find_map(|it| match it {
+                    Item::StructDef(s) if &s.name == name => Some(s),
+                    _ => None,
+                })
+            });
+            if let Some(def) = def {
+                for fi in fields {
+                    if let Some(fl) = def.fields.iter().find(|fl| fl.name == fi.name) {
+                        self.check_slot_kinds(&fi.value, &fl.ty);
+                    }
+                }
+            }
+        }
+    }
+
+    /// §9.6 in a stored slot: a closure literal that writes a capture is a
+    /// `MutFn`, and an `Fn` slot (a struct field, a tuple element, a `Vec`
+    /// or array element, a generic field instantiated at `Fn`) does not
+    /// take one, as an `Fn` parameter does not: a call through shared
+    /// access could re-enter it (B-2026-11-19-74).
+    fn check_slot_kinds(&mut self, value: &Expr, ty: &TypeExpr) {
+        let mut ty = ty;
+        while let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &ty.kind {
+            ty = inner;
+        }
+        match (&value.kind, &ty.kind) {
+            (ExprKind::Closure { .. }, TypeKind::FnType { is_once: false, .. })
+                if !self.is_mut_fn(ty) =>
+            {
+                if let Some(n) = self.closure_writes.get(&value.span.offset) {
+                    let message = format!(
+                        "the closure mutates {n}, so it is a MutFn, but it is stored where `Fn` is \
+                         expected (§9.6): declare the slot `MutFn(..)`"
+                    );
+                    self.kind_errors.push((value.span, message));
+                }
+            }
+            (ExprKind::Tuple(es), TypeKind::Tuple(ts)) => {
+                for (e, t) in es.iter().zip(ts) {
+                    self.check_slot_kinds(e, t);
+                }
+            }
+            (ExprKind::ArrayLiteral(es), TypeKind::Array { element, .. }) => {
+                for e in es {
+                    self.check_slot_kinds(e, element);
+                }
+            }
+            (ExprKind::ArrayLiteral(es), TypeKind::Path(p)) if matches!(p.segments.as_slice(), [n] if n == "Vec") =>
+            {
+                let element = p.generic_args.iter().flatten().find_map(|a| match a {
+                    GenericArg::Type(t) => Some(t),
+                    _ => None,
+                });
+                if let Some(element) = element {
+                    for e in es {
+                        self.check_slot_kinds(e, element);
+                    }
+                }
+            }
+            // A generic field of a struct literal (`G { f: .. }` for a
+            // `G[Fn() -> i64]`); a field of a declared type is checked at
+            // the literal.
+            (ExprKind::StructLiteral { path, fields, .. }, TypeKind::Path(_)) => {
+                let tc = self.tc;
+                let def = path.last().and_then(|name| {
+                    tc.program.items.iter().find_map(|it| match it {
+                        Item::StructDef(s) if &s.name == name => Some(s),
+                        _ => None,
+                    })
+                });
+                let Some(def) = def else {
+                    return;
+                };
+                for fi in fields {
+                    let Some(fl) = def.fields.iter().find(|fl| fl.name == fi.name) else {
+                        continue;
+                    };
+                    if let Some(arg) = struct_param_arg(def, &fl.ty, || Some(ty.clone())) {
+                        self.check_slot_kinds(&fi.value, &arg);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn children(&mut self, e: &Expr) {
@@ -1836,9 +1989,22 @@ impl Walk<'_, '_> {
         if innermost != Some(0) {
             return;
         }
+        let generic = self.generic_fn_param_types.get(name).cloned();
         self.shared_mut_fn_calls.push((
             callee.span,
-            if kind == "MutFn" {
+            if let Some(g) = generic {
+                let why = if kind == "MutFn" {
+                    "a `MutFn` is called only through an owned binding, an `own` parameter \
+                     or a `mut ref`"
+                } else {
+                    "calling an `OnceFn` moves it, and a borrowed parameter cannot be moved"
+                };
+                format!(
+                    "`{name}` is a borrowed `{g}`, whose bound is `{kind}`, so it cannot be \
+                     called (core-semantics.md §9.6): {why}. Declare the parameter \
+                     `{name}: own {g}`"
+                )
+            } else if kind == "MutFn" {
                 format!(
                     "`{name}` is a borrowed `MutFn`, so it cannot be called \
                      (core-semantics.md §9.6): a `MutFn` is called only through an owned \
@@ -1917,14 +2083,27 @@ impl Walk<'_, '_> {
                 let Type::Named { name, .. } = ty else {
                     return None;
                 };
-                self.tc.program.items.iter().find_map(|it| match it {
-                    Item::StructDef(s) if &s.name == name => s
-                        .fields
-                        .iter()
-                        .find(|fl| &fl.name == field)
-                        .map(|fl| strip(&fl.ty)),
+                let def = self.tc.program.items.iter().find_map(|it| match it {
+                    Item::StructDef(s) if &s.name == name => Some(s),
                     _ => None,
-                })
+                })?;
+                let declared = strip(&def.fields.iter().find(|fl| &fl.name == field)?.ty);
+                // A field typed by the struct's own parameter (`struct G[F]
+                // { f: F }`) has the type the object's declaration gives
+                // it (`h: G[MutFn() -> i64]`, B-2026-11-19-75).
+                match struct_param_arg(def, &declared, || self.place_type_expr(object)) {
+                    Some(arg) => Some(arg),
+                    None => Some(declared),
+                }
+            }
+            // A tuple's element (`(h.0)()` with `h: (MutFn() -> i64, i64)`,
+            // B-2026-11-19-75).
+            ExprKind::TupleIndex { object, index } => {
+                let outer = self.place_type_expr(object)?;
+                let TypeKind::Tuple(ts) = &outer.kind else {
+                    return None;
+                };
+                ts.get(usize::try_from(*index).ok()?).map(strip)
             }
             ExprKind::Index { object, .. } => {
                 let outer = self.place_type_expr(object)?;
@@ -2106,6 +2285,15 @@ impl Walk<'_, '_> {
             let mut ty = &param.ty;
             while let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &ty.kind {
                 ty = inner;
+            }
+            // `f: F` under `F: Fn(..)` takes what an `Fn` parameter takes
+            // (B-2026-11-19-76).
+            if let Some(bound) = generic_fn_bound(f, ty) {
+                ty = bound;
+            }
+            if !matches!(ty.kind, TypeKind::FnType { .. }) {
+                self.check_slot_kinds(&a.value, ty);
+                continue;
             }
             if !matches!(ty.kind, TypeKind::FnType { is_once: false, .. }) || self.is_mut_fn(ty) {
                 continue;
@@ -2812,5 +3000,73 @@ fn owned_collection(t: &Type) -> bool {
             ) && args.iter().all(ref_free)
         }
         _ => false,
+    }
+}
+
+/// The function-trait bound of the generic parameter `ty` names in `f`
+/// (`F: MutFn() -> i64`, in the brackets or a `where`), as the `FnType`
+/// the bound parses to. A generic `F`'s calls and arguments follow its
+/// bound's kind, not the instance's (core-semantics §9.6,
+/// B-2026-11-19-76).
+fn generic_fn_bound<'f>(f: &'f Function, ty: &TypeExpr) -> Option<&'f TypeExpr> {
+    let TypeKind::Path(p) = &ty.kind else {
+        return None;
+    };
+    let [name] = p.segments.as_slice() else {
+        return None;
+    };
+    if p.generic_args.is_some() {
+        return None;
+    }
+    let inline = f
+        .generic_params
+        .iter()
+        .flat_map(|g| &g.params)
+        .filter(|g| &g.name == name)
+        .flat_map(|g| &g.bounds);
+    let wheres = f
+        .where_clause
+        .iter()
+        .flat_map(|w| &w.constraints)
+        .filter_map(|c| match c {
+            WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } if type_name == name => Some(bounds),
+            _ => None,
+        })
+        .flatten();
+    inline.chain(wheres).find_map(|b| b.fn_sig.as_deref())
+}
+
+/// When `declared`, a field's written type, is one of `def`'s own type
+/// parameters (`struct G[F] { f: F }`), the argument `outer`, the
+/// struct's instantiated type (`G[MutFn() -> i64]`), gives it.
+fn struct_param_arg(
+    def: &StructDef,
+    declared: &TypeExpr,
+    outer: impl FnOnce() -> Option<TypeExpr>,
+) -> Option<TypeExpr> {
+    let TypeKind::Path(p) = &declared.kind else {
+        return None;
+    };
+    let [name] = p.segments.as_slice() else {
+        return None;
+    };
+    if p.generic_args.is_some() {
+        return None;
+    }
+    let i = def
+        .generic_params
+        .as_ref()?
+        .params
+        .iter()
+        .position(|g| !g.is_const && &g.name == name)?;
+    let outer = outer()?;
+    let TypeKind::Path(op) = &outer.kind else {
+        return None;
+    };
+    match op.generic_args.as_ref()?.get(i)? {
+        GenericArg::Type(t) => Some(t.clone()),
+        _ => None,
     }
 }

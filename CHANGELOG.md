@@ -20,6 +20,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A generic `F`'s function-trait bound decides how it is called and what
+  it takes, as a written function type does (core semantics §9.6): a bare
+  `f: F` under `F: MutFn(..)` or `F: OnceFn(..)` is a borrow and cannot be
+  called (`karac fix` declares it `own F`), nor can an `OnceFn` through
+  `mut ref F`; and `F: Fn(..)` refuses a closure that writes a capture.
+  These were judged on each instance, so a `MutFn` could be called twice
+  through a shared borrow (B-2026-11-19-76).
+- A closure that writes a capture is not stored where `Fn` is declared: a
+  struct field, a tuple element, a `Vec` or array element, or a generic
+  field instantiated at `Fn` (`G[Fn() -> i64]`). Declaring the slot `Fn`
+  made the shared call legal (B-2026-11-19-74). A `MutFn` in a tuple
+  element or a generic field is called only through unique access, as one
+  in a struct field already was (B-2026-11-19-75).
 - A call through an escaping function value has the effects its type
   declares (design.md §12): a struct field, a collection element, an
   `escaping` parameter, and a `for` binding over a collection of them is
@@ -2023,6 +2036,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   put the group in an inner block that ends first, rather than advising a
   `.clone()` where the value is borrowed, which does not end the borrow
   (B-2026-11-19-112).
+- A closure literal handed to a named call that is itself another
+  call's argument (`println(twice(|| s.len()))`) ends with its statement,
+  as one at the statement's root call does, so a later move of what it
+  reads is no longer refused as "moved inside a loop" (B-2026-11-19-113).
 - Rust's array `map` on a list literal, `["a", "b"].map(|u| u.to_string())`,
   gets the `.into_iter()` hop as a fix, and the follow-up fixes collect
   it, as a named list's `.map` does. It was E0236 with no fix

@@ -783,13 +783,29 @@ impl<'a> UseClassifier<'a> {
     /// [`Self::record_statement_closures`].
     fn record_chain_closures(&mut self, value: &Expr, extent: (usize, usize)) {
         let mut found = Vec::new();
+        if !self.chain_closures(value, &mut found) {
+            return;
+        }
+        for k in found {
+            self.classification.statement_closures.insert(k, extent);
+        }
+    }
+
+    /// Collects into `found` the closure literals of `value`'s receiver
+    /// chain and of the named function call at its root, and of the calls
+    /// nested in that call's arguments (`show(twice(|| s.len()))`: the inner
+    /// call runs its closure, if at all, before it returns, and hands on a
+    /// result that holds none). False, collecting nothing, when what the
+    /// chain leaves behind could hold one.
+    fn chain_closures(&self, value: &Expr, found: &mut Vec<SpanKey>) -> bool {
+        let mut local = Vec::new();
         let mut e = value;
         loop {
             match &e.kind {
                 ExprKind::MethodCall { object, args, .. } => {
                     for a in args {
                         if matches!(a.value.kind, ExprKind::Closure { .. }) {
-                            found.push(SpanKey::from_span(&a.value.span));
+                            local.push(SpanKey::from_span(&a.value.span));
                         }
                     }
                     e = object;
@@ -808,26 +824,34 @@ impl<'a> UseClassifier<'a> {
             if crate::ownership::callee_param_modes_key(callee).is_some() {
                 for a in args {
                     let k = SpanKey::from_span(&a.value.span);
-                    if matches!(a.value.kind, ExprKind::Closure { .. })
-                        && !self.tc.core_escaping_closures.contains(&k)
-                    {
-                        found.push(k);
+                    if matches!(a.value.kind, ExprKind::Closure { .. }) {
+                        if !self.tc.core_escaping_closures.contains(&k) {
+                            local.push(k);
+                        }
+                    } else if matches!(
+                        a.value.kind,
+                        ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::Question(_)
+                    ) && self.tc.expr_type(&a.value).is_some_and(|t| {
+                        holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
+                    }) {
+                        // An argument that is itself a call's result
+                        // (B-2026-11-19-113).
+                        self.chain_closures(&a.value, &mut local);
                     }
                 }
             }
         }
-        if found.is_empty()
+        if local.is_empty()
             || matches!(e.kind, ExprKind::MethodCall { .. })
             || !self
                 .tc
                 .expr_type(e)
                 .is_some_and(|t| holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[]))
         {
-            return;
+            return false;
         }
-        for k in found {
-            self.classification.statement_closures.insert(k, extent);
-        }
+        found.extend(local);
+        true
     }
 
     fn walk_stmt(&mut self, stmt: &Stmt) {

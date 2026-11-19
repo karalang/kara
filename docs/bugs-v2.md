@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 562 |
-| false-positive | 304 |
+| false-positive | 305 |
 | missing-feature | 209 |
 | perf | 189 |
 | other | 119 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 273 |
 | cli | 213 |
 | parser | 127 |
-| ownership | 119 |
+| ownership | 120 |
 | interp | 94 |
 | runtime | 91 |
 | effect | 49 |
@@ -137,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-104 | 2026-11-19 | ownership | medium | `karac check` misses §14.5 when a closure that uses a provider leaves its `with_provider` through a GENERIC function: `keep(mut hs, || Clk.now())` with `fn keep[Fx](v: mut ref Vec[Fx], f: own Fx) { v.push(f); }`, and `with_provider[Clk](F { t: 1 }, || id(|| Clk.now()))` with `fn id[T](x: own T) -> T`, pass check; every lane then refuses in the MIR borrow check (E0509 / E0516) | — |
 | B-2026-11-19-105 | 2026-11-19 | mir | medium | A function that uses a provider cannot be taken as a value under `with_provider` (core-semantics §14.3: 'Taking such a function as a value captures the provider in scope'): `let f = read_clk; f() + 1` passes check and every lane stops `a function used as a value that uses Clk's provider is not lowered yet`; returning it out of the call (`|| { let g = read_clk; g }`) also passes check instead of the §14.5 refusal | — |
 | B-2026-11-19-106 | 2026-11-19 | typecheck+mir | low | A `mut ref MutFn(..)` parameter cannot be handed to a lazy adaptor: `fn cnt(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool) -> i64 { v.iter().filter(f).count() }` is refused 'trait bound `FnV: MutFn` is not satisfied; `mut ref Fn(ref i64) -> bool` does not implement `MutFn`' | — |
+| B-2026-11-19-113 | 2026-11-19 | ownership | medium | A closure literal handed to a named call that is itself an argument of another call (`show(twice(|| s.len()))`, `println(twice(|| s.len()))`) is taken to outlive its statement: a later move of what it reads (`let t = s;`) is refused with E0500 "moved inside a loop" in straight-line code, though `let k = twice(|| s.len()); let t = s;` is accepted | — |
 
 ### Relocated
 
