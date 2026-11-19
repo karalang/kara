@@ -181,6 +181,18 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // A trait's entry is read off its declaration alone, so every trait
+        // is registered before the walk: a signature above the trait names
+        // it in `dyn Shape` as items are otherwise order-free (B-2026-11-19-37).
+        // The walk registers each again, to the same entry.
+        for item in items {
+            match item {
+                Item::TraitDef(t) => self.env_add_trait(t),
+                Item::MarkerTrait(t) => self.env_add_marker_trait(t),
+                _ => {}
+            }
+        }
+
         for item in items {
             // An item's own lint levels cover its header, which is lowered
             // here first: `#[allow(deprecated)] impl Old` or `fn mk() -> Old`
