@@ -59,14 +59,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 560 |
-| false-positive | 298 |
+| false-positive | 299 |
 | missing-feature | 208 |
 | perf | 189 |
 | other | 119 |
 | soundness | 100 |
 | miscompile | 90 |
 | crash | 61 |
-| run-vs-build | 58 |
+| run-vs-build | 59 |
 | codegen-gap | 39 |
 | use-after-free | 10 |
 | leak | 5 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 712 |
+| typecheck | 713 |
 | mir-llvm | 306 |
 | mir | 270 |
 | cli | 211 |
 | parser | 126 |
-| ownership | 117 |
+| ownership | 119 |
 | interp | 94 |
 | runtime | 91 |
 | effect | 47 |
@@ -122,7 +122,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-63 | 2026-11-19 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secret'); the declaration-site Serialize field check refuses a user type that lacks Serialize but counts `Secret` as capable | — |
 | B-2026-11-19-64 | 2026-11-19 | mir-llvm | medium | A compiled program on more than one worker sometimes stops with a false "deadlock: every task waits on a channel ..." when a task's last `Sender` is dropped while the receiving task is being polled: the drop's wake is counted before the sender count falls, so the receiver can park on a channel that is already closed | — |
 | B-2026-11-19-65 | 2026-11-19 | typecheck | low | An open type variable nested inside the first branch or element of a join is not solved by a later one: `[Some(None), Some(Some(4))]`, `if c { Some(None) } else { Some(Some(4)) }`, the same as a `match`, `[(Some(None), 0), (Some(Some(4)), 1)]` and `[Ok(None), Ok(Some(4)), Err(1)]` are E0238 `cannot infer type parameter 'T'`, while the reversed order, `v.push` of the same two values, an annotation, and a top-level `[None, Some(4)]` all check and run | — |
-| B-2026-11-19-71 | 2026-11-19 | mir+mir-llvm | high | Calling a function value through a generic `mut ref F` parameter (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`, `twice(mut g)`) crashes every lane: compiled is a stack overflow (exit 134) or SIGSEGV (139), ASan reports stack-buffer-overflow / SEGV in `twice[Fn() -> i64]`, and `__mir-run` stops `call through Agg([Ref(..)]), which is not a function value` | — |
 | B-2026-11-19-72 | 2026-11-19 | mir+mir-llvm | high | A closure LITERAL passed to a generic bare `F` parameter (`fn call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) captures by move on every lane: a counter it writes is copied, so `n` reads 0 after two calls (want 2), and a captured `Drop` value is moved and dropped at the end of the call statement (`d5` prints before the result), while `karac check` treats the capture as a borrow and accepts a later use of `r` that the MIR move check then refuses | — |
 | B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
 | B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
@@ -138,6 +137,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-98 | 2026-11-19 | typecheck | low | A trait whose parameter defaults to Self (`trait Tr[X = Self] { fn m(self, x: X) -> i64; }`) is treated as if X were Self at an explicit instance: `dyn Tr[i64]` is refused E_DYN_NOT_DISPATCHABLE (`m` names Self outside the receiver), and under `T: Tr + Tr[i64]` the UFCS `Tr[i64].m(t, 1)` is refused E0233 `ambiguous method 'm' ... Use UFCS Tr[i64].m(receiver, ...)`, the very form written | — |
 | B-2026-11-19-99 | 2026-11-19 | interp | medium | A closure forwarded through a function parameter into `Vec.retain`, `sort_by` or `sort_by_key` (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool) { v.retain(f); }`) stops the MIR interpreter with `cannot call Ref(Addr { .. })`; build and ASan run it correctly | — |
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
+| B-2026-11-19-103 | 2026-11-19 | ownership+typecheck | low | A borrowed `Fn` parameter cannot be handed to a lazy adaptor (`v.iter().filter(f).count()` is E0516 'cannot be stored as a function value; declare the parameter `escaping`'), and a generic `f: F` cannot be handed to `retain` (E0200 'cannot give away parameter'), though the concrete `f: Fn(..)` can | — |
+| B-2026-11-19-104 | 2026-11-19 | ownership | medium | `karac check` misses §14.5 when a closure that uses a provider leaves its `with_provider` through a GENERIC function: `keep(mut hs, || Clk.now())` with `fn keep[Fx](v: mut ref Vec[Fx], f: own Fx) { v.push(f); }`, and `with_provider[Clk](F { t: 1 }, || id(|| Clk.now()))` with `fn id[T](x: own T) -> T`, pass check; every lane then refuses in the MIR borrow check (E0509 / E0516) | — |
 
 ### Relocated
 
@@ -1834,6 +1835,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-68 | mir | medium | A covariant `Never` coercion design.md allows (`Option[Never]` to `Option[String]`, `Result[i64, Never]` to `Result[i64, String]`) passes `karac chec… | b5d0b2a4c7 |
 | B-2026-11-19-69 | typecheck | low | A list literal passed to a generic `Array` parameter is built as a `Vec`: `first([7, 8])` with `fn first[T: Copy, const N: i64](arr: Array[T, N]) ->… | db4547d2df |
 | B-2026-11-19-70 | typecheck | low | A function with a REQUIRED named parameter is accepted as a value, and the named parameter becomes positional: `fn connect(host: String; port: i64)`,… | db4547d2df |
+| B-2026-11-19-71 | mir+mir-llvm | high | Calling a function value through a generic `mut ref F` parameter (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`, `twice(mut g)`) c… | c9a5487bcc |
 | B-2026-11-19-73 | mir-llvm | medium | On wasm_wasi, corpus/design/ok_pool_chained_health_check_with_a_closure_factory (pinned at 0aa814606b) traps `table index is out of bounds` in karac_… | a71dba27cf |
 | B-2026-11-19-80 | parser | medium | `thread::spawn(move \|\| ..)` has a message naming `TaskGroup` but no fix, so a Rust-shaped server's worker thread stops the Mend loop | 53f86eb754 |
 | B-2026-11-19-81 | parser+typecheck | medium | Rust's alternate form `{:#04x}` has no fix, in `format!` (the conversion bails) or in an `f".."` hole | 53f86eb754 |
