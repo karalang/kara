@@ -114,7 +114,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-18-66 | 2026-11-18 | typecheck+cli | medium | `karac fix` flips `own` on and off a trait impl method's parameter: E0200's `own` fix meets E0288 (impl may not be stronger than the trait), whose fix removes it | — |
 | B-2026-11-18-69 | 2026-11-18 | typecheck+cli | low | E0208's derive fix adds `#[derive(PartialOrd, PartialEq)]` to a type that implements `PartialEq` by hand, and the fixed program is E0240 (conflicting impl) | — |
-| B-2026-11-18-70 | 2026-11-18 | typecheck | low | The E0236 fix for `v.iter().chunks(2).collect()` into a `Vec[Vec[i64]]` writes `v.chunks(2).into_iter().collect()`, whose items are slices (E0200 FromIterator[Slice[i64]]) | — |
 | B-2026-11-18-72 | 2026-11-18 | typecheck | low | A closure that destructures a `(String, number)` item of a literal list keeps the number at `i64` under a `collect` annotation: `let r = [("x", 2)]; r.iter().map(|(n, v)| (n.to_string(), v)).collect()` into `Vec[(String, i32)]` is refused, and Rust's `*v` there gets no machine fix | — |
 | B-2026-11-18-74 | 2026-11-18 | typecheck | medium | `let pool: Pool[Conn, ConnectError] = Pool.new(|| Ok(Conn { id: 1 }), 8, 16).with_health_check(|c| c.ping());` is refused with E0238 `cannot infer type parameter 'E'`, and its help says to annotate a binding that is already annotated: a type variable that only a closure argument's result mentions is not carried through a chained method's return type | — |
 | B-2026-11-18-76 | 2026-11-18 | typecheck | low | E0509 for a view stored in a `Mutex`'s value names the element type (`(i64, E)`), not the `Str` field that makes it a view, and offers no fix | — |
@@ -140,7 +139,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-21 | 2026-11-19 | effect | medium | An access to a `mut` field of a `shared` value that carries a borrow flag is not a `panics` atom: `#[no_effect(panics)]` accepts a function that then panics 'already borrowed' at run time, and `program_effects` omits `panics` for it | — |
 | B-2026-11-19-23 | 2026-11-19 | ownership | medium | `v.split_at_mut(i)` on a binding declared without `mut` checks clean and the halves write through it (`let v = [1, 2, 3, 4]; let (l, r) = v.split_at_mut(2); l[0] = 0;` prints [0, 2, 3, 4] on every lane); with `let mut v` the unused_mut lint says `v` is never borrowed as `mut`, so following it produces the unsound form | — |
 | B-2026-11-19-24 | 2026-11-19 | mir | low | A `par` branch that always returns (`{ return 9; }`) bound into an annotated tuple, `let (a, b): (i64, i64) = par { { return 9; }, 2 }; a + b`, checks clean and then fails MIR validation on every lane ('binary operands of different types ! and i64'); without the annotation `karac check` refuses `a + b` with "type '!' does not implement trait Add" | — |
-| B-2026-11-19-25 | 2026-11-19 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they drop with the Receiver, and concurrency.md now says so | — |
 
 ### Relocated
 
@@ -1766,10 +1764,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-65 | cli | medium | `karac fix` declines every `lossless_cast` / `redundant_cast` / `redundant_clone` fix in a program with a mutual-recursion group: the L0002 note sits… | 47288c5743 |
 | B-2026-11-18-67 | typecheck | medium | E_MODULE_LET offers `const` for `let EMPTY: Vec[i64] = Vec.new();`, and the fixed program is E_MODULE_BINDING_EFFECTFUL_INIT | efcedc5d41 |
 | B-2026-11-18-68 | typecheck | medium | A bare parameter of an unbounded type parameter handed to a generic `own` parameter is offered `.clone()` (E0236 after the fix) instead of `own` | efcedc5d41 |
+| B-2026-11-18-70 | typecheck | low | The E0236 fix for `v.iter().chunks(2).collect()` into a `Vec[Vec[i64]]` writes `v.chunks(2).into_iter().collect()`, whose items are slices (E0200 Fro… | 4529cc7ee6 |
 | B-2026-11-18-71 | typecheck | low | A literal list read through `iter()` and an adapter, or a closure that builds a tuple or `Some` from a bound literal list's items, did not take a `co… | dd8b194cd6 |
 | B-2026-11-18-73 | interp+mir-llvm | medium | A `Pool` dropped while one of its loans is still out keeps its IDLE values alive until that loan comes back, on every surface; pool.md says the idle… | 2faf2c5577 |
 | B-2026-11-18-75 | mir | medium | Since B-2026-11-17-92 (ab62be2b9d) a closure that captures a `Vec` of `shared` handles whose type has a function field is refused as carrying a view… | 6a9755a0bc |
 | B-2026-11-18-78 | typecheck | medium | Since B-2026-11-15-32 (558a84bb49) `Option.map` / `Result.map` inside a closure is read as a lazy adaptor returning its closure argument, so a captur… | c6256b83b2 |
+| B-2026-11-19-25 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they d… | be5d113f9e |
 
 </details>
 
