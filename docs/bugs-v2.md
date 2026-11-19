@@ -59,14 +59,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 544 |
-| false-positive | 286 |
+| false-positive | 287 |
 | missing-feature | 205 |
 | perf | 188 |
 | other | 115 |
 | soundness | 90 |
 | miscompile | 86 |
 | run-vs-build | 56 |
-| crash | 54 |
+| crash | 55 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
 | leak | 5 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 683 |
+| typecheck | 684 |
 | mir-llvm | 298 |
-| mir | 260 |
+| mir | 261 |
 | cli | 206 |
 | parser | 119 |
 | ownership | 111 |
@@ -148,6 +148,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-37 | 2026-11-19 | typecheck | low | `dyn Trait` in a signature above the trait's declaration is refused, "`dyn Shape`: `Shape` is not a trait", though items are otherwise order-free (a `[S: Shape]` bound above the trait checks and runs) | — |
 | B-2026-11-19-38 | 2026-11-19 | effect | medium | A call through an escaping function value (a struct field, a collection element, a `for` binding over one) is charged nothing by the front-end effect check: `pub fn go(j: Job) -> i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)` checks clean without a `with` clause, and a field with no clause is not charged every effect | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
+| B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
 
 ### Relocated
 
@@ -1787,6 +1788,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-12 | typecheck | low | A prelude variant written qualified (`Option.Some(1)`, `Result.Ok(v)`) is accepted silently, though design.md says the prelude variants are always wr… | 3efb545461 |
 | B-2026-11-19-25 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they d… | be5d113f9e |
 | B-2026-11-19-2 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `def… | 3efb545461 |
+| B-2026-11-19-40 | mir | medium | A slice range whose bounds are `ref` integers (`nums[a..=b]` with `a`, `b` from `l.iter().zip(r.iter())`, or `nums[a..]` with `a` a closure's `ref i3… | 60902ec48a |
 
 </details>
 
