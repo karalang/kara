@@ -23,7 +23,7 @@ fn refused(src: &str, expected: &str) {
 fn never_invariance_a_vec_of_never_is_not_a_vec_of_i64() {
     refused(
         "fn main() { let v: Vec[Never] = Vec.new(); let mut w: Vec[i64] = v; w.push(5); println(w.len()); }\n",
-        "expected 'Vec[i64]'",
+        "expected 'Vec[i64]', found 'Vec[Never]'",
     );
 }
 

@@ -939,7 +939,7 @@ pub fn type_display(ty: &Type) -> String {
         Type::Char => "char".to_string(),
         Type::Str => "String".to_string(),
         Type::Unit => "()".to_string(),
-        Type::Never => "!".to_string(),
+        Type::Never => "Never".to_string(),
         Type::Tuple(types) => {
             let inner: Vec<String> = types.iter().map(type_display).collect();
             // A one-element tuple prints as it is written, `(T,)`.
