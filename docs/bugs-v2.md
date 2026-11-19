@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 546 |
-| false-positive | 287 |
+| diagnostics | 549 |
+| false-positive | 288 |
 | missing-feature | 205 |
 | perf | 188 |
 | other | 117 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 686 |
+| typecheck | 687 |
 | mir-llvm | 301 |
 | mir | 261 |
-| cli | 208 |
-| parser | 119 |
+| cli | 209 |
+| parser | 121 |
 | ownership | 111 |
 | interp | 90 |
 | runtime | 90 |
@@ -117,17 +117,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-29 | 2026-11-18 | typecheck | low | Range literals carried through iterator closures into an `i32` tuple (`(-1..=1).flat_map(|dx| (-1..=1).map(|dy| (dx, dy))).filter_map(|(dx, dy)| (1..8).map(|k| (kx + k * dx, ky + k * dy)).find(|p| placed.contains(p)))` with `kx: i32`, `placed: Set[(i32, i32)]`) are refused at `contains` and at `collect` with no machine fix | — |
 | B-2026-11-19-30 | 2026-11-18 | mir+mir-llvm | low | `Mutex` has no `try_lock`, which Rust (`Mutex::try_lock`), Go (`TryLock`), Java (`ReentrantLock.tryLock`), C (`pthread_mutex_trylock`) and Python (`Lock.acquire(blocking=False)`) all have; the dining philosophers' back-off form gets only "no method 'try_lock' on type 'Mutex'" | — |
 | B-2026-11-19-31 | 2026-11-18 | interp+mir-llvm+runtime | low | A deadlock among `Mutex` waits is reported as "every task waits on a channel that no running task sends to or receives from" on every backend, naming a channel when no task waits on one; and when the root task is waiting at a `TaskGroup`'s drop the report carries no location | — |
-| B-2026-11-19-4 | 2026-11-19 | typecheck | medium | `.into()` from a `Str` (or a string literal) to `String` is refused, though `String.from(s)` works and design.md §9 lists `impl From[Str] for String`; a remainder of B-2026-11-15-72, whose fix covers only user `From[Str]` impls | — |
-| B-2026-11-19-5 | 2026-11-19 | typecheck | low | `v[a..b] = other` with a `Vec` (or a list literal) on the right is refused "expected 'Slice[i64]', found 'Vec[i64]'"; only a slice expression is accepted | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-7 | 2026-11-19 | typecheck | medium | A struct update `P { b: 3, ..x }` whose base supplies a field of a type with its own `impl Drop` is refused as `partial_move_of_drop_struct` 'cannot move a non-Copy field out of `D`', though `P` has no Drop and the field moves whole | — |
-| B-2026-11-19-10 | 2026-11-19 | typecheck | low | A list literal with a `SortedSet[T]` expected type is refused (`let s: SortedSet[i64] = [3, 1, 2]`), though `SortedMap` takes a map literal; review ruled it builds a SortedSet like `Set[T]` does | — |
 | B-2026-11-19-13 | 2026-11-19 | typecheck | low | `#[derive(...)]` accepts what it cannot derive with no diagnostic: an unknown trait name (`#[derive(Frobnicate)]`), a derive on a `fn`, `const` or `trait`, and a trait listed twice all check clean | — |
 | B-2026-11-19-14 | 2026-11-19 | effect+mir | medium | design.md §9's 'Effects of an ambiguous call' example is refused: when two traits' same-named methods with different effects are implemented on one type, the effect checks merge them as one `C.access` (E0230 on the reads impl, E0400 on the UFCS caller), and `__mir-run` stops with 'call of unknown function C.access' | — |
 | B-2026-11-19-16 | 2026-11-19 | ownership | low | Remainder of B-2026-11-17-27: `freeze r` is still refused (E0512 'its source is used before the `freeze`') after `r.kids.push(Node { val: 2, kids: Vec.new() })` with a struct literal holding no handle, where the same push of a fresh call `leaf(2)` is accepted; and after a scalar read of the source (`println(r.val);`) | — |
 | B-2026-11-19-17 | 2026-11-19 | cli | low | design.md §11 From `shared` to `sync` shows E_NOT_CROSS_TASK carrying a suggested diff and `fix: karac fix --apply=concurrent-promote-shared`; karac's E_NOT_CROSS_TASK has a prose help only, no diff, and `karac fix` has no `--apply` option | — |
 | B-2026-11-19-18 | 2026-11-19 | typecheck | low | A field typed `Option[weak P]` is accepted at the definition though design.md says the field is `weak P`, not `Option[weak P]`; every store into it is then refused with a bare "expected 'weak P', found 'P'" that names neither rule | — |
-| B-2026-11-19-20 | 2026-11-19 | typecheck | low | `#[allow(deprecated)]` on an item does not cover the item's own header: a deprecated struct named in `impl Old { .. }` under `#[allow(deprecated)]` on the impl, or in the return type of `#[allow(deprecated)] fn mk() -> Old`, still warns, so the defining package cannot write a deprecated struct's impl without the warning | — |
 | B-2026-11-19-22 | 2026-11-19 | effect | low | A pub fn that only stores a closure into an effect-typed slot (`pub fn mk() -> EventBus[with writes(OrderDb)]`) and never calls it is made to declare `with writes(OrderDb)` (E0400); review ruled storing performs no effect, so the declaration is not required | — |
 | B-2026-11-19-21 | 2026-11-19 | effect | medium | An access to a `mut` field of a `shared` value that carries a borrow flag is not a `panics` atom: `#[no_effect(panics)]` accepts a function that then panics 'already borrowed' at run time, and `program_effects` omits `panics` for it | — |
 | B-2026-11-19-23 | 2026-11-19 | ownership | medium | `v.split_at_mut(i)` on a binding declared without `mut` checks clean and the halves write through it (`let v = [1, 2, 3, 4]; let (l, r) = v.split_at_mut(2); l[0] = 0;` prints [0, 2, 3, 4] on every lane); with `let mut v` the unused_mut lint says `v` is never borrowed as `mut`, so following it produces the unsound form | — |
@@ -146,8 +142,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-44 | 2026-11-19 | mir-llvm | low | On wasm_wasi a deep recursion that a native build runs exhausts the module's own 1 MiB shadow stack and traps as a bare `RuntimeError: memory access out of bounds`, not a stack overflow; design.md's wasm note says only the host engine's stack bounds recursion depth | — |
 | B-2026-11-19-45 | 2026-11-19 | mir-llvm | medium | An early exit in a `par {}` branch misses a later branch that is just going to sleep when the program runs on more than one worker: the cancelled branch sleeps its whole sleep and runs on (16 to 63 of 400 rounds, by lane) | — |
 | B-2026-11-19-46 | 2026-11-19 | mir-llvm | low | `karac __mir-llvm-run` and the sanitizer lanes report a child killed by a signal as a bare exit code 101, which reads as a Kara panic, where `karac run` reports 128 + signal | — |
-| B-2026-11-19-47 | 2026-11-19 | cli | low | `karac fmt` moves a comment that ends an attribute's line (`#[derive(Copy)] // why`) onto the end of whatever precedes the item, and two such items in a row do not format to a fixed point | — |
-| B-2026-11-19-48 | 2026-11-19 | cli | medium | `karac fmt` drops a supertrait bound's arguments: `trait PartialOrd[Rhs = Self]: PartialEq[Rhs]` is written back as `: PartialEq`, which names a different trait, so formatting changes what the program means | — |
+| B-2026-11-19-49 | 2026-11-19 | typecheck | low | `#[allow(deprecated)]` on a struct, a struct field, an enum or a type alias does not cover a deprecated type named in its fields, payloads or body; a remainder of B-2026-11-19-20, which covered functions, impls and methods | — |
+| B-2026-11-19-50 | 2026-11-19 | parser | low | Two attributes on one item naming the same lint (`#[allow(deprecated)]` then `#[deny(deprecated)]`) are not `E_DUPLICATE_LINT_LEVEL`: the later one silently wins; only a repeat inside one attribute (`#[allow(deprecated, deprecated)]`) is refused | — |
+| B-2026-11-19-51 | 2026-11-19 | cli | low | `malformed_diagnostic_attribute` never fires: `#[diagnostic::on_unimplemented]` on a function, with an unknown field, with an unknown `{placeholder}`, or twice on one trait checks clean, because `check_diagnostic_attributes` has no caller outside its own test file | — |
+| B-2026-11-19-52 | 2026-11-19 | parser | low | An inner attribute `#![...]` at the top of a file is accepted and ignored: `#![frobnicate]` checks clean though an unknown attribute is E_UNKNOWN_ATTRIBUTE, and `#![allow(unused_mut)]` parses but suppresses nothing | — |
 
 ### Relocated
 
@@ -1785,17 +1783,23 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-26 | typecheck | low | A named list of tuple literals walked by a tuple pattern (`let dirs = [(-1, 0), (1, 0)]; for (dx, dy) in dirs.iter() { let mut (x, y) = (king[0] + dx… | cc3372dd0f |
 | B-2026-11-19-27 | parser | medium | an integer literal with a float suffix (`0f64`, `1f32`) is an integer by design (design.md §3), but the error is a parse recovery whose fix adds `;`… | d1ab453bcb |
 | B-2026-11-19-28 | typecheck | low | the fix for a Rust `match xs.binary_search(v) { Ok(i) => i, Err(i) => i }` writes `{ let i = xs.partition_point(..); if i < xs.len() and xs[i] == v {… | 4dbf2fe839 |
+| B-2026-11-19-4 | typecheck | medium | `.into()` from a `Str` (or a string literal) to `String` is refused, though `String.from(s)` works and design.md §9 lists `impl From[Str] for String`… | 700d4fe00b |
+| B-2026-11-19-5 | typecheck | low | `v[a..b] = other` with a `Vec` (or a list literal) on the right is refused "expected 'Slice[i64]', found 'Vec[i64]'"; only a slice expression is acce… | 700d4fe00b |
 | B-2026-11-19-8 | typecheck | medium | A type alias of a struct cannot build or match it: `type Q = P; Q { a: 1 }` is E0207 "'Q' is not a struct", and `match p { IntPair { a, b } => . | 8ca9a74cbc |
 | B-2026-11-19-9 | typecheck | low | Type alias declarations are not checked on their own: a cycle (`type A = Vec[B]; type B = A;`) passes check until used, then gives E0516 'no definiti… | 8ca9a74cbc |
+| B-2026-11-19-10 | typecheck | low | A list literal with a `SortedSet[T]` expected type is refused (`let s: SortedSet[i64] = [3, 1, 2]`), though `SortedMap` takes a map literal; review r… | 700d4fe00b |
 | B-2026-11-19-11 | typecheck | low | A plain enum recursive through `Option` (`enum L { Nil, Cons(i64, Option[L]) }`) is accepted and runs, though design.md says a plain enum containing… | 3efb545461 |
 | B-2026-11-19-12 | typecheck | low | A prelude variant written qualified (`Option.Some(1)`, `Result.Ok(v)`) is accepted silently, though design.md says the prelude variants are always wr… | 3efb545461 |
 | B-2026-11-19-15 | typecheck | medium | Under `where I.Item: Add[Output = I.Item]`, `t + x` with `x` from `for x in iter` is refused "expected 'I.Item', found 'I': the bound `Add` on 'I.Ite… | 2be9f2b012 |
 | B-2026-11-19-19 | typecheck | low | Remainder of B-2026-11-04-71: the §11 #[must_use] mandate is unmet for builder steps (a discarded `Command.arg(..)` or `RequestBuilder.header(..)`, w… | 6220867c70 |
+| B-2026-11-19-20 | typecheck | low | `#[allow(deprecated)]` on an item does not cover the item's own header: a deprecated struct named in `impl Old { . | 700d4fe00b |
 | B-2026-11-19-25 | interp+mir-llvm+runtime | medium | Messages still buffered in a channel when its Receiver drops are kept until the last Sender drops, on every surface; review ruled (2026-11-18) they d… | be5d113f9e |
 | B-2026-11-19-1 | mir | medium | A method of an impl at concrete type arguments (`impl Pr[bool]` of `struct Pr[T] { x: T }`) that nothing calls is borrow-checked with its fields at t… | 11e38661f8 |
 | B-2026-11-19-2 | cli | low | In `karac repl`, a binding shadowed by a later cell's `let`, what is left of a binding a later cell moved a field out of, and a cell's top-level `def… | 3efb545461 |
 | B-2026-11-19-40 | mir | medium | A slice range whose bounds are `ref` integers (`nums[a..=b]` with `a`, `b` from `l.iter().zip(r.iter())`, or `nums[a..]` with `a` a closure's `ref i3… | 60902ec48a |
 | B-2026-11-19-42 | typecheck | low | Remainder of B-2026-11-18-57: the `.bytes()` fix on text from an `if`/`match`/block tail that is a temporary (`sha256(if c { a.clone() } else { b })`… | 44a1949fa0 |
+| B-2026-11-19-47 | cli | low | `karac fmt` moves a comment that ends an attribute's line (`#[derive(Copy)] // why`) onto the end of whatever precedes the item, and two such items i… | 700d4fe00b |
+| B-2026-11-19-48 | cli | medium | `karac fmt` drops a supertrait bound's arguments: `trait PartialOrd[Rhs = Self]: PartialEq[Rhs]` is written back as `: PartialEq`, which names a diff… | 700d4fe00b |
 
 </details>
 
