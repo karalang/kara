@@ -4615,6 +4615,54 @@ impl<'a> super::TypeChecker<'a> {
     /// (B-2026-11-04-72). A type parameter is left to its instantiation.
     fn check_weak_field_targets(&mut self, fields: &[StructField], generic_params: &[String]) {
         for f in fields {
+            // `Option[weak P]`: emptiness is already a state of every weak
+            // handle, so the field is `weak P` (design.md § Cycles and
+            // `weak`, Storing into a weak field). Accepted, it refused every
+            // store with a bare mismatch (B-2026-11-19-18). The fix drops
+            // the `Option[` and its `]`.
+            if let TypeKind::Path(p) = &f.ty.kind {
+                if let ([last], [crate::ast::GenericArg::Type(arg)]) = (
+                    p.segments.as_slice(),
+                    p.generic_args.as_deref().unwrap_or_default(),
+                ) {
+                    if last == "Option" && matches!(arg.kind, TypeKind::Weak(_)) {
+                        let outer = f.ty.span;
+                        let inner = arg.span;
+                        self.type_error(
+                            format!(
+                                "field `{}` is `Option[weak ..]`, but a weak handle is already \
+                                 optional: it may be empty, and reading it gives an `Option` \
+                                 either way. Declare the field `weak ..`; `None` stores an empty \
+                                 one and a strong handle converts on store (design.md § Cycles \
+                                 and `weak`)",
+                                f.name
+                            ),
+                            outer,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        let outer_end = outer.offset + outer.length;
+                        let inner_end = inner.offset + inner.length;
+                        if inner.offset > outer.offset && outer_end > inner_end {
+                            self.error_fix_diffs.insert(
+                                SpanKey::from_span(&outer),
+                                vec![
+                                    crate::resolver::TextEdit {
+                                        offset: outer.offset,
+                                        length: inner.offset - outer.offset,
+                                        replacement: String::new(),
+                                    },
+                                    crate::resolver::TextEdit {
+                                        offset: inner_end,
+                                        length: outer_end - inner_end,
+                                        replacement: String::new(),
+                                    },
+                                ],
+                            );
+                        }
+                        continue;
+                    }
+                }
+            }
             let mut bad: Vec<(String, Span)> = Vec::new();
             crate::span_visitor::for_each_type_expr(&f.ty, &mut |x| {
                 let TypeKind::Weak(inner) = &x.kind else {

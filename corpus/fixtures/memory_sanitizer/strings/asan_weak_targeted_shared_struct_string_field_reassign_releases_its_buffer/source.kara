@@ -1,5 +1,5 @@
 
-shared struct P { mut label: String, mut back: Option[weak P] }
+shared struct P { mut label: String, mut back: weak P }
 fn main() {
     let p = P { label: "start", back: None };
     let mut i = 0i64;
