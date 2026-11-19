@@ -1,6 +1,8 @@
 //! Kata 1231's jumps arm: `match xs.binary_search(v) { Ok(i) => i, Err(i)
-//! => i }`, the index either way, is fixed to the search alone, not to an
-//! `if` whose two branches are the same (B-2026-11-19-28).
+//! => i }`, the index either way. It was fixed to an `if` whose two
+//! branches were the same (B-2026-11-19-28), then to the search alone; since
+//! `Ok`'s index is the last equal element and `Err`'s the end of the run
+//! (B-2026-11-19-32), the two sides differ by one and the test stays.
 
 use std::process::Command;
 
@@ -46,7 +48,7 @@ fn wrap(body: &str) -> String {
 }
 
 #[test]
-fn kata_1231_binary_search_index_either_way_is_the_search_alone() {
+fn kata_1231_binary_search_index_either_way_runs_as_rust() {
     for (tag, body) in [
         (
             "ok-err",
@@ -60,9 +62,7 @@ fn kata_1231_binary_search_index_either_way_is_the_search_alone() {
         let (err, fixed, after, out) = check_fix_run(tag, &wrap(body));
         assert!(err.contains("binary_search"), "{tag}: {err}");
         assert!(
-            fixed.contains(".partition_point(")
-                && !fixed.contains("binary_search")
-                && !fixed.contains(" else "),
+            fixed.contains(".partition_point(") && !fixed.contains("binary_search"),
             "{tag}: {fixed}"
         );
         assert!(

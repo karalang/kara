@@ -3,30 +3,38 @@
 //!
 //! Rust's `binary_search` returns `Result<usize, usize>`: `Ok` of an index
 //! holding the value, `Err` of the insertion point. Kāra's returns
-//! `Option[i64]` (docs/library/collections.md), and the insertion point is
-//! `partition_point(|y| y < v)`, which is also a valid `Ok` index when the
-//! value is there (Rust leaves which equal element unspecified). When a
-//! Rust shape fails to check, its errors give way to one that says so, and
-//! the mechanical shapes carry the rewrite:
+//! `Option[i64]` (docs/library/collections.md). Rust's documentation leaves
+//! which of several equal elements `Ok` names unspecified, but its
+//! implementation names the last, as Kāra's `binary_search` does, and a
+//! carried program can depend on it (kata 1235's search arm, a list of
+//! repeated keys whose last is the best, B-2026-11-19-32). So the rewrite
+//! searches once for the end of the equal run,
+//! `hi = partition_point(|y| y <= v)`: when `xs[hi - 1] == v`, `Ok`'s index
+//! is `hi - 1`, and otherwise `hi` is `Err`'s insertion point, the same
+//! as `partition_point(|y| y < v)` when `v` is absent. When a Rust shape
+//! fails to check, its errors give way to one that says so, and the
+//! mechanical shapes carry the rewrite:
 //!
-//! - `xs.binary_search(v).unwrap_or_else(|i| i)` is
-//!   `xs.partition_point(|y| y < v)`; another body `f(i)` is
-//!   `{ let i = xs.partition_point(..); if i < xs.len() and xs[i] == v { i } else { f(i) } }`.
+//! - `xs.binary_search(v).unwrap_or_else(|i| f(i))` is
+//!   `{ let i = xs.partition_point(|y| y <= v); if i > 0 and xs[i - 1] == v { i - 1 } else { f(i) } }`.
 //! - `match xs.binary_search(v) { Ok(i) => a, Err(j) => b }` and
 //!   `if let Ok(i)`/`Err(i) = xs.binary_search(v) { .. } else { .. }` are
-//!   `{ let i = xs.partition_point(|y| y < v); if i < xs.len() and xs[i] == v { a } else { b } }`.
-//!   When both sides are alike the test is dropped, and
-//!   `Ok(i) => i, Err(i) => i` is the search alone.
+//!   `{ let j = xs.partition_point(|y| y <= v); if j > 0 and xs[j - 1] == v { let i = j - 1; a } else { b } }`.
+//!   When no side reads `Ok`'s index (`Ok(_)`, or no `Ok` side), the
+//!   search finds the insertion point instead, and the test reads the
+//!   element there: `{ let j = xs.partition_point(|y| y < v); if j < xs.len() and xs[j] == v { a } else { b } }`.
+//!   When both sides are alike the test is dropped.
 //!
 //! `xs` must be a plain place and `v` free of effects, since the rewrite
 //! names each more than once; otherwise the message says so.
 //!
 //! Kāra has no `binary_search_by_key` or `binary_search_by`, and the same
 //! shapes over them carry the same way (B-2026-11-13-6): the key closure
-//! `|p| key` against `k` searches with `partition_point(|p| key < k)`,
-//! and the index found holds `k` when it lies below
-//! `partition_point(|p| key <= k)`; an ordering closure `|p| order` reads
-//! `order == Ordering.Less` and `order != Ordering.Greater` for the two.
+//! `|p| key` against `k` finds the end of the run with
+//! `partition_point(|p| key <= k)`, and the run is there when
+//! `partition_point(|p| key < k)` lies below it; an ordering closure
+//! `|p| order` reads `order != Ordering.Greater` and
+//! `order == Ordering.Less` for the two.
 
 use crate::ast::{BinOp, CallArg, Expr, ExprKind, MatchArm, Pattern, PatternKind};
 use crate::resolver::SpanKey;
@@ -156,39 +164,59 @@ fn fresh(v: &Expr) -> &'static str {
         .unwrap_or("elem")
 }
 
-/// The pieces of a rewrite: `xs.partition_point(|y| y < v)` and the test
-/// that the index found holds `v`.
-fn search(xs: &Expr, by: By, at: &str) -> (String, String) {
+/// The pieces of a rewrite: the search, with `at` naming where it ends,
+/// and the test that the value is there. When `Ok`'s index is read
+/// (`last`), the search finds the end of the run of equal elements,
+/// `xs.partition_point(|y| y <= v)`, and `Ok`'s index is `at - 1`, the last
+/// equal element, as Rust's implementation gives it (B-2026-11-19-32).
+/// Otherwise it finds the insertion point, `xs.partition_point(|y| y < v)`,
+/// and the test reads the element there. Either way, without the value,
+/// `at` is `Err`'s insertion point.
+fn search(xs: &Expr, by: By, at: &str, last: bool) -> (String, String) {
     let r = crate::formatter::render_expr(xs);
+    let (to, past) = if last {
+        (BinOp::LtEq, BinOp::Lt)
+    } else {
+        (BinOp::Lt, BinOp::LtEq)
+    };
+    // The other end of the run, against `at`.
+    let other = |p: String| {
+        if last {
+            format!("{p} < {at}")
+        } else {
+            format!("{at} < {p}")
+        }
+    };
     match by {
         By::Value(v) => {
             let val = crate::formatter::render_expr(v);
             let y = fresh(v);
-            (
-                format!("{r}.partition_point(|{y}| {y} < {val})"),
-                format!("{at} < {r}.len() and {r}[{at}] == {val}"),
-            )
+            let op = if last { "<=" } else { "<" };
+            let holds = if last {
+                format!("{at} > 0 and {r}[{at} - 1] == {val}")
+            } else {
+                format!("{at} < {r}.len() and {r}[{at}] == {val}")
+            };
+            (format!("{r}.partition_point(|{y}| {y} {op} {val})"), holds)
         }
         By::Key(k, f) => (
-            format!(
+            format!("{r}.partition_point({})", closure_with(f, to, k.clone())),
+            other(format!(
                 "{r}.partition_point({})",
-                closure_with(f, BinOp::Lt, k.clone())
-            ),
-            format!(
-                "{at} < {r}.partition_point({})",
-                closure_with(f, BinOp::LtEq, k.clone())
-            ),
+                closure_with(f, past, k.clone())
+            )),
         ),
-        By::Order(f) => (
-            format!(
-                "{r}.partition_point({})",
-                closure_with(f, BinOp::Eq, ordering("Less", f.span))
-            ),
-            format!(
-                "{at} < {r}.partition_point({})",
-                closure_with(f, BinOp::NotEq, ordering("Greater", f.span))
-            ),
-        ),
+        By::Order(f) => {
+            let (end, start) = (
+                closure_with(f, BinOp::NotEq, ordering("Greater", f.span)),
+                closure_with(f, BinOp::Eq, ordering("Less", f.span)),
+            );
+            let (find, test) = if last { (end, start) } else { (start, end) };
+            (
+                format!("{r}.partition_point({find})"),
+                other(format!("{r}.partition_point({test})")),
+            )
+        }
     }
 }
 
@@ -238,12 +266,19 @@ fn block_text(e: &Expr) -> String {
     }
 }
 
-/// `body`, the block of the branch that binds `name`, reading `at` as it.
-fn bound_branch(name: Option<&str>, at: &str, body: &Expr) -> String {
+/// `body`, the block of the branch that binds `name`, reading `index` (the
+/// end of the search, or one less on the `Ok` side) as it.
+fn bound_branch(name: Option<&str>, index: &str, body: &Expr) -> String {
+    if let Some(n) = name {
+        // `Ok(i) => i`: the index itself.
+        if matches!(&body.kind, ExprKind::Identifier(b) if b == n) {
+            return format!("{{ {index} }}");
+        }
+    }
     let text = block_text(body);
     match name {
-        Some(n) if n != at => match text.strip_prefix('{') {
-            Some(rest) => format!("{{ let {n} = {at};{rest}"),
+        Some(n) if n != index => match text.strip_prefix('{') {
+            Some(rest) => format!("{{ let {n} = {index};{rest}"),
             None => text,
         },
         _ => text,
@@ -313,21 +348,28 @@ fn rewrite_branches(e: &Expr) -> Option<(By<'_>, Result<String, String>)> {
     if let Some(why) = not_mechanical(xs, by) {
         return Some((by, Err(why.to_string())));
     }
-    let at = ok
+    // The search names the end of the run: `Err`'s index as it stands,
+    // `Ok`'s one less.
+    let at = err
         .as_ref()
         .and_then(|s| s.0)
-        .or(err.as_ref().and_then(|s| s.0))
+        .or(ok.as_ref().and_then(|s| s.0))
         .unwrap_or("at");
-    let (find, holds) = search(xs, by, at);
-    let text = |s: &Side| bound_branch(s.0, at, &s.1);
-    let tail = match (ok.as_ref().map(text), err.as_ref().map(text)) {
-        // `Ok(i) => i, Err(i) => i`: either way the index found, so the
-        // search alone (B-2026-11-19-28).
-        (Some(o), Some(r)) if o == r && o == format!("{{ {at} }}") => {
-            return Some((by, Ok(find)));
-        }
-        // Both sides alike: the test decides nothing.
-        (Some(o), Some(r)) if o == r => o,
+    // Only a side that reads `Ok`'s index needs the last equal element.
+    let last = ok.as_ref().is_some_and(|s| s.0.is_some());
+    let (find, holds) = search(xs, by, at, last);
+    let index = format!("{at} - 1");
+    let ok_text = ok.as_ref().map(|s| bound_branch(s.0, &index, &s.1));
+    let err_text = err.as_ref().map(|s| bound_branch(s.0, at, &s.1));
+    let tail = match (ok_text, err_text) {
+        // Both sides alike: the test decides nothing, and the side's
+        // block joins the rewrite's (`Ok(i) => i - 1, Err(i) => i - 1`,
+        // kata 1235's search arm, is `{ let i = ..; i - 1 }`).
+        (Some(o), Some(r)) if o == r => match o.strip_prefix('{').and_then(|t| t.strip_suffix('}'))
+        {
+            Some(inner) => inner.trim().to_string(),
+            None => o,
+        },
         (Some(o), Some(r)) => format!("if {holds} {o} else {r}"),
         (Some(o), None) => format!("if {holds} {o}"),
         (None, Some(r)) => format!("if not ({holds}) {r}"),
@@ -349,41 +391,38 @@ fn rewrite_unwrap_or_else(xs: &Expr, by: By, closure: &Expr) -> Option<Result<St
         PatternKind::Wildcard => "_",
         _ => return None,
     };
-    if matches!(&body.kind, ExprKind::Identifier(n) if n == name) {
-        if matches!(by, By::Value(v) | By::Key(v, _) if !is_pure(v)) {
-            return Some(Err(
-                "the predicate names the value once per probe, so bind it to a `let` first"
-                    .to_string(),
-            ));
-        }
-        return Some(Ok(search(xs, by, name).0));
-    }
     if let Some(why) = not_mechanical(xs, by) {
         return Some(Err(why.to_string()));
     }
     let at = if name == "_" { "at" } else { name };
-    let (find, holds) = search(xs, by, at);
+    let (find, holds) = search(xs, by, at, true);
+    // `Ok`'s index is the last equal element (B-2026-11-19-32), so even
+    // `|i| i` keeps the test.
     Some(Ok(format!(
-        "{{ let {at} = {find}; if {holds} {{ {at} }} else {} }}",
+        "{{ let {at} = {find}; if {holds} {{ {at} - 1 }} else {} }}",
         block_text(body)
     )))
 }
 
 const SHAPE: &str = "Kāra's `binary_search` returns `Option[i64]`, the index of an element \
                      equal to the value or `None`, not Rust's `Result` of an index or the \
-                     insertion point; the insertion point is `partition_point(|y| y < v)`";
+                     insertion point; the insertion point is `partition_point(|y| y < v)`, \
+                     and the last equal element, the one Rust's `Ok` names, lies just below \
+                     `partition_point(|y| y <= v)`";
 
 /// What the message says of the search it rewrites.
 fn shape(by: By) -> String {
     match by {
         By::Value(_) => SHAPE.to_string(),
         By::Key(..) => "Kāra has no `binary_search_by_key`; the insertion point of `k` is \
-                        `partition_point(|p| key < k)`, and it holds `k` when it lies below \
-                        `partition_point(|p| key <= k)`"
+                        `partition_point(|p| key < k)`, and when it lies below \
+                        `partition_point(|p| key <= k)` the last element just below that, \
+                        the one Rust's `Ok` names, holds `k`"
             .to_string(),
         By::Order(_) => "Kāra has no `binary_search_by`; the insertion point is \
-                         `partition_point(|p| order == Ordering.Less)`, and it holds a match \
-                         when it lies below `partition_point(|p| order != Ordering.Greater)`"
+                         `partition_point(|p| order == Ordering.Less)`, and when it lies below \
+                         `partition_point(|p| order != Ordering.Greater)` the last element \
+                         just below that, the one Rust's `Ok` names, is a match"
             .to_string(),
     }
 }

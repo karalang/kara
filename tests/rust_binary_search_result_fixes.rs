@@ -38,7 +38,9 @@ fn fix_and_run(tag: &str, src: &str) -> (String, String, String, String) {
 
 const SHAPE: &str = "Kāra's `binary_search` returns `Option[i64]`, the index of an element \
                      equal to the value or `None`, not Rust's `Result` of an index or the \
-                     insertion point; the insertion point is `partition_point(|y| y < v)`";
+                     insertion point; the insertion point is `partition_point(|y| y < v)`, \
+                     and the last equal element, the one Rust's `Ok` names, lies just below \
+                     `partition_point(|y| y <= v)`";
 
 #[test]
 fn unwrap_or_else_and_ok_err_matches_are_rewritten_through_partition_point() {
@@ -63,7 +65,7 @@ fn unwrap_or_else_and_ok_err_matches_are_rewritten_through_partition_point() {
     assert_eq!(before.matches("error[").count(), 6, "{before}");
     assert!(
         before.contains(&format!(
-            "4:14: {SHAPE}: write `v.partition_point(|y| y < want)`"
+            "4:14: {SHAPE}; `karac fix` rewrites this one through `partition_point`"
         )),
         "{before}"
     );
@@ -74,17 +76,29 @@ fn unwrap_or_else_and_ok_err_matches_are_rewritten_through_partition_point() {
         "{before}"
     );
     assert!(
-        text.contains("let at = v.partition_point(|y| y < want);")
-            && text.contains(
-                "    {
-        let i = prices.partition_point(|y| y < p);
-        if i < prices.len() and prices[i] == p {
+        text.contains(
+            "    let at = {
+        let x = v.partition_point(|y| y <= want);
+        if x > 0 and v[x - 1] == want {
+            x - 1
+        } else {
+            x
+        }
+    };"
+        ) && text.contains(
+            "    {
+        let i = prices.partition_point(|y| y <= p);
+        if i > 0 and prices[i - 1] == p {
+            let i = i - 1;
             println(f\"have {i}\")
         } else {
             prices.insert(i, p)
         }
     }"
-            ),
+        ) && text.contains(
+            "        let i = v.partition_point(|y| y < 5);
+        if i < v.len() and v[i] == 5 {"
+        ),
         "{text}"
     );
     assert!(check.contains("All checks passed"), "{text}\n{check}");
@@ -107,7 +121,7 @@ fn main() {
     for (at, why) in [
         (
             "4:13",
-            "the predicate names the value once per probe, so bind it to a `let` first",
+            "the rewrite names the value more than once, so bind it to a `let` first",
         ),
         (
             "5:13",
@@ -144,8 +158,18 @@ fn kata_2035s_insertion_point_search_is_rewritten() {
 }
 ";
     let (_, text, check, out) = fix_and_run("kata-2035", src);
+    // `Ok`'s index is the last equal element (B-2026-11-19-32).
     assert!(
-        text.contains("let at = ys.partition_point(|y| y < want);"),
+        text.contains(
+            "        let at = {
+            let x = ys.partition_point(|y| y <= want);
+            if x > 0 and ys[x - 1] == want {
+                x - 1
+            } else {
+                x
+            }
+        };"
+        ),
         "{text}"
     );
     assert!(check.contains("All checks passed"), "{check}");

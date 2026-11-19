@@ -809,6 +809,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `karac fix`'s rewrite of Rust's `binary_search`, `binary_search_by` and
+  `binary_search_by_key` names the LAST of several equal elements in
+  `Ok`, as rustc's implementation and Kāra's own `binary_search` do: it
+  searches once for the end of the equal run, `partition_point(|y| y <=
+  v)`. It took the first, so a carried program over repeated keys
+  answered differently (kata 1235's search arm, 278 of 2000 differential
+  cases). A `match` or `if let` that never reads `Ok`'s index (`Ok(_)`)
+  keeps the insertion-point search, `partition_point(|y| y < v)`, and
+  `Ok(i) => i - 1, Err(i) => i - 1` is now `{ let i = ..; i - 1 }`
+  (B-2026-11-19-32).
 - `for x in iter` over an owned parameter `iter: own I` with `I:
   Iterator` binds `x` as `I.Item`, the item `iter.next()` returns. It bound
   the iterator's own type `I`, so `t + x` under `where I.Item: Add[Output
@@ -1964,10 +1974,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from `for x in 0..=50` and returned as `best.to_vec()` from a
   `Vec[i32]` function had no machine fix, and `karac fix` now writes
   `[0i32, 0]` and then `0i32..=50` (B-2026-11-18-52).
-- The fix for Rust's `match xs.binary_search(v) { Ok(i) => i, Err(i) => i }`
-  is the `partition_point` search alone, and two alike branches drop the
-  test. It wrote `if i < xs.len() and xs[i] == v { i } else { i }`
-  (B-2026-11-19-28).
+- The fix for a Rust `match` over `binary_search` whose two branches come
+  out alike drops the test: it wrote `if .. { i } else { i }` for
+  `Ok(i) => i, Err(i) => i` (B-2026-11-19-28), which since
+  B-2026-11-19-32 keeps its test, the two sides differing by one.
 - Rust's `0f64`, `1f32` and `1_000f64` are one error whose fix writes the
   float (`0.0f64`), since a literal with neither a point nor an exponent is
   an integer (design.md §3), and the parse goes on as that float. The
