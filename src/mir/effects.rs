@@ -261,6 +261,13 @@ pub struct Slot {
     /// traced, as a stored function value is, rather than having every
     /// effect.
     pub traced: bool,
+    /// The effects the value's type declares, when it declares any: its
+    /// `with` clause narrowed to the method's own, or the method's clause,
+    /// a ceiling every concrete type's method stays within (design.md §
+    /// `dyn Trait`). A call the analysis cannot resolve has these rather
+    /// than every effect, so two `par` iterations calling a parameter's
+    /// `dyn Shape with ()` do not conflict.
+    pub bound: Option<Vec<Effect>>,
 }
 
 impl Slot {
@@ -1133,6 +1140,7 @@ pub fn conflict_witness(
     b: &EffectSet,
     may_alias: &dyn Fn(&Key, &Key) -> bool,
 ) -> Option<(String, String)> {
+    let (a, b) = (&*bounded(a), &*bounded(b));
     if let (Some(x), Some(y)) = (top(a), ordered_effect(b)) {
         return Some((x, y));
     }
@@ -1145,6 +1153,20 @@ pub fn conflict_witness(
             .find(|y| conflicts(x, y, may_alias))
             .map(|y| (x.display(), y.display()))
     })
+}
+
+/// `s` with each `dyn` call whose type declares its effects
+/// ([`Slot::bound`]) replaced by those effects.
+fn bounded(s: &EffectSet) -> std::borrow::Cow<'_, EffectSet> {
+    if s.slots.iter().all(|x| x.bound.is_none()) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = s.clone();
+    out.slots.retain(|x| x.bound.is_none());
+    for x in &s.slots {
+        out.effects.extend(x.bound.iter().flatten().cloned());
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// What makes a set conflict with everything: an unknown callee, or a call
@@ -3096,6 +3118,7 @@ impl<'p> Analysis<'p> {
                     slot,
                     name: self.slot_name(dyn_ty, slot),
                     traced: body.clause_names_var,
+                    bound: declared.map(|d| d.effects.into_iter().collect()),
                 });
             }
             _ => eff.union(declared.unwrap_or_else(untraced)),

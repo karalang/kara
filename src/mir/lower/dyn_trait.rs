@@ -308,10 +308,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A receiver whose type writes a `with` clause: the call has the
         // clause's effects, narrowed to the method's own (design.md § `dyn
         // Trait`), kept like a function-typed field's clause.
-        if let (Some(declared), Some(p)) = (self.dyn_clause_effects(object, m), ops[0].place()) {
-            if p.projection.is_empty() {
-                self.b.fn_value_effects.push((p.local, declared));
-            }
+        let recv_place = ops[0].place().cloned();
+        if let (Some(declared), Some(p)) = (self.dyn_clause_effects(object, m), recv_place) {
+            // A view read out of a place, such as a `par` body's capture
+            // (`(*env).0`), is copied into a temporary the clause is kept
+            // on: the clause is kept per local.
+            let l = if p.projection.is_empty() {
+                p.local
+            } else {
+                let ty = self.operand_ty(&ops[0]);
+                let r = self.temp(ty);
+                self.assign(r, Rvalue::Use(ops[0].clone()));
+                ops[0] = match ops[0] {
+                    Operand::Move(_) => Operand::Move(Place::local(r)),
+                    _ => Operand::Copy(Place::local(r)),
+                };
+                r
+            };
+            self.b.fn_value_effects.push((l, declared));
         }
         let unit = self.unit();
         let func = Operand::Const(Const {
@@ -350,14 +364,20 @@ impl<'l, 'a> Bx<'l, 'a> {
             ty = i;
         }
         let crate::typechecker::Type::Dyn {
-            clause: crate::typechecker::types::DynClause(Some(list)),
+            clause: crate::typechecker::types::DynClause(clause),
             ..
         } = ty
         else {
             return None;
         };
+        let ceiling = m.effects.as_ref().map(super::declared_effect_list);
+        // No clause on the type: the method's own clause, a ceiling every
+        // concrete type's method stays within, when it writes one.
+        let Some(list) = clause else {
+            return ceiling.flatten();
+        };
         let mut declared = super::declared_effect_list(list)?;
-        if let Some(ceiling) = m.effects.as_ref().and_then(super::declared_effect_list) {
+        if let Some(Some(ceiling)) = ceiling {
             declared.retain(|d| ceiling.contains(d));
         }
         Some(declared)

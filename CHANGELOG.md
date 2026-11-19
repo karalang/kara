@@ -843,6 +843,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   by the move check after `karac check` had accepted it, and a counter a
   `MutFn` closure wrote was a copy, reading 0 after two calls
   (B-2026-11-19-72).
+- A `TaskGroup` task takes a `for` binding, a `while let` or `if let`
+  binding, or a `match` arm's binding by move, as it takes a `let` in a
+  loop body: each drops before a group declared ahead of it (core
+  semantics §9.1, §9.5). `for s in names.into_iter() {
+  hs.push(group.spawn(|| show(s))); }` was refused with E0516 at the
+  loop, the task holding a borrow of `s` (B-2026-11-19-107).
+- A `par for` that calls a method of a `dyn` parameter or local whose
+  type declares its effects has those effects: the type's `with` clause
+  narrowed to the method's own, or, with no clause on the type, the
+  trait method's clause, a ceiling every concrete method stays within
+  (design.md § `dyn Trait`). Two iterations calling `t.g(x)` on `t: dyn
+  T + CrossTask with ()` were refused as conflicting on `calls(p2.g)`
+  (B-2026-11-19-108).
 - `karac fix`'s rewrite of Rust's `binary_search`, `binary_search_by` and
   `binary_search_by_key` names the LAST of several equal elements in
   `Ok`, as rustc's implementation and Kāra's own `binary_search` do: it
