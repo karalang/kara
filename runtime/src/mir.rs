@@ -4814,8 +4814,13 @@ pub unsafe extern "C" fn karac_mir_string_from_chars(out: *mut RawVec, c: *const
     unsafe { string_of(out, text.as_bytes()) };
 }
 
-/// An erased function value of the MIR backend: `{code, env, drop}`.
-type MirFnBytes = [usize; 3];
+/// An erased function value of the MIR backend: `{code, env, drop}`, each
+/// in an 8-byte slot (`erase_into` in src/backend/mir/callable.rs stores
+/// them at 0, 8 and 16 on every target). On wasm32 a pointer fills the low
+/// half of its slot; read as `[usize; 3]` the env was the padding after the
+/// code and the drop was the env, called through the table as a function
+/// index (B-2026-11-19-73).
+type MirFnBytes = [u64; 3];
 
 /// Drops an erased function value: its captures through their glue, then
 /// their block (a null environment owns nothing).
@@ -4823,13 +4828,15 @@ type MirFnBytes = [usize; 3];
 /// # Safety
 /// `f` is a live erased function value, not used again.
 unsafe fn drop_mir_fn(f: &MirFnBytes) {
-    let env = f[1] as *mut u8;
+    // Each slot's low `usize` is its pointer.
+    let env = f[1] as usize as *mut u8;
     if env.is_null() {
         return;
     }
-    if f[2] != 0 {
+    let drop = f[2] as usize;
+    if drop != 0 {
         // SAFETY: `drop` is the glue of the captures at `env`.
-        let d: unsafe extern "C" fn(*mut u8) = unsafe { std::mem::transmute(f[2]) };
+        let d: unsafe extern "C" fn(*mut u8) = unsafe { std::mem::transmute(drop) };
         unsafe { d(env) };
     }
     // SAFETY: the captures' block came from `malloc`.

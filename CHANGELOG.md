@@ -826,6 +826,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   keeps the insertion-point search, `partition_point(|y| y < v)`, and
   `Ok(i) => i - 1, Err(i) => i - 1` is now `{ let i = ..; i - 1 }`
   (B-2026-11-19-32).
+- On `--target=wasm_wasi`, a `Pool` whose factory or health check is a
+  closure no longer traps `table index is out of bounds` when it drops
+  after use: the runtime read the closure's environment and drop glue from
+  the wrong offsets on a 32-bit target (B-2026-11-19-73).
 - A call under a bound that writes no arguments (`T: Combine`, with
   `trait Combine[Rhs = Self]`) runs and types through the impl at the
   trait's defaults. With both `impl Combine[i64] for M` and `impl Combine
