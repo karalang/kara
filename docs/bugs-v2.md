@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 91 |
 | miscompile | 87 |
 | run-vs-build | 57 |
-| crash | 55 |
+| crash | 56 |
 | codegen-gap | 38 |
 | use-after-free | 10 |
 | leak | 5 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 688 |
 | mir-llvm | 301 |
-| mir | 261 |
+| mir | 262 |
 | cli | 209 |
 | parser | 121 |
 | ownership | 111 |
@@ -118,9 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-13 | 2026-11-19 | typecheck | low | `#[derive(...)]` accepts what it cannot derive with no diagnostic: an unknown trait name (`#[derive(Frobnicate)]`), a derive on a `fn`, `const` or `trait`, and a trait listed twice all check clean | — |
 | B-2026-11-19-14 | 2026-11-19 | effect+mir | medium | design.md §9's 'Effects of an ambiguous call' example is refused: when two traits' same-named methods with different effects are implemented on one type, the effect checks merge them as one `C.access` (E0230 on the reads impl, E0400 on the UFCS caller), and `__mir-run` stops with 'call of unknown function C.access' | — |
-| B-2026-11-19-16 | 2026-11-19 | ownership | low | Remainder of B-2026-11-17-27: `freeze r` is still refused (E0512 'its source is used before the `freeze`') after `r.kids.push(Node { val: 2, kids: Vec.new() })` with a struct literal holding no handle, where the same push of a fresh call `leaf(2)` is accepted; and after a scalar read of the source (`println(r.val);`) | — |
-| B-2026-11-19-17 | 2026-11-19 | cli | low | design.md §11 From `shared` to `sync` shows E_NOT_CROSS_TASK carrying a suggested diff and `fix: karac fix --apply=concurrent-promote-shared`; karac's E_NOT_CROSS_TASK has a prose help only, no diff, and `karac fix` has no `--apply` option | — |
-| B-2026-11-19-18 | 2026-11-19 | typecheck | low | A field typed `Option[weak P]` is accepted at the definition though design.md says the field is `weak P`, not `Option[weak P]`; every store into it is then refused with a bare "expected 'weak P', found 'P'" that names neither rule | — |
 | B-2026-11-19-22 | 2026-11-19 | effect | low | A pub fn that only stores a closure into an effect-typed slot (`pub fn mk() -> EventBus[with writes(OrderDb)]`) and never calls it is made to declare `with writes(OrderDb)` (E0400); review ruled storing performs no effect, so the declaration is not required | — |
 | B-2026-11-19-21 | 2026-11-19 | effect | medium | An access to a `mut` field of a `shared` value that carries a borrow flag is not a `panics` atom: `#[no_effect(panics)]` accepts a function that then panics 'already borrowed' at run time, and `program_effects` omits `panics` for it | — |
 | B-2026-11-19-3 | 2026-11-19 | cli | low | In `karac repl`, a cell after one that spawned tasks or holds a value with no source form (a task handle, a `shared` handle under a task) runs the cells that made it again, so their tasks run and print again; a custom log backend's own state also starts over in each cell | — |
@@ -1788,6 +1785,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-11 | typecheck | low | A plain enum recursive through `Option` (`enum L { Nil, Cons(i64, Option[L]) }`) is accepted and runs, though design.md says a plain enum containing… | 3efb545461 |
 | B-2026-11-19-12 | typecheck | low | A prelude variant written qualified (`Option.Some(1)`, `Result.Ok(v)`) is accepted silently, though design.md says the prelude variants are always wr… | 3efb545461 |
 | B-2026-11-19-15 | typecheck | medium | Under `where I.Item: Add[Output = I.Item]`, `t + x` with `x` from `for x in iter` is refused "expected 'I.Item', found 'I': the bound `Add` on 'I.Ite… | 2be9f2b012 |
+| B-2026-11-19-16 | ownership | low | Remainder of B-2026-11-17-27: `freeze r` is still refused (E0512 'its source is used before the `freeze`') after `r.kids.push(Node { val: 2, kids: Ve… | d581039d1f |
+| B-2026-11-19-17 | cli | low | design.md §11 From `shared` to `sync` shows E_NOT_CROSS_TASK carrying a suggested diff and `fix: karac fix --apply=concurrent-promote-shared`; karac'… | e5e5722093 |
+| B-2026-11-19-18 | typecheck | low | A field typed `Option[weak P]` is accepted at the definition though design.md says the field is `weak P`, not `Option[weak P]`; every store into it i… | 3191e21033 |
 | B-2026-11-19-19 | typecheck | low | Remainder of B-2026-11-04-71: the §11 #[must_use] mandate is unmet for builder steps (a discarded `Command.arg(..)` or `RequestBuilder.header(..)`, w… | 6220867c70 |
 | B-2026-11-19-20 | typecheck | low | `#[allow(deprecated)]` on an item does not cover the item's own header: a deprecated struct named in `impl Old { . | 700d4fe00b |
 | B-2026-11-19-23 | ownership | medium | `v.split_at_mut(i)` on a binding declared without `mut` checks clean and the halves write through it (`let v = [1, 2, 3, 4]; let (l, r) = v.split_at_… | b12d5bcd5f |
@@ -1801,6 +1801,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-46 | mir-llvm | low | `karac __mir-llvm-run` and the sanitizer lanes report a child killed by a signal as a bare exit code 101, which reads as a Kara panic, where `karac r… | 50c01040a4 |
 | B-2026-11-19-47 | cli | low | `karac fmt` moves a comment that ends an attribute's line (`#[derive(Copy)] // why`) onto the end of whatever precedes the item, and two such items i… | 700d4fe00b |
 | B-2026-11-19-48 | cli | medium | `karac fmt` drops a supertrait bound's arguments: `trait PartialOrd[Rhs = Self]: PartialEq[Rhs]` is written back as `: PartialEq`, which names a diff… | 700d4fe00b |
+| B-2026-11-19-54 | mir | medium | Since B-2026-11-17-152 (b3388ea406) `match w[i]` on a `mut ref Vec[weak N]` is indexed for writing and takes the raw weak slot, so mir-interp stops a… | 8ca791230e |
 
 </details>
 
