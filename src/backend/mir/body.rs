@@ -391,9 +391,10 @@ impl<'ctx> Cx<'ctx, '_> {
     /// The place `*p` for a `p` of type `ty` stored at `ptr`, and its type.
     fn deref(&mut self, ptr: PointerValue<'ctx>, ty: Ty) -> R<(PointerValue<'ctx>, Ty)> {
         Ok(match self.tys.kind(ty) {
-            // A reference to a `str`, a slice or a `dyn` value is the two
-            // words themselves.
-            TyKind::Ref(p) | TyKind::MutRef(p)
+            // A shared reference to a `str`, a slice or a `dyn` value is
+            // the two words themselves, as is a `mut ref dyn`; a `mut ref`
+            // to a `str` or a slice points at its view ([`layout`]).
+            TyKind::Ref(p)
                 if matches!(
                     self.tys.kind(p),
                     TyKind::Str | TyKind::Slice(_) | TyKind::Dyn { .. }
@@ -401,6 +402,7 @@ impl<'ctx> Cx<'ctx, '_> {
             {
                 (ptr, p)
             }
+            TyKind::MutRef(p) if matches!(self.tys.kind(p), TyKind::Dyn { .. }) => (ptr, p),
             TyKind::Ref(p) | TyKind::MutRef(p) => (self.load_ref(ptr, p)?, p),
             TyKind::RawPtr { pointee: p, .. } => (self.load_ptr(ptr)?, p),
             TyKind::Shared(a) => {
@@ -855,12 +857,17 @@ impl<'ctx> Cx<'ctx, '_> {
             Rvalue::Ref(_, place) => {
                 let pty = self.place_type(place)?;
                 let p = self.place_ptr(place)?;
-                if matches!(
-                    self.tys.kind(pty),
-                    TyKind::Str | TyKind::Slice(_) | TyKind::Dyn { .. }
-                ) {
+                let to_view = matches!(self.tys.kind(ty), TyKind::MutRef(_))
+                    && matches!(self.tys.kind(pty), TyKind::Str | TyKind::Slice(_));
+                if !to_view
+                    && matches!(
+                        self.tys.kind(pty),
+                        TyKind::Str | TyKind::Slice(_) | TyKind::Dyn { .. }
+                    )
+                {
                     // A reference to a `str`, a slice or a `dyn` value is
-                    // its two words.
+                    // its two words, but for a `mut ref` to a `str` or a
+                    // slice, which is the view's address ([`layout`]).
                     self.copy(dst, p, pty)
                 } else {
                     self.store(dst, p.into())

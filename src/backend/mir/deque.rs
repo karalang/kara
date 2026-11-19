@@ -255,7 +255,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.abort_unless(ok, "index out of bounds")?;
                 let at = self.slot(q, i, size)?;
                 let d = self.place_ptr(dest)?;
-                self.store_ref(d, at, el)?;
+                let rty = self.place_type(dest)?;
+                self.store_ref_as(d, at, el, rty)?;
             }
             // Every element moved out into a `Vec`, front to back, the
             // deque left empty (`suspending_drop`'s glue).

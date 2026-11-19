@@ -451,6 +451,24 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// [`Self::store_ref`] into a reference of type `rty`: a `mut ref` to
+    /// a `str` or a slice element is the element's address, which a write
+    /// of a whole new view goes through (kata 1258, [`layout`]).
+    pub(super) fn store_ref_as(
+        &mut self,
+        d: PointerValue<'ctx>,
+        at: PointerValue<'ctx>,
+        el: Ty,
+        rty: Ty,
+    ) -> R<()> {
+        if matches!(self.tys.kind(rty), TyKind::MutRef(_))
+            && matches!(self.tys.kind(el), TyKind::Str | TyKind::Slice(_))
+        {
+            return self.store(d, at.into());
+        }
+        self.store_ref(d, at, el)
+    }
+
     /// Drops each argument the native was handed by move and did not keep.
     pub(super) fn drop_moved(&mut self, args: &[Operand]) -> R<()> {
         for a in args {
@@ -785,10 +803,10 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)> {
         let t = self.operand_type(a)?;
         let mut p = self.operand_ptr(a)?;
-        if let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(t) {
-            if !matches!(self.tys.kind(inner), TyKind::Str) {
-                p = self.load_ptr(p)?;
-            }
+        match self.tys.kind(t) {
+            TyKind::Ref(inner) if matches!(self.tys.kind(inner), TyKind::Str) => {}
+            TyKind::Ref(_) | TyKind::MutRef(_) => p = self.load_ptr(p)?,
+            _ => {}
         }
         let s = self.load_ptr(p)?;
         // A length is at most `isize::MAX`, so a cursor below it steps
@@ -820,7 +838,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .ok_or("an option without a payload")?;
         let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
         match (self.tys.kind(pt), self.tys.kind(el)) {
-            (TyKind::Ref(_) | TyKind::MutRef(_), _) => self.store_ref(q, at, el),
+            (TyKind::Ref(_) | TyKind::MutRef(_), _) => self.store_ref_as(q, at, el, pt),
             // A map entry handed out as views of its parts, `(ref K, ref V)`
             // (`SortedMap.floor` / `ceiling`, B-2026-11-13-25).
             (TyKind::Tuple(ps), TyKind::Tuple(es))
@@ -2067,7 +2085,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let buf = self.load_ptr(v)?;
                 let at = self.elem_ptr(buf, i, size)?;
                 let d = self.place_ptr(dest)?;
-                self.store_ref(d, at, el)
+                let rty = self.place_type(dest)?;
+                self.store_ref_as(d, at, el, rty)
             }
             // `xs[i] = v` into a `Vec[dyn T]`: the old element moved out
             // to `dest`, the new one moved in (B-2026-11-08-84).
@@ -2587,7 +2606,11 @@ impl<'ctx> Cx<'ctx, '_> {
         let mut t = self.operand_type(a)?;
         let mut p = self.operand_ptr(a)?;
         while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
-            if matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) {
+            // A shared reference to a `str` or a slice is the view; a
+            // `mut ref` points at it ([`layout`]).
+            if matches!(self.tys.kind(t), TyKind::Ref(_))
+                && matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_))
+            {
                 t = i;
                 break;
             }

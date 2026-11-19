@@ -2325,7 +2325,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let i = self.int_arg(i)?;
                 let at = self.checked_elem(p, n, i, size)?;
                 let d = self.place_ptr(dest)?;
-                self.store_ref(d, at, el)?;
+                self.store_ref_as(d, at, el, dty)?;
             }
             ("get", [i]) => {
                 let i = self.int_arg(i)?;
@@ -3131,7 +3131,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.elem_ptr(p, i, size)?;
                 let d = self.place_ptr(dest)?;
                 if matches!(self.tys.kind(dty), TyKind::Ref(_) | TyKind::MutRef(_)) {
-                    self.store_ref(d, at, el)?;
+                    self.store_ref_as(d, at, el, dty)?;
                 } else {
                     self.clone_into(d, at, dty)?;
                 }
@@ -3272,7 +3272,9 @@ impl<'ctx> Cx<'ctx, '_> {
         while t != el {
             match self.tys.kind(t) {
                 TyKind::Ref(i) | TyKind::MutRef(i) => {
-                    if matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) {
+                    if matches!(self.tys.kind(t), TyKind::Ref(_))
+                        && matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_))
+                    {
                         break;
                     }
                     p = self.load_ptr(p)?;

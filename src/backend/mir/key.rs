@@ -570,7 +570,9 @@ impl<'ctx> Cx<'ctx, '_> {
     fn key_place(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<(PointerValue<'ctx>, Ty)> {
         match self.tys.kind(ty) {
             TyKind::Ref(i) | TyKind::MutRef(i) => {
-                if matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) {
+                if matches!(self.tys.kind(ty), TyKind::Ref(_))
+                    && matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_))
+                {
                     Ok((p, i))
                 } else {
                     let q = self.load_ptr(p)?;
@@ -696,9 +698,8 @@ impl<'ctx> Cx<'ctx, '_> {
             b.locals
                 .get(i + 1)
                 .is_some_and(|l| match self.tys.kind(l.ty) {
-                    TyKind::Ref(t) | TyKind::MutRef(t) => {
-                        !matches!(self.tys.kind(t), TyKind::Str | TyKind::Slice(_))
-                    }
+                    TyKind::Ref(t) => !matches!(self.tys.kind(t), TyKind::Str | TyKind::Slice(_)),
+                    TyKind::MutRef(_) => true,
                     _ => false,
                 })
         })
@@ -748,7 +749,8 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             match self.tys.kind(ty) {
                 TyKind::Ref(i) | TyKind::MutRef(i)
-                    if !matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) =>
+                    if matches!(self.tys.kind(ty), TyKind::MutRef(_))
+                        || !matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) =>
                 {
                     p = self.load_ptr(p)?;
                     ty = i;

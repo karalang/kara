@@ -69,11 +69,18 @@ impl<'ctx> Cx<'ctx, '_> {
     /// Writes a reference to the stored value at `v` into `d`: its address,
     /// or for a `dyn` value its pair, which is what a `ref dyn` is
     /// (B-2026-10-29-30).
-    fn lend_value(&mut self, d: PointerValue<'ctx>, v: PointerValue<'ctx>, t: Table) -> R<()> {
+    fn lend_value(
+        &mut self,
+        d: PointerValue<'ctx>,
+        v: PointerValue<'ctx>,
+        t: Table,
+        rty: Ty,
+    ) -> R<()> {
         // A value that is a reference is lent as itself (a borrow of a
         // borrow is the borrow, B-2026-11-02-38), and so is a view, which is
-        // its own header: `m[k]` on a `Map[char, Str]` (B-2026-11-18-61).
-        self.store_ref(d, v, t.val.unwrap_or(t.key))
+        // its own header: `m[k]` on a `Map[char, Str]` (B-2026-11-18-61);
+        // a `mut ref` to a view is its address (kata 1258).
+        self.store_ref_as(d, v, t.val.unwrap_or(t.key), rty)
     }
 
     pub(super) fn mrt_ptr(
@@ -846,7 +853,9 @@ impl<'ctx> Cx<'ctx, '_> {
         while t != key {
             match self.tys.kind(t) {
                 TyKind::Ref(i) | TyKind::MutRef(i) => {
-                    if matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_)) {
+                    if matches!(self.tys.kind(t), TyKind::Ref(_))
+                        && matches!(self.tys.kind(i), TyKind::Str | TyKind::Slice(_))
+                    {
                         break;
                     }
                     p = self.load_ptr(p)?;
@@ -1013,7 +1022,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.abort_unless(found, "key not found")?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let d = self.place_ptr(dest)?;
-                self.lend_value(d, v, t)?;
+                self.lend_value(d, v, t, dty)?;
                 self.drop_moved(&args[1..])?;
             }
             // The position of the first key `>= k` (`> k` when `past`): one
@@ -1078,7 +1087,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.walk_at(h, i, t)?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let d = self.place_ptr(dest)?;
-                self.lend_value(d, v, t)?;
+                self.lend_value(d, v, t, dty)?;
             }
             ("insert", [k, rest @ ..]) => self.table_insert(hp, t, k, rest, dest, dty, unit)?,
             ("entries", []) if is_map => {
@@ -1145,7 +1154,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.load_ptr(slot)?;
                 let vp = self.offset(at, self.val_off(t)?)?;
                 let d = self.place_ptr(dest)?;
-                self.lend_value(d, vp, t)?;
+                self.lend_value(d, vp, t, dty)?;
                 let _ = v;
             }
             ("remove", [k]) => {
@@ -1274,7 +1283,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     let src = cx.offset(at, off)?;
                     let out = cx.elem_ptr(buf, i, size)?;
                     if by_ref && method == "values" {
-                        cx.lend_value(out, src, t)
+                        cx.lend_value(out, src, t, el)
                     } else if by_ref {
                         cx.store(out, src.into())
                     } else {
@@ -1307,7 +1316,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store_tag(d, dty, occ)?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let q = self.offset(d, self.field_offset(dty, Some(occ), 0)?)?;
-                self.lend_value(q, v, t)?;
+                self.lend_value(q, v, t, self.tys.field_ty(dty, Some(occ), 0).unwrap_or(dty))?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(new);
                 self.store_tag(d, dty, vac)?;
@@ -1703,7 +1712,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let h = self.load_ptr(hp)?;
                 let at = self.entry_at(h, i)?;
                 let v = self.offset(at, self.val_off(t)?)?;
-                self.lend_value(d, v, t)?;
+                let rty = self.place_type(dest)?;
+                self.lend_value(d, v, t, rty)?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
             }

@@ -115,8 +115,18 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
             Some(Cell::Inline(held)) => of(held)?,
             None => adt_body(tys, t, depth)?,
         },
-        TyKind::Ref(p) | TyKind::MutRef(p) => match tys.kind(p) {
+        // A shared reference to a `str`, a slice or a `dyn` value is the
+        // two words themselves, as is a `mut ref dyn`. A `mut ref` to a
+        // `str` or a slice points at the view, so a write of a whole new
+        // view through it reaches the place (B-2026-11-19-140, from kata
+        // 1258: `v[i] = s` into a `Vec[Str]`, `*s = t` through a `mut ref
+        // Str` parameter).
+        TyKind::Ref(p) => match tys.kind(p) {
             TyKind::Str | TyKind::Slice(_) | TyKind::Dyn { .. } => TWO_WORDS,
+            _ => WORD,
+        },
+        TyKind::MutRef(p) => match tys.kind(p) {
+            TyKind::Dyn { .. } => TWO_WORDS,
             _ => WORD,
         },
         TyKind::Intrinsic(IntrinsicTy::String | IntrinsicTy::Vec(_)) => {

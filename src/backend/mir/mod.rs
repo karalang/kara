@@ -796,7 +796,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
         let view = |k: TyKind| matches!(k, TyKind::Str | TyKind::Slice(_));
         let two_words = match self.tys.kind(t) {
-            TyKind::Ref(p) | TyKind::MutRef(p) => view(self.tys.kind(p)),
+            TyKind::Ref(p) => view(self.tys.kind(p)),
+            TyKind::MutRef(_) => false,
             k => view(k),
         };
         if two_words && l.size == 16 && std::env::var("KARAC_MIR_SLICE_REGS").as_deref() != Ok("0")
