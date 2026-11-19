@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 567 |
+| diagnostics | 568 |
 | false-positive | 314 |
 | missing-feature | 211 |
 | perf | 189 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 729 |
 | mir-llvm | 310 |
-| mir | 275 |
+| mir | 276 |
 | cli | 218 |
 | parser | 127 |
 | ownership | 121 |
@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
-| B-2026-11-19-63 | 2026-11-19 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secret'); the declaration-site Serialize field check refuses a user type that lacks Serialize but counts `Secret` as capable | — |
 | B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
 | B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
 | B-2026-11-19-76 | 2026-11-19 | typecheck | medium | A generic `F: Fn`/`MutFn`/`OnceFn` bound's kind and call access are checked on the instance, not the bound: a `MutFn` closure is accepted for `F: Fn() -> i64`, a `MutFn` is called through a bare (shared) `f: F`, and an `OnceFn` through a bare or `mut ref` `F`, whenever the instance happens not to move; the concrete function types refuse all of these (core-semantics §9.6) | — |
@@ -143,6 +142,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-134 | 2026-11-19 | typecheck | medium | Assigning a plain value to a `ref` binding passes `karac check` and then stops every lane with invalid MIR: `let mut p: ref i64 = ref e; let x: i64 = 5; p = x;` (and `p = mk()`, `p = h.join()` of a task whose closure `|| ref v` returns i64) gives 'invalid MIR: assigning i64 to _2 of type ref i64' | — |
 | B-2026-11-19-135 | 2026-11-19 | typecheck | medium | An unannotated generic struct literal or variant with an empty list `[]` in a field whose element type mentions the type parameter is refused with the internal E0516 'a type that failed to check is not lowered yet': `struct W[T] { v: T, xs: Vec[T] }` `W { v: 1, xs: [] }` (when xs is later used), and every generic tree `Tr { v: 1, kids: [] }`, `Tree.Node(1, [])`, even inside `fn leaf[T](v: own T) -> Tr[T] { Tr { v: v, kids: [] } }` | — |
 | B-2026-11-19-136 | 2026-11-19 | typecheck | medium | A generic struct with a self-referential `Option` field (`struct Ls[T] { v: T, next: Option[Ls[T]] }`) cannot be built with a literal: `Ls { v: 1, next: None }` is E0200 'field next has type Option[i64], but the type parameter was already bound to Option[Ls[i64]] by an earlier field', also with an annotation, `shared`, and `T = String` | — |
+| B-2026-11-19-137 | 2026-11-19 | mir | low | Inside a closure body, a borrowck conflict on a captured variable names neither the place nor the holder: 'mutable borrow of (*a temporary value) while it is borrowed', where the same code in a `for` loop says 'cannot mutably borrow `seen` while `more` still holds a borrow of it' | — |
 
 ### Relocated
 
@@ -1838,6 +1838,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-60 | typecheck+mir | low | `TimedOut` (std.time `timeout`) and `TaskFailed` (isolating groups, `try_join`) implement neither `Display` nor `Error`, so `timeout(d, f)?` and `h.t… | d58a0c7cf1 |
 | B-2026-11-19-61 | interp+mir-llvm | low | std.path `parent` of a root followed by a trailing `.` (`"/."`, `"/./"`, `"/./."`) is `Some("/")`, where `components` gives `["/"]`, `parent("/")` is… | 9a3d1848c1 |
 | B-2026-11-19-62 | other | low | secret.md is behind the compiler in two places: `ct_eq` is said to be `Secret[String]` only, but `Secret[Vec[u8]]` compares (`true`) on every lane; a… | c780bee67f |
+| B-2026-11-19-63 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secr… | 049c4a2646 |
 | B-2026-11-19-64 | mir-llvm | medium | A compiled program on more than one worker sometimes stops with a false "deadlock: every task waits on a channel ..." when a task's last `Sender` is… | 11949b2cd6 |
 | B-2026-11-19-65 | typecheck | low | An open type variable nested inside the first branch or element of a join is not solved by a later one: `[Some(None), Some(Some(4))]`, `if c { Some(N… | 5fdf9d7035 |
 | B-2026-11-19-66 | typecheck+mir | high | Inside a generic body bounded by a trait with a defaulted parameter (`fn total[T: Combine](a: own T, b: own T) -> T.Output { a.combine(b) }`, `trait… | a29450cdd1 |
