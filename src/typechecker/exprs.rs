@@ -7190,6 +7190,7 @@ impl<'a> super::TypeChecker<'a> {
                 .resolve_bounded_projections(
                     &sub_ret,
                     &Self::bounds_by_param(None, Some(wc)),
+                    &Self::bare_bounds(None, Some(wc)),
                     &solutions,
                 ),
             _ => sub_ret.clone(),
@@ -8992,13 +8993,19 @@ impl<'a> super::TypeChecker<'a> {
     /// `bounds` name exactly one trait that the solved type implements with
     /// its own binding of `Assoc`, replaced by that binding (B-2026-10-18-1).
     /// Any other projection is left for `resolve_assoc_projections`.
+    ///
+    /// `bare` holds the `(param, trait)` bounds written with no arguments
+    /// (`T: Combine` of `trait Combine[Rhs = Self]`): such a bound names the
+    /// trait at its defaults, so of the type's `impl Combine` and `impl
+    /// Combine[i64]` it reads the one that writes none (B-2026-11-19-66).
     pub(super) fn resolve_bounded_projections(
         &self,
         ty: &Type,
         bounds: &HashMap<String, Vec<String>>,
+        bare: &FxHashSet<(String, String)>,
         solutions: &HashMap<String, Type>,
     ) -> Type {
-        let recur = |t: &Type| self.resolve_bounded_projections(t, bounds, solutions);
+        let recur = |t: &Type| self.resolve_bounded_projections(t, bounds, bare, solutions);
         match ty {
             Type::AssocProjection {
                 param, assoc, args, ..
@@ -9029,6 +9036,23 @@ impl<'a> super::TypeChecker<'a> {
                             .map(|(_, t)| (i, t))
                     })
                     .collect();
+                let at_defaults: Vec<(usize, &Type)> = found
+                    .iter()
+                    .copied()
+                    .filter(|(i, _)| {
+                        let imp = &self.env.impls[*i];
+                        imp.trait_args.is_empty()
+                            && imp
+                                .trait_name
+                                .as_ref()
+                                .is_some_and(|t| bare.contains(&(param.clone(), t.clone())))
+                    })
+                    .collect();
+                let found = if found.len() > 1 && at_defaults.len() == 1 {
+                    at_defaults
+                } else {
+                    found
+                };
                 let [(i, bound)] = found.as_slice() else {
                     return ty.clone();
                 };
@@ -9062,7 +9086,10 @@ impl<'a> super::TypeChecker<'a> {
                 // `impl[T: Add]`) is read through the impl's own bounds.
                 let inner_bounds =
                     Self::bounds_by_param(imp.generic_params.as_ref(), imp.where_clause.as_ref());
-                let bound = self.resolve_bounded_projections(bound, &inner_bounds, &inner);
+                let inner_bare =
+                    Self::bare_bounds(imp.generic_params.as_ref(), imp.where_clause.as_ref());
+                let bound =
+                    self.resolve_bounded_projections(bound, &inner_bounds, &inner_bare, &inner);
                 inner.insert("Self".to_string(), solved.clone());
                 let subs: HashMap<String, SubstValue> = inner
                     .into_iter()
@@ -9240,6 +9267,36 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Each type parameter's bound trait names, from its inline bounds and
     /// a where clause.
+    /// The `(param, trait)` bounds of `generics` and `where_clause` written
+    /// with no arguments (`T: Combine`, not `T: Combine[i64]`).
+    pub(super) fn bare_bounds(
+        generics: Option<&GenericParams>,
+        where_clause: Option<&WhereClause>,
+    ) -> FxHashSet<(String, String)> {
+        let bare = |b: &&TraitBound| b.generic_args.as_ref().is_none_or(|a| a.is_empty());
+        let mut out = FxHashSet::default();
+        for p in generics.into_iter().flat_map(|g| &g.params) {
+            for b in p.bounds.iter().filter(bare) {
+                if let Some(t) = b.path.last() {
+                    out.insert((p.name.clone(), t.clone()));
+                }
+            }
+        }
+        for c in where_clause.into_iter().flat_map(|w| &w.constraints) {
+            if let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = c
+            {
+                for b in bounds.iter().filter(bare) {
+                    if let Some(t) = b.path.last() {
+                        out.insert((type_name.clone(), t.clone()));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub(super) fn bounds_by_param(
         generics: Option<&GenericParams>,
         where_clause: Option<&WhereClause>,

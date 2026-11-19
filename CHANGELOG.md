@@ -826,6 +826,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   keeps the insertion-point search, `partition_point(|y| y < v)`, and
   `Ok(i) => i - 1, Err(i) => i - 1` is now `{ let i = ..; i - 1 }`
   (B-2026-11-19-32).
+- A call under a bound that writes no arguments (`T: Combine`, with
+  `trait Combine[Rhs = Self]`) runs and types through the impl at the
+  trait's defaults. With both `impl Combine[i64] for M` and `impl Combine
+  for M`, the call ran whichever impl came first, reading an `M` as the
+  `i64` in compiled code, and `T.Output` was read from whichever came last
+  (B-2026-11-19-66).
 - `for x in iter` over an owned parameter `iter: own I` with `I:
   Iterator` binds `x` as `I.Item`, the item `iter.next()` returns. It bound
   the iterator's own type `I`, so `t + x` under `where I.Item: Add[Output

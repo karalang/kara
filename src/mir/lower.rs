@@ -13102,14 +13102,35 @@ impl<'l, 'a> Bx<'l, 'a> {
         method: &str,
         trait_args: &[Ty],
     ) -> Option<(DefId, Vec<Ty>)> {
-        if trait_args.is_empty() || matches!(self.tys().tcx().kind(t), HK::Dyn { .. }) {
+        if matches!(self.tys().tcx().kind(t), HK::Dyn { .. }) {
             return self.user_impl_method(t, tr, method);
         }
+        // A bound that writes no arguments (`T: Combine` of `trait
+        // Combine[Rhs = Self]`) names the trait at its defaults, as an impl
+        // that writes none (`impl Combine for M`) implements it there: of
+        // that impl and `impl Combine[i64] for M`, the bound's is the first,
+        // whatever the source order (B-2026-11-19-66).
+        let defaults = self.default_trait_args(t, tr);
+        let unwritten = trait_args.is_empty();
+        let trait_args = match (unwritten, &defaults) {
+            (false, _) => trait_args,
+            (true, Some(d)) if !d.is_empty() => d.as_slice(),
+            _ => return self.user_impl_method(t, tr, method),
+        };
         let mut n = 0;
         while let Some((d, targs)) = self.nth_impl_def(t, tr, method, n) {
             n += 1;
             let item = self.lcx.fns.get(&d)?;
             let Some(written) = item.impl_trait_args else {
+                if defaults.as_deref() == Some(trait_args) {
+                    let inst = match targs.as_deref() {
+                        Some(a) => item.impl_args(a)?,
+                        None => Vec::new(),
+                    };
+                    if inst.len() == item.impl_params {
+                        return Some((d, inst));
+                    }
+                }
                 continue;
             };
             let written: Vec<&ast::TypeExpr> = written
@@ -13132,15 +13153,48 @@ impl<'l, 'a> Bx<'l, 'a> {
                     *slot = Some(a);
                 }
             }
-            let fits = written
-                .iter()
-                .zip(trait_args)
-                .all(|(w, &a)| self.written_fits(w, a, &names, &mut out));
+            let fits = written.iter().zip(trait_args).all(|(w, &a)| {
+                if is_self_path(w) {
+                    return a == t;
+                }
+                self.written_fits(w, a, &names, &mut out)
+            });
             if let (true, Some(inst)) = (fits, out.into_iter().collect::<Option<Vec<_>>>()) {
                 return Some((d, inst));
             }
         }
+        // No impl at the defaults (a supertrait's slot, whose arguments are
+        // not tracked): the type's impl, as before.
+        if unwritten {
+            return self.user_impl_method(t, tr, method);
+        }
         None
+    }
+
+    /// The arguments `tr` takes when none are written, for `t`'s impl:
+    /// each parameter's default, `Self` being `t` (`[M]` for `trait
+    /// Combine[Rhs = Self]` at `M`). `None` when a parameter has no default
+    /// or one this cannot read (only `Self` and primitives are read).
+    fn default_trait_args(&self, t: Ty, tr: &str) -> Option<Vec<Ty>> {
+        let def = self.lcx.trait_defs.get(tr)?;
+        let Some(g) = def.generic_params.as_ref() else {
+            return Some(Vec::new());
+        };
+        g.params
+            .iter()
+            .map(|p| {
+                let te = p.default.as_ref().filter(|_| !p.is_const)?;
+                if is_self_path(te) {
+                    return Some(t);
+                }
+                match &te.kind {
+                    ast::TypeKind::Path(q) if q.generic_args.is_none() && q.segments.len() == 1 => {
+                        self.lcx.primitive(q.segments.last()?)
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     /// Whether `te`, a type an impl writes, can be `t`, binding each of the
@@ -25160,10 +25214,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         tr: &str,
         m: &str,
     ) -> Option<(DefId, Vec<Ty>)> {
-        if let Some(targs) = self.bound_trait_args(e) {
-            if let Some(hit) = self.trait_impl_method(t, tr, m, &targs) {
-                return Some(hit);
-            }
+        let targs = self.bound_trait_args(e).unwrap_or_default();
+        if let Some(hit) = self.trait_impl_method(t, tr, m, &targs) {
+            return Some(hit);
         }
         self.user_impl_method(t, tr, m)
     }
@@ -32883,6 +32936,12 @@ fn stderr_print(callee: &Expr) -> Option<&'static str> {
         [r, m] if r == "Stderr" && m == "print" => Some("eprint"),
         _ => None,
     }
+}
+
+/// Whether `te` is the bare `Self`.
+fn is_self_path(te: &ast::TypeExpr) -> bool {
+    matches!(&te.kind, ast::TypeKind::Path(q)
+        if q.generic_args.is_none() && q.segments.len() == 1 && q.segments[0] == "Self")
 }
 
 #[cfg(test)]

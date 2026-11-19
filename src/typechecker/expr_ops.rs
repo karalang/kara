@@ -3375,7 +3375,8 @@ impl<'a> super::TypeChecker<'a> {
         };
         let t = self.subst_operator_self_in(t, &own, name, Some(at));
         let bounds = Self::bounds_by_param(imp.generic_params.as_ref(), imp.where_clause.as_ref());
-        let t = self.resolve_bounded_projections(&t, &bounds, &solutions);
+        let bare = Self::bare_bounds(imp.generic_params.as_ref(), imp.where_clause.as_ref());
+        let t = self.resolve_bounded_projections(&t, &bounds, &bare, &solutions);
         let subs: HashMap<String, super::types::SubstValue> = solutions
             .into_iter()
             .map(|(k, v)| (k, super::types::SubstValue::Type(v)))
