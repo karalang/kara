@@ -1374,6 +1374,14 @@ fn source_place(body: &Body, tys: &TyInterner, p: &Place) -> Option<String> {
                         .and_then(|v| v.fields.get(f.0 as usize))
                         .map(|(n, _)| n.clone()),
                     TyKind::Tuple(_) => Some(f.0.to_string()),
+                    // A closure body's own environment, its first argument:
+                    // the captured variable, by the name it was written
+                    // with (B-2026-11-19-137).
+                    TyKind::Closure(..) if cur.local.index() == 1 => {
+                        s = body.capture_names.get(f.0 as usize)?.clone();
+                        cur = cur.project(*elem);
+                        continue;
+                    }
                     _ => None,
                 }?;
                 s = format!("{s}.{name}");

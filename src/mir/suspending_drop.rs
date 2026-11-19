@@ -1037,6 +1037,7 @@ impl Pass<'_, '_> {
             drop_flags: vec![],
             fn_value_effects: Vec::new(),
             clause_names_var: false,
+            capture_names: Vec::new(),
         })
     }
 }
@@ -1400,6 +1401,7 @@ fn empty_like(b: &Body) -> Body {
         drop_flags: vec![],
         fn_value_effects: Vec::new(),
         clause_names_var: false,
+        capture_names: Vec::new(),
     }
 }
 

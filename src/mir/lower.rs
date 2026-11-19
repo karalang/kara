@@ -1658,6 +1658,9 @@ struct ClosureJob<'a> {
     /// For each capture, the field of the symbol's struct it borrows when
     /// the closure captures fields apart (core semantics §9.1).
     fields: Vec<Option<String>>,
+    /// For each capture, the name the program wrote (`seen`, `p.name`),
+    /// for the body's borrow errors (`Body::capture_names`).
+    capture_names: Vec<String>,
     /// For each capture, whether the binding is itself a reference: the
     /// field holds that reference (a borrow of a borrow is the borrow), so
     /// the body names the field rather than what it points to.
@@ -28019,6 +28022,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             let kt = self.expr_ty(body)?;
             self.queue_user_cmp(kt);
         }
+        let capture_names = caps
+            .iter()
+            .zip(&fields)
+            .map(|(&(sym, _, _), field)| {
+                let var = self
+                    .lcx
+                    .binding_syms
+                    .iter()
+                    .find(|(_, s)| **s == sym)
+                    .map_or("self", |((_, n), _)| n.as_str());
+                match field {
+                    Some(f) => format!("{var}.{f}"),
+                    None => var.to_string(),
+                }
+            })
+            .collect();
         self.lcx.closure_queue.push(ClosureJob {
             def,
             name,
@@ -28026,6 +28045,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             args: self.args.clone(),
             caps,
             fields,
+            capture_names,
             lent,
             env,
             ty,
@@ -28057,6 +28077,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             EnvMode::Value => job.ty,
         };
         let env = self.b.arg("env", env_ty);
+        self.b.capture_names = job.capture_names.clone();
         let base = match job.env {
             EnvMode::Value => {
                 self.schedule(ScopeEntry::Drop(Place::local(env)));

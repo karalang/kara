@@ -169,6 +169,11 @@ pub struct Body {
     /// flow into that local, which callers resolve for the values they
     /// pass, rather than every effect.
     pub clause_names_var: bool,
+    /// A closure body's captures, by environment field: the name the
+    /// program wrote (`seen`, or `p.name` for a field captured apart), so
+    /// a borrow error on `(*(*env).k)` names the captured variable
+    /// (B-2026-11-19-137). Empty for any other body.
+    pub capture_names: Vec<String>,
 }
 
 /// One effect of a function type's `with` clause, as written: the verb's
