@@ -1040,6 +1040,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   one whose `g` writes a resource is refused, the message naming the
   caller and its line. A function reached as a value is still refused,
   since its callers cannot be listed (B-2026-11-19-109).
+- Two `par` branches, or two iterations of a `par for`, that call a
+  generic function-typed parameter have the effects of the function value
+  each caller passes (core semantics §12): `fn both[F: Fn() -> i64](f: F)
+  -> i64 { let (a, b) = par { f(), f() }; a + b }` called as `both(|| k)`
+  was refused as conflicting on `unknown (a call through a value)`. A
+  closure that captures a function value and calls it now has the effects
+  of what it captured, so the branch is checked with each caller's value,
+  through a generic that forwards it too, and a caller passing one that
+  prints is refused, naming the caller (B-2026-11-19-94).
 - A `par for` at the end of a function's block, with no semicolon, is the
   function's value, as a `for` is in a value position (core semantics
   §11.4): `fn doubled(xs: Vec[i64]) -> Vec[i64] { par for x in xs.iter()

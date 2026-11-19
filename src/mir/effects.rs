@@ -725,13 +725,70 @@ fn open_slot(s: &Slot) -> bool {
     s.bound.is_none() && matches!(&s.key, Key::Param(_, path) if path.is_empty())
 }
 
-/// `sites` without their [`open_slot`] calls.
-fn without_open(sites: &[Site]) -> Vec<Site> {
+/// A call through a parameter's own value that its callers resolve: an
+/// [`open_slot`], or a call of a parameter that is a function value,
+/// which a closure's call of a function value it captured is in its
+/// maker ([`Analysis::task_effects`], B-2026-11-19-94).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Open {
+    Slot(Slot),
+    /// A call of the function value a parameter is ([`EffectSet::calls`]).
+    Calls(u32),
+}
+
+/// The parameters of `body` that are function values, whose calls
+/// ([`EffectSet::calls`]) each caller resolves with the value it passes.
+/// A call of the function values a struct parameter holds (an
+/// `EventBus`'s handlers) is not one: it stays the parameter's.
+fn fn_params(body: &Body, tys: &TyInterner) -> BTreeSet<u32> {
+    let tcx = tys.tcx();
+    body.args()
+        .filter(|a| {
+            let mut t = body.local(*a).ty;
+            while let SK::Ref(i) | SK::MutRef(i) = tcx.kind(t) {
+                t = i;
+            }
+            matches!(
+                tcx.kind(t),
+                SK::Fn { .. } | SK::Closure { .. } | SK::FnDef { .. }
+            )
+        })
+        .map(|a| a.0)
+        .collect()
+}
+
+/// The calls of `e` its callers resolve, `fns` being the parameters that
+/// are function values ([`fn_params`]).
+fn open_parts(e: &EffectSet, fns: &BTreeSet<u32>) -> Vec<Open> {
+    let slots = e
+        .slots
+        .iter()
+        .filter(|x| open_slot(x))
+        .cloned()
+        .map(Open::Slot);
+    let calls = e
+        .calls
+        .iter()
+        .copied()
+        .filter(|p| fns.contains(p))
+        .map(Open::Calls);
+    slots.chain(calls).collect()
+}
+
+fn has_open(sites: &[Site], fns: &BTreeSet<u32>) -> bool {
+    sites
+        .iter()
+        .any(|s| !open_parts(&s.effects, fns).is_empty())
+}
+
+/// `sites` without their [`Open`] calls.
+fn without_open(sites: &[Site], fns: &BTreeSet<u32>) -> Vec<Site> {
     sites
         .iter()
         .map(|s| {
             let mut e = s.effects.clone();
             e.slots.retain(|x| !open_slot(x));
+            e.calls.retain(|p| !fns.contains(p));
             Site {
                 block: s.block,
                 effects: e,
@@ -2819,6 +2876,22 @@ impl<'p> Analysis<'p> {
                 {
                     eff.stored.insert(k);
                 }
+                // A closure calling a function value it captured: the
+                // value its maker captured, which a task's effects map
+                // to the maker's key ([`Analysis::task_effects`]), so a
+                // `par` branch calling a parameter's function value is
+                // charged what each caller passes (core §12,
+                // B-2026-11-19-94).
+                Some(k @ Key::Param(1, _))
+                    if matches!(&k, Key::Param(_, path) if path.len() == 1)
+                        && self.is_closure_body(body)
+                        && func
+                            .place()
+                            .and_then(|p| declared_fn_value_effects(body, p))
+                            .is_none() =>
+                {
+                    eff.stored.insert(k);
+                }
                 _ => match func
                     .place()
                     .and_then(|p| declared_fn_value_effects(body, p))
@@ -3139,11 +3212,12 @@ impl<'p> Analysis<'p> {
         made: &BTreeMap<String, EffectSet>,
     ) -> Vec<ParConflict> {
         let sites = &report.sites[name];
-        if found.is_empty() || !sites.iter().any(|s| s.effects.slots.iter().any(open_slot)) {
+        let fns = fn_params(body, self.tys);
+        if found.is_empty() || !has_open(sites, &fns) {
             return found;
         }
         let here = &origins[index[name]];
-        let plain = par_conflicts(body, &without_open(sites), here);
+        let plain = par_conflicts(body, &without_open(sites, &fns), here);
         let same =
             |a: &ParConflict, b: &ParConflict| a.region == b.region && a.branches == b.branches;
         let mut out = Vec::new();
@@ -3189,6 +3263,7 @@ impl<'p> Analysis<'p> {
             Some(calls) if depth < MAX_CALLER_DEPTH => calls,
             _ => return region(&sites).or_else(|| Some(c.clone())),
         };
+        let frame_fns = fn_params(&self.program.bodies[frame], self.tys);
         for (caller, block) in calls {
             let cbody = &self.program.bodies[caller];
             let TerminatorKind::Call { args, .. } = &cbody.blocks[block.index()].terminator.kind
@@ -3197,19 +3272,21 @@ impl<'p> Analysis<'p> {
             };
             let corigins = &at.all[at.index[caller.as_str()]];
             let defs = single_defs(cbody);
-            let mut solved: BTreeMap<Slot, EffectSet> = BTreeMap::new();
+            let caller_fns = fn_params(cbody, self.tys);
+            let mut solved: BTreeMap<Open, EffectSet> = BTreeMap::new();
             let passed: Vec<Site> = sites
                 .iter()
                 .map(|s| {
                     let mut e = s.effects.clone();
-                    let open: Vec<Slot> =
-                        e.slots.iter().filter(|x| open_slot(x)).cloned().collect();
-                    for x in open {
-                        e.slots.remove(&x);
+                    for x in open_parts(&e, &frame_fns) {
+                        match &x {
+                            Open::Slot(y) => e.slots.remove(y),
+                            Open::Calls(p) => e.calls.remove(p),
+                        };
                         let add = solved
                             .entry(x.clone())
                             .or_insert_with(|| {
-                                self.passed_slot(cbody, &defs, corigins, block, args, &x, at)
+                                self.passed_open(cbody, &defs, corigins, block, args, &x, at)
                             })
                             .clone();
                         e.union(add);
@@ -3227,10 +3304,10 @@ impl<'p> Analysis<'p> {
                 }
                 found
             };
-            if let Some(found) = region(&without_open(&passed)) {
+            if let Some(found) = region(&without_open(&passed, &caller_fns)) {
                 return Some(via(found));
             }
-            if passed.iter().any(|s| s.effects.slots.iter().any(open_slot)) {
+            if has_open(&passed, &caller_fns) {
                 if let Some(found) = self.caller_conflict(at, passed, caller, c, depth + 1) {
                     return Some(via(found));
                 }
@@ -3239,27 +3316,37 @@ impl<'p> Analysis<'p> {
         None
     }
 
-    /// The effects, in the body a `par` region is in, of calling the
-    /// [`open_slot`] `x` on what the call in `caller`'s `block` passes: the
-    /// coerced type's method when the value is coerced for the call, and
-    /// otherwise the methods of what can flow into it there, with keys on
-    /// the caller's values read as any value, and a parameter of the
-    /// caller's left open for its own callers.
+    /// The effects, in the body a `par` region is in, of the [`Open`] call
+    /// `x` on what the call in `caller`'s `block` passes: for a `dyn`
+    /// method, the coerced type's method when the value is coerced for the
+    /// call; otherwise the methods or function values of what can flow
+    /// into it there, with keys on the caller's values read as any value,
+    /// and a parameter of the caller's left open for its own callers.
     #[allow(clippy::too_many_arguments)]
-    fn passed_slot(
+    fn passed_open(
         &self,
         caller: &Body,
         defs: &BTreeMap<u32, Place>,
         origins: &Origins,
         block: BasicBlock,
         args: &[Operand],
-        x: &Slot,
+        x: &Open,
         at: &Caller,
     ) -> EffectSet {
         let summaries = &at.report.summaries;
-        let Key::Param(p, _) = x.key else {
+        let (Open::Slot(Slot {
+            key: Key::Param(p, _),
+            ..
+        })
+        | Open::Calls(p)) = x
+        else {
             return opaque();
         };
+        let p = *p;
+        // A function value: the bodies it can name, or the caller's own
+        // parameter, left open for its callers.
+        let arg = args.get(p as usize - 1);
+        let fn_value = arg.is_some_and(|a| is_fn_value(caller, self.tys, a));
         let arg_key = |i: usize| -> Key {
             match args.get(i).and_then(Operand::place) {
                 Some(p) => place_key(caller, defs, p),
@@ -3267,16 +3354,26 @@ impl<'p> Analysis<'p> {
             }
         };
         let arg_fn = |i: usize| self.fn_value_effects(caller, defs, args.get(i), summaries);
-        let coerced = args
-            .get(p as usize - 1)
-            .and_then(Operand::place)
-            .and_then(|a| self.coerced_here(caller, defs, a));
+        let coerced = match x {
+            Open::Slot(y) => args
+                .get(p as usize - 1)
+                .and_then(Operand::place)
+                .and_then(|a| self.coerced_here(caller, defs, a))
+                .map(|c| (c, y)),
+            Open::Calls(_) => None,
+        };
         let mut e = match coerced {
-            Some((idx, k)) => self.slot_effects(idx, Some(x.dyn_ty), x.slot, k, summaries),
+            Some(((idx, k), y)) => self.slot_effects(idx, Some(y.dyn_ty), y.slot, k, summaries),
+            None if fn_value || matches!(x, Open::Calls(_)) => {
+                self.fn_value_effects(caller, defs, arg, summaries)
+            }
             None => {
-                let one = EffectSet {
-                    slots: BTreeSet::from([x.clone()]),
-                    ..EffectSet::default()
+                let one = match x {
+                    Open::Slot(y) => EffectSet {
+                        slots: BTreeSet::from([y.clone()]),
+                        ..EffectSet::default()
+                    },
+                    Open::Calls(_) => opaque(),
                 };
                 let mut s = [Site {
                     block,
@@ -3391,6 +3488,20 @@ impl<'p> Analysis<'p> {
             }
             _ => eff.union(declared.unwrap_or_else(untraced)),
         }
+    }
+
+    /// Whether `body` is a closure's, whose first parameter is its
+    /// captures.
+    fn is_closure_body(&self, body: &Body) -> bool {
+        if body.arg_count == 0 {
+            return false;
+        }
+        let tcx = self.tys.tcx();
+        let mut t = body.locals[1].ty;
+        while let SK::Ref(i) | SK::MutRef(i) = tcx.kind(t) {
+            t = i;
+        }
+        matches!(tcx.kind(t), SK::Closure { .. })
     }
 
     /// The `dyn` method's name, from any table of `dyn_ty`.
@@ -3796,6 +3907,7 @@ impl<'p> Analysis<'p> {
         if bodies.is_empty() {
             return opaque();
         }
+        let fns = fn_params(body, self.tys);
         let mut out = EffectSet::default();
         for b in bodies {
             let Some(s) = summaries.get(&b) else {
@@ -3826,7 +3938,37 @@ impl<'p> Analysis<'p> {
                     key: key(&e.key),
                 });
             }
-            out.stored.extend(s.stored.iter().map(key));
+            // A call of a function value the closure captured
+            // ([`Analysis::call_effects`]): the maker's function-valued
+            // parameter is called, which its callers resolve, and any other
+            // function value it captured has every effect, unless the
+            // closure's clause names an effect variable, whose stored calls
+            // are traced. A value the closure's callees call into keeps its
+            // key.
+            let traced = self
+                .program
+                .bodies
+                .get(&b)
+                .is_some_and(|cb| cb.clause_names_var);
+            for k in &s.stored {
+                let captured_fn = match k {
+                    Key::Param(1, path) if path.len() == 1 && !traced => ops
+                        .get(path[0] as usize)
+                        .is_some_and(|o| is_fn_value(body, self.tys, o)),
+                    _ => false,
+                };
+                match key(k) {
+                    Key::Param(p, path) if captured_fn && path.is_empty() && fns.contains(&p) => {
+                        out.calls.insert(p);
+                    }
+                    _ if captured_fn => {
+                        out.union(EffectSet::unknown(format!("{b}: a call through a value")))
+                    }
+                    k => {
+                        out.stored.insert(k);
+                    }
+                }
+            }
             out.slots.extend(s.slots.iter().map(|s| Slot {
                 key: key(&s.key),
                 ..s.clone()
