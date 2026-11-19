@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 560 |
-| false-positive | 300 |
+| diagnostics | 562 |
+| false-positive | 304 |
 | missing-feature | 209 |
 | perf | 189 |
 | other | 119 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 714 |
+| typecheck | 715 |
 | mir-llvm | 306 |
-| mir | 272 |
-| cli | 211 |
-| parser | 126 |
+| mir | 273 |
+| cli | 213 |
+| parser | 127 |
 | ownership | 119 |
 | interp | 94 |
 | runtime | 91 |
-| effect | 47 |
+| effect | 49 |
 | resolver | 46 |
 | other | 35 |
 | codegen | 22 |
@@ -1851,6 +1851,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-99 | interp | medium | A closure forwarded through a function parameter into `Vec.retain`, `sort_by` or `sort_by_key` (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool)… | 848f25873b |
 | B-2026-11-19-100 | parser | low | Rust's typed None, `None::<T>` (`None::<Rc<RefCell<TreeNode>>>` in a LeetCode Rust template), stops at E0002 "Expected `)`, found `::`" with no fix,… | ee08f070a |
 | B-2026-11-19-101 | typecheck | low | A `Vec` passed to a library method's `Slice[T]` parameter is refused E0200 "expected 'Slice[i64]', found 'Vec[i64]'" when the receiver's elements are… | ee08f070a |
+| B-2026-11-19-107 | typecheck+mir | medium | A `TaskGroup` task that captures a `for` binding, a `while let` or `if let` binding, or a `match` arm's binding borrowed it instead of taking it by m… | b03a13d177 |
+| B-2026-11-19-108 | effect | medium | A `par for` that calls a method of a `dyn` parameter or local whose type declares its effects (`dyn T + CrossTask with ()`, or a trait method with it… | 6dd4c8f6fc |
+| B-2026-11-19-109 | effect | medium | A `par for` calling a method of a non-escaping `dyn` parameter whose type declares no effects (`t: ref dyn T + CrossTask`) was refused as conflicting… | 77f1c15163 |
+| B-2026-11-19-110 | parser | medium | A `par for` at the end of a function's block, with no semicolon, was parsed as a statement, so `fn pages(level: Vec[String], parser: dyn HtmlParser +… | 7980991545 |
+| B-2026-11-19-111 | cli | low | An E0509 for an element of a `let`-bound collection that a bare `for` walks and stores where a view may not go (`for next in links { requests[0].send… | cec16d44a9 |
+| B-2026-11-19-112 | cli | low | An E0516 whose borrow a `TaskGroup` task holds advised taking a copy (`.clone()`, `.cloned()`, `*r`) where the value is borrowed, which does not end… | cec16d44a9 |
 
 </details>
 
