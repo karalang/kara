@@ -11,12 +11,17 @@ use std::process::Command;
 
 use karac::mir::lower::run_source;
 
+static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// `karac check` on `src`: its errors, empty when it passes.
 fn check(src: &str) -> String {
     let dir = std::env::temp_dir().join(format!(
-        "karac-channel-clause-{}-{:x}",
+        "karac-channel-clause-{}-{:x}-{}",
         std::process::id(),
-        src.len() * 31 + src.bytes().map(usize::from).sum::<usize>()
+        src.len() * 31 + src.bytes().map(usize::from).sum::<usize>(),
+        // Two tests running the same source at once each get a directory:
+        // one's cleanup removed the other's file mid-run.
+        CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("main.kara");
