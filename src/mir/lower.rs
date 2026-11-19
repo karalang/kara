@@ -9936,7 +9936,18 @@ impl<'l, 'a> Bx<'l, 'a> {
         // `m.get(k).unwrap_or(0)`): the slot takes the value read through
         // the reference (core semantics §5.10), not the reference itself,
         // which a compiled backend stored as an address.
-        if matches!(e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. }) {
+        // So does a written `ref place` (`let f: Fn() -> i64 = || ref v`):
+        // the closure's tail stored `&v` in its `i64` return, an address a
+        // compiled build printed (B-2026-11-19-130).
+        if matches!(
+            e.kind,
+            ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::Unary {
+                    op: UnaryOp::Ref | UnaryOp::MutRef,
+                    ..
+                }
+        ) {
             let dt = self.place_type(&dest);
             let et = self.expr_ty(e)?;
             if matches!(self.tys().tcx().kind(et), HK::Ref(i) | HK::MutRef(i) if i == dt)

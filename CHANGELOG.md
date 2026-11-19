@@ -855,6 +855,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A closure literal whose tail is a written `ref` of a `Copy` value,
+  passed where the callee leaves the return type open (`ap[T](f: Fn() ->
+  T)` called as `ap(|| ref v)`, or `g.spawn(|| ref v)`), gives a `ref`, as
+  a let-bound closure or a non-`Copy` value already did. `T` was solved as
+  the value type while the closure still returned the reference, so
+  `karac run` printed the reference's address, and a join into a `ref
+  i64` that outlived the value stopped on invalid MIR instead of being
+  refused by the borrow check. Where the slot is the value type (`let f:
+  Fn() -> i64 = || ref v`), the closure returns the value: a compiled
+  build returned the address (B-2026-11-19-130).
 - The bitwise and shift operators `& | ^ << >>` and unary `~` work on a
   type parameter bounded by their trait (`fn f[T: BitAnd[Output = T]](a:
   own T, b: own T) -> T { a & b }`, `T: Shl[i64, Output = T]`, `T:

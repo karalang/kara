@@ -4976,7 +4976,24 @@ impl<'a> super::TypeChecker<'a> {
                     let inner = (**inner).clone();
                     // A slot the tail solved as the `ref` keeps it.
                     let want = self.resolved_now(expected_ret);
+                    // So does a slot the callee leaves open (`ap[T](f: Fn() ->
+                    // T)` with `ap(|| ref v)`) when the tail is a written
+                    // `ref`: the closure's type solves it as the reference
+                    // the body returns, as a let-bound closure's does. Read as
+                    // the value, `T` was `i64` while the closure handed back
+                    // the `ref i64`, whose address the caller printed
+                    // (B-2026-11-19-130). A reference the tail only computes
+                    // (`map(|n| m.get(n).unwrap_or(-1))`) is still read as
+                    // the value, which may be of a temporary that dies with
+                    // the closure. A parameter of the enclosing function is a
+                    // type, not a slot, and still reads the value.
+                    let open = match &want {
+                        Type::TypeVar(_) => true,
+                        Type::TypeParam(p) => !self.enclosing_bounds.contains_key(p),
+                        _ => false,
+                    } && Self::tail_is_written_ref(body);
                     if Self::scalar_reads_as_value(&inner)
+                        && !open
                         && !matches!(want, Type::Ref(_) | Type::MutRef(_))
                         && self.is_subtype_with_projections(&want, &inner)
                     {
@@ -6002,6 +6019,25 @@ impl<'a> super::TypeChecker<'a> {
     /// in `where_clause` is evaluated against the resolved const-args;
     /// `Bool(false)` triggers a `"const constraint violated"`
     /// diagnostic at `discharge_span`.
+    /// Whether a closure body's value is a written `ref` / `mut ref`
+    /// (`|| ref v`, `|| { ..; ref v }`), not a reference some call returns.
+    fn tail_is_written_ref(body: &Expr) -> bool {
+        let mut tail = body;
+        while let ExprKind::Block(b) = &tail.kind {
+            match b.final_expr.as_deref() {
+                Some(e) => tail = e,
+                None => return false,
+            }
+        }
+        matches!(
+            tail.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Ref | UnaryOp::MutRef,
+                ..
+            }
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn check_call_args_with_substitution_full(
         &mut self,
