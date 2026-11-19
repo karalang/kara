@@ -439,6 +439,11 @@ pub struct ParConflict {
     /// The block and the effect on each side.
     pub first: (BasicBlock, String),
     pub second: (BasicBlock, String),
+    /// When the conflict is a `dyn` parameter's method's, which no type
+    /// declares: the body the region is in, the caller that passes the
+    /// value whose method conflicts, and the line of that call
+    /// ([`Analysis::through_callers`]).
+    pub via: Option<(String, String, usize)>,
 }
 
 /// Compute every body's effects.
@@ -533,6 +538,7 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
             continue;
         }
         let found = par_conflicts(body, &report.sites[*name], &origins[i]);
+        let found = a.through_callers(name, body, found, &report, &origins, &index, &made);
         if !found.is_empty() {
             report.par_conflicts.insert((*name).clone(), found);
         }
@@ -703,12 +709,41 @@ fn par_conflicts(body: &Body, sites: &[Site], origins: &Origins) -> Vec<ParConfl
                     branches: (i, j),
                     first,
                     second,
+                    via: None,
                 });
             }
         }
     }
     out
 }
+
+/// A call of a `dyn` parameter's method whose type declares no effects:
+/// its effects are those of the value each caller passes, charged at the
+/// call (design.md § `dyn Trait`), as a generic parameter's are in each
+/// instance.
+fn open_slot(s: &Slot) -> bool {
+    s.bound.is_none() && matches!(&s.key, Key::Param(_, path) if path.is_empty())
+}
+
+/// `sites` without their [`open_slot`] calls.
+fn without_open(sites: &[Site]) -> Vec<Site> {
+    sites
+        .iter()
+        .map(|s| {
+            let mut e = s.effects.clone();
+            e.slots.retain(|x| !open_slot(x));
+            Site {
+                block: s.block,
+                effects: e,
+            }
+        })
+        .collect()
+}
+
+/// How deep [`Analysis::through_callers`] follows a `dyn` value passed on
+/// from parameter to parameter before it takes the call to have every
+/// effect.
+const MAX_CALLER_DEPTH: usize = 4;
 
 type Witness = (BasicBlock, String);
 
@@ -2024,6 +2059,18 @@ struct Analysis<'p> {
     tys: &'p TyInterner,
 }
 
+/// The body whose `par` region [`Analysis::through_callers`] checks, and
+/// what it needs to read every other body's effects.
+struct Caller<'a> {
+    name: &'a str,
+    body: &'a Body,
+    origins: &'a Origins,
+    report: &'a EffectReport,
+    all: &'a [Origins],
+    index: &'a BTreeMap<&'a str, usize>,
+    made: &'a BTreeMap<String, EffectSet>,
+}
+
 impl<'p> Analysis<'p> {
     /// The bodies `body` may run: direct callees, closures handed to a
     /// native, and the `Drop` bodies its drops reach.
@@ -3067,6 +3114,225 @@ impl<'p> Analysis<'p> {
             }
         }
         out
+    }
+
+    /// `found`, the conflicts of `body`'s `par` regions, with each that
+    /// only a call of a `dyn` parameter's method makes ([`open_slot`])
+    /// checked again with the value each caller passes, as a generic
+    /// parameter's call is checked in each instance (design.md § `dyn
+    /// Trait`: a parameter that does not escape has the effects of the
+    /// value passed). Such a conflict stands when some caller's value
+    /// conflicts, when the body is reached otherwise than by a direct call
+    /// (as a function value, a closure, a `dyn` method), and when the value
+    /// is passed on through more than [`MAX_CALLER_DEPTH`] parameters.
+    #[allow(clippy::too_many_arguments)]
+    fn through_callers(
+        &self,
+        name: &str,
+        body: &Body,
+        found: Vec<ParConflict>,
+        report: &EffectReport,
+        origins: &[Origins],
+        index: &BTreeMap<&str, usize>,
+        made: &BTreeMap<String, EffectSet>,
+    ) -> Vec<ParConflict> {
+        let sites = &report.sites[name];
+        if found.is_empty() || !sites.iter().any(|s| s.effects.slots.iter().any(open_slot)) {
+            return found;
+        }
+        let here = &origins[index[name]];
+        let plain = par_conflicts(body, &without_open(sites), here);
+        let same =
+            |a: &ParConflict, b: &ParConflict| a.region == b.region && a.branches == b.branches;
+        let mut out = Vec::new();
+        for c in found {
+            if plain.iter().any(|p| same(p, &c)) {
+                out.push(c);
+                continue;
+            }
+            let at = Caller {
+                name,
+                body,
+                origins: here,
+                report,
+                all: origins,
+                index,
+                made,
+            };
+            if let Some(found) = self.caller_conflict(&at, sites.to_vec(), name, &c, 0) {
+                out.push(found);
+            }
+        }
+        out
+    }
+
+    /// The conflict `c` of `at`'s region, checked with the values each
+    /// direct caller of `frame` passes for the [`open_slot`] calls in
+    /// `sites`, which are `frame`'s parameters': the first caller's that
+    /// conflicts, or none.
+    fn caller_conflict(
+        &self,
+        at: &Caller,
+        sites: Vec<Site>,
+        frame: &str,
+        c: &ParConflict,
+        depth: usize,
+    ) -> Option<ParConflict> {
+        let region = |sites: &[Site]| {
+            par_conflicts(at.body, sites, at.origins)
+                .into_iter()
+                .find(|p| p.region == c.region && p.branches == c.branches)
+        };
+        let calls = match self.direct_calls(frame) {
+            Some(calls) if depth < MAX_CALLER_DEPTH => calls,
+            _ => return region(&sites).or_else(|| Some(c.clone())),
+        };
+        for (caller, block) in calls {
+            let cbody = &self.program.bodies[caller];
+            let TerminatorKind::Call { args, .. } = &cbody.blocks[block.index()].terminator.kind
+            else {
+                continue;
+            };
+            let corigins = &at.all[at.index[caller.as_str()]];
+            let defs = single_defs(cbody);
+            let mut solved: BTreeMap<Slot, EffectSet> = BTreeMap::new();
+            let passed: Vec<Site> = sites
+                .iter()
+                .map(|s| {
+                    let mut e = s.effects.clone();
+                    let open: Vec<Slot> =
+                        e.slots.iter().filter(|x| open_slot(x)).cloned().collect();
+                    for x in open {
+                        e.slots.remove(&x);
+                        let add = solved
+                            .entry(x.clone())
+                            .or_insert_with(|| {
+                                self.passed_slot(cbody, &defs, corigins, block, args, &x, at)
+                            })
+                            .clone();
+                        e.union(add);
+                    }
+                    Site {
+                        block: s.block,
+                        effects: e,
+                    }
+                })
+                .collect();
+            let line = cbody.blocks[block.index()].terminator.source_info.span.line;
+            let via = |mut found: ParConflict| {
+                if found.via.is_none() {
+                    found.via = Some((at.name.to_string(), caller.clone(), line));
+                }
+                found
+            };
+            if let Some(found) = region(&without_open(&passed)) {
+                return Some(via(found));
+            }
+            if passed.iter().any(|s| s.effects.slots.iter().any(open_slot)) {
+                if let Some(found) = self.caller_conflict(at, passed, caller, c, depth + 1) {
+                    return Some(via(found));
+                }
+            }
+        }
+        None
+    }
+
+    /// The effects, in the body a `par` region is in, of calling the
+    /// [`open_slot`] `x` on what the call in `caller`'s `block` passes: the
+    /// coerced type's method when the value is coerced for the call, and
+    /// otherwise the methods of what can flow into it there, with keys on
+    /// the caller's values read as any value, and a parameter of the
+    /// caller's left open for its own callers.
+    #[allow(clippy::too_many_arguments)]
+    fn passed_slot(
+        &self,
+        caller: &Body,
+        defs: &BTreeMap<u32, Place>,
+        origins: &Origins,
+        block: BasicBlock,
+        args: &[Operand],
+        x: &Slot,
+        at: &Caller,
+    ) -> EffectSet {
+        let summaries = &at.report.summaries;
+        let Key::Param(p, _) = x.key else {
+            return opaque();
+        };
+        let arg_key = |i: usize| -> Key {
+            match args.get(i).and_then(Operand::place) {
+                Some(p) => place_key(caller, defs, p),
+                None => Key::Any,
+            }
+        };
+        let arg_fn = |i: usize| self.fn_value_effects(caller, defs, args.get(i), summaries);
+        let coerced = args
+            .get(p as usize - 1)
+            .and_then(Operand::place)
+            .and_then(|a| self.coerced_here(caller, defs, a));
+        let mut e = match coerced {
+            Some((idx, k)) => self.slot_effects(idx, Some(x.dyn_ty), x.slot, k, summaries),
+            None => {
+                let one = EffectSet {
+                    slots: BTreeSet::from([x.clone()]),
+                    ..EffectSet::default()
+                };
+                let mut s = [Site {
+                    block,
+                    effects: substitute(&one, &arg_key, &arg_fn),
+                }];
+                self.resolve_stored(caller, origins, &mut s, summaries, at.made);
+                let [s] = s;
+                s.effects
+            }
+        };
+        e.effects = e
+            .effects
+            .into_iter()
+            .map(|mut f| {
+                if matches!(f.key, Key::Param(..) | Key::Local(..)) {
+                    f.key = Key::Any;
+                }
+                f
+            })
+            .collect();
+        e
+    }
+
+    /// The bodies that call `name` directly, each with the block of the
+    /// call, when that is the only way it is reached: none when it is
+    /// never called, or is reached as a value (a function item passed or
+    /// stored, a closure, a `dyn` method), whose callers this cannot list.
+    fn direct_calls(&self, name: &str) -> Option<Vec<(&'p String, BasicBlock)>> {
+        if self
+            .program
+            .vtables
+            .iter()
+            .any(|vt| vt.slots.iter().any(|m| m == name))
+        {
+            return None;
+        }
+        let is = |o: &Operand| matches!(o, Operand::Const(Const { kind: ConstKind::FnDef(f), .. }) if f.name == name);
+        let mut out = Vec::new();
+        for (cname, b) in &self.program.bodies {
+            for (i, bb) in b.blocks.iter().enumerate() {
+                for st in &bb.statements {
+                    if let StatementKind::Assign(_, rv) = &st.kind {
+                        if self.made_fn_values(rv).iter().any(|m| m == name) {
+                            return None;
+                        }
+                    }
+                }
+                if let TerminatorKind::Call { func, args, .. } = &bb.terminator.kind {
+                    if args.iter().any(is) {
+                        return None;
+                    }
+                    if is(func) {
+                        out.push((cname, BasicBlock(i as u32)));
+                    }
+                }
+            }
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     /// The effects of calling the method at `slot` of `dyn_ty` on `recv`

@@ -30280,7 +30280,16 @@ fn par_conflict_text(c: &crate::mir::effects::ParConflict) -> String {
             c.branches.1 + 1
         )
     };
-    format!("{which} conflict: `{}` and `{}`", c.first.1, c.second.1)
+    // A `dyn` parameter's method is checked with each caller's value
+    // (design.md § `dyn Trait`): say which caller's conflicts.
+    let via = match &c.via {
+        Some((_, caller, line)) => format!(", with the value `{caller}` passes at line {line}"),
+        None => String::new(),
+    };
+    format!(
+        "{which} conflict: `{}` and `{}`{via}",
+        c.first.1, c.second.1
+    )
 }
 
 /// Which rule a [`source_effect_errors`] finding breaks.
