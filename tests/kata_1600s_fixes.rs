@@ -170,3 +170,16 @@ fn an_indexed_list_of_string_literals_is_a_str() {
         "bc z\n",
     );
 }
+
+/// The `from_iter` fix for a `collect` compared with a typed value, on a
+/// parenthesized range receiver: the edits cut `.collect()` from the
+/// call's end, not from the range's span, which stops short of `n)`
+/// (kata 1666's differential, `seen != (0..n).collect()`).
+#[test]
+fn a_compared_collect_over_a_parenthesized_range_is_fixed() {
+    fixes_to(
+        "collect_paren_range",
+        "fn main() {\n    let seen: Vec[i64] = [0, 1, 2];\n    let n = 3;\n    if seen != (0..n).collect() {\n        println(\"no\");\n    }\n}\n",
+        "Vec[i64].from_iter(0..n)",
+    );
+}

@@ -8665,6 +8665,7 @@ impl<'a> super::TypeChecker<'a> {
                             object,
                             method,
                             args,
+                            args_close_span,
                             ..
                         },
                     ) = (&e.kind, &operand.kind)
@@ -8680,8 +8681,13 @@ impl<'a> super::TypeChecker<'a> {
                                 t => t.clone(),
                             },
                         );
-                        let end = operand.span.offset + operand.span.length;
-                        let from = object.span.offset + object.span.length;
+                        // The call ends at its `)`, and `.collect()` is the ten
+                        // characters before it: the receiver's own span can stop
+                        // short of its text (`(0..n)`, whose range ends before
+                        // `n` and its paren; kata 1666).
+                        let end = args_close_span.offset + args_close_span.length;
+                        let from = end.saturating_sub(".collect()".len());
+                        let end = if from >= object.span.offset { end } else { 0 };
                         if let Some(o) = other_ty.filter(|o| {
                             (matches!(o, Type::Named { .. } | Type::Str))
                                 && type_is_fully_concrete(o)
