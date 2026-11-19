@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 556 |
+| diagnostics | 557 |
 | false-positive | 293 |
 | missing-feature | 208 |
 | perf | 188 |
 | other | 119 |
-| soundness | 97 |
+| soundness | 98 |
 | miscompile | 89 |
 | crash | 60 |
 | run-vs-build | 57 |
@@ -81,11 +81,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 269 |
 | cli | 210 |
 | parser | 124 |
-| ownership | 113 |
+| ownership | 114 |
 | interp | 92 |
 | runtime | 91 |
 | resolver | 46 |
-| effect | 45 |
+| effect | 46 |
 | other | 35 |
 | codegen | 22 |
 | autopar | 7 |
@@ -146,6 +146,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
 | B-2026-11-19-76 | 2026-11-19 | typecheck | medium | A generic `F: Fn`/`MutFn`/`OnceFn` bound's kind and call access are checked on the instance, not the bound: a `MutFn` closure is accepted for `F: Fn() -> i64`, a `MutFn` is called through a bare (shared) `f: F`, and an `OnceFn` through a bare or `mut ref` `F`, whenever the instance happens not to move; the concrete function types refuse all of these (core-semantics §9.6) | — |
 | B-2026-11-19-86 | 2026-11-19 | ownership | high | A `shared` handle reaches a `TaskGroup` task through a captured PARAMETER: `fn sp(g: TaskGroup, x: own C) -> TaskHandle[i64] { g.spawn(|| { let y = x; 1 }) }` with `shared struct C` passes `karac check`, and 20000 such spawns race on the non-atomic count: `malloc(): unaligned fastbin chunk detected` (2 runs in 6), and the Drop body runs in 1 run in 6 and is leaked otherwise; the same capture of a local is refused E_NOT_CROSS_TASK | — |
+| B-2026-11-19-87 | 2026-11-19 | effect | high | A public inherent method with no `with` clause is never checked against its declaration, and a public caller is charged none of its effects: `impl Job { pub fn go(self) -> i64 { println("x"); self.n } }` and `pub fn fire(j: Job) -> i64 { j.go() }` both check clean | — |
+| B-2026-11-19-88 | 2026-11-19 | ownership | low | When an assignment's iterator chain fails to type (E0200, `flat_map` over a closure that returns a `Vec`), a closure in the chain is again taken to outlive the statement: a spurious E0500 on a value it borrows, whose machine fix `karac fix` applies beside the real one, cloning the value | — |
 
 ### Relocated
 
