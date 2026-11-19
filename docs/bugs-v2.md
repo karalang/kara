@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 563 |
+| diagnostics | 565 |
 | false-positive | 309 |
-| missing-feature | 210 |
+| missing-feature | 211 |
 | perf | 189 |
 | other | 119 |
 | soundness | 101 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 721 |
+| typecheck | 722 |
 | mir-llvm | 307 |
 | mir | 273 |
-| cli | 214 |
+| cli | 216 |
 | parser | 127 |
 | ownership | 120 |
 | interp | 94 |
@@ -134,11 +134,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-98 | 2026-11-19 | typecheck | low | A trait whose parameter defaults to Self (`trait Tr[X = Self] { fn m(self, x: X) -> i64; }`) is treated as if X were Self at an explicit instance: `dyn Tr[i64]` is refused E_DYN_NOT_DISPATCHABLE (`m` names Self outside the receiver), and under `T: Tr + Tr[i64]` the UFCS `Tr[i64].m(t, 1)` is refused E0233 `ambiguous method 'm' ... Use UFCS Tr[i64].m(receiver, ...)`, the very form written | — |
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
 | B-2026-11-19-103 | 2026-11-19 | ownership+typecheck | low | A borrowed `Fn` parameter cannot be handed to a lazy adaptor (`v.iter().filter(f).count()` is E0516 'cannot be stored as a function value; declare the parameter `escaping`'), and a generic `f: F` cannot be handed to `retain` (E0200 'cannot give away parameter'), though the concrete `f: Fn(..)` can | — |
-| B-2026-11-19-104 | 2026-11-19 | ownership | medium | `karac check` misses §14.5 when a closure that uses a provider leaves its `with_provider` through a GENERIC function: `keep(mut hs, || Clk.now())` with `fn keep[Fx](v: mut ref Vec[Fx], f: own Fx) { v.push(f); }`, and `with_provider[Clk](F { t: 1 }, || id(|| Clk.now()))` with `fn id[T](x: own T) -> T`, pass check; every lane then refuses in the MIR borrow check (E0509 / E0516) | — |
 | B-2026-11-19-105 | 2026-11-19 | mir | medium | A function that uses a provider cannot be taken as a value under `with_provider` (core-semantics §14.3: 'Taking such a function as a value captures the provider in scope'): `let f = read_clk; f() + 1` passes check and every lane stops `a function used as a value that uses Clk's provider is not lowered yet`; returning it out of the call (`|| { let g = read_clk; g }`) also passes check instead of the §14.5 refusal | — |
 | B-2026-11-19-106 | 2026-11-19 | typecheck+mir | low | A `mut ref MutFn(..)` parameter cannot be handed to a lazy adaptor: `fn cnt(v: ref Vec[i64], f: mut ref MutFn(ref i64) -> bool) -> i64 { v.iter().filter(f).count() }` is refused 'trait bound `FnV: MutFn` is not satisfied; `mut ref Fn(ref i64) -> bool` does not implement `MutFn`' | — |
 | B-2026-11-19-113 | 2026-11-19 | ownership | medium | A closure literal handed to a named call that is itself an argument of another call (`show(twice(|| s.len()))`, `println(twice(|| s.len()))`) is taken to outlive its statement: a later move of what it reads (`let t = s;`) is refused with E0500 "moved inside a loop" in straight-line code, though `let k = twice(|| s.len()); let t = s;` is accepted | — |
 | B-2026-11-19-114 | 2026-11-19 | cli | low | kara-lsp anchors an E0200 'collect the iterator' diagnostic at a zero-width range after the expression (the machine fix's insertion point), where `karac check` anchors it at the expression's start, so the two tools disagree on where the error is | — |
+| B-2026-11-19-121 | 2026-11-19 | cli | medium | kara-lsp references and rename see only the declaration of a method or an enum variant, and miss a unit variant in a pattern and a type argument in an expression path: renaming a method, variant, enum or struct leaves uses behind, so the renamed program no longer checks (36 of 296 corpus renames) | — |
+| B-2026-11-19-122 | 2026-11-19 | cli | low | After an edit that adds an error in one function, kara-lsp keeps a warning from another, unchanged function, where `karac check` and a fresh open of the same text show only the error (warnings are dropped while errors exist) | — |
+| B-2026-11-19-123 | 2026-11-19 | typecheck | low | An undefined type name in an expression path's type arguments (`Vec[Qqq].new()`, `Option[Qqq].None`, `Mix[Zzz].N(63)`) is reported as E0516 'an expression whose type does not lower (Type(UnknownName("Qqq"))) is not lowered yet', not as an undefined name with its suggestion | — |
 
 ### Relocated
 
@@ -1853,6 +1855,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-99 | interp | medium | A closure forwarded through a function parameter into `Vec.retain`, `sort_by` or `sort_by_key` (`fn keep(v: mut ref Vec[i64], f: Fn(ref i64) -> bool)… | 848f25873b |
 | B-2026-11-19-100 | parser | low | Rust's typed None, `None::<T>` (`None::<Rc<RefCell<TreeNode>>>` in a LeetCode Rust template), stops at E0002 "Expected `)`, found `::`" with no fix,… | ee08f070a |
 | B-2026-11-19-101 | typecheck | low | A `Vec` passed to a library method's `Slice[T]` parameter is refused E0200 "expected 'Slice[i64]', found 'Vec[i64]'" when the receiver's elements are… | ee08f070a |
+| B-2026-11-19-104 | ownership | medium | `karac check` misses §14.5 when a closure that uses a provider leaves its `with_provider` through a GENERIC function: `keep(mut hs, \|\| Clk.now())` wi… | 3f88b4f807 |
 | B-2026-11-19-107 | typecheck+mir | medium | A `TaskGroup` task that captures a `for` binding, a `while let` or `if let` binding, or a `match` arm's binding borrowed it instead of taking it by m… | b03a13d177 |
 | B-2026-11-19-108 | effect | medium | A `par for` that calls a method of a `dyn` parameter or local whose type declares its effects (`dyn T + CrossTask with ()`, or a trait method with it… | 6dd4c8f6fc |
 | B-2026-11-19-109 | effect | medium | A `par for` calling a method of a non-escaping `dyn` parameter whose type declares no effects (`t: ref dyn T + CrossTask`) was refused as conflicting… | 77f1c15163 |
