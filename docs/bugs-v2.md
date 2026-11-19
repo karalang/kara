@@ -59,15 +59,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 553 |
-| false-positive | 289 |
+| false-positive | 292 |
 | missing-feature | 206 |
 | perf | 188 |
 | other | 119 |
-| soundness | 92 |
-| miscompile | 87 |
-| crash | 58 |
+| soundness | 93 |
+| miscompile | 89 |
+| crash | 60 |
 | run-vs-build | 57 |
-| codegen-gap | 38 |
+| codegen-gap | 39 |
 | use-after-free | 10 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 694 |
-| mir-llvm | 303 |
-| mir | 264 |
+| typecheck | 699 |
+| mir-llvm | 306 |
+| mir | 268 |
 | cli | 210 |
 | parser | 121 |
 | ownership | 111 |
@@ -123,7 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-38 | 2026-11-19 | effect | medium | A call through an escaping function value (a struct field, a collection element, a `for` binding over one) is charged nothing by the front-end effect check: `pub fn go(j: Job) -> i64 { (j.run)(3) }` with `run: Fn(i64) -> i64 with writes(OrderDb)` checks clean without a `with` clause, and a field with no clause is not charged every effect | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-19-41 | 2026-11-19 | typecheck | low | A tuple literal whose number literal sits beside a typed part settles the number at `i64`: `let mut best = (0, keys[0]);` (with `keys[0]` a `u8`) then `best = press` with an `(i32, u8)` press is refused, where `let mut best = (0, 1);` stays open and takes `(i32, i64)` | — |
-| B-2026-11-19-44 | 2026-11-19 | mir-llvm | low | On wasm_wasi a deep recursion that a native build runs exhausts the module's own 1 MiB shadow stack and traps as a bare `RuntimeError: memory access out of bounds`, not a stack overflow; design.md's wasm note says only the host engine's stack bounds recursion depth | — |
 | B-2026-11-19-49 | 2026-11-19 | typecheck | low | `#[allow(deprecated)]` on a struct, a struct field, an enum or a type alias does not cover a deprecated type named in its fields, payloads or body; a remainder of B-2026-11-19-20, which covered functions, impls and methods | — |
 | B-2026-11-19-50 | 2026-11-19 | parser | low | Two attributes on one item naming the same lint (`#[allow(deprecated)]` then `#[deny(deprecated)]`) are not `E_DUPLICATE_LINT_LEVEL`: the later one silently wins; only a repeat inside one attribute (`#[allow(deprecated, deprecated)]`) is refused | — |
 | B-2026-11-19-51 | 2026-11-19 | cli | low | `malformed_diagnostic_attribute` never fires: `#[diagnostic::on_unimplemented]` on a function, with an unknown field, with an unknown `{placeholder}`, or twice on one trait checks clean, because `check_diagnostic_attributes` has no caller outside its own test file | — |
@@ -138,6 +137,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-61 | 2026-11-19 | interp+mir-llvm | low | std.path `parent` of a root followed by a trailing `.` (`"/."`, `"/./"`, `"/./."`) is `Some("/")`, where `components` gives `["/"]`, `parent("/")` is `None` and Rust's std::path gives `None`; a remainder of B-2026-11-16-179 (`"//."` already gives `None`) | — |
 | B-2026-11-19-63 | 2026-11-19 | typecheck | low | `#[derive(Serialize)]` over a struct with a `Secret[T]` field passes `karac check`, then every MIR lane refuses it ('no method serialize on type Secret'); the declaration-site Serialize field check refuses a user type that lacks Serialize but counts `Secret` as capable | — |
 | B-2026-11-19-64 | 2026-11-19 | mir-llvm | medium | A compiled program on more than one worker sometimes stops with a false "deadlock: every task waits on a channel ..." when a task's last `Sender` is dropped while the receiving task is being polled: the drop's wake is counted before the sender count falls, so the receiver can park on a channel that is already closed | — |
+| B-2026-11-19-65 | 2026-11-19 | typecheck | low | An open type variable nested inside the first branch or element of a join is not solved by a later one: `[Some(None), Some(Some(4))]`, `if c { Some(None) } else { Some(Some(4)) }`, the same as a `match`, `[(Some(None), 0), (Some(Some(4)), 1)]` and `[Ok(None), Ok(Some(4)), Err(1)]` are E0238 `cannot infer type parameter 'T'`, while the reversed order, `v.push` of the same two values, an annotation, and a top-level `[None, Some(4)]` all check and run | — |
+| B-2026-11-19-66 | 2026-11-19 | typecheck+mir | high | Inside a generic body bounded by a trait with a defaulted parameter (`fn total[T: Combine](a: own T, b: own T) -> T.Output { a.combine(b) }`, `trait Combine[Rhs = Self]`), when the type also has `impl Combine[i64]` declared before `impl Combine`, the call runs the `Combine[i64]` impl with an `M` as its `i64`: compiled prints 6 for M{c:2} + M{c:3} (want 5), `__mir-run` stops `Mul on Int(2) and Agg([Int(3)])`, and `T.Output` types as `i64` | — |
+| B-2026-11-19-67 | 2026-11-19 | typecheck | medium | Invariance is not enforced against `Never`: `let w: Vec[i64] = v` with `v: Vec[Never]`, and `set(mut o)` with `o: Option[Never]` into a `mut ref Option[i64]` parameter, pass `karac check` (design.md § Subtyping and variance: `Vec` and the `mut ref T` target are invariant); every lane then stops at the MIR validator | — |
+| B-2026-11-19-68 | 2026-11-19 | mir | medium | A covariant `Never` coercion design.md allows (`Option[Never]` to `Option[String]`, `Result[i64, Never]` to `Result[i64, String]`) passes `karac check` and stops at the MIR validator on every lane: `let n: Option[Never] = None; let w: Option[String] = n;` is `invalid MIR: assigning Option[!] to _2 of type Option[String]` | — |
+| B-2026-11-19-69 | 2026-11-19 | typecheck | low | A list literal passed to a generic `Array` parameter is built as a `Vec`: `first([7, 8])` with `fn first[T: Copy, const N: i64](arr: Array[T, N]) -> T` and `g([7, 8])` with `fn g[T](a: Array[T, 2])` are refused `expected 'Array[T, N]', found 'Vec[i64]'`, though a concrete `Array[i64, 2]` parameter takes the same literal | — |
+| B-2026-11-19-70 | 2026-11-19 | typecheck | low | A function with a REQUIRED named parameter is accepted as a value, and the named parameter becomes positional: `fn connect(host: String; port: i64)`, `let c = connect; c("ab".to_string(), 40)` checks and prints 42, and `ap(connect)` into `Fn(String, i64) -> i64` runs; design.md § Function values says such a function cannot be a value | — |
+| B-2026-11-19-71 | 2026-11-19 | mir+mir-llvm | high | Calling a function value through a generic `mut ref F` parameter (`fn twice[F: MutFn() -> i64](f: mut ref F) -> i64 { f() + f() }`, `twice(mut g)`) crashes every lane: compiled is a stack overflow (exit 134) or SIGSEGV (139), ASan reports stack-buffer-overflow / SEGV in `twice[Fn() -> i64]`, and `__mir-run` stops `call through Agg([Ref(..)]), which is not a function value` | — |
+| B-2026-11-19-72 | 2026-11-19 | mir+mir-llvm | high | A closure LITERAL passed to a generic bare `F` parameter (`fn call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) captures by move on every lane: a counter it writes is copied, so `n` reads 0 after two calls (want 2), and a captured `Drop` value is moved and dropped at the end of the call statement (`d5` prints before the result), while `karac check` treats the capture as a borrow and accepts a later use of `r` that the MIR move check then refuses | — |
+| B-2026-11-19-73 | 2026-11-19 | mir-llvm | medium | On wasm_wasi, corpus/design/ok_pool_chained_health_check_with_a_closure_factory (pinned at 0aa814606b) traps `table index is out of bounds` in karac_mir_pool_drop, so tests/mir_wasm_core_corpus.rs fails 1 of 329; native lanes pass | — |
 
 ### Relocated
 
@@ -1806,6 +1814,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-40 | mir | medium | A slice range whose bounds are `ref` integers (`nums[a..=b]` with `a`, `b` from `l.iter().zip(r.iter())`, or `nums[a..]` with `a` a closure's `ref i3… | 60902ec48a |
 | B-2026-11-19-42 | typecheck | low | Remainder of B-2026-11-18-57: the `.bytes()` fix on text from an `if`/`match`/block tail that is a temporary (`sha256(if c { a.clone() } else { b })`… | 44a1949fa0 |
 | B-2026-11-19-43 | typecheck | medium | Inside a generic body a value of a projection is accepted where a concrete type is wanted (`let s: bool = x` with `x: I.Item`, from `it.next()` or a… | 68aacc05fd |
+| B-2026-11-19-44 | mir-llvm | low | On wasm_wasi a deep recursion that a native build runs exhausts the module's own 1 MiB shadow stack and traps as a bare `RuntimeError: memory access… | 104397bd16 |
 | B-2026-11-19-45 | mir-llvm | medium | An early exit in a `par {}` branch misses a later branch that is just going to sleep when the program runs on more than one worker: the cancelled bra… | 50c01040a4 |
 | B-2026-11-19-46 | mir-llvm | low | `karac __mir-llvm-run` and the sanitizer lanes report a child killed by a signal as a bare exit code 101, which reads as a Kara panic, where `karac r… | 50c01040a4 |
 | B-2026-11-19-47 | cli | low | `karac fmt` moves a comment that ends an attribute's line (`#[derive(Copy)] // why`) onto the end of whatever precedes the item, and two such items i… | 700d4fe00b |
