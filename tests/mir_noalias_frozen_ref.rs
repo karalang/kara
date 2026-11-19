@@ -3,7 +3,9 @@
 //! handle, and tuples, arrays and options of them) is `noalias`: the
 //! borrow freezes those bytes for the call, so LLVM may keep them in
 //! registers across the stores the body makes (kata 718's `ref Vec`
-//! reloaded its header on every write to another vector, B-2026-11-09-8). A
+//! reloaded its header on every write to another vector, B-2026-11-09-8),
+//! and `readonly`, as the call writes none of those bytes (kata 404's
+//! caller kept its header loads across a recursive call, B-2026-11-09-22). A
 //! struct parameter is left as it was. `KARAC_MIR_NOALIAS_REF=0` turns it
 //! off.
 
@@ -37,7 +39,7 @@ fn mir_llvm_frozen_ref_params_are_noalias() {
         .unwrap_or_else(|| panic!("no `total` in\n{ir}"));
     assert!(
         def.contains(
-            "(ptr noalias align 8 dereferenceable(24) %0, ptr align 8 dereferenceable(16) %1)"
+            "(ptr noalias readonly align 8 dereferenceable(24) %0, ptr align 8 dereferenceable(16) %1)"
         ),
         "{def}"
     );

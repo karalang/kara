@@ -1253,6 +1253,17 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                     self.llcx.create_enum_attribute(k, 0),
                 );
             }
+            // A shared borrow of such a `T` cannot change its bytes, so the
+            // call writes nothing through the pointer: a caller's loads of a
+            // `Vec` header survive a recursive call (kata 404,
+            // B-2026-11-09-22).
+            if frozen {
+                let k = Attribute::get_named_enum_kind_id("readonly");
+                f.add_attribute(
+                    AttributeLoc::Param(here),
+                    self.llcx.create_enum_attribute(k, 0),
+                );
+            }
         }
         Ok(())
     }

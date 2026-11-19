@@ -1785,6 +1785,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- A recursive call whose argument a branch decides (`visit(-1)` where a
+  child index is -1) is split at that branch and folds once inlined, and a
+  `ref` parameter whose bytes a shared borrow freezes (a `Vec` header) is
+  marked `readonly`, so a caller's loads survive a recursive call. Kata 404
+  runs in 1.05x checked Rust's time on x86, down from 1.30x; over 151 kata
+  benches the instruction geomean is 0.994, at worst 1.035x
+  (B-2026-11-09-22).
 - `karac build`'s auto-parallel cost gate counts a loop of at least a
   million known trips as nested work, and so a call that gives a callee's
   parameter-bounded loop a known count of at least a million: two such

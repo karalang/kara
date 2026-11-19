@@ -549,6 +549,64 @@ fn unroll_threshold() {
     });
 }
 
+/// Splits a self-call whose argument a predecessor's branch decides
+/// (`visit(-1)` on the arm where a child index is -1) into one call per
+/// arm, so the constant one folds once inlined: `default<O2>` has no
+/// call-site splitting. Only self-calls are split; any other call is held
+/// with `noduplicate` while the passes run (splitting those duplicated
+/// small leaf calls into loops and cost kata 277 1.7x the instructions).
+/// The clean-up before the split turns the `i1` switches codegen writes
+/// into the compares it reads (kata 404, B-2026-11-09-22).
+fn split_self_calls(module: &Module<'_>, tm: &TargetMachine) -> Result<(), String> {
+    use inkwell::attributes::{Attribute, AttributeLoc};
+    use inkwell::values::{CallSiteValue, FunctionValue, InstructionOpcode};
+    fn calls<'c>(f: FunctionValue<'c>) -> Vec<CallSiteValue<'c>> {
+        let mut out = Vec::new();
+        for bb in f.get_basic_blocks() {
+            let mut at = bb.get_first_instruction();
+            while let Some(i) = at {
+                at = i.get_next_instruction();
+                if i.get_opcode() == InstructionOpcode::Call {
+                    if let Ok(call) = CallSiteValue::try_from(i) {
+                        out.push(call);
+                    }
+                }
+            }
+        }
+        out
+    }
+    let ctx = module.get_context();
+    let nodup = Attribute::get_named_enum_kind_id("noduplicate");
+    let mut any_self = false;
+    for f in module.get_functions() {
+        for call in calls(f) {
+            if call.get_called_fn_value() == Some(f) {
+                any_self = true;
+            } else {
+                call.add_attribute(AttributeLoc::Function, ctx.create_enum_attribute(nodup, 0));
+            }
+        }
+    }
+    let r = if any_self {
+        let passes = "function(sroa,early-cse<memssa>,instcombine<no-verify-fixpoint>,\
+                      jump-threading,simplifycfg<no-speculate-blocks>,\
+                      instcombine<no-verify-fixpoint>,callsite-splitting)";
+        module
+            .run_passes(passes, tm, PassBuilderOptions::create())
+            .map_err(|e| format!("{passes}: {}", e.to_string()))
+    } else {
+        Ok(())
+    };
+    // Walked again: the passes delete calls and make new ones. Codegen
+    // writes no `noduplicate` of its own.
+    for f in module.get_functions() {
+        for call in calls(f) {
+            call.remove_enum_attribute(AttributeLoc::Function, nodup);
+        }
+    }
+    r
+}
+
 fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), String> {
     unroll_threshold();
     if opt > 0 {
@@ -568,6 +626,7 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
             // costs as its pointer-heavy form) is inlined and its loads
             // hoisted. `KARAC_MIR_EARLY_PROMOTE=0` leaves it out.
             if std::env::var("KARAC_MIR_EARLY_PROMOTE").as_deref() != Ok("0") {
+                split_self_calls(module, tm)?;
                 passes = format!(
                     "function(sroa,instcombine<no-verify-fixpoint>),cgscc(argpromotion),{passes}"
                 );
