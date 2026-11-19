@@ -1537,6 +1537,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- `karac build`'s auto-parallel cost gate counts a loop of at least a
+  million known trips as nested work, and so a call that gives a callee's
+  parameter-bounded loop a known count of at least a million: two such
+  statements in a row run as tasks. Its verdict is keyed by the function a
+  provider copy was made from, which the build lowers, and the tasks carry
+  the statements' source positions, so a provider write inside them is
+  carried into the task. A program that writes its work as `process(WORK)`
+  with `const WORK = 1000000` over three providers ran in order; it now
+  runs in 0.018 s rather than 0.049 s, the same as a written `par { }`
+  (B-2026-11-17-72). `KARAC_AUTO_PAR=0` builds exactly as before.
 - An array literal whose elements are all constants (`const MOVES:
   Array[(i64, i64), 8] = [...]` at its use) is copied from a constant
   global rather than stored element by element, and a loop of at most

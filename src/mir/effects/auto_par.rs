@@ -62,7 +62,10 @@
 //!   recursive search 160x), and no statement group inside a loop of its
 //!   own function. How much, by how deep a body's work nests (its weight:
 //!   0 straight-line, 1 a loop of straight-line iterations, 2 a loop with
-//!   a loop or a looping call in it, or recursion): a loop runs as tasks
+//!   a loop or a looping call in it, or recursion, or a loop of at least a
+//!   million known trips, by literal or `const` bounds of its own or by
+//!   the count a call gives a callee's loop bounded by a parameter;
+//!   B-2026-11-17-72): a loop runs as tasks
 //!   only when its body has weight 1 or more, and a group only when at
 //!   least two of its statements have weight 2. A loop of straight-line
 //!   iterations (a fill, a copy) is too little work for its tasks, and
@@ -282,6 +285,14 @@ pub(super) struct Cost {
     hot: BTreeSet<String>,
     /// Whether the size half of the gate is on (see [`size_gate`]).
     size: bool,
+    /// The headers of each body's loops that make at least [`BIG_TRIPS`]
+    /// trips by literal or `const` bounds: weight 2 however plain their
+    /// iterations (B-2026-11-17-72).
+    big_loops: BTreeMap<String, BTreeSet<BasicBlock>>,
+    /// The blocks of each body whose call gives a callee's loop, bounded by
+    /// one of its parameters, a known count of at least [`BIG_TRIPS`]
+    /// trips (`record(WORK)` with `while i < value`): weight 2.
+    big_calls: BTreeMap<String, BTreeSet<BasicBlock>>,
 }
 
 /// Whether the size half of the cost gate is on. `KARAC_AUTO_PAR_SIZE=0`
@@ -313,6 +324,103 @@ fn constant_trips(body: &Body, header: BasicBlock) -> Option<u128> {
 /// back through the join, where the code after it no longer knows what
 /// it built (a `Vec`'s length, so its bounds checks stay).
 const SMALL_WORK: u128 = 100_000;
+
+/// At least how many trips a loop of plain iterations makes, by literal or
+/// `const` bounds, to weigh as much as a loop with a loop in it: ten times
+/// [`SMALL_WORK`], milliseconds of work against a task's microseconds of
+/// spawn and join. parallax_lite's three provider writes each run a
+/// 50,000,000-trip loop behind a `const WORK` and stayed in order, though a
+/// written `par` of them ran 2.7x faster (B-2026-11-17-72).
+const BIG_TRIPS: u128 = 1_000_000;
+
+/// The literal an operand holds: a literal, or a local whose only write is
+/// one (no call writes it). A negative literal is not a count.
+fn known_count(body: &Body, o: &Operand) -> Option<u128> {
+    let v = match o {
+        Operand::Const(Const {
+            kind: ConstKind::Scalar(v),
+            ..
+        }) => *v,
+        Operand::Copy(p) if p.projection.is_empty() => {
+            let mut lit = None;
+            for bb in &body.blocks {
+                for st in &bb.statements {
+                    if let StatementKind::Assign(q, rv) = &st.kind {
+                        if q.local == p.local {
+                            match (rv, lit) {
+                                (
+                                    Rvalue::Use(Operand::Const(Const {
+                                        kind: ConstKind::Scalar(v),
+                                        ..
+                                    })),
+                                    None,
+                                ) => lit = Some(*v),
+                                _ => return None,
+                            }
+                        }
+                    }
+                }
+                if let TerminatorKind::Call { destination, .. } = &bb.terminator.kind {
+                    if destination.local == p.local {
+                        return None;
+                    }
+                }
+            }
+            lit?
+        }
+        _ => return None,
+    };
+    (v < 1 << 62).then_some(v)
+}
+
+/// A loop of `body` bounded by one of its parameters, not nested in or
+/// holding another loop: the parameter's index among the arguments, the
+/// counter's literal start, and whether the test is `<=`. The parameter
+/// must not be written in the body.
+fn param_bounded_loop(body: &Body, l: &NatLoop) -> Option<(usize, u128, bool)> {
+    let (op, i, bound) = header_test(body, l.header)?;
+    let Operand::Copy(b) = bound else {
+        return None;
+    };
+    let arg = b.local.index();
+    if !b.projection.is_empty() || arg == 0 || arg > body.arg_count {
+        return None;
+    }
+    let written = body.blocks.iter().any(|bb| {
+        bb.statements
+            .iter()
+            .any(|st| matches!(&st.kind, StatementKind::Assign(q, _) if q.local == b.local))
+            || matches!(&bb.terminator.kind, TerminatorKind::Call { destination, .. } if destination.local == b.local)
+    });
+    if written {
+        return None;
+    }
+    // The counter's start: the literal before the loop (`let mut i = 0`),
+    // as `loop_trips` takes it.
+    let Operand::Copy(c) = i else {
+        return None;
+    };
+    let starts: Vec<u128> = body
+        .blocks
+        .iter()
+        .flat_map(|bb| &bb.statements)
+        .filter_map(|st| match &st.kind {
+            StatementKind::Assign(
+                q,
+                Rvalue::Use(Operand::Const(Const {
+                    kind: ConstKind::Scalar(v),
+                    ..
+                })),
+            ) if q.local == c.local && c.projection.is_empty() => Some(*v),
+            _ => None,
+        })
+        .collect();
+    let start = *starts.first()?;
+    if starts.iter().any(|&v| v != start) {
+        return None;
+    }
+    Some((arg - 1, start, op == BinOp::Le))
+}
 
 /// [`constant_trips`], or, with `outer` the header of a loop that holds
 /// this one and makes constant trips, also for a bound that is `outer`'s
@@ -401,7 +509,12 @@ fn loop_trips(body: &Body, header: BasicBlock, outer: Option<BasicBlock>) -> Opt
         }
     };
     let trips = end.checked_sub(start)?;
-    Some(if op == BinOp::Le { trips + 1 } else { trips })
+    // A negative literal reads as a huge one: `<=` it overflows.
+    if op == BinOp::Le {
+        trips.checked_add(1)
+    } else {
+        Some(trips)
+    }
 }
 
 /// The local `l` is a copy of, when its only write is `l = copy m`.
@@ -502,12 +615,71 @@ impl Cost {
                 out
             })
             .collect();
+        // Loops of many known trips, and calls that give a parameter-bounded
+        // loop many (B-2026-11-17-72). Neither depends on weight.
+        let mut big_loops: BTreeMap<String, BTreeSet<BasicBlock>> = BTreeMap::new();
+        let mut param_loops: BTreeMap<&str, Vec<(usize, u128, bool)>> = BTreeMap::new();
+        for n in &names {
+            let body = &a.program.bodies[*n];
+            let ls: &Vec<NatLoop> = &loops[*n];
+            let mut big = BTreeSet::new();
+            for l in ls {
+                // A count of 2^62 or more is a negative literal's bits.
+                if constant_trips(body, l.header).is_some_and(|t| (BIG_TRIPS..1 << 62).contains(&t))
+                {
+                    big.insert(l.header);
+                }
+                let alone = !ls.iter().any(|m| {
+                    m.header != l.header
+                        && (l.blocks.contains(&m.header) || m.blocks.contains(&l.header))
+                });
+                if alone {
+                    if let Some(pl) = param_bounded_loop(body, l) {
+                        param_loops.entry(n.as_str()).or_default().push(pl);
+                    }
+                }
+            }
+            big_loops.insert((*n).clone(), big);
+        }
+        let mut big_calls: BTreeMap<String, BTreeSet<BasicBlock>> = BTreeMap::new();
+        for n in &names {
+            let body = &a.program.bodies[*n];
+            let mut big = BTreeSet::new();
+            for (b, bb) in body.blocks.iter().enumerate() {
+                let TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(inst),
+                            ..
+                        }),
+                    args,
+                    ..
+                } = &bb.terminator.kind
+                else {
+                    continue;
+                };
+                let heavy = param_loops.get(inst.name.as_str()).is_some_and(|pls| {
+                    pls.iter().any(|&(arg, start, le)| {
+                        args.get(arg)
+                            .and_then(|o| known_count(body, o))
+                            .and_then(|end| end.checked_sub(start))
+                            .is_some_and(|t| t + u128::from(le) >= BIG_TRIPS)
+                    })
+                });
+                if heavy {
+                    big.insert(BasicBlock(b as u32));
+                }
+            }
+            big_calls.insert((*n).clone(), big);
+        }
         let mut cost = Cost {
             loops,
             calls,
             weight: BTreeMap::new(),
             hot: BTreeSet::new(),
             size,
+            big_loops,
+            big_calls,
         };
         // Callee components come first, so a caller sees its callees' weight.
         for scc in tarjan(&edges) {
@@ -558,8 +730,9 @@ impl Cost {
 
     /// How deep the work of blocks `set` of body `name` nests, up to 2:
     /// a loop headed in `set` counts 1, and 2 when another loop or a call
-    /// to a body of weight 1 or more lies in it; a call counts its body's
-    /// weight.
+    /// to a body of weight 1 or more lies in it, or when it makes at least
+    /// [`BIG_TRIPS`] known trips; a call counts its body's weight, and 2
+    /// when it gives a loop of the callee's that many.
     fn weight_of(&self, name: &str, set: &BTreeSet<BasicBlock>) -> u8 {
         let loops: Vec<&NatLoop> = self.loops[name]
             .iter()
@@ -570,7 +743,18 @@ impl Cost {
             let nested = loops
                 .iter()
                 .any(|m| m.header != l.header && l.blocks.contains(&m.header));
-            w = w.max(if nested { 2 } else { 1 });
+            let big = self
+                .big_loops
+                .get(name)
+                .is_some_and(|b| b.contains(&l.header));
+            w = w.max(if nested || big { 2 } else { 1 });
+        }
+        if self
+            .big_calls
+            .get(name)
+            .is_some_and(|b| b.iter().any(|b| set.contains(b)))
+        {
+            return 2;
         }
         for &b in set {
             let in_loop = loops.iter().any(|l| l.blocks.contains(&b));
@@ -1931,6 +2115,97 @@ fn main() {
         let r = v.verdict.unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(r.len(), 1, "{r:?}");
         assert_eq!(r[0].op, ReduceOp::Op(BinOp::Add));
+    }
+
+    /// One pass of plain steps weighs as much as nested work when it makes
+    /// at least [`BIG_TRIPS`] trips by literal or `const` bounds, in the
+    /// statement's own loop or in a callee's loop bounded by a parameter
+    /// the call gives a known count: parallax_lite's three provider writes
+    /// of a 50,000,000-trip loop each (B-2026-11-17-72). Below that count,
+    /// or with a count the call does not know, they stay in order.
+    #[test]
+    fn auto_par_statements_of_many_known_trips_run_together() {
+        let v = written_sized(
+            "const BIG: i64 = 2000000;
+
+fn spin(n: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < n {
+        s = s + i;
+        i = i + 1;
+    }
+    s
+}
+
+fn fixed() -> i64 {
+    let mut s = 0;
+    for i in 0..1500000 {
+        s = s + i;
+    }
+    s
+}
+
+fn big_calls() -> i64 {
+    let mut a = 0;
+    let mut b = 0;
+    par {
+        a = spin(BIG);
+        b = spin(3000000);
+    }
+    a + b
+}
+
+fn big_loops() -> i64 {
+    let mut a = 0;
+    let mut b = 0;
+    par {
+        a = fixed();
+        b = fixed();
+    }
+    a + b
+}
+
+fn small_calls() -> i64 {
+    let mut a = 0;
+    let mut b = 0;
+    par {
+        a = spin(999999);
+        b = spin(1000);
+    }
+    a + b
+}
+
+fn unknown_calls(n: i64) -> i64 {
+    let mut a = 0;
+    let mut b = 0;
+    par {
+        a = spin(n);
+        b = spin(n);
+    }
+    a + b
+}
+
+fn main() {
+    println(big_calls());
+    println(big_loops());
+    println(small_calls());
+    println(unknown_calls(5));
+}
+",
+        );
+        for f in ["big_calls", "big_loops"] {
+            let x = only(&v, f);
+            assert_eq!(x.verdict, Ok(Vec::new()), "{f}: {x:#?}");
+            assert_eq!(groups(x), [vec![0, 1]], "{f}");
+        }
+        for f in ["small_calls", "unknown_calls"] {
+            assert_eq!(
+                cost_reason(only(&v, f)),
+                "0 of its 2 statements nest loops or recurse",
+                "{f}"
+            );
+        }
     }
 
     /// Two statements whose work nests (a loop calling a loop) run

@@ -210,3 +210,133 @@ fn mir_auto_par_small_work_stays_in_order() {
         assert_eq!(listed(&built, "auto-par: loops as tasks: "), tasked);
     }
 }
+
+/// B-2026-11-17-72: three provider writes that each run a loop of a
+/// `const` count of at least a million trips weigh as nested work, so they
+/// run as tasks (parallax_lite's shape: 0.049 s in order, 0.018 s as
+/// tasks). The verdict is on `process_request{MetricsA=..}`, the providers
+/// pass's copy, and applies to `process_request`, the function the build
+/// lowers; the tasks carry their providers like a written `par`'s. The
+/// output is the sequential program's.
+const PROVIDERS_SRC: &str = r#"pub trait Recorder {
+    fn record(mut ref self, value: i64);
+}
+
+pub effect resource MetricsA: Recorder;
+pub effect resource MetricsB: Recorder;
+pub effect resource MetricsC: Recorder;
+
+pub struct Mem {
+    count: i64,
+    total: i64,
+}
+
+impl Recorder for Mem {
+    fn record(mut ref self, value: i64) {
+        let mut sum: i64 = 0;
+        let mut i: i64 = 0;
+        while i < value {
+            sum = sum + i;
+            i = i + 1;
+        }
+        self.total = self.total + sum;
+        self.count = self.count + 1;
+    }
+}
+
+pub const WORK: i64 = 1000000;
+
+fn record_a() with writes(MetricsA) {
+    MetricsA.record(WORK);
+}
+
+fn record_b() with writes(MetricsB) {
+    MetricsB.record(WORK);
+}
+
+fn record_c() with writes(MetricsC) {
+    MetricsC.record(WORK);
+}
+
+pub fn process_request() with writes(MetricsA) writes(MetricsB) writes(MetricsC) {
+    record_a(); // group
+    record_b();
+    record_c();
+}
+
+fn main() {
+    providers {
+        MetricsA => Mem { count: 0, total: 0 },
+        MetricsB => Mem { count: 0, total: 0 },
+        MetricsC => Mem { count: 0, total: 0 },
+    } in {
+        process_request();
+    }
+    println("done");
+}
+"#;
+
+#[test]
+fn mir_auto_par_provider_writes_of_a_const_million_trips_run_as_tasks() {
+    let dir = std::env::temp_dir().join(format!("karac-auto-par-providers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.kara");
+    std::fs::write(&file, PROVIDERS_SRC).unwrap();
+    let at = format!(
+        "process_request@{}",
+        PROVIDERS_SRC
+            .lines()
+            .position(|l| l.ends_with("// group"))
+            .unwrap()
+            + 1
+    );
+    let run = |auto: bool| {
+        karac(auto, true)
+            .args(["__mir-run", file.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    let want = stdout(&run(false));
+    assert_eq!(want, "done\n");
+    let par = run(true);
+    assert_eq!(stdout(&par), want);
+    let report = String::from_utf8_lossy(&par.stderr).to_string();
+    assert_eq!(
+        listed(&report, "auto-par: statements as tasks: "),
+        std::slice::from_ref(&at),
+        "{report}"
+    );
+    let exe = dir.join("main");
+    let built = karac(true, true)
+        .args([
+            "build",
+            "--mir",
+            file.to_str().unwrap(),
+            "-o",
+            exe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&built.stderr).to_string();
+    assert!(
+        built.status.success() || err.contains("Linker failed"),
+        "does not build: {err}"
+    );
+    if common::link_or_skip(if built.status.success() {
+        Ok(())
+    } else {
+        Err(err.clone())
+    })
+    .is_some()
+    {
+        assert_eq!(
+            listed(&err, "auto-par: statements as tasks: "),
+            [at],
+            "{err}"
+        );
+        let out = Command::new(&exe).output().unwrap();
+        assert_eq!(stdout(&out), want);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

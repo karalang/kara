@@ -6296,7 +6296,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         let tt = self.tys().tcx().tuple(&task_tys);
         let tup = self.temp(tt);
         self.push_scope();
-        self.par_tasks(region, &tasks, Place::local(tup), true)?;
+        // The group's spawns and joins are at the run, as a written `par`'s
+        // are at the `par`: a body whose every call went into its tasks
+        // otherwise has no place of its own, which reads as the library's
+        // to the providers pass, so its tasks did not carry their
+        // providers and the parallel build was refused (B-2026-11-17-72).
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: run[0].span,
+            ..outer
+        });
+        let lowered = self.par_tasks(region, &tasks, Place::local(tup), true);
+        self.b.set_source_info(outer);
+        lowered?;
         let mut binds = Vec::new();
         for (k, (slot, t)) in slots.into_iter().enumerate() {
             let (task, part) = at[k];
@@ -31396,6 +31408,7 @@ fn auto_par_builds(
             }
             let name = name.clone();
             let before = hints.len();
+            let name = provider_template(&name).to_string();
             hints.loops.retain(|(instance, _, _), _| *instance != name);
             hints.stmts.retain(|(instance, _, _), _| *instance != name);
             if hints.len() == before {
@@ -31428,8 +31441,9 @@ fn auto_par_builds(
             eprintln!("auto-par: `{name}` would suspend and is used as a function value");
         }
         let before = hints.len();
-        hints.loops.retain(|(instance, _, _), _| *instance != name);
-        hints.stmts.retain(|(instance, _, _), _| *instance != name);
+        let name = provider_template(&name);
+        hints.loops.retain(|(instance, _, _), _| instance != name);
+        hints.stmts.retain(|(instance, _, _), _| instance != name);
         if hints.len() == before {
             break;
         }
@@ -31490,10 +31504,29 @@ pub(crate) enum AutoPar {
 /// A run of statements an auto-par verdict said may run together: its
 /// statements (indices into the block's), and those that start each of
 /// its tasks.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct StmtGroup {
     stmts: Vec<usize>,
     starts: Vec<usize>,
+}
+
+/// The function a providers-pass copy `f{R=T, ..}` was made from: `f`. A
+/// name with no such suffix is its own (an instance of closure types,
+/// `f{Fn(i64) -> i64}`, binds no resource).
+fn provider_template(instance: &str) -> &str {
+    match instance.strip_suffix('}').and_then(|s| s.rsplit_once('{')) {
+        Some((template, bound))
+            if !template.is_empty()
+                && bound.split(", ").all(|b| {
+                    b.split_once('=').is_some_and(|(r, _)| {
+                        !r.is_empty() && r.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    })
+                }) =>
+        {
+            template
+        }
+        _ => instance,
+    }
 }
 
 /// The loops whose iterations may run as tasks, by instance and the
@@ -31514,13 +31547,29 @@ pub(crate) struct AutoParHints {
 impl AutoParHints {
     fn of(verdicts: &[crate::mir::effects::auto_par::AutoParVerdict]) -> AutoParHints {
         use crate::mir::effects::auto_par::VerdictKind;
-        let mut loops = FxHashMap::default();
-        let mut stmts = FxHashMap::default();
+        let mut loops: FxHashMap<_, Vec<Span>> = FxHashMap::default();
+        let mut stmts: FxHashMap<_, Vec<StmtGroup>> = FxHashMap::default();
+        // A verdict is on an instance after the providers pass, which names
+        // a function's copy under its bound providers `f{R=T}`; the build
+        // lowers `f` itself, once, so its hint is keyed by `f`, and holds
+        // only when every copy's verdict on that candidate is the same yes
+        // (B-2026-11-17-72: parallax_lite's accepted group ran in order).
+        let mut split: FxHashSet<(String, usize, usize)> = FxHashSet::default();
         for v in verdicts {
-            let key = (v.instance.clone(), v.span.offset, v.span.length);
+            let key = (
+                provider_template(&v.instance).to_string(),
+                v.span.offset,
+                v.span.length,
+            );
+            let copy = v.instance != key.0;
             match (&v.kind, &v.verdict) {
                 (VerdictKind::Loop, Ok(reductions)) => {
-                    loops.insert(key, reductions.iter().map(|r| r.span).collect());
+                    let reds: Vec<Span> = reductions.iter().map(|r| r.span).collect();
+                    if let Some(old) = loops.insert(key.clone(), reds.clone()) {
+                        if copy && old != reds {
+                            split.insert(key);
+                        }
+                    }
                 }
                 (VerdictKind::Statements { groups, tasks }, Ok(_)) if !groups.is_empty() => {
                     let gs = groups
@@ -31530,11 +31579,22 @@ impl AutoParHints {
                             stmts: g.clone(),
                             starts: t.clone(),
                         })
-                        .collect();
-                    stmts.insert(key, gs);
+                        .collect::<Vec<_>>();
+                    if let Some(old) = stmts.insert(key.clone(), gs.clone()) {
+                        if copy && old != gs {
+                            split.insert(key);
+                        }
+                    }
+                }
+                _ if copy => {
+                    split.insert(key);
                 }
                 _ => {}
             }
+        }
+        for k in &split {
+            loops.remove(k);
+            stmts.remove(k);
         }
         AutoParHints {
             loops,
