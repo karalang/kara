@@ -9700,7 +9700,17 @@ impl<'a> TypeChecker<'a> {
                 self.settle_existential_literals(found, &assoc_bindings);
             }
         }
-        if self.is_subtype_with_projections(expected, found) {
+        // A variable of the slot that a check since then solved (`T` of
+        // `Fn() -> Result[T, E]`, fixed by the body of `|| Ok(one())`) is
+        // that type now: compared as the bare variable, it refused the
+        // closure (B-2026-11-19-53).
+        if self.is_subtype_with_projections(expected, found)
+            || (exprs::contains_type_var(expected)
+                && self.is_subtype_with_projections(
+                    &self.resolved_now(expected),
+                    &self.resolved_now(found),
+                ))
+        {
             // Record a concrete witness flowing into the current function's
             // return-position `impl Trait`, so the end-of-body single-witness
             // check can reject a multi-witness existential. No-op unless
