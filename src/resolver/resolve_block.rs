@@ -369,7 +369,13 @@ impl<'a> super::Resolver<'a> {
                 }
             }
 
-            ExprKind::Path { segments, .. } => {
+            ExprKind::Path {
+                segments,
+                generic_args,
+            } => {
+                if let Some(args) = generic_args {
+                    self.resolve_generic_args(segments, args);
+                }
                 // Resolve the first segment, then qualified access
                 if let Some(first) = segments.first() {
                     if let Some(sym) = self.table.lookup(first) {
@@ -717,8 +723,12 @@ impl<'a> super::Resolver<'a> {
                 path,
                 fields,
                 spread,
+                generic_args,
                 ..
             } => {
+                if let Some(args) = generic_args {
+                    self.resolve_generic_args(path, args);
+                }
                 // Resolve the struct type name
                 if let Some(first) = path.first() {
                     if let Some(sym) = self.table.lookup(first) {

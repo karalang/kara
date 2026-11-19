@@ -181,38 +181,45 @@ impl<'a> super::Resolver<'a> {
         }
         // Resolve generic args
         if let Some(ref args) = path.generic_args {
-            // The length of `Array[T, n]` / `Vector[T, n]` is a constant
-            // the parser routes to a type path when it is one name. A name
-            // nothing declares is left to the typechecker, which reports it
-            // as a const generic argument rather than an undefined type
-            // (B-2026-11-13-22).
-            let sized = path.segments.len() == 1
-                && matches!(path.segments[0].as_str(), "Array" | "Vector")
-                && args.len() == 2;
-            for (i, arg) in args.iter().enumerate() {
-                if sized && i == 1 {
-                    if let GenericArg::Type(TypeExpr {
-                        kind: TypeKind::Path(p),
-                        ..
-                    }) = arg
+            self.resolve_generic_args(&path.segments, args);
+        }
+    }
+
+    /// The generic arguments written after `segments`, in a type or in an
+    /// expression (`Vec[Qqq].new()`, `Pair[i64] { .. }`): each type
+    /// resolved, so an undefined name is reported at it (B-2026-11-19-123).
+    pub(crate) fn resolve_generic_args(&mut self, segments: &[String], args: &[GenericArg]) {
+        // The length of `Array[T, n]` / `Vector[T, n]` is a constant
+        // the parser routes to a type path when it is one name. A name
+        // nothing declares is left to the typechecker, which reports it
+        // as a const generic argument rather than an undefined type
+        // (B-2026-11-13-22).
+        let sized = segments.len() == 1
+            && matches!(segments[0].as_str(), "Array" | "Vector")
+            && args.len() == 2;
+        for (i, arg) in args.iter().enumerate() {
+            if sized && i == 1 {
+                if let GenericArg::Type(TypeExpr {
+                    kind: TypeKind::Path(p),
+                    ..
+                }) = arg
+                {
+                    if p.segments.len() == 1
+                        && p.generic_args.is_none()
+                        && self.table.lookup(&p.segments[0]).is_none()
                     {
-                        if p.segments.len() == 1
-                            && p.generic_args.is_none()
-                            && self.table.lookup(&p.segments[0]).is_none()
-                        {
-                            continue;
-                        }
+                        continue;
                     }
                 }
-                match arg {
-                    GenericArg::Type(ty) => self.resolve_type_expr(ty),
-                    GenericArg::Const(expr) => self.resolve_expr(expr),
-                    GenericArg::Shape(_) => {
-                        // Shape-literal dims resolve under the Dim/Shape kind
-                        // system (Phase 11 Q1) — identifiers inside a shape literal
-                        // name Dim-kinded / variadic shape params the resolver
-                        // cannot see until that lands; deliberately not walked.
-                    }
+            }
+            match arg {
+                GenericArg::Type(ty) => self.resolve_type_expr(ty),
+                GenericArg::Const(expr) => self.resolve_expr(expr),
+                GenericArg::Shape(_) => {
+                    // Shape-literal dims resolve under the Dim/Shape kind
+                    // system (Phase 11 Q1) — identifiers inside a shape literal
+                    // name Dim-kinded / variadic shape params the resolver
+                    // cannot see until that lands; deliberately not walked.
                 }
             }
         }

@@ -2083,6 +2083,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- An undefined type in an expression's type arguments (`Vec[Qqq].new()`,
+  `Option[Qqq].None`, `Mix[Zzz].N(63)`, `Pair[Ppp] { a: 1 }`) is reported
+  as an undefined type at the name, with the did-you-mean a type position
+  gets; it was the internal 'an expression whose type does not lower
+  (Type(UnknownName("Qqq")))' at the enclosing `let` (B-2026-11-19-123).
+
 - A unit struct's bare name, `Err(TimedOut)` or `let u = Marker;`, is E0206
   naming the struct, with `TimedOut {}` as its machine fix, in expression and
   pattern position alike. With `std.time.TimedOut` imported, the expression
