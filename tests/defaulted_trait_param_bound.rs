@@ -121,3 +121,32 @@ fn a_bare_bound_output_is_not_the_other_impls() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("does not implement trait Add"), "{err}");
 }
+
+#[test]
+fn a_bound_binding_only_the_output_runs_the_impl_at_the_defaults() {
+    // `T: Tr[Out = i64]` writes an associated binding, not an argument.
+    runs_as(
+        "out-bound",
+        "trait Tr[X = Self] { type Out; fn m(self, x: X) -> Self.Out; }\n\
+         struct A { n: i64 }\n\
+         impl Tr[i64] for A { type Out = i64; fn m(self, x: i64) -> i64 { 11 } }\n\
+         impl Tr for A { type Out = i64; fn m(self, x: A) -> i64 { 10 } }\n\
+         fn g_self[T: Tr[Out = i64]](t: T, u: T) -> i64 { t.m(u) }\n\
+         fn main() { println(g_self(A { n: 1 }, A { n: 2 })); }\n",
+        "10\n",
+    );
+}
+
+#[test]
+fn an_associated_fn_under_a_bare_bound_runs_the_impl_at_the_defaults() {
+    runs_as(
+        "assoc-fn",
+        "trait Mk[X = Self] { fn mk(x: X) -> Self; }\n\
+         struct M { v: i64 }\n\
+         impl Mk[i64] for M { fn mk(x: i64) -> M { M { v: x * 10 } } }\n\
+         impl Mk for M { fn mk(x: M) -> M { M { v: x.v + 1 } } }\n\
+         fn via[T: Mk](t: own T) -> T { T.mk(t) }\n\
+         fn main() { println(via(M { v: 4 }).v); }\n",
+        "5\n",
+    );
+}
