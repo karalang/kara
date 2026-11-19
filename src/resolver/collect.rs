@@ -1429,7 +1429,7 @@ impl<'a> super::Resolver<'a> {
                  §11), so `Rc<RefCell<T>>` is a `T` declared `shared struct`",
             );
         }
-        let prelude = Self::prelude_import_note(imp);
+        let prelude = Self::prelude_import_note(imp).or_else(|| Self::rehomed_import_note(imp));
         if let Some((note, _)) = &prelude {
             message.push_str(note);
         } else if let Some(ref s) = suggestion {
@@ -1494,6 +1494,112 @@ impl<'a> super::Resolver<'a> {
                 offset: imp.span.offset,
                 length: imp.span.length,
                 replacement: String::new(),
+            }),
+        ))
+    }
+
+    /// An import from a `std` module that does not exist whose items are
+    /// each either the prelude's or one real module's (Rust's
+    /// `std::collections::BinaryHeap` beside `std::cmp::Reverse`, written
+    /// `import std.collections.{PriorityQueue, Reverse};`): the note that
+    /// says where each one is, and the edit that imports the rest from
+    /// their modules (kata 1244, B-2026-11-20-80). `None` when an item is
+    /// renamed, is in no module, or is in more than one.
+    fn rehomed_import_note(imp: &ImportDecl) -> Option<(String, Box<TextEdit>)> {
+        if imp.path.first().map(String::as_str) != Some("std")
+            || imp.is_wildcard
+            || imp.items.is_empty()
+            || imp.items.iter().any(|it| it.alias.is_some())
+        {
+            return None;
+        }
+        let visible = |name: &str| {
+            crate::prelude::PRELUDE_TYPES.contains(&name)
+                || crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name)
+                || crate::prelude::PRELUDE_FUNCTIONS.contains(&name)
+                || crate::prelude::PRELUDE_TRAITS.contains(&name)
+                || name == "String"
+                || crate::module_rename::library_function_names().contains(name)
+        };
+        let home = |name: &str| -> Option<String> {
+            let mut homes: Vec<String> = crate::prelude::GATED_STDLIB_SOURCES
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, text))| text.contains(name))
+                .filter(|(i, _)| {
+                    crate::prelude::gated_stdlib_program(*i)
+                        .items
+                        .iter()
+                        .any(|item| match item {
+                            Item::Function(f) => f.is_pub && f.name == name,
+                            Item::StructDef(s) => s.is_pub && s.name == name,
+                            Item::EnumDef(e) => e.is_pub && e.name == name,
+                            Item::TraitDef(t) => t.is_pub && t.name == name,
+                            Item::EffectResource(r) => r.name == name,
+                            _ => false,
+                        })
+                })
+                .map(|(_, (path, _))| path.join("."))
+                .collect();
+            homes.extend(
+                crate::prelude::LIBRARY_GLOBAL_MODULES
+                    .iter()
+                    .filter(|(_, items, _)| items.contains(&name))
+                    .map(|(path, _, _)| path.join(".")),
+            );
+            homes.dedup();
+            (homes.len() == 1).then(|| homes.remove(0))
+        };
+        let mut in_prelude: Vec<String> = Vec::new();
+        // Each module with the items it gets, in the import's order.
+        let mut moved: Vec<(String, Vec<String>)> = Vec::new();
+        for it in &imp.items {
+            if visible(&it.name) {
+                in_prelude.push(format!("`{}`", it.name));
+                continue;
+            }
+            let module = home(&it.name)?;
+            if module == imp.path.join(".") {
+                return None;
+            }
+            match moved.iter_mut().find(|(m, _)| *m == module) {
+                Some((_, names)) => names.push(it.name.clone()),
+                None => moved.push((module, vec![it.name.clone()])),
+            }
+        }
+        if moved.is_empty() {
+            return None;
+        }
+        let imports: Vec<String> = moved
+            .iter()
+            .map(|(module, names)| match names.as_slice() {
+                [one] => format!("import {module}.{one};"),
+                _ => format!("import {module}.{{{}}};", names.join(", ")),
+            })
+            .collect();
+        let places: Vec<String> = moved
+            .iter()
+            .flat_map(|(module, names)| names.iter().map(move |n| format!("`{n}` is `{module}`'s")))
+            .collect();
+        let mut note = String::from(": ");
+        if !in_prelude.is_empty() {
+            let is = if in_prelude.len() == 1 { "is" } else { "are" };
+            note.push_str(&format!(
+                "{} {is} in the prelude, visible without an import, and ",
+                in_prelude.join(", ")
+            ));
+        }
+        note.push_str(&format!(
+            "{}, so the import becomes `{}`",
+            places.join(", "),
+            imports.join(" ")
+        ));
+        Some((
+            note,
+            Box::new(TextEdit {
+                offset: imp.span.offset,
+                length: imp.span.length,
+                replacement: imports.join("\n"),
             }),
         ))
     }
