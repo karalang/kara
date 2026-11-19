@@ -2654,6 +2654,22 @@ pub(super) fn rust_sequence_method_twin(type_name: &str, method: &str) -> Option
              and `into_iter().collect()`, or one element at a time by \
              `pop_front` (library/collections.md)"
         }
+        // Kata 1255's harness reached for `s.parse_int()`: a string is
+        // parsed by the type it becomes (strings.md, core-types.md).
+        (
+            "String" | "Str",
+            "parse_int" | "parse_i64" | "parse_i32" | "parse_u64" | "parse_float" | "parse_f64"
+            | "to_int" | "to_i64" | "to_i32" | "to_float" | "to_f64" | "to_number",
+        ) => {
+            "a string is parsed by the type it becomes: `i64.parse(s)` (or \
+             `f64.parse(s)`), which gives a `Result` (library/core-types.md#parsing)"
+        }
+        // Rust's checked cut `s.get(a..b)` (kata 1256's first draft).
+        ("String" | "Str", "get") => {
+            "a string is cut by `s[a..b]`, a `Str` view that panics out of range \
+             or off a char boundary, or by `s.substring(a, b)`, an owned copy \
+             whose bounds saturate (library/strings.md)"
+        }
         _ => return None,
     })
 }

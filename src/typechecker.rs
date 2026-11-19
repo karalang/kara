@@ -10738,15 +10738,25 @@ impl<'a> TypeChecker<'a> {
         }
         // An owned `String` where a `Str` view is wanted outside a call
         // boundary (`let mut kept: Str = digits;`): `as_str()` is the
-        // conversion strings.md names for those places (kata 2117).
+        // conversion strings.md names for those places (kata 2117). A
+        // borrowed `String` (`for w in names.iter() { views[i] = w; }`)
+        // takes the same edit (kata 1258).
+        let string_found = match &found {
+            Type::Str => Some("String"),
+            Type::Ref(t) if matches!(**t, Type::Str) => Some("ref String"),
+            Type::MutRef(t) if matches!(**t, Type::Str) => Some("mut ref String"),
+            _ => None,
+        };
         if matches!(expected, Type::Named { name, args } if (name == "StringSlice" || name == "Str") && args.is_empty())
-            && matches!(found, Type::Str)
+            && string_found.is_some()
             && !self.loose_expr_spans.contains(&SpanKey::from_span(&span))
         {
             self.type_error_with_fix_it(
-                "expected 'Str', found 'String': a `String` is passed as a `Str` only at a \
-                 call; elsewhere take the view with `.as_str()` (library/strings.md)"
-                    .to_string(),
+                format!(
+                    "expected 'Str', found '{}': a `String` is passed as a `Str` only at a \
+                     call; elsewhere take the view with `.as_str()` (library/strings.md)",
+                    string_found.unwrap_or_default()
+                ),
                 span,
                 TypeErrorKind::TypeMismatch,
                 FixIt {
