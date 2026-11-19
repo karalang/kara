@@ -102,10 +102,16 @@ fn a_list_literal_builds_a_sorted_set() {
 #[test]
 fn range_assign_refuses_another_element_type() {
     let errs = errors(
-        "fn main() {\n    let mut v = [1, 2, 3, 4];\n    let w: Vec[i32] = [5, 6];\n    v[0..2] = w;\n}\n",
+        "fn main() {\n    let mut v: Vec[i64] = [1, 2, 3, 4];\n    let w: Vec[i32] = [5, 6];\n    v[0..2] = w;\n}\n",
     );
     assert_eq!(errs.len(), 1, "{errs:#?}");
     assert!(errs[0].contains("Vec[i32]"), "{errs:#?}");
+    // Elements no use has typed yet take the type of the elements put
+    // in, as a `push` gives them (kata 1640's `starts_with` slot).
+    let errs = errors(
+        "fn main() {\n    let mut v = [1, 2, 3, 4];\n    let w: Vec[i32] = [5, 6];\n    v[0..2] = w;\n}\n",
+    );
+    assert!(errs.is_empty(), "{errs:#?}");
 }
 
 fn deprecated_warnings(src: &str) -> Vec<String> {

@@ -50,6 +50,13 @@ impl super::Parser {
             return;
         }
         let close = i;
+        // `None::<Rc<RefCell<TreeNode>>>`: Rust's typed `None` (kata
+        // 1660's template). Kāra names the type on the enum,
+        // `Option[TreeNode].None` (design.md § Generics, B-2026-09-13-25).
+        if name == "None" && !matches!(token(close + 1), Some(Token::LeftParen)) {
+            self.reject_none_turbofish(at, close);
+            return;
+        }
         if !matches!(token(close + 1), Some(Token::LeftParen)) {
             return;
         }
@@ -115,6 +122,51 @@ impl super::Parser {
                 replacement: String::new(),
             }],
         );
+        self.tokens.drain(at..=close);
+    }
+    /// `None::<T>` with the `None` consumed, `at` the `::` and `close` the
+    /// list's `>`: the diagnostic, with the fix `Option[T].None` when the
+    /// list is one type, and the list dropped so `None` parses on.
+    fn reject_none_turbofish(&mut self, at: usize, close: usize) {
+        let name = self.tokens[at - 1].span;
+        let last = self.tokens[close].span;
+        let whole = Span {
+            length: last.offset + last.length - name.offset,
+            ..name
+        };
+        let first = self.tokens[at + 2].span;
+        let ty = self.source.as_ref().and_then(|(source, base)| {
+            let text =
+                source.get(first.offset.checked_sub(*base)?..last.offset.checked_sub(*base)?)?;
+            let one_type = !text.trim().is_empty()
+                && text.trim() != "_"
+                && !text.contains(['\n', '/', '"', ',']);
+            one_type.then(|| text.trim().replace('<', "[").replace('>', "]"))
+        });
+        match ty {
+            Some(ty) => {
+                self.error_at(
+                    &format!(
+                        "`None::<..>` is Rust's turbofish; Kāra names the type on the enum: \
+                         `Option[{ty}].None`"
+                    ),
+                    whole,
+                );
+                self.fix_diffs.insert(
+                    SpanKey::from_span(&whole),
+                    vec![TextEdit {
+                        offset: whole.offset,
+                        length: whole.length,
+                        replacement: format!("Option[{ty}].None"),
+                    }],
+                );
+            }
+            None => self.error_at(
+                "`None::<..>` is Rust's turbofish; Kāra names the type on the enum: \
+                 `Option[T].None`",
+                whole,
+            ),
+        }
         self.tokens.drain(at..=close);
     }
 }

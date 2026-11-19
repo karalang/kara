@@ -9225,6 +9225,41 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // A `Slice` slot whose element is still an open literal (a library
+        // method's `prefix: Slice[T]` on a receiver of unsuffixed literals,
+        // `[1, 2].starts_with(piece)`) takes the element of the `Vec`,
+        // `Array` or `Slice` handed to it, as the call-boundary coercion
+        // would once the literal is fixed (kata 1640).
+        if let Type::Slice {
+            element,
+            mutable: false,
+        } = self.resolved_now(expected)
+        {
+            if let Type::TypeVar(id) = *element {
+                let peeled = match self.resolved_now(found) {
+                    Type::Ref(inner) | Type::MutRef(inner) => *inner,
+                    t => t,
+                };
+                let given = match peeled {
+                    Type::Named { name, mut args } if name == "Vec" && args.len() == 1 => {
+                        args.pop()
+                    }
+                    Type::Array { element, .. } | Type::Slice { element, .. } => Some(*element),
+                    _ => None,
+                };
+                if let (Some(kind), Some(given)) = (inference::literal_var_kind(id), given) {
+                    let same_open = matches!(&given, Type::TypeVar(g)
+                        if *g != id && inference::literal_var_kind(*g) == Some(kind));
+                    if same_open
+                        || types::is_numeric(&given) && inference::literal_takes(kind, &given)
+                    {
+                        self.env.substitutions.insert(id, given);
+                        let expected = self.resolved_now(expected);
+                        return self.check_assignable(&expected, found, span);
+                    }
+                }
+            }
+        }
         // A literal no use has fixed yet is fixed by the slot it flows into,
         // including a slot whose own type a later use decides (`b.push(7)`
         // on a `Bag.new()`'s `Bag[?T]`; design.md § Type inference,

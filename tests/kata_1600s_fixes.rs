@@ -135,3 +135,26 @@ fn a_weak_read_unwrap_in_an_assignment_warns_once() {
     let all = format!("{out}{err}");
     assert_eq!(all.matches("weak_read_unwrap").count(), 1, "{all}");
 }
+
+/// Rust's typed `None`, `None::<T>` (kata 1660's template), is named and
+/// fixed to Kāra's `Option[T].None`.
+#[test]
+fn a_none_turbofish_is_fixed_to_the_typed_none() {
+    fixes_to(
+        "none_turbofish",
+        "fn main() {\n    let mut q = Vec.new();\n    q.push((1i64, None::<i64>));\n    q.push((2i64, Some(3i64)));\n    println(q.len());\n}\n",
+        "Option[i64].None",
+    );
+}
+
+/// A `Slice` slot whose element is still an open literal takes the
+/// element of the `Vec` handed to it: `[1, 2, 3, 4].starts_with(piece)`
+/// (kata 1640's scan arm, probed on unsuffixed literals).
+#[test]
+fn a_vec_passed_to_an_open_literal_slice_slot_coerces() {
+    runs(
+        "starts_open",
+        "fn main() {\n    let arr = [1, 2, 3, 4];\n    let piece = [2, 3];\n    let typed: Vec[i64] = [1, 2];\n    println(arr[1..].starts_with(piece));\n    println(arr.starts_with(typed));\n    println(arr.ends_with(piece));\n}\n",
+        "true\ntrue\nfalse\n",
+    );
+}
