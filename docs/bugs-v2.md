@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 618 |
+| diagnostics | 621 |
 | false-positive | 326 |
 | missing-feature | 223 |
 | perf | 190 |
@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 106 |
 | miscompile | 98 |
 | crash | 64 |
-| run-vs-build | 60 |
+| run-vs-build | 61 |
 | codegen-gap | 40 |
 | use-after-free | 11 |
 | leak | 5 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 772 |
 | mir-llvm | 313 |
 | mir | 287 |
-| cli | 235 |
+| cli | 239 |
 | parser | 140 |
 | ownership | 122 |
 | runtime | 101 |
@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-10 | 2026-11-20 | runtime | medium | An HTTP server handler that panics is silent: the isolating group holds the panic message and the server drops it, so the connection just closes with no response and nothing is logged; ruling: log the panic to standard error and answer 500 when no response has started | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
 | B-2026-11-20-63 | 2026-11-20 | mir | medium | `*p.0` on a closure parameter that views a tuple item checks clean but every MIR backend refuses it: `let t: Vec[(i32, i32)] = [(1, 2), (3, 4)]; let out: Vec[i32] = t.iter().map(|p| *p.0).collect();` passes `karac check`, while `__mir-run` and `__mir-llvm-run` stop at the `*` with "unary '*' requires 'ref T' .. found 'i32'; a 'i32' is copied, so drop the `*`" | — |
-| B-2026-11-20-67 | 2026-11-20 | typecheck | low | `let m: ref R = r` is refused (E0200 "a type annotation does not borrow: this let would move the place") when `r` is destructured from a borrowed field (`let (r, k) = h.pe`, `h` a bare parameter), though `r` is already a view; the same let from a tuple parameter (`let (r, k) = p`) passes | — |
 | B-2026-11-20-70 | 2026-11-20 | typecheck | medium | Python's `x ** 4` is mended to `x * 4`: it parses as `x * (*4)`, and E0209's fix ("a 'i64' is copied, so drop the `*`") is machine-applied, so the program runs and prints 12 for 81 | — |
 | B-2026-11-20-71 | 2026-11-20 | typecheck | medium | A negative literal index (`v[-1]`, Python's last element) checks clean and panics at run time with "index out of bounds"; design.md prescribes `v.last(n)` for end-relative access, and the checker could say so | — |
 | B-2026-11-20-72 | 2026-11-20 | typecheck | low | Python's `v.append(4)` (one element) is told "there is no `Vec.append`: write `a.extend(b)`", then `extend` refuses the `i64`; the one-element form is `v.push(4)` | — |
@@ -1964,6 +1963,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-64 | typecheck | low | Items made from a value a `let` binds to literal-seeded folds, `once(first).chain(encoded.iter().scan(first, ..)).collect()` into a `Vec[i32]` with `… | 045accc7ad |
 | B-2026-11-20-65 | typecheck+mir | medium | An inherent associated function and a trait function of the same name resolve by impl order: `T.name()` took the first impl in source order, so a tra… | 804f34b9a1 |
 | B-2026-11-20-66 | typecheck | medium | `==` on a type with only a hand-written `impl PartialEq` is refused ("'==' cannot dispatch to your 'impl PartialEq for Item': .. | 95f3257492 |
+| B-2026-11-20-67 | typecheck | low | `let m: ref R = r` is refused (E0200 "a type annotation does not borrow: this let would move the place") when `r` is destructured from a borrowed fie… | 6c2663929c |
 | B-2026-11-20-68 | cli | medium | `karac fix` turns on the six style lints that `karac check --output=json` leaves off, so it rewrites code (needless_return, manual_compound_assign, q… | a33f6ff6ed |
 | B-2026-11-20-69 | typecheck | low | An element read back out of a vector that fill elements were pushed into, `v.push(pre[i][j])` then `v[v.len() - k]` returned as `i32` with `pre = Vec… | 38ba199571 |
 | B-2026-11-20-80 | resolver+cli | low | A std import mixing prelude names with another module's (`import std.collections.{PriorityQueue, Reverse};`, Rust's BinaryHeap and std::cmp::Reverse… | f9eea2da7c |
@@ -1975,6 +1975,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-89 | typecheck | low | `cycle` and `clone` on a library iterator that is not `Clone` always say it "holds a closure (`map`, `filter`, ..)", including on `v.into_iter()`, `o… | c39f49a207 |
 | B-2026-11-20-90 | typecheck | medium | `v.iter().map(f).take(3).cycle()` passes `karac check`, then `karac run` and `karac build` fail with an internal MIR borrow-check error in `IterTake[… | c39f49a207 |
 | B-2026-11-20-91 | typecheck | low | A `scan` closure that writes its by-value state in place and returns only the item, `\|sum, c\| { sum += c; Some(sum) }`, gets two bare type errors (`e… | 039abec2c1 |
+| B-2026-11-20-93 | cli | medium | `karac repl` placed a move made in a bare-expression cell (`eat(w)`) 8 columns too far right (`moved at cell 3:1:13`, the column in the `let _ = eat(… | 6c2663929c |
+| B-2026-11-20-94 | cli | medium | `karac repl`'s `:save` wrote a session whose cells used `?` as a plain `fn main()`, so the saved file failed `karac check` (E0200 at the first `?`),… | 6c2663929c |
+| B-2026-11-20-95 | cli | low | `karac repl` ran a line ending in a binary operator (`let t = 1 +`, `ok = a and`) as a whole cell instead of reading on, and input that ended inside… | 6c2663929c |
+| B-2026-11-20-96 | cli | low | `karac repl`'s `:type` errors named the program the expression is checked in (`<repl>:8:11`, snippet `8 \| let __t = nosuch;`) rather than the express… | 6c2663929c |
 
 </details>
 
