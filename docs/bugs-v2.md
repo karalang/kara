@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 569 |
+| diagnostics | 571 |
 | false-positive | 320 |
 | missing-feature | 215 |
 | perf | 189 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 736 |
 | mir-llvm | 311 |
 | mir | 280 |
-| cli | 218 |
+| cli | 220 |
 | parser | 127 |
 | ownership | 122 |
 | interp | 94 |
@@ -125,11 +125,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
 | B-2026-11-19-113 | 2026-11-19 | ownership | medium | A closure literal handed to a named call that is itself an argument of another call (`show(twice(|| s.len()))`, `println(twice(|| s.len()))`) is taken to outlive its statement: a later move of what it reads (`let t = s;`) is refused with E0500 "moved inside a loop" in straight-line code, though `let k = twice(|| s.len()); let t = s;` is accepted | — |
 | B-2026-11-19-140 | 2026-11-19 | mir-llvm | high | A write through a `mut ref` to a view (`Str`, `Slice`) is lost in compiled code: `set(mut v, "b")` with `fn set(s: mut ref Str, t: Str) { *s = t; }`, `w[1] = "m"` on a `Vec[Str]` and `sl[0] = xs[0..2]` on a `Vec[Slice[i64]]` leave the old value on run, build and ASan; the MIR interpreter is right | — |
-| B-2026-11-20-3 | 2026-11-20 | typecheck | low | A tuple literal argument to a `dyn` method is not typed by the parameter: `e.tp(("abc", 0.5))` with `fn tp(self, t: (Str, f32)) -> f64` through `dyn Tp` is E0200 "expected '(Str, f32)', found '(String, f64)'"; the same literal to a plain function or an annotated `let` is accepted | — |
 | B-2026-11-20-6 | 2026-11-20 | typecheck | low | A generic `mut ref T` parameter instantiated at a reference type refuses its `mut` marker: `fn setv[T](slot: mut ref T, x: own T) { *slot = x; }` called `setv(mut p, q)` with `p`, `q` both `ref String` is E0219 "`mut` marker is not legal here: parameter expects `ref String` (not a mutable borrow)"; with `T = i64` (`setv(mut p, 5)`) it is right | — |
 | B-2026-11-20-7 | 2026-11-20 | typecheck | low | A use after a capture moved into a closure passed to a generic `own F` names a loop that does not exist: `let f = keep(|| s.len()); drop(s); println(f());` is E0500 "value 's' is moved inside a loop and not assigned again before the next iteration" in straight-line `main` | — |
 | B-2026-11-20-9 | 2026-11-20 | ownership | medium | A bare (D5-borrowed) `f: MutFn` parameter can be passed to an `own MutFn` slot such as `it.any(f)` and is accepted, although calling `f()` directly in the same body is refused as 'a borrowed MutFn': the borrowed closure is moved out of a borrow, or mutated through a shared one | — |
 | B-2026-11-20-10 | 2026-11-20 | runtime | medium | An HTTP server handler that panics is silent: the isolating group holds the panic message and the server drops it, so the connection just closes with no response and nothing is logged; ruling: log the panic to standard error and answer 500 when no response has started | — |
+| B-2026-11-20-11 | 2026-11-20 | cli | low | Remainder of B-2026-11-09-15: `karac fix` annotates a defaulted literal that reaches a narrower slot through a collection read back by a `for` loop (`a: i32`), but not one read back by index through a view binding (`right[size].push(b)` then `let ys = ref right[n - k]; ys[at]`), so `best.min(..)` stays refused with no edit | — |
+| B-2026-11-20-12 | 2026-11-20 | cli | low | The Rust linked-list cursor step `tail = mut ref tail.as_mut().unwrap().next` is refused (E_REF_OPERAND_UNSUPPORTED, correctly: a borrow through a call result, §5.1/§5.5) with no machine fix, though the accepted spelling `while let Some(n) = tail { tail = mut ref n.next; }` is a mechanical rewrite | — |
 
 ### Relocated
 
@@ -1893,6 +1894,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-141 | typecheck | low | A `mut ref MutFn` passed to a non-generic eager iterator slot (`any(f)`, `all(f)` with `f: mut ref MutFn`) is still refused: the checker's Function t… | 56bbfc708c |
 | B-2026-11-20-1 | mir | medium | A `dyn` of a generic trait at a VIEW type argument cannot be built: `let e: dyn Cv[Str] = A { };` with `trait Cv[T] { fn cv(self, x: T) -> i64; }` an… | fa4b30aa47 |
 | B-2026-11-20-2 | mir | medium | A `dyn` coercion through a blanket impl cannot be built: `impl[T: Nm] Loud for T { . | fa4b30aa47 |
+| B-2026-11-20-3 | typecheck | low | A tuple literal argument to a `dyn` method is not typed by the parameter: `e.tp(("abc", 0.5))` with `fn tp(self, t: (Str, f32)) -> f64` through `dyn… | 8fe98cb5b9 |
 | B-2026-11-20-4 | typecheck | medium | A type with two impls of one generic trait cannot coerce to `dyn` of the second: with `impl Cv[Str] for A` and `impl Cv[i64] for A`, `let f: dyn Cv[i… | fa4b30aa47 |
 | B-2026-11-20-5 | mir | low | A closure handed through a generic identity on `own F` and then returned from a let is refused E0509: `fn keep[F: Fn() -> i64](f: own F) -> F { f }`,… | 7aacfe8e98 |
 | B-2026-11-20-8 | typecheck | low | Coercing a generic struct literal with an open type parameter to `dyn` does not use the only impl to fix it: `let mut e: dyn Ac = Bag { xs: Vec.new()… | fa4b30aa47 |
