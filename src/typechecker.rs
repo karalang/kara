@@ -3635,6 +3635,10 @@ pub struct TypeChecker<'a> {
     /// (`erase_operand`); the ownership pass checks their kind
     /// (B-2026-11-19-141).
     pub(super) fn_ref_slot_args: FxHashSet<SpanKey>,
+    /// A function-valued binding handed to an owned function slot (not a
+    /// bare, borrowed one): the slot calls what it is given, so the
+    /// ownership pass refuses a borrowed `MutFn` there (B-2026-11-20-9).
+    pub(super) fn_owned_slot_args: FxHashSet<SpanKey>,
     /// B-2026-10-14-27 — the `*r` operands of a comparison being inferred.
     /// `==` and `<` borrow `*r` (design.md § `*` and `ref` in expressions),
     /// so a deref there moves nothing out of the borrow.
@@ -4837,6 +4841,7 @@ impl<'a> TypeChecker<'a> {
             const_init_serde_default: false,
             current_fn_ref_params: FxHashSet::default(),
             fn_ref_slot_args: FxHashSet::default(),
+            fn_owned_slot_args: FxHashSet::default(),
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,
             current_fn_d5_params: FxHashMap::default(),

@@ -1,0 +1,1 @@
+error[typecheck]: `f` is a borrowed `MutFn`, so it cannot be passed to a function parameter, which calls it (core-semantics.md §9.6)

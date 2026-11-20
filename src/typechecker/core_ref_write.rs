@@ -2290,10 +2290,9 @@ impl Walk<'_, '_> {
             let ExprKind::Identifier(x) = &a.value.kind else {
                 continue;
             };
-            if !self
-                .tc
-                .fn_ref_slot_args
-                .contains(&SpanKey::from_span(&a.value.span))
+            let key = SpanKey::from_span(&a.value.span);
+            if !(self.tc.fn_ref_slot_args.contains(&key)
+                || self.tc.fn_owned_slot_args.contains(&key))
                 || self
                     .kind_errors
                     .iter()
@@ -2307,41 +2306,57 @@ impl Walk<'_, '_> {
             if i != 0 {
                 continue;
             }
-            let Some(own_fix) = self.shared_mut_fn_params.get(x).cloned() else {
+            if !self.shared_mut_fn_params.contains_key(x) {
                 continue;
-            };
+            }
             let declared = self
                 .declared_types
                 .iter()
                 .find(|(r, _)| *r == (i, j))
                 .map(|(_, t)| t.clone());
-            let (fix, decl) = match (own_fix, declared) {
-                (Some(fix), _) => (Some(fix), format!("`{x}: own ...`")),
-                (None, Some(t)) => match &t.kind {
-                    TypeKind::Ref(inner) if inner.span != t.span => (
-                        Some(FixIt {
-                            span: Span {
-                                length: 0,
-                                ..t.span
-                            },
-                            replacement: "mut ".to_string(),
-                        }),
-                        format!("`{x}: mut ref ...`"),
-                    ),
-                    _ => (None, format!("`{x}: mut ref ...`")),
+            let insert = |t: &TypeExpr, text: &str| FixIt {
+                span: Span {
+                    length: 0,
+                    ..t.span
                 },
-                (None, None) => (None, format!("`{x}: mut ref ...`")),
+                replacement: text.to_string(),
             };
-            self.shared_mut_fn_calls.push((
-                a.value.span,
-                format!(
-                    "`{x}` is a `MutFn` held by a shared borrow, so it cannot be passed \
-                     to a function parameter, which calls it (core-semantics.md §9.6): a \
-                     `MutFn` is called only through an owned binding, an `own` parameter \
-                     or a `mut ref`. Declare the parameter {decl}"
+            let (message, fix) = match &declared {
+                // `f: ref MutFn(..)`, written.
+                Some(t) if matches!(&t.kind, TypeKind::Ref(inner) if inner.span != t.span) => (
+                    format!(
+                        "`{x}` is a `MutFn` held by a shared borrow, so it cannot be passed \
+                         to a function parameter, which calls it (core-semantics.md §9.6): a \
+                         `MutFn` is called only through an owned binding, an `own` parameter \
+                         or a `mut ref`. Declare the parameter `{x}: mut ref ...`"
+                    ),
+                    Some(insert(t, "mut ")),
                 ),
-                fix,
-            ));
+                // A bare `f: MutFn(..)` (or `f: F` under a `MutFn` bound),
+                // which D5 borrows (B-2026-11-20-9).
+                _ => {
+                    let escaping = declared.as_ref().is_some_and(|t| {
+                        self.tc
+                            .program
+                            .escaping_fn_types
+                            .contains(&SpanKey::from_span(&t.span))
+                    });
+                    (
+                        format!(
+                            "`{x}` is a borrowed `MutFn`, so it cannot be passed to a function \
+                             parameter, which calls it (core-semantics.md §9.6): a `MutFn` is \
+                             called only through an owned binding, an `own` parameter or a \
+                             `mut ref`. Declare the parameter `{x}: mut ref ...`, or \
+                             `{x}: own ...` if the function keeps it"
+                        ),
+                        declared
+                            .as_ref()
+                            .filter(|_| !escaping)
+                            .map(|t| insert(t, "mut ref ")),
+                    )
+                }
+            };
+            self.shared_mut_fn_calls.push((a.value.span, message, fix));
         }
     }
 

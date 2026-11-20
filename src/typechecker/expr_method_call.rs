@@ -1676,7 +1676,13 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_expr(&arg.value);
             }
         } else {
-            for (arg, param) in args.iter().zip(param_types.iter()) {
+            for (i, (arg, param)) in args.iter().zip(param_types.iter()).enumerate() {
+                // An `own` function parameter calls what it is given; a
+                // borrowed `MutFn` handed to it is refused by the ownership
+                // pass (B-2026-11-20-9).
+                if method.params.get(i).is_some_and(|p| p.is_own) {
+                    self.note_owned_fn_slot_arg(&arg.value, param, false);
+                }
                 // A closure takes its parameters' types from the slot
                 // (`it.any(|x| x == 2)` through a `dyn Iterator[Item = i64]`).
                 //

@@ -20,6 +20,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A bare `MutFn` parameter handed to an `own` function parameter (core
+  semantics §9.6, E0518). `fn has(v: ref Vec[i64], f: MutFn(i64) -> bool)
+  -> bool { v.iter().cloned().any(f) }` was accepted, though `f` is
+  borrowed and calling it in the same body is refused: `any` called a
+  `MutFn` through a shared borrow. The fix declares the parameter `f: mut
+  ref MutFn(..)` (and its callers pass `mut g`), or `own` when the function
+  keeps it. A bare, borrowed parameter still takes it (B-2026-11-20-9).
 - `#[derive(Serialize)]` or `#[derive(Deserialize)]` over a type that
   holds a `std.secret.Secret` (a field, or inside an `Option`, a `Vec`,
   a tuple) is refused at the declaration, naming the field: a secret is

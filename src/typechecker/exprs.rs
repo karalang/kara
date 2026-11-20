@@ -5908,6 +5908,19 @@ impl<'a> super::TypeChecker<'a> {
     /// checked against the reference, which would otherwise make the binding
     /// itself a reference and leave `collect`'s target unresolvable
     /// (B-2026-11-09-56).
+    /// Notes a binding handed to an owned function slot, which calls what
+    /// it is given (B-2026-11-20-9). A bare, non-`escaping` function slot
+    /// borrows its argument and is left out.
+    pub(super) fn note_owned_fn_slot_arg(&mut self, arg: &Expr, slot: &Type, borrowed: bool) {
+        if !borrowed
+            && matches!(slot, Type::Function { .. } | Type::OnceFunction { .. })
+            && matches!(arg.kind, ExprKind::Identifier(_))
+        {
+            self.fn_owned_slot_args
+                .insert(SpanKey::from_span(&arg.span));
+        }
+    }
+
     /// The type a `ref`/`mut ref` binding of a function value is checked
     /// against for a plain function-typed slot: the slot, behind the
     /// binding's own reference (B-2026-11-19-141).
@@ -6269,6 +6282,11 @@ impl<'a> super::TypeChecker<'a> {
                     self.settle_binding_lent_to_ref(&arg.value, param_ty);
                     self.check_expr(&arg.value, param_ty)
                 };
+                self.note_owned_fn_slot_arg(
+                    &arg.value,
+                    param_ty,
+                    borrowed_fn.get(i) == Some(&true),
+                );
                 self.note_named_arg_lent_into_ref(&arg.value, param_ty);
                 self.borrow_context = saved_borrow_ctx;
                 self.mut_through_param_arg = saved_mut_through;
@@ -7103,6 +7121,11 @@ impl<'a> super::TypeChecker<'a> {
                         self.fn_ref_slot_args
                             .insert(SpanKey::from_span(&arg.value.span));
                     }
+                    self.note_owned_fn_slot_arg(
+                        &arg.value,
+                        &resolved,
+                        borrowed_fn.get(i) == Some(&true),
+                    );
                     let checked = through_fn.as_ref().unwrap_or(arg_ty);
                     if !given_away && !(is_str_view(&resolved) && is_string_place_type(checked)) {
                         self.check_assignable(&resolved, checked, arg.value.span);

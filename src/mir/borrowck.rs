@@ -3833,6 +3833,9 @@ fn main() -> () {
             // A `MutFn` behind a shared `ref` handed to a function
             // parameter: the kind check's (§9.6, B-2026-11-19-141).
             "err_shared_ref_mut_fn_passed_to_function_slot",
+            // A bare, borrowed `MutFn` handed to an `own` function
+            // parameter (§9.6, B-2026-11-20-9).
+            "err_borrowed_mut_fn_passed_to_own_slot",
             // The same body check over a view-typed argument (B-2026-11-13-31).
             "err_receiver_method_returns_view_argument",
             // A function value whose environment reaches a `shared` handle

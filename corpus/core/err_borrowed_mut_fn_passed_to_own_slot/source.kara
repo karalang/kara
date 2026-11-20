@@ -1,0 +1,16 @@
+// A bare `MutFn` parameter is borrowed (D5), so it cannot be called
+// (§9.6), and it cannot be handed to an `own MutFn` parameter either:
+// `any` would call it through the borrow.
+fn has(v: ref Vec[i64], f: MutFn(i64) -> bool) -> bool {
+    v.iter().cloned().any(f)
+}
+
+fn main() {
+    let mut seen = 0;
+    let mut is_two = |x: i64| {
+        seen = seen + 1;
+        x == 2
+    };
+    println(has([1, 2, 3], is_two));
+    println(seen);
+}
