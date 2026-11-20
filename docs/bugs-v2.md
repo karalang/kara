@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 600 |
+| diagnostics | 610 |
 | false-positive | 323 |
 | missing-feature | 223 |
 | perf | 189 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 758 |
+| typecheck | 763 |
 | mir-llvm | 313 |
 | mir | 286 |
 | cli | 229 |
-| parser | 135 |
+| parser | 140 |
 | ownership | 122 |
 | runtime | 101 |
 | interp | 95 |
@@ -122,6 +122,16 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-63 | 2026-11-20 | mir | medium | `*p.0` on a closure parameter that views a tuple item checks clean but every MIR backend refuses it: `let t: Vec[(i32, i32)] = [(1, 2), (3, 4)]; let out: Vec[i32] = t.iter().map(|p| *p.0).collect();` passes `karac check`, while `__mir-run` and `__mir-llvm-run` stop at the `*` with "unary '*' requires 'ref T' .. found 'i32'; a 'i32' is copied, so drop the `*`" | — |
 | B-2026-11-20-65 | 2026-11-20 | typecheck+mir | medium | An inherent associated function and a trait function of the same name resolve by impl order: `T.name()` took the first impl in source order, so a trait impl written before `impl T` hid the inherent function, and `let h: W = Get.get(7)` reached the inherent `get` when `impl W` came first; `e.m()` called an inherent `fn m()` with no `self` past a trait's `m(self)`; and a generic body's `T.build(s)` under `T: Build` could not call a `build[S]` the type also has inherently | — |
 | B-2026-11-20-67 | 2026-11-20 | typecheck | low | `let m: ref R = r` is refused (E0200 "a type annotation does not borrow: this let would move the place") when `r` is destructured from a borrowed field (`let (r, k) = h.pe`, `h` a bare parameter), though `r` is already a view; the same let from a tuple parameter (`let (r, k) = p`) passes | — |
+| B-2026-11-20-70 | 2026-11-20 | typecheck | medium | Python's `x ** 4` is mended to `x * 4`: it parses as `x * (*4)`, and E0209's fix ("a 'i64' is copied, so drop the `*`") is machine-applied, so the program runs and prints 12 for 81 | — |
+| B-2026-11-20-71 | 2026-11-20 | typecheck | medium | A negative literal index (`v[-1]`, Python's last element) checks clean and panics at run time with "index out of bounds"; design.md prescribes `v.last(n)` for end-relative access, and the checker could say so | — |
+| B-2026-11-20-72 | 2026-11-20 | typecheck | low | Python's `v.append(4)` (one element) is told "there is no `Vec.append`: write `a.extend(b)`", then `extend` refuses the `i64`; the one-element form is `v.push(4)` | — |
+| B-2026-11-20-73 | 2026-11-20 | parser | low | Python's operator and statement keywords get bare parse errors with no Kāra form: `x is None`, `is not None`, `in`/`not in` as operators, `elif`, `a if c else b`, `lambda x: ..`, `#` comments, `pass`, and `//` (read as a comment, so "Expected `)`, found the end of the file") | — |
+| B-2026-11-20-74 | 2026-11-20 | parser | low | Python's `try:/except`, `with open(..) as f`, `raise`, `class`, `-> None`, `list[T]`/`int` type hints and unparenthesized tuple unpacking (`let a, b = 1, 2`) get "expected `;`", "undefined name 'except'/'with'/'raise'" or E0104 with no Kāra form | — |
+| B-2026-11-20-75 | 2026-11-20 | parser | low | Python's slices `v[1:3]` / `s[:-4]`, list comprehensions `[x * x for x in v if ..]`, a dict literal `{"a": 1}` and `d.get(k, default)` get bare parse or type errors ("Expected `]`, found `:`"; "expected 'String', found 'i64'") with no Kāra form | — |
+| B-2026-11-20-76 | 2026-11-20 | typecheck | low | Python's builtins and str/dict methods mostly get "undefined name" / "no method" with no Kāra name: `str(n)`, `int(s)`, `sum(v)`, `max(v)`, `sorted`, `enumerate`, `zip`, `reversed`, `print(a, b)`, `sep.join(v)`, `strip`, `upper`, `split()`, `d.items()`, `[0] * 3`, `"ab" * 3` | — |
+| B-2026-11-20-77 | 2026-11-20 | parser | low | Go's declaration forms get bare parse errors with no Kāra form: `x := 4`, `var x i64 = 3`, parameters `a i64`, a result list without `->` (`fn f() (i64, i64)`), fields `x i64`, `type P struct {..}`, `const ( A = 1; B = 2 )`, `package main`, `import "fmt"` and the type `int` | — |
+| B-2026-11-20-78 | 2026-11-20 | parser | low | Go's control flow gets bare parse errors with no Kāra form: `for i := 0; i < n; i++`, `for cond {}`, `for {}`, `for i, x := range v`, `if v, ok := m[k]; ok`, `switch`/`case`/`default`, `select`, and `i++` / `i--` | — |
+| B-2026-11-20-79 | 2026-11-20 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}` literals, `go f(x)`, `<-rx`, `err != nil` without a binding, `errors.New`, `strconv`, `strings`, `sync`, `fmt.Println(a, b)`, the comma-ok `let (v, ok) = m[k]`, and `&T{..}` (mended into an E0283) | — |
 
 ### Relocated
 
