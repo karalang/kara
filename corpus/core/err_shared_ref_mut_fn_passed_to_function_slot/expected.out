@@ -1,0 +1,1 @@
+error[typecheck]: `f` is a `MutFn` held by a shared borrow, so it cannot be passed to a function parameter, which calls it (core-semantics.md §9.6)

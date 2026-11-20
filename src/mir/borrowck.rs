@@ -3830,6 +3830,9 @@ fn main() -> () {
             // escape pass's (§9.3, B-2026-11-19-103).
             "err_let_bound_adaptor_keeps_non_escaping_param",
             "err_let_bound_closure_captures_non_escaping_param",
+            // A `MutFn` behind a shared `ref` handed to a function
+            // parameter: the kind check's (§9.6, B-2026-11-19-141).
+            "err_shared_ref_mut_fn_passed_to_function_slot",
             // The same body check over a view-typed argument (B-2026-11-13-31).
             "err_receiver_method_returns_view_argument",
             // A function value whose environment reaches a `shared` handle

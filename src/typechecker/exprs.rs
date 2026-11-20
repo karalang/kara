@@ -5891,6 +5891,27 @@ impl<'a> super::TypeChecker<'a> {
     /// checked against the reference, which would otherwise make the binding
     /// itself a reference and leave `collect`'s target unresolvable
     /// (B-2026-11-09-56).
+    /// The type a `ref`/`mut ref` binding of a function value is checked
+    /// against for a plain function-typed slot: the slot, behind the
+    /// binding's own reference (B-2026-11-19-141).
+    fn fn_ref_for_fn_slot(&self, arg: &Expr, slot: &Type) -> Option<Type> {
+        if !matches!(slot, Type::Function { .. } | Type::OnceFunction { .. }) {
+            return None;
+        }
+        let ExprKind::Identifier(x) = &arg.kind else {
+            return None;
+        };
+        match self.local_scope.lookup(x)? {
+            Type::Ref(inner) if matches!(**inner, Type::Function { .. }) => {
+                Some(Type::Ref(Box::new(slot.clone())))
+            }
+            Type::MutRef(inner) if matches!(**inner, Type::Function { .. }) => {
+                Some(Type::MutRef(Box::new(slot.clone())))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn settle_binding_lent_to_ref(&mut self, arg: &Expr, param_ty: &Type) {
         let (Type::Ref(inner) | Type::MutRef(inner), ExprKind::Identifier(name)) =
             (param_ty, &arg.kind)
@@ -6199,6 +6220,15 @@ impl<'a> super::TypeChecker<'a> {
                     // literal or `default()` infers exactly as it would for
                     // an owned parameter.
                     self.check_expr(&arg.value, inner)
+                } else if let Some(lent) = self.fn_ref_for_fn_slot(&arg.value, param_ty) {
+                    // A `ref`/`mut ref` binding of a function value for a
+                    // plain function-typed slot is checked as the reference
+                    // it is: MIR hands the slot a forwarder over it
+                    // (`erase_operand`), and the kind is the ownership
+                    // pass's (B-2026-11-19-141).
+                    self.fn_ref_slot_args
+                        .insert(SpanKey::from_span(&arg.value.span));
+                    self.check_expr(&arg.value, &lent)
                 } else {
                     self.settle_binding_lent_to_ref(&arg.value, param_ty);
                     self.check_expr(&arg.value, param_ty)
@@ -6770,6 +6800,7 @@ impl<'a> super::TypeChecker<'a> {
                 // `|x| f(x)` over the reference (`erase_operand`), as it does
                 // a bare `f: Fn(..)` (B-2026-11-19-106).
                 let arg_ty = match fn_reached_for_bound(peel_slot_ref(formal), arg_ty, where_clause)
+                    .or_else(|| fn_reached_for_fn_slot(formal, arg_ty))
                 {
                     Some(inner) => inner,
                     None => arg_ty,
@@ -6997,7 +7028,13 @@ impl<'a> super::TypeChecker<'a> {
                     // bound's slot is checked as the function it reaches,
                     // as pass 1 solved it (B-2026-11-19-106).
                     let through_fn =
-                        fn_reached_for_bound(peel_slot_ref(formal), arg_ty, where_clause).cloned();
+                        fn_reached_for_bound(peel_slot_ref(formal), arg_ty, where_clause)
+                            .or_else(|| fn_reached_for_fn_slot(&resolved, arg_ty))
+                            .cloned();
+                    if through_fn.is_some() {
+                        self.fn_ref_slot_args
+                            .insert(SpanKey::from_span(&arg.value.span));
+                    }
                     let checked = through_fn.as_ref().unwrap_or(arg_ty);
                     if !given_away && !(is_str_view(&resolved) && is_string_place_type(checked)) {
                         self.check_assignable(&resolved, checked, arg.value.span);
@@ -20491,6 +20528,22 @@ fn prefix_fix_type_is_spellable(ty: &Type) -> bool {
 /// a `ref` to a function for any of `Fn`, `MutFn` and `OnceFn`, a `mut ref`
 /// for `MutFn` and `OnceFn` (core semantics §9.6). MIR hands the slot
 /// `|x| f(x)` over the reference (`erase_operand`, B-2026-11-19-106).
+/// A reference to a function value for a plain function-typed slot
+/// (`any(f)` with `f: mut ref MutFn(..)`) is checked as the function it
+/// reaches; the slot's Fn/MutFn kind is the ownership pass's, which reads it
+/// from the declaration (B-2026-11-19-141).
+fn fn_reached_for_fn_slot<'t>(formal: &Type, arg: &'t Type) -> Option<&'t Type> {
+    if !matches!(formal, Type::Function { .. } | Type::OnceFunction { .. }) {
+        return None;
+    }
+    match arg {
+        Type::Ref(inner) | Type::MutRef(inner) if matches!(**inner, Type::Function { .. }) => {
+            Some(inner)
+        }
+        _ => None,
+    }
+}
+
 fn fn_reached_for_bound<'t>(
     formal: &Type,
     arg: &'t Type,

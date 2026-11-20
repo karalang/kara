@@ -115,6 +115,9 @@ struct Walk<'t, 'a> {
     closure_writes: FxHashMap<usize, String>,
     /// The current function's `MutFn` parameters.
     mut_fn_params: FxHashSet<String>,
+    /// Its parameters that reach a `MutFn` through any `ref`s or a generic
+    /// bound (B-2026-11-19-141).
+    reaches_mut_fn_params: FxHashSet<String>,
     /// Its `MutFn` parameters held by a shared borrow (a bare or `ref`
     /// one), with the edit that makes each `own` where there is one.
     shared_mut_fn_params: FxHashMap<String, Option<FixIt>>,
@@ -367,6 +370,7 @@ impl<'a> TypeChecker<'a> {
             closures: Vec::new(),
             closure_writes: FxHashMap::default(),
             mut_fn_params: FxHashSet::default(),
+            reaches_mut_fn_params: FxHashSet::default(),
             shared_mut_fn_params: FxHashMap::default(),
             shared_once_fn_params: FxHashMap::default(),
             generic_fn_param_types: FxHashMap::default(),
@@ -461,6 +465,18 @@ impl<'a> TypeChecker<'a> {
                 .flat_map(|p| p.pattern.binding_names())
                 .collect();
             w.mut_fn_params.extend(mut_fns);
+            w.reaches_mut_fn_params = f
+                .params
+                .iter()
+                .filter(|p| {
+                    let mut t = &p.ty;
+                    while let TypeKind::Ref(i) | TypeKind::MutRef(i) = &t.kind {
+                        t = i;
+                    }
+                    w.is_mut_fn(generic_fn_bound(f, t).unwrap_or(t))
+                })
+                .flat_map(|p| p.pattern.binding_names())
+                .collect();
             w.shared_mut_fn_params = f
                 .params
                 .iter()
@@ -1482,6 +1498,7 @@ impl Walk<'_, '_> {
                 }
                 self.children(e);
                 self.check_fn_kinds(callee, args);
+                self.check_fn_ref_args(args);
                 self.check_shared_mut_fn_call(callee);
                 self.check_mut_fn_place_call(callee, e.span);
                 return;
@@ -1695,6 +1712,7 @@ impl Walk<'_, '_> {
         self.children(e);
         if let ExprKind::MethodCall { args, .. } = &e.kind {
             self.check_method_kinds(e, args);
+            self.check_fn_ref_args(args);
         }
         if let ExprKind::StructLiteral { path, fields, .. } = &e.kind {
             let tc = self.tc;
@@ -2263,6 +2281,70 @@ impl Walk<'_, '_> {
         self.check_arg_kinds(&name, f, args);
     }
 
+    /// A `MutFn` parameter held by a shared borrow (a bare or `ref` one)
+    /// handed to a function slot: the slot calls it, through a forwarder
+    /// over the borrow, and a `MutFn` is called only through an owned
+    /// binding, an `own` parameter or a `mut ref` (§9.6; B-2026-11-19-141).
+    fn check_fn_ref_args(&mut self, args: &[CallArg]) {
+        for a in args {
+            let ExprKind::Identifier(x) = &a.value.kind else {
+                continue;
+            };
+            if !self
+                .tc
+                .fn_ref_slot_args
+                .contains(&SpanKey::from_span(&a.value.span))
+                || self
+                    .kind_errors
+                    .iter()
+                    .any(|(s, _)| s.offset == a.value.span.offset)
+            {
+                continue;
+            }
+            let Root::Local(i, j) = self.root_of(x) else {
+                continue;
+            };
+            if i != 0 {
+                continue;
+            }
+            let Some(own_fix) = self.shared_mut_fn_params.get(x).cloned() else {
+                continue;
+            };
+            let declared = self
+                .declared_types
+                .iter()
+                .find(|(r, _)| *r == (i, j))
+                .map(|(_, t)| t.clone());
+            let (fix, decl) = match (own_fix, declared) {
+                (Some(fix), _) => (Some(fix), format!("`{x}: own ...`")),
+                (None, Some(t)) => match &t.kind {
+                    TypeKind::Ref(inner) if inner.span != t.span => (
+                        Some(FixIt {
+                            span: Span {
+                                length: 0,
+                                ..t.span
+                            },
+                            replacement: "mut ".to_string(),
+                        }),
+                        format!("`{x}: mut ref ...`"),
+                    ),
+                    _ => (None, format!("`{x}: mut ref ...`")),
+                },
+                (None, None) => (None, format!("`{x}: mut ref ...`")),
+            };
+            self.shared_mut_fn_calls.push((
+                a.value.span,
+                format!(
+                    "`{x}` is a `MutFn` held by a shared borrow, so it cannot be passed \
+                     to a function parameter, which calls it (core-semantics.md §9.6): a \
+                     `MutFn` is called only through an owned binding, an `own` parameter \
+                     or a `mut ref`. Declare the parameter {decl}"
+                ),
+                fix,
+            ));
+        }
+    }
+
     /// A plain `Fn` parameter of `f` takes neither a closure that writes a
     /// capture nor a `MutFn` (§9.6).
     fn check_arg_kinds(&mut self, name: &str, f: &Function, args: &[CallArg]) {
@@ -2308,7 +2390,10 @@ impl Walk<'_, '_> {
                 },
                 ExprKind::Identifier(x) => {
                     match self.root_of(x) {
-                        Root::Local(0, _) if self.mut_fn_params.contains(x) => {
+                        Root::Local(0, _)
+                            if self.mut_fn_params.contains(x)
+                                || self.reaches_mut_fn_params.contains(x) =>
+                        {
                             format!("`{x}` is a MutFn, but {name} expects Fn (§9.6)")
                         }
                         Root::Local(i, j) => match self.mut_closure_locals.iter().find(|(r, n)| {

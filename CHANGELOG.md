@@ -893,6 +893,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   holds `|x| f(x)` over it, so the closure keeps its writes and an adaptor
   that outlives it is refused at the caller. A `mut ref` for an `Fn` bound
   stays refused (B-2026-11-19-106).
+- A reference to a function value can be handed to a parameter typed as a
+  plain function type too: the eager iterator methods (`any`, `all`,
+  `fold`, `find`) and a user function's `Fn` or `own MutFn` parameter.
+  `fn has(v: ref Vec[i64], f: mut ref MutFn(i64) -> bool) -> bool {
+  v.iter().cloned().any(f) }` was refused "expected 'Fn(i64) -> bool',
+  found 'mut ref Fn(i64) -> bool'". The kind is checked as for any other
+  function value (§9.6, E0518): a `MutFn` for an `Fn` parameter or bound,
+  and a `MutFn` held by a shared `ref` for any function parameter, are
+  refused, the second with a `mut ref` fix (B-2026-11-19-141).
 - A closure literal passed to a generic bare `F` parameter (`fn
   call[F: Fn() -> i64](f: F)`, `call(|| r.id)`) borrows what it captures,
   as one passed to a bare `f: Fn() -> i64` does: a bare parameter is a

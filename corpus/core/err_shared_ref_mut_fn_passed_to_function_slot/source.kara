@@ -1,0 +1,15 @@
+// A `MutFn` held by a shared `ref` cannot be called (§9.6), so it cannot
+// be handed to a function parameter either: `any` would call it.
+fn has(v: ref Vec[i64], f: ref MutFn(i64) -> bool) -> bool {
+    v.iter().cloned().any(f)
+}
+
+fn main() {
+    let mut seen = 0;
+    let is_two = |x: i64| {
+        seen = seen + 1;
+        x == 2
+    };
+    println(has([1, 2, 3], is_two));
+    println(seen);
+}

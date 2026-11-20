@@ -1,0 +1,9 @@
+source = "B-2026-11-19-141"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "iterators"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "core-semantics §9.6: a `mut ref` to a function value is called as a `MutFn`, a `ref` as an `Fn`. A `f: mut ref MutFn(..)` parameter handed to `any` and `fold`, a `f: ref Fn(..)` to `all`, and the same references handed to a user function's plain `Fn` and `own MutFn` parameters; `any(f)` was refused \"expected 'Fn(i64) -> bool', found 'mut ref Fn(i64) -> bool'\"."

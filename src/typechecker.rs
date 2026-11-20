@@ -3629,6 +3629,11 @@ pub struct TypeChecker<'a> {
     /// the whole chain (the overwrite hazard `map_entry_lint` documents for the
     /// same reason), so `s` in `s.r` reads back as the type of `s.r`.
     pub(super) current_fn_ref_params: FxHashSet<String>,
+    /// Arguments checked as a `ref`/`mut ref` to a function value handed to
+    /// a function slot, which MIR forwards over the reference
+    /// (`erase_operand`); the ownership pass checks their kind
+    /// (B-2026-11-19-141).
+    pub(super) fn_ref_slot_args: FxHashSet<SpanKey>,
     /// B-2026-10-14-27 — the `*r` operands of a comparison being inferred.
     /// `==` and `<` borrow `*r` (design.md § `*` and `ref` in expressions),
     /// so a deref there moves nothing out of the borrow.
@@ -4830,6 +4835,7 @@ impl<'a> TypeChecker<'a> {
             const_init_resource_default: false,
             const_init_serde_default: false,
             current_fn_ref_params: FxHashSet::default(),
+            fn_ref_slot_args: FxHashSet::default(),
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,
             current_fn_d5_params: FxHashMap::default(),

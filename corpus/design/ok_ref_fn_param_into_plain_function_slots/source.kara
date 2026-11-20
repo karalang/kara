@@ -1,0 +1,62 @@
+// A function value reached through a `ref` or `mut ref` parameter, handed
+// to a slot typed as a plain function type: the eager iterator methods
+// (`any`, `all`, `fold`) and a user function's `Fn` / `own MutFn`
+// parameter. A `mut ref` reaches a `MutFn`, whose writes land in the
+// closure the caller lent (core-semantics §9.6).
+
+fn has(v: ref Vec[i64], f: mut ref MutFn(i64) -> bool) -> bool {
+    v.iter().cloned().any(f)
+}
+
+fn every(v: ref Vec[i64], f: ref Fn(i64) -> bool) -> bool {
+    v.iter().cloned().all(f)
+}
+
+fn total(v: ref Vec[i64], f: mut ref MutFn(i64, i64) -> i64) -> i64 {
+    v.iter().cloned().fold(0, f)
+}
+
+fn apply(f: Fn(i64) -> i64) -> i64 {
+    f(3)
+}
+
+fn apply_twice(f: own MutFn(i64) -> i64) -> i64 {
+    f(3) + f(4)
+}
+
+fn via_ref(f: ref Fn(i64) -> i64) -> i64 {
+    apply(f)
+}
+
+fn via_mut(f: mut ref MutFn(i64) -> i64) -> i64 {
+    apply_twice(f)
+}
+
+fn main() {
+    let v = [1, 2, 3];
+    let mut seen = 0;
+    let mut is_two = |x: i64| {
+        seen = seen + 1;
+        x == 2
+    };
+    println(has(v, mut is_two));
+    println(seen);
+    let positive = |x: i64| x > 0;
+    println(every(v, positive));
+    let mut calls = 0;
+    let mut add = |a: i64, b: i64| {
+        calls = calls + 1;
+        a + b
+    };
+    println(total(v, mut add));
+    println(calls);
+    let double = |x: i64| x * 2;
+    println(via_ref(double));
+    let mut n = 0;
+    let mut bump = |x: i64| {
+        n = n + x;
+        n
+    };
+    println(via_mut(mut bump));
+    println(n);
+}

@@ -1,0 +1,10 @@
+source = "B-2026-11-19-141"
+dedup_of = []
+expect = "error:E0518"
+exit = 1
+tags = ["closure"]
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "B-2026-11-19-141: core semantics §9.6, a `MutFn` is called only through an owned binding, an `own` parameter or a `mut ref`; one held by a shared `ref` cannot be handed to a function parameter, which would call it through that borrow. The fix declares the parameter `mut ref`. The expected.out wording of an error pin is guidance, not a byte oracle."
