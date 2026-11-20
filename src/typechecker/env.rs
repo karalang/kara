@@ -741,7 +741,7 @@ impl TypeEnv {
     /// these arguments: `impl[T: Show] Show for Wrap[T]` makes `Wrap[i64]`
     /// a `Show` and not `Wrap[Plain]` when `Plain` is not one
     /// (B-2026-10-13-5). An argument not yet inferred is not refused.
-    fn has_applicable_impl(
+    pub(super) fn has_applicable_impl(
         &self,
         trait_name: &str,
         target_type: &str,

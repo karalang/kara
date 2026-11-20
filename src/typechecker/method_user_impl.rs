@@ -615,7 +615,7 @@ impl<'a> super::TypeChecker<'a> {
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }
-                    let message = if library {
+                    let message = if library && holds_library_closure(receiver_for_lookup) {
                         format!(
                             "no method 'cycle' on type '{name}': `cycle` starts each \
                              round from a copy of the iterator, and this one holds a \
@@ -623,6 +623,19 @@ impl<'a> super::TypeChecker<'a> {
                              the source and adapt after it (`v.iter().cycle().map(..)`), \
                              or collect the items into a `Vec` and cycle over its `iter()` \
                              (library/iterators.md § `cycle`)"
+                        )
+                    } else if library {
+                        // An owning iterator (`into_iter()`) or a view the
+                        // library does not make `Clone` (B-2026-11-20-89):
+                        // no closure to blame.
+                        format!(
+                            "no method 'cycle' on type '{name}': `cycle` starts each \
+                             round from a copy of the iterator (`where Self: Clone`), and \
+                             `{name}` is not `Clone`: an owning iterator (`into_iter()`) is \
+                             not, nor is a view library/iterators.md § `cycle` does not \
+                             list. Cycle a view over a `Vec`, `Array`, `Slice` or \
+                             `VecDeque` (`v.iter().cycle()`) and clone what you keep, or \
+                             collect the items into a `Vec` and cycle over its `iter()`"
                         )
                     } else {
                         format!(
@@ -2079,11 +2092,17 @@ impl<'a> super::TypeChecker<'a> {
                         && args.is_empty()
                         && self.library_iter_item_type(receiver_for_lookup).is_some()
                     {
+                        let why = if holds_library_closure(receiver_for_lookup) {
+                            "an iterator that holds a closure (`map`, `filter`, ..) is not `Clone`"
+                        } else {
+                            // B-2026-11-20-89: no closure to blame.
+                            "an owning iterator (`into_iter()`) is not `Clone`, nor is a view \
+                             library/iterators.md § `cycle` does not list"
+                        };
                         self.type_error(
                             format!(
                                 "no method 'clone' on type '{type_name}', an iterator: \
-                                 an iterator that holds a closure (`map`, `filter`, ..) is \
-                                 not `Clone` -- for a second walk, build the iterator again \
+                                 {why} -- for a second walk, build the iterator again \
                                  from its source, or `collect` it once into a `Vec` and walk \
                                  that"
                             ),
@@ -2672,4 +2691,28 @@ pub(super) fn rust_sequence_method_twin(type_name: &str, method: &str) -> Option
         }
         _ => return None,
     })
+}
+
+/// Whether a library iterator type is, or wraps, an adaptor that stores a
+/// closure (`map`, `filter`, ..): the reason such an iterator is not `Clone`.
+/// An owning iterator or an unlisted view is refused `cycle` and `clone` for
+/// another reason, and its diagnostic says so (B-2026-11-20-89).
+fn holds_library_closure(ty: &Type) -> bool {
+    const CLOSURE_ADAPTORS: &[&str] = &[
+        "IterMap",
+        "IterFilter",
+        "IterFilterMap",
+        "IterFlatMap",
+        "IterTakeWhile",
+        "IterSkipWhile",
+        "IterInspect",
+        "IterScan",
+        "IterSuccessors",
+    ];
+    match ty {
+        Type::Named { name, args } => {
+            CLOSURE_ADAPTORS.contains(&name.as_str()) || args.iter().any(holds_library_closure)
+        }
+        _ => false,
+    }
 }

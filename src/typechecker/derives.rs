@@ -3569,7 +3569,11 @@ impl super::env::TypeEnv {
                         .iter()
                         .all(|a| self.type_supports_clone(a));
                 }
-                if self.has_impl("Clone", name, args) {
+                // Only an impl whose own bounds hold: the library's
+                // `impl[I: Clone] Clone for IterTake[I]` makes
+                // `v.iter().take(3)` `Clone` and not `v.iter().map(f).take(3)`,
+                // whose closure does not clone (B-2026-11-20-90).
+                if self.has_applicable_impl("Clone", name, args) {
                     return true;
                 }
                 // A `shared` type named directly clones as its handle does

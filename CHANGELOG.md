@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `cycle` on `take`, `skip`, `enumerate`, `step_by`, `rev`, `zip` or
+  `cloned` over a closure adaptor (`v.iter().map(f).take(3).cycle()`),
+  with the diagnostic a bare `map(f).cycle()` gets. `karac check`
+  accepted it and `run` and `build` then failed with an internal borrow
+  error in the iterator's `clone`: the wrapper's `Clone` impl was taken
+  without its `I: Clone` bound (iterators.md § cycle, B-2026-11-20-90).
 - `fs.copy(p, p)`, and a copy onto the same file through a link, fails with
   `InvalidInput` and leaves the file intact. It emptied the file and returned
   `Ok(0)`, as Rust's `std::fs::copy` does (review-thread ruling 2026-11-20,
@@ -2227,6 +2233,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - Rust's `eprint!(..)` is repaired to the prelude's `eprint`, an
   f-string when it has format arguments, as `eprintln!` is; it got no
   fix (B-2026-11-20-53).
+- `cycle` or `clone` refused on an owning iterator (`v.into_iter()`,
+  `opt.into_iter()`) or a view that is not `Clone` (`m.iter()`) says so,
+  and points at the views that are; it said the iterator held a closure
+  (B-2026-11-20-89).
 - `let br = BufReader.new(f); br.read_line(mut s)` is no longer refused with
   E0510 `declared without mut`: `read_line` and `read_to_string` take `ref
   self` (io.md), and the check had read the `buf: mut ref String` after
