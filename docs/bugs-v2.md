@@ -131,7 +131,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-60 | 2026-11-20 | cli | low | kara-lsp hover shows `R` for a binding destructured from a borrowed place (`let (r, k) = h.pe` with `h` a bare parameter, then `let m = r`), which is a `ref R`: written back as the binding's type it is refused (E0313) | — |
 | B-2026-11-20-63 | 2026-11-20 | mir | medium | `*p.0` on a closure parameter that views a tuple item checks clean but every MIR backend refuses it: `let t: Vec[(i32, i32)] = [(1, 2), (3, 4)]; let out: Vec[i32] = t.iter().map(|p| *p.0).collect();` passes `karac check`, while `__mir-run` and `__mir-llvm-run` stop at the `*` with "unary '*' requires 'ref T' .. found 'i32'; a 'i32' is copied, so drop the `*`" | — |
 | B-2026-11-20-65 | 2026-11-20 | typecheck+mir | medium | An inherent associated function and a trait function of the same name resolve by impl order: `T.name()` took the first impl in source order, so a trait impl written before `impl T` hid the inherent function, and `let h: W = Get.get(7)` reached the inherent `get` when `impl W` came first; `e.m()` called an inherent `fn m()` with no `self` past a trait's `m(self)`; and a generic body's `T.build(s)` under `T: Build` could not call a `build[S]` the type also has inherently | — |
-| B-2026-11-20-66 | 2026-11-20 | typecheck | medium | `==` on a type with only a hand-written `impl PartialEq` is refused ("'==' cannot dispatch to your 'impl PartialEq for Item': ... add 'impl Eq for Item {}'") by the plain typecheck path that run_playground, the REPL's magic commands and the wasm analyze use, while `karac check` accepts it and the program prints true through the user's `eq` | — |
 
 ### Relocated
 
@@ -1950,6 +1949,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-58 | cli | medium | kara-lsp hover shows the enclosing block's type on `let _`, `Fn(..)` for a closure that writes a capture (a `MutFn`), and the renamed-apart name (`Fi… | 0b47a3dbea |
 | B-2026-11-20-59 | cli | medium | kara-lsp signature help gives nothing for library methods outside four library pages (`tx.send`, `Duration.ms`), module functions (`sleep`, `log.init… | 0b47a3dbea |
 | B-2026-11-20-64 | typecheck | low | Items made from a value a `let` binds to literal-seeded folds, `once(first).chain(encoded.iter().scan(first, ..)).collect()` into a `Vec[i32]` with `… | 045accc7ad |
+| B-2026-11-20-66 | typecheck | medium | `==` on a type with only a hand-written `impl PartialEq` is refused ("'==' cannot dispatch to your 'impl PartialEq for Item': .. | 95f3257492 |
 
 </details>
 
