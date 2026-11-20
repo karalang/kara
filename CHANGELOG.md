@@ -905,6 +905,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   was refused "expected '(Str, f32)', found '(String, f64)'", and a tuple
   whose parts the parameter writes is passed in the slot's types on the
   compiled backends (B-2026-11-20-3).
+- A number literal in a `let`'s tuple beside a typed part (`let mut best =
+  (0, keys[0]);`) stays open for a later use to fix, as one in an
+  all-literal tuple does: `if press > best { best = press; }` with an
+  `(i32, u8)` press checks, and a comparison of two tuples that both hold
+  open literals fixes each from the other. It was E0200 "expected '(i64,
+  u8)', found '(i32, u8)'" (B-2026-11-19-41).
+- A list of tuples that mix numbers with other parts (`[("append", 2)]`)
+  holds its numbers open too, so `r.iter().map(|(n, v)| (n.to_string(),
+  v)).collect()` into `Vec[(String, i32)]` checks, and so does Rust's
+  `*v` there: a read through a view of an open number is that number. Both
+  were refused as an `i64` to `i32` narrowing (B-2026-11-18-72).
 - The bitwise and shift operators `& | ^ << >>` and unary `~` work on a
   type parameter bounded by their trait (`fn f[T: BitAnd[Output = T]](a:
   own T, b: own T) -> T { a & b }`, `T: Shl[i64, Output = T]`, `T:

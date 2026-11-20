@@ -5359,7 +5359,13 @@ impl<'a> super::TypeChecker<'a> {
                     continue;
                 }
                 let want = Self::peel_scalar_refs_in_tuple(&theirs);
-                if super::exprs::contains_type_var(&want) {
+                // Two tuples that both hold open literals meet part by part
+                // (`(0, k) > (v, 2)`: each side fixes the other's literal,
+                // B-2026-11-19-41); anything else open on the other side
+                // is not a type to take.
+                let both_open_tuples = matches!((&mine, &want), (Type::Tuple(a), Type::Tuple(b))
+                    if a.len() == b.len() && open_parts(&want));
+                if super::exprs::contains_type_var(&want) && !both_open_tuples {
                     continue;
                 }
                 let mut subs = self.env.substitutions.clone();
@@ -6778,6 +6784,13 @@ impl<'a> super::TypeChecker<'a> {
         if let Some((id, kind)) = self.unbound_literal_var(&ty) {
             match (op, kind) {
                 (UnaryOp::Neg, _) | (UnaryOp::BitNot, super::inference::LiteralKind::Int) => {
+                    return Type::TypeVar(id);
+                }
+                // A read through a view of an open number (`*v` of a
+                // closure's `|(n, v)|` over `[("append", 2)].iter()`) is
+                // that number, still open for the use that fixes it, as `v`
+                // alone is (B-2026-11-18-72).
+                (UnaryOp::Deref, _) if self.core_deref_of_view(operand) => {
                     return Type::TypeVar(id);
                 }
                 _ => {

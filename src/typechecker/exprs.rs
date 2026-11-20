@@ -16240,6 +16240,14 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// A tuple literal with an unsuffixed number among its parts, or in a
+    /// tuple among them: `("append", 2)` (B-2026-11-18-72).
+    fn tuple_holds_number_literal(e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Tuple(parts) if parts.iter().any(|p| {
+            Self::is_number_literal_tree(p) || Self::tuple_holds_number_literal(p)
+        }))
+    }
+
     /// An unsuffixed number, its negation, or a tuple of them: what a tuple
     /// literal holds when its numbers are open with it (B-2026-11-10-40).
     fn is_number_literal_tree(e: &Expr) -> bool {
@@ -19363,6 +19371,13 @@ impl<'a> super::TypeChecker<'a> {
                         || (self.open_literal_expr == Some(expr.id)
                             && exprs.iter().all(Self::is_number_literal_tree)))
                         && !expr.id.is_dummy();
+                    // A `let`'s tuple that mixes literals with typed parts
+                    // (`(0, keys[0])`) holds its literals open too, and those
+                    // of a tuple inside it: a later use fixes them as it
+                    // fixes an all-literal tuple's (`best = press` with
+                    // `press: (i32, u8)`, B-2026-11-19-41).
+                    let open_parts =
+                        !open && self.open_literal_expr == Some(expr.id) && !expr.id.is_dummy();
                     let types: Vec<Type> = exprs
                         .iter()
                         .map(|e| {
@@ -19370,7 +19385,11 @@ impl<'a> super::TypeChecker<'a> {
                             // (`w.push(((z, 5), 0.5))`, B-2026-11-12-1).
                             let t = if open && matches!(e.kind, ExprKind::Tuple(_)) {
                                 self.infer_element_open(e)
-                            } else if open {
+                            } else if open
+                                || (open_parts
+                                    && (Self::is_number_literal_tree(e)
+                                        || matches!(e.kind, ExprKind::Tuple(_))))
+                            {
                                 self.infer_expr_open(e)
                             } else {
                                 self.infer_expr(e)
@@ -19378,6 +19397,30 @@ impl<'a> super::TypeChecker<'a> {
                             self.tuple_slot_holds_ref_pattern(e, t)
                         })
                         .collect();
+                    // Beside a borrowed part (`(0, i)` with `i` a `ref i64`
+                    // from `m.get(k)`) the literals take their default where
+                    // they are written, as before: such a tuple is read at
+                    // the join that makes it, whose other arm decides the
+                    // part's type (kata 1122).
+                    let types = if open_parts
+                        && types
+                            .iter()
+                            .any(|t| matches!(self.resolved_now(t), Type::Ref(_) | Type::MutRef(_)))
+                    {
+                        let settled: Vec<Type> =
+                            types.iter().map(|t| self.settle_literals(t)).collect();
+                        for (e, t) in exprs.iter().zip(settled.iter()) {
+                            if Self::is_number_literal_tree(e)
+                                || matches!(e.kind, ExprKind::Tuple(_))
+                            {
+                                self.record_expr_type(&e.span, t);
+                                self.record_node_type(e.id, t);
+                            }
+                        }
+                        settled
+                    } else {
+                        types
+                    };
                     // B-2026-09-03-20 — each element is consumed by value, so
                     // `(w.r, 1)` moves `r` out of an own-`Drop` `W` exactly as
                     // `let x = w.r;` does. Measured: two bodies, and the second
@@ -20191,7 +20234,16 @@ impl<'a> super::TypeChecker<'a> {
                                 ) && Self::is_literal_tree(e, &Type::Int(IntSize::I64)))
                         }) || elements.iter().all(unsuffixed_float)
                             || elements.iter().all(Self::literal_tuple)
-                            || elements.iter().all(Self::literal_list));
+                            || elements.iter().all(Self::literal_list)
+                            // A list of tuples that mix numbers with other
+                            // parts (`[("append", 2)]`): their numbers are
+                            // open too, for the use that fixes them, a
+                            // `collect` into `Vec[(String, i32)]`
+                            // (B-2026-11-18-72).
+                            || (elements
+                                .iter()
+                                .all(|e| matches!(e.kind, ExprKind::Tuple(_)))
+                                && elements.iter().any(Self::tuple_holds_number_literal)));
                     // So do the numbers of a list of tuples of them (`let
                     // m = [(-1, 0)]`, `SortedMap.from([(-1, 0)])` as a fold's
                     // seed, kata 1187's Rust arm, B-2026-11-17-115), and of
