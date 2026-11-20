@@ -1346,6 +1346,100 @@ impl Deserializer for JsonDeserializer {
     }
 }
 
+/// A `Json` value writes as the JSON it is, so a typed envelope can carry
+/// an untyped part (`data: Json`), as serde_json's `Value` does. An
+/// object's repeated key is written once, where it first appears, with its
+/// last value, as `stringify` writes it (B-2026-11-20-28).
+impl Serialize for Json {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        match self {
+            Json.Null => s.serialize_none(),
+            Json.Bool(b) => s.serialize_bool(b),
+            Json.Int(n) => s.serialize_i64(n),
+            Json.Number(x) => s.serialize_f64(x),
+            Json.String(t) => s.serialize_string(t.clone()),
+            Json.Array(items) => {
+                s.serialize_seq_begin(items.len());
+                for x in items.iter() {
+                    s.serialize_element();
+                    x.serialize(s);
+                }
+                s.serialize_seq_end();
+            }
+            Json.Object(fields) => {
+                let mut last: Map[String, i64] = Map.new();
+                let mut i = 0;
+                while i < fields.len() {
+                    last.insert(fields[i].0.clone(), i);
+                    i += 1;
+                }
+                s.serialize_map_begin(last.len());
+                let mut written: Set[String] = Set.new();
+                i = 0;
+                while i < fields.len() {
+                    let key = ref fields[i].0;
+                    if not written.contains(key) {
+                        written.insert(key.clone());
+                        s.serialize_key();
+                        s.serialize_string(key.clone());
+                        s.serialize_value();
+                        let at = last.get(key).unwrap_or(i);
+                        fields[at].1.serialize(s);
+                    }
+                    i += 1;
+                }
+                s.serialize_map_end();
+            }
+        }
+    }
+}
+
+/// Any value reads as a `Json`, of the shape it has: an integer that fits
+/// an `i64` is `Json.Int`, any other number `Json.Number`, as `Json.parse`
+/// reads it (B-2026-11-20-28).
+impl Deserialize for Json {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[Json, DeserializeError] {
+        if not d.deserialize_option()? {
+            return Ok(Json.Null);
+        }
+        let m = d.deserialize_mark();
+        if let Ok(b) = d.deserialize_bool() {
+            return Ok(Json.Bool(b));
+        }
+        d.deserialize_reset(m);
+        if let Ok(t) = d.deserialize_string() {
+            return Ok(Json.String(t));
+        }
+        d.deserialize_reset(m);
+        if let Ok(n) = d.deserialize_i64() {
+            return Ok(Json.Int(n));
+        }
+        d.deserialize_reset(m);
+        if let Ok(x) = d.deserialize_f64() {
+            return Ok(Json.Number(x));
+        }
+        d.deserialize_reset(m);
+        if let Ok(()) = d.deserialize_seq_begin() {
+            let mut items: Vec[Json] = Vec.new();
+            while d.deserialize_element()? {
+                let x: Json = serde_next(d)?;
+                items.push(x);
+            }
+            return Ok(Json.Array(items));
+        }
+        d.deserialize_reset(m);
+        d.deserialize_map_begin()?;
+        let mut fields: Vec[(String, Json)] = Vec.new();
+        while d.deserialize_key()? {
+            let k = d.deserialize_string()?;
+            d.deserialize_value()?;
+            let v: Json = serde_next(d)?;
+            fields.push((k, v));
+        }
+        Ok(Json.Object(fields))
+    }
+}
+
 impl Json {
     /// `v` as compact JSON text.
     fn serialize[T: Serialize](v: ref T) -> String {

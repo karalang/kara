@@ -471,6 +471,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   adds no effect; `lock` still adds `blocks` (B-2026-11-19-30).
 - `eprint`, the prelude's `print` for standard error, beside `eprintln`
   (B-2026-11-20-53).
+- `Json` implements `Serialize` and `Deserialize`, as serde_json's
+  `Value` does: a derived type can hold an untyped part (`data: Json`),
+  `Json.deserialize` reads any value as a `Json`, and a `Json` is a log
+  field. An object's repeated key is written once, at its first place with
+  its last value, as `stringify` writes it (B-2026-11-20-28).
 - `SortedMap.lower(k)` and `SortedMap.higher(k)`, the entries with the
   largest key below `k` and the smallest above it, beside `floor` and
   `ceiling` (B-2026-11-19-82). `Slice.starts_with(prefix)` and
