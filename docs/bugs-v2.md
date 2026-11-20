@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 581 |
-| false-positive | 320 |
-| missing-feature | 218 |
+| diagnostics | 593 |
+| false-positive | 322 |
+| missing-feature | 220 |
 | perf | 189 |
 | other | 122 |
 | soundness | 105 |
-| miscompile | 96 |
-| crash | 62 |
+| miscompile | 97 |
+| crash | 63 |
 | run-vs-build | 59 |
-| codegen-gap | 39 |
+| codegen-gap | 40 |
 | use-after-free | 11 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 738 |
-| mir-llvm | 312 |
-| mir | 282 |
-| cli | 220 |
+| typecheck | 751 |
+| mir-llvm | 313 |
+| mir | 284 |
+| cli | 223 |
 | parser | 135 |
 | ownership | 122 |
 | runtime | 99 |
@@ -145,6 +145,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-28 | 2026-11-20 | runtime | low | `Json` implements neither `Serialize` nor `Deserialize`, so a derived type cannot hold a pass-through document (`extra: Json`), `Json.deserialize` cannot read a part as a `Json`, and a `Json` cannot be a log field value | — |
 | B-2026-11-20-29 | 2026-11-20 | runtime | medium | An `f64` field reads JSON `null` as NaN: `{"f":null}` deserializes to `f: NaN` with no error, where serde_json refuses `invalid type: null, expected f64`; nothing in json.md or design.md says a number field accepts `null` | — |
 | B-2026-11-20-30 | 2026-11-20 | other | low | design.md § Serialize and Deserialize lists `Serializer` and `Deserializer` methods that do not exist in serde.kara or have other signatures: `serialize_string(v: Str)` (is `String`), `deserialize_seq_begin -> Result[i64, ..]` (is `Result[(), ..]`), `deserialize_field -> Result[String, ..]` (is `Result[Option[String], ..]`), and `deserialize_seq_end` / `deserialize_struct_end`, which are not there | — |
+| B-2026-11-20-32 | 2026-11-20 | typecheck | medium | The `let mut` rule reads a library method's receiver off its first parameter after `self`: `let br = BufReader.new(f); br.read_line(mut s)` is refused (E0510) though read_line takes `ref self`, and `br.consume(n)` / `br.fill_buf()` (mut ref self) are accepted on a plain `let` | — |
+| B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
 
 ### Relocated
 
@@ -1917,6 +1919,23 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-8 | typecheck | low | Coercing a generic struct literal with an open type parameter to `dyn` does not use the only impl to fix it: `let mut e: dyn Ac = Bag { xs: Vec.new()… | fa4b30aa47 |
 | B-2026-11-20-9 | ownership | medium | A bare (D5-borrowed) `f: MutFn` parameter can be passed to an `own MutFn` slot such as `it.any(f)` and is accepted, although calling `f()` directly i… | 90f0cc48ee |
 | B-2026-11-20-31 | mir-llvm | high | A channel end dropped while the other side's last end drops on another worker read the channel's drop glue after releasing its lock (karac_mir_chan_e… | 17af81db2d |
+| B-2026-11-20-33 | typecheck | low | An inner `fold` seeded `0` whose items are `i32`, `rows.iter().fold(0, \|richest, row\| max(richest, row.iter().fold(0, \|sum, money\| sum + money)))` re… | 93fd9b2078 |
+| B-2026-11-20-34 | typecheck | low | `PriorityQueue.min()`, a direction guessed into the constructor's name, is refused as an unknown associated function with no pointer to `PriorityQueu… | 93fd9b2078 |
+| B-2026-11-20-35 | mir | low | A `for` element copied out of `nums.iter()` and pushed into a queue of `ref i32`, `for x in nums.iter() { let start = x; queue.push(start); }`, is re… | 93fd9b2078 |
+| B-2026-11-20-36 | typecheck | low | A row of a fill of fills walked by `iter().max()`, `*dp[0][n - 1].iter().max().unwrap()` returned as `i32`, gets no machine fix for the fill's `0`: t… | 93fd9b2078 |
+| B-2026-11-20-37 | typecheck | medium | A fill of fills of `None`, `Vec.filled(2, Vec.filled(2, None))`, whose element a later write decides, is an internal E0516 instead of taking its type… | 93fd9b2078 |
+| B-2026-11-20-38 | typecheck | low | `a.cmp(b) as i32`, Rust's -1 / 0 / 1 from an `Ordering`, is refused (Kāra's `Ordering` holds no numbers) with no machine fix | 93fd9b2078 |
+| B-2026-11-20-39 | typecheck | low | A `String` extended by a slice of `char`s, Rust's `res.extend(&d[a..b])`, is refused after `karac fix` drops the `&`: `String.extend` takes an iterat… | 93fd9b2078 |
+| B-2026-11-20-41 | typecheck | low | `max()` straight on a collection, `nums.windows(k).max()`, is two errors: the right one (an iterator method, write `.iter().max()`) and a false secon… | 93fd9b2078 |
+| B-2026-11-20-42 | cli | low | `karac fix` dropping a cast that widens by itself, `ans += (hi - lo) as i64;`, leaves the parentheses: `ans += (hi - lo);` | 93fd9b2078 |
+| B-2026-11-20-43 | cli | low | `karac fix` rewriting a Rust `binary_search` match whose `Ok` arm is empty writes `if i < v.len() and v[i] == x {} else { .. | 93fd9b2078 |
+| B-2026-11-20-44 | typecheck | low | Kāra's integers have no `isqrt` (Rust 1.84's floor of the square root): `n.isqrt()` is refused "no method 'isqrt'" | 93fd9b2078 |
+| B-2026-11-20-45 | cli | low | Literals that meet an `i32` total only through the free `min`/`max`, `total += min(firsts, seconds) * less` with `let mut firsts = 0;`, are named in… | 93fd9b2078 |
+| B-2026-11-20-46 | typecheck | low | A narrowing of a `let` bound to a search over a literal range, `let next = (0..16).find(\|v\| arr[i] ^ v == encoded[i]).unwrap(); arr.push(next)` into… | 93fd9b2078 |
+| B-2026-11-20-47 | typecheck | low | A `scan` whose items are its state, reduced and bound by a `let`, `let highest = gain.iter().scan(0, \|a, g\| { let a = a + g; Some((a, a)) }).max().un… | 93fd9b2078 |
+| B-2026-11-20-48 | mir-llvm | low | An `if` of tuple literals returned by a closure into a wider tuple slot, `fold((0, 0i32), \|(best, count), side\| if side > best { (side, count + 1) }… | 93fd9b2078 |
+| B-2026-11-20-49 | typecheck | low | `karac fix` on a Rust template whose literal bindings meet its `usize` parameters spends two rounds on a declaration it ends up not needing: round on… | 93fd9b2078 |
+| B-2026-11-20-50 | typecheck | low | `Set` and `SortedSet` have no `is_disjoint`, `is_subset` or `is_superset`: `known[u].is_disjoint(known[v])`, Rust's `HashSet::is_disjoint` and Python… | 93fd9b2078 |
 
 </details>
 
