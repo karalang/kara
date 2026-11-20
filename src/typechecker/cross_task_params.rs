@@ -23,6 +23,7 @@ impl<'a> super::TypeChecker<'a> {
         for p in params {
             if !self.enclosing_bounds.contains_key(&p)
                 || self.type_param_satisfies_bound(&p, "CrossTask")
+                || self.type_param_has_cross_task_fn_bound(&p)
             {
                 continue;
             }
@@ -33,11 +34,21 @@ impl<'a> super::TypeChecker<'a> {
             {
                 continue;
             }
+            // A function-trait bound takes the marker itself, so that each
+            // function value a caller gives is checked (B-2026-11-20-88).
+            let help = if self.type_param_has_fn_bound(&p) {
+                format!(
+                    "write `+ CrossTask` after `{p}`'s function bound, as in `{p}: Fn(..) -> R + \
+                     CrossTask`, so that each function value a caller gives it is checked"
+                )
+            } else {
+                format!("declare `{p}: CrossTask` where `{p}` is declared")
+            };
             let message = format!(
                 "error[E_NOT_CROSS_TASK]: {descr} (type `{}`) cannot cross a task boundary\n\
                  note: type parameter `{p}` is not bounded by `CrossTask`, so a caller may give \
                  it a `shared` value\n\
-                 help: declare `{p}: CrossTask` where `{p}` is declared",
+                 help: {help}",
                 type_display(ty)
             );
             match self.param_bound_edit(span.offset, &p, "CrossTask") {
@@ -58,5 +69,28 @@ impl<'a> super::TypeChecker<'a> {
                 None => self.type_error(message, *span, TypeErrorKind::CrossTaskUnsafeCapture),
             }
         }
+    }
+
+    /// Whether `p` is bounded by a function trait written `+ CrossTask`,
+    /// `F: Fn() -> i64 + CrossTask` (core semantics §6.3): every function
+    /// value a caller gives it is checked to be `CrossTask`, so a task may
+    /// capture it (B-2026-11-20-88).
+    fn type_param_has_fn_bound(&self, p: &str) -> bool {
+        self.enclosing_bounds
+            .get(p)
+            .is_some_and(|bounds| bounds.iter().any(|tb| tb.fn_sig.is_some()))
+    }
+
+    fn type_param_has_cross_task_fn_bound(&self, p: &str) -> bool {
+        self.enclosing_bounds.get(p).is_some_and(|bounds| {
+            bounds.iter().any(|tb| {
+                tb.fn_sig.as_ref().is_some_and(|sig| {
+                    crate::prelude::marks_cross_task_fn(
+                        self.program,
+                        &SpanKey::from_span(&sig.span),
+                    )
+                })
+            })
+        })
     }
 }

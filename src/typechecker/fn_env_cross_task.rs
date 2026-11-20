@@ -175,7 +175,10 @@ impl<'a> super::TypeChecker<'a> {
         for (key, f) in &fns {
             let server = SERVER_ENTRIES.contains(&key.as_str());
             for (i, p) in f.params.iter().enumerate() {
-                if (server && is_fn_type_expr(&p.ty)) || self.type_expr_marks_fn(&p.ty, true) {
+                if (server && is_fn_type_expr(&p.ty))
+                    || self.type_expr_marks_fn(&p.ty, true)
+                    || self.param_of_marked_fn_bound(f, &p.ty)
+                {
                     required.insert((key.clone(), i));
                 }
             }
@@ -293,6 +296,7 @@ impl super::TypeChecker<'_> {
         let names_cross_task = |b: &TraitBound| {
             let t = b.path.last().cloned().unwrap_or_default();
             t == "CrossTask"
+                || self.bound_marks_fn(b)
                 || self
                     .env
                     .supertrait_closure_traits(&t)
@@ -315,6 +319,44 @@ impl super::TypeChecker<'_> {
             }
         }
         out
+    }
+
+    /// Whether `b` is a function-trait bound written `+ CrossTask`, `F:
+    /// Fn() -> i64 + CrossTask`: a value of `F` is a function value checked
+    /// to be `CrossTask` where it is passed (B-2026-11-20-88).
+    fn bound_marks_fn(&self, b: &TraitBound) -> bool {
+        b.fn_sig.as_ref().is_some_and(|sig| {
+            crate::prelude::marks_cross_task_fn(self.program, &SpanKey::from_span(&sig.span))
+        })
+    }
+
+    /// Whether a parameter of `f` typed `ty` holds a value of a type
+    /// parameter in scope whose bound, or `where` clause, is a function
+    /// trait written `+ CrossTask`, so that the argument is coerced into a
+    /// marked function type as for `f: Fn() -> i64 + CrossTask`.
+    fn param_of_marked_fn_bound(&self, f: &Function, ty: &TypeExpr) -> bool {
+        let name = match &ty.kind {
+            TypeKind::Ref(t) | TypeKind::MutRef(t) => match &t.kind {
+                TypeKind::Path(p) if p.generic_args.is_none() => p.segments.as_slice(),
+                _ => return false,
+            },
+            TypeKind::Path(p) if p.generic_args.is_none() => p.segments.as_slice(),
+            _ => return false,
+        };
+        let [name] = name else {
+            return false;
+        };
+        let in_bounds = self
+            .param_scopes_at(f.span.offset)
+            .into_iter()
+            .flatten()
+            .flat_map(|g| &g.params)
+            .any(|p| p.name == *name && p.bounds.iter().any(|b| self.bound_marks_fn(b)));
+        in_bounds
+            || f.where_clause.iter().flat_map(|w| &w.constraints).any(|c| {
+                matches!(c, WhereConstraint::TypeBound { type_name, bounds, .. }
+                    if type_name == name && bounds.iter().any(|b| self.bound_marks_fn(b)))
+            })
     }
 
     /// Whether `t` names a function type written `+ CrossTask` (`marked`),

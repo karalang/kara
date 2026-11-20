@@ -4,7 +4,9 @@
 //! semantics §12: a call through a non-escaping function-typed parameter
 //! has the effects of the argument, charged at the call). A pure closure
 //! or function passes, through a generic that forwards it too; a closure
-//! that prints is refused, naming the caller.
+//! that prints is refused, naming the caller. Each parameter is bounded
+//! `Fn(..) -> R + CrossTask`, which a `par` branch's capture of it needs
+//! (B-2026-11-19-86, B-2026-11-20-88).
 
 use std::process::{Command, Output, Stdio};
 
@@ -24,14 +26,14 @@ fn karac(tag: &str, sub: &str, src: &str) -> Output {
     out
 }
 
-const HEAD: &str = "fn both[F: Fn() -> i64](f: F) -> i64 {
+const HEAD: &str = "fn both[F: Fn() -> i64 + CrossTask](f: F) -> i64 {
     let (a, b) = par { f(), f() };
     a + b
 }
-fn each[F: Fn(i64) -> i64](xs: Vec[i64], f: F) -> Vec[i64] {
+fn each[F: Fn(i64) -> i64 + CrossTask](xs: Vec[i64], f: F) -> Vec[i64] {
     par for x in xs.iter() { f(x) }
 }
-fn fwd[F: Fn() -> i64](f: F) -> i64 { both(f) }
+fn fwd[F: Fn() -> i64 + CrossTask](f: F) -> i64 { both(f) }
 fn five() -> i64 { 5 }
 ";
 
