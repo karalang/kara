@@ -1,0 +1,1 @@
+error[E0112]: source.kara:1:1: unknown module `doer`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`

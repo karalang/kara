@@ -1,0 +1,1 @@
+error[E0200]: source.kara:4:27: negative integer literal -1 cannot initialize unsigned type 'u8'

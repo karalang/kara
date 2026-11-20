@@ -1,0 +1,1 @@
+error[E0515]: source.kara:2:86: cannot move a non-`Copy` value out of a collection element: the collection still owns it; the binding is only read, so the fix borrows the element

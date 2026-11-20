@@ -1,0 +1,1 @@
+error[E0515]: source.kara:2:32: cannot move a non-`Copy` value out of a collection element: the collection still owns it

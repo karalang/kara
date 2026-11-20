@@ -1,0 +1,1 @@
+error[E0236]: source.kara:2:45: no associated function 'Null' on type 'Stdio'; `Stdio` is built by a constructor now: write `Stdio.null()`
