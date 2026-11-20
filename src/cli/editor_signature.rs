@@ -92,9 +92,12 @@ pub(crate) fn signature_help(source: &str, at: usize) -> Option<SignatureHelp> {
     })?;
     let (text, _) = nav.text();
     let mut index = call.commas;
-    let mut help = match callee(&nav, &found) {
-        Some(sig) => {
-            let help = render(text, &sig)?;
+    // A library declaration's span is in its library file, not this text:
+    // render gives nothing, and the library reference answers instead
+    // (B-2026-11-20-59).
+    let declared = callee(&nav, &found).and_then(|sig| Some((render(text, &sig)?, sig)));
+    let mut help = match declared {
+        Some((help, sig)) => {
             if sig.self_param.is_some() && found.receiver {
                 index += 1;
             }
@@ -363,6 +366,25 @@ fn paren_after(text: &str, from: usize) -> Option<usize> {
 /// call (`Shape.Rect(1.0, 2.0)`), so it ends after its last segment.
 fn callee_end(text: &str, callee: &Expr) -> usize {
     match &callee.kind {
+        // A module's function (`log.init`) is resolved to its bare name,
+        // over the span of the module path: it ends after the name
+        // (B-2026-11-20-59).
+        ExprKind::Identifier(n)
+            if text.get(callee.span.offset..callee.span.offset + callee.span.length)
+                != Some(n.as_str()) =>
+        {
+            let end = editor_nav::expr_end(text, callee);
+            match text.get(end..).map(|t| (t.trim_start(), t.len())) {
+                Some((t, len)) if t.starts_with('.') => {
+                    let after = end + len - t.len() + 1;
+                    match text.get(after..).and_then(|t| t.find(n.as_str())) {
+                        Some(i) if text[after..after + i].trim().is_empty() => after + i + n.len(),
+                        _ => end,
+                    }
+                }
+                _ => end,
+            }
+        }
         ExprKind::Path { segments, .. } => {
             let mut at = callee.span.offset;
             for seg in segments {
@@ -660,56 +682,198 @@ fn render(text: &str, f: &FnLike) -> Option<SignatureHelp> {
     })
 }
 
-/// The library reference's pages that list the builtin types' methods.
+/// The library reference's pages: every one, since each documents some
+/// library type's methods or some module's functions (B-2026-11-20-59).
 const LIBRARY_PAGES: &[&str] = &[
     include_str!("../../docs/library/collections.md"),
     include_str!("../../docs/library/strings.md"),
     include_str!("../../docs/library/core-types.md"),
     include_str!("../../docs/library/iterators.md"),
+    include_str!("../../docs/library/concurrency.md"),
+    include_str!("../../docs/library/crypto.md"),
+    include_str!("../../docs/library/data.md"),
+    include_str!("../../docs/library/encoding.md"),
+    include_str!("../../docs/library/io.md"),
+    include_str!("../../docs/library/json.md"),
+    include_str!("../../docs/library/log.md"),
+    include_str!("../../docs/library/path.md"),
+    include_str!("../../docs/library/pool.md"),
+    include_str!("../../docs/library/regex.md"),
+    include_str!("../../docs/library/secret.md"),
+    include_str!("../../docs/library/time-random-env.md"),
 ];
+
+/// Whether `e` names something an `import` brings in (`log`, `sleep`): an
+/// import, a module, or a function with no declaration in the buffer (the
+/// caller asks only once the buffer's own declarations have not answered).
+fn is_import(nav: &Nav, e: &Expr) -> bool {
+    use crate::resolver::SymbolKind;
+    let resolved = nav.resolved();
+    resolved
+        .resolutions
+        .get(&SpanKey::from_span(&e.span))
+        .is_some_and(|sid| {
+            matches!(
+                resolved.symbol_table.get_symbol(*sid).kind,
+                SymbolKind::Import { .. } | SymbolKind::Module | SymbolKind::Function { .. }
+            )
+        })
+}
+
+/// A primitive type's name (`i64.parse(s)` names a type, not a module).
+fn is_primitive(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "isize"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
+}
+
+/// Signatures and notes the library reference states.
+struct LibrarySigs {
+    /// `(type, method)`.
+    methods: HashMap<(String, String), (String, String)>,
+    /// A function by its name alone, for a module's function (`log.init`,
+    /// an imported `sleep`): the first the pages list.
+    functions: HashMap<String, (String, String)>,
+}
 
 /// `(type, method)` to its signature and notes, from the method tables of
 /// [`LIBRARY_PAGES`]: a row `` | `push` | `fn push(mut ref self, val: own T)` | Appends | ``
 /// under a heading that names its types (`` ## `Vec[T]` ``,
 /// `` ## Reading: `Str` and `String` ``).
 fn library_methods() -> &'static HashMap<(String, String), (String, String)> {
-    static TABLE: OnceLock<HashMap<(String, String), (String, String)>> = OnceLock::new();
+    &library_sigs().methods
+}
+
+/// [`library_methods`], and the functions by name. A table row is
+/// `` | `name` | `fn name(..)` | notes | `` or `` | `name(..)` | effects | notes | ``;
+/// the types it belongs to are those a heading or a `` **`Type`** ``
+/// paragraph names. A `kara` code block's `fn` lines are listed too, under
+/// the `impl` they sit in (`impl Duration { fn ms(ms: i64) -> Duration }`).
+fn library_sigs() -> &'static LibrarySigs {
+    static TABLE: OnceLock<LibrarySigs> = OnceLock::new();
     TABLE.get_or_init(|| {
-        let mut out = HashMap::new();
+        let mut out = LibrarySigs {
+            methods: HashMap::new(),
+            functions: HashMap::new(),
+        };
+        let upper_ticks = |h: &str| -> Vec<String> {
+            h.split('`')
+                .skip(1)
+                .step_by(2)
+                .map(|t| t.split('[').next().unwrap_or(t).trim().to_string())
+                .filter(|t| {
+                    (t.starts_with(|c: char| c.is_ascii_uppercase()) || is_primitive(t))
+                        && t.chars().all(|c| c.is_alphanumeric() || c == '_')
+                })
+                .collect()
+        };
+        let mut add = |types: &[String], name: &str, sig: String, notes: String| {
+            for t in types {
+                out.methods
+                    .entry((t.clone(), name.to_string()))
+                    .or_insert_with(|| (sig.clone(), notes.clone()));
+            }
+            out.functions
+                .entry(name.to_string())
+                .or_insert((sig, notes));
+        };
         for page in LIBRARY_PAGES {
             let mut types: Vec<String> = Vec::new();
+            let mut in_code = false;
+            let mut impl_ty: Option<String> = None;
             for line in page.lines() {
-                if let Some(h) = line.strip_prefix("## ") {
-                    types = h
-                        .split('`')
-                        .skip(1)
-                        .step_by(2)
-                        .map(|t| t.split('[').next().unwrap_or(t).trim().to_string())
-                        .filter(|t| t.starts_with(|c: char| c.is_ascii_uppercase()))
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("```") {
+                    in_code = !in_code;
+                    impl_ty = None;
+                    continue;
+                }
+                if in_code {
+                    if let Some(rest) = trimmed.strip_prefix("impl") {
+                        // `impl[T: CrossTask] Sender[T] {`, `impl Duration {`.
+                        let rest = rest.trim_start();
+                        let rest = if rest.starts_with('[') {
+                            matching(rest, 0).map_or("", |c| &rest[c + 1..])
+                        } else {
+                            rest
+                        };
+                        let name: String = rest
+                            .trim_start()
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        impl_ty = (!name.is_empty() && !rest.contains(" for ")).then_some(name);
+                    } else if trimmed.starts_with('}') && !line.starts_with(' ') {
+                        impl_ty = None;
+                    } else if let Some(rest) = trimmed.strip_prefix("fn ") {
+                        let name: String = rest
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        if !name.is_empty() && rest.contains('(') {
+                            let sig = trimmed.trim_end_matches(['{', ';', ' ']).to_string();
+                            let tys: Vec<String> = impl_ty.iter().cloned().collect();
+                            add(&tys, &name, sig, String::new());
+                        }
+                    }
+                    continue;
+                }
+                if let Some(h) = line.strip_prefix("##") {
+                    types = upper_ticks(h);
+                    continue;
+                }
+                if let Some(p) = line.strip_prefix("**`") {
+                    let ty: String = p
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
                         .collect();
+                    if ty.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        types = vec![ty];
+                    }
                     continue;
                 }
                 let cells: Vec<&str> = line.split(" | ").collect();
-                let [first, sig, rest @ ..] = cells.as_slice() else {
+                let [first, second, rest @ ..] = cells.as_slice() else {
                     continue;
                 };
-                let Some(name) = first.strip_prefix("| `").and_then(|n| n.strip_suffix('`')) else {
-                    continue;
-                };
-                // The first of `fn a(..)` / `fn a(..)`.
-                let Some(sig) = sig
-                    .strip_prefix("`fn ")
-                    .and_then(|s| s.split('`').next())
-                    .map(|s| format!("fn {s}"))
+                let Some(first) = first.strip_prefix("| `").and_then(|n| n.strip_suffix('`'))
                 else {
                     continue;
                 };
-                let notes = rest.join(" | ");
-                let notes = notes.trim_end_matches('|').trim().to_string();
-                for t in &types {
-                    out.entry((t.clone(), name.to_string()))
-                        .or_insert_with(|| (sig.clone(), notes.clone()));
+                // The first of `fn a(..)` / `fn a(..)`.
+                let sig = second
+                    .strip_prefix("`fn ")
+                    .and_then(|s| s.split('`').next())
+                    .map(|s| format!("fn {s}"));
+                let (name, sig, notes) = match sig {
+                    Some(sig) => (first.to_string(), sig, rest.join(" | ")),
+                    // `| `sleep(d: Duration)` | effects | notes |`.
+                    None if first.contains('(') && first.ends_with(')') => {
+                        let name = first.split('(').next().unwrap_or("").to_string();
+                        (name, format!("fn {first}"), rest.join(" | "))
+                    }
+                    None => continue,
+                };
+                if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
                 }
+                let notes = notes.trim_end_matches('|').trim().to_string();
+                add(&types, &name, sig, notes);
             }
         }
         out
@@ -801,7 +965,9 @@ fn undeclared(nav: &Nav, found: &FoundCall) -> Option<(SignatureHelp, bool)> {
         let head = match typed.node_method_callees.get(&found.id) {
             Some(key) => key.rsplit_once('.').map(|(t, _)| t.to_string()),
             None => match &object.kind {
-                ExprKind::Identifier(n) if !found.receiver => Some(n.clone()),
+                ExprKind::Identifier(n) if !found.receiver || is_import(nav, object) => {
+                    Some(n.clone())
+                }
                 _ => typed
                     .node_types
                     .get(&object.id)
@@ -821,6 +987,21 @@ fn undeclared(nav: &Nav, found: &FoundCall) -> Option<(SignatureHelp, bool)> {
         let listed = std::iter::once(head.as_str())
             .chain(also.iter().copied())
             .find_map(|t| table.get(&(t.to_string(), method.clone())));
+        // core-types.md § Parsing: every number type's `parse`.
+        if is_primitive(&head) && method == "parse" && head != "bool" && head != "char" {
+            return render_text(
+                &format!("fn parse(s: Str) -> Result[{head}, ParseError]"),
+                None,
+                false,
+            );
+        }
+        // `log.init(..)`: a module's function, read as a method of the
+        // module's name.
+        let listed = listed.or_else(|| {
+            (head.starts_with(|c: char| c.is_ascii_lowercase()) && !is_primitive(&head))
+                .then(|| library_sigs().functions.get(method))
+                .flatten()
+        });
         return match listed {
             Some((sig, notes)) => {
                 let doc = (!notes.is_empty()).then(|| notes.clone());
@@ -837,7 +1018,12 @@ fn undeclared(nav: &Nav, found: &FoundCall) -> Option<(SignatureHelp, bool)> {
             // `Vec.new()`, `String.with_capacity(n)`: a builtin type's
             // function, as the library reference lists it.
             if let [.., ty, f] = segments.as_slice() {
-                if let Some((sig, notes)) = library_methods().get(&(ty.clone(), f.clone())) {
+                let listed = library_methods().get(&(ty.clone(), f.clone())).or_else(|| {
+                    (ty.starts_with(|c: char| c.is_ascii_lowercase()) && !is_primitive(ty))
+                        .then(|| library_sigs().functions.get(f))
+                        .flatten()
+                });
+                if let Some((sig, notes)) = listed {
                     let doc = (!notes.is_empty()).then(|| notes.clone());
                     return render_text(sig, doc, false);
                 }
@@ -875,7 +1061,35 @@ fn undeclared(nav: &Nav, found: &FoundCall) -> Option<(SignatureHelp, bool)> {
         let owned = !name.ends_with("print") && !name.ends_with("println");
         return render_text(&sig, doc.map(str::to_string), owned);
     }
-    variant(nav, None, &name)
+    if let Some(help) = variant(nav, None, &name) {
+        return Some(help);
+    }
+    // A library module's function the buffer imports (`sleep`).
+    if is_import(nav, callee) {
+        if let Some((sig, notes)) = library_sigs().functions.get(&name) {
+            let doc = (!notes.is_empty()).then(|| notes.clone());
+            return render_text(sig, doc, false);
+        }
+    }
+    // A value of a function type (`let f = |x: i64| x + 1; f(2)`): its type.
+    let ty = typed
+        .node_types
+        .get(&callee.id)
+        .map(|(t, _)| t)
+        .or_else(|| typed.expr_types.get(&SpanKey::from_span(&callee.span)));
+    if let Some(
+        ty @ (Type::Function { .. } | Type::OnceFunction { .. } | Type::Ref(_) | Type::MutRef(_)),
+    ) = ty
+    {
+        let shown = nav.shown(ty);
+        let shown = shown
+            .trim_start_matches("mut ref ")
+            .trim_start_matches("ref ");
+        if shown.contains("Fn(") {
+            return render_text(&format!("{name}: {shown}"), None, false);
+        }
+    }
+    None
 }
 
 /// Tuple variant `name` of enum `of` (of any enum, when `None`) the program

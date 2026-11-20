@@ -595,6 +595,7 @@ impl<'a> TypeChecker<'a> {
                 .collect();
             w.block(&f.body);
         }
+        let mut_fn_closures: Vec<usize> = w.closure_writes.keys().copied().collect();
         let mut conflicts = w.conflicts;
         let mut errors = w.errors;
         let kind_errors = w.kind_errors;
@@ -610,6 +611,7 @@ impl<'a> TypeChecker<'a> {
         // A binding the fix makes `ref` that its arm writes through must be
         // `mut ref` instead (B-2026-10-18-28).
         let written = w.written_pattern_bindings;
+        self.mut_fn_closures.extend(mut_fn_closures);
         for edits in self.core_moving_scrutinees.values_mut() {
             for e in edits.iter_mut().filter(|e| written.contains(&e.offset)) {
                 e.replacement = e.replacement.replace("ref ", "mut ref ");

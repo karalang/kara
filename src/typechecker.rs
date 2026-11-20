@@ -2143,6 +2143,10 @@ pub struct TypeCheckResult {
     /// instead): where an editor offers the rewrite to `.expect("…")`
     /// (design.md §11 weak Ergonomics, B-2026-11-05-3).
     pub option_unwrap_sites: Vec<Span>,
+    /// The start offset of each closure literal that writes a capture, a
+    /// `MutFn` (§9.6), which the `Type` of a closure does not tell apart
+    /// from an `Fn`: what an editor's hover renders (B-2026-11-20-58).
+    pub mut_fn_closures: FxHashSet<usize>,
     /// The closures in [`Self::core_escaping_closures`] that escape only by
     /// being returned from another closure (B-2026-10-26-9).
     pub core_closure_result_only: FxHashSet<SpanKey>,
@@ -3169,6 +3173,8 @@ pub struct TypeChecker<'a> {
     pub(super) option_unwrap_receivers: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::option_unwrap_sites`].
     pub(super) option_unwrap_sites: Vec<Span>,
+    /// See [`TypeCheckResult::mut_fn_closures`].
+    pub(super) mut_fn_closures: FxHashSet<usize>,
     /// The start offset of the assignment a `match` arm holds without
     /// braces (`'L' => (dx, dy) = (-dy, dx),`), while its block is checked.
     /// The parser wraps such a body in a block whose span is the
@@ -4761,6 +4767,7 @@ impl<'a> TypeChecker<'a> {
             deprecated_enums: None,
             option_unwrap_receivers: FxHashSet::default(),
             option_unwrap_sites: Vec::new(),
+            mut_fn_closures: FxHashSet::default(),
             braceless_arm_assign: None,
             core_ref_copy_nodes: FxHashSet::default(),
             core_ref_results: FxHashSet::default(),
@@ -5568,6 +5575,7 @@ impl<'a> TypeChecker<'a> {
             core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
             core_escaping_closures,
             option_unwrap_sites: self.option_unwrap_sites,
+            mut_fn_closures: self.mut_fn_closures,
             core_closure_result_only,
             core_task_moved_captures,
             vector_method_receivers: self.vector_method_receivers,

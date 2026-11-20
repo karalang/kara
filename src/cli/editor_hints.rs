@@ -139,7 +139,7 @@ pub(super) fn hints_of(pipeline: &Pipeline, source: &str) -> Vec<InlayHint> {
         let Some((ty, _)) = typed.node_types.get(&id) else {
             continue;
         };
-        let shown = type_display(ty);
+        let shown = super::unrename(&pipeline.renames, type_display(ty));
         if shown.contains("<error>") || shown.contains("?T") {
             continue;
         }

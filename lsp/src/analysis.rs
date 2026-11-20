@@ -483,6 +483,12 @@ pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
     raw.into_iter()
         .map(|s| {
             let range = index.range(s.span_offset, s.span_length);
+            let name_len = if s.name_offset + s.name.len() <= s.span_offset + s.span_length {
+                s.name.len()
+            } else {
+                0
+            };
+            let selection_range = index.range(s.name_offset, name_len);
             #[allow(deprecated)] // `deprecated` field is required by the struct
             DocumentSymbol {
                 name: s.name,
@@ -491,9 +497,8 @@ pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
                 tags: None,
                 deprecated: None,
                 range,
-                // Flat outline: no separate name span yet, so the selection
-                // range is the whole item (must be ⊆ `range`, which equal is).
-                selection_range: range,
+                // The item's name (B-2026-11-20-sym), inside `range`.
+                selection_range,
                 children: None,
             }
         })

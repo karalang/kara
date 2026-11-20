@@ -1524,16 +1524,40 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
                 });
             }
         }
-        if let Some((ty, offset, length)) = nav.binding_at(byte_offset) {
+        if let Some((ty, offset, length, mut_fn)) = nav.binding_at(byte_offset) {
+            let mut type_display = nav.shown(ty);
+            // A closure that writes a capture is a `MutFn` (§9.6), which its
+            // `Type` does not say (B-2026-11-20-58).
+            if mut_fn && type_display.starts_with("Fn(") {
+                type_display.insert_str(0, "Mut");
+            }
             return Some(HoverInfo {
-                type_display: crate::typechecker::types::type_display(ty),
+                type_display,
                 effect_signature: None,
                 effect_signature_grouped: None,
                 span_offset: offset,
                 span_length: length,
             });
         }
-        hover_from_tables(nav.resolved(), nav.typed(), nav.effects(), byte_offset)
+        // A wildcard (`let _ = ..`) names nothing: the innermost expression
+        // around it is the enclosing block, whose type it is not
+        // (B-2026-11-20-58).
+        let bytes = source.as_bytes();
+        let ident = |i: usize| {
+            bytes
+                .get(i)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        };
+        if bytes.get(byte_offset) == Some(&b'_')
+            && !ident(byte_offset + 1)
+            && (byte_offset == 0 || !ident(byte_offset - 1))
+        {
+            return None;
+        }
+        hover_from_tables(nav.resolved(), nav.typed(), nav.effects(), byte_offset).map(|mut h| {
+            h.type_display = nav.unrename(h.type_display);
+            h
+        })
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -1880,6 +1904,25 @@ pub fn goto_definition_site(source: &str, byte_offset: usize) -> Option<DefSite>
     if let Some(loc) = resolver_definition(source, byte_offset) {
         return Some(DefSite::Buffer(loc));
     }
+    // A field's name in a struct literal or pattern (`R { id: 7 }`): its
+    // declaration, as `references` finds it (B-2026-11-20-56).
+    if let Some(decl) = resolve_source(source)
+        .and_then(|(_, resolved)| field_sites_at(source, &resolved, byte_offset))
+        .and_then(|sites| {
+            let here = sites
+                .iter()
+                .find(|s| s.offset <= byte_offset && byte_offset <= s.offset + s.length)?;
+            if here.declaration || here.shorthand {
+                return None;
+            }
+            sites.into_iter().find(|s| s.declaration)
+        })
+    {
+        return Some(DefSite::Buffer(DefLocation {
+            span_offset: decl.offset,
+            span_length: decl.length,
+        }));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         let nav = cli::editor_nav::analyze(source)?;
@@ -1891,6 +1934,35 @@ pub fn goto_definition_site(source: &str, byte_offset: usize) -> Option<DefSite>
     }
 }
 
+/// Whether the resolution (or declaration) spanning `start..start + len`
+/// is the one the identifier at `byte_offset` names: its span is exactly
+/// that identifier, or its symbol has the identifier's name. A tuple-variant
+/// pattern's resolution covers the whole pattern (`E.A(r)`) and a struct
+/// literal's the whole literal (`S { f: |x| x }`), so without this a binding
+/// inside them went to the enum or the struct (B-2026-11-20-56).
+fn names_the_word(
+    source: &str,
+    byte_offset: usize,
+    start: usize,
+    len: usize,
+    resolved: &ResolveResult,
+    sym: crate::resolver::SymbolId,
+) -> bool {
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+    let bytes = source.as_bytes();
+    let (mut a, mut b) = (byte_offset.min(bytes.len()), byte_offset.min(bytes.len()));
+    while a > 0 && ident(bytes[a - 1]) {
+        a -= 1;
+    }
+    while b < bytes.len() && ident(bytes[b]) {
+        b += 1;
+    }
+    if a == b || (a == start && b == start + len) {
+        return true;
+    }
+    source.get(a..b) == Some(resolved.symbol_table.get_symbol(sym).name.as_str())
+}
+
 /// A name the resolver binds: a local, parameter, function or type.
 fn resolver_definition(source: &str, byte_offset: usize) -> Option<DefLocation> {
     let (_program, resolved) = resolve_source(source)?;
@@ -1899,6 +1971,9 @@ fn resolver_definition(source: &str, byte_offset: usize) -> Option<DefLocation> 
     for (key, sym_id) in &resolved.resolutions {
         let (start, len) = (key.0, key.1);
         if byte_offset < start || byte_offset >= start.saturating_add(len) {
+            continue;
+        }
+        if !names_the_word(source, byte_offset, start, len, &resolved, *sym_id) {
             continue;
         }
         if best.is_none_or(|(blen, _)| len < blen) {
@@ -1971,7 +2046,11 @@ pub fn find_references(
     let mut best_len = usize::MAX;
     for (key, sym_id) in &resolved.resolutions {
         let (start, len) = (key.0, key.1);
-        if byte_offset >= start && byte_offset < start.saturating_add(len) && len < best_len {
+        if byte_offset >= start
+            && byte_offset < start.saturating_add(len)
+            && len < best_len
+            && names_the_word(source, byte_offset, start, len, &resolved, *sym_id)
+        {
             best_len = len;
             target = Some(*sym_id);
         }
@@ -1981,7 +2060,12 @@ pub fn find_references(
     if target.is_none() {
         for sym in resolved.symbol_table.all_symbols() {
             let (start, len) = (sym.span.offset, sym.span.length);
-            if len > 0 && byte_offset >= start && byte_offset < start + len && len < best_len {
+            if len > 0
+                && byte_offset >= start
+                && byte_offset < start + len
+                && len < best_len
+                && names_the_word(source, byte_offset, start, len, &resolved, sym.id)
+            {
                 best_len = len;
                 target = Some(sym.id);
             }
@@ -2372,6 +2456,9 @@ pub struct SymbolOutline {
     pub kind: &'static str,
     pub span_offset: usize,
     pub span_length: usize,
+    /// Where the item's name sits in it (the symbol's selection range), the
+    /// first whole-word occurrence of the name in the item's span.
+    pub name_offset: usize,
 }
 
 /// Document-outline query: every top-level user item (function, struct, enum,
@@ -2409,11 +2496,26 @@ pub fn document_symbols(source: &str) -> Vec<SymbolOutline> {
                 SymbolKind::EffectResource | SymbolKind::EffectGroup => "namespace",
                 _ => return None,
             };
+            let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+            let name_offset = source
+                .get(s.span.offset..(s.span.offset + s.span.length).min(source.len()))
+                .and_then(|text| {
+                    let b = text.as_bytes();
+                    text.match_indices(s.name.as_str()).find(|(i, _)| {
+                        (*i == 0 || !ident(b[i - 1]))
+                            && (i + s.name.len() == b.len() || !ident(b[i + s.name.len()]))
+                    })
+                })
+                .map(|(i, _)| s.span.offset + i);
+            // A library item the buffer imports carries its library file's
+            // span, which is not this text: no outline entry.
+            let name_offset = name_offset?;
             Some(SymbolOutline {
                 name: s.name.clone(),
                 kind,
                 span_offset: s.span.offset,
                 span_length: s.span.length,
+                name_offset,
             })
         })
         .collect();

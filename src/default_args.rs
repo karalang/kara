@@ -942,8 +942,12 @@ pub(crate) fn named_call_fix(
             .collect();
     }
     if positional < info.named_from {
-        let a = &args[positional];
-        if a.label.is_some() && a.label.as_deref() == info.names[positional].as_deref() {
+        // A call with fewer arguments than positional parameters, `f()` for
+        // `f(a, b: ..)` (B-2026-11-20-55).
+        let (Some(a), Some(name)) = (args.get(positional), info.names.get(positional)) else {
+            return vec![];
+        };
+        if a.label.is_some() && a.label.as_deref() == name.as_deref() {
             let end = a
                 .mut_marker_span
                 .map(|m| m.offset)

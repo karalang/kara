@@ -74,9 +74,14 @@ cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads --no-defau
 echo "==> building karac + karac_jit_runner (release, static LLVM)"
 cargo build --release --no-default-features --features llvm,llvm-static --bin karac --bin karac_jit_runner
 
-# Its own build: the server analyses source and links no LLVM at all.
-echo "==> building kara-lsp (release)"
-cargo build --release -p kara-lsp --bin kara-lsp
+# Its own build: the server analyses source and links no LLVM at all. Its
+# profile unwinds (Cargo.toml `release-lsp`): the server answers each request
+# under `catch_unwind`, which `panic = "abort"` would turn into a dead editor
+# session on the first analysis panic (B-2026-11-20-55). Copied to
+# target/release/ so the steps below find it where the other binaries are.
+echo "==> building kara-lsp (release-lsp)"
+cargo build --profile release-lsp -p kara-lsp --bin kara-lsp
+cp target/release-lsp/kara-lsp target/release/kara-lsp
 
 VERSION_RAW="$(target/release/karac --version | awk '{print $2}')"
 if [[ "$VERSION_RAW" == *"dev.shallow"* || "$VERSION_RAW" == *"dev.unknown"* ]]; then

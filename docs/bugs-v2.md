@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 593 |
+| diagnostics | 596 |
 | false-positive | 322 |
-| missing-feature | 221 |
+| missing-feature | 223 |
 | perf | 189 |
 | other | 124 |
 | soundness | 105 |
 | miscompile | 98 |
-| crash | 63 |
+| crash | 64 |
 | run-vs-build | 59 |
 | codegen-gap | 40 |
 | use-after-free | 11 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 752 |
+| typecheck | 753 |
 | mir-llvm | 313 |
 | mir | 284 |
-| cli | 223 |
+| cli | 228 |
 | parser | 135 |
 | ownership | 122 |
 | runtime | 101 |
@@ -145,6 +145,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-51 | 2026-11-20 | interp+runtime | medium | `fs.copy(p, p)` empties `p` and returns Ok(0), on run and build alike; a copy onto the same file through a symlink does the same. Ruled: refuse with InvalidInput and leave the file intact | — |
 | B-2026-11-20-52 | 2026-11-20 | other | low | `std.path.parent` can end in a `.` component: `parent("/usr//lib/./x")` is `"/usr//lib/."` and `parent("../x/./y")` is `"../x/."`. Ruled: no trailing `.` component, as Python's PurePath | — |
 | B-2026-11-20-53 | 2026-11-20 | typecheck | low | The prelude has `print`, `println` and `eprintln` but no `eprint`: `eprint("x")` is E0100 `undefined name 'eprint'`. Ruled: add it for symmetry | — |
+| B-2026-11-20-55 | 2026-11-20 | typecheck | high | karac check aborts on a call with fewer arguments than a named-parameter function's positional parameters (`log.init()`), and kara-lsp's release build dies with it: the workspace's `panic = "abort"` voids the server's catch_unwind guards | — |
+| B-2026-11-20-56 | 2026-11-20 | cli | medium | kara-lsp goto-definition and references at a binding inside a tuple-variant pattern (`E.A(r)`, `Some(w)`), a closure parameter or a field name inside a struct literal go to the enclosing enum or struct, so references from the binding miss its uses | — |
+| B-2026-11-20-57 | 2026-11-20 | cli | low | kara-lsp document symbols select the whole item rather than its name, and list the library functions a file imports with spans from their library files | — |
+| B-2026-11-20-58 | 2026-11-20 | cli | medium | kara-lsp hover shows the enclosing block's type on `let _`, `Fn(..)` for a closure that writes a capture (a `MutFn`), and the renamed-apart name (`Fiel_`) of a program type named like one the compiler spells; each written back as the binding's type is refused | — |
+| B-2026-11-20-60 | 2026-11-20 | cli | low | kara-lsp hover shows `R` for a binding destructured from a borrowed place (`let (r, k) = h.pe` with `h` a bare parameter, then `let m = r`), which is a `ref R`: written back as the binding's type it is refused (E0313) | — |
+| B-2026-11-20-59 | 2026-11-20 | cli | medium | kara-lsp signature help gives nothing for library methods outside four library pages (`tx.send`, `Duration.ms`), module functions (`sleep`, `log.init`), a number type's `parse`, or a call of a function-typed value | — |
 
 ### Relocated
 

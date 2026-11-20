@@ -4856,6 +4856,32 @@ fn mir_check_text(text: &str) -> String {
     temp.replace_all(&t, "a temporary value").into_owned()
 }
 
+/// `shown` with each type [`Pipeline::strict_core`] renamed apart named as
+/// the program wrote it, word by word (`Fiel_` back to `Field`): what an
+/// editor shows of a type (B-2026-11-20-58).
+pub(crate) fn unrename(renames: &[(String, String)], shown: String) -> String {
+    if renames.is_empty() {
+        return shown;
+    }
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(shown.len());
+    let mut rest = shown.as_str();
+    while let Some(start) = rest.find(ident) {
+        out.push_str(&rest[..start]);
+        let word_len = rest[start..]
+            .find(|c: char| !ident(c))
+            .unwrap_or(rest.len() - start);
+        let word = &rest[start..start + word_len];
+        match renames.iter().find(|(new, _)| new == word) {
+            Some((_, old)) => out.push_str(old),
+            None => out.push_str(word),
+        }
+        rest = &rest[start + word_len..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod mir_message_tests {
     use super::{mir_check_message, mir_check_text};

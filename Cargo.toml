@@ -443,3 +443,12 @@ opt-level = 1
 [profile.release]
 panic = "abort"
 lto = "fat"
+
+# kara-lsp's release build (scripts/package-release.sh): the release profile
+# with unwinding. The server answers each request under `catch_unwind` so a
+# front-end panic costs one answer, not the editor's session; under the
+# workspace's `panic = "abort"` every guard was void and the first panic
+# killed the server (B-2026-11-20-55).
+[profile.release-lsp]
+inherits = "release"
+panic = "unwind"

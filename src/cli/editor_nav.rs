@@ -28,6 +28,9 @@ pub(crate) struct Nav {
     /// The package's other modules: each one's file, and where its text is
     /// in `text` (B-2026-11-17-71).
     modules: Vec<(std::path::PathBuf, usize, usize)>,
+    /// The program's types the check renamed apart from the compiler's
+    /// (`(new, old)`), which a type it shows names as written.
+    renames: Vec<(String, String)>,
 }
 
 /// Where a definition is: in the buffer, or in one file of the library
@@ -120,6 +123,7 @@ pub(crate) fn analyze_at(source: &str, path: Option<&std::path::Path>) -> Option
             user_len: t.user_len,
             lib_start: t.lib_start,
             modules: t.modules,
+            renames: Vec::new(),
         });
     }
     nav_of(super::editor::checked(source), source)
@@ -156,10 +160,21 @@ fn nav_of(mut pipeline: super::Pipeline, source: &str) -> Option<Nav> {
         user_len,
         lib_start: user_len,
         modules: Vec::new(),
+        renames: std::mem::take(&mut pipeline.renames),
     })
 }
 
 impl Nav {
+    /// `ty` as the program writes it (B-2026-11-20-58).
+    pub(crate) fn shown(&self, ty: &Type) -> String {
+        self.unrename(crate::typechecker::types::type_display(ty))
+    }
+
+    /// [`super::unrename`] with this check's renames.
+    pub(crate) fn unrename(&self, shown: String) -> String {
+        super::unrename(&self.renames, shown)
+    }
+
     pub(crate) fn resolved(&self) -> &crate::resolver::ResolveResult {
         &self.resolved
     }
@@ -451,10 +466,15 @@ impl Nav {
 
     /// The type of the `let` (or other pattern) binding whose name is under
     /// `at`, with the name's span.
-    pub(crate) fn binding_at(&self, at: usize) -> Option<(&Type, usize, usize)> {
+    /// The binding pattern at `at`: its type, its span, and whether it is a
+    /// `let` of a closure that writes a capture, a `MutFn` (§9.6) the type
+    /// does not tell from an `Fn` (B-2026-11-20-58).
+    pub(crate) fn binding_at(&self, at: usize) -> Option<(&Type, usize, usize, bool)> {
         struct Find {
             at: usize,
             hit: Option<(NodeId, Span)>,
+            /// `let` pattern offset → its closure value's offset.
+            closure_lets: Vec<(usize, usize)>,
         }
         impl MutVisitor for Find {
             fn span(&mut self, _: &mut Span) {}
@@ -466,8 +486,20 @@ impl Nav {
                     self.hit = Some((p.id, p.span));
                 }
             }
+            fn stmt(&mut self, s: &mut crate::ast::Stmt) {
+                if let crate::ast::StmtKind::Let { pattern, value, .. } = &s.kind {
+                    if matches!(value.kind, crate::ast::ExprKind::Closure { .. }) {
+                        self.closure_lets
+                            .push((pattern.span.offset, value.span.offset));
+                    }
+                }
+            }
         }
-        let mut find = Find { at, hit: None };
+        let mut find = Find {
+            at,
+            hit: None,
+            closure_lets: Vec::new(),
+        };
         for item in self.user_items() {
             if span_contains(item.span(), at) {
                 walk_item_mut_with(&mut item.clone(), &mut find);
@@ -475,7 +507,11 @@ impl Nav {
         }
         let (id, span) = find.hit?;
         let (ty, _) = self.typed().node_types.get(&id)?;
-        Some((ty, span.offset, span.length))
+        let mut_fn = find
+            .closure_lets
+            .iter()
+            .any(|(p, c)| *p == span.offset && self.typed().mut_fn_closures.contains(c));
+        Some((ty, span.offset, span.length, mut_fn))
     }
 
     /// The definition of `ty.method`, and the declaration's header.
