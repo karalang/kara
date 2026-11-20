@@ -3707,7 +3707,16 @@ impl<'a> super::TypeChecker<'a> {
         // `to_string`/… — so route it (and `ref StringSlice`) through the same
         // stdlib dispatch (design.md § StringSlice). No impl block exists for
         // it, so unlike `ref String` the derefed form routes here too.
-        if matches!(&obj_ty_for_named, Type::Named { name, .. } if name == "StringSlice") {
+        // A USER trait impl on `Str` gets a method the view's builtin surface
+        // lacks, as one on `String` does above (B-2026-11-20-26: the library's
+        // `impl Serialize for Str`); builtin methods keep precedence.
+        let view_routes_to_user_impl = !STRING_BUILTIN_METHODS.contains(&method)
+            && ["Str", "StringSlice"]
+                .iter()
+                .any(|ty| !self.env.find_methods_with_args(ty, &[], method).is_empty());
+        if matches!(&obj_ty_for_named, Type::Named { name, .. } if name == "StringSlice")
+            && !view_routes_to_user_impl
+        {
             return self.infer_str_view_method(method, args, span);
         }
 

@@ -515,22 +515,26 @@ fn report_helpers(attrs: &[Attribute], site: HelperSite, errors: &mut Vec<Resolv
 
 fn check_item_helpers(item: &Item, errors: &mut Vec<ResolveError>) {
     use HelperSite::*;
-    let fields = |fs: &[StructField], errors: &mut Vec<ResolveError>| {
+    let fields = |fs: &[StructField], place: SerdePlace, errors: &mut Vec<ResolveError>| {
         for f in fs {
             report_helpers(&f.attributes, Field, errors);
+            check_serde_keys(&f.attributes, place, errors);
         }
     };
     match item {
         Item::StructDef(s) => {
             report_helpers(&s.attributes, TypeOrVariant, errors);
-            fields(&s.fields, errors);
+            check_serde_keys(&s.attributes, SerdePlace::Struct, errors);
+            fields(&s.fields, SerdePlace::Field, errors);
         }
         Item::EnumDef(e) => {
             report_helpers(&e.attributes, TypeOrVariant, errors);
+            check_serde_keys(&e.attributes, SerdePlace::Enum, errors);
             for v in &e.variants {
                 report_helpers(&v.attributes, TypeOrVariant, errors);
+                check_serde_keys(&v.attributes, SerdePlace::Variant, errors);
                 if let VariantKind::Struct(fs) = &v.kind {
-                    fields(fs, errors);
+                    fields(fs, SerdePlace::VariantField, errors);
                 }
             }
         }
@@ -581,6 +585,127 @@ fn check_item_helpers(item: &Item, errors: &mut Vec<ResolveError>) {
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_) => {}
+    }
+}
+
+/// Where a `#[serde(...)]` stands, for the keys the derives read there
+/// (runtime/stdlib/source/serde.kara).
+#[derive(Clone, Copy, PartialEq)]
+enum SerdePlace {
+    Struct,
+    Enum,
+    Variant,
+    Field,
+    /// A struct variant's field: the derives read no key there.
+    VariantField,
+}
+
+impl SerdePlace {
+    /// The keys read here: those that take a value, then the bare flags.
+    /// `default` is both (`default` or `default: expr`).
+    fn keys(self) -> (&'static [&'static str], &'static [&'static str]) {
+        match self {
+            SerdePlace::Struct | SerdePlace::VariantField => (&[], &[]),
+            SerdePlace::Enum => (&["tag"], &["untagged"]),
+            SerdePlace::Variant => (&["rename"], &[]),
+            SerdePlace::Field => (
+                &["rename", "default"],
+                &["skip", "skip_serializing", "skip_deserializing", "default"],
+            ),
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            SerdePlace::Struct => "a struct",
+            SerdePlace::Enum => "an enum",
+            SerdePlace::Variant => "a variant",
+            SerdePlace::Field => "a field",
+            SerdePlace::VariantField => "a variant's field",
+        }
+    }
+}
+
+/// Refuse a `#[serde(...)]` key the derives do not read where it stands: it
+/// would do nothing, and a misspelt `skip_serializing` writes the field it
+/// was meant to hide (B-2026-11-20-24). A key within two edits of one that
+/// is read gets a machine-applicable rename.
+fn check_serde_keys(attrs: &[Attribute], place: SerdePlace, errors: &mut Vec<ResolveError>) {
+    let (valued, flags) = place.keys();
+    let mut known: Vec<&str> = Vec::new();
+    for k in valued.iter().chain(flags.iter()) {
+        if !known.contains(k) {
+            known.push(k);
+        }
+    }
+    let accepted = if known.is_empty() {
+        format!("The derives read no `serde` key on {}", place.noun())
+    } else {
+        let list: Vec<String> = known.iter().map(|k| format!("`{k}`")).collect();
+        let list = match list.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            _ => list.join(""),
+        };
+        let noun = place.noun();
+        format!("On {noun} the derives read {list}")
+    };
+    for attr in attrs.iter().filter(|a| a.is_bare("serde")) {
+        for arg in &attr.args {
+            // `key: value`, or a bare `key`.
+            let (key, key_span, has_value) = match (&arg.name, &arg.value) {
+                (Some(k), _) => (k.clone(), arg.span, arg.value.is_some()),
+                (
+                    None,
+                    Some(Expr {
+                        kind: ExprKind::Identifier(k),
+                        span,
+                        ..
+                    }),
+                ) => (k.clone(), *span, false),
+                _ => continue,
+            };
+            let message = if valued.contains(&key.as_str()) || flags.contains(&key.as_str()) {
+                if has_value && !valued.contains(&key.as_str()) {
+                    format!("`serde({key})` takes no value; write `{key}`")
+                } else if !has_value && !flags.contains(&key.as_str()) {
+                    format!("`serde({key}: ...)` needs a value, as `{key}: \"name\"`")
+                } else {
+                    continue;
+                }
+            } else {
+                let close = crate::edit_distance::suggest_similar(&key, &known);
+                if let Some(c) = &close {
+                    errors.push(ResolveError {
+                        message: format!(
+                            "error[E_UNKNOWN_ATTRIBUTE]: unknown `serde` key `{key}`; did you \
+                             mean `{c}`? {accepted} (design.md § Serialize and Deserialize)"
+                        ),
+                        span: key_span,
+                        kind: ResolveErrorKind::UnknownAttribute,
+                        suggestion: Some(format!("write `{c}`")),
+                        replacement: Some(Box::new(crate::resolver::TextEdit {
+                            offset: key_span.offset,
+                            length: key.len(),
+                            replacement: c.clone(),
+                        })),
+                        stub_hint: None,
+                    });
+                    continue;
+                }
+                format!("unknown `serde` key `{key}`")
+            };
+            errors.push(ResolveError {
+                message: format!(
+                    "error[E_UNKNOWN_ATTRIBUTE]: {message}. {accepted} (design.md § Serialize \
+                     and Deserialize)"
+                ),
+                span: key_span,
+                kind: ResolveErrorKind::UnknownAttribute,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+        }
     }
 }
 

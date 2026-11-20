@@ -27,6 +27,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `MutFn` through a shared borrow. The fix declares the parameter `f: mut
   ref MutFn(..)` (and its callers pass `mut g`), or `own` when the function
   keeps it. A bare, borrowed parameter still takes it (B-2026-11-20-9).
+- A `#[serde(...)]` key the derives do not read where it stands is an
+  error, with a did-you-mean rename that `karac fix` applies:
+  `#[serde(skip_serialising)]` wrote the field it was meant to hide, and
+  `#[serde(tagg: "kind")]` left the enum externally tagged, both with a
+  clean check. A key that needs a value and has none (`rename`), or a
+  flag given one (`skip: true`), is refused too (B-2026-11-20-24).
+- `Json.deserialize` refuses `null` for an `f64` or `f32` field, as
+  serde_json does, with the field's path (`f: expected a number, found
+  null`); it read NaN. NaN and the infinities are still written `null`,
+  so they do not round-trip: a field that needs them is `Option[f64]` or
+  has its own impl (B-2026-11-20-29).
+
 - `#[derive(Serialize)]` or `#[derive(Deserialize)]` over a type that
   holds a `std.secret.Secret` (a field, or inside an `Option`, a `Vec`,
   a tuple) is refused at the declaration, naming the field: a secret is
@@ -868,6 +880,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   could already be freeing it; ThreadSanitizer reported it in every one-shot
   channel waitlist kata (1114 to 1117, 1188) and nowhere else in the corpus
   sweep. The glue is now read under the lock (B-2026-11-20-31).
+- `Json.serialize` writes a float as `Json.stringify` and serde_json do
+  (`1e-7`, `0.00001`), not as Kāra's own text (`1e-07`, `1e-05`), and an
+  `f32` by its own shortest digits (`0.1`, not `0.10000000149011612`),
+  in a log field too (B-2026-11-20-25).
+- `Str` implements `Serialize`, as log.md lists it: a view split out of
+  a line is logged or serialized as its text. A program's own trait impl
+  on `Str` now resolves, directly and through a bound; its methods were
+  never found (B-2026-11-20-26).
+
 - A closure literal whose tail is a written `ref` of a `Copy` value,
   passed where the callee leaves the return type open (`ap[T](f: Fn() ->
   T)` called as `ap(|| ref v)`, or `g.spawn(|| ref v)`), gives a `ref`, as

@@ -207,13 +207,31 @@ impl Serialize for usize {
 
 impl Serialize for f32 {
     fn serialize[S: Serializer](ref self, s: mut ref S) {
-        s.serialize_f64(self as f64);
+        // The f64 nearest the f32's own shortest text, so `0.1` is written
+        // `0.1`, not the widened `0.10000000149011612` (B-2026-11-20-25).
+        let wide = self as f64;
+        if wide - wide != 0.0 {
+            s.serialize_f64(wide);
+        } else {
+            match f64.parse(f"{self}") {
+                Ok(v) => s.serialize_f64(v),
+                Err(_) => s.serialize_f64(wide),
+            }
+        }
     }
 }
 
 impl Serialize for f64 {
     fn serialize[S: Serializer](ref self, s: mut ref S) {
         s.serialize_f64(self);
+    }
+}
+
+// A view is written as its text: a field split out of a line can be logged
+// or serialized as it is (docs/library/log.md § Fields; B-2026-11-20-26).
+impl Serialize for Str {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_string(self.to_string());
     }
 }
 
@@ -597,12 +615,9 @@ impl Serializer for JsonSerializer {
     }
 
     fn serialize_f64(mut ref self, v: f64) {
-        // JSON has no NaN or infinity.
-        if v != v or v - v != 0.0 {
-            self.scalar("null");
-        } else {
-            self.scalar(f"{v}");
-        }
+        // The text `Json.stringify` writes, serde_json's (`1e-7`, `0.00001`);
+        // NaN and the infinities are `null` (B-2026-11-20-25).
+        self.scalar(Json.Number(v).stringify());
     }
 
     fn serialize_string(mut ref self, v: String) {
@@ -1124,11 +1139,8 @@ impl Deserializer for JsonDeserializer {
     }
 
     fn deserialize_f64(mut ref self) -> Result[f64, DeserializeError] {
-        self.ws();
-        if self.peek() == Some('n') {
-            self.word("null")?;
-            return Ok(0.0 / 0.0);
-        }
+        // `null` is the wrong shape, as in serde_json: a NaN or an infinity
+        // is written `null` and does not read back (B-2026-11-20-29).
         let text = self.number("a number".to_string())?;
         if not serde_json_number_ok(text, false) {
             return Err(self.fail(f"`{text}` is not a number"));

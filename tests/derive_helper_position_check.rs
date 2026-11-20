@@ -42,10 +42,14 @@ fn a_derive_helper_off_its_derive_s_items_is_refused() {
     }
 }
 
+// A struct variant's field is a place `#[serde(...)]` may stand, but the
+// derives read no key there, so `rename` on one is now refused by key
+// (B-2026-11-20-24, tests/serde_conformance_pass.rs): it was accepted here
+// and wrote `x`, not `xx`.
 #[test]
 fn a_derive_helper_where_its_derive_reads_it_is_accepted() {
     let src = "#[derive(Serialize)]\n#[serde(tag: \"type\")]\n\
-               enum E { #[serde(rename: \"a\")] A { #[serde(rename: \"xx\")] x: i64 }, B }\n\
+               enum E { #[serde(rename: \"a\")] A { x: i64 }, B }\n\
                #[derive(Serialize)]\nstruct P { #[serde(skip)] a: i64, #[karac::field(3)] b: i64, \
                #[karac::proto(sint64)] c: i64 }\nfn main() { println(1); }\n";
     let (ok, out) = check("valid", src);

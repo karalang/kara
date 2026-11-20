@@ -1989,7 +1989,13 @@ impl<'a> Lcx<'a> {
                     let target = self.defs.impls.get(&impl_id).and_then(|i| i.target);
                     let prim = match (&b.target_type.kind, target) {
                         (ast::TypeKind::Path(p), None) if b.generic_params.is_none() => {
-                            p.segments.last().and_then(|n| self.primitive(n))
+                            p.segments.last().and_then(|n| {
+                                // `impl Serialize for Str`: the view, `str`
+                                // (B-2026-11-20-26).
+                                self.primitive(n).or_else(|| {
+                                    (n == "Str").then(|| self.tys.tcx().intern(HK::StaticStr))
+                                })
+                            })
                         }
                         _ => None,
                     };

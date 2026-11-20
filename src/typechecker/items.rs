@@ -6267,6 +6267,12 @@ impl<'a> super::TypeChecker<'a> {
                 // matched no impl and every call on it typed as an error in
                 // silence.
                 Type::TypeParam(p) if gp.contains(p) => lowered.clone(),
+                // `impl Serialize for Str`: `self` is the view every `Str`
+                // annotation names, not a `Named { "Str" }` none does
+                // (B-2026-11-20-26).
+                Type::Named { name, args } if name == "StringSlice" && args.is_empty() => {
+                    lowered.clone()
+                }
                 _ => Type::Named {
                     name: type_name.clone(),
                     args: Vec::new(),
