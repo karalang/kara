@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 638 |
 | false-positive | 331 |
 | missing-feature | 224 |
-| perf | 190 |
+| perf | 191 |
 | other | 126 |
 | soundness | 109 |
 | miscompile | 99 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 789 |
-| mir-llvm | 314 |
+| mir-llvm | 315 |
 | mir | 290 |
 | cli | 243 |
 | parser | 143 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-79 | 2026-11-20 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}` literals, `go f(x)`, `<-rx`, `err != nil` without a binding, `errors.New`, `strconv`, `strings`, `sync`, `fmt.Println(a, b)`, the comma-ok `let (v, ok) = m[k]`, and `&T{..}` (mended into an E0283) | — |
 | B-2026-11-20-104 | 2026-11-20 | cli | low | `karac repl` refuses a `?` in a cell under `:provide` (E0200 "`?` on a Result inside this closure requires the closure to return `Result`", placed at `<repl>:8:36` on a hidden `with_provider[Clock](FakeClock {}, || {`), though deferred.md § Cell Scope makes `?` legal in any cell | — |
 | B-2026-11-20-107 | 2026-11-20 | mir+ownership | low | The build's MIR frontend runs the ownership pass without the core rules (`CORE_RULES`), so it lowers closure captures by `ref` that `karac check` verified by move: 24 of 21,387 corpus programs differ, none observably (all pass ASan) | — |
+| B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
 
 ### Relocated
 
