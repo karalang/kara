@@ -1,5 +1,15 @@
 # concurrent_emails — what Python and Go miss, what Kāra catches
 
+> **Rewritten 2026-11-20.** `task.md` and `solution.kara` now return each
+> welcome line and print the three lines after the `par` block, because
+> two branches that both print conflict (`E0418`, core-semantics.md
+> §11.2). The compiler now reports the shared-counter race as `E0418` too;
+> `E0408` and the module-level `let mut` it described are gone (a
+> module-level `let mut` is `E_MODULE_LET`). The transcripts below, the
+> `MemoryOrdering` argument in them, `canned_responses.json` and the
+> recorded harness runs predate the rewrite and describe the old task and
+> compiler. `expected.txt`, produced by `mirror.py`, is the oracle.
+
 The task: send three welcomes **concurrently** while keeping a running
 count. The naive shape — a shared mutable counter incremented from
 concurrent tasks — is a data race. Here is who catches it, verified on

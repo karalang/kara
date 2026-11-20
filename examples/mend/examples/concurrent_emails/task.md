@@ -5,10 +5,10 @@
 > Write a Kāra program that sends a welcome message to users 1, 2, and 3
 > **concurrently**, keeping a running count of how many were sent. Define:
 >
-> - `send_welcome(user_id: i64, ...)` — prints a welcome line and increments
->   the shared sent-count.
+> - `send_welcome(user_id: i64, ...) -> String` — returns the welcome line
+>   for that user (`welcome user <id>`) and increments the shared sent-count.
 > - `main()` — runs the three sends concurrently in a `par { }` block, then
->   prints `"done"`.
+>   prints the three lines in user order, then `sent <count>`, then `"done"`.
 >
 > The compiler will check your code with `karac check --output=json` and report
 > structured diagnostics. If any errors carry a `replacement` field, run
@@ -18,17 +18,24 @@
 ## Why this task
 
 This is the corpus's concurrency punchline. The obvious first attempt —
-a module-level `let mut` counter incremented from inside a `par { }`
-block — is the exact shape of a data race. Kāra rejects it at **compile
-time** with `E0408`: a `par { }` branch may not write a plain shared
-mutable binding; the value must be a concurrency primitive
-(`Atomic[T]` / `Mutex[T]`) or per-task state.
+a plain counter (a `let mut` the branches update through `mut ref`)
+incremented from inside a `par { }` block — is the exact shape of a data
+race. Kāra rejects it at **compile time**: two `par` branches may not
+write, or mutably borrow, the same place (`E0418`, core-semantics.md
+§11.2); the value must be a concurrency primitive (`Atomic[T]` /
+`Mutex[T]`) or per-task state. (A module-level `let mut` counter is
+refused before that, as `E_MODULE_LET`: Kāra has no mutable globals.)
+Earlier versions of this task asked each branch to print its own line;
+that first attempt now also meets `E0418`, since two branches writing
+`Stdout` conflict the same way. It is the same lesson: a shared effect in
+`par` branches is refused.
 
-The LLM reads the `E0408` message, lifts the counter into a
+The LLM reads the `E0418` message, lifts the counter into a
 `sync struct Counter { count: Atomic[i64] }`, and the build goes clean —
 *with the parallelism preserved*. The compiler didn't force the
 programmer back to sequential code; it forced the counter to be
-race-free.
+race-free. `expected.txt` (from `mirror.py`, the Python mirror) is the
+oracle.
 
 This is the descriptive end of the Mend loop (no machine-applicable
 `replacement` — convergence relies on the LLM reading the message and

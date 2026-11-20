@@ -83,7 +83,7 @@ Each example directory contains:
 | `welcome_emails` | Ownership                       | Use-after-move on `Vec` consumed by a `for` loop | `E0500` (descriptive) |
 | `order_status`   | Pattern exhaustiveness          | Missing variant in `match` over enum          | `E0205` (descriptive) |
 | `user_lookup`    | Type mismatch                   | Returning `Option[String]` where `String` was declared (forgot to handle the None case from `Map.get`) | `E0200` (descriptive) |
-| `concurrent_emails` | Effect / `par`-conflict      | Shared-counter data race written from inside a `par { }` block | `E0408` (descriptive) |
+| `concurrent_emails` | Effect / `par`-conflict      | Shared-counter data race written from inside a `par { }` block | `E0418` (descriptive) |
 
 Each example targets a distinct *compiler axis* — the same loop
 machinery exercises ownership, exhaustiveness, type checking, and the
