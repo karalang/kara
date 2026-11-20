@@ -1430,6 +1430,18 @@ impl<'a> super::TypeChecker<'a> {
                 // `T` to `i64`, where zipping the impl's params with the
                 // receiver's args bound it to `Option[i64]`. Positional zipping
                 // remains only for an impl whose target args were not recorded.
+                // A `Map` / `Set` receiver that names no hasher has the default
+                // one, which a library impl written over any hasher
+                // (`impl[K, V, H: BuildHasher] Map[K, V, H]`) binds its `H` to
+                // (B-2026-11-21-3).
+                let type_args: Vec<Type> = match super::types::hasher_slot(&type_name) {
+                    Some(n) if type_args.len() == n => {
+                        let mut padded = type_args.clone();
+                        padded.push(super::types::default_hasher());
+                        padded
+                    }
+                    _ => type_args.clone(),
+                };
                 let recv_subs: HashMap<String, SubstValue> = if imp.target_generic_args.is_empty() {
                     imp.generic_params
                         .as_ref()

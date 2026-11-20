@@ -634,11 +634,16 @@ impl[T: Hash + Eq] Set[T] {
     fn iter(ref self) -> SetIter[T] {
         SetIter { s: self, front: 0, back: self.len() }
     }
+}
 
+// Every method that hashes is generic over the table's hasher, so a set
+// that names one (`Set[T, MyBuildHasher]`) keeps hashing through it here
+// too (B-2026-11-21-3).
+impl[T: Hash + Eq, H: BuildHasher] Set[T, H] {
     /// A set of the list's elements; a repeated element is kept once
     /// (docs/library/collections.md, Collection literals).
-    fn from(v: own Vec[T]) -> Set[T] {
-        let mut out: Set[T] = Set.new();
+    fn from(v: own Vec[T]) -> Set[T, H] {
+        let mut out: Set[T, H] = Set.new();
         for x in v.into_iter() {
             out.insert(x);
         }
@@ -811,16 +816,43 @@ impl[K, V] Iterator for MapIter[K, V] {
     }
 }
 
-impl[K: Hash + Eq, V] Map[K, V] {
+// Every method that hashes is generic over the table's hasher, so a map
+// that names one (`Map[K, V, MyBuildHasher]`) keeps hashing through it here
+// too (B-2026-11-21-3).
+impl[K: Hash + Eq, V, H: BuildHasher] Map[K, V, H] {
     /// A map of the list's `(key, value)` pairs; a repeated key keeps its
     /// last value (docs/library/collections.md, Collection literals).
-    fn from(v: own Vec[(K, V)]) -> Map[K, V] {
-        let mut out: Map[K, V] = Map.new();
+    fn from(v: own Vec[(K, V)]) -> Map[K, V, H] {
+        let mut out: Map[K, V, H] = Map.new();
         for (k, x) in v.into_iter() {
             out.insert(k, x);
         }
         out
     }
+
+    /// The value at `key`, borrowed to be changed in place.
+    fn get_mut(mut ref self, key: K) -> Option[mut ref V] {
+        if self.contains_key(key) {
+            Some(mut self[key])
+        } else {
+            None
+        }
+    }
+
+    /// Keeps the entries for which `pred` returns `true` and drops the
+    /// rest. `pred` borrows the key and may change the value.
+    fn retain(mut ref self, pred: own MutFn(K, mut ref V) -> bool) {
+        let mut f = pred;
+        for (k, v) in self.drain_entries().into_iter() {
+            let mut v = v;
+            if f(k, mut v) {
+                self.insert(k, v);
+            }
+        }
+    }
+}
+
+impl[K: Hash + Eq, V] Map[K, V] {
 
     /// The entries, in the map's iteration order, each key and value
     /// borrowed.
@@ -836,15 +868,6 @@ impl[K: Hash + Eq, V] Map[K, V] {
     /// The values, in the map's iteration order, each borrowed.
     fn values(ref self) -> MapValues[K, V] {
         MapValues { m: self, front: 0, back: self.len() }
-    }
-
-    /// The value at `key`, borrowed to be changed in place.
-    fn get_mut(mut ref self, key: K) -> Option[mut ref V] {
-        if self.contains_key(key) {
-            Some(mut self[key])
-        } else {
-            None
-        }
     }
 
     /// The values, in the map's iteration order, each borrowed to be
@@ -872,18 +895,6 @@ impl[K: Hash + Eq, V] Map[K, V] {
             out.push(v);
         }
         out.into_iter()
-    }
-
-    /// Keeps the entries for which `pred` returns `true` and drops the
-    /// rest. `pred` borrows the key and may change the value.
-    fn retain(mut ref self, pred: own MutFn(K, mut ref V) -> bool) {
-        let mut f = pred;
-        for (k, v) in self.drain_entries().into_iter() {
-            let mut v = v;
-            if f(k, mut v) {
-                self.insert(k, v);
-            }
-        }
     }
 }
 
@@ -2007,10 +2018,10 @@ impl FromIterator[char] for String {
     }
 }
 
-impl[K: Hash + Eq, V] FromIterator[(K, V)] for Map[K, V] {
-    fn from_iter[I: Iterator[Item = (K, V)]](iter: own I) -> Map[K, V] {
+impl[K: Hash + Eq, V, H: BuildHasher] FromIterator[(K, V)] for Map[K, V, H] {
+    fn from_iter[I: Iterator[Item = (K, V)]](iter: own I) -> Map[K, V, H] {
         let mut it = iter;
-        let mut out: Map[K, V] = Map.new();
+        let mut out: Map[K, V, H] = Map.new();
         while let Some((k, v)) = it.next() {
             out.insert(k, v);
         }
@@ -2018,10 +2029,10 @@ impl[K: Hash + Eq, V] FromIterator[(K, V)] for Map[K, V] {
     }
 }
 
-impl[T: Hash + Eq] FromIterator[T] for Set[T] {
-    fn from_iter[I: Iterator[Item = T]](iter: own I) -> Set[T] {
+impl[T: Hash + Eq, H: BuildHasher] FromIterator[T] for Set[T, H] {
+    fn from_iter[I: Iterator[Item = T]](iter: own I) -> Set[T, H] {
         let mut it = iter;
-        let mut out: Set[T] = Set.new();
+        let mut out: Set[T, H] = Set.new();
         while let Some(x) = it.next() {
             out.insert(x);
         }
@@ -2083,7 +2094,7 @@ impl[T] Extend[T] for VecDeque[T] {
     }
 }
 
-impl[T: Hash + Eq] Extend[T] for Set[T] {
+impl[T: Hash + Eq, H: BuildHasher] Extend[T] for Set[T, H] {
     fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I) {
         for x in items.into_iter() {
             self.insert(x);
@@ -2100,7 +2111,7 @@ impl[T] Extend[T] for SortedSet[T] {
 }
 
 // A later pair replaces an earlier value, as `insert` does.
-impl[K: Hash + Eq, V] Extend[(K, V)] for Map[K, V] {
+impl[K: Hash + Eq, V, H: BuildHasher] Extend[(K, V)] for Map[K, V, H] {
     fn extend[I: IntoIterator[Item = (K, V)]](mut ref self, items: own I) {
         for (k, v) in items.into_iter() {
             self.insert(k, v);
@@ -2520,8 +2531,8 @@ impl[T: PartialEq] VecDeque[T] {
     }
 }
 
-impl[T: Hash + Eq] Set[T] {
-    fn default() -> Set[T] {
+impl[T: Hash + Eq, H: BuildHasher] Set[T, H] {
+    fn default() -> Set[T, H] {
         Set.new()
     }
 }
@@ -2532,8 +2543,8 @@ impl[T] SortedSet[T] {
     }
 }
 
-impl[K: Hash + Eq, V] Map[K, V] {
-    fn default() -> Map[K, V] {
+impl[K: Hash + Eq, V, H: BuildHasher] Map[K, V, H] {
+    fn default() -> Map[K, V, H] {
         Map.new()
     }
 }

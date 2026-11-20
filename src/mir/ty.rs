@@ -689,10 +689,23 @@ impl TyInterner {
             }
             TyKind::Intrinsic(IntrinsicTy::String) => "String".into(),
             TyKind::Intrinsic(IntrinsicTy::Vec(e)) => format!("Vec[{}]", self.display(e)),
-            TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => {
-                format!("Map[{}, {}]", self.display(k), self.display(v))
-            }
-            TyKind::Intrinsic(IntrinsicTy::Set(e)) => format!("Set[{}]", self.display(e)),
+            // A hasher other than the default is written, as the checker
+            // writes it: two tables over different hashers are different
+            // types, and an instance named for one is not the other's
+            // (B-2026-11-21-3).
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => match self.hasher(t) {
+                Some(h) => format!(
+                    "Map[{}, {}, {}]",
+                    self.display(k),
+                    self.display(v),
+                    self.display(h)
+                ),
+                None => format!("Map[{}, {}]", self.display(k), self.display(v)),
+            },
+            TyKind::Intrinsic(IntrinsicTy::Set(e)) => match self.hasher(t) {
+                Some(h) => format!("Set[{}, {}]", self.display(e), self.display(h)),
+                None => format!("Set[{}]", self.display(e)),
+            },
             TyKind::Intrinsic(IntrinsicTy::VecDeque(e)) => {
                 format!("VecDeque[{}]", self.display(e))
             }

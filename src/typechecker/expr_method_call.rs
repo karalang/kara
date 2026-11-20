@@ -3237,10 +3237,9 @@ impl<'a> super::TypeChecker<'a> {
             return t;
         }
         // An `Array[T, N]` has every `Slice[T]` method (library/collections.md).
-        // The scalar-element reads above are the array's own arm; any other
-        // element type reads through the slice surface, as `.as_slice()`
-        // would (B-2026-10-24-23).
-        if matches!(method, "get" | "first" | "last" | "contains") {
+        // Its reads go through the slice surface for every element type, as
+        // `.as_slice()` would (B-2026-10-24-23, B-2026-11-21-2).
+        if matches!(method, "get" | "first" | "last" | "contains" | "is_sorted") {
             let array_elem = match &obj_ty {
                 Type::Array { element, .. } => Some(element.clone()),
                 Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {

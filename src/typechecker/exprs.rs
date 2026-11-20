@@ -8342,6 +8342,27 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// The type variable in the hasher slot of the `Map` / `Set` a call at
+    /// `span` returns, when it is still unsolved (B-2026-11-21-3).
+    fn unsolved_result_hasher_var(&self, span: Span) -> Option<TypeVarId> {
+        let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
+        let ty = self.expr_types.get(&SpanKey::from_span(&span))?;
+        let ty = resolve_type_vars(
+            ty,
+            &self.env.substitutions,
+            &HashMap::new(),
+            &self.env.const_substitutions,
+            &no_consts,
+        );
+        let Type::Named { name, args } = &ty else {
+            return None;
+        };
+        match args.get(super::types::hasher_slot(name)?) {
+            Some(Type::TypeVar(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
     pub(super) fn report_unsolved_call_vars(&mut self) {
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
         for (span, id) in std::mem::take(&mut self.unsolved_array_lens) {
@@ -8389,20 +8410,27 @@ impl<'a> super::TypeChecker<'a> {
         }
         for (span, vars) in std::mem::take(&mut self.unsolved_call_vars) {
             let names: HashMap<TypeVarId, String> = vars.iter().cloned().collect();
+            // The hasher of a `Map` / `Set` the call makes is the default
+            // when nothing names one, as for `Map.new()`: the library's
+            // `Map.from` is generic over it (B-2026-11-21-3).
+            let hasher_var = self.unsolved_result_hasher_var(span);
             // A parameter a literal solved (`Vec.from_iter(0..3)`) takes the
             // literal's type, its default when nothing else fixes it.
-            let unsolved = vars.iter().find(|(id, _)| {
-                matches!(
-                    resolve_type_vars(
-                        &Type::TypeVar(*id),
-                        &self.env.substitutions,
-                        &HashMap::new(),
-                        &self.env.const_substitutions,
-                        &no_consts,
-                    ),
-                    Type::TypeVar(v) if inference::literal_var_kind(v).is_none()
-                )
-            });
+            let unsolved = vars
+                .iter()
+                .filter(|(id, _)| Some(*id) != hasher_var)
+                .find(|(id, _)| {
+                    matches!(
+                        resolve_type_vars(
+                            &Type::TypeVar(*id),
+                            &self.env.substitutions,
+                            &HashMap::new(),
+                            &self.env.const_substitutions,
+                            &no_consts,
+                        ),
+                        Type::TypeVar(v) if inference::literal_var_kind(v).is_none()
+                    )
+                });
             let Some((_, name)) = unsolved else {
                 self.report_collect_used_early(span, &names);
                 continue;

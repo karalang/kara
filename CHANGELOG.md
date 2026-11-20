@@ -910,6 +910,20 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   through the same borrow. `karac run`, `karac build` and the MIR
   interpreter refused it with "unary '*' requires 'ref T'"
   (B-2026-11-20-63).
+- A `Map[K, V, H]` or `Set[T, H]` with a user `BuildHasher` keeps its keys
+  through `extend`, `retain`, `get_mut`, `Map.from` / `Set.from` and
+  `collect`. Those methods are library source written over the default
+  hasher, so they hashed with SipHash while `get` and `insert` ran the
+  table's own hasher: `get` missed keys the table held, and `karac run` and
+  `karac build` printed different answers. They are now written over any
+  hasher, and `Map.from(..)` / `collect()` into a `Map[K, V,
+  FxBuildHasher]` builds that table (collections.md § Hashing,
+  B-2026-11-21-3).
+- A fixed `Array[T, N]` reads like a `Slice` (collections.md § Array):
+  `first`, `get` and `last` on an array of numbers return `Option[ref T]`,
+  as on every other element type, and `is_sorted` works on an array of
+  `String`s or tuples, which was refused (B-2026-11-21-2).
+
 - A channel whose two ends are dropped on different pool workers at the
   same moment no longer reads freed memory. The end that was not last read
   the channel's drop glue after releasing its lock, while the other end

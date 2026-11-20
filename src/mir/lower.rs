@@ -1163,6 +1163,11 @@ struct FnItem<'a> {
     /// that is not simply the leading ones in order: `impl[I, B] ... for
     /// MapIter[I, I.Item, B]` gives `[0, 2]`.
     impl_arg_pos: Option<Vec<usize>>,
+    /// For an impl over any hasher (`impl[K, V, H: BuildHasher] .. Map[K,
+    /// V, H]`): how many arguments the table has before its hasher, and the
+    /// default hasher a target that names none stands for
+    /// (B-2026-11-21-3).
+    impl_hasher_pad: Option<(usize, Ty)>,
     /// The impl block's span: with the method's own span, the key of the
     /// checker's per-function tables (a trait default method copied into
     /// several impls has the same span in each).
@@ -1200,8 +1205,25 @@ impl FnItem<'_> {
             .unwrap_or_else(|| args.to_vec())
     }
 
+    /// The target arguments [`Self::impl_args`] reads: `full`, a table's
+    /// with its hasher, for an impl over any hasher; else `elems`.
+    fn table_targs<'t>(&self, full: &'t [Ty], elems: &'t [Ty]) -> &'t [Ty] {
+        match self.impl_hasher_pad {
+            Some(_) => full,
+            None => elems,
+        }
+    }
+
     /// The impl's generic arguments, read off its target's arguments.
     fn impl_args(&self, targs: &[Ty]) -> Option<Vec<Ty>> {
+        let padded;
+        let targs = match self.impl_hasher_pad {
+            Some((base, h)) if targs.len() == base => {
+                padded = [targs, &[h]].concat();
+                &padded[..]
+            }
+            _ => targs,
+        };
         match &self.impl_arg_pos {
             Some(pos) => pos.iter().map(|&k| targs.get(k).copied()).collect(),
             None => targs.get(..self.impl_params).map(<[Ty]>::to_vec),
@@ -1839,6 +1861,7 @@ impl<'a> Lcx<'a> {
                     impl_trait_args: None,
                     impl_target_ty: None,
                     impl_arg_pos: None,
+                    impl_hasher_pad: None,
                     impl_span: None,
                     impl_dispatch: None,
                     impl_suffix: None,
@@ -1915,6 +1938,7 @@ impl<'a> Lcx<'a> {
                                 impl_trait_args: None,
                                 impl_target_ty: None,
                                 impl_arg_pos: None,
+                                impl_hasher_pad: None,
                                 impl_span: None,
                                 impl_dispatch: None,
                                 impl_suffix: None,
@@ -2059,6 +2083,30 @@ impl<'a> Lcx<'a> {
                         });
                     let impl_params = b.generic_params.as_ref().map_or(0, |g| g.params.len());
                     let impl_arg_pos = impl_arg_positions(b);
+                    // The parser keeps a written hasher beside the tree
+                    // (`Program::container_hashers`): the target names one
+                    // when a generic parameter of the impl sits there.
+                    let impl_hasher_pad = match &b.target_type.kind {
+                        ast::TypeKind::Path(p) => {
+                            let key = SpanKey::from_span(&p.span);
+                            let over_any = matches!(
+                                program.container_hashers.get(&key),
+                                Some(crate::hasher_kind::HasherKind::User(h))
+                                    if b.generic_params.as_ref().is_some_and(
+                                        |g| g.params.iter().any(|q| &q.name == h))
+                            );
+                            match p.segments.last().map(String::as_str) {
+                                Some("Map") if over_any => Some(2),
+                                Some("Set") if over_any => Some(1),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                    .and_then(|base| {
+                        let d = self.defs.lookup(0, "SipHash13BuildHasher")?;
+                        Some((base, self.tys.tcx().adt(d, &[])))
+                    });
                     for it in &b.items {
                         let ImplItem::Method(f) = it else { continue };
                         // A `#[compiler_builtin]` method's body is a
@@ -2087,6 +2135,7 @@ impl<'a> Lcx<'a> {
                                         .and_then(|t| t.generic_args.as_deref()),
                                     impl_target_ty: Some(&b.target_type),
                                     impl_arg_pos: impl_arg_pos.clone(),
+                                    impl_hasher_pad,
                                     impl_span: Some(SpanKey::from_span(&b.span)),
                                     impl_dispatch: impl_dispatch.clone(),
                                     impl_suffix: impl_suffix.clone(),
@@ -25904,6 +25953,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .is_some_and(|g| !g.params.is_empty());
             return (prim.next().is_none() && !generic).then(|| (d, Vec::new()));
         }
+        // A table's arguments with its hasher, for an impl over any hasher.
+        let full = match kind {
+            HK::Adt { args, .. } | HK::Shared { args, .. } | HK::Intrinsic { args, .. } => {
+                self.tys().tcx().list(args)
+            }
+            _ => Vec::new(),
+        };
         let (target, targs) = match kind {
             HK::Adt { def, args } | HK::Shared { def, args } => (def, self.tys().tcx().list(args)),
             HK::Intrinsic { kind, args } => {
@@ -25937,7 +25993,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return None;
         }
-        Some((d, item.impl_args(&targs)?))
+        Some((d, item.impl_args(item.table_targs(&full, &targs))?))
     }
 
     /// The method `method` of the blanket impl being lowered, when `recv`
@@ -26019,6 +26075,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !prim.is_empty() {
             return Ok(None);
         }
+        // A table's arguments with its hasher, for an impl over any hasher.
+        let full = match kind {
+            HK::Adt { args, .. } | HK::Shared { args, .. } | HK::Intrinsic { args, .. } => {
+                self.tys().tcx().list(args)
+            }
+            _ => Vec::new(),
+        };
         let (target, targs) = match kind {
             HK::Adt { def, args } | HK::Shared { def, args } => (def, self.tys().tcx().list(args)),
             HK::Intrinsic { kind, args } => {
@@ -26054,7 +26117,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !generic(item) {
             return Ok(None);
         }
-        let Some(inst) = item.impl_args(&targs) else {
+        let Some(inst) = item.impl_args(item.table_targs(&full, &targs)) else {
             return Ok(None);
         };
         self.own_generics_from_args(*d, inst, args, ret)
@@ -26084,6 +26147,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             return self.own_generics_from_args(d, Vec::new(), args, None);
         }
+        // A table's arguments with its hasher, for an impl over any hasher.
+        let full = match kind {
+            HK::Adt { args, .. } | HK::Shared { args, .. } | HK::Intrinsic { args, .. } => {
+                self.tys().tcx().list(args)
+            }
+            _ => Vec::new(),
+        };
         let (target, targs) = match kind {
             HK::Adt { def, args } | HK::Shared { def, args } => (def, self.tys().tcx().list(args)),
             HK::Intrinsic { kind, args } => {
@@ -26116,7 +26186,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if found.next().is_some() {
             return Ok(None);
         }
-        let inst = match item.impl_args(&targs) {
+        let inst = match item.impl_args(item.table_targs(&full, &targs)) {
             Some(inst) => inst,
             None => match self.impl_args_through_bound(e, item, base) {
                 Some(inst) => inst,

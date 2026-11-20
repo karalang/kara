@@ -307,115 +307,35 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Fixed-size `Array[T, N]` read-only method surface for a SCALAR
-        // element (B-2026-07-17-19). A fixed array is a structural
-        // `Type::Array`, not `Type::Named`, so it otherwise falls through to
-        // the silent `Type::Error` catch-all — which typechecked `a.get(0)` /
-        // `a.contains(x)` clean and then either ran only under the interpreter
-        // (which dispatches a fixed array as a Vec) or BUILD-FAILED under AOT.
-        // Model exactly the subset both backends now run (`compile_fixed_array_
-        // read` provides the matching codegen): `len`/`is_empty`/`get`/`first`/
-        // `last`/`contains`. `iter`/`into_iter`/`as_slice`/`as_ptr` are handled
-        // by their own arms (above / the iterator-source arm below), so they are
-        // deliberately excluded here to fall through to them; the wider Vec
-        // surface (`to_vec`/`slice`/`rev`/iterator adaptors) is NOT modelled and
-        // is rejected at the structural fall-through. Non-scalar element arrays
-        // (String/Vec/struct elements) need heap/borrow handling the codegen
-        // arm does not provide, so they are excluded and stay rejected.
-        if matches!(
-            method,
-            "len" | "is_empty" | "get" | "first" | "last" | "contains" | "is_sorted"
-        ) {
-            let array_elem = match obj_ty {
-                Type::Array { element, .. } => Some((**element).clone()),
-                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
-                    Type::Array { element, .. } => Some((**element).clone()),
-                    _ => None,
-                },
-                _ => None,
-            };
-            if let Some(elem) = array_elem {
-                // B-2026-10-06-40: `len` / `is_empty` never touch an
-                // element -- the answer is the type's own `N` -- so they hold
-                // for EVERY element type, not only the scalar ones the rest of
-                // this surface is gated on. `Array[(i64, i64), 2].len()` was
-                // refused with "no method 'len' on type 'Array'" while the same
-                // call on `Array[i64, 2]` typechecked; codegen answers both
-                // from the LLVM array length.
-                let scalar = matches!(
-                    elem,
-                    Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
-                );
-                if scalar || matches!(method, "len" | "is_empty") {
-                    let option_elem = Type::Named {
-                        name: "Option".to_string(),
-                        args: vec![elem.clone()],
-                    };
-                    match method {
-                        "len" => {
-                            if !args.is_empty() {
-                                self.type_error(
-                                    "Array.len() takes no arguments".to_string(),
-                                    *span,
-                                    TypeErrorKind::WrongNumberOfArgs,
-                                );
-                            }
-                            return Some(Type::Int(IntSize::I64));
-                        }
-                        "is_empty" => {
-                            if !args.is_empty() {
-                                self.type_error(
-                                    "Array.is_empty() takes no arguments".to_string(),
-                                    *span,
-                                    TypeErrorKind::WrongNumberOfArgs,
-                                );
-                            }
-                            return Some(Type::Bool);
-                        }
-                        "first" => {
-                            if !args.is_empty() {
-                                self.type_error(
-                                    "Array.first() takes no arguments".to_string(),
-                                    *span,
-                                    TypeErrorKind::WrongNumberOfArgs,
-                                );
-                            }
-                            return Some(option_elem);
-                        }
-                        "last" => {
-                            self.expect_optional_index_arg("Array.last", args, span);
-                            return Some(option_elem);
-                        }
-                        "get" => {
-                            for arg in args {
-                                let at = self.infer_expr(&arg.value);
-                                self.check_assignable(
-                                    &Type::Int(IntSize::I64),
-                                    &at,
-                                    arg.value.span,
-                                );
-                            }
-                            return Some(option_elem);
-                        }
-                        "contains" => {
-                            for arg in args {
-                                let at = self.infer_expr(&arg.value);
-                                self.check_assignable(&elem, &at, arg.value.span);
-                            }
-                            return Some(Type::Bool);
-                        }
-                        // The fixed-array twin of `Vec.is_sorted` /
-                        // `Slice.is_sorted` (B-2026-08-21-10). Same
-                        // total-order gate, so a `Array[f64, N]` receiver is
-                        // rejected exactly as `Vec[f64].sort()` is.
-                        "is_sorted" => {
-                            self.expect_no_args("Array.is_sorted", args, span);
-                            self.require_ord_element(&elem, "Array", "is_sorted", span);
-                            return Some(Type::Bool);
-                        }
-                        _ => unreachable!(),
-                    }
+        // `Array[T, N].len()` / `.is_empty()` answer from the type's own `N`
+        // and never touch an element, so they hold for every element type
+        // (B-2026-10-06-40). The array's other `Slice[T]` reads (`get`,
+        // `first`, `last`, `contains`, `is_sorted`) go through the slice
+        // surface for every element type, with the slice's signatures:
+        // `a.first()` is an `Option[ref T]` (collections.md § `Array[T, N]`,
+        // B-2026-11-21-2). They used to have a scalar-only arm here that
+        // returned `Option[T]`.
+        if matches!(method, "len" | "is_empty") {
+            let is_array = match obj_ty {
+                Type::Array { .. } => true,
+                Type::Ref(inner) | Type::MutRef(inner) => {
+                    matches!(inner.as_ref(), Type::Array { .. })
                 }
+                _ => false,
+            };
+            if is_array {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("Array.{method}() takes no arguments"),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                return Some(if method == "len" {
+                    Type::Int(IntSize::I64)
+                } else {
+                    Type::Bool
+                });
             }
         }
         None
