@@ -3918,6 +3918,10 @@ pub struct TypeChecker<'a> {
     /// innermost last, with each range's first literal
     /// (`range_literal_sources`, B-2026-11-19-29 / -33).
     pub(super) range_param_sources: Vec<(String, Vec<range_literal_sources::RangeLiteral>)>,
+    /// `let` bindings of the current function whose value's items come from
+    /// literal ranges (`let next = (0..16).find(..).unwrap();`), with those
+    /// ranges' first literals, latest last (kata 1720, B-2026-11-20-46).
+    pub(super) range_let_sources: Vec<(String, Vec<range_literal_sources::RangeLiteral>)>,
     /// A use of such a parameter, or a `collect` over such items, by span:
     /// a narrowing refused there offers the ranges' suffixes.
     pub(super) range_source_uses: FxHashMap<SpanKey, Vec<range_literal_sources::RangeLiteral>>,
@@ -4927,6 +4931,7 @@ impl<'a> TypeChecker<'a> {
             error_fix_diffs: FxHashMap::default(),
             trait_locked_params: FxHashMap::default(),
             range_param_sources: Vec::new(),
+            range_let_sources: Vec::new(),
             range_source_uses: FxHashMap::default(),
             par_stmt_branches: FxHashMap::default(),
             tuple_literal_elems: FxHashMap::default(),

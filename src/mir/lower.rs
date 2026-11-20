@@ -4103,6 +4103,12 @@ struct Bx<'l, 'a> {
     self_local: Option<Local>,
     scopes: Vec<Vec<ScopeEntry<'a>>>,
     loops: Vec<LoopCx>,
+    /// A `for` element of `Copy` type bound by value from a shared
+    /// reference into the collection (`for x in v.iter()`), with the local
+    /// that holds that reference: where `x` flows into a `ref` slot, the
+    /// slot takes the reference into the collection, not a borrow of the
+    /// loop's copy, which ends with the iteration.
+    copied_elems: FxHashMap<Local, Local>,
     errors: Vec<String>,
     name: String,
     /// In a closure body: where each captured symbol lives.
@@ -4297,6 +4303,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             self_local: None,
             scopes: Vec::new(),
             loops: Vec::new(),
+            copied_elems: FxHashMap::default(),
             errors: Vec::new(),
             name,
             captured: FxHashMap::default(),
@@ -4842,6 +4849,29 @@ impl<'l, 'a> Bx<'l, 'a> {
         let l = self.temp(want);
         self.expr_into(a, Place::local(l))?;
         Ok(Operand::Move(Place::local(l)))
+    }
+
+    /// The target's tuple type, when `value` is a branching expression
+    /// (`branches`) of another tuple type of the same arity: its tails are
+    /// then built at the target's widths.
+    fn tuple_slot_of_branches(
+        &mut self,
+        branches: bool,
+        value: &'a Expr,
+        target: &'a Expr,
+    ) -> R<Option<Ty>> {
+        if !branches {
+            return Ok(None);
+        }
+        let vt = self.expr_ty(value)?;
+        let tt = self.expr_ty(target)?;
+        let (_, tt) = self.strip_ty_full(tt);
+        let tcx = self.tys().tcx();
+        let same_arity = match (tcx.kind(vt), tcx.kind(tt)) {
+            (HK::Tuple(a), HK::Tuple(b)) => tcx.list(a).len() == tcx.list(b).len(),
+            _ => false,
+        };
+        Ok((same_arity && vt != tt).then_some(tt))
     }
 
     /// `op` widened into the numeric slot `t`, if it needs it.
@@ -7706,10 +7736,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         let pending = self.prepare_place(target)?;
         // A tuple literal is built at the target's element types, as a
         // `let`'s is at its annotation's (`b[1] = (7, 8)` into `(i32, i32)`).
+        let branches = matches!(
+            value.kind,
+            ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_)
+        );
         let op = if matches!(value.kind, ExprKind::Tuple(_)) {
             let tt = self.expr_ty(target)?;
             let (_, tt) = self.strip_ty_full(tt);
             self.operand_at(value, tt)?
+        } else if let Some(tt) = self.tuple_slot_of_branches(branches, value, target)? {
+            // The same for an `if`, `match` or block of tuple literals
+            // (`acc = if c { (side, n + 1) } else { acc }`): each tail is
+            // built at the target's widths, as a `let`'s is (B-2026-11-20-48).
+            let l = self.temp(tt);
+            self.expr_into(value, Place::local(l))?;
+            Operand::Move(Place::local(l))
         } else {
             // A view of a number stored into a wider number slot is read
             // and widened: `cur = d` with `d: ref i32`
@@ -10196,6 +10237,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 // A place of `T` flowing into a `ref T` slot is borrowed.
                 if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(dt) {
+                    // A `for` element copied out of the collection lends
+                    // the reference it was copied through (B-2026-11-20-35).
+                    if inner == t && !mutable && p.projection.is_empty() {
+                        if let Some(&r) = self.copied_elems.get(&p.local) {
+                            self.assign(dest, Rvalue::Use(Operand::Copy(Place::local(r))));
+                            return Ok(());
+                        }
+                    }
                     if inner == t {
                         let kind = if mutable {
                             BorrowKind::Mut
@@ -18409,6 +18458,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             PatternKind::Binding(name) if by_ref && !mutable && self.is_copy(elem) => {
                 let x = self.user_local(name, elem, pattern.id);
                 self.assign(x, Rvalue::Use(Operand::Copy(place.clone())));
+                self.copied_elems.insert(x, place.local);
                 binds.push((x, elem));
             }
             // `for x in v.iter()`: `x` is the reference itself.

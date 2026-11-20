@@ -133,7 +133,9 @@ impl super::Parser {
                             stmts.push(self.finish_multi_assign(expr)?);
                         } else if self.eat(&Token::Equal) {
                             // Assignment: expr = value
+                            let value_start = self.current_span();
                             let value = self.parse_expression()?;
+                            self.note_whole_value_cast(&value_start, &value);
                             self.expect(&Token::Semicolon)?;
                             let span = expr.span;
                             stmts.push(Stmt {
@@ -146,7 +148,9 @@ impl super::Parser {
                             });
                         } else if let Some(cop) = self.try_compound_op() {
                             // Compound assignment: expr += value
+                            let value_start = self.current_span();
                             let value = self.parse_expression()?;
+                            self.note_whole_value_cast(&value_start, &value);
                             self.expect(&Token::Semicolon)?;
                             let span = expr.span;
                             stmts.push(Stmt {
@@ -264,7 +268,9 @@ impl super::Parser {
             return self.finish_multi_assign(expr);
         }
         if self.eat(&Token::Equal) {
+            let value_start = self.current_span();
             let value = self.parse_expression()?;
+            self.note_whole_value_cast(&value_start, &value);
             self.expect(&Token::Semicolon)?;
             let span = expr.span;
             return Some(Stmt {
@@ -277,7 +283,9 @@ impl super::Parser {
             });
         }
         if let Some(cop) = self.try_compound_op() {
+            let value_start = self.current_span();
             let value = self.parse_expression()?;
+            self.note_whole_value_cast(&value_start, &value);
             self.expect(&Token::Semicolon)?;
             let span = expr.span;
             return Some(Stmt {
@@ -777,7 +785,9 @@ impl super::Parser {
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
         self.expect(&Token::Equal)?;
+        let value_start = self.current_span();
         let value = self.parse_expression()?;
+        self.note_whole_value_cast(&value_start, &value);
         self.expect(&Token::Semicolon)?;
         let mut locals: Vec<(String, Span)> = Vec::new();
         crate::span_visitor::for_each_expr(&value, &mut |e| match &e.kind {

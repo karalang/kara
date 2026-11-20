@@ -49,7 +49,10 @@ pub(crate) const SET_BUILTIN_METHODS: &[&str] = &[
     "difference",
     "insert",
     "intersection",
+    "is_disjoint",
     "is_empty",
+    "is_subset",
+    "is_superset",
     "iter",
     "len",
     "remove",
@@ -66,7 +69,10 @@ pub(crate) const SORTED_SET_BUILTIN_METHODS: &[&str] = &[
     "difference",
     "insert",
     "intersection",
+    "is_disjoint",
     "is_empty",
+    "is_subset",
+    "is_superset",
     "len",
     "max",
     "min",
@@ -2816,6 +2822,49 @@ impl<'a> super::TypeChecker<'a> {
             && self.extends_by_lent_chars(&args[0].value)
         {
             return Type::Unit;
+        }
+        // `s.extend(v[a..b])`, Rust's `s.extend(&v[a..b])` once `karac fix`
+        // has dropped the `&`: a slice is not `IntoIterator`
+        // (collections.md), so a `String`'s `Extend[char]` reads it through
+        // `.iter()`, which lends the `char`s the case above takes (kata
+        // 1694's Rust solution, B-2026-11-20-39).
+        if method == "extend"
+            && args.len() == 1
+            && matches!(receiver_for_method_lookup(&obj_ty), Type::Str)
+        {
+            if let Some(shown) = self.extends_by_a_char_slice(&args[0].value) {
+                let arg = &args[0].value;
+                let message = format!(
+                    "`extend` on a `String` takes an iterator of `char`s or `String`s, and \
+                     `{shown}` is not one: a slice is not `IntoIterator`, so read its `char`s \
+                     with `.iter()`"
+                );
+                if matches!(
+                    arg.kind,
+                    ExprKind::Index { .. }
+                        | ExprKind::Identifier(_)
+                        | ExprKind::FieldAccess { .. }
+                        | ExprKind::MethodCall { .. }
+                        | ExprKind::Call { .. }
+                ) {
+                    self.type_error_with_fix_it(
+                        message,
+                        arg.span,
+                        TypeErrorKind::TypeMismatch,
+                        super::FixIt {
+                            span: Span {
+                                offset: arg.span.offset + arg.span.length,
+                                length: 0,
+                                ..arg.span
+                            },
+                            replacement: ".iter()".to_string(),
+                        },
+                    );
+                } else {
+                    self.type_error(message, arg.span, TypeErrorKind::TypeMismatch);
+                }
+                return Type::Unit;
+            }
         }
         // A library type's method with a Kāra body (redesign A2) is typed
         // through that body's signature, so the call records the callee and

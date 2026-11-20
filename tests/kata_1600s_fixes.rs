@@ -183,3 +183,108 @@ fn a_compared_collect_over_a_parenthesized_range_is_fixed() {
         "Vec[i64].from_iter(0..n)",
     );
 }
+
+/// `a.cmp(b) as i32`, Rust's -1 / 0 / 1, is refused (Kāra's `Ordering`
+/// holds no numbers) with a fix that writes the match (kata 1686's Rust
+/// solution, B-2026-11-20-38).
+#[test]
+fn an_ordering_cast_to_an_integer_is_fixed_to_a_match() {
+    let src = "fn sign(a: i32, b: i32) -> i32 {\n    a.cmp(b) as i32\n}\nfn main() {\n    println(f\"{sign(1, 2)} {sign(2, 2)} {sign(3, 2)}\");\n}\n";
+    fixes_to(
+        "ordering_cast",
+        src,
+        "match a.cmp(b) { Ordering.Less => -1i32, Ordering.Equal => 0i32, Ordering.Greater => 1i32 }",
+    );
+    let f = program("ordering_cast_run", src);
+    let _ = karac(&["fix"], &f);
+    let (ok, out, err) = karac(&["run", "--interp"], &f);
+    assert!(ok, "{err}");
+    assert_eq!(out, "-1 0 1\n");
+}
+
+/// A `String` extended by a slice of `char`s, Rust's `res.extend(&d[a..b])`
+/// (kata 1694's Rust solution): `karac fix` drops the `&`, then reads the
+/// slice through `.iter()`, and the program runs (B-2026-11-20-39).
+#[test]
+fn a_string_extended_by_a_char_slice_is_fixed_to_iter() {
+    let src = "fn main() {\n    let d: Vec[char] = \"12345\".chars().collect();\n    let mut res = String.new();\n    res.extend(&d[1..3]);\n    res.push('-');\n    res.extend(&d[3..]);\n    println(res);\n}\n";
+    fixes_to("extiter", src, "res.extend(d[1..3].iter());");
+    let f = program("extiter2", src);
+    let _ = karac(&["fix"], &f);
+    let (ok, out, err) = karac(&["run", "--interp"], &f);
+    assert!(ok, "{err}");
+    assert_eq!(out, "23-45\n");
+}
+
+/// An inner `fold` whose `0` seed the outer `max` leaves at the default
+/// `i64` while its items are `i32` (kata 1672's fold arm): the refusal
+/// names the seed and `karac fix` writes `0i32` (B-2026-11-20-33).
+#[test]
+fn an_inner_fold_seed_is_fixed_to_its_items_type() {
+    let src = "fn wealth(rows: Vec[Vec[i32]]) -> i32 {\n    rows.iter().fold(0, |richest, row| max(richest, row.iter().fold(0, |sum, money| sum + money)))\n}\nfn main() {\n    println(wealth([[1, 2, 3], [3, 2, 2]]));\n}\n";
+    fixes_to(
+        "inner_fold",
+        src,
+        "row.iter().fold(0i32, |sum, money| sum + money)",
+    );
+    let f = program("inner_fold_run", src);
+    let _ = karac(&["fix"], &f);
+    let (ok, out, err) = karac(&["run", "--interp"], &f);
+    assert!(ok, "{err}");
+    assert_eq!(out, "7\n");
+}
+
+/// `PriorityQueue.min()`, a direction guessed into the constructor's name
+/// (kata 1673): the refusal names `PriorityQueue.new()`, the queue that
+/// pops the smallest first, and `karac fix` writes it (B-2026-11-20-34).
+#[test]
+fn a_guessed_priority_queue_constructor_is_fixed() {
+    let src = "fn main() {\n    let mut heap: PriorityQueue[i64] = PriorityQueue.min();\n    heap.push(3);\n    heap.push(1);\n    println(heap.pop().unwrap());\n}\n";
+    fixes_to("pq_min", src, "PriorityQueue.new()");
+    let f = program("pq_min_run", src);
+    let _ = karac(&["fix"], &f);
+    let (ok, out, err) = karac(&["run", "--interp"], &f);
+    assert!(ok, "{err}");
+    assert_eq!(out, "1\n");
+}
+
+/// A `for` element copied out of `nums.iter()` and pushed into a queue of
+/// `ref i32` lends the reference into `nums`, not a borrow of the loop's
+/// copy, so the loop variable is not "written while borrowed" (kata 1675's
+/// mutant M1, B-2026-11-20-35). Check only: the queue's sift of a reference
+/// element does not lower yet (PREDICTS B-2026-11-20-40).
+#[test]
+fn a_copied_for_element_pushed_as_a_reference_checks() {
+    let src = "fn largest(nums: Vec[i32]) -> i32 {\n    let mut queue = PriorityQueue.max_first();\n    for x in nums.iter() {\n        let start = x;\n        queue.push(start);\n    }\n    *queue.pop().unwrap()\n}\nfn main() {\n    println(largest([3, 8, 5]));\n}\n";
+    let f = program("for_ref_elem", src);
+    let (ok, out, err) = karac(&["check"], &f);
+    assert!(ok, "{out}{err}");
+}
+
+/// A row of a fill of fills walked by `iter().max()`, `*dp[0][n -
+/// 1].iter().max().unwrap()` returned as `i32` (kata 1682's Rust
+/// solution): the fill's literal is read one level below the row, and
+/// `karac fix` writes `0i32` (B-2026-11-20-36).
+#[test]
+fn a_walked_row_of_a_fill_of_fills_fixes_its_literal() {
+    let src = "fn best(n: i64) -> i32 {\n    let mut dp = Vec.filled(n, Vec.filled(n, Vec.filled(3, 0)));\n    for i in 0..n {\n        let mut inner = 0;\n        inner = inner.max(dp[i][0][1]);\n        dp[i][n - 1][2] = inner + 2;\n    }\n    *dp[0][n - 1].iter().max().unwrap()\n}\nfn main() {\n    println(best(2));\n}\n";
+    fixes_to("fill_walk", src, "Vec.filled(3, 0i32)");
+    let f = program("fill_walk_run", src);
+    let _ = karac(&["fix"], &f);
+    let (ok, out, err) = karac(&["run", "--interp"], &f);
+    assert!(ok, "{err}");
+    assert_eq!(out, "2\n");
+}
+
+/// A fill of fills of `None`, `Vec.filled(2, Vec.filled(2, None))`, whose
+/// element a later write decides (kata 1690's memo arm): the inner fill
+/// takes its type from the outer one, as a single fill does, where it was
+/// an internal E0516 (B-2026-11-20-37).
+#[test]
+fn a_fill_of_fills_of_none_takes_its_type_from_a_use() {
+    runs(
+        "fill_none",
+        "fn put(memo: mut ref Vec[Vec[Option[i32]]]) {\n    memo[0][1] = Some(3);\n}\nfn main() {\n    let mut memo = Vec.filled(2, Vec.filled(2, None));\n    put(mut memo);\n    memo[1][0] = Some(4i32);\n    println(f\"{memo[0][1].unwrap_or(0)} {memo[1][0].unwrap_or(0)} {memo[1][1].unwrap_or(0)}\");\n}\n",
+        "3 4 0\n",
+    );
+}

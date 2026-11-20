@@ -192,6 +192,26 @@ impl<'a> super::TypeChecker<'a> {
             for key in std::mem::take(&mut self.usize_use_site_fixes) {
                 self.error_fix_diffs.remove(&key);
             }
+            // The same for a literal binding declared a `usize` or `isize`
+            // where it meets one (`let mut mouse = 0;` then `mouse = i`
+            // with `i: usize`): this pass makes that `usize` an `i64`, the
+            // literal's own default, so the declaration would only be
+            // turned to a redundant `: i64` next pass (kata 1728's Rust
+            // arm, B-2026-11-20-49). Its error stays, with no edit, and is gone
+            // next pass.
+            for i in 0..errors_before {
+                let pointer_sized = self.errors[i].fix_it.as_ref().is_some_and(|f| {
+                    matches!(
+                        f.replacement.as_str(),
+                        ": usize" | ": isize" | "usize" | "isize"
+                    )
+                });
+                if pointer_sized {
+                    self.errors[i].fix_it = None;
+                    let key = crate::resolver::SpanKey::from_span(&self.errors[i].span);
+                    self.error_fix_diffs.remove(&key);
+                }
+            }
         }
     }
 

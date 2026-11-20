@@ -1391,6 +1391,42 @@ impl<'ctx> Cx<'ctx, '_> {
                 })?;
                 self.drop_moved(&args[1..])?;
             }
+            ("is_disjoint" | "is_subset" | "is_superset", [other]) if !is_map => {
+                // Whether no element of one set is in the other, or every
+                // element of the walked set is (kata 1733, B-2026-11-20-50): true
+                // until an element says otherwise. `is_superset` walks the
+                // other set's elements in the receiver.
+                let h = self.load_ptr(hp)?;
+                let ot = self.operand_type(other)?;
+                let op = if matches!(self.tys.kind(ot), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                    self.ref_arg(other)?
+                } else {
+                    self.operand_ptr(other)?
+                };
+                let oh = self.load_ptr(op)?;
+                let (walked, probed) = if method == "is_superset" {
+                    (oh, h)
+                } else {
+                    (h, oh)
+                };
+                let yes = self.llcx.bool_type().const_all_ones();
+                self.store_bool(dest, yes)?;
+                let n = self.table_len(walked)?;
+                self.count_loop(n, |cx, i| {
+                    let at = cx.entry_at(walked, i)?;
+                    let (j, _) = cx.lookup(probed, at, t)?;
+                    let breaks = if method == "is_disjoint" {
+                        cx.builder.build_is_not_null(j, "").map_err(e)?
+                    } else {
+                        cx.builder.build_is_null(j, "").map_err(e)?
+                    };
+                    cx.if_then(breaks, |cx| {
+                        let no = cx.llcx.bool_type().const_zero();
+                        cx.store_bool(dest, no)
+                    })
+                })?;
+                self.drop_moved(&args[1..])?;
+            }
             ("union" | "intersection" | "difference" | "symmetric_difference", [other])
                 if !is_map =>
             {

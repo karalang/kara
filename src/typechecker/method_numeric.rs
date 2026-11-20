@@ -100,6 +100,7 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "count_ones",
     "count_zeros",
     "div_euclid",
+    "isqrt",
     "leading_ones",
     "leading_zeros",
     "max",
@@ -1099,6 +1100,35 @@ impl<'a> super::TypeChecker<'a> {
             && matches!(receiver_for_lookup, Type::UInt(_))
             && method == "next_power_of_two"
         {
+            self.record_expr_type(args_close_span, receiver_for_lookup);
+            return Some(receiver_for_lookup.clone());
+        }
+        // `isqrt` on integer scalars -> Self (Rust's `iN/uN::isqrt`): the
+        // floor of the square root, a negative signed value a panic as in
+        // Rust (kata 1714, B-2026-11-20-44). Up to 64 bits: the compiled lowering
+        // steps an f64 estimate, which is within one of the root only that
+        // far. The receiver is stashed at `args_close_span` for the
+        // interpreter's width, as `next_power_of_two`'s.
+        if args.is_empty()
+            && method == "isqrt"
+            && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+        {
+            if matches!(
+                receiver_for_lookup,
+                Type::Int(IntSize::I128) | Type::UInt(UIntSize::U128)
+            ) {
+                self.type_error(
+                    format!(
+                        "`isqrt` on a 128-bit integer is not supported yet: it is on every integer \
+                         type up to 64 bits, so a value that fits can take it as `i64` or `u64`, \
+                         found '{}'",
+                        type_display(receiver_for_lookup)
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                );
+                return Some(Type::Error);
+            }
             self.record_expr_type(args_close_span, receiver_for_lookup);
             return Some(receiver_for_lookup.clone());
         }

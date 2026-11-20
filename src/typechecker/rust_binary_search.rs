@@ -23,7 +23,8 @@
 //!   When no side reads `Ok`'s index (`Ok(_)`, or no `Ok` side), the
 //!   search finds the insertion point instead, and the test reads the
 //!   element there: `{ let j = xs.partition_point(|y| y < v); if j < xs.len() and xs[j] == v { a } else { b } }`.
-//!   When both sides are alike the test is dropped.
+//!   When both sides are alike the test is dropped, and an empty side
+//!   is left out when the other is not: `if not (..) { b }`.
 //!
 //! `xs` must be a plain place and `v` free of effects, since the rewrite
 //! names each more than once; otherwise the message says so.
@@ -359,8 +360,23 @@ fn rewrite_branches(e: &Expr) -> Option<(By<'_>, Result<String, String>)> {
     let last = ok.as_ref().is_some_and(|s| s.0.is_some());
     let (find, holds) = search(xs, by, at, last);
     let index = format!("{at} - 1");
-    let ok_text = ok.as_ref().map(|s| bound_branch(s.0, &index, &s.1));
-    let err_text = err.as_ref().map(|s| bound_branch(s.0, at, &s.1));
+    // An empty side, `Ok(_) => {}`, is left out when the other is not, so
+    // the rewrite reads `if not (..) { .. }` rather than keeping an empty
+    // branch (kata 1713's Rust arm, B-2026-11-20-43).
+    let empty = |side: &Option<Side>| {
+        side.as_ref().is_some_and(|s| {
+            matches!(&s.1.kind, ExprKind::Block(b) if b.stmts.is_empty() && b.final_expr.is_none())
+        })
+    };
+    let (ok_empty, err_empty) = (empty(&ok), empty(&err));
+    let ok_text = ok
+        .as_ref()
+        .filter(|_| !(ok_empty && !err_empty))
+        .map(|s| bound_branch(s.0, &index, &s.1));
+    let err_text = err
+        .as_ref()
+        .filter(|_| !(err_empty && !ok_empty))
+        .map(|s| bound_branch(s.0, at, &s.1));
     let tail = match (ok_text, err_text) {
         // Both sides alike: the test decides nothing, and the side's
         // block joins the rewrite's (`Ok(i) => i - 1, Err(i) => i - 1`,
@@ -450,7 +466,7 @@ fn reflow(text: &str, column: usize) -> String {
 impl TypeChecker<'_> {
     /// Takes back the errors at or after `before` that lie inside `within`;
     /// true when there were any.
-    fn retract_errors_within(&mut self, before: usize, within: Span) -> bool {
+    pub(super) fn retract_errors_within(&mut self, before: usize, within: Span) -> bool {
         let inside = |s: &Span| {
             s.offset >= within.offset && s.offset + s.length <= within.offset + within.length
         };

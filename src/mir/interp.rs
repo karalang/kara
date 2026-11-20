@@ -3881,7 +3881,7 @@ impl<'a> Interp<'a> {
                 | "checked_mul" | "saturating_add" | "saturating_sub" | "saturating_mul" | "clamp"
                 | "overflowing_add" | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes"
                 | "to_le_bytes" | "to_be_bytes" | "rotate_left" | "rotate_right" | "swap_bytes"
-                | "reverse_bits" | "next_power_of_two",
+                | "reverse_bits" | "next_power_of_two" | "isqrt",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
             // B-2026-10-19-11: the families' div / rem / neg / shl / shr / pow.
             (t, m) if int_width(t).is_some() && is_overflow_family_op(m) => {
@@ -10765,6 +10765,25 @@ impl<'a> Interp<'a> {
                 }
                 self.option(ret, out.pop())
             }
+            ("is_disjoint" | "is_subset" | "is_superset", [other]) if !is_map => {
+                // No element of one set in the other, or every element of
+                // the walked set in the other (kata 1733, B-2026-11-20-50).
+                let other = self.box_behind(other)?;
+                let (walked, probed) = if method == "is_superset" {
+                    (other, id)
+                } else {
+                    (id, other)
+                };
+                let mut holds = true;
+                for x in &self.table_entries(walked)? {
+                    let found = self.table_find(sorted, probed, x, key_ty, false)?.is_some();
+                    if found == (method == "is_disjoint") {
+                        holds = false;
+                        break;
+                    }
+                }
+                Ok(Value::Bool(holds))
+            }
             ("union" | "intersection" | "difference" | "symmetric_difference", [other])
                 if !is_map =>
             {
@@ -13114,6 +13133,19 @@ impl<'a> Interp<'a> {
                     x.reverse_bits()
                 } >> (128 - bits);
                 Ok(Value::Int(at_width(r as i128, bits, signed)))
+            }
+            // The floor of the square root; a negative signed value panics,
+            // as Rust's `isqrt` (B-2026-11-20-44).
+            ("isqrt", [a]) => {
+                if signed && *a < 0 {
+                    self.panic_message =
+                        Some("argument of integer square root cannot be negative".to_string());
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
+                    return Err(Stop::Abort(AbortReason::Panic));
+                }
+                Ok(Value::Int(raw(*a).isqrt() as i128))
             }
             // Unsigned only (the checker's rule): the smallest power of two
             // at or above the value, `1` for `0`, an overflow past the width.

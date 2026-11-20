@@ -5194,6 +5194,13 @@ pub(crate) fn collect_method_param_modes(
         "SortedSet.union",
         "SortedSet.intersection",
         "SortedSet.difference",
+        // The comparisons only read it (kata 1733, B-2026-11-20-50).
+        "Set.is_disjoint",
+        "Set.is_subset",
+        "Set.is_superset",
+        "SortedSet.is_disjoint",
+        "SortedSet.is_subset",
+        "SortedSet.is_superset",
     ] {
         map.insert(key.to_string(), vec![OwnershipMode::Ref]);
     }

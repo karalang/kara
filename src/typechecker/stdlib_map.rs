@@ -891,6 +891,28 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 sorted_set_elem
             }
+            // Rust's and Python's set comparisons (kata 1733, B-2026-11-20-50).
+            "is_disjoint" | "is_subset" | "is_superset" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "SortedSet.{method}() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(
+                        &sorted_set_elem,
+                        &crate::typechecker::peel_probe_ref(&at),
+                        arg.value.span,
+                    );
+                }
+                Type::Bool
+            }
             "range" | "range_inclusive" => {
                 // The elements in `[from, to)` (`[from, to]` inclusive),
                 // ascending, cloned like `min` / `max` and `SortedMap.range`
@@ -1333,6 +1355,28 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 set_elem
             }
+            // Whether the two sets share no element, or every element of one
+            // is in the other: Rust's `is_disjoint` / `is_subset` /
+            // `is_superset`, Python's `isdisjoint` / `<=` / `>=` (kata 1733,
+            // B-2026-11-20-50).
+            "is_disjoint" | "is_subset" | "is_superset" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Set.{method}() expects 1 argument, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(
+                        &set_elem,
+                        &crate::typechecker::peel_probe_ref(&at),
+                        arg.value.span,
+                    );
+                }
+                Type::Bool
+            }
             // B-2026-08-12-8 — codegen has implemented `Set.clear()` all along
             // (collections.rs) and an E2E test covered it, but the typechecker
             // never listed it, so `karac check` rejected every program that
@@ -1378,7 +1422,10 @@ impl<'a> super::TypeChecker<'a> {
                     "difference",
                     "insert",
                     "intersection",
+                    "is_disjoint",
                     "is_empty",
+                    "is_subset",
+                    "is_superset",
                     "len",
                     "remove",
                     "union",

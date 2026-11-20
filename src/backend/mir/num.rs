@@ -1818,6 +1818,53 @@ impl<'ctx> Cx<'ctx, '_> {
                     .into_int_value();
                 self.store_int_as(dest, v, false)?;
             }
+            // The floor of the square root, at most 64 bits (the checker's
+            // rule), a negative signed value an abort as Rust's panic. The
+            // f64 root of such a value is within one of the true one, so
+            // it is stepped down while its square passes the value and up
+            // while the next square does not, the squares at 128 bits so
+            // none overflows (B-2026-11-20-44).
+            ("isqrt", []) if it.bits() <= 64 => {
+                if it.signed() {
+                    let nonneg = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGE, x, xt.const_zero(), "")
+                        .map_err(e)?;
+                    self.abort_unless(
+                        nonneg,
+                        "argument of integer square root cannot be negative",
+                    )?;
+                }
+                let i64t = self.llcx.i64_type();
+                let i128t = self.llcx.i128_type();
+                let f64t = self.llcx.f64_type();
+                let b = &self.builder;
+                let w = b.build_int_cast_sign_flag(x, i64t, false, "").map_err(e)?;
+                let fx = b.build_unsigned_int_to_float(w, f64t, "").map_err(e)?;
+                let s = self.float_intrinsic("sqrt", &[fx])?;
+                let b = &self.builder;
+                let r = b.build_float_to_unsigned_int(s, i64t, "").map_err(e)?;
+                let mut r = b.build_int_z_extend(r, i128t, "").map_err(e)?;
+                let v = b.build_int_z_extend(w, i128t, "").map_err(e)?;
+                let one = i128t.const_int(1, false);
+                for _ in 0..2 {
+                    let sq = b.build_int_mul(r, r, "").map_err(e)?;
+                    let over = b
+                        .build_int_compare(IntPredicate::UGT, sq, v, "")
+                        .map_err(e)?;
+                    let step = b.build_int_z_extend(over, i128t, "").map_err(e)?;
+                    r = b.build_int_sub(r, step, "").map_err(e)?;
+                }
+                let r1 = b.build_int_add(r, one, "").map_err(e)?;
+                let sq = b.build_int_mul(r1, r1, "").map_err(e)?;
+                let under = b
+                    .build_int_compare(IntPredicate::ULE, sq, v, "")
+                    .map_err(e)?;
+                let step = b.build_int_z_extend(under, i128t, "").map_err(e)?;
+                let r = b.build_int_add(r, step, "").map_err(e)?;
+                let r = b.build_int_truncate(r, xt, "").map_err(e)?;
+                self.store_int_as(dest, r, it.signed())?;
+            }
             ("pow", [y]) if it.bits() > 64 => {
                 let n = self.operand_scalar(y)?.into_int_value();
                 let (v, o) = self.int_pow_overflowing(x, n, it.signed())?;

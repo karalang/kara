@@ -1371,6 +1371,36 @@ impl<'a> super::TypeChecker<'a> {
         lent
     }
 
+    /// The type of `src`, the argument of a `String`'s `extend`, shown, when
+    /// it is a slice or array of `char`, which `extend` cannot take bare.
+    /// Its diagnostics are dropped otherwise, as `extends_by_lent_chars`
+    /// drops them (B-2026-11-20-39).
+    pub(super) fn extends_by_a_char_slice(&mut self, src: &Expr) -> Option<String> {
+        let mark = (self.errors.len(), self.warnings.len());
+        let at = self.infer_expr(src);
+        let at = resolve_type_var_top(&at, &self.env.substitutions);
+        let bare = match &at {
+            Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+            other => other.clone(),
+        };
+        let element = match &bare {
+            Type::Slice { element, .. } | Type::Array { element, .. } => Some((**element).clone()),
+            Type::Named { name, args } if name == "Slice" && args.len() == 1 => {
+                Some(args[0].clone())
+            }
+            _ => None,
+        };
+        let chars = element.is_some_and(|e| {
+            matches!(
+                resolve_type_var_top(&e, &self.env.substitutions),
+                Type::Char
+            )
+        });
+        self.errors.truncate(mark.0);
+        self.warnings.truncate(mark.1);
+        chars.then(|| type_display(&bare))
+    }
+
     fn extend_item_type(&mut self, src: &Type) -> Option<Type> {
         match src {
             Type::Named { name, args } if name == "Iterator" && args.len() == 1 => {

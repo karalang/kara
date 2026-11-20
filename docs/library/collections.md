@@ -191,6 +191,9 @@ self.table.entry(key).or_insert_with(Vec.new).push(row);
 | `union` | `fn union(self, other: Set[T, H]) -> Set[T, H]` | |
 | `intersection` | `fn intersection(self, other: Set[T, H]) -> Set[T, H]` | |
 | `difference` | `fn difference(self, other: Set[T, H]) -> Set[T, H]` | Elements of `self` not in `other` |
+| `is_disjoint` | `fn is_disjoint(self, other: Set[T, H]) -> bool` | No element of `self` is in `other` |
+| `is_subset` | `fn is_subset(self, other: Set[T, H]) -> bool` | Every element of `self` is in `other` |
+| `is_superset` | `fn is_superset(self, other: Set[T, H]) -> bool` | Every element of `other` is in `self` |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred` and drops the rest |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | As `Map.reserve` |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
@@ -256,6 +259,9 @@ A B-tree set, `T: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `union` | `fn union(self, other: SortedSet[T]) -> SortedSet[T]` | |
 | `intersection` | `fn intersection(self, other: SortedSet[T]) -> SortedSet[T]` | |
 | `difference` | `fn difference(self, other: SortedSet[T]) -> SortedSet[T]` | |
+| `is_disjoint` | `fn is_disjoint(self, other: SortedSet[T]) -> bool` | |
+| `is_subset` | `fn is_subset(self, other: SortedSet[T]) -> bool` | |
+| `is_superset` | `fn is_superset(self, other: SortedSet[T]) -> bool` | |
 
 ## Lookup by view
 

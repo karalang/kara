@@ -114,6 +114,9 @@ impl TypeChecker<'_> {
                 if let Some((_, s)) = self.range_param_sources.iter().rev().find(|(m, _)| m == n) {
                     return Some(s.clone());
                 }
+                if let Some((_, s)) = self.range_let_sources.iter().rev().find(|(m, _)| m == n) {
+                    return Some(s.clone());
+                }
                 let t = self.local_scope.lookup(n.as_str())?.clone();
                 self.narrow_type_or_none(&t)
             }
@@ -271,13 +274,19 @@ impl TypeChecker<'_> {
     /// A use of a closure parameter bound by [`Self::enter_range_closures`]:
     /// a refusal at its span offers the ranges' suffixes.
     pub(super) fn note_range_param_use(&mut self, expr: &Expr) {
-        if self.range_param_sources.is_empty() {
+        if self.range_param_sources.is_empty() && self.range_let_sources.is_empty() {
             return;
         }
         let ExprKind::Identifier(n) = &expr.kind else {
             return;
         };
-        if let Some((_, s)) = self.range_param_sources.iter().rev().find(|(m, _)| m == n) {
+        if let Some((_, s)) = self
+            .range_param_sources
+            .iter()
+            .rev()
+            .chain(self.range_let_sources.iter().rev())
+            .find(|(m, _)| m == n)
+        {
             let s = s.clone();
             self.range_source_uses
                 .insert(SpanKey::from_span(&expr.span), s);

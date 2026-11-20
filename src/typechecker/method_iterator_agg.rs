@@ -275,7 +275,17 @@ impl<'a> super::TypeChecker<'a> {
                         },
                     );
                 }
-                return Some(self.infer_iterator_method(&item_ty, method, args, span, false));
+                let before = self.errors.len();
+                let t = self.infer_iterator_method(&item_ty, method, args, span, false);
+                // The `.iter()` the error asks for yields references, which
+                // `max` and `min` order whatever the element; the element
+                // judged here without it gave a second error at the same
+                // place that the fix proves wrong, `max()` refused over
+                // `nums.windows(k)`'s slices (kata 1708, B-2026-11-20-41).
+                if self.cli_lint_overrides.strict_core {
+                    self.retract_errors_within(before, *span);
+                }
+                return Some(t);
             }
         }
 

@@ -3402,6 +3402,18 @@ impl<'a> super::TypeChecker<'a> {
                     link(e, PartOf::Elem);
                 }
             }
+            // `Vec.filled(n, v)` is a vector of `v`s: a fill of fills whose
+            // innermost `None` a later use decides, `Vec.filled(2,
+            // Vec.filled(2, None))`, gives the inner fill the element type
+            // the outer one found (kata 1690's memo arm, B-2026-11-20-37).
+            ExprKind::Call { callee, args }
+                if args.len() == 2
+                    && args[1].label.is_none()
+                    && matches!(&callee.kind, ExprKind::Path { segments, .. }
+                        if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled") =>
+            {
+                link(&args[1].value, PartOf::Elem);
+            }
             // By position only: a labelled argument may be out of order.
             ExprKind::Call { callee, args } if args.iter().all(|a| a.label.is_none()) => {
                 for (index, a) in args.iter().enumerate() {
@@ -5044,7 +5056,24 @@ impl<'a> super::TypeChecker<'a> {
                 // (B-2026-11-08-69).
                 let want = resolve_type_var_top(expected_ret, &self.env.substitutions);
                 let number = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
-                if number(&want) && number(&body_ty) && body_ty != want {
+                // The same for a tuple whose numbers the slot's take in: an
+                // `if` of tuple literals `(side, count + 1)` with `side:
+                // i32` checked for an `(i64, i32)` accumulator is built at
+                // the slot's widths, as it is for a `let`'s annotation or a
+                // fn's tail. Typed as the branches' own tuple, the closure
+                // returned an `(i32, i32)` where `fold` read an `(i64, i32)`
+                // (kata 1725's fold arm, B-2026-11-20-48).
+                let tuple_widens = match (&want, &body_ty) {
+                    (Type::Tuple(ws), Type::Tuple(bs)) => {
+                        ws.len() == bs.len()
+                            && ws
+                                .iter()
+                                .zip(bs)
+                                .all(|(w, b)| w == b || (number(w) && number(b)))
+                    }
+                    _ => false,
+                };
+                if ((number(&want) && number(&body_ty)) || tuple_widens) && body_ty != want {
                     body_ty = want;
                 }
                 self.leave_closure_d5_params(saved_d5);
@@ -13889,6 +13918,14 @@ impl<'a> super::TypeChecker<'a> {
                     let seed = Self::fold_seed(value)?;
                     self.literal_entry(seed, ty, end(seed.span), true, false, name)
                 })
+                // `let top = it.scan(0, |s, g| { let s = s + g; Some((s,
+                // s)) }).max().unwrap()`: the items are the state, so the
+                // result has the seed's type and its literal takes the
+                // suffix (kata 1732, B-2026-11-20-47).
+                .or_else(|| {
+                    let seed = Self::scan_seed(value)?;
+                    self.literal_entry(seed, ty, end(seed.span), true, false, name)
+                })
         };
         match entry {
             Some(e) => {
@@ -14406,6 +14443,57 @@ impl<'a> super::TypeChecker<'a> {
         Some(entry)
     }
 
+    /// The seed of `<receiver>.scan(seed, f)` reduced to one item (`max`,
+    /// `min`, `last`, `sum` or `product`, then any `unwrap`), when `f`
+    /// yields its new state as the item, `Some((s, s))`: the result then
+    /// has the seed's type.
+    fn scan_seed(value: &Expr) -> Option<&Expr> {
+        let mut at = value;
+        let mut reduced = false;
+        loop {
+            let ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } = &at.kind
+            else {
+                return None;
+            };
+            match method.as_str() {
+                "unwrap" if args.is_empty() => {}
+                "max" | "min" | "last" | "sum" | "product" if args.is_empty() => reduced = true,
+                "scan" if reduced && args.len() == 2 => {
+                    let ExprKind::Closure { body, .. } = &args[1].value.kind else {
+                        return None;
+                    };
+                    let mut tail = body.as_ref();
+                    while let ExprKind::Block(b) = &tail.kind {
+                        tail = b.final_expr.as_deref()?;
+                    }
+                    let ExprKind::Call { callee, args: some } = &tail.kind else {
+                        return None;
+                    };
+                    if !matches!(&callee.kind, ExprKind::Identifier(n) if n == "Some")
+                        || some.len() != 1
+                    {
+                        return None;
+                    }
+                    let ExprKind::Tuple(pair) = &some[0].value.kind else {
+                        return None;
+                    };
+                    let same = matches!(
+                        (&pair.first()?.kind, &pair.get(1)?.kind),
+                        (ExprKind::Identifier(a), ExprKind::Identifier(b)) if a == b
+                    );
+                    return (pair.len() == 2 && same).then_some(&args[0].value);
+                }
+                _ => return None,
+            }
+            at = object;
+        }
+    }
+
     /// The seed of `<receiver>.fold(seed, f)`, whose type the call's result
     /// has.
     fn fold_seed(value: &Expr) -> Option<&Expr> {
@@ -14901,8 +14989,11 @@ impl<'a> super::TypeChecker<'a> {
         // element (`v[i]`).
         // `dist.iter().max().unwrap()`: a chain that only walks the
         // collection named at its root and picks one of its elements, so it
-        // reads an element as `dist[i]` does (kata 2050's Rust arm).
-        fn element_of(e: &Expr) -> Option<&str> {
+        // reads an element as `dist[i]` does (kata 2050's Rust arm). A row
+        // of a fill of fills walked so, `dp[0][n - 1].iter().max()`, reads
+        // one level below the row (kata 1682's Rust arm). Each with how
+        // many levels deep the element is.
+        fn element_of(e: &Expr) -> Option<(&str, usize)> {
             const PICK: &[&str] = &[
                 "unwrap",
                 "unwrap_or",
@@ -14945,13 +15036,21 @@ impl<'a> super::TypeChecker<'a> {
                         at = ranged.unwrap_or(object);
                         continue;
                     }
+                    "iter" | "into_iter" | "first" | "last" | "get"
+                        if super::TypeChecker::element_read_root(object).is_some() =>
+                    {
+                        walked = true
+                    }
                     m if PICK.contains(&m) => {}
                     _ => return None,
                 }
                 at = object;
             }
             match &at.kind {
-                ExprKind::Identifier(n) if walked => Some(n.as_str()),
+                ExprKind::Identifier(n) if walked => Some((n.as_str(), 1)),
+                ExprKind::Index { .. } if walked => {
+                    super::TypeChecker::element_read_root(at).map(|(n, d)| (n, d + 1))
+                }
                 _ => None,
             }
         }
@@ -14959,9 +15058,7 @@ impl<'a> super::TypeChecker<'a> {
         fn names<'e>(e: &'e Expr, out: &mut Vec<(&'e str, usize)>) {
             match &e.kind {
                 ExprKind::Identifier(n) => out.push((n.as_str(), 0)),
-                ExprKind::MethodCall { .. } if element_of(e).is_some() => {
-                    out.extend(element_of(e).map(|n| (n, 1)))
-                }
+                ExprKind::MethodCall { .. } if element_of(e).is_some() => out.extend(element_of(e)),
                 ExprKind::Index { .. } => {
                     if let Some(read) = super::TypeChecker::element_read_root(e) {
                         out.push(read);
@@ -14971,6 +15068,14 @@ impl<'a> super::TypeChecker<'a> {
                 ExprKind::Binary { left, right, .. } => {
                     names(left, out);
                     names(right, out);
+                }
+                // `min(firsts, seconds) * less`: the free `min` and `max`
+                // keep their arguments' type, as the methods do (kata
+                // 1717's counts arm, B-2026-11-20-45).
+                ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Identifier(f) if f == "min" || f == "max") => {
+                    for a in args {
+                        names(&a.value, out);
+                    }
                 }
                 // `(total - a).abs()`: a numeric method keeps its
                 // receiver's type. Not past a walk of a collection, whose
@@ -15095,6 +15200,11 @@ impl<'a> super::TypeChecker<'a> {
                         reads(&a.value, out);
                     }
                 }
+                ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Identifier(f) if f == "min" || f == "max") => {
+                    for a in args {
+                        reads(&a.value, out);
+                    }
+                }
                 _ => {}
             }
         }
@@ -15139,6 +15249,7 @@ impl<'a> super::TypeChecker<'a> {
     /// seed and those literals and gives each the target's suffix, where a
     /// truncating `as` would change what the program means.
     pub(super) fn fold_seed_literals(
+        &self,
         expr: &Expr,
         source: &Type,
         target: &Type,
@@ -15223,8 +15334,11 @@ impl<'a> super::TypeChecker<'a> {
             at = inner;
         }
         // With no literal items, the seed is to blame only where the fold
-        // never combines an item into the accumulator: `|a, b| a.max(b)`
-        // over `i64` items is an `i64` fold whatever the seed.
+        // never combines an item wider than the target into the
+        // accumulator: `|a, b| a.max(b)` over `i64` items is an `i64` fold
+        // whatever the seed, but `|sum, money| sum + money` over `i32`
+        // items is an `i32` fold but for its seed (kata 1672).
+        let mut item_read = false;
         if items.is_empty() {
             let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
                 return None;
@@ -15233,11 +15347,14 @@ impl<'a> super::TypeChecker<'a> {
             match item {
                 Some(crate::ast::PatternKind::Wildcard) => {}
                 Some(crate::ast::PatternKind::Binding(n)) => {
-                    let mut used = false;
+                    let mut wide = false;
                     crate::provider_escape::walk_expr_exprs(body, &mut |e| {
-                        used |= matches!(&e.kind, ExprKind::Identifier(m) if m == n);
+                        if matches!(&e.kind, ExprKind::Identifier(m) if m == n) {
+                            item_read = true;
+                            wide |= !self.fits_in(e, target);
+                        }
                     });
-                    if used {
+                    if wide {
                         return None;
                     }
                 }
@@ -15249,7 +15366,13 @@ impl<'a> super::TypeChecker<'a> {
             return None;
         }
         edits.extend(items.iter().map(|(e, _)| suffix(e)));
-        let why = if items.is_empty() {
+        let why = if item_read {
+            format!(
+                "the `fold` seed `{seed_value}` kept the default 'i64', since an operator or a \
+                 method on the accumulator does not fix a literal's type, though every item is \
+                 '{t}' or narrower (design.md §8 Literals); write `{seed_value}{t}`"
+            )
+        } else if items.is_empty() {
             format!(
                 "the `fold` seed `{seed_value}` kept the default 'i64', since a method on the \
                  accumulator does not fix a literal's type (design.md §8 Literals); write \
@@ -15264,6 +15387,26 @@ impl<'a> super::TypeChecker<'a> {
         };
         edits.sort_by_key(|e| e.offset);
         Some((edits, why))
+    }
+
+    /// Whether the integer `e` reads fits in `target`: the same type, or
+    /// a narrower one that widens into it (`i32` items into an `i32` or
+    /// `i64` fold).
+    fn fits_in(&self, e: &Expr, target: &Type) -> bool {
+        let Some(t) = self.expr_types.get(&SpanKey::from_span(&e.span)) else {
+            return false;
+        };
+        let mut t = self.resolved_now(t);
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = *inner;
+        }
+        if !matches!(t, Type::Int(_) | Type::UInt(_)) {
+            return false;
+        }
+        match (Self::int_literal_range(&t), Self::int_literal_range(target)) {
+            (Some((lo, hi)), Some((tlo, thi))) => lo >= tlo && hi <= thi,
+            _ => false,
+        }
     }
 
     pub(super) fn bit_count_casts(
@@ -15621,7 +15764,7 @@ impl<'a> super::TypeChecker<'a> {
             );
             return;
         }
-        if let Some((edits, why)) = Self::fold_seed_literals(expr, &source, &target) {
+        if let Some((edits, why)) = self.fold_seed_literals(expr, &source, &target) {
             self.error_fix_diffs
                 .insert(SpanKey::from_span(&expr.span), edits);
             self.type_error(
@@ -15659,6 +15802,20 @@ impl<'a> super::TypeChecker<'a> {
                 expr.span,
                 TypeErrorKind::TypeMismatch,
                 fix,
+            );
+            return;
+        }
+        // A binding of items of literal ranges, `let next = (0..16).find(..)
+        // .unwrap();` handed to an `i32` slot (kata 1720, B-2026-11-20-46).
+        if let Some(why) = self.range_literal_suffix_fix(&expr.span, &target, &source) {
+            self.type_error(
+                format!(
+                    "implicit coercion from '{}' to '{}' would narrow or change sign{why}",
+                    type_display(&source),
+                    type_display(&target),
+                ),
+                expr.span,
+                TypeErrorKind::TypeMismatch,
             );
             return;
         }
@@ -19355,6 +19512,50 @@ impl<'a> super::TypeChecker<'a> {
                                 },
                                 replacement: byte,
                             },
+                        );
+                    }
+                    // `a.cmp(b) as i32`, Rust's -1, 0 or 1 from `Ordering`'s
+                    // `#[repr(i8)]`: Kāra's `Ordering` holds no numbers and
+                    // casts to none (design.md § `.discriminant()`), so the
+                    // fix writes the match that names them (kata 1686's
+                    // Rust solution, B-2026-11-20-38).
+                    (_, to)
+                        if is_integer(to)
+                            && matches!(
+                                super::expr_ops::strip_refs_for_compare(
+                                    &resolve_type_var_top(&from_ty, &self.env.substitutions)
+                                ),
+                                Type::Named { name, .. } if name == "Ordering"
+                            ) =>
+                    {
+                        let suffix = if matches!(to, Type::Int(IntSize::I64)) {
+                            String::new()
+                        } else {
+                            type_display(to)
+                        };
+                        let fixed = format!(
+                            "match {} {{ Ordering.Less => -1{suffix}, Ordering.Equal => 0{suffix}, \
+                             Ordering.Greater => 1{suffix} }}",
+                            crate::formatter::render_expr(inner)
+                        );
+                        let end = ty.span.offset + ty.span.length;
+                        self.error_fix_diffs.insert(
+                            SpanKey::from_span(&inner.span),
+                            vec![crate::resolver::TextEdit {
+                                offset: inner.span.offset,
+                                length: end.saturating_sub(inner.span.offset),
+                                replacement: fixed.clone(),
+                            }],
+                        );
+                        self.type_error(
+                            format!(
+                                "cannot cast 'Ordering' to '{}': Kāra's `Ordering` holds no \
+                                 numbers (Rust's `as` reads the -1, 0 and 1 of its \
+                                 `#[repr(i8)]`); say them with a match: `{fixed}`",
+                                type_display(to)
+                            ),
+                            inner.span,
+                            TypeErrorKind::InvalidCast,
                         );
                     }
                     _ => {

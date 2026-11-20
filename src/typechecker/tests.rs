@@ -1749,6 +1749,7 @@ mod number_method_table_tests {
         ("is_sign_negative", "x.is_sign_negative()"),
         ("is_sign_positive", "x.is_sign_positive()"),
         ("is_power_of_two", "u.is_power_of_two()"),
+        ("isqrt", "n.isqrt() u.isqrt()"),
         ("leading_ones", "n.leading_ones() u.leading_ones()"),
         ("leading_zeros", "n.leading_zeros() u.leading_zeros()"),
         ("ln", "x.ln()"),

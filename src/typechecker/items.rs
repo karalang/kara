@@ -3280,6 +3280,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_closure_lets = std::mem::take(&mut self.current_fn_closure_lets);
+        let saved_range_lets = std::mem::take(&mut self.range_let_sources);
         let markers: rustc_hash::FxHashMap<String, Span> = f
             .params
             .iter()
@@ -3400,6 +3401,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_frozen_lets = saved_frozen_lets;
         self.current_fn_closure_lets = saved_closure_lets;
+        self.range_let_sources = saved_range_lets;
         self.current_fn_fn_markers = saved_fn_markers;
         self.current_fn_ref_params = saved_ref_params;
         self.current_fn_d5_params = saved_d5_params;
@@ -12947,6 +12949,22 @@ impl<'a> super::TypeChecker<'a> {
                     .contains(&crate::resolver::SpanKey::from_span(&value.span))
                 {
                     self.current_fn_frozen_lets.extend(pattern.binding_names());
+                }
+                // `let next = (0..16).find(|v| ..).unwrap();`: a binding
+                // whose value's items come from literal ranges carries them
+                // to its uses, where a narrowing refusal offers the ranges'
+                // suffix (kata 1720, B-2026-11-20-46). A later `let` of the name
+                // drops them.
+                {
+                    let names = pattern.binding_names();
+                    self.range_let_sources.retain(|(n, _)| !names.contains(n));
+                    if let (None, PatternKind::Binding(name)) = (ty, &pattern.kind) {
+                        if let Some(s) = self.range_literal_sources(value, &mut Vec::new()) {
+                            if !s.is_empty() {
+                                self.range_let_sources.push((name.clone(), s));
+                            }
+                        }
+                    }
                 }
                 match (&pattern.kind, &value.kind) {
                     (PatternKind::Binding(name), ExprKind::Closure { .. }) => {

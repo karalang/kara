@@ -1966,6 +1966,46 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Error;
                 }
             }
+            // A `PriorityQueue` is built smallest first by `new` and largest
+            // first by `max_first`; a direction guessed into the
+            // constructor's name (`PriorityQueue.min()`, kata 1673) is
+            // pointed at the one it means.
+            if type_name == "PriorityQueue" && self.local_scope.lookup(type_name).is_none() {
+                let kara = match member.as_str() {
+                    "min" | "min_first" | "min_heap" | "smallest_first" => Some("new"),
+                    "max" | "max_heap" | "largest_first" => Some("max_first"),
+                    _ => None,
+                };
+                let has = |m: &str| {
+                    self.env.impls.iter().any(|imp| {
+                        imp.target_type == "PriorityQueue" && imp.methods.contains_key(m)
+                    }) || self
+                        .pruned_library_methods
+                        .get("PriorityQueue")
+                        .is_some_and(|p| p.contains(m))
+                };
+                if let Some(k) = kara.filter(|k| has(k)) {
+                    let path = Span {
+                        length: span.length.min(type_name.len() + 1 + member.len()),
+                        ..*span
+                    };
+                    let order = if k == "new" { "smallest" } else { "largest" };
+                    self.type_error_with_fix_it(
+                        format!(
+                            "no associated function '{member}' on type 'PriorityQueue'; a queue \
+                             that pops the {order} first is `PriorityQueue.{k}()` \
+                             (`new` pops the smallest first, `max_first` the largest)"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span: path,
+                            replacement: format!("PriorityQueue.{k}"),
+                        },
+                    );
+                    return Type::Error;
+                }
+            }
             // B-2026-10-14-55: the library declares every method an ambient
             // resource has, so any other name is a typo, as it is through the
             // lowercase module (`clock.bogus()`).

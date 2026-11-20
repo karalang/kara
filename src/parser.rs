@@ -3893,8 +3893,11 @@ impl Parser {
         })
     }
 
-    /// A `let`'s value `(e) as T` starting at `start`, its operand
-    /// parenthesized: see [`crate::ast::Program::whole_value_casts`].
+    /// A `let`'s or an assignment's value `(e) as T` starting at `start`,
+    /// its operand parenthesized: see
+    /// [`crate::ast::Program::whole_value_casts`]. An assignment's value is
+    /// as whole as a `let`'s, `ans += (hi - lo) as i64;` (kata 1712's Rust
+    /// arm, B-2026-11-20-42).
     pub(crate) fn note_whole_value_cast(&mut self, start: &Span, value: &Expr) {
         let ExprKind::Cast { expr: operand, .. } = &value.kind else {
             return;
