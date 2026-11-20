@@ -1216,6 +1216,17 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return Some(Type::Error);
                 }
+                // `Set[i64].from_iter(it)` names no hasher: the default one,
+                // which an impl over any hasher binds its `H` to
+                // (B-2026-11-21-3).
+                let target_args: Vec<Type> = match super::types::hasher_slot(&type_name) {
+                    Some(n) if target_args.len() == n => {
+                        let mut padded = target_args.to_vec();
+                        padded.push(super::types::default_hasher());
+                        padded
+                    }
+                    _ => target_args.to_vec(),
+                };
                 if let Some((imp, sig)) = candidates.first() {
                     let subs: HashMap<String, SubstValue> = imp
                         .generic_params

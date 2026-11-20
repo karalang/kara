@@ -8416,9 +8416,23 @@ impl<'a> super::TypeChecker<'a> {
             let hasher_var = self.unsolved_result_hasher_var(span);
             // A parameter a literal solved (`Vec.from_iter(0..3)`) takes the
             // literal's type, its default when nothing else fixes it.
+            // Compared once each is resolved: the hasher may have met
+            // another table's still-open one (`fold(Map.from(..), |m, x|
+            // { let mut n = Map.new(); .. n })`).
+            let hasher_of = |id: TypeVarId| {
+                hasher_var.is_some_and(|h| {
+                    resolve_type_vars(
+                        &Type::TypeVar(id),
+                        &self.env.substitutions,
+                        &HashMap::new(),
+                        &self.env.const_substitutions,
+                        &no_consts,
+                    ) == Type::TypeVar(h)
+                })
+            };
             let unsolved = vars
                 .iter()
-                .filter(|(id, _)| Some(*id) != hasher_var)
+                .filter(|(id, _)| !hasher_of(*id))
                 .find(|(id, _)| {
                     matches!(
                         resolve_type_vars(
