@@ -111,6 +111,7 @@ mod patterns;
 mod range_literal_sources;
 mod refinement_elision;
 mod rust_binary_search;
+mod rust_cursor_walk;
 mod rust_last_mut;
 mod rust_scan;
 mod rust_timeout_duration;
@@ -3950,6 +3951,10 @@ pub struct TypeChecker<'a> {
     /// B-2026-11-10-51: `let x = v.last_mut().unwrap();`'s rewrite, keyed
     /// by the receiver's span.
     pub(super) end_mut_let_rewrites: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// B-2026-11-20-12: `while c.is_some() { c = mut ref
+    /// c.as_mut().unwrap().f; }`'s rewrite to the cursor walk, keyed by the
+    /// `mut ref`'s span.
+    pub(super) cursor_walk_rewrites: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// The `?`s in a `fn main()` that returns `()`, which `check_function`
     /// fixes by declaring a `Result` return (B-2026-11-07-43), each with its
     /// operand's error type and whether that converts to `AnyError`; `None`
@@ -4958,6 +4963,7 @@ impl<'a> TypeChecker<'a> {
             tuple_literal_elems: FxHashMap::default(),
             end_mut_rewrites: FxHashMap::default(),
             end_mut_let_rewrites: FxHashMap::default(),
+            cursor_walk_rewrites: FxHashMap::default(),
             unit_main_questions: Vec::new(),
             loose_expr_spans: FxHashSet::default(),
             collapsed_mut_ref_args: FxHashSet::default(),

@@ -7056,13 +7056,24 @@ impl<'a> super::TypeChecker<'a> {
             UnaryOp::MutRef => {
                 let core = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
                 if !core || !is_named_place_projection(operand) {
-                    self.type_error(
-                        "error[E_REF_OPERAND_UNSUPPORTED]: `mut ref` borrows a place: a local, \
-                         `self`, or a field or element of one (core-semantics.md §5.1)"
-                            .to_string(),
-                        *span,
-                        TypeErrorKind::RefOperandUnsupported,
-                    );
+                    let mut msg = "error[E_REF_OPERAND_UNSUPPORTED]: `mut ref` borrows a place: a \
+                                   local, `self`, or a field or element of one (core-semantics.md \
+                                   §5.1)"
+                        .to_string();
+                    // Rust's cursor step, `c = &mut c.as_mut().unwrap().f`,
+                    // is §5.3's cursor walk here (B-2026-11-20-12).
+                    if let Some((c, f, _)) = super::rust_cursor_walk::cursor_operand(operand) {
+                        let n = if c == "n" { "node" } else { "n" };
+                        msg.push_str(&format!(
+                            "; a cursor steps through the `Some` it holds: `while let Some({n}) = \
+                             {c} {{ {c} = mut ref {n}.{f}; }}` (core-semantics.md §5.3)"
+                        ));
+                        if let Some(edits) = self.cursor_walk_rewrite(span) {
+                            msg.push_str(", which `karac fix` writes for this loop");
+                            self.error_fix_diffs.insert(SpanKey::from_span(span), edits);
+                        }
+                    }
+                    self.type_error(msg, *span, TypeErrorKind::RefOperandUnsupported);
                     return Type::Error;
                 }
                 match ty {

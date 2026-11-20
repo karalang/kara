@@ -13940,6 +13940,9 @@ impl<'a> super::TypeChecker<'a> {
             self.literal_entry(value, ty, end(name_span), false, false, name)
                 .or_else(|| self.literal_copy(value, ty))
                 .or_else(|| self.literal_element_copy(value, ty))
+                // `let ys = ref right[n - k]`: a view of a collection a
+                // literal binding was pushed into (B-2026-11-20-11).
+                .or_else(|| self.literal_pushed_entry(value, 0))
                 // `let mut res = [0, 0]`: an array of literals is typed by
                 // its first, so a narrowing read of an element offers that
                 // literal's suffix as a fill's does (kata 1144).
@@ -14324,9 +14327,43 @@ impl<'a> super::TypeChecker<'a> {
         let Some(entry) = entry else {
             return;
         };
+        // Stored with how many indexes from the root reach the pushed
+        // value: 2 for `right[size].push(b)`, read back as `right[i][j]`
+        // (B-2026-11-20-11).
+        let entry = super::LiteralLet {
+            depth: entry.depth + Self::collection_index_depth(object) + 1,
+            ..entry
+        };
         if let Some(root) = Self::collection_root_name(object) {
             self.literal_pushes.insert(root.to_string(), entry);
         }
+    }
+
+    /// How many element indexes `e` takes from its collection's root:
+    /// 1 for `left[k]` and `ref left[k]`, 0 for `left` and `left.iter()`.
+    /// A range subscript keeps the collection's depth.
+    fn collection_index_depth(e: &Expr) -> usize {
+        match &e.kind {
+            ExprKind::Index { object, index } => {
+                Self::collection_index_depth(object)
+                    + usize::from(!matches!(index.kind, ExprKind::Range { .. }))
+            }
+            ExprKind::Unary { operand, .. } => Self::collection_index_depth(operand),
+            ExprKind::MethodCall { object, .. } => Self::collection_index_depth(object),
+            _ => 0,
+        }
+    }
+
+    /// The pushed literal binding a collection expression reads, as the
+    /// entry of a name bound to it: `let ys = ref right[n - k]` with
+    /// `right[size].push(b)` makes `ys[at]` read `b` (B-2026-11-20-11).
+    fn literal_pushed_entry(&self, collection: &Expr, below: usize) -> Option<super::LiteralLet> {
+        let root = Self::collection_root_name(collection)?;
+        let e = self.literal_pushes.get(root)?;
+        let depth = e
+            .depth
+            .checked_sub(Self::collection_index_depth(collection) + below)?;
+        Some(super::LiteralLet { depth, ..e.clone() })
     }
 
     /// `for x in left[k]` over a collection a literal binding was pushed
@@ -14341,9 +14378,8 @@ impl<'a> super::TypeChecker<'a> {
         let PatternKind::Binding(name) = &pattern.kind else {
             return self.note_literal_for_tuple(pattern, iterable);
         };
-        let entry = Self::collection_root_name(iterable)
-            .and_then(|root| self.literal_pushes.get(root))
-            .cloned()
+        let entry = self
+            .literal_pushed_entry(iterable, 1)
             .or_else(|| self.literal_array_entry(name, iterable, false))
             .or_else(|| self.literal_range_for_entry(iterable, name));
         let prev = match entry {
@@ -15132,22 +15168,13 @@ impl<'a> super::TypeChecker<'a> {
         names(expr, &mut found);
         found.into_iter().find_map(|(name, depth)| {
             // An element of a collection literal bindings or fill elements
-            // were pushed into, `v[k - 1]` after `v.push(pre[i][j])`, reads
-            // what was pushed (B-2026-11-20-69).
-            let pushed = match self.literal_lets.get(name) {
-                Some(_) => None,
-                None => self
-                    .literal_pushes
-                    .get(name)
-                    .filter(|e| e.depth == 0 && depth == 1)
-                    .map(|e| super::LiteralLet {
-                        depth: 1,
-                        ..e.clone()
-                    }),
-            };
-            let entry = match &pushed {
+            // were pushed into, `v[k - 1]` after `v.push(pre[i][j])` or
+            // `right[i][j]` after `right[size].push(b)`, reads what was
+            // pushed; the push stored how many indexes reach it
+            // (B-2026-11-20-69, B-2026-11-20-11).
+            let entry = match self.literal_lets.get(name) {
                 Some(e) => e,
-                None => self.literal_lets.get(name)?,
+                None => self.literal_pushes.get(name)?,
             };
             let name = entry.root.as_str();
             if entry.depth != depth
@@ -18689,6 +18716,7 @@ impl<'a> super::TypeChecker<'a> {
                 // a value (design.md: `while` / `for` always have type `()`).
                 self.break_value_types
                     .push(BreakFrame::for_valueless_loop(label.clone()));
+                self.note_cursor_walk_rewrite(condition, body);
                 self.infer_block(body);
                 self.break_value_types.pop();
                 Type::Unit

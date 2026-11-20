@@ -2242,6 +2242,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   self` (io.md), and the check had read the `buf: mut ref String` after
   `self` as the receiver. A `let mut br` that only reads lines now gets the
   `unused_mut` warning (B-2026-11-20-32).
+- `karac fix` annotates a defaulted literal binding pushed into a
+  collection and read back by index, through a view of the collection
+  (`right[size].push(b)`, then `let ys = ref right[n - k]; .. ys[at]`) or
+  directly (`right[i][j]`), as it did for one read back by a `for` loop: a
+  narrowing refusal at the read offers `b: i32`. Kata 2035's Rust arm now
+  mends fully (B-2026-11-20-11).
+- Rust's linked-list cursor step, `tail = mut ref
+  tail.as_mut().unwrap().next`, is still refused (a borrow through a call
+  result, core semantics §5.1), and the refusal now names the cursor walk
+  of §5.3, `while let Some(n) = tail { tail = mut ref n.next; }`; when the
+  step is the whole body of a `while tail.is_some()` loop, `karac fix`
+  rewrites the loop to it. Kata 2046's Rust arm now mends fully
+  (B-2026-11-20-12).
 - New lint `vec_per_element` (warn): `let seen = Vec.filled(n, [false,
   false]);` whose rows are only indexed puts a separate heap `Vec` in every
   slot, since a list literal is a `Vec` unless an `Array` is expected
