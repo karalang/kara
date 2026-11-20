@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 637 |
+| diagnostics | 638 |
 | false-positive | 331 |
 | missing-feature | 224 |
 | perf | 190 |
@@ -80,12 +80,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 314 |
 | mir | 290 |
 | cli | 243 |
-| parser | 142 |
+| parser | 143 |
 | ownership | 125 |
 | runtime | 101 |
 | interp | 95 |
 | effect | 50 |
-| resolver | 47 |
+| resolver | 48 |
 | other | 38 |
 | codegen | 22 |
 | autopar | 7 |
@@ -2007,6 +2007,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-103 | cli | low | `karac repl` showed a value in its source form, not the Debug form deferred.md specifies (`Vec.new()` for an empty Vec, `["a": 1]` for a map, `Set.fr… | af100c5f34 |
 | B-2026-11-20-105 | typecheck | low | A borrowed `String` parameter bound to a `Str` local, `let mut rest: Str = s;`, gets a bare `expected 'Str', found 'ref String'` and no fix: the `.as… | 21cdf88b69 |
 | B-2026-11-20-106 | typecheck | low | `.unwrap()` on `VecDeque.remove(i)`, Rust's `Option`-returning `remove`, gets a bare `no method 'unwrap' on type 'i32'` and no fix: Kāra's `VecDeque.… | 21cdf88b69 |
+| B-2026-11-20-108 | parser+resolver | low | A `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string hole is refused as `undefined name 'std'`, without the import form or the fix… | 3c0ebd591e |
 
 </details>
 
