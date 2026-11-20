@@ -7325,7 +7325,7 @@ Language extensions and library additions that have a design but no track. Each 
 
 ### References to References (`mut ref (ref T)`)
 
-**Decision (2026-11-20, review thread, B-2026-11-20-6):** v1 has no reference to a reference. A borrow of a borrow is the borrow: `ref` / `mut ref` of a place whose type is already `ref T` yields that `ref T` (§5.9 reborrow), and the same collapse applies through generic substitution, so `mut ref T` at `T = ref String` is `ref String`. A generic that writes through `mut ref T` therefore cannot be instantiated at a shared-reference `T`; the checker refuses the call with a diagnostic that names the collapse and suggests an owned `T` or reassigning the reference local directly.
+**Decision (2026-11-20, review thread, B-2026-11-20-6):** v1 has no reference to a reference. A borrow of a borrow is the borrow: `ref p` with `p: ref T` is a §5.9 reborrow of type `ref T`, and `mut ref p` is a mutable reborrow through a shared reference, refused (E0517). The same collapse applies through generic substitution, so `mut ref T` at `T = ref String` is `ref String`. A generic that writes through `mut ref T` therefore cannot be instantiated at a shared-reference `T`; the checker refuses the call with a diagnostic that names the collapse and suggests an owned `T` or reassigning the reference local directly.
 
 **Why deferred:** nested references need a second level in typing (no collapse under substitution), a meaning for `mut ref p` on a reference local ("borrow the binding", not reborrow the referent), borrowck origins for pointer-to-pointer, and MIR lowering for it. No corpus, kata or app program has needed it.
 
