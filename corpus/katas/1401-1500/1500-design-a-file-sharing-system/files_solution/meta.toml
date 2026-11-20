@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/1401-1500/1500-design-a-file-sharing-system/files_solution.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = ["lib:map", "lib:sortedset", "lib:heap", "io:fs"]
 class = "e"
-bucket = "b-fix-incomplete:E0200"
-classified_with = "83c2a5580"
-extracted_src = "4bedde70"
+expected_from = "mirror"
+note = "mirror: expected.out is the kata's Python mirror (files.py), which the kata's text now (the compiler fixes its arm needed have landed) matches under karac run and karac build; the entry had no expectation while check refused it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "ae2efc319+local"
+extracted_src = "7ff84595"

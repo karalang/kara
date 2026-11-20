@@ -1,0 +1,5 @@
+join -> 1, 2, 3; request(1, 3) -> [2]; request(2, 2) -> [1, 2]; leave(1); request(2, 1) -> []; leave(2); join -> 1
+3000 systems of up to 6 chunks, 40 calls each: 41016 joins, 56222 requests, 123319 owners returned, checksum 306371994
+300 systems of up to 30 chunks, 300 calls each: 27464 joins, 44659 requests, 334789 owners returned, checksum 864389751
+10 systems of up to 100000 chunks, 3000 calls each: 9008 joins, 15037 requests, 20683 owners returned, checksum 432879484
+4 systems of up to 5 chunks, 5000 calls each: 6081 joins, 9906 requests, 1806144 owners returned, checksum 912812842

@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/2001-2100/2003-smallest-missing-genetic-value-in-each-subtree/genetic_solution.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-bucket = "check-refuses:E0200"
-classified_with = "95006f015"
-extracted_src = "5db31e88"
+expected_from = "mirror"
+note = "mirror: expected.out is the kata's Python mirror (genetic.py), which the kata's text now (the compiler fixes its arm needed have landed) matches under karac run and karac build; the entry had no expectation while check refused it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "ae2efc319+local"
+extracted_src = "9a1c9c93"

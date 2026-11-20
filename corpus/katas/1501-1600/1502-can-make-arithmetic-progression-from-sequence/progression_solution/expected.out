@@ -1,0 +1,11 @@
+[3, 5, 1] -> true
+[1, 2, 4] -> false
+[1, 1] -> true
+[0, 0, 0, 1] -> false
+[-5, 5] -> true
+[10, -2, 4, 1, 7] -> true
+[1, 100, 50] -> false
+[7, 7, 7] -> true
+20000 arrays of 2 to 8 numbers: 8752 can, checksum 905462204
+2000 arrays of 2 to 200 numbers: 667 can, checksum 942779840
+40 arrays of 2 to 1000 numbers: 8 can, checksum 816579243

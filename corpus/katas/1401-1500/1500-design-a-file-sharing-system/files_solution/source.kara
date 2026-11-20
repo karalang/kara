@@ -6,7 +6,7 @@
 struct FileSharing {
     owners: Map[i32, SortedSet[i32]],
     owned: Map[i32, Vec[i32]],
-    free: PriorityQueue[Release[i32]],
+    free: PriorityQueue[i32],
     next: i32,
 }
 

@@ -1,0 +1,11 @@
+[# #,   #, #c ], "abc" -> true
+[ #a,  #c,  #a], "ac" -> false
+[# #,   #, # c], "ca" -> true
+[a], "a" -> true
+[ ], "ab" -> false
+[#  #], "ab" -> true
+[  ,   ], "ab" -> true
+[#b#, #a#, # #], "abc" -> false
+[#####, #   #, #####], "xyz" -> true
+3000 boards of up to 6 by 6: 1394 placed, checksum 482808685
+6 boards of up to 100000 cells: 5 placed, checksum 62

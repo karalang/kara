@@ -4,9 +4,9 @@
 
 struct Solution {}
 
-fn dfs(u: i64, children: ref Vec[Vec[i64]], nums: ref Vec[i32], seen: mut ref Vec[bool], visited: mut ref Vec[bool]) {
+fn dfs(u: i64, children: Vec[Vec[i64]], nums: Vec[i32], seen: mut ref Vec[bool], visited: mut ref Vec[bool]) {
     visited[u] = true;
-    if (nums[u] as i64) < seen.len() {
+    if nums[u] < seen.len() {
         seen[nums[u] as usize] = true;
     }
     for c in ref children[u] {
@@ -44,7 +44,7 @@ impl Solution {
     }
 }
 
-fn smallest_missing(parents: ref Vec[i64], nums: ref Vec[i64]) -> Vec[i64] {
+fn smallest_missing(parents: Vec[i64], nums: Vec[i64]) -> Vec[i64] {
     let p: Vec[i32] = parents.iter().map(|x| x as i32).collect();
     let v: Vec[i32] = nums.iter().map(|x| x as i32).collect();
     Solution.smallest_missing_value_subtree(p, v).iter().map(|x| x as i64).collect()

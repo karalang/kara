@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/1501-1600/1507-reformat-date/reformat_iter.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-bucket = "check-refuses:E0236"
-classified_with = "1dce193ad+local"
+expected_from = "mirror"
+note = "mirror: expected.out is the kata's Python mirror (reformat.py), which this text matches under karac run and karac build; the entry had no expectation while check refused it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "ae2efc319+local"
 extracted_src = "8ecf5182"

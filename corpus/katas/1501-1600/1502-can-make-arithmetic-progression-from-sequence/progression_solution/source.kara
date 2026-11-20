@@ -5,10 +5,11 @@
 struct Solution {}
 
 impl Solution {
-    pub fn can_make_arithmetic_progression(mut arr: Vec[i32]) -> bool {
+    pub fn can_make_arithmetic_progression(arr: own Vec[i32]) -> bool {
+        let mut arr = arr;
         arr.sort();
         let d = arr[1] - arr[0];
-        arr.windows(2).all(|w| w[1] - w[0] == d)
+        arr.windows(2).iter().all(|w| w[1] - w[0] == d)
     }
 }
 

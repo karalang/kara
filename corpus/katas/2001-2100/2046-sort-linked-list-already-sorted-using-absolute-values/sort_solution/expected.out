@@ -1,0 +1,1 @@
+error[E_REF_OPERAND_UNSUPPORTED]: source.kara:50:20: `mut ref` borrows a place: a local, `self`, or a field or element of one (core-semantics.md §5.1)

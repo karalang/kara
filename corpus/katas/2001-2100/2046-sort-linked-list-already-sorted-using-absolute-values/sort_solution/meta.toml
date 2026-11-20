@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/2001-2100/2046-sort-linked-list-already-sorted-using-absolute-values/sort_solution.kara"
 dedup_of = []
+expect = "error:E_REF_OPERAND_UNSUPPORTED"
+exit = 1
 tags = []
-class = "e"
-bucket = "check-refuses:E0236"
-classified_with = "6c8947133+local"
+class = "a"
+expected_from = "spec"
+note = "core-semantics.md §5.1: `mut ref place` borrows a projection of a named place, and §5.5: borrows root at named places. The template's cursor step `tail = mut ref tail.as_mut().unwrap().next` borrows through a call result, so it is refused; the walk §5.3 accepts is `while let Some(n) = tail { tail = mut ref n.next; }` (B-2026-11-09-45). `Option.as_mut` exists since B-2026-11-15-33, so this is the arm's last refusal. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
+classified_with = "ae2efc319+local"
 extracted_src = "664e4c86"

@@ -1,7 +1,11 @@
 source = "kara-katas/leetcode/2001-2100/2018-check-if-word-can-be-placed-in-crossword/crossword_solution.kara"
 dedup_of = []
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-bucket = "check-refuses:E0200"
-classified_with = "95006f015"
+expected_from = "mirror"
+note = "mirror: expected.out is the kata's Python mirror (crossword.py), which this text matches under karac run and karac build; the entry had no expectation while check refused it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "ae2efc319+local"
 extracted_src = "c8a5be01"
