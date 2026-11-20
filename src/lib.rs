@@ -1933,6 +1933,35 @@ pub fn find_references(
     byte_offset: usize,
     include_declaration: bool,
 ) -> Vec<DefLocation> {
+    // A wildcard (`let _ = ..`, `_ =>`) names nothing; without this the
+    // enclosing function's definition span below claimed it.
+    let ident = |b: &u8| b.is_ascii_alphanumeric() || *b == b'_' || *b >= 0x80;
+    let bytes = source.as_bytes();
+    let (mut start, mut end) = (byte_offset.min(bytes.len()), byte_offset.min(bytes.len()));
+    while start > 0 && ident(&bytes[start - 1]) {
+        start -= 1;
+    }
+    while end < bytes.len() && ident(&bytes[end]) {
+        end += 1;
+    }
+    if source.get(start..end) == Some("_") {
+        return Vec::new();
+    }
+    // A method or an enum variant: the sites the typechecker binds
+    // (B-2026-11-19-121).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((_, sites)) = member_sites_at(source, byte_offset) {
+        let mut out: Vec<DefLocation> = sites
+            .into_iter()
+            .filter(|s| include_declaration || !s.declaration)
+            .map(|s| DefLocation {
+                span_offset: s.offset,
+                span_length: s.length,
+            })
+            .collect();
+        out.dedup();
+        return out;
+    }
     let Some((_program, resolved)) = resolve_source(source) else {
         return Vec::new();
     };
@@ -1996,6 +2025,26 @@ pub fn find_references(
             });
         }
     }
+    // An enum named as a unit variant's qualifier in a pattern (`Slot.N =>`),
+    // which the resolver records no use of.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let sym = resolved.symbol_table.get_symbol(target);
+        if matches!(sym.kind, crate::resolver::SymbolKind::Enum { .. }) {
+            if let Some(nav) = cli::editor_nav::analyze(source) {
+                let key = format!("e:{}", sym.name);
+                out.extend(
+                    nav.member_sites()
+                        .into_iter()
+                        .filter(|s| s.key == key)
+                        .map(|s| DefLocation {
+                            span_offset: s.offset,
+                            span_length: s.length,
+                        }),
+                );
+            }
+        }
+    }
     // Each span narrowed to the name: a struct literal's resolution covers
     // the whole literal (`P { x: 1 }`) and a declaration's its whole item,
     // where an editor wants the name alone (B-2026-11-15-124).
@@ -2016,6 +2065,24 @@ pub fn find_references(
     });
     out.dedup();
     out
+}
+
+/// The method or variant named at `at`, as its key and every site of it.
+#[cfg(not(target_arch = "wasm32"))]
+fn member_sites_at(
+    source: &str,
+    at: usize,
+) -> Option<(String, Vec<cli::editor_members::MemberSite>)> {
+    let nav = cli::editor_nav::analyze(source)?;
+    let sites = nav.member_sites();
+    let key = sites
+        .iter()
+        .filter(|s| s.key.starts_with("m:") || s.key.starts_with("v:"))
+        .find(|s| at >= s.offset && at < s.offset + s.length.max(1))?
+        .key
+        .clone();
+    let sites: Vec<_> = sites.into_iter().filter(|s| s.key == key).collect();
+    Some((key, sites))
 }
 
 /// The first whole-word occurrence of `name` in `text`.
@@ -2165,6 +2232,27 @@ pub fn rename_edits(
                 false => edit(s.offset, s.length, new_name.to_string()),
             })
             .collect();
+        return Ok(Some(edits));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((key, sites)) = member_sites_at(source, byte_offset) {
+        let name = key.rsplit('.').next().unwrap_or(&key).to_string();
+        if let Some(t) = sites.iter().find_map(|s| s.locked.as_ref()) {
+            return Err(format!(
+                "`{name}` is a method of the trait `{t}`, which fixes its name: an impl of \
+                 `{t}` must keep it"
+            ));
+        }
+        if !sites.iter().any(|s| s.declaration) {
+            return Err(format!(
+                "`{name}` is declared outside this file, so it cannot be renamed here"
+            ));
+        }
+        let mut edits: Vec<RenameEdit> = sites
+            .into_iter()
+            .map(|s| edit(s.offset, s.length, new_name.to_string()))
+            .collect();
+        edits.dedup();
         return Ok(Some(edits));
     }
     let Some((name, spans)) = rename_spans(source, byte_offset) else {

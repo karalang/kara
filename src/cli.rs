@@ -33,6 +33,7 @@ pub(crate) mod editor;
 pub(crate) mod editor_complete;
 pub(crate) mod editor_hints;
 pub(crate) mod editor_incremental;
+pub(crate) mod editor_members;
 pub(crate) mod editor_nav;
 pub(crate) mod editor_signature;
 pub mod explain;

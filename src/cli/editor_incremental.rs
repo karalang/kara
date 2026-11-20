@@ -534,6 +534,25 @@ impl DocumentChecker {
                 .into_iter()
                 .filter(|d| in_edited(&new.bodies, d.offset)),
         );
+        // A parse or resolve error stops the phases after its own, so a
+        // check whose first stopping phase moved reports a different set
+        // from the unchanged bodies too: an edit that adds a resolve error
+        // drops their typecheck warnings, and one that removes it brings
+        // them back (B-2026-11-19-122). Only a whole check knows that set.
+        if first_error_phase(&last.diags) != first_error_phase(&diags) {
+            return None;
+        }
+        // Any error holds back the `unused_mut` lint (W0301) over the whole
+        // program (`report_unused_muts`): an edit that adds the first error
+        // drops the unchanged bodies' too, and one that removes the last
+        // brings back what only a whole check finds.
+        let erred = |d: &[PlaygroundDiagnostic]| d.iter().any(|d| d.severity == "error");
+        if erred(&last.diags) && !erred(&diags) {
+            return None;
+        }
+        if erred(&diags) {
+            diags.retain(|d| d.code.as_deref() != Some("W0301"));
+        }
         let index = LineStarts::new(nt);
         for d in &mut diags {
             (d.line, d.column) = index.line_col(nt, d.offset);
@@ -570,6 +589,22 @@ impl DocumentChecker {
 
 /// 1-based line and column (in characters) of a byte offset, as
 /// [`PlaygroundDiagnostic`] counts them.
+/// The earliest phase with an error that stops the phases after it, `None`
+/// when there is none: a parse error stops everything after the parse, and a
+/// resolve error the typecheck and every check after it. An error from a
+/// later phase stops nothing (a type error still gets its ownership errors).
+fn first_error_phase(diags: &[PlaygroundDiagnostic]) -> Option<usize> {
+    diags
+        .iter()
+        .filter(|d| d.severity == "error")
+        .filter_map(|d| match d.phase {
+            "parse" => Some(0),
+            "resolve" => Some(1),
+            _ => None,
+        })
+        .min()
+}
+
 struct LineStarts(Vec<usize>);
 
 impl LineStarts {

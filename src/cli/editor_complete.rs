@@ -79,11 +79,14 @@ pub(crate) fn complete(source: &str, at: usize) -> Vec<CompletionEntry> {
 
 /// Check `before HOLE rest`, then, when that does not parse, with a `;`
 /// after the hole, as a statement left unfinished needs.
-fn check_with_hole(before: &str, rest: &str) -> Option<(Nav, usize)> {
+fn check_with_hole(before: &str, rest: &str) -> Option<(Nav, usize, String)> {
     let hole_at = before.len();
-    analyze_focused(&format!("{before}{HOLE}{rest}"), hole_at)
-        .or_else(|| analyze_focused(&format!("{before}{HOLE};{rest}"), hole_at))
-        .map(|nav| (nav, hole_at))
+    [
+        format!("{before}{HOLE}{rest}"),
+        format!("{before}{HOLE};{rest}"),
+    ]
+    .into_iter()
+    .find_map(|text| analyze_focused(&text, hole_at).map(|nav| (nav, hole_at, text)))
 }
 
 /// [`editor_nav::analyze`] of the text with every body but the one at `at`
@@ -177,10 +180,10 @@ fn std_members(path: &[String]) -> Vec<CompletionEntry> {
 
 /// The fields and `self` methods of the value before the `.`.
 fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
-    let Some((nav, hole_at)) = check_with_hole(before, rest) else {
+    let Some((nav, hole_at, holed)) = check_with_hole(before, rest) else {
         return Vec::new();
     };
-    let Some(ty) = receiver_type(&nav, hole_at) else {
+    let Some((ty, receiver)) = receiver_type(&nav, hole_at) else {
         return Vec::new();
     };
     let Some(head) = member_head(&ty) else {
@@ -353,7 +356,67 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
             detail: None,
         });
     }
+    drop_unmet_bounds(&mut out, &holed, receiver, hole_at);
     out
+}
+
+/// Drops the methods the receiver has no call of: one whose impl bounds its
+/// type arguments do not meet (`cloned` on an `Option[Wide]`, `to_string`
+/// on a `Map` of a value with no `Display`; B-2026-11-19-124). Each method
+/// is called once on the receiver in one more check, and a call the
+/// checker answers "no method" for is dropped; a call it refuses only for
+/// its arguments stays. When that check does not parse, nothing is dropped.
+fn drop_unmet_bounds(out: &mut Vec<CompletionEntry>, holed: &str, receiver: Span, hole_at: usize) {
+    use crate::typechecker::TypeErrorKind;
+    let start = receiver.offset;
+    let end = hole_at + HOLE.len();
+    let (Some(object), Some(head), Some(tail)) = (
+        holed.get(start..receiver.offset + receiver.length),
+        holed.get(..start),
+        holed.get(end..),
+    ) else {
+        return;
+    };
+    let mut names: Vec<&str> = out
+        .iter()
+        .filter(|e| matches!(e.kind, CompletionKind::Method) && e.label != HOLE)
+        .map(|e| e.label.as_str())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        return;
+    }
+    let mut text = format!("{head}{{ ");
+    let mut calls: Vec<(usize, usize, String)> = Vec::new();
+    for name in names {
+        let at = text.len();
+        text.push_str(&format!("({object}).{name}(); "));
+        calls.push((at, text.len(), name.to_string()));
+    }
+    text.push_str("0 }");
+    text.push_str(tail);
+    let Some(nav) = analyze_focused(&text, start) else {
+        return;
+    };
+    let missing: Vec<&str> = nav
+        .typed()
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(e.kind, TypeErrorKind::NoMethodFound)
+                && !e.message.contains("taking these arguments")
+        })
+        .filter_map(|e| {
+            calls
+                .iter()
+                .find(|(s, t, _)| e.span.offset >= *s && e.span.offset < *t)
+                .map(|(_, _, n)| n.as_str())
+        })
+        .collect();
+    out.retain(|e| {
+        !(matches!(e.kind, CompletionKind::Method) && missing.contains(&e.label.as_str()))
+    });
 }
 
 /// `Option`'s methods (docs/library/core-types.md), most of them the
@@ -448,7 +511,7 @@ fn member_head(ty: &Type) -> Option<String> {
 }
 
 /// The type of the receiver of the member access whose name is the hole.
-fn receiver_type(nav: &Nav, hole_at: usize) -> Option<Type> {
+fn receiver_type(nav: &Nav, hole_at: usize) -> Option<(Type, Span)> {
     struct Find<'a> {
         text: &'a str,
         hole_at: usize,
@@ -494,6 +557,7 @@ fn receiver_type(nav: &Nav, hole_at: usize) -> Option<Type> {
         .map(|(t, _)| t)
         .or_else(|| typed.expr_types.get(&SpanKey::from_span(&span)))
         .cloned()
+        .map(|t| (t, span))
 }
 
 /// A top-level item's name and kind, and whether it is `pub`.
