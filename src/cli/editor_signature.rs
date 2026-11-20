@@ -1046,9 +1046,9 @@ fn undeclared(nav: &Nav, found: &FoundCall) -> Option<(SignatureHelp, bool)> {
         "Some" => Some(("Some(value: own T)", None)),
         "Ok" => Some(("Ok(value: own T)", None)),
         "Err" => Some(("Err(error: own E)", None)),
-        "print" | "println" | "eprintln" => Some((
+        "print" | "println" | "eprint" | "eprintln" => Some((
             "",
-            Some("Takes any `Display` value; `print` and `println` write `Stdout`, `eprintln` `Stderr`."),
+            Some("Takes any `Display` value; `print` and `println` write `Stdout`, `eprint` and `eprintln` `Stderr`."),
         )),
         _ => None,
     };

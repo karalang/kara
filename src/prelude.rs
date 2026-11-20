@@ -3004,6 +3004,7 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     "dbg",
     "print",
     "println",
+    "eprint",
     "eprintln",
     "assert",
     "assert_eq",

@@ -3050,11 +3050,11 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Built-in output functions: println() / print() / eprintln().
+        // Built-in output functions: println() / print() / eprint() / eprintln().
         // Accept 0 or 1 Display-implementing argument; return Unit.
         // Local-binding shadow guard (B-2026-08-01-26), as above.
         if let ExprKind::Identifier(name) = &callee.kind {
-            if (name == "println" || name == "print" || name == "eprintln")
+            if (name == "println" || name == "print" || name == "eprint" || name == "eprintln")
                 && self.local_scope.lookup(name).is_none()
             {
                 match args.len() {

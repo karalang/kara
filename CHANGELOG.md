@@ -20,6 +20,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `fs.copy(p, p)`, and a copy onto the same file through a link, fails with
+  `InvalidInput` and leaves the file intact. It emptied the file and returned
+  `Ok(0)`, as Rust's `std::fs::copy` does (review-thread ruling 2026-11-20,
+  B-2026-11-20-51).
 - `BufReader.fill_buf` and `BufReader.consume` on a plain `let` (E0510).
   Both take `mut ref self`, so the reader is `let mut br`, as for any other
   method that writes its receiver; they were accepted on a plain `let`. A
@@ -459,6 +463,8 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `TryLock` and Java's `tryLock` do. A task holding one lock can try a
   second and back off (the dining philosophers' deadlock-free form). It
   adds no effect; `lock` still adds `blocks` (B-2026-11-19-30).
+- `eprint`, the prelude's `print` for standard error, beside `eprintln`
+  (B-2026-11-20-53).
 - `SortedMap.lower(k)` and `SortedMap.higher(k)`, the entries with the
   largest key below `k` and the smallest above it, beside `floor` and
   `ceiling` (B-2026-11-19-82). `Slice.starts_with(prefix)` and
@@ -722,6 +728,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- `std.path.parent` ends in no `.` component: `parent("a/./b")` is `"a"`
+  and `parent("../x/./y")` is `"../x"`, where they were `"a/."` and
+  `"../x/."` (review-thread ruling 2026-11-20, B-2026-11-20-52).
 - A diagnostic record's `code` is now its most specific code. When the
   message opens with a symbolic code (`error[E_CHAR_AS_NARROW_INT]: ...`),
   that code is `code`, the tag leaves the message, and the kind's numeric

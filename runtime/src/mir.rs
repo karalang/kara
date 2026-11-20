@@ -2565,7 +2565,7 @@ pub unsafe extern "C" fn karac_mir_fs(
         // SAFETY: as above.
         19 => fs_set_modified(&path, unsafe { *value }),
         // SAFETY: `value` is writable for an `i64`.
-        _ => std::fs::copy(&path, to()).map(|n| unsafe { *value = n as i64 }),
+        _ => fs_copy(&path, &to()).map(|n| unsafe { *value = n as i64 }),
     };
     let e = match res {
         Ok(()) => return -1,
@@ -2679,6 +2679,41 @@ fn fs_set_modified(path: &str, ms: i64) -> std::io::Result<()> {
     #[cfg(not(windows))]
     let f = std::fs::File::open(path)?;
     f.set_modified(t)
+}
+
+/// `fs.copy(from, to)`. Copying a file onto itself (the same path, or the
+/// same file through a link) is `InvalidInput` and leaves it intact:
+/// `std::fs::copy` opens `to` for writing, which empties it, before it
+/// reads `from` (review-thread ruling 2026-11-20, B-2026-11-20-51).
+fn fs_copy(from: &str, to: &str) -> std::io::Result<u64> {
+    if fs_same_file(from, to) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "source and destination are the same file",
+        ));
+    }
+    std::fs::copy(from, to)
+}
+
+/// Whether `a` and `b` name one file, links followed: the same device and
+/// inode on Unix, the same canonical path elsewhere.
+fn fs_same_file(a: &str, b: &str) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        ma.dev() == mb.dev() && ma.ino() == mb.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (ma, mb);
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => a == b,
+        }
+    }
 }
 
 /// `fs.symlink(target, link)`; a directory link on Windows when the target

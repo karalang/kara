@@ -2579,7 +2579,13 @@ impl<'a> EffectChecker<'a> {
             ] {
                 seed(name, &[w("Stdout")]);
             }
-            for name in ["eprintln", "Stderr.println", "Stderr.print", "Stderr.flush"] {
+            for name in [
+                "eprint",
+                "eprintln",
+                "Stderr.println",
+                "Stderr.print",
+                "Stderr.flush",
+            ] {
                 seed(name, &[w("Stderr")]);
             }
 

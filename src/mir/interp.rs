@@ -11308,7 +11308,7 @@ impl<'a> Interp<'a> {
             ("remove_dir", [p]) => std::fs::remove_dir(p).map(|()| None),
             ("remove_dir_all", [p]) => std::fs::remove_dir_all(p).map(|()| None),
             ("rename", [from, to]) => std::fs::rename(from, to).map(|()| None),
-            ("copy", [from, to]) => match std::fs::copy(from, to) {
+            ("copy", [from, to]) => match crate::mir::fs::copy(from, to) {
                 Ok(n) => return self.variant_named(ret, None, "Ok", vec![Value::Int(n as i128)]),
                 Err(e) => Err(e),
             },

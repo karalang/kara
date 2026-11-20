@@ -104,6 +104,42 @@ fn open_for_times(path: &str) -> io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+/// `fs.copy(from, to)`; the runtime's twin is `fs_copy` in runtime/src/mir.rs.
+/// Copying a file onto itself (the same path, or the
+/// same file through a link) is `InvalidInput` and leaves it intact:
+/// `std::fs::copy` opens `to` for writing, which empties it, before it
+/// reads `from` (review-thread ruling 2026-11-20, B-2026-11-20-51).
+pub fn copy(from: &str, to: &str) -> std::io::Result<u64> {
+    if same_file(from, to) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "source and destination are the same file",
+        ));
+    }
+    std::fs::copy(from, to)
+}
+
+/// Whether `a` and `b` name one file, links followed: the same device and
+/// inode on Unix, the same canonical path elsewhere.
+fn same_file(a: &str, b: &str) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        ma.dev() == mb.dev() && ma.ino() == mb.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (ma, mb);
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => a == b,
+        }
+    }
+}
+
 /// `fs.symlink(target, link)`: makes `link` a symbolic link to `target`,
 /// which is stored as given (a relative target is relative to the link's
 /// directory) and need not exist. On Windows the link is a directory link

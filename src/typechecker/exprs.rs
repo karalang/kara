@@ -5743,7 +5743,7 @@ impl<'a> super::TypeChecker<'a> {
             || self.env.constants.contains_key(name)
             || matches!(
                 name,
-                "todo" | "unreachable" | "println" | "print" | "eprintln" | "panic"
+                "todo" | "unreachable" | "println" | "print" | "eprint" | "eprintln" | "panic"
             )
         {
             return None;

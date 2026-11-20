@@ -34,7 +34,8 @@ fn path_trimmed(p: Str) -> Str {
 
 /// The path without its last component: `"a/b/c.txt"` gives `"a/b"`, `"a"`
 /// gives `""` and `"/a"` gives `"/"`. `None` for the root and for an empty
-/// path. Trailing separators are ignored.
+/// path. Trailing separators are ignored, and the result has no trailing
+/// `.` component.
 pub fn parent(p: Str) -> Option[Str] {
     let t = path_trimmed(p);
     if t.is_empty() or t == "/" {
@@ -42,11 +43,10 @@ pub fn parent(p: Str) -> Option[Str] {
     }
     match t.rfind("/") {
         Some(i) => {
-            let mut head = i + 1;
-            while head > 1 and t.slice(0, head).ends_with("/") {
-                head = head - 1;
-            }
-            Some(t.slice(0, head))
+            // The parent ends in no separator and no `.` component either:
+            // `"a/./b"` gives `"a"`, not `"a/."` (review-thread ruling
+            // 2026-11-20, B-2026-11-20-52).
+            Some(path_trimmed(t.slice(0, i + 1)))
         }
         None => Some(t.slice(0, 0)),
     }
