@@ -13719,13 +13719,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         n: usize,
     ) -> Option<(DefId, Option<Vec<Ty>>)> {
         let label = format!("impl {tr}#{n}");
+        // A table's arguments with its hasher too, for an impl over any
+        // hasher (B-2026-11-21-3).
+        let mut full = Vec::new();
         let (def, args) = match self.tys().tcx().adt_of(t) {
             Some((adt, args)) => (adt.def, args),
             None => match self.tys().tcx().kind(t) {
-                HK::Intrinsic { kind, args } => (
-                    self.lcx.defs.lookup(0, kind.name())?,
-                    crate::mir::ty::table_args(kind, self.tys().tcx().list(args)),
-                ),
+                HK::Intrinsic { kind, args } => {
+                    full = self.tys().tcx().list(args);
+                    (
+                        self.lcx.defs.lookup(0, kind.name())?,
+                        crate::mir::ty::table_args(kind, full.clone()),
+                    )
+                }
                 // A primitive's impl (`impl Shape for i64`) has no target
                 // definition: the method whose `self` was checked at `t`.
                 _ => {
@@ -13745,7 +13751,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         path.push(method.to_string());
         let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
         let d = self.lcx.lowered_def(d)?;
-        self.lcx.fns.contains_key(&d).then_some((d, Some(args)))
+        let item = self.lcx.fns.get(&d)?;
+        let args = match full.is_empty() {
+            true => args,
+            false => item.table_targs(&full, &args).to_vec(),
+        };
+        Some((d, Some(args)))
     }
 
     /// B-2026-10-15-76 — the operator method `a <op> right` calls on `t`:
