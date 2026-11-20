@@ -68,7 +68,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | crash | 62 |
 | run-vs-build | 59 |
 | codegen-gap | 39 |
-| use-after-free | 10 |
+| use-after-free | 11 |
 | leak | 5 |
 | double-free | 2 |
 
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 738 |
-| mir-llvm | 311 |
+| mir-llvm | 312 |
 | mir | 282 |
 | cli | 220 |
 | parser | 135 |
@@ -1916,6 +1916,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-4 | typecheck | medium | A type with two impls of one generic trait cannot coerce to `dyn` of the second: with `impl Cv[Str] for A` and `impl Cv[i64] for A`, `let f: dyn Cv[i… | fa4b30aa47 |
 | B-2026-11-20-5 | mir | low | A closure handed through a generic identity on `own F` and then returned from a let is refused E0509: `fn keep[F: Fn() -> i64](f: own F) -> F { f }`,… | 7aacfe8e98 |
 | B-2026-11-20-8 | typecheck | low | Coercing a generic struct literal with an open type parameter to `dyn` does not use the only impl to fix it: `let mut e: dyn Ac = Bag { xs: Vec.new()… | fa4b30aa47 |
+| B-2026-11-20-31 | mir-llvm | high | A channel end dropped while the other side's last end drops on another worker read the channel's drop glue after releasing its lock (karac_mir_chan_e… | 17af81db2d |
 
 </details>
 
