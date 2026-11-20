@@ -1,0 +1,13 @@
+struct FakeEnv {}
+
+impl EnvProvider for FakeEnv {
+    fn args(ref self) -> Vec[String] { ["prog", "--verbose"] }
+}
+
+fn main() {
+    with_provider[Env](FakeEnv {}, || {
+        println(env.args().len());
+        let v = env.var("HOME");
+        println(f"{v.is_ok()}");
+    });
+}

@@ -1,0 +1,7 @@
+shared struct Cache { mut hits: i64 }
+fn main() {
+    let cache = Cache { hits: 0 };
+    let g = TaskGroup.new();
+    let h = g.spawn(|| cache.hits + 1);
+    println(f"{h.join()}");
+}

@@ -1,0 +1,7 @@
+shared struct Node { v: i64 }
+struct Wrap { inner: Option[Node] }
+fn main() {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| Wrap { inner: Some(Node { v: 1 }) });
+    println(f"{h.join().inner.is_some()}");
+}

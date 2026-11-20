@@ -1,0 +1,11 @@
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
+    let tx2 = tx.clone();
+    par {
+        tx.send(1).unwrap(),
+        tx2.send(2).unwrap(),
+    };
+    drop(tx); drop(tx2);
+    println(f"{rx.recv()}");
+}

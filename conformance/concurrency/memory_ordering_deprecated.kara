@@ -1,0 +1,8 @@
+import std.sync.{Atomic};
+
+fn main() {
+    let c = Atomic.new(0);
+    c.fetch_add(1, MemoryOrdering.SeqCst);
+    c.store(5, MemoryOrdering.Relaxed);
+    println(f"{c.load(MemoryOrdering.Acquire)}");
+}

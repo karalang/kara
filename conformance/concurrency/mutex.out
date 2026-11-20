@@ -1,0 +1,4 @@
+latency: count 2000 sum 7249000 mean 3624
+held by me: true
+free again, count 2000
+[0, 1, 2, 3]

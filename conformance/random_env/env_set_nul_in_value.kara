@@ -1,0 +1,5 @@
+fn main() {
+    println("before");
+    env.set("A", "x\u{0}y");
+    println("after");
+}

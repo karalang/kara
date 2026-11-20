@@ -1,0 +1,21 @@
+fn slow_square(n: i64) -> i64 {
+    let mut acc = 0;
+    for _ in 0..(5000 * (5 - n)) { acc += 1; }
+    n * n + acc - acc
+}
+
+fn check(n: i64) -> Result[i64, String] {
+    if n % 3 == 0 { Err(f"{n} divisible by 3") } else { Ok(n) }
+}
+
+fn main() {
+    // Values come back in source order, whatever order the branches finish in.
+    let (a, b, c) = par { slow_square(1), slow_square(2), slow_square(3) };
+    println(f"{a} {b} {c}");
+    // par for yields results in iteration order.
+    let squares = par for i in 0..8 { slow_square(i % 5) };
+    println(f"{squares}");
+    // Without `?`, every branch's result comes back, errors included.
+    let rs = par for i in 1..7 { check(i) };
+    println(f"{rs}");
+}

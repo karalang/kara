@@ -1,0 +1,6 @@
+fn add(x: mut ref i64, n: i64) { *x += n; }
+fn main() {
+    let mut x = 0;
+    par { add(mut x, 1), add(mut x, 2) };
+    println(f"{x}");
+}

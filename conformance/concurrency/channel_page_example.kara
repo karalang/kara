@@ -1,0 +1,39 @@
+import std.sync.{channel, Sender, Receiver, SendError};
+
+enum Request { GoTo(i64), Stop }
+
+fn handle(req: Request) {
+    match req {
+        Request.GoTo(n) => println(f"go to {n}"),
+        Request.Stop => println("stop"),
+    }
+}
+
+fn producer(tx: own Sender[Request]) -> Result[(), SendError[Request]] {
+    tx.send(Request.GoTo(5))?;
+    tx.send(Request.GoTo(3))?;
+    tx.send(Request.Stop)?;
+    Ok(())
+}   // tx drops here, which closes the channel
+
+fn controller(rx: own Receiver[Request]) {
+    for req in rx.into_iter() {   // ends once the channel is closed and drained
+        handle(req);
+    }
+    println("drained");
+}
+
+fn run() -> Result[(), SendError[Request]] {
+    let (tx, rx) = channel(8);
+    let (sent, _) = par { producer(tx), controller(rx) };
+    sent
+}
+
+fn main() {
+    println(f"{run().is_ok()}");
+    // A capacity-1 channel: the producer waits on each send until the
+    // controller takes the message, and the order still holds.
+    let (tx, rx) = channel(1);
+    let (sent, _) = par { producer(tx), controller(rx) };
+    println(f"{sent.is_ok()}");
+}

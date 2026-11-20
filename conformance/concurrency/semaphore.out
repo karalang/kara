@@ -1,0 +1,13 @@
+foo
+bar
+foo
+bar
+foo
+bar
+foo
+bar
+timeout
+waited the timeout: true
+one release frees one: true false
+permits after two extra releases: 3
+peak within permits: true

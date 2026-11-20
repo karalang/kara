@@ -1,0 +1,30 @@
+import std.sync.{channel, Sender, Receiver};
+
+struct Handler {
+    f: Fn(i64) -> i64 with sends(Channel) receives(Channel) blocks suspends,
+}
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (back_tx, back_rx): (Sender[i64], Receiver[i64]) = channel(1);
+    // A closure that waits on a channel, stored as a function value.
+    let h = Handler { f: |n| { tx.send(n).unwrap(); back_rx.recv().unwrap() } };
+    let g = TaskGroup.new();
+    // The echo task answers each request doubled.
+    let echo = g.spawn(|| {
+        let mut count = 0;
+        for v in rx.into_iter() {
+            back_tx.send(v * 2).unwrap();
+            count += 1;
+        }
+        count
+    });
+    let mut results = Vec.new();
+    for i in 1..4 { results.push((h.f)(i)); }
+    println(f"{results}");
+    // An iterator adapter holding a suspending closure.
+    let more: Vec[i64] = [10, 20].iter().map(|x| (h.f)(*x)).collect();
+    println(f"{more}");
+    drop(h);   // the closure owns tx: dropping it closes the channel
+    println(f"echoed {echo.join()}");
+}

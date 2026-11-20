@@ -1,0 +1,14 @@
+fn half(n: i64) -> i64 {
+    if n == 3 { panic("odd branch"); }
+    n / 2
+}
+
+fn main() {
+    let g = TaskGroup.isolating();
+    let h = g.spawn(|| {
+        let (a, b) = par { half(4), half(3) };
+        a + b
+    });
+    let r = h.join();
+    println(f"joined {r}");
+}

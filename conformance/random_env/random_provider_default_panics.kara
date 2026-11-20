@@ -1,0 +1,10 @@
+import std.uuid;
+struct Empty {}
+impl RandomProvider for Empty {}
+
+fn main() {
+    with_provider[RandomSource](Empty {}, || {
+        println("inside");
+        println(uuid.v4());
+    });
+}

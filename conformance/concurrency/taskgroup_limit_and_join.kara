@@ -1,0 +1,68 @@
+import std.sync.{Atomic};
+import std.time.{Duration, sleep};
+
+fn work(i: i64, running: Atomic[i64], peak: Atomic[i64]) -> i64 {
+    let now = running.fetch_add(1) + 1;
+    let mut seen = peak.load();
+    while now > seen {
+        match peak.compare_exchange(seen, now) {
+            Ok(_) => break,
+            Err(actual) => seen = actual,
+        }
+    }
+    sleep(Duration.ms(5));
+    running.fetch_sub(1);
+    i * i
+}
+
+fn parse(n: i64) -> Result[i64, String] {
+    if n < 0 { Err("bad input") } else { Ok(n + 1) }
+}
+
+fn main() {
+    let running = Atomic.new(0);
+    let peak = Atomic.new(0);
+    let mut handles = Vec.new();
+    {
+        let g = TaskGroup.new(limit: 3);
+        for i in 0..12 {
+            handles.push(g.spawn(|| work(i, running, peak)));
+        }
+    }   // the group drops here and joins every task
+    // Every task is done: no task still runs.
+    println(f"running after drop: {running.load()}");
+    println(f"peak within limit: {peak.load() <= 3}");
+    // Handles outlive their group and return the stored results.
+    let mut total = 0;
+    for h in handles.into_iter() {
+        total += h.join();
+    }
+    println(f"total {total}");
+
+    // An unbounded group runs every task at once.
+    let started = Atomic.new(0);
+    let g2 = TaskGroup.new();
+    let mut hs = Vec.new();
+    for _ in 0..8 {
+        hs.push(g2.spawn(|| {
+            started.fetch_add(1);
+            let mut spins = 0;
+            while started.load() < 8 and spins < 2000 {
+                sleep(Duration.ms(1));
+                spins += 1;
+            }
+            started.load()
+        }));
+    }
+    let mut all = true;
+    for h in hs.into_iter() {
+        if h.join() != 8 { all = false; }
+    }
+    println(f"all eight ran together: {all}");
+
+    // A task's Err reaches whoever joins it; siblings are unaffected.
+    let g3 = TaskGroup.new();
+    let a = g3.spawn(|| parse(-1));
+    let b = g3.spawn(|| parse(41));
+    println(f"{a.join()} {b.join()}");
+}

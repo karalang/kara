@@ -2251,6 +2251,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string
+  hole names the import form and is fixed with its import, as it is outside
+  a hole; it was refused as `undefined name 'std'` with no fix
+  (B-2026-11-20-108).
 - The fix-it log.md gives a log field whose value is `Display` but not
   `Serialize` keeps a struct literal on one line inside the interpolation,
   `f"{P { v: 2 }}"`; it was written a field to a line (B-2026-11-20-92).

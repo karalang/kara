@@ -1,0 +1,49 @@
+import std.sync.{channel, Sender, Receiver, SendError};
+
+fn main() {
+    // FIFO, and recv drains after every Sender drops.
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(3);
+    tx.send(1).unwrap();
+    tx.send(2).unwrap();
+    tx.send(3).unwrap();
+    // Full from try_send hands the value back.
+    match tx.try_send(4) {
+        Ok(()) => println("try_send stored past cap"),
+        Err(SendError.Full(v)) => println(f"full {v}"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+    }
+    let tx2 = tx.clone();
+    drop(tx);
+    println(f"{rx.recv()}");
+    tx2.send(5).unwrap();
+    drop(tx2);
+    println(f"{rx.recv()}");
+    println(f"{rx.try_recv()}");
+    println(f"{rx.recv()}");
+    println(f"{rx.recv()}");
+    println(f"{rx.try_recv()}");
+
+    // try_recv on an empty open channel.
+    let (t3, r3): (Sender[String], Receiver[String]) = channel(1);
+    println(f"{r3.try_recv()}");
+    t3.send("one").unwrap();
+    println(f"{r3.try_recv()}");
+    // Closed after the Receiver drops: send and try_send hand the value back.
+    drop(r3);
+    match t3.send("two") {
+        Ok(()) => println("sent to nobody"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+        Err(SendError.Full(v)) => println(f"full {v}"),
+    }
+    match t3.try_send("three") {
+        Ok(()) => println("sent to nobody"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+        Err(SendError.Full(v)) => println(f"full {v}"),
+    }
+    // Display texts.
+    let (t4, r4): (Sender[i64], Receiver[i64]) = channel(1);
+    t4.send(0).unwrap();
+    match t4.try_send(1) { Err(e) => println(f"{e}"), Ok(()) => println("?") }
+    drop(r4);
+    match t4.try_send(1) { Err(e) => println(f"{e}"), Ok(()) => println("?") }
+}

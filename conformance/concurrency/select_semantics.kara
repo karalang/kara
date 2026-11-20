@@ -1,0 +1,75 @@
+import std.sync.{channel, Sender, Receiver, SendError};
+import std.time.{Duration};
+
+struct Tok { id: i64 }
+impl Drop for Tok {
+    fn drop(mut ref self) { println(f"drop tok {self.id}"); }
+}
+
+fn main() {
+    // Both ready: the first in source order wins, every time.
+    let (t1, r1): (Sender[i64], Receiver[i64]) = channel(2);
+    let (t2, r2): (Sender[i64], Receiver[i64]) = channel(2);
+    t1.send(1).unwrap();
+    t2.send(2).unwrap();
+    let got = select {
+        a = r2.recv() => f"r2 {a}",
+        b = r1.recv() => f"r1 {b}",
+    };
+    println(got);
+    // The losing arm's operation did not happen: r1 still holds 1.
+    println(f"{r1.try_recv()} {r2.try_recv()}");
+
+    // default runs when nothing is ready.
+    let v = select {
+        a = r1.recv() => f"recv {a}",
+        default => "idle".to_string(),
+    };
+    println(v);
+
+    // A losing send arm keeps its value, which drops when the select ends.
+    let (t3, r3): (Sender[Tok], Receiver[Tok]) = channel(1);
+    t1.send(7).unwrap();
+    let w = select {
+        a = r1.recv() => f"recv {a}",
+        s = t3.send(Tok { id: 9 }) => f"sent {s.is_ok()}",
+    };
+    println(w);
+    println("after select");
+    println(f"{r3.try_recv().is_none()}");
+
+    // A closed channel makes its arm ready.
+    drop(t2);
+    let c = select {
+        a = r2.recv() => f"closed recv {a}",
+        _ = after(Duration.ms(5000)) => "timer".to_string(),
+    };
+    println(c);
+    drop(r3);
+    let d = select {
+        s = t3.send(Tok { id: 4 }) => match s {
+            Err(SendError.Closed(t)) => f"closed send {t.id}",
+            _ => "?".to_string(),
+        },
+        _ = after(Duration.ms(5000)) => "timer".to_string(),
+    };
+    println(d);
+
+    // after fires when nothing else does.
+    let e = select {
+        a = r1.recv() => f"recv {a}",
+        _ = after(Duration.ms(20)) => "timeout".to_string(),
+    };
+    println(e);
+
+    // The value is the chosen arm's, and break in a body leaves the loop.
+    let mut n = 0;
+    loop {
+        t1.send(n).unwrap();
+        select {
+            a = r1.recv() => { if a == Some(3) { break; } n += 1; },
+            default => {},
+        }
+    }
+    println(f"broke at {n}");
+}

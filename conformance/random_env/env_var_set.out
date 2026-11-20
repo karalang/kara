@@ -1,0 +1,9 @@
+KARA_CONF_SET=[hello world]
+KARA_CONF_EMPTY=[]
+KARA_CONF_UNSET not present
+KARA_CONF_BAD not unicode
+8080
+9090
+KARA_CONF_UNSET=[now set = with equals]
+KARA_CONF_SET=[]
+child sees [now set = with equals]

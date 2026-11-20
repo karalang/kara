@@ -1,0 +1,12 @@
+recv timed out
+waited enough: true
+Ok(4)
+send timed out, kept 6
+timed out
+Ok(5)
+recv closed
+channel closed
+send closed, kept x
+channel closed
+timed out
+Ok(8)

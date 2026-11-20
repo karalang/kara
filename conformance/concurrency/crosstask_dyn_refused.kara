@@ -1,0 +1,9 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+fn run(sh: dyn Shape) -> i64 {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| sh.area());
+    h.join()
+}
+fn main() { println(f"{run(Sq { s: 3 })}"); }

@@ -39,9 +39,18 @@ def kara_str(s: str) -> str:
     return '"' + "".join(out) + '"'
 
 
-def run(src: str, backends=("interp", "build"), stdin: str = "", timeout: int = 600):
-    """The program's stdout on each backend, as {backend: (code, stdout, stderr)}."""
+def run(src: str, backends=("interp", "build"), stdin: str = "", timeout: int = 600, repeat: int = 1,
+        env=None, args=None):
+    """The program's results on each backend: {"check": (code, stdout,
+    stderr), backend: [(code, stdout, stderr), ...]}, one entry per run when
+    `repeat` asks for several (a schedule-sensitive case). The compiled
+    program is built once and run `repeat` times. `args` are the program's
+    command-line arguments (str, or bytes for a non-UTF-8 one); with them
+    the interpreter runs through `karac run --interp`, since the corpus
+    runner's `__mir-run` passes none."""
     out = {}
+    run_env = dict(os.environ, **{k: os.fsdecode(v) for k, v in (env or {}).items()})
+    argv = [os.fsdecode(a) for a in (args or [])]
     with tempfile.TemporaryDirectory(prefix="kara-conf-") as d:
         path = Path(d) / "main.kara"
         path.write_text(src)
@@ -49,19 +58,26 @@ def run(src: str, backends=("interp", "build"), stdin: str = "", timeout: int = 
         out["check"] = (check.returncode, check.stdout, check.stderr)
         if check.returncode != 0:
             return out
+
+        def once(cmd):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, input=stdin, timeout=timeout,
+                                   env=run_env)
+                return (r.returncode, r.stdout, r.stderr)
+            except subprocess.TimeoutExpired:
+                return (-999, "", f"timed out after {timeout}s")
+
         if "interp" in backends:
-            r = subprocess.run([KARAC, "__mir-run", str(path)], capture_output=True, text=True,
-                               input=stdin, timeout=timeout)
-            out["interp"] = (r.returncode, r.stdout, r.stderr)
+            cmd = [KARAC, "run", "--interp", str(path), "--", *argv] if args is not None else [KARAC, "__mir-run", str(path)]
+            out["interp"] = [once(cmd) for _ in range(repeat)]
         if "build" in backends and has_backend():
             exe = Path(d) / "main.bin"
             b = subprocess.run([KARAC, "build", "-o", str(exe), str(path)], capture_output=True,
                                text=True, timeout=timeout)
             if b.returncode != 0:
-                out["build"] = (b.returncode, "", b.stdout + b.stderr)
+                out["build"] = [(b.returncode, "", b.stdout + b.stderr)]
             else:
-                r = subprocess.run([str(exe)], capture_output=True, text=True, input=stdin, timeout=timeout)
-                out["build"] = (r.returncode, r.stdout, r.stderr)
+                out["build"] = [once([str(exe), *argv]) for _ in range(repeat)]
     return out
 
 
@@ -107,12 +123,10 @@ class Report:
             self.failed.append("check refused the program:\n" + results["check"][1] + results["check"][2])
             return
         for backend in ("interp", "build"):
-            if backend not in results:
-                continue
-            code, stdout, stderr = results[backend]
-            if code != 0:
-                self.failed.append(f"[{backend}] exit {code}: {stderr[-2000:]}")
-            self.compare(backend, labels, stdout.splitlines(), want_lines)
+            for code, stdout, stderr in results.get(backend, []):
+                if code != 0:
+                    self.failed.append(f"[{backend}] exit {code}: {stderr[-2000:]}")
+                self.compare(backend, labels, stdout.splitlines(), want_lines)
 
     def finish(self):
         for f in self.failed[:60]:

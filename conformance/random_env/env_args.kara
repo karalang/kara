@@ -1,0 +1,7 @@
+fn main() {
+    let args = env.args();
+    println(f"{args.len()}");
+    for a in args.iter().skip(1) { println(f"[{a}]"); }
+    let name = args[0].clone();
+    println(f"program name present: {name.len() > 0}");
+}

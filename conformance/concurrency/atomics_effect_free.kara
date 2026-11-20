@@ -1,0 +1,23 @@
+import std.sync.{Atomic, Mutex};
+
+// A public function declares its effects; atomics add none, and lock adds
+// only `blocks`.
+pub fn bump(c: Atomic[i64]) -> i64 {
+    c.fetch_add(1)
+}
+
+pub fn read_locked(m: Mutex[i64]) -> i64 with blocks {
+    let g = m.lock();
+    *g.value
+}
+
+fn main() {
+    let c = Atomic.new(0);
+    // Two par branches on one atomic do not conflict.
+    let (x, y) = par { c.fetch_add(1), c.fetch_add(2) };
+    println(f"{x + y >= 1} {c.load()}");
+    bump(c);
+    println(f"{c.load()}");
+    let m = Mutex.new(5);
+    println(f"{read_locked(m)}");
+}

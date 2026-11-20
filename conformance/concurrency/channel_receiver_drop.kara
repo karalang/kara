@@ -1,0 +1,42 @@
+import std.sync.{channel, Sender, Receiver, SendError};
+import std.time.{Duration, sleep};
+
+struct Msg { id: i64 }
+impl Drop for Msg {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+
+fn main() {
+    // Buffered messages drop with the Receiver.
+    let (tx, rx): (Sender[Msg], Receiver[Msg]) = channel(4);
+    tx.send(Msg { id: 1 }).unwrap();
+    tx.send(Msg { id: 2 }).unwrap();
+    println("dropping receiver");
+    drop(rx);
+    println("dropped receiver");
+    match tx.send(Msg { id: 3 }) {
+        Err(SendError.Closed(m)) => println(f"closed, got back {m.id}"),
+        _ => println("?"),
+    }
+    println("--");
+    // A send waiting on a full channel returns Closed when the Receiver drops.
+    let (tx2, rx2): (Sender[i64], Receiver[i64]) = channel(1);
+    tx2.send(10).unwrap();
+    let g = TaskGroup.new();
+    let h = g.spawn(|| {
+        match tx2.send(11) {
+            Ok(()) => "sent".to_string(),
+            Err(SendError.Closed(m)) => f"closed {m}",
+            Err(SendError.Full(m)) => f"full {m}",
+        }
+    });
+    let h2 = g.spawn(|| {
+        sleep(Duration.ms(100));
+        drop(rx2);
+        "receiver gone"
+    });
+    let a = h.join();
+    let b = h2.join();
+    println(a);
+    println(b);
+}

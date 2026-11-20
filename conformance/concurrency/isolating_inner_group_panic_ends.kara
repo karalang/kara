@@ -1,0 +1,10 @@
+fn main() {
+    let g = TaskGroup.isolating();
+    let h = g.spawn(|| {
+        let inner = TaskGroup.new();
+        let x = inner.spawn(|| { panic("inner task"); 1 });
+        x.join()
+    });
+    let r = h.join();
+    println(f"joined {r}");
+}

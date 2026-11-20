@@ -1,0 +1,45 @@
+import std.random;
+import std.uuid;
+import std.random.{next_u64};
+
+fn hex_ok(c: char) -> bool {
+    (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f')
+}
+
+fn uuid_ok(u: String) -> bool {
+    let cs: Vec[char] = u.chars().collect();
+    if cs.len() != 36 { return false; }
+    for (i, c) in cs.iter().enumerate() {
+        if i == 8 or i == 13 or i == 18 or i == 23 {
+            if *c != '-' { return false; }
+        } else if not hex_ok(*c) {
+            return false;
+        }
+    }
+    cs[14] == '4' and (cs[19] == '8' or cs[19] == '9' or cs[19] == 'a' or cs[19] == 'b')
+}
+
+fn main() {
+    // Draws differ (a repeat among 1000 64-bit draws is all but impossible).
+    let mut seen: Set[u64] = Set.new();
+    for _ in 0..500 { seen.insert(random.next_u64()); }
+    for _ in 0..500 { seen.insert(next_u64()); }
+    println(f"distinct draws: {seen.len()}");
+    // Every bit position takes both values.
+    let mut ones = 0u64;
+    let mut zeros = 0u64;
+    for _ in 0..64 {
+        let x = random.next_u64();
+        ones = ones | x;
+        zeros = zeros | (x ^ u64.MAX);
+    }
+    println(f"every bit varies: {ones == u64.MAX and zeros == u64.MAX}");
+    let mut ids: Set[String] = Set.new();
+    let mut all_ok = true;
+    for _ in 0..200 {
+        let u = uuid.v4();
+        if not uuid_ok(u.clone()) { all_ok = false; println(f"bad uuid {u}"); }
+        ids.insert(u);
+    }
+    println(f"uuids well formed: {all_ok}, distinct: {ids.len()}");
+}

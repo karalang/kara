@@ -1,0 +1,5 @@
+drop inner
+drop outer
+outer cancelled
+busy cancelled
+busy reached 2

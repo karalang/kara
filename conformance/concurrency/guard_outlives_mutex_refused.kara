@@ -1,0 +1,9 @@
+import std.sync.{Mutex, MutexGuard};
+fn take() -> MutexGuard[i64] {
+    let m = Mutex.new(1);
+    m.lock()
+}
+fn main() {
+    let g = take();
+    println(f"{g.value}");
+}

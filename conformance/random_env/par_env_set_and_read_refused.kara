@@ -1,0 +1,4 @@
+fn main() {
+    let (_, v) = par { env.set("A", "1"), env.var("A") };
+    println(f"{v.is_ok()}");
+}

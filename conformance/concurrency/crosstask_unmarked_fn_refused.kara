@@ -1,0 +1,6 @@
+fn run(f: Fn() -> i64) -> i64 {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| f());
+    h.join()
+}
+fn main() { println(f"{run(|| 3)}"); }

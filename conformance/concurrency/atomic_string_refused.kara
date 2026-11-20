@@ -1,0 +1,5 @@
+import std.sync.{Atomic};
+fn main() {
+    let a = Atomic.new("x");
+    println(a.load());
+}

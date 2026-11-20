@@ -1,0 +1,5 @@
+fn run(f: Fn() -> i64) -> i64 {
+    let (a, b) = par { f(), f() };
+    a + b
+}
+fn main() { println(f"{run(|| 3)}"); }

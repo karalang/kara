@@ -1,0 +1,8 @@
+import std.sync.{channel, Sender, Receiver};
+shared struct Node { v: i64 }
+fn main() {
+    let (tx, rx) = channel(1);
+    let nodes: Vec[Node] = [Node { v: 1 }];
+    tx.send(nodes).unwrap();
+    println(f"{rx.recv().unwrap().len()}");
+}

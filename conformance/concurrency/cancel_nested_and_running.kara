@@ -1,0 +1,59 @@
+import std.sync.{channel, Sender, Receiver, Atomic, TaskFailed};
+import std.time.{Duration, Instant};
+
+struct Noisy { name: String }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+
+fn inner_task(rx: own Receiver[i64]) -> i64 {
+    let _n = Noisy { name: "inner" };
+    rx.recv().unwrap_or(-1)
+}
+
+// Starts an inner group whose task waits forever, then waits on it.
+fn outer_task(rx: own Receiver[i64]) -> i64 {
+    let _n = Noisy { name: "outer" };
+    let inner = TaskGroup.new();
+    let h = inner.spawn(|| inner_task(rx));
+    h.join()
+}
+
+// Tells main it is running, computes for a while without waiting, then
+// waits. Whether main's cancel lands while it computes (separate workers)
+// or once it waits (one worker), it must stop at that wait.
+fn busy(ready: own Sender[i64], ran: Atomic[i64], rx: own Receiver[i64]) -> i64 {
+    ready.send(1).unwrap();
+    let t0 = Instant.now();
+    let mut x = 0;
+    while t0.elapsed().as_ms() < 100 { x += 1; }
+    ran.store(2);
+    let _ = rx.recv();
+    ran.store(3);
+    7
+}
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (tx2, rx2): (Sender[i64], Receiver[i64]) = channel(1);
+    let (ready_tx, ready_rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let ran = Atomic.new(0);
+    let g = TaskGroup.new();
+    let outer = g.spawn(|| outer_task(rx));
+    let b = g.spawn(|| busy(ready_tx, ran, rx2));
+    let _ = ready_rx.recv();
+    g.cancel();
+    let o = outer.try_join();
+    let r = b.try_join();
+    match o {
+        Err(TaskFailed.Cancelled) => println("outer cancelled"),
+        other => println(f"outer {other}"),
+    }
+    match r {
+        Err(TaskFailed.Cancelled) => println("busy cancelled"),
+        other => println(f"busy {other}"),
+    }
+    println(f"busy reached {ran.load()}");
+    drop(tx);
+    drop(tx2);
+}

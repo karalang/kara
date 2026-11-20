@@ -2158,6 +2158,25 @@ impl super::Parser {
                                     },
                                 );
                             }
+                            // `std.random.next_u64()` in a hole is reported
+                            // and fixed as one outside it (B-2026-11-20-108).
+                            for (at, (message, edit, import)) in &result.program.rust_std_paths {
+                                let at = shift_key(crate::resolver::SpanKey(*at, 0)).0;
+                                let moved =
+                                    shift_key(crate::resolver::SpanKey(edit.offset, edit.length));
+                                self.hole_rust_std_paths.insert(
+                                    at,
+                                    (
+                                        message.clone(),
+                                        crate::resolver::TextEdit {
+                                            offset: moved.0,
+                                            length: moved.1,
+                                            replacement: edit.replacement.clone(),
+                                        },
+                                        import.clone(),
+                                    ),
+                                );
+                            }
                             for (k, at) in &result.program.ref_binding_keywords {
                                 let key = shift_key(*k);
                                 let kw = shift_key(crate::resolver::SpanKey(*at, 0)).0;

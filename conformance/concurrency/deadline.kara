@@ -1,0 +1,21 @@
+import std.sync.{channel, Sender, Receiver, TaskFailed};
+import std.time.{Duration, Instant, sleep};
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let t0 = Instant.now();
+    let g = TaskGroup.new().with_deadline(Duration.ms(80));
+    let slow = g.spawn(|| { sleep(Duration.ms(10000)); "slow finished" });
+    let blocked = g.spawn(|| rx.recv());
+    let quick = g.spawn(|| { sleep(Duration.ms(5)); "quick finished" });
+    match quick.try_join() { Ok(s) => println(s), Err(e) => println(f"quick {e}") }
+    match slow.try_join() { Ok(s) => println(s), Err(e) => println(f"slow {e}") }
+    match blocked.try_join() {
+        Ok(v) => println(f"blocked got {v}"),
+        Err(TaskFailed.Cancelled) => println("blocked cancelled"),
+        Err(e) => println(f"blocked {e}"),
+    }
+    let ms = t0.elapsed().as_ms();
+    println(f"after the deadline: {ms >= 80}, long before the sleep: {ms < 5000}");
+    drop(tx);
+}

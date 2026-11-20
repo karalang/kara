@@ -1,0 +1,12 @@
+r2 Some(2)
+Some(1) None
+idle
+drop tok 9
+recv Some(7)
+after select
+true
+closed recv None
+drop tok 4
+closed send 4
+timeout
+broke at 3

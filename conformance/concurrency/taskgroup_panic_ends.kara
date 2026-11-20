@@ -1,0 +1,6 @@
+fn main() {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| 1);
+    let b = g.spawn(|| { panic("ordinary task"); 2 });
+    println(f"{a.join() + b.join()}");
+}

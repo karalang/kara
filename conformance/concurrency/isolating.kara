@@ -1,0 +1,65 @@
+import std.sync.{channel, Sender, Receiver, TaskFailed};
+import std.time.{Duration, sleep};
+
+struct Noisy { name: String }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+
+fn fails(n: i64) -> Result[i64, String] {
+    let _g = Noisy { name: "in failing task" };
+    defer println("failing defer");
+    errdefer println("failing errdefer");
+    errdefer(e) println(f"failing errdefer(e) {e}");
+    if n > 0 {
+        panic("boom");
+    }
+    Ok(n)
+}
+
+fn parse(s: Str) -> Result[i64, String] {
+    if s == "x" { return Err("not a number"); }
+    Ok(1)
+}
+
+fn main() {
+    let g = TaskGroup.isolating();
+    let bad = g.spawn(|| fails(1));
+    let good = g.spawn(|| { sleep(Duration.ms(20)); 42 });
+    let ret = g.spawn(|| parse("x"));
+    match bad.join() {
+        Ok(v) => println(f"bad ok {v}"),
+        Err(TaskFailed.Panicked { message, location }) => {
+            println(f"panicked: {message}");
+            let parts: Vec[Str] = location.split(":").collect();
+            println(f"line {parts[parts.len() - 2]} column {parts[parts.len() - 1]}");
+        }
+        Err(TaskFailed.Cancelled) => println("cancelled?"),
+    }
+    println(f"{good.join()}");
+    // A task returning Err comes back in Ok: it left with its own value.
+    println(f"{ret.join()}");
+
+    // Display of TaskFailed.
+    let g2 = TaskGroup.isolating();
+    let h = g2.spawn(|| fails(2));
+    match h.join() {
+        Err(e) => {
+            let text = f"{e}";
+            println(f"starts right: {text.starts_with("task panicked at ")}");
+            println(f"ends right: {text.ends_with(": boom")}");
+        }
+        Ok(_) => println("?"),
+    }
+    // Cancelled: join returns Err(Cancelled) rather than panicking.
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let g3 = TaskGroup.isolating();
+    let w = g3.spawn(|| rx.recv());
+    g3.cancel();
+    match w.join() {
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        other => println(f"{other}"),
+    }
+    drop(tx);
+    println("end");
+}

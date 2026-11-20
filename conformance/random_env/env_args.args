@@ -1,0 +1,1 @@
+['one', 'two words', '', b'caf\xc3\xa9', b'bad\xffbyte', b'\xe2\x82']

@@ -1,0 +1,7 @@
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let mut v: Vec[i64] = [3, 1, 2];
+    v.sort_by(|a, b| { tx.send(1).unwrap(); let _ = rx.recv(); a.cmp(b) });
+    println(f"{v}");
+}

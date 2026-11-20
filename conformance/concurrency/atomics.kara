@@ -1,0 +1,53 @@
+import std.sync.{Atomic};
+
+sync struct Metrics {
+    requests: Atomic[u64],
+    bytes: Atomic[u64],
+}
+
+impl Metrics {
+    fn record(self, n: u64) {
+        self.requests.fetch_add(1);
+        self.bytes.fetch_add(n);
+    }
+}
+
+fn publish(ready: Atomic[bool]) {
+    ready.store(true);
+}
+
+fn is_ready(ready: Atomic[bool]) -> bool {
+    ready.load()
+}
+
+fn main() {
+    let b = Atomic.new(false);
+    println(f"{is_ready(b)}");
+    publish(b);
+    println(f"{is_ready(b)} swap gave {b.swap(false)} now {b.load()}");
+    println(f"{b.compare_exchange(true, true)} {b.compare_exchange(false, true)} {b.load()}");
+
+    let a32: Atomic[i32] = Atomic.new(i32.MAX);
+    println(f"{a32.fetch_add(1)} then {a32.load()}");
+    println(f"{a32.fetch_sub(1)} then {a32.load()}");
+    let a64 = Atomic.new(i64.MIN);
+    println(f"{a64.fetch_sub(1)} then {a64.load()}");
+    let u32a: Atomic[u32] = Atomic.new(0);
+    println(f"{u32a.fetch_sub(1)} then {u32a.load()}");
+    let u64a = Atomic[u64].new(5);
+    println(f"{u64a.fetch_sub(6)} then {u64a.load()}");
+    println(f"{u64a.swap(9)} {u64a.compare_exchange(9, 1)} {u64a.compare_exchange(9, 2)} {u64a.load()}");
+    u64a.store(77);
+    println(f"{u64a.load()}");
+
+    let m = Metrics { requests: Atomic.new(0), bytes: Atomic.new(0) };
+    {
+        let g = TaskGroup.new();
+        for t in 0..8 {
+            g.spawn(|| {
+                for _ in 0..500 { m.record(3); }
+            });
+        }
+    }
+    println(f"requests {m.requests.load()} bytes {m.bytes.load()}");
+}

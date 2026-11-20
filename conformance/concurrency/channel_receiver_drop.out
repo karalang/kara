@@ -1,0 +1,9 @@
+dropping receiver
+drop 1
+drop 2
+dropped receiver
+closed, got back 3
+drop 3
+--
+closed 11
+receiver gone

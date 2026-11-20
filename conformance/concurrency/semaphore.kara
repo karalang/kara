@@ -1,0 +1,72 @@
+import std.sync.{Atomic};
+import std.time.{Duration, Instant, sleep};
+
+sync struct FooBar {
+    n: i64,
+    foo_sem: Semaphore,   // Semaphore.new(1): foo goes first
+    bar_sem: Semaphore,   // Semaphore.new(0): bar waits for foo's release
+}
+
+impl FooBar {
+    fn foo(self, print_foo: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.foo_sem.acquire(60000);
+            print_foo();
+            self.bar_sem.release();
+        }
+    }
+    fn bar(self, print_bar: Fn()) {
+        for _ in 0..self.n {
+            let _ = self.bar_sem.acquire(60000);
+            print_bar();
+            self.foo_sem.release();
+        }
+    }
+}
+
+fn main() {
+    let fb = FooBar { n: 4, foo_sem: Semaphore.new(1), bar_sem: Semaphore.new(0) };
+    {
+        let g = TaskGroup.new();
+        g.spawn(|| fb.bar(|| println("bar")));
+        g.spawn(|| fb.foo(|| println("foo")));
+    }
+    // A negative count is 0: an acquire outside a task waits its timeout and fails.
+    let neg = Semaphore.new(-3);
+    let t0 = Instant.now();
+    match neg.acquire(30) {
+        Ok(()) => println("acquired from a negative count"),
+        Err(SemaphoreError.Timeout) => println("timeout"),
+    }
+    println(f"waited the timeout: {t0.elapsed().as_ms() >= 30}");
+    neg.release();
+    println(f"one release frees one: {neg.acquire(0).is_ok()} {neg.acquire(0).is_ok()}");
+    // release is not capped at the starting count.
+    let s = Semaphore.new(1);
+    s.release();
+    s.release();
+    let mut got = 0;
+    while s.acquire(0).is_ok() { got += 1; }
+    println(f"permits after two extra releases: {got}");
+    // Gating a fan-out: no more than 2 at once.
+    let gate = Semaphore.new(2);
+    let running = Atomic.new(0);
+    let peak = Atomic.new(0);
+    {
+        let g = TaskGroup.new();
+        for _ in 0..10 {
+            g.spawn(|| {
+                gate.acquire(60000).unwrap();
+                let now = running.fetch_add(1) + 1;
+                let mut seen = peak.load();
+                while now > seen {
+                    match peak.compare_exchange(seen, now) { Ok(_) => break, Err(a) => seen = a }
+                }
+                sleep(Duration.ms(3));
+                running.fetch_sub(1);
+                gate.release();
+            });
+        }
+    }
+    println(f"peak within permits: {peak.load() <= 2}");
+}

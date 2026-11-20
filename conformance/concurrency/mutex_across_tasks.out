@@ -1,0 +1,3 @@
+try_lock while held: true
+after release: 11
+released

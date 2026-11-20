@@ -1,0 +1,2 @@
+pub fn configure() with reads(Env) { env.set("A", "1"); }
+fn main() { configure(); }

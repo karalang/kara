@@ -1,0 +1,7 @@
+import std.sync.{Mutex, MutexGuard, channel, Sender, Receiver};
+fn main() {
+    let m = Mutex.new(1);
+    let (tx, rx) = channel(1);
+    tx.send(m.lock()).unwrap();
+    println(f"{rx.recv().unwrap().value}");
+}

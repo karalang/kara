@@ -1,0 +1,33 @@
+import std.sync.{channel, Sender, Receiver, TaskFailed};
+import std.time.{Duration, sleep};
+
+struct Noisy { name: String }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+
+fn waiter(rx: own Receiver[i64]) -> Result[i64, String] {
+    let n = Noisy { name: "waiter local" };
+    defer println("waiter defer");
+    errdefer println("waiter errdefer");
+    let v = rx.recv();
+    println("waiter resumed");   // never runs: the task is torn down at recv
+    Ok(v.unwrap_or(0))
+}
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let g = TaskGroup.new();
+    let h = g.spawn(|| waiter(rx));
+    // A task past its last wait completes and keeps its result.
+    let done = g.spawn(|| 5);
+    sleep(Duration.ms(100));
+    println(f"done {done.join()}");
+    g.cancel();
+    match h.try_join() {
+        Ok(r) => println(f"finished {r}"),
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        Err(e) => println(f"other {e}"),
+    }
+    drop(tx);
+}

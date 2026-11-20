@@ -1,0 +1,7 @@
+shared struct Cache { mut hits: i64 }
+fn read(c: Cache) -> i64 { c.hits }
+fn main() {
+    let cache = Cache { hits: 0 };
+    let (a, b) = par { read(cache), 2 };
+    println(f"{a + b}");
+}

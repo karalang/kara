@@ -1,0 +1,57 @@
+import std.sync.{channel, Sender, Receiver, RecvTimeoutError, SendTimeoutError};
+import std.time.{Duration, Instant, sleep};
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    // Empty and open: TimedOut, after at least d.
+    let t0 = Instant.now();
+    match rx.recv_timeout(Duration.ms(50)) {
+        Ok(v) => println(f"got {v}"),
+        Err(RecvTimeoutError.TimedOut) => println("recv timed out"),
+        Err(RecvTimeoutError.Closed) => println("recv closed"),
+    }
+    println(f"waited enough: {t0.elapsed().as_ms() >= 50}");
+    // Ready: the value.
+    tx.send(4).unwrap();
+    println(f"{rx.recv_timeout(Duration.ms(50))}");
+    // Full: TimedOut hands the value back.
+    tx.send(5).unwrap();
+    match tx.send_timeout(6, Duration.ms(30)) {
+        Ok(()) => println("sent"),
+        Err(SendTimeoutError.TimedOut(v)) => println(f"send timed out, kept {v}"),
+        Err(SendTimeoutError.Closed(v)) => println(f"send closed, kept {v}"),
+    }
+    match tx.send_timeout(6, Duration.ms(30)) {
+        Err(e) => println(f"{e}"),
+        Ok(()) => println("sent"),
+    }
+    // Buffered message is still delivered after the last Sender drops; then Closed.
+    drop(tx);
+    println(f"{rx.recv_timeout(Duration.ms(30))}");
+    match rx.recv_timeout(Duration.ms(5000)) {
+        Err(RecvTimeoutError.Closed) => println("recv closed"),
+        other => println(f"{other}"),
+    }
+    match rx.recv_timeout(Duration.ms(5000)) {
+        Err(e) => println(f"{e}"),
+        Ok(v) => println(f"{v}"),
+    }
+    // Closed send hands the value back.
+    let (t2, r2): (Sender[String], Receiver[String]) = channel(1);
+    drop(r2);
+    match t2.send_timeout("x", Duration.ms(5000)) {
+        Err(SendTimeoutError.Closed(v)) => println(f"send closed, kept {v}"),
+        _ => println("?"),
+    }
+    match t2.send_timeout("y", Duration.ms(5000)) {
+        Err(e) => println(f"{e}"),
+        Ok(()) => println("sent"),
+    }
+    let (t3, r3): (Sender[i64], Receiver[i64]) = channel(1);
+    match r3.recv_timeout(Duration.ms(1)) { Err(e) => println(f"{e}"), Ok(v) => println(f"{v}") }
+    // A value sent by another task while recv_timeout waits arrives.
+    let g = TaskGroup.new();
+    let h = g.spawn(|| { sleep(Duration.ms(30)); t3.send(8).unwrap(); });
+    println(f"{r3.recv_timeout(Duration.ms(5000))}");
+    h.join();
+}

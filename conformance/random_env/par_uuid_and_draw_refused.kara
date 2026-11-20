@@ -1,0 +1,6 @@
+import std.random;
+import std.uuid;
+fn main() {
+    let (a, b) = par { uuid.v4(), random.next_u64() };
+    println(f"{a.len()} {b > 0}");
+}

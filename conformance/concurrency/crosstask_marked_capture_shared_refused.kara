@@ -1,0 +1,10 @@
+shared struct Cache { mut hits: i64 }
+fn run(f: Fn() -> i64 + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| f());
+    h.join()
+}
+fn main() {
+    let c = Cache { hits: 4 };
+    println(f"{run(|| c.hits)}");
+}

@@ -1,0 +1,7 @@
+import std.sync.{Mutex, MutexGuard};
+shared struct Holder { g: MutexGuard[i64] }
+fn main() {
+    let m = Mutex.new(1);
+    let h = Holder { g: m.lock() };
+    println(f"{h.g.value}");
+}

@@ -1,0 +1,6 @@
+fn run_in_task[T](v: own T) -> T {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| v);
+    h.join()
+}
+fn main() { println(f"{run_in_task(3)}"); }

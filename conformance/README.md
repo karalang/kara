@@ -12,12 +12,32 @@ compiled. Both must give the expected output.
 |---|---|---|
 | `encoding.py` | encoding.md | Python's `base64`, `urllib.parse`, and the page's own rules where Python is laxer (non-canonical Base64, whitespace in hex) |
 | `crypto.py` | crypto.md | FIPS 180-4, RFC 4231, `hashlib`, `hmac`; the streaming types against the one-shot functions for random splits |
-| `cases.py <dir>...` | log.md, pool.md, and the examples on encoding.md and crypto.md | The page: `<name>.out` / `.err` hold the output the page says, `.refused` the diagnostics `karac check` must give, and `.unordered` marks output whose line order the page leaves open |
+| `cases.py <dir>...` | log.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
+
+A fixed case is `<name>.kara` with files beside it, each written from the page:
+
+| File | Meaning |
+|---|---|
+| `.out`, `.err` | The exact stdout and stderr; with a nonzero `.exit`, `.err` holds lines stderr must contain |
+| `.exit` | The exit status, when the page promises a panic |
+| `.unordered` | The page leaves the order of lines open, so they are compared sorted |
+| `.repeat` | A schedule-sensitive case: N runs (20 if empty) on each backend, and every run must meet the expectation |
+| `.refused` | `karac check` must refuse it, printing each line of the file |
+| `.buildrefused` | The page refuses it when the program is built: check passes, and both the interpreter and the build fail with each line on stderr |
+| `.fixed` | `karac fix` must turn the program into exactly this text |
+| `.env`, `.args` | A Python literal: variables to add, and command-line arguments (bytes for a non-UTF-8 one). With `.args` the interpreter runs through `karac run --interp`, since `__mir-run` takes none |
+
+A concurrency case holds output to an order only where concurrency.md
+promises one (FIFO on a channel, a `par` block's source order, a group that
+joins before the next line). Where it does not, the program checks the
+guarantee itself and prints the verdict, as `taskgroup_fan_in` checks that
+each producer's messages arrive in its own order.
 
 ```bash
 python3 conformance/encoding.py --seed 1      # random cases; any seed
 python3 conformance/crypto.py --seed 1
-python3 conformance/cases.py conformance/log conformance/pool conformance/encoding conformance/crypto
+python3 conformance/cases.py conformance/log conformance/pool conformance/encoding conformance/crypto \
+    conformance/concurrency conformance/random_env
 ```
 
 `KARAC=<path>` picks the binary (default `target/release/karac`), and

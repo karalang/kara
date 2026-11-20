@@ -1,0 +1,3 @@
+fn main() {
+    par { println("a"), println("b") };
+}

@@ -1,0 +1,5 @@
+fn main() {
+    println("before");
+    env.set("A=B", "v");
+    println("after");
+}

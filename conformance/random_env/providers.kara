@@ -1,0 +1,55 @@
+import std.random;
+import std.uuid;
+
+struct FakeEnv { vars: Vec[(String, String)] }
+
+impl EnvProvider for FakeEnv {
+    fn args(ref self) -> Vec[String] { ["prog", "--verbose"] }
+    fn var(ref self, name: Str) -> Result[String, VarError] {
+        for (k, v) in self.vars.iter() {
+            if k == name { return Ok(v.clone()); }
+        }
+        Err(VarError.NotPresent)
+    }
+    fn set(mut ref self, name: Str, value: Str) {
+        self.vars.push((name.to_string(), value.to_string()));
+    }
+}
+
+struct Counting { n: u64 }
+
+impl RandomProvider for Counting {
+    fn next_u64(mut ref self) -> u64 {
+        self.n += 1;
+        self.n
+    }
+}
+
+fn verbose() -> bool {
+    env.args().iter().any(|a| a == "--verbose")
+}
+
+fn port() -> i64 {
+    match env.var("PORT") {
+        Ok(s) => i64.parse(s).unwrap_or(8080),
+        Err(_) => 8080,
+    }
+}
+
+fn main() {
+    with_provider[Env](FakeEnv { vars: [] }, || {
+        println(env.args().len());   // 2
+        // Functions called inside the closure see the fake too.
+        println(f"{verbose()} {port()}");
+        env.set("PORT", "7000");
+        println(f"{port()}");
+    });
+    // The fake does not leave the call: the real environment is back.
+    println(f"real args: {env.args().len() == 1}, real PORT unset: {env.var("KARA_CONF_NEVER_SET").is_err()}");
+    with_provider[RandomSource](Counting { n: 40 }, || {
+        println(f"{random.next_u64()} {random.next_u64()}");
+        let u = uuid.v4();
+        let again = uuid.v4();
+        println(f"uuid from the fake: {u.len()} chars, differs: {u != again}");
+    });
+}

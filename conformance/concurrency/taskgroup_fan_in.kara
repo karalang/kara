@@ -1,0 +1,34 @@
+import std.sync.{channel, Sender, Receiver};
+
+fn main() {
+    let (tx, rx): (Sender[String], Receiver[String]) = channel(2);
+    {
+        let g = TaskGroup.new();
+        for p in 0..4 {
+            let mine = tx.clone();
+            g.spawn(|| {
+                for i in 0..3 {
+                    mine.send(f"{p} {i}").unwrap();
+                }
+            });
+        }
+        drop(tx);
+        let consumer = g.spawn(|| {
+            let mut got = Vec.new();
+            for m in rx.into_iter() { got.push(m); }
+            got
+        });
+        let got = consumer.join();
+        // Each producer's messages arrive in the order it sent them.
+        let mut next = [0, 0, 0, 0];
+        let mut ordered = true;
+        for m in got.iter() {
+            let parts: Vec[Str] = m.split(" ").collect();
+            let p = i64.parse(parts[0]).unwrap();
+            let i = i64.parse(parts[1]).unwrap();
+            if i != next[p] { ordered = false; }
+            next[p] = i + 1;
+        }
+        println(f"received {got.len()}, each producer in order: {ordered}");
+    }
+}

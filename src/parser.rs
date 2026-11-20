@@ -564,6 +564,12 @@ pub struct Parser {
     pub(crate) acronym_type_names: Vec<crate::ast::AcronymName>,
     /// See [`crate::ast::Program::rust_box_new`].
     pub(crate) rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// [`crate::ast::Program::rust_std_paths`] found inside f-string holes,
+    /// rebased onto this source. A hole is parsed on its own, so its tokens
+    /// never reach [`Self::rust_std_paths`]' scan (B-2026-11-20-108).
+    #[allow(clippy::type_complexity)]
+    pub(crate) hole_rust_std_paths:
+        rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit, Option<String>)>,
     /// See [`crate::ast::Program::foreign_calls`].
     pub(crate) foreign_calls: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::expr_stmt_semis`].
@@ -934,6 +940,7 @@ impl Parser {
             prefix_collection_literals: rustc_hash::FxHashMap::default(),
             acronym_type_names: Vec::new(),
             rust_box_new: rustc_hash::FxHashMap::default(),
+            hole_rust_std_paths: rustc_hash::FxHashMap::default(),
             foreign_calls: rustc_hash::FxHashMap::default(),
             expr_stmt_semis: rustc_hash::FxHashMap::default(),
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
@@ -1877,6 +1884,19 @@ impl Parser {
     /// is undeclared, so a local named `std` (a standard deviation) is left
     /// alone.
     #[allow(clippy::type_complexity)]
+    /// Whether the file has `import std.random;`: the module itself, not a
+    /// list from it.
+    fn imports_module(&self, module: &[&str]) -> bool {
+        self.tokens.windows(2 * module.len() + 1).any(|w| {
+            matches!(w[0].token, Token::Import)
+                && !matches!(w[2 * module.len()].token, Token::Dot)
+                && module.iter().enumerate().all(|(k, seg)| {
+                    matches!(&w[1 + 2 * k].token, Token::Identifier { name, .. } if name == seg)
+                        && (k + 1 == module.len() || matches!(w[2 + 2 * k].token, Token::Dot))
+                })
+        })
+    }
+
     fn rust_std_paths(
         &self,
     ) -> rustc_hash::FxHashMap<usize, (String, crate::resolver::TextEdit, Option<String>)> {
@@ -1921,16 +1941,7 @@ impl Parser {
                 let leaf = module.last().copied().unwrap_or_default();
                 let rest = names[module.len()..].join(".");
                 let path = module.join(".");
-                // `import std.random;`, the module itself (not a list from it).
-                let imported = self.tokens.windows(2 * module.len() + 1).any(|w| {
-                    matches!(w[0].token, Token::Import)
-                        && !matches!(w[2 * module.len()].token, Token::Dot)
-                        && module.iter().enumerate().all(|(k, seg)| {
-                            matches!(&w[1 + 2 * k].token, Token::Identifier { name, .. } if name == seg)
-                                && (k + 1 == module.len()
-                                    || matches!(w[2 + 2 * k].token, Token::Dot))
-                        })
-                });
+                let imported = self.imports_module(&module);
                 let message = format!(
                     "`{}` is a path into Kāra's `{path}` module, which a program imports: \
                      `import {path};` and then `{leaf}.{rest}`, or `import {path}.{{{}}};` and \
@@ -1973,6 +1984,20 @@ impl Parser {
                 replacement: String::new(),
             };
             out.insert(start, (message, edit, None));
+        }
+        // Holes: the same report, with the import offered only when this
+        // file does not import the module already.
+        for (at, (message, edit, import)) in &self.hole_rust_std_paths {
+            let import = import.as_ref().filter(|line| {
+                let path = line
+                    .trim()
+                    .trim_start_matches("import ")
+                    .trim_end_matches(';');
+                let module: Vec<&str> = path.split('.').collect();
+                !self.imports_module(&module)
+            });
+            out.entry(*at)
+                .or_insert_with(|| (message.clone(), edit.clone(), import.cloned()));
         }
         out
     }

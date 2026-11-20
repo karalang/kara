@@ -1,0 +1,4 @@
+import std.random;
+fn main() {
+    println(f"{random.next_u64() > 0}");
+}

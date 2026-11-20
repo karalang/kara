@@ -1,0 +1,24 @@
+import std.sync.{Mutex, channel, Sender, Receiver};
+
+fn main() {
+    let m = Mutex.new(0);
+    let (locked_tx, locked_rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (go_tx, go_rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let g = TaskGroup.new();
+    let h = g.spawn(|| {
+        let guard = m.lock();
+        guard.value += 1;
+        locked_tx.send(1).unwrap();
+        let _ = go_rx.recv();   // hold the lock until main says go
+        guard.value += 10;
+        "released"
+    });
+    let _ = locked_rx.recv();
+    // Another task holds it: try_lock does not wait.
+    println(f"try_lock while held: {m.try_lock().is_none()}");
+    go_tx.send(1).unwrap();
+    // lock waits for the release and then sees both writes.
+    let v = { let guard = m.lock(); *guard.value };
+    println(f"after release: {v}");
+    println(h.join());
+}

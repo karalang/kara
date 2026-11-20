@@ -1,0 +1,2 @@
+pub fn port() -> String { env.var("PORT").unwrap_or("8080") }
+fn main() { println(port()); }

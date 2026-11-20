@@ -1,0 +1,7 @@
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let (tx, rx) = channel(1);
+    tx.send(v.as_slice()).unwrap();
+    println(f"{rx.recv().unwrap().len()}");
+}

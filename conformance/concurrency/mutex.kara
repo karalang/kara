@@ -1,0 +1,57 @@
+import std.sync.{Mutex};
+
+struct Totals { count: i64, sum: i64 }
+
+impl Totals {
+    fn mean(self) -> i64 { if self.count == 0 { 0 } else { self.sum / self.count } }
+}
+
+sync struct Stats {
+    name: String,
+    totals: Mutex[Totals],
+}
+
+impl Stats {
+    fn record(self, n: i64) {
+        let g = self.totals.lock();
+        g.value.count += 1;
+        g.value.sum += n;
+    }   // g drops here, releasing the lock
+}
+
+fn main() {
+    let stats = Stats { name: "latency", totals: Mutex.new(Totals { count: 0, sum: 0 }) };
+    {
+        let g = TaskGroup.new();
+        for t in 0..8 {
+            g.spawn(|| {
+                for i in 0..250 { stats.record(t * 1000 + i); }
+            });
+        }
+    }
+    {
+        let g = stats.totals.lock();
+        println(f"{stats.name}: count {g.value.count} sum {g.value.sum} mean {g.value.mean()}");
+        // try_lock is None while a guard is held, the caller's own included.
+        println(f"held by me: {stats.totals.try_lock().is_none()}");
+    }
+    // Released at the end of the scope: try_lock succeeds.
+    match stats.totals.try_lock() {
+        Some(g) => println(f"free again, count {g.value.count}"),
+        None => println("still held"),
+    }
+    // A Mutex on its own, and into_inner.
+    let m = Mutex.new(Vec.new());
+    {
+        let g = TaskGroup.new();
+        for t in 0..4 {
+            g.spawn(|| {
+                let guard = m.lock();
+                guard.value.push(t);
+            });
+        }
+    }
+    let mut v: Vec[i64] = m.into_inner();
+    v.sort();
+    println(f"{v}");
+}

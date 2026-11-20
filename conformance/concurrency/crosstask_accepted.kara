@@ -1,0 +1,69 @@
+import std.sync.{Atomic, Mutex, channel, Sender, Receiver};
+
+sync struct Counter { n: Atomic[i64], log: Mutex[Vec[i64]] }
+
+shared struct Config { name: String }
+
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+
+fn run(f: Fn() -> i64 + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| f());
+    h.join()
+}
+
+fn area_in_task(sh: dyn Shape + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| sh.area());
+    h.join()
+}
+
+fn forward[T: CrossTask](tx: Sender[T], v: own T) {
+    tx.send(v).unwrap();
+}
+
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut t = 0;
+    for x in xs { t += *x; }
+    t
+}
+
+fn main() {
+    // A sync type shared by tasks.
+    let c = Counter { n: Atomic.new(0), log: Mutex.new(Vec.new()) };
+    {
+        let g = TaskGroup.new();
+        for i in 0..4 {
+            g.spawn(|| { c.n.fetch_add(1); c.log.lock().value.push(i); });
+        }
+    }
+    let mut seen = c.log.lock().value.clone();
+    seen.sort();
+    println(f"{c.n.load()} {seen}");
+    // A frozen handle read by par branches.
+    let root = Config { name: "prod" };
+    let cfg = freeze root;
+    let (a, b) = par { cfg.name.len(), cfg.name.len() + 1 };
+    println(f"{a} {b}");
+    // Views enter par branches and tasks.
+    let v: Vec[i64] = [1, 2, 3, 4];
+    let (lo, hi) = par { sum(v.as_slice()[0..2]), sum(v.as_slice()[2..4]) };
+    let g = TaskGroup.new();
+    let h = g.spawn(|| sum(v.as_slice()));
+    println(f"{lo} {hi} {h.join()}");
+    // Marked function types and dyn values.
+    let k = 10;
+    println(f"{run(|| k + 1)}");
+    println(f"{area_in_task(Sq { s: 3 })}");
+    // A closure literal bound to a local is not erased: no marker needed.
+    let f = || k + 2;
+    let g2 = TaskGroup.new();
+    let h2 = g2.spawn(|| f());
+    println(f"{h2.join()}");
+    // A generic function that sends a T states T: CrossTask.
+    let (tx, rx): (Sender[String], Receiver[String]) = channel(1);
+    forward(tx, "sent");
+    println(f"{rx.recv()}");
+}

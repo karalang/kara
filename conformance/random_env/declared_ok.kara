@@ -1,0 +1,22 @@
+import std.random;
+import std.uuid;
+
+pub fn roll() -> u64 with writes(RandomSource) { random.next_u64() % 6 }
+pub fn id() -> String with writes(RandomSource) { uuid.v4() }
+pub fn port() -> i64 with reads(Env) {
+    match env.var("KARA_CONF_PORT") {
+        Ok(s) => i64.parse(s).unwrap_or(8080),
+        Err(_) => 8080,
+    }
+}
+pub fn configure() with writes(Env) { env.set("KARA_CONF_PORT", "9000"); }
+
+fn main() {
+    println(f"{roll() < 6} {id().len()}");
+    println(f"{port()}");
+    configure();
+    println(f"{port()}");
+    // Two par branches that only read Env do not conflict.
+    let (a, b) = par { port(), port() };
+    println(f"{a} {b}");
+}

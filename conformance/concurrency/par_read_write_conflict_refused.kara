@@ -1,0 +1,6 @@
+fn bump(v: mut ref Vec[i64]) { v.push(1); }
+fn main() {
+    let mut v: Vec[i64] = [];
+    let (a, _) = par { v.len(), bump(mut v) };
+    println(f"{a}");
+}
