@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 597 |
+| diagnostics | 598 |
 | false-positive | 321 |
 | missing-feature | 223 |
 | perf | 189 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 753 |
+| typecheck | 754 |
 | mir-llvm | 313 |
 | mir | 285 |
 | cli | 228 |
@@ -1947,6 +1947,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-57 | cli | low | kara-lsp document symbols select the whole item rather than its name, and list the library functions a file imports with spans from their library fil… | 0b47a3dbea |
 | B-2026-11-20-58 | cli | medium | kara-lsp hover shows the enclosing block's type on `let _`, `Fn(..)` for a closure that writes a capture (a `MutFn`), and the renamed-apart name (`Fi… | 0b47a3dbea |
 | B-2026-11-20-59 | cli | medium | kara-lsp signature help gives nothing for library methods outside four library pages (`tx.send`, `Duration.ms`), module functions (`sleep`, `log.init… | 0b47a3dbea |
+| B-2026-11-20-64 | typecheck | low | Items made from a value a `let` binds to literal-seeded folds, `once(first).chain(encoded.iter().scan(first, ..)).collect()` into a `Vec[i32]` with `… | 045accc7ad |
 
 </details>
 
