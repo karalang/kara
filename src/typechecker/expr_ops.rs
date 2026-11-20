@@ -27,7 +27,7 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
-use super::env::FunctionSig;
+use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, resolve_type_vars};
 use super::types::{
     float_width_rank, impl_args_match, is_integer, is_numeric, is_prelude_type_or_module_name,
@@ -1708,11 +1708,21 @@ impl<'a> super::TypeChecker<'a> {
             // Find the impl first: the stability check below needs `&mut
             // self`, and cloning every impl to get there was most of this
             // function's time.
-            let found = self.env.impls.iter().position(|imp| {
+            // An inherent function hides a trait's of the same name at
+            // `T.name` (design.md § Associated functions), whichever impl
+            // comes first; `Trait.name` names the trait's (B-2026-11-20-65).
+            let applies = |imp: &ImplInfo| {
                 imp.target_type == *type_name
                     && imp.target_args.is_empty()
                     && imp.methods.contains_key(member)
-            });
+                    && self.env.ufcs_admits(imp, member)
+            };
+            let found = self
+                .env
+                .impls
+                .iter()
+                .position(|imp| imp.trait_name.is_none() && applies(imp))
+                .or_else(|| self.env.impls.iter().position(applies));
             if let Some(i) = found {
                 let target_generic_args = self.env.impls[i].target_generic_args.clone();
                 let sig = self.env.impls[i].methods[member].clone();

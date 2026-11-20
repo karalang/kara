@@ -928,6 +928,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   a line is logged or serialized as its text. A program's own trait impl
   on `Str` now resolves, directly and through a bound; its methods were
   never found (B-2026-11-20-26).
+- An inherent associated function and a trait's function of the same name
+  resolve as design.md says, whichever impl block comes first: `T.name()`
+  is the inherent one and `Trait.name(..)` the trait's. Lookup took the
+  first impl in source order, so moving an impl changed which function a
+  call reached. `e.m()` reaches a trait's `m(self)` past an inherent `fn
+  m()` with no `self`, which is not a method; it was called with the
+  receiver as its argument, or refused. A bound's impl function with type
+  parameters of its own (`T.build(s)` under `T: Build`, `fn build[S:
+  Source](s: mut ref S) -> Self`) is called in a generic body even where
+  the type has an inherent `build` too (B-2026-11-20-65).
 
 - A closure literal whose tail is a written `ref` of a `Copy` value,
   passed where the callee leaves the return type open (`ap[T](f: Fn() ->

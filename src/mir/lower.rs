@@ -22490,7 +22490,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         // `T.label()` under `T: Named` is `Named`'s, even where the type
         // has an inherent `label` too (B-2026-11-04-9).
-        if let Some((d, inst_args)) = self.bound_impl_fn(e, t, m) {
+        if let Some((d, inst_args)) = self.bound_impl_fn(e, t, m, args)? {
             let f = self.lcx.fns[&d].f;
             return self.def_call(e, d, f, inst_args, None, args, dest);
         }
@@ -25395,7 +25395,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     apart.ends_with(&format!("#{tr}")).then_some((d, inst_args))
                 });
             if let Some((d, inst_args)) = bound {
-                return self.user_method_call(e, object, d, inst_args, args, dest);
+                if let Some((d, inst_args)) = self.with_own_generics(e, d, inst_args, args)? {
+                    return self.user_method_call(e, object, d, inst_args, args, dest);
+                }
             }
             // In a blanket impl's body, a method of the impl on its own
             // parameter (`self.tag()` in `impl[T: Display] Shout for T`):
@@ -25430,7 +25432,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // Of several traits' `m` for the type, the one the bound names
             // (`x.m()` under `T: B` where `A` has an `m` too,
             // B-2026-11-04-11).
-            if let Some((d, inst_args)) = self.bound_impl_fn(e, rt, method) {
+            if let Some((d, inst_args)) = self.bound_impl_fn(e, rt, method, args)? {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
             // A generic method (`v.serialize(s)` with `S` the serializer's
@@ -25765,20 +25767,58 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the checker dispatched the call `e` through names (`Named.label` for
     /// `T.label()` or `x.label()` under `T: Named`), when it has no generic
     /// parameters of its own.
-    fn bound_impl_fn(&mut self, e: &Expr, t: Ty, m: &str) -> Option<(DefId, Vec<Ty>)> {
-        let key = self
+    fn bound_impl_fn(
+        &mut self,
+        e: &Expr,
+        t: Ty,
+        m: &str,
+        args: &'a [CallArg],
+    ) -> R<Option<(DefId, Vec<Ty>)>> {
+        let Some((tr, km)) = self
             .lcx
             .tc
             .method_typeparam_trait_key
-            .get(&SpanKey::from_span(&e.span))?;
-        let (tr, km) = key.split_once('.')?;
+            .get(&SpanKey::from_span(&e.span))
+            .and_then(|k| k.split_once('.'))
+        else {
+            return Ok(None);
+        };
         if km != m {
-            return None;
+            return Ok(None);
         }
-        let (d, inst_args) = self.bound_trait_impl_method(e, self.strip_ty_full(t).1, tr, m)?;
-        let own = self.lcx.fns.get(&d)?.f.generic_params.as_ref();
-        own.is_none_or(|g| g.params.is_empty())
-            .then_some((d, inst_args))
+        let Some((d, inst_args)) = self.bound_trait_impl_method(e, self.strip_ty_full(t).1, tr, m)
+        else {
+            return Ok(None);
+        };
+        self.with_own_generics(e, d, inst_args, args)
+    }
+
+    /// `d` at `inst`, with the function's own generic parameters, if it
+    /// has any, read off the call's arguments (`D` of `deserialize[D](d:
+    /// mut ref D)`), so that a bound's impl that is generic itself is called
+    /// at an instance (B-2026-11-20-65).
+    fn with_own_generics(
+        &mut self,
+        e: &Expr,
+        d: DefId,
+        inst: Vec<Ty>,
+        args: &'a [CallArg],
+    ) -> R<Option<(DefId, Vec<Ty>)>> {
+        let generic = self
+            .lcx
+            .fns
+            .get(&d)
+            .and_then(|i| i.f.generic_params.as_ref())
+            .is_some_and(|g| !g.params.is_empty());
+        if !generic {
+            return Ok(Some((d, inst)));
+        }
+        let ret = if self.lcx.node_types.contains_key(&e.id) {
+            Some(self.expr_ty(e)?)
+        } else {
+            None
+        };
+        self.own_generics_from_args(d, inst, args, ret)
     }
 
     /// The arguments of the generic bound a method call in a generic body

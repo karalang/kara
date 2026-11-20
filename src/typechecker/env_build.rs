@@ -3611,6 +3611,14 @@ impl<'a> super::TypeChecker<'a> {
             generic_params: imp.generic_params.clone(),
             where_clause: imp.where_clause.clone(),
             target_span: Some(imp.target_type.span),
+            assoc_fns: imp
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    ImplItem::Method(f) if f.self_param.is_none() => Some(f.name.clone()),
+                    _ => None,
+                })
+                .collect(),
         };
         // On the MIR pipeline a library source re-states a baked stdlib
         // trait impl in Kāra (`impl Display for AllocError`); it replaces the
@@ -3943,6 +3951,7 @@ impl<'a> super::TypeChecker<'a> {
             // Compiler-internal: no source impl block, so nothing to
             // disambiguate and no span to key it by.
             target_span: None,
+            assoc_fns: Default::default(),
         });
     }
 
@@ -4116,6 +4125,7 @@ impl<'a> super::TypeChecker<'a> {
                         where_clause: None,
                         // Synthesized `TryFrom` impl — no source impl block.
                         target_span: None,
+                        assoc_fns: Default::default(),
                     });
                     ty = refined;
                 }
@@ -4210,6 +4220,7 @@ impl<'a> super::TypeChecker<'a> {
                         where_clause: None,
                         // Synthesized `TryFrom` impl — no source impl block.
                         target_span: None,
+                        assoc_fns: Default::default(),
                     });
                 }
                 Err((msg, span)) => {

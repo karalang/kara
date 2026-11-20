@@ -179,6 +179,11 @@ pub struct ImplInfo {
     /// phase re-derives it and they cannot drift into emitting one symbol and
     /// looking up another.
     pub target_span: Option<crate::token::Span>,
+    /// The impl's associated functions, the methods it declares without a
+    /// `self`. `e.m()` does not find one, so an inherent `fn m()` does not
+    /// hide a trait's `m(self)` there (design.md § Method resolution,
+    /// B-2026-11-20-65). Empty for a compiler-internal impl.
+    pub assoc_fns: std::collections::HashSet<String>,
 }
 
 impl ImplInfo {
@@ -198,6 +203,7 @@ impl ImplInfo {
             generic_params: self.generic_params.clone(),
             where_clause: self.where_clause.clone(),
             target_span: self.target_span,
+            assoc_fns: self.assoc_fns.clone(),
         }
     }
 }
@@ -943,7 +949,7 @@ impl TypeEnv {
 
     /// Whether `imp` may answer a lookup of `method` while a UFCS call
     /// names a trait ([`Self::ufcs_trait`]).
-    fn ufcs_admits(&self, imp: &ImplInfo, method: &str) -> bool {
+    pub fn ufcs_admits(&self, imp: &ImplInfo, method: &str) -> bool {
         match &self.ufcs_trait {
             Some((t, m)) if m == method => {
                 imp.trait_name.as_deref() == Some(t.as_str())
@@ -1000,6 +1006,7 @@ impl TypeEnv {
         method: &str,
     ) -> Vec<(&ImplInfo, &FunctionSig)> {
         let mut inherent: Vec<(&ImplInfo, &FunctionSig)> = Vec::new();
+        let mut assoc: Vec<(&ImplInfo, &FunctionSig)> = Vec::new();
         let mut trait_methods: Vec<(&ImplInfo, &FunctionSig)> = Vec::new();
         for imp in &self.impls {
             if imp.target_type != target_type || !impl_args_match(&imp.target_args, target_args) {
@@ -1015,15 +1022,24 @@ impl TypeEnv {
                 continue;
             }
             if imp.trait_name.is_none() {
-                inherent.push((imp, sig));
+                if imp.assoc_fns.contains(method) {
+                    assoc.push((imp, sig));
+                } else {
+                    inherent.push((imp, sig));
+                }
             } else if !self.trait_hidden(imp) {
                 trait_methods.push((imp, sig));
             }
         }
+        // An inherent associated function is no method: `e.m()` reaches a
+        // trait's `m(self)` past it, and finds it only when nothing else
+        // has the name, for the diagnostic that says how to call it.
         if !inherent.is_empty() {
             inherent
-        } else {
+        } else if !trait_methods.is_empty() {
             trait_methods
+        } else {
+            assoc
         }
     }
 
