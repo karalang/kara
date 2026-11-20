@@ -145,3 +145,39 @@ fn null_into_an_f64_field_is_the_wrong_shape() {
         "err f: expected a number, found null at line 1 column 6\nF { f: 1.0 }\nG { f: None }\n{\"f\":null}\n",
     );
 }
+
+// B-2026-11-20-27: a field `#[serde(skip)]` leaves off the wire needs
+// neither trait in that direction; read back, it takes its `default:
+// expr` or its type's `Default`, which it must then have.
+#[test]
+fn a_skipped_field_needs_no_serde_impl() {
+    runs(
+        "import std.json.{Json};\nimport std.secret.{Secret};\n#[derive(Default)]\nstruct Cache { hits: i64 }\nstruct Handle { fd: i64 }\n#[derive(Serialize, Deserialize)]\nstruct T {\n    a: i64,\n    #[serde(skip)]\n    c: Cache,\n    #[serde(skip_deserializing)]\n    s: i64,\n    #[serde(skip_serializing, default)]\n    w: String,\n    #[serde(skip, default: 3)]\n    k: i64,\n}\n#[derive(Serialize)]\nstruct OnlyOut { a: i64, #[serde(skip)] h: Handle, #[serde(skip)] tok: Secret[String] }\nfn main() {\n    let t = T { a: 1, c: Cache { hits: 2 }, s: 5, w: \"w\".to_string(), k: 9 };\n    println(Json.serialize(t));\n    let r: Result[T, DeserializeError] = Json.deserialize(\"{\\\"a\\\":4,\\\"c\\\":{\\\"x\\\":1},\\\"s\\\":6,\\\"w\\\":\\\"in\\\"}\");\n    match r { Ok(v) => println(f\"{v.a} {v.c.hits} {v.s} {v.w} {v.k}\"), Err(e) => println(f\"err {e}\") }\n    println(Json.serialize(OnlyOut { a: 1, h: Handle { fd: 3 }, tok: Secret.new(\"x\".to_string()) }));\n}\n",
+        "{\"a\":1,\"s\":5}\n4 0 0 in 3\n{\"a\":1}\n",
+    );
+}
+
+#[test]
+fn a_field_skipped_when_read_needs_a_default() {
+    let path = scratch(
+        "struct Handle { fd: i64 }\n#[derive(Deserialize)]\nstruct T { a: i64, #[serde(skip)] h: Handle }\nfn main() { }\n",
+    );
+    let check = karac(&["check"], &path);
+    let out = text(&check);
+    assert!(!check.status.success(), "{out}");
+    assert!(
+        out.contains("skips field 'h', which is then built as its type's `Default`, but 'Handle' does not implement Default"),
+        "{out}"
+    );
+    assert!(!out.contains("does not implement Deserialize"), "{out}");
+}
+
+// B-2026-11-20-23: a value the type refuses names the field and the place;
+// a field missing from a nested struct names that struct.
+#[test]
+fn a_refused_value_names_its_field_and_place() {
+    runs(
+        "import std.json.{Json};\n#[derive(Deserialize, Debug)]\nstruct In { n: i64, c: char, small: u8, o: Option[i32] }\n#[derive(Deserialize, Debug)]\nstruct Out { inner: In }\nfn show(t: Str) {\n    let r: Result[Out, DeserializeError] = Json.deserialize(t);\n    match r { Ok(v) => println(v.fmt_debug()), Err(e) => println(f\"err {e}\") }\n}\nfn main() {\n    show(\"{\\\"inner\\\":{\\\"n\\\":1,\\\"c\\\":\\\"ab\\\",\\\"small\\\":1}}\");\n    show(\"{\\\"inner\\\":{\\\"n\\\":1,\\\"c\\\":\\\"a\\\",\\\"small\\\":300}}\");\n    show(\"{\\\"inner\\\":{\\\"n\\\":1,\\\"c\\\":\\\"a\\\",\\\"small\\\":1,\\\"o\\\":3000000000}}\");\n    show(\"{\\\"inner\\\":{\\\"n\\\":1,\\\"c\\\":\\\"a\\\"}}\");\n    show(\"{}\");\n    let x: Result[i8, DeserializeError] = Json.deserialize(\"200\");\n    match x { Ok(v) => println(f\"{v}\"), Err(e) => println(f\"err {e}\") }\n}\n",
+        "err inner.c: expected one character, found \"ab\" at line 1 column 24\nerr inner.small: 300 is out of range for u8 at line 1 column 35\nerr inner.o: 3000000000 is out of range for i32 at line 1 column 48\nerr inner: missing field `small`\nerr missing field `inner`\nerr 200 is out of range for i8 at line 1 column 3\n",
+    );
+}

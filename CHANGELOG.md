@@ -903,6 +903,21 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`1e-7`, `0.00001`), not as Kāra's own text (`1e-07`, `1e-05`), and an
   `f32` by its own shortest digits (`0.1`, not `0.10000000149011612`),
   in a log field too (B-2026-11-20-25).
+- A field `#[serde(skip)]` (or `skip_serializing` / `skip_deserializing`)
+  leaves off the wire needs neither trait in that direction, as in serde:
+  a cache, a handle or a lock can be skipped. It was refused as not
+  implementing `Serialize`. Read back, it takes its `default: expr` or its
+  type's `Default`, and a type without one is refused naming the field
+  (B-2026-11-20-27).
+- A value `Json.deserialize` reads and the type refuses (an integer out of
+  an `i8`..`u32` range, a string that is not one `char`) names the field
+  and the place, `u: 256 is out of range for u8 at line 1 column 39`, and a
+  field missing from a nested struct names that struct, `inner: missing
+  field `small``. A `Deserializer` gains `deserialize_invalid` and
+  `deserialize_missing`, with defaults (B-2026-11-20-23).
+- design.md's listing of `Serializer` and `Deserializer` is the traits as
+  the library declares them: it showed methods that do not exist and other
+  signatures (B-2026-11-20-30).
 - `Str` implements `Serialize`, as log.md lists it: a view split out of
   a line is logged or serialized as its text. A program's own trait impl
   on `Str` now resolves, directly and through a bound; its methods were

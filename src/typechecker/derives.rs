@@ -1466,6 +1466,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         let library = self.program.library_start.unwrap_or(usize::MAX);
         let mut parts: Vec<(String, String, Type, Span)> = Vec::new();
+        let mut skipped_without_default: Vec<(String, String, Type, Span)> = Vec::new();
         for item in &self.program.items {
             match item {
                 Item::StructDef(s)
@@ -1476,11 +1477,34 @@ impl<'a> super::TypeChecker<'a> {
                         continue;
                     };
                     for (field, ty, _) in &info.fields {
-                        let span = s
-                            .fields
-                            .iter()
-                            .find(|f| &f.name == field)
-                            .map_or(s.span, |f| f.span);
+                        let decl = s.fields.iter().find(|f| &f.name == field);
+                        let span = decl.map_or(s.span, |f| f.span);
+                        // A field `#[serde(skip)]` leaves off the wire in
+                        // this direction needs nothing of the trait, as in
+                        // serde: a cache, a handle or a lock (B-2026-11-20-27).
+                        // Read back, it is its `default: expr` or its type's
+                        // `Default`, which it must then have.
+                        let (skip_ser, skip_de, default_expr) = decl
+                            .map_or((false, false, false), |f| serde_field_skips(&f.attributes));
+                        let skipped = if trait_name == "Serialize" {
+                            skip_ser
+                        } else {
+                            skip_de
+                        };
+                        if skipped {
+                            if trait_name == "Deserialize"
+                                && !default_expr
+                                && !self.derived_default_field_ok(ty)
+                            {
+                                skipped_without_default.push((
+                                    s.name.clone(),
+                                    field.clone(),
+                                    ty.clone(),
+                                    span,
+                                ));
+                            }
+                            continue;
+                        }
                         parts.push((
                             format!("struct '{}'", s.name),
                             format!("field '{field}'"),
@@ -1532,6 +1556,19 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 _ => {}
             }
+        }
+        for (owner, field, ty, span) in skipped_without_default {
+            self.type_error(
+                format!(
+                    "struct '{owner}' derives Deserialize and skips field '{field}', which is \
+                     then built as its type's `Default`, but '{}' does not implement Default; \
+                     give it a value with `#[serde(default: expr)]`, or implement `Default` \
+                     for it (design.md § Serialize and Deserialize)",
+                    type_display(&ty)
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
         }
         for (owner, part, ty, span) in parts {
             // design.md § Secret Type: a `Secret` is never serialized
@@ -3871,4 +3908,38 @@ fn distinct_scope(d: &crate::ast::DistinctTypeDef) -> Vec<String> {
         .flat_map(|g| &g.params)
         .map(|p| p.name.clone())
         .collect()
+}
+
+/// A field's `#[serde(...)]` skips: whether it is left out when writing and
+/// when reading, and whether it names a `default: expr` for reading.
+fn serde_field_skips(attrs: &[Attribute]) -> (bool, bool, bool) {
+    let (mut ser, mut de, mut default_expr) = (false, false, false);
+    for attr in attrs.iter().filter(|a| a.is_bare("serde")) {
+        for arg in &attr.args {
+            let bare = match (&arg.name, &arg.value) {
+                (
+                    None,
+                    Some(Expr {
+                        kind: ExprKind::Identifier(k),
+                        ..
+                    }),
+                ) => k.as_str(),
+                (Some(k), Some(_)) if k == "default" => {
+                    default_expr = true;
+                    continue;
+                }
+                _ => continue,
+            };
+            match bare {
+                "skip" => {
+                    ser = true;
+                    de = true;
+                }
+                "skip_serializing" => ser = true,
+                "skip_deserializing" => de = true,
+                _ => {}
+            }
+        }
+    }
+    (ser, de, default_expr)
 }

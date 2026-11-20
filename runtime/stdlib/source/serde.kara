@@ -104,6 +104,19 @@ pub trait Deserializer {
     fn deserialize_length(ref self, msg: own String) -> DeserializeError {
         DeserializeError.new(msg)
     }
+    /// The error for a value of the right shape that the type refuses (an
+    /// integer out of a narrower type's range, a string that is not one
+    /// `char`), just after the value. A format that knows where it is says
+    /// so, with the field being read (B-2026-11-20-23).
+    fn deserialize_invalid(ref self, msg: own String) -> DeserializeError {
+        DeserializeError.new(msg)
+    }
+    /// The error for a field the input lacks, `field` being the key it
+    /// should have held. A format that knows which struct it was reading
+    /// says so (B-2026-11-20-23).
+    fn deserialize_missing(ref self, field: String) -> DeserializeError {
+        DeserializeError.new(f"missing field `{field}`")
+    }
 }
 
 pub trait Deserialize {
@@ -127,14 +140,6 @@ fn serde_element[X: Deserialize, D: Deserializer](d: mut ref D) -> Result[X, Des
 /// A skipped field's value when it names no `default`.
 fn serde_default[X: Default]() -> X {
     X.default()
-}
-
-/// A missing field's value: `None` for an `Option` field, an error otherwise.
-fn serde_missing[X](field: String, slot: own Option[X]) -> Result[X, DeserializeError] {
-    match slot {
-        Some(v) => Ok(v),
-        None => Err(DeserializeError.new(f"missing field `{field}`")),
-    }
 }
 
 // ── The library's own types ────────────────────────────────────────
@@ -332,29 +337,33 @@ impl Deserialize for bool {
     }
 }
 
-/// `v` as a narrower integer, or an error naming the type.
-fn serde_narrow(v: i64, lo: i64, hi: i64, ty: String) -> Result[i64, DeserializeError] {
-    if v < lo or v > hi {
-        return Err(DeserializeError.new(f"{v} is out of range for {ty}"));
-    }
-    Ok(v)
-}
-
 impl Deserialize for i8 {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[i8, DeserializeError] {
-        Ok(serde_narrow(d.deserialize_i64()?, -128, 127, "i8")? as i8)
+        let v = d.deserialize_i64()?;
+        if v < -128 or v > 127 {
+            return Err(d.deserialize_invalid(f"{v} is out of range for i8"));
+        }
+        Ok(v as i8)
     }
 }
 
 impl Deserialize for i16 {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[i16, DeserializeError] {
-        Ok(serde_narrow(d.deserialize_i64()?, -32768, 32767, "i16")? as i16)
+        let v = d.deserialize_i64()?;
+        if v < -32768 or v > 32767 {
+            return Err(d.deserialize_invalid(f"{v} is out of range for i16"));
+        }
+        Ok(v as i16)
     }
 }
 
 impl Deserialize for i32 {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[i32, DeserializeError] {
-        Ok(serde_narrow(d.deserialize_i64()?, -2147483648, 2147483647, "i32")? as i32)
+        let v = d.deserialize_i64()?;
+        if v < -2147483648 or v > 2147483647 {
+            return Err(d.deserialize_invalid(f"{v} is out of range for i32"));
+        }
+        Ok(v as i32)
     }
 }
 
@@ -374,7 +383,7 @@ impl Deserialize for u8 {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[u8, DeserializeError] {
         let v = d.deserialize_u64()?;
         if v > 255 {
-            return Err(DeserializeError.new(f"{v} is out of range for u8"));
+            return Err(d.deserialize_invalid(f"{v} is out of range for u8"));
         }
         Ok(v as u8)
     }
@@ -384,7 +393,7 @@ impl Deserialize for u16 {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[u16, DeserializeError] {
         let v = d.deserialize_u64()?;
         if v > 65535 {
-            return Err(DeserializeError.new(f"{v} is out of range for u16"));
+            return Err(d.deserialize_invalid(f"{v} is out of range for u16"));
         }
         Ok(v as u16)
     }
@@ -394,7 +403,7 @@ impl Deserialize for u32 {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[u32, DeserializeError] {
         let v = d.deserialize_u64()?;
         if v > 4294967295 {
-            return Err(DeserializeError.new(f"{v} is out of range for u32"));
+            return Err(d.deserialize_invalid(f"{v} is out of range for u32"));
         }
         Ok(v as u32)
     }
@@ -429,7 +438,7 @@ impl Deserialize for char {
         let s = d.deserialize_string()?;
         let cs: Vec[char] = s.chars().collect();
         if cs.len() != 1 {
-            return Err(DeserializeError.new(f"expected one character, found \"{s}\""));
+            return Err(d.deserialize_invalid(f"expected one character, found \"{s}\""));
         }
         Ok(cs[0])
     }
@@ -757,9 +766,8 @@ impl JsonDeserializer {
         self.fail_at(self.pos, msg)
     }
 
-    /// [`Self::fail`], placed at the char at `at`.
-    fn fail_at(ref self, at: i64, msg: String) -> DeserializeError {
-        let (line, column) = self.place_at(at);
+    /// The field path being read, `inner.n`, or "" at the top.
+    fn path_text(ref self) -> String {
         let mut at = String.new();
         for f in self.path.iter() {
             if not f.is_empty() {
@@ -769,6 +777,13 @@ impl JsonDeserializer {
                 at.push_str(f);
             }
         }
+        at
+    }
+
+    /// [`Self::fail`], placed at the char at `at`.
+    fn fail_at(ref self, at: i64, msg: String) -> DeserializeError {
+        let (line, column) = self.place_at(at);
+        let at = self.path_text();
         if at.is_empty() {
             DeserializeError.new(f"{msg} at line {line} column {column}")
         } else {
@@ -1219,6 +1234,28 @@ impl Deserializer for JsonDeserializer {
         self.skip_value()
     }
 
+    /// `u: 256 is out of range for u8 at line 1 column 39`: the field being
+    /// read, and the value's last character, where serde_json places an
+    /// invalid value (B-2026-11-20-23).
+    fn deserialize_invalid(ref self, msg: own String) -> DeserializeError {
+        if self.pos > 0 {
+            return self.fail_at(self.pos - 1, msg);
+        }
+        self.fail(msg)
+    }
+
+    /// `inner: missing field `small``: the path of the struct that lacks the
+    /// field, when it is nested; a top-level one reads as before, with no
+    /// position (json.md, B-2026-11-16-174; B-2026-11-20-23).
+    fn deserialize_missing(ref self, field: String) -> DeserializeError {
+        let at = self.path_text();
+        if at.is_empty() {
+            DeserializeError.new(f"missing field `{field}`")
+        } else {
+            DeserializeError.new(f"{at}: missing field `{field}`")
+        }
+    }
+
     /// `too few values in a variant's payload at line 1 column 10`: at the
     /// `]` that closed the sequence early, where serde_json places an
     /// invalid length, or at the first value past the end
@@ -1601,7 +1638,8 @@ comptime fn serde_read_fields(
                 "match " + slot + " { Some(v) => v, None => None }"
             } else {
                 // The key the input names, `rename` applied (B-2026-11-08-80).
-                "serde_missing(\"" + serde_key(fname, args) + "\", " + slot + ")?"
+                "match " + slot + " { Some(v) => v, None => return Err(d.deserialize_missing(\""
+                    + serde_key(fname, args) + "\".to_string())) }"
             };
             build = build + fname + ": " + missing + ", ";
         }

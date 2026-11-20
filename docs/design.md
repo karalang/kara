@@ -4469,35 +4469,61 @@ The derived `Serialize` visits each field in order; the derived `Deserialize` re
 trait Serializer {
     fn serialize_bool(mut ref self, v: bool);
     fn serialize_i64(mut ref self, v: i64);
-    fn serialize_string(mut ref self, v: Str);
+    fn serialize_u64(mut ref self, v: u64);
+    fn serialize_f64(mut ref self, v: f64);
+    fn serialize_string(mut ref self, v: String);
+    fn serialize_none(mut ref self);
     fn serialize_seq_begin(mut ref self, len: i64);
+    fn serialize_element(mut ref self);          // before each element
     fn serialize_seq_end(mut ref self);
-    fn serialize_struct_begin(mut ref self, name: Str, len: i64);
-    fn serialize_field(mut ref self, name: Str);
+    fn serialize_map_begin(mut ref self, len: i64);
+    fn serialize_key(mut ref self);              // before each key
+    fn serialize_value(mut ref self);            // between a key and its value
+    fn serialize_map_end(mut ref self);
+    fn serialize_struct_begin(mut ref self, name: String, len: i64);
+    fn serialize_field(mut ref self, name: String);
     fn serialize_struct_end(mut ref self);
-    // ... enum, map and option visitors
+    fn serialize_unit_variant(mut ref self, name: String, variant: String);
+    fn serialize_variant_begin(mut ref self, name: String, variant: String);
+    fn serialize_variant_end(mut ref self);
 }
 
 trait Serialize {
-    fn serialize[S: Serializer](self, s: mut ref S);
+    fn serialize[S: Serializer](ref self, s: mut ref S);
 }
 
 trait Deserializer {
     fn deserialize_bool(mut ref self) -> Result[bool, DeserializeError];
     fn deserialize_i64(mut ref self) -> Result[i64, DeserializeError];
+    fn deserialize_u64(mut ref self) -> Result[u64, DeserializeError];
+    fn deserialize_f64(mut ref self) -> Result[f64, DeserializeError];
     fn deserialize_string(mut ref self) -> Result[String, DeserializeError];
-    fn deserialize_seq_begin(mut ref self) -> Result[i64, DeserializeError];
-    fn deserialize_seq_end(mut ref self) -> Result[(), DeserializeError];
-    fn deserialize_struct_begin(mut ref self, name: Str) -> Result[(), DeserializeError];
-    fn deserialize_field(mut ref self) -> Result[String, DeserializeError];
-    fn deserialize_struct_end(mut ref self) -> Result[(), DeserializeError];
-    // ... enum, map and option visitors
+    fn deserialize_option(mut ref self) -> Result[bool, DeserializeError];   // false: none, consumed
+    fn deserialize_seq_begin(mut ref self) -> Result[(), DeserializeError];
+    fn deserialize_element(mut ref self) -> Result[bool, DeserializeError];  // false: the end
+    fn deserialize_map_begin(mut ref self) -> Result[(), DeserializeError];
+    fn deserialize_key(mut ref self) -> Result[bool, DeserializeError];      // false: the end
+    fn deserialize_value(mut ref self) -> Result[(), DeserializeError];
+    fn deserialize_struct_begin(mut ref self, name: String) -> Result[(), DeserializeError];
+    fn deserialize_field(mut ref self) -> Result[Option[String], DeserializeError];  // None: the end
+    fn deserialize_skip(mut ref self) -> Result[(), DeserializeError];       // a field the type lacks
+    fn deserialize_variant(mut ref self, name: String) -> Result[(String, bool), DeserializeError];
+    fn deserialize_variant_end(mut ref self) -> Result[(), DeserializeError];
+    fn deserialize_mark(mut ref self) -> i64;                // read ahead, for tagged and untagged enums
+    fn deserialize_reset(mut ref self, mark: i64);
+    // Errors, with defaults a format that knows its position overrides:
+    fn deserialize_duplicate(ref self, field: String) -> DeserializeError { .. }
+    fn deserialize_length(ref self, msg: own String) -> DeserializeError { .. }
+    fn deserialize_invalid(ref self, msg: own String) -> DeserializeError { .. }
+    fn deserialize_missing(ref self, field: String) -> DeserializeError { .. }
 }
 
 trait Deserialize {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[Self, DeserializeError];
 }
 ```
+
+These are the traits as `runtime/stdlib/source/serde.kara` declares them; a format implements every method without a default (B-2026-11-20-30).
 
 **Generic, not dynamic.** `serialize` and `deserialize` are generic over the format, so each format gets its own monomorphized code and no trait objects are involved.
 
@@ -4517,7 +4543,7 @@ struct Config {
 }
 ```
 
-- The attributes are `rename`, `skip`, `skip_serializing`, `skip_deserializing` and `default` (deserializing only). `default` alone uses the field type's `Default`; a skipped field without one does too. A key the derives do not read where it stands is an error with a did-you-mean fix: a field takes those five, an enum `tag` and `untagged`, a variant `rename`, and a struct and a struct variant's field none (B-2026-11-20-24).
+- The attributes are `rename`, `skip`, `skip_serializing`, `skip_deserializing` and `default` (deserializing only). `default` alone uses the field type's `Default`; a skipped field without one does too. A key the derives do not read where it stands is an error with a did-you-mean fix: a field takes those five, an enum `tag` and `untagged`, a variant `rename`, and a struct and a struct variant's field none (B-2026-11-20-24). A field skipped in one direction needs neither trait for that direction, as in serde: a cache, a handle or a lock can be left off the wire. Read back, a skipped field takes its `default: expr`, or its type's `Default`, which it must then have (B-2026-11-20-27).
 - Enums are externally tagged by default. `#[serde(tag: "type")]` makes them internally tagged and `#[serde(untagged)]` untagged. An internally tagged enum holds unit and struct variants only. `rename` also applies to a variant. Reading an internally tagged or untagged enum reads ahead and back, so a `Deserializer` provides `deserialize_mark` and `deserialize_reset`.
 - **`#[serde(default: expr)]`** takes a constant expression, the same class a `const` initializer accepts ([§4 Constants](#constants)): literals, named constants (`i64.MAX`), constant arithmetic (`MAX_PORT - 1`), and struct, array and tuple literals built from constants. A run-time expression (`Vec.new()`, `load_config()`) is a "not a constant expression" error.
 - **A tuple field or payload** (`pair: (i64, bool)`) is a sequence of its elements, `[1,true]` in JSON, and reads back from a sequence of exactly its length. A tuple inside another type (`Vec[(A, B)]`, `Option[(A, B)]`) has no impl of either trait yet: the derive refuses that field by name, and a struct element is the way to write it today.
