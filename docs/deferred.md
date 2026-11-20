@@ -4811,7 +4811,7 @@ The interactive surfaces will be re-platformed on the MIR interpreter. The text 
 Kāra ships interactive evaluation as a first-class delivery alongside the compiler. The execution backend backs three surfaces:
 
 - **`karac repl`**. Terminal REPL binary. Line-based with multi-line continuation; persistent session; meta-commands `:help`, `:quit`, `:type expr`, `:effects`, `:save file.kara`, `:provide R = expr` / `:end-provide R` (see *Cross-Cell Providers*), `:dep name = "..."` (see *Session Dependencies*).
-- **Browser playground**. Zero-install entry point hosting the interpreter behind a web frontend. No Python, no install, no IDE — intended as the common first-try surface.
+- **Browser playground**. Zero-install entry point hosting the interpreter behind a web frontend. No Python, no install, no IDE — intended as the common first-try surface. When this track is picked up, the playground checks programs through the check Pipeline `karac check` uses, one entry with no pre-v2 checker of its own; the starting point is `karac` not compiling for wasm32 at all (565 errors on 2026-11-20, B-2026-11-20-98).
 - **Jupyter kernel**. `jupyter_client` protocol compliance, distributed as `pip install karac-kernel`. Notebook-native rendering for effects, ownership, and rich values. Scheduled to ship once the stdlib is stable enough that a first-time notebook user does not hit "function not found" on common types.
 
 The `.kara` file remains the authoritative source format. The interactive surfaces execute the same language — not a dialect — and guarantee round-trip fidelity with saved `.kara` files (see *Session Export* below).
