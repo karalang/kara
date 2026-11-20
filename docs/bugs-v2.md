@@ -63,8 +63,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 223 |
 | perf | 189 |
 | other | 124 |
-| soundness | 105 |
-| miscompile | 99 |
+| soundness | 106 |
+| miscompile | 98 |
 | crash | 64 |
 | run-vs-build | 60 |
 | codegen-gap | 40 |
@@ -117,15 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-10 | 2026-11-20 | runtime | medium | An HTTP server handler that panics is silent: the isolating group holds the panic message and the server drops it, so the connection just closes with no response and nothing is logged; ruling: log the panic to standard error and answer 500 when no response has started | — |
 | B-2026-11-20-11 | 2026-11-20 | cli | low | Remainder of B-2026-11-09-15: `karac fix` annotates a defaulted literal that reaches a narrower slot through a collection read back by a `for` loop (`a: i32`), but not one read back by index through a view binding (`right[size].push(b)` then `let ys = ref right[n - k]; ys[at]`), so `best.min(..)` stays refused with no edit | — |
 | B-2026-11-20-12 | 2026-11-20 | cli | low | The Rust linked-list cursor step `tail = mut ref tail.as_mut().unwrap().next` is refused (E_REF_OPERAND_UNSUPPORTED, correctly: a borrow through a call result, §5.1/§5.5) with no machine fix, though the accepted spelling `while let Some(n) = tail { tail = mut ref n.next; }` is a mechanical rewrite | — |
-| B-2026-11-20-14 | 2026-11-20 | mir | high | `for x in mut ref v { *x += 1; }` checks clean and the writes are lost on both backends (prints `1 2` for `[1, 2]`); `karac fix` writes Rust's `for x in &mut v` that way | — |
-| B-2026-11-20-15 | 2026-11-20 | parser | medium | `karac fix` mangles Rust's `static NAME: &str = "kara";` into `static; NAME;: &str = "kara";`: two "expected `;` after this expression statement" fixes fire at the item, and the result is refused worse than before | — |
-| B-2026-11-20-16 | 2026-11-20 | parser | high | `karac fix` turns Rust's `Rc::new(RefCell::new(1))` with a second handle `Rc::clone(&c)` into a plain copy, so a write through one handle no longer shows through the other: the mended program prints `1` where the Rust prints `5` | — |
-| B-2026-11-20-17 | 2026-11-20 | parser | medium | A Rust `std::` path inside a `println!`/`format!` argument keeps its module segments when the macro becomes an f-string: `println!("{}", std::cmp::max(3, 9))` is fixed to `println(f"{std.cmp.max(3, 9)}")`, then E0100 undefined name `std`, with no fix | — |
-| B-2026-11-20-18 | 2026-11-20 | parser | medium | Rust's `{:?}` hole has no fix in `println!`/`format!`, and the message does not say it is the reason: `println!("{:?}", v)` gets "so write its format arguments into an f-string" with no edit, for a `Vec`, an `Option` or a `VecDeque` that `{v}` displays | — |
-| B-2026-11-20-19 | 2026-11-20 | parser | low | A `println!`/`format!` argument holding a turbofish or a struct literal gets no f-string fix: `println!("{}", v.iter().sum::<i64>())`, `println!("{}", P { x: 3 })` and `println!("{}", m[&K { a: 1 }])` stop at the no-fix message | — |
-| B-2026-11-20-20 | 2026-11-20 | parser | low | A method call on a Rust unit struct's name (`struct A;` ... `A.hi()`) is mended to `struct A {}` and `A.hi()`, which reports E0202 "`A.hi` takes `self`: pass the receiver as the first argument", where the value is `A {}` | — |
-| B-2026-11-20-21 | 2026-11-20 | parser | low | Rust's `impl Iterator<Item = i64>` parameter gets no fix: the angle-bracket rewrite has no edit when the list holds an associated-type binding, and an E0002 "Expected `)`, found `<`" follows; the Kāra form needs `own` too | — |
-| B-2026-11-20-22 | 2026-11-20 | parser | low | An inline Rust `mod m { .. }` is refused with no fix and an E0002 "Expected expression, found `}`" after it, while `m::sq(4)` at the call is fixed to `m.sq(4)`, which still names the deleted module | — |
 | B-2026-11-20-28 | 2026-11-20 | runtime | low | `Json` implements neither `Serialize` nor `Deserialize`, so a derived type cannot hold a pass-through document (`extra: Json`), `Json.deserialize` cannot read a part as a `Json`, and a `Json` cannot be a log field value | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
 | B-2026-11-20-63 | 2026-11-20 | mir | medium | `*p.0` on a closure parameter that views a tuple item checks clean but every MIR backend refuses it: `let t: Vec[(i32, i32)] = [(1, 2), (3, 4)]; let out: Vec[i32] = t.iter().map(|p| *p.0).collect();` passes `karac check`, while `__mir-run` and `__mir-llvm-run` stop at the `*` with "unary '*' requires 'ref T' .. found 'i32'; a 'i32' is copied, so drop the `*`" | — |
@@ -1913,6 +1904,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-8 | typecheck | low | Coercing a generic struct literal with an open type parameter to `dyn` does not use the only impl to fix it: `let mut e: dyn Ac = Bag { xs: Vec.new()… | fa4b30aa47 |
 | B-2026-11-20-9 | ownership | medium | A bare (D5-borrowed) `f: MutFn` parameter can be passed to an `own MutFn` slot such as `it.any(f)` and is accepted, although calling `f()` directly i… | 90f0cc48ee |
 | B-2026-11-20-13 | mir | low | Latent: the dyn call's argument lowering (`dyn_param_ty`, B-2026-11-19-128) expects a string literal bound for a `Str` slot to arrive as its String c… | 1ad6644a07 |
+| B-2026-11-20-14 | mir | high | (premise: miscompile; actual: soundness, check accepted a §5.9 write) `for x in mut ref v { *x += 1; }` checks clean and the writes are lost on both… | 816368874e |
+| B-2026-11-20-15 | parser | medium | `karac fix` mangles Rust's `static NAME: &str = "kara";` into `static; NAME;: &str = "kara";`: two "expected `;` after this expression statement" fix… | 816368874e |
+| B-2026-11-20-16 | parser | high | `karac fix` turns Rust's `Rc::new(RefCell::new(1))` with a second handle `Rc::clone(&c)` into a plain copy, so a write through one handle no longer s… | 816368874e |
+| B-2026-11-20-17 | parser | medium | A Rust `std::` path inside a `println!`/`format!` argument keeps its module segments when the macro becomes an f-string: `println!("{}", std::cmp::ma… | 816368874e |
+| B-2026-11-20-18 | parser | medium | (message-only fix: Debug is reserved) Rust's `{:?}` hole has no fix in `println!`/`format!`, and the message does not say it is the reason: `println!… | 816368874e |
+| B-2026-11-20-19 | parser | low | A `println!`/`format!` argument holding a turbofish or a struct literal gets no f-string fix: `println!("{}", v.iter().sum::<i64>())`, `println!("{}"… | 816368874e |
+| B-2026-11-20-20 | parser | low | A method call on a Rust unit struct's name (`struct A;` .. | 816368874e |
+| B-2026-11-20-21 | parser | low | Rust's `impl Iterator<Item = i64>` parameter gets no fix: the angle-bracket rewrite has no edit when the list holds an associated-type binding, and a… | 816368874e |
+| B-2026-11-20-22 | parser | low | An inline Rust `mod m { . | 816368874e |
 | B-2026-11-20-23 | runtime | low | A value check inside a library `Deserialize` impl loses the field path and the position: `{"u":256}` into a `u8` field reads `256 is out of range for… | bb44db4445 |
 | B-2026-11-20-24 | runtime+typecheck | medium | An unknown `#[serde(...)]` key is ignored silently: `#[serde(skip_serialising)] password: String` writes the password, `#[serde(tagg: "kind")]` leave… | e524c2d0b9 |
 | B-2026-11-20-25 | runtime | low | `Json.serialize` writes a float in Kāra's own text, not the JSON text `Json.stringify` writes: `1e-7` is `1e-07`, `0.00001` is `1e-05`, `0.00001234`… | e524c2d0b9 |
