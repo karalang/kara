@@ -1523,6 +1523,50 @@ impl super::Parser {
                 } else {
                     ("`&` is Rust syntax -- a borrow is `ref place`", "ref ")
                 };
+                // `for x in &mut v`: a loop iterates for writing with
+                // `v.iter_mut()`, which binds each item as a `mut ref`; the
+                // item of `for x in mut ref v` is a shared `ref` (§4.6), so
+                // the `mut ref` edit led to a loop that cannot write
+                // (B-2026-11-20-14).
+                if is_mut
+                    && self.for_iterable_at == Some(start.offset)
+                    && matches!(
+                        &operand.kind,
+                        ExprKind::Identifier(_)
+                            | ExprKind::FieldAccess { .. }
+                            | ExprKind::Index { .. }
+                    )
+                {
+                    self.error_at(
+                        "`&mut` is Rust syntax -- a `for` loop iterates for writing with \
+                         `.iter_mut()`, which binds each item as a `mut ref`",
+                        sigil,
+                    );
+                    let end = operand.span.offset + operand.span.length;
+                    self.fix_diffs.insert(
+                        crate::resolver::SpanKey::from_span(&sigil),
+                        vec![
+                            crate::resolver::TextEdit {
+                                offset: sigil.offset,
+                                length: sigil.length,
+                                replacement: String::new(),
+                            },
+                            crate::resolver::TextEdit {
+                                offset: end,
+                                length: 0,
+                                replacement: ".iter_mut()".to_string(),
+                            },
+                        ],
+                    );
+                    return Some(Expr {
+                        id: crate::ids::NodeId::DUMMY,
+                        span: self.span_from(&start),
+                        kind: ExprKind::Unary {
+                            op: UnaryOp::MutRef,
+                            operand: Box::new(operand),
+                        },
+                    });
+                }
                 self.error_at(message, sigil);
                 self.fix_edits.insert(
                     crate::resolver::SpanKey::from_span(&sigil),
@@ -3141,7 +3185,10 @@ impl super::Parser {
             ));
             self.advance();
         }
-        let iterable = self.parse_condition_expr()?;
+        let saved_for_iterable = self.for_iterable_at.replace(self.current_span().offset);
+        let iterable = self.parse_condition_expr();
+        self.for_iterable_at = saved_for_iterable;
+        let iterable = iterable?;
         if let Some(span) = mut_span {
             if matches!(
                 iterable.kind,

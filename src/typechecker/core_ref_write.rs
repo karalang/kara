@@ -2659,6 +2659,12 @@ impl Walk<'_, '_> {
                 ExprKind::FieldAccess { object, .. }
                 | ExprKind::TupleIndex { object, .. }
                 | ExprKind::Index { object, .. } => object,
+                // `(*x).f = ..`, `(*x).push(..)`: the write goes through
+                // what `x` refers to, so `x` decides (B-2026-11-20-14).
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } => operand,
                 ExprKind::Identifier(n) => {
                     if let Some((ro, text)) = self.bound_from_read_only(cur) {
                         let through = format!("through `{n}` (bound from `{text}`)");
@@ -2912,6 +2918,13 @@ impl Walk<'_, '_> {
     }
 
     fn step(&self, e: &Expr) -> Step {
+        // The item of a bare `for` is a `ref` into the collection (§4.6),
+        // whatever type inference left on the binding: an element type still
+        // open when the loop was checked (`let mut v = [1, 2]; for x in mut
+        // ref v`) typed it `mut ref`, and `*x += 1` was accepted and changed
+        // nothing (B-2026-11-20-14).
+        let for_item = matches!(&e.kind, ExprKind::Identifier(n)
+            if matches!(self.origin_of(n), Origin::ForElem | Origin::ForElemCopy));
         let named_read_only = match &e.kind {
             ExprKind::SelfValue => self.self_read_only,
             ExprKind::Identifier(n) if n == "self" => self.self_read_only,
@@ -2946,6 +2959,7 @@ impl Walk<'_, '_> {
         match ty {
             Type::Ref(inner) if self.is_handle(inner) => Step::Writable,
             Type::Ref(_) => Step::ReadOnly,
+            Type::MutRef(inner) if for_item && !self.is_handle(inner) => Step::ReadOnly,
             Type::MutRef(_) => Step::Writable,
             _ if named_read_only => Step::ReadOnly,
             _ => Step::Continue,

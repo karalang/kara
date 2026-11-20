@@ -1174,7 +1174,21 @@ impl super::Parser {
                 // An associated-type binding inside a nested list
                 // (`impl<T: Add<Output = T>>`) is part of it; at the list's
                 // own level an `=` ends the type (`Vec<i64 = ..`).
-                Token::Equal if open_brackets.len() <= 1 => break,
+                // `Iterator<Item = i64>`: a binding at the list's own level
+                // (a name right after the `<` or a `,`) is part of it too
+                // (B-2026-11-20-21).
+                Token::Equal
+                    if open_brackets.len() <= 1
+                        && !(i >= 2
+                            && matches!(self.tokens[i - 1].token, Token::Identifier { .. })
+                            && matches!(
+                                self.tokens[i - 2].token,
+                                Token::LessThan | Token::Comma
+                            )
+                            && open_brackets.len() == 1) =>
+                {
+                    break
+                }
                 _ => &[],
             };
             if matches!(t.token, Token::GreaterThan | Token::GreaterGreater) {

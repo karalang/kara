@@ -96,7 +96,10 @@ impl super::Parser {
         };
         let what = if wrapped.is_empty() {
             "delete the line, and declare each type held in an `Rc<RefCell<T>>` as a \
-             `shared struct` with `mut` fields"
+             `shared struct` with `mut` fields; a value that is not a struct (a number, a \
+             `Vec`, a `String`) is shared by holding it in a `mut` field of a `shared \
+             struct` of its own, and the fix leaves it to you, since a plain copy would \
+             not share it"
                 .to_string()
         } else {
             let names: Vec<String> = wrapped.iter().map(|n| format!("`{n}`")).collect();
@@ -176,6 +179,21 @@ impl super::Parser {
                 }
             }
         }
+        // Only the structs this file declares can become `shared struct`.
+        let declared = |n: &str| {
+            self.tokens.windows(2).any(|w| {
+                matches!(w[0].token, Token::Struct)
+                    && matches!(&w[1].token, Token::Identifier { name, .. } if name == n)
+            })
+        };
+        // A `RefCell` holding anything else (`RefCell::new(1)`, a `Vec`, a
+        // `String`) has no `shared struct` to become: rewritten, its handles
+        // were plain copies and a write through one no longer showed through
+        // the other, so the program changed meaning (B-2026-11-20-16). Such a
+        // file gets no envelope, and the message says how to hold the value.
+        if !wrapped.iter().any(|n| declared(n)) || self.refcell_holds_a_non_struct(&wrapped) {
+            return (Vec::new(), Vec::new());
+        }
         let mut edits = Vec::new();
         let mut i = 0;
         while i < self.tokens.len() {
@@ -204,6 +222,33 @@ impl super::Parser {
             })
         });
         (edits, wrapped)
+    }
+
+    /// Whether some `RefCell::new(x)` in the file holds a value that is
+    /// visibly not one of the `wrapped` structs: a literal, a list, a macro,
+    /// or a value built from another type (`Vec::new()`, `String::from(..)`).
+    /// A plain variable is taken to hold the struct its `Rc<RefCell<T>>`
+    /// type names.
+    fn refcell_holds_a_non_struct(&self, wrapped: &[String]) -> bool {
+        let token = |k: usize| self.tokens.get(k).map(|t| &t.token);
+        (0..self.tokens.len()).any(|i| {
+            let ctor = matches!(token(i), Some(Token::Identifier { name, .. }) if name == "RefCell")
+                && matches!(token(i + 1), Some(Token::ColonColon | Token::Dot))
+                && matches!(token(i + 2), Some(Token::Identifier { name, .. }) if name == "new")
+                && matches!(token(i + 3), Some(Token::LeftParen));
+            if !ctor {
+                return false;
+            }
+            match token(i + 4) {
+                Some(Token::Identifier { name, .. }) => {
+                    let upper = name.starts_with(|c: char| c.is_ascii_uppercase());
+                    let macro_call = matches!(token(i + 5), Some(Token::Bang));
+                    macro_call || (upper && !wrapped.contains(name))
+                }
+                Some(Token::LeftParen) | Some(Token::RightParen) | None => false,
+                Some(_) => true,
+            }
+        })
     }
 
     /// `Rc<RefCell<T>>` (or `Rc[RefCell[T]]`) starting at token `i`: the end

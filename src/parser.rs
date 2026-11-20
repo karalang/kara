@@ -380,6 +380,10 @@ fn format_arg_fits_hole_inner(arg: &str) -> bool {
                 // `:` would start a format spec, and a turbofish `::<` has
                 // no hole form.
                 ':' if is_path_colons(&chars, i) => {}
+                // A field's `:` inside a struct literal's braces
+                // (`P { x: 3 }`) is the literal's own; the hole wraps such an
+                // argument in parentheses (B-2026-11-20-19).
+                ':' if depth > 0 => {}
                 ':' | '\\' => return false,
                 '/' if prev == '/' => return false,
                 '*' if prev == '/' => return false,
@@ -412,10 +416,11 @@ fn is_path_colons(chars: &[char], at: usize) -> bool {
 }
 
 /// `arg` with each path `::` outside a quote written as Kāra's `.`.
-fn path_colons_as_dots(arg: &str) -> String {
+fn path_colons_as_dots(arg: &str, inline_mods: &[String]) -> String {
     let chars: Vec<char> = arg.chars().collect();
     let mut out = String::with_capacity(arg.len());
     let mut quote: Option<char> = None;
+    let word = |c: char| c.is_alphanumeric() || c == '_';
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -429,9 +434,34 @@ fn path_colons_as_dots(arg: &str) -> String {
             Some(q) if c == q => quote = None,
             Some(_) => {}
             None if c == '"' || c == '\'' => quote = Some(c),
-            None if c == ':' && is_path_colons(&chars, i) => {
-                out.push('.');
-                i += 2;
+            // A path starts at a word no `.` or word character precedes:
+            // its segments are read whole, so a `std::` module prefix (or an
+            // inline module's name) is dropped as `rewrite_rust_path` drops
+            // it outside a format argument (B-2026-11-20-17).
+            None if (c.is_alphabetic() || c == '_')
+                && (i == 0 || !(word(chars[i - 1]) || chars[i - 1] == '.')) =>
+            {
+                let mut segs: Vec<String> = Vec::new();
+                let mut j = i;
+                loop {
+                    let from = j;
+                    while j < chars.len() && word(chars[j]) {
+                        j += 1;
+                    }
+                    segs.push(chars[from..j].iter().collect());
+                    if j + 2 < chars.len()
+                        && chars[j] == ':'
+                        && chars[j + 1] == ':'
+                        && (chars[j + 2].is_alphabetic() || chars[j + 2] == '_')
+                    {
+                        j += 2;
+                    } else {
+                        break;
+                    }
+                }
+                let dropped = rust_path_module_prefix(&segs, inline_mods);
+                out.push_str(&segs[dropped..].join("."));
+                i = j;
                 continue;
             }
             None => {}
@@ -440,6 +470,36 @@ fn path_colons_as_dots(arg: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// How many leading segments of a Rust path are module segments Kāra does
+/// not write: an inline module unwrapped into the file, or the modules of a
+/// `std::` / `core::` path before its first type or its last segment.
+fn rust_path_module_prefix(names: &[String], inline_mods: &[String]) -> usize {
+    const PRIMITIVES: &[&str] = &[
+        "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+        "f32", "f64", "bool", "char", "str",
+    ];
+    if names.len() < 2 {
+        return 0;
+    }
+    if inline_mods.contains(&names[0]) {
+        return 1;
+    }
+    let mut dropped = 0;
+    if matches!(
+        names[0].as_str(),
+        "std" | "core" | "alloc" | "cmp" | "mem" | "collections"
+    ) {
+        while dropped < names.len() - 1
+            && !starts_upper(&names[dropped])
+            && !PRIMITIVES.contains(&names[dropped].as_str())
+            && !kara_module_call(names, dropped)
+        {
+            dropped += 1;
+        }
+    }
+    dropped
 }
 
 // ── Parser ───────────────────────────────────────────────────────
@@ -749,6 +809,13 @@ pub struct Parser {
     /// recognizers see the same `!` when recovery re-parses it (`expect` and
     /// the prefix parser), and each reported it (B-2026-10-20-5).
     pub(crate) macro_bangs_reported: rustc_hash::FxHashSet<usize>,
+    /// Where the iterable of the `for` being parsed starts: Rust's `for x
+    /// in &mut v` there is `v.iter_mut()`, not `mut ref v` (B-2026-11-20-14).
+    pub(crate) for_iterable_at: Option<usize>,
+    /// The names of Rust's inline `mod name { .. }` blocks the fix unwraps
+    /// into the file, whose `name::item` paths lose the `name::`
+    /// (B-2026-11-20-22).
+    pub(crate) inline_mods: Vec<String>,
     /// The token position of an item keyword that began a line inside a
     /// body whose `}` is missing: every block open there closes at it, and
     /// the item parses at the top level (one error, no cascade).
@@ -920,6 +987,8 @@ impl Parser {
             pattern_muts: Vec::new(),
             amp_sigils: Vec::new(),
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
+            for_iterable_at: None,
+            inline_mods: Vec::new(),
             unclosed_item_at: None,
             escaped_bindings: rustc_hash::FxHashSet::default(),
             source: None,
@@ -2327,6 +2396,17 @@ impl Parser {
                         },
                     );
                 }
+                None if self.macro_has_debug_hole() => self.error_at(
+                    &format!(
+                        "Kāra has no macros; `{name}!(...)` is Rust syntax, and its `{{:?}}` \
+                         hole is Rust's Debug form, which Kāra reserves and does not implement \
+                         yet (design.md § Interpolated strings): write the value into an \
+                         f-string that displays it, `{name}(f\"{{x}}\")` (a `Vec`, an `Option` or a \
+                         number displays as Rust's Debug shows it; a string shows without \
+                         quotes)"
+                    ),
+                    bang_span,
+                ),
                 None => self.error_at(
                     &format!(
                         "Kāra has no macros; `{name}!(...)` is Rust syntax: it takes one \
@@ -2463,6 +2543,16 @@ impl Parser {
         body.replace("{{", "").contains('{')
     }
 
+    /// Whether the format string of the macro whose `!` is current has a
+    /// Debug hole, `{:?}` or `{x:?}` (B-2026-11-20-18).
+    fn macro_has_debug_hole(&self) -> bool {
+        matches!(
+            self.tokens.get(self.pos + 2).map(|t| &t.token),
+            Some(Token::StringLiteral(body)) if body.replace("{{", "").contains(":?}")
+                || body.replace("{{", "").contains(":#?}")
+        )
+    }
+
     fn format_macro_rewrite(&self) -> Option<crate::resolver::TextEdit> {
         let (source, base) = self.source.as_ref()?;
         let text = |span: &Span| {
@@ -2521,7 +2611,24 @@ impl Parser {
             let start = f.offset.checked_sub(*base)?;
             let arg = source.get(start..l.offset - base + l.length)?;
             let arg = vec_macros_as_literals(arg)?;
-            format_arg_fits_hole(&arg).then(|| path_colons_as_dots(&arg))
+            // `.sum::<i64>()` / `.product::<i64>()`: the total is of the
+            // items' own type, so the turbofish goes (B-2026-11-20-19).
+            let arg = ["sum", "product"].iter().fold(arg, |a, m| {
+                let pat = format!(".{m}::<");
+                match a.find(&pat) {
+                    Some(at) => {
+                        let open = at + pat.len();
+                        match a[open..].find(">()") {
+                            Some(close) if !a[open..open + close].contains(['(', '<']) => {
+                                format!("{}.{m}(){}", &a[..at], &a[open + close + 3..])
+                            }
+                            _ => a,
+                        }
+                    }
+                    None => a,
+                }
+            });
+            format_arg_fits_hole(&arg).then(|| path_colons_as_dots(&arg, &self.inline_mods))
         });
         let mut out = String::from("f\"");
         let mut chars = body.chars().peekable();
@@ -2588,8 +2695,16 @@ impl Parser {
                             return None;
                         }
                         // A block argument opens with the brace that, after
-                        // the hole's own, would read as an escaped `{{`.
-                        if arg.starts_with('{') {
+                        // the hole's own, would read as an escaped `{{`, and a
+                        // struct literal's closing brace beside the hole's
+                        // would read as `}}` (B-2026-11-20-19).
+                        let struct_literal = arg.starts_with(|c: char| c.is_ascii_uppercase())
+                            && arg.split_once('{').is_some_and(|(head, _)| {
+                                head.trim_end()
+                                    .chars()
+                                    .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+                            });
+                        if arg.starts_with('{') || struct_literal {
                             out.push('(');
                             out.push_str(arg);
                             out.push(')');
@@ -3257,7 +3372,9 @@ impl Parser {
             "f32", "f64", "bool", "char", "str",
         ];
         let mut dropped = 0;
-        if matches!(
+        if self.inline_mods.contains(&names[0]) && names.len() > 1 {
+            dropped = 1;
+        } else if matches!(
             names[0].as_str(),
             "std" | "core" | "alloc" | "cmp" | "mem" | "collections"
         ) {

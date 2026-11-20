@@ -112,6 +112,38 @@ impl<'a> super::TypeChecker<'a> {
             return None;
         }
         let Some((recv, rest)) = args.split_first() else {
+            // A struct with no fields has one value, `A {}`: Rust's unit
+            // struct `A` called as `A.hi()` means that value's method
+            // (B-2026-11-20-20).
+            if is_type
+                && alias == name
+                && self
+                    .env
+                    .structs
+                    .get(name)
+                    .is_some_and(|s| s.fields.is_empty())
+            {
+                let at = span.offset + alias.len();
+                self.type_error_with_fix_it(
+                    format!(
+                        "`{name}.{method}` takes `self`, and `{name}` has no fields: its one \
+                         value is `{name} {{}}`, so call `{name} {{}}.{method}()` (Rust's unit \
+                         struct value `{name}` is written `{name} {{}}`)"
+                    ),
+                    *span,
+                    TypeErrorKind::WrongNumberOfArgs,
+                    FixIt {
+                        span: Span {
+                            offset: at,
+                            length: 0,
+                            column: span.column + alias.len(),
+                            ..*span
+                        },
+                        replacement: " {}".to_string(),
+                    },
+                );
+                return Some(Type::Error);
+            }
             self.type_error(
                 format!(
                     "`{name}.{method}` takes `self`: pass the receiver as the first \

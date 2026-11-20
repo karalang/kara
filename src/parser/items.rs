@@ -451,6 +451,50 @@ impl super::Parser {
                 }
                 self.import_item(is_pub)
             }
+            // Rust's `static NAME: T = v;` is a `const` (B-2026-11-20-15): the
+            // keyword used to read as an expression statement, and the fix
+            // inserted `;`s into the item. `static mut` is a mutable global,
+            // which Kāra does not have, so it gets no fix.
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "static"
+                && (matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+                    && matches!(self.peek_token_ref_at(2), Token::Colon)
+                    || matches!(self.peek_token_ref_at(1), Token::Mut)) =>
+            {
+                let at = self.current_span();
+                if matches!(self.peek_token_ref_at(1), Token::Mut) {
+                    let mut_end = self.tokens[self.pos + 1].span;
+                    let whole = Span {
+                        length: mut_end.offset + mut_end.length - at.offset,
+                        ..at
+                    };
+                    self.error_at(
+                        "`static mut` is Rust's mutable global -- Kāra has no mutable \
+                         globals: pass the value to the functions that change it (a `mut \
+                         ref` parameter), or hold it in a `shared struct` they share",
+                        whole,
+                    );
+                    self.advance();
+                } else {
+                    self.error_at(
+                        "`static` is Rust's -- a Kāra global is a `const`: write `const`",
+                        at,
+                    );
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&at),
+                        crate::resolver::TextEdit {
+                            offset: at.offset,
+                            length: at.length,
+                            replacement: "const".to_string(),
+                        },
+                    );
+                }
+                self.tokens[self.pos].token = Token::Const;
+                let decl = self.parse_const_decl(attributes, is_pub, is_private)?;
+                Some(Item::ConstDecl(decl))
+            }
             Token::Const => {
                 let decl = self.parse_const_decl(attributes, is_pub, is_private)?;
                 Some(Item::ConstDecl(decl))
@@ -3408,6 +3452,67 @@ impl super::Parser {
 
     fn reject_mod_decl(&mut self) {
         let start = self.current_span();
+        // Rust's inline `mod name { items }` in a one-file program: the fix
+        // unwraps the items into the file, and `name::item` paths lose the
+        // `name::` (B-2026-11-20-22). The braces are dropped from the tokens
+        // too, so the items parse on as the file's own.
+        if let (Token::Identifier { name, .. }, Token::LeftBrace) = (
+            self.peek_token_ref_at(1).clone(),
+            self.peek_token_ref_at(2).clone(),
+        ) {
+            let open = self.pos + 2;
+            let mut depth = 0usize;
+            let mut close = None;
+            for k in open..self.tokens.len() {
+                match self.tokens[k].token {
+                    Token::LeftBrace => depth += 1,
+                    Token::RightBrace => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(k);
+                            break;
+                        }
+                    }
+                    Token::EOF => break,
+                    _ => {}
+                }
+            }
+            if let Some(close) = close {
+                let brace = self.tokens[open].span;
+                let head = Span {
+                    length: brace.offset + brace.length - start.offset,
+                    ..start
+                };
+                let shut = self.tokens[close].span;
+                self.error_at(
+                    &format!(
+                        "`mod {name} {{ .. }}` is Rust's inline module -- in Kāra each \
+                         `.kara` file is a module (design.md § Module System): the fix moves \
+                         the items into this file and writes `{name}::item` as `item`"
+                    ),
+                    head,
+                );
+                self.fix_diffs.insert(
+                    crate::resolver::SpanKey::from_span(&head),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: head.offset,
+                            length: head.length,
+                            replacement: String::new(),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: shut.offset,
+                            length: shut.length,
+                            replacement: String::new(),
+                        },
+                    ],
+                );
+                self.inline_mods.push(name);
+                self.tokens.remove(close);
+                self.pos = open + 1;
+                return;
+            }
+        }
         self.advance(); // consume `mod`
                         // Consume an optional identifier and the rest of the declaration up
                         // to the next semicolon, so the parser resumes cleanly on the next
