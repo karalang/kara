@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 571 |
+| diagnostics | 579 |
 | false-positive | 320 |
 | missing-feature | 215 |
 | perf | 189 |
 | other | 119 |
 | soundness | 105 |
-| miscompile | 95 |
+| miscompile | 96 |
 | crash | 62 |
 | run-vs-build | 59 |
 | codegen-gap | 39 |
@@ -78,9 +78,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 736 |
 | mir-llvm | 311 |
-| mir | 281 |
+| mir | 282 |
 | cli | 220 |
-| parser | 127 |
+| parser | 135 |
 | ownership | 122 |
 | interp | 94 |
 | runtime | 92 |
@@ -130,6 +130,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-11 | 2026-11-20 | cli | low | Remainder of B-2026-11-09-15: `karac fix` annotates a defaulted literal that reaches a narrower slot through a collection read back by a `for` loop (`a: i32`), but not one read back by index through a view binding (`right[size].push(b)` then `let ys = ref right[n - k]; ys[at]`), so `best.min(..)` stays refused with no edit | — |
 | B-2026-11-20-12 | 2026-11-20 | cli | low | The Rust linked-list cursor step `tail = mut ref tail.as_mut().unwrap().next` is refused (E_REF_OPERAND_UNSUPPORTED, correctly: a borrow through a call result, §5.1/§5.5) with no machine fix, though the accepted spelling `while let Some(n) = tail { tail = mut ref n.next; }` is a mechanical rewrite | — |
 | B-2026-11-20-13 | 2026-11-20 | mir | low | Latent: the dyn call's argument lowering (`dyn_param_ty`, B-2026-11-19-128) expects a string literal bound for a `Str` slot to arrive as its String constant, so a literal the checker types as `Str` reaching a borrowed `Str`/`X = Str` dyn slot is passed wrongly on build (seen as i05 printing 0 for 3 during B-2026-11-20-3, then avoided by keeping the infer-then-judge path) | — |
+| B-2026-11-20-14 | 2026-11-20 | mir | high | `for x in mut ref v { *x += 1; }` checks clean and the writes are lost on both backends (prints `1 2` for `[1, 2]`); `karac fix` writes Rust's `for x in &mut v` that way | — |
+| B-2026-11-20-15 | 2026-11-20 | parser | medium | `karac fix` mangles Rust's `static NAME: &str = "kara";` into `static; NAME;: &str = "kara";`: two "expected `;` after this expression statement" fixes fire at the item, and the result is refused worse than before | — |
+| B-2026-11-20-16 | 2026-11-20 | parser | high | `karac fix` turns Rust's `Rc::new(RefCell::new(1))` with a second handle `Rc::clone(&c)` into a plain copy, so a write through one handle no longer shows through the other: the mended program prints `1` where the Rust prints `5` | — |
+| B-2026-11-20-17 | 2026-11-20 | parser | medium | A Rust `std::` path inside a `println!`/`format!` argument keeps its module segments when the macro becomes an f-string: `println!("{}", std::cmp::max(3, 9))` is fixed to `println(f"{std.cmp.max(3, 9)}")`, then E0100 undefined name `std`, with no fix | — |
+| B-2026-11-20-18 | 2026-11-20 | parser | medium | Rust's `{:?}` hole has no fix in `println!`/`format!`, and the message does not say it is the reason: `println!("{:?}", v)` gets "so write its format arguments into an f-string" with no edit, for a `Vec`, an `Option` or a `VecDeque` that `{v}` displays | — |
+| B-2026-11-20-19 | 2026-11-20 | parser | low | A `println!`/`format!` argument holding a turbofish or a struct literal gets no f-string fix: `println!("{}", v.iter().sum::<i64>())`, `println!("{}", P { x: 3 })` and `println!("{}", m[&K { a: 1 }])` stop at the no-fix message | — |
+| B-2026-11-20-20 | 2026-11-20 | parser | low | A method call on a Rust unit struct's name (`struct A;` ... `A.hi()`) is mended to `struct A {}` and `A.hi()`, which reports E0202 "`A.hi` takes `self`: pass the receiver as the first argument", where the value is `A {}` | — |
+| B-2026-11-20-21 | 2026-11-20 | parser | low | Rust's `impl Iterator<Item = i64>` parameter gets no fix: the angle-bracket rewrite has no edit when the list holds an associated-type binding, and an E0002 "Expected `)`, found `<`" follows; the Kāra form needs `own` too | — |
+| B-2026-11-20-22 | 2026-11-20 | parser | low | An inline Rust `mod m { .. }` is refused with no fix and an E0002 "Expected expression, found `}`" after it, while `m::sq(4)` at the call is fixed to `m.sq(4)`, which still names the deleted module | — |
 
 ### Relocated
 
