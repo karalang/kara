@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 599 |
+| diagnostics | 600 |
 | false-positive | 323 |
 | missing-feature | 223 |
 | perf | 189 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 757 |
+| typecheck | 758 |
 | mir-llvm | 313 |
 | mir | 286 |
 | cli | 229 |
@@ -1952,6 +1952,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-64 | typecheck | low | Items made from a value a `let` binds to literal-seeded folds, `once(first).chain(encoded.iter().scan(first, ..)).collect()` into a `Vec[i32]` with `… | 045accc7ad |
 | B-2026-11-20-66 | typecheck | medium | `==` on a type with only a hand-written `impl PartialEq` is refused ("'==' cannot dispatch to your 'impl PartialEq for Item': .. | 95f3257492 |
 | B-2026-11-20-68 | cli | medium | `karac fix` turns on the six style lints that `karac check --output=json` leaves off, so it rewrites code (needless_return, manual_compound_assign, q… | a33f6ff6ed |
+| B-2026-11-20-69 | typecheck | low | An element read back out of a vector that fill elements were pushed into, `v.push(pre[i][j])` then `v[v.len() - k]` returned as `i32` with `pre = Vec… | 38ba199571 |
 
 </details>
 
