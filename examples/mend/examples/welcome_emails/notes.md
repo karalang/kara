@@ -26,8 +26,11 @@ the effect system.
 The sibling `concurrent_emails` example poses the same task with a
 parallelism ask. The LLM's natural attempt — increment a shared
 mutable counter from inside a `par { }` block — is rejected at compile
-time. The real diagnostic (verified against the in-tree `karac`, not a
-mock) is `E0408` from the effect phase:
+time. Today the compiler reports it as `E0418`: two `par` branches may
+not write or mutably borrow the same place (core-semantics.md §11.2). A
+module-level `let mut` counter is refused before that, as `E_MODULE_LET`
+(Kāra has no mutable globals). When this note was written the code was
+`E0408`, now historical; its message read:
 
 ```
 module-level let mut 'SENT_COUNT' cannot be written from inside
@@ -35,7 +38,7 @@ par { } — wrap in Atomic[T], Mutex[T], or use #[thread_local] for
 per-task state (binding declared at line 1)
 ```
 
-(Note: a write/write conflict in *ordinary* sequential code is not an
+(Note, also from that time: a write/write conflict in *ordinary* sequential code is not an
 error — the compiler silently serializes it. The hard error fires
 specifically for a shared mutable binding written from inside an
 explicit `par { }` region, where serializing is almost never intended.)

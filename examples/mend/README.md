@@ -130,7 +130,9 @@ evidence of working infrastructure but not a compelling cast. See
 **Slice 4 — concurrency axis (`concurrent_emails`).** A fourth example
 pair exercising the effect checker's `par`-conflict path: the LLM
 increments a shared module-level counter from inside a `par { }`
-block, the compiler rejects it with `E0408`, and the LLM lifts the
+block, the compiler rejects it with `E0408` (the historical code; today
+`E0418`, or `E_MODULE_LET` for the module-level counter, and the task
+was rewritten on 2026-11-20 so each branch returns its line), and the LLM lifts the
 counter into an `Atomic[i64]` (`sync struct`) — clean build, parallelism
 preserved. Both canned iterations and `solution.kara` are verified
 against the in-tree `karac` (iter 0 → `E0408` only; iter 1 → clean).

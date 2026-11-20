@@ -9,7 +9,7 @@ representative examples from the corpus.
 |--------------------------|-----------------|----------------------------|---------------------------|
 | `welcome_emails.cast`    | `welcome_emails` | Ownership (use-after-move on `Vec`) | 3 (live) |
 | `order_status.cast`      | `order_status`   | Pattern interpretation (qualified path → bind, W0237) | 2 (live) |
-| `concurrent_emails.cast` | `concurrent_emails` | Effect / `par`-conflict (shared-counter race, E0408) | 2 (dry-run — see below) |
+| `concurrent_emails.cast` | `concurrent_emails` | Effect / `par`-conflict (shared-counter race, E0408 when recorded; E0418 today) | 2 (dry-run — see below) |
 | `demo.sh`                | (driver)         | Narrated wrapper around `mend.py` for recording use | — |
 
 The recorded iteration counts are *one observed run each* — the live

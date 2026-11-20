@@ -42,7 +42,8 @@ distinct from `fixed-by-llm` (the model re-reasoned from prose).
 
 - `welcome_emails` — resolver-level typos (`count_user` → `count_users`),
   the other machine-fixable class.
-- `concurrent_emails` — a shared-mutable-in-`par` race (`E0408`) whose fix
+- `concurrent_emails` — a shared-mutable-in-`par` race (`E0418` today, or `E_MODULE_LET` for a
+  module-level `let mut`; `E0408` is the historical code) whose fix
   is a *structural refactor* with a three-way choice; correctly
   descriptive (`fixed-by-llm`), not machine-applicable.
 

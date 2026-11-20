@@ -43,5 +43,5 @@ the Mend loop iterates to convergence.
 Machine-fixable, like `welcome_emails` (resolver did-you-mean) and
 `two_source_totals` (effect-clause comma) — and the first example whose
 fix comes from the **typecheck** phase rather than resolve or parse.
-`concurrent_emails` remains the contrast: its `E0408` fix is a structural
+`concurrent_emails` remains the contrast: its `E0418` fix (`E0408` historically) is a structural
 refactor with a three-way choice, correctly descriptive (`fixed-by-llm`).
