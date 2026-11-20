@@ -1,0 +1,28 @@
+-- create failure does not count toward max
+CreateFailed refused
+create 1
+ok 1
+-- timeout outside a task waits the whole timeout
+Timeout
+true
+-- release to another pool drops it and frees the slot
+drop 1
+released
+create 2
+ok 2
+-- release to own pool
+ok 2
+-- a loan outliving its pool
+pool dropped
+drop 2
+-- health check
+create 201
+ok 201
+check 201
+drop 201
+create 202
+ok 202
+check 202
+ok 202
+-- end
+drop 202

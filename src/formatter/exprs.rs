@@ -772,6 +772,28 @@ impl super::Formatter {
                     self.write_str(" {}");
                     return;
                 }
+                if self.one_line {
+                    self.write_str(" { ");
+                    for (i, fi) in fields.iter().enumerate() {
+                        if i > 0 {
+                            self.write_str(", ");
+                        }
+                        self.write_ident(&fi.name);
+                        if !fi.shorthand {
+                            self.write_str(": ");
+                            self.format_expr(&fi.value);
+                        }
+                    }
+                    if let Some(ref s) = spread {
+                        if !fields.is_empty() {
+                            self.write_str(", ");
+                        }
+                        self.write_str("..");
+                        self.format_expr(s);
+                    }
+                    self.write_str(" }");
+                    return;
+                }
                 self.write_str(" {\n");
                 self.push_indent();
                 for fi in fields {

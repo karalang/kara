@@ -1,0 +1,5 @@
+import std.log.{info};
+fn main() {
+    info("a");
+    println("out");
+}

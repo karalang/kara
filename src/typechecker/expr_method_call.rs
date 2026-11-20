@@ -2270,7 +2270,7 @@ impl<'a> super::TypeChecker<'a> {
                         (
                             label.clone(),
                             value.value.span,
-                            crate::formatter::render_expr(&value.value),
+                            crate::formatter::render_expr_one_line(&value.value),
                         ),
                     );
                 }

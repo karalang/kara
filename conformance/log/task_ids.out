@@ -1,0 +1,6 @@
+INFO  t i=1 task_id=1
+INFO  t i=2 task_id=2
+{"level":"info","msg":"t","i":3,"task_id":3}
+{"level":"info","msg":"t","i":4,"task_id":4}
+{"level":"info","msg":"t","i":5,"task_id":5}
+15

@@ -1,0 +1,83 @@
+import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration, Instant};
+
+shared struct Ids { mut next: i64, mut fail_next: bool }
+
+struct Conn { id: i64, healthy: bool }
+impl Drop for Conn {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+
+fn show(r: ref Result[PooledConnection[Conn], PoolError[String]]) -> String {
+    match r {
+        Ok(c) => f"ok {c.val.id}",
+        Err(PoolError.Timeout) => "Timeout",
+        Err(PoolError.Busy) => "Busy",
+        Err(PoolError.PoolClosed) => "PoolClosed",
+        Err(PoolError.CreateFailed(e)) => f"CreateFailed {e}",
+        Err(_) => "other",
+    }
+}
+
+fn make(ids: Ids, base: i64, max: i64, waiters: i64) -> Pool[Conn, String] {
+    Pool.new(|| {
+        if ids.fail_next {
+            ids.fail_next = false;
+            return Err("refused".to_string());
+        }
+        ids.next += 1;
+        println(f"create {base + ids.next}");
+        Ok(Conn { id: base + ids.next, healthy: true })
+    }, max, waiters)
+}
+
+fn main() {
+    let t = Duration.ms(30);
+    println("-- create failure does not count toward max");
+    let ids = Ids { next: 0, fail_next: true };
+    let pool = make(ids.clone(), 0, 1, 4);
+    let a = pool.acquire(t);
+    println(show(a));
+    let b = pool.acquire(t);
+    println(show(b));
+    println("-- timeout outside a task waits the whole timeout");
+    let start = Instant.now();
+    let c = pool.acquire(t);
+    println(show(c));
+    println(start.elapsed().as_ms() >= 30);
+    println("-- release to another pool drops it and frees the slot");
+    let other = make(Ids { next: 0, fail_next: false }, 100, 1, 4);
+    match b {
+        Ok(conn) => other.release(conn),
+        Err(_) => {}
+    }
+    println("released");
+    let d = pool.acquire(t);
+    println(show(d));
+    println("-- release to own pool");
+    match d {
+        Ok(conn) => pool.release(conn),
+        Err(_) => {}
+    }
+    let e = pool.acquire(t);
+    println(show(e));
+    println("-- a loan outliving its pool");
+    drop(pool);
+    println("pool dropped");
+    drop(e);
+    println("-- health check");
+    let hc = make(Ids { next: 0, fail_next: false }, 200, 2, 4).with_health_check(|c| {
+        println(f"check {c.id}");
+        c.id != 201
+    });
+    let x = hc.acquire(t);
+    println(show(x));
+    drop(x);
+    let y = hc.acquire(t);
+    println(show(y));
+    drop(y);
+    let z = hc.acquire(t);
+    println(show(z));
+    drop(z);
+    println("-- end");
+}

@@ -1,0 +1,4 @@
+import std.log.{Backend as B, Record};
+struct X { }
+impl B for X { fn emit(mut ref self, record: Record) { } }
+fn main() { }

@@ -1,0 +1,20 @@
+-- reuse
+create 1
+ok 1
+ok 1
+-- full, no waiters: Busy
+create 2
+ok 2
+Busy
+-- release one, reuse it
+ok 2
+-- create failure does not count
+CreateFailed nope
+could not create a pooled value: nope
+-- close
+ok 1
+drop 2
+closed
+PoolClosed
+drop 1
+-- end

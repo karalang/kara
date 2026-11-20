@@ -1,0 +1,26 @@
+import std.encoding.{base64_encode, base64_decode, hex_encode, DecodeError};
+
+fn decode_all(a: Str, b: Str) -> Result[i64, AnyError] {
+    let x = base64_decode(a)?;
+    let y = base64_decode(b)?;
+    Ok(x.len() + y.len())
+}
+
+fn main() {
+    let b = base64_encode("hello".bytes());       // "aGVsbG8="
+    let back = base64_decode(b.as_str());         // Ok of the five bytes
+    let h = hex_encode("hi".bytes());             // "6869"
+    println(b);
+    println(back.unwrap().len());
+    println(h);
+    match decode_all("aGk=", "a") {
+        Ok(n) => println(n),
+        Err(e) => println(f"err: {e}"),
+    }
+    let e: DecodeError = base64_decode("@@@@").unwrap_err();
+    match e {
+        DecodeError.InvalidByte(at) => println(at),
+        DecodeError.InvalidLength => println("len"),
+        _ => println("other"),
+    }
+}

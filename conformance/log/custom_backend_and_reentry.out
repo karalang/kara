@@ -1,0 +1,5 @@
+emit true outer [a=1;b="two";] task=None trace=None
+emit true inner [] task=None trace=None
+emit true in task [i=1;] task=Some(1) trace=None
+emit true in task [i=2;] task=Some(2) trace=None
+3

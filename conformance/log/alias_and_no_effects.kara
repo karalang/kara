@@ -1,0 +1,12 @@
+import std.log.{info, Level as L};
+
+pub fn add(a: i64, b: i64) -> i64 {
+    info("add", a: a, b: b);
+    a + b
+}
+
+fn main() {
+    let l: L = L.Warn;
+    println(l > L.Info);
+    println(add(1, 2));
+}

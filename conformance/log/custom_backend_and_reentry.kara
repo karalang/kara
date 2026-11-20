@@ -1,0 +1,34 @@
+import std.log;
+import std.log.{info, Backend, Record, Level};
+import std.json.{Json};
+
+struct Collect { n: i64 }
+impl Backend for Collect {
+    fn emit(mut ref self, record: Record) {
+        self.n += 1;
+        let mut keys = String.new();
+        for (k, v) in record.fields.iter() {
+            keys.push_str(f"{k}={v.clone().stringify()};");
+        }
+        println(f"emit {record.level == Level.Info} {record.msg} [{keys}] task={record.task_id} trace={record.trace_id}");
+        if record.msg == "inner" {
+            info("from emit", depth: 1);
+        }
+    }
+}
+
+fn work(i: i64) -> i64 {
+    info("in task", i: i);
+    i
+}
+
+fn main() {
+    log.init(Collect { n: 0 });
+    info("outer", a: 1, b: "two");
+    info("inner");
+    let (x, y) = par {
+        work(1),
+        work(2),
+    };
+    println(x + y);
+}

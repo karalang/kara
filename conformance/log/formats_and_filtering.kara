@@ -1,0 +1,27 @@
+import std.log;
+import std.log.{debug, info, warn, error};
+
+fn side(n: i64) -> i64 {
+    println(f"eval {n}");
+    n
+}
+
+fn main() {
+    let s = "x y".to_string();
+    info("default", s: s, n: 1);
+    debug("dropped", a: side(1));
+    println(s);
+    info("nums", big: u64.MAX, neg: i64.MIN, f: 0.1f32, g: 1.5, h: 1e21, z: -0.0, c: 'é', o: Some(3), none: Option[i64].None, v: Vec[1, 2]);
+    log.init(log.text_backend(log.Stream.Stdout));
+    info("t", e: "", sp: "a b", eq: "a=b", q: "a\"b", ctl: "a\tb", plain: "ok", uni: "é", n: 5, b: true);
+    warn("w");
+    error("e");
+    debug("d");
+    log.init(log.text_backend(log.Stream.Stdout), level: log.Level.Debug);
+    debug("d2", x: side(2));
+    log.init(log.json_backend(log.Stream.Stdout), level: log.Level.Warn);
+    info("filtered");
+    warn("kept", k: 1);
+    println(log.Level.Debug < log.Level.Info);
+    println(log.Level.Warn == log.Level.Warn);
+}

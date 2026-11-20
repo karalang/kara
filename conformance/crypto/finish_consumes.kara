@@ -1,0 +1,7 @@
+import std.crypto.legacy.{Sha1};
+fn main() {
+    let mut h = Sha1.new();
+    h.update("a".bytes());
+    let x = h.finish();
+    h.update("b".bytes());
+}

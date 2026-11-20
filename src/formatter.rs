@@ -93,6 +93,16 @@ pub fn render_expr(expr: &Expr) -> String {
     f.output
 }
 
+/// [`render_expr`], with struct literals on one line: the text of an
+/// expression a fix puts inside a line, as `f"{P { v: 2 }}"`
+/// (B-2026-11-20-92).
+pub fn render_expr_one_line(expr: &Expr) -> String {
+    let mut f = Formatter::new();
+    f.one_line = true;
+    f.format_expr(expr);
+    f.output
+}
+
 /// Render a single [`Stmt`] at indent level zero, without its trailing
 /// newline: a machine fix that rewrites one statement.
 pub fn render_stmt(stmt: &Stmt) -> String {
@@ -254,6 +264,10 @@ pub(super) struct Formatter {
     /// `if let`, `while let` or `for`, outside any delimiter, where a struct
     /// literal must be parenthesized (design.md § 6, `exprs.rs`).
     pub(super) in_head: bool,
+    /// A struct literal is written on one line (`P { v: 2 }`), for a fix
+    /// that puts an expression inside a line of its own, such as an
+    /// interpolation ([`render_expr_one_line`]).
+    pub(super) one_line: bool,
 }
 
 impl Formatter {
@@ -278,6 +292,7 @@ impl Formatter {
             line_comment_end: usize::MAX,
             stmt_start: false,
             in_head: false,
+            one_line: false,
         }
     }
 

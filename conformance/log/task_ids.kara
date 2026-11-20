@@ -1,0 +1,17 @@
+import std.log;
+import std.log.{info};
+
+fn work(i: i64) -> i64 {
+    info("t", i: i);
+    i
+}
+
+fn main() {
+    log.init(log.text_backend(log.Stream.Stdout));
+    let (a, b) = par { work(1), work(2) };
+    log.init(log.json_backend(log.Stream.Stdout));
+    let (c, d) = par { work(3), work(4) };
+    let g = TaskGroup.new();
+    let h = g.spawn(|| work(5));
+    println(h.join() + a + b + c + d);
+}

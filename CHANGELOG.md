@@ -2251,6 +2251,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- The fix-it log.md gives a log field whose value is `Display` but not
+  `Serialize` keeps a struct literal on one line inside the interpolation,
+  `f"{P { v: 2 }}"`; it was written a field to a line (B-2026-11-20-92).
 - Rust's `eprint!(..)` is repaired to the prelude's `eprint`, an
   f-string when it has format arguments, as `eprintln!` is; it got no
   fix (B-2026-11-20-53).

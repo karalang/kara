@@ -1,0 +1,21 @@
+import std.pool.{Pool, PoolError};
+import std.time.{Duration};
+
+struct Conn { id: i64 }
+
+enum ConnectError { Refused, AuthFailed }
+
+fn connect() -> Result[Conn, ConnectError] { Ok(Conn { id: 1 }) }
+
+fn main() {
+    let pool: Pool[Conn, ConnectError] = Pool.new(connect, 8, 16);
+    match pool.acquire(Duration.ms(500)) {
+        Ok(conn) => println(f"using {conn.val.id}"),
+        Err(PoolError.Timeout) => println("timed out"),
+        Err(PoolError.Busy) => println("busy"),
+        Err(PoolError.CreateFailed(e)) => println("could not connect"),
+        Err(PoolError.PoolClosed) => println("shutting down"),
+        Err(_) => println("could not acquire"), // `PoolError` is `#[non_exhaustive]`
+    }
+    pool.acquire(Duration.ms(5)).unwrap();
+}

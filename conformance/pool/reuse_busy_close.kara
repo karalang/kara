@@ -1,0 +1,69 @@
+import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration};
+
+shared struct Ids { mut next: i64, mut fail_next: bool }
+
+struct Conn { id: i64, healthy: bool }
+impl Drop for Conn {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+
+fn show(r: ref Result[PooledConnection[Conn], PoolError[String]]) -> String {
+    match r {
+        Ok(c) => f"ok {c.val.id}",
+        Err(PoolError.Timeout) => "Timeout",
+        Err(PoolError.Busy) => "Busy",
+        Err(PoolError.PoolClosed) => "PoolClosed",
+        Err(PoolError.CreateFailed(e)) => f"CreateFailed {e}",
+        Err(_) => "other",
+    }
+}
+
+fn main() {
+    let ids = Ids { next: 0, fail_next: false };
+    let mk = ids.clone();
+    let pool: Pool[Conn, String] = Pool.new(|| {
+        if mk.fail_next {
+            mk.fail_next = false;
+            return Err("refused".to_string());
+        }
+        mk.next += 1;
+        println(f"create {mk.next}");
+        Ok(Conn { id: mk.next, healthy: true })
+    }, 2, 0);
+    let t = Duration.ms(20);
+    println("-- reuse");
+    let a = pool.acquire(t);
+    println(show(a));
+    drop(a);
+    let b = pool.acquire(t);
+    println(show(b));
+    println("-- full, no waiters: Busy");
+    let c = pool.acquire(t);
+    println(show(c));
+    let d = pool.acquire(t);
+    println(show(d));
+    println("-- release one, reuse it");
+    drop(c);
+    let e = pool.acquire(t);
+    println(show(e));
+    drop(e);
+    drop(b);
+    println("-- create failure does not count");
+    let p2: Pool[Conn, String] = Pool.new(|| Err("nope".to_string()), 1, 4);
+    let f = p2.acquire(t);
+    println(show(f));
+    match f {
+        Err(err) => println(err),
+        Ok(_) => {}
+    }
+    println("-- close");
+    let g = pool.acquire(t);
+    println(show(g));
+    pool.close();
+    println("closed");
+    let h = pool.acquire(t);
+    println(show(h));
+    drop(g);
+    println("-- end");
+}

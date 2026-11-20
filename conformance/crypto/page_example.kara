@@ -1,0 +1,16 @@
+import std.crypto.sha2.{sha256};
+import std.crypto.hmac.{hmac_sha256};
+import std.crypto.{constant_time_eq};
+import std.encoding.{hex_encode};
+
+fn verify(message: Slice[u8], tag: Slice[u8]) -> bool {
+    constant_time_eq(hmac_sha256("key".bytes(), message), tag)
+}
+
+fn main() {
+    let d = sha256("abc".bytes());
+    println(hex_encode(d));   // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    let t = hmac_sha256("key".bytes(), "msg".bytes());
+    println(verify("msg".bytes(), t));
+    println(verify("msh".bytes(), t));
+}

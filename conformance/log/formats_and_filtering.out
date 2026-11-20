@@ -1,0 +1,10 @@
+eval 1
+x y
+INFO  t e="" sp="a b" eq="a=b" q="a\"b" ctl="a\tb" plain=ok uni=é n=5 b=true
+WARN  w
+ERROR e
+eval 2
+DEBUG d2 x=2
+{"level":"warn","msg":"kept","k":1,"task_id":null}
+true
+true

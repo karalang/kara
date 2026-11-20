@@ -1,0 +1,7 @@
+import std.log.{info};
+struct P { v: i64 }
+impl Display for P { fn to_string(ref self) -> String { f"P{self.v}" } }
+struct Q { v: i64 }
+fn main() {
+    info("x", task_id: 1);
+}

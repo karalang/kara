@@ -1,0 +1,32 @@
+import std.pool.{Pool, PoolError};
+import std.time.{Duration, sleep};
+
+struct Conn { id: i64 }
+
+fn main() {
+    let pool: Pool[Conn, String] = Pool.new(|| Ok(Conn { id: 7 }), 1, 1);
+    let g = TaskGroup.new();
+    let held = pool.acquire(Duration.ms(100));
+    let h1 = g.spawn(|| {
+        match pool.acquire(Duration.ms(2000)) {
+            Ok(c) => f"waited and got {c.val.id}",
+            Err(e) => f"failed {e}",
+        }
+    });
+    let h2 = g.spawn(|| {
+        sleep(Duration.ms(50));
+        match pool.acquire(Duration.ms(10)) {
+            Ok(c) => f"got {c.val.id}",
+            Err(PoolError.Busy) => "busy",
+            Err(e) => f"other {e}",
+        }
+    });
+    let h3 = g.spawn(|| {
+        sleep(Duration.ms(200));
+        drop(held);
+        "released"
+    });
+    println(h1.join());
+    println(h2.join());
+    println(h3.join());
+}

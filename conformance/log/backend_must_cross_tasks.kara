@@ -1,0 +1,6 @@
+import std.log;
+import std.log.{Backend, Record};
+shared struct Counter { n: i64 }
+struct X { c: Counter }
+impl Backend for X { fn emit(mut ref self, record: Record) { } }
+fn main() { log.init(X { c: Counter { n: 0 } }); }
