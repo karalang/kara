@@ -624,6 +624,11 @@ pub(super) struct LocalTypeScope {
     /// collection, whose `next()` items are views as that call's are.
     /// Cleared like `views` by a shadowing `insert`.
     lent_iters: Vec<FxHashSet<String>>,
+    /// B-2026-11-20-63 — per scope, outside the strict check, the names
+    /// bound to an item lent by `.iter()` (a `for` loop's whole item, or an
+    /// adaptor closure's item parameter), which this pipeline types as a
+    /// `ref` of the item rather than marking a view. Cleared like `views`.
+    lent_items: Vec<FxHashSet<String>>,
     /// Per scope, the names bound out of a bare (D5-borrowed) parameter, to
     /// that parameter's name: `r` in `let W { r, n } = w` or in a `match w`
     /// arm. Cleared like `views` by a shadowing `insert`.
@@ -645,6 +650,7 @@ impl LocalTypeScope {
             scopes: vec![FxHashMap::default()],
             views: vec![Default::default()],
             lent_iters: vec![Default::default()],
+            lent_items: vec![Default::default()],
             parts_of: vec![Default::default()],
             ref_patterns: vec![Default::default()],
             borrowed_parts: vec![Default::default()],
@@ -655,6 +661,7 @@ impl LocalTypeScope {
         self.scopes.push(FxHashMap::default());
         self.views.push(Default::default());
         self.lent_iters.push(Default::default());
+        self.lent_items.push(Default::default());
         self.parts_of.push(Default::default());
         self.ref_patterns.push(Default::default());
         self.borrowed_parts.push(Default::default());
@@ -664,6 +671,7 @@ impl LocalTypeScope {
         self.scopes.pop();
         self.views.pop();
         self.lent_iters.pop();
+        self.lent_items.pop();
         self.parts_of.pop();
         self.ref_patterns.pop();
         self.borrowed_parts.pop();
@@ -674,6 +682,9 @@ impl LocalTypeScope {
             v.remove(name.as_str());
         }
         if let Some(v) = self.lent_iters.last_mut() {
+            v.remove(name.as_str());
+        }
+        if let Some(v) = self.lent_items.last_mut() {
             v.remove(name.as_str());
         }
         if let Some(v) = self.parts_of.last_mut() {
@@ -744,6 +755,26 @@ impl LocalTypeScope {
         for (scope, views) in self.scopes.iter().zip(self.views.iter()).rev() {
             if scope.contains_key(name) {
                 return views.contains(name);
+            }
+        }
+        false
+    }
+
+    /// Mark `name`, already bound in the innermost scope, as an item lent
+    /// by `.iter()` (outside the strict check; see `lent_items`).
+    pub(super) fn mark_lent_item(&mut self, name: &str) {
+        if self.scopes.last().is_some_and(|s| s.contains_key(name)) {
+            if let Some(v) = self.lent_items.last_mut() {
+                v.insert(name.to_string());
+            }
+        }
+    }
+
+    /// Does `name` resolve to a binding marked by [`Self::mark_lent_item`]?
+    pub(super) fn is_lent_item(&self, name: &str) -> bool {
+        for (scope, items) in self.scopes.iter().zip(self.lent_items.iter()).rev() {
+            if scope.contains_key(name) {
+                return items.contains(name);
             }
         }
         false

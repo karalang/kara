@@ -6739,7 +6739,11 @@ impl<'a> super::TypeChecker<'a> {
             {
                 root = object;
             }
-            return matches!(&root.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n));
+            // A part of an item lent by `.iter()` reads the same way
+            // (B-2026-11-20-63).
+            let projected = !std::ptr::eq(root, operand);
+            return matches!(&root.kind, ExprKind::Identifier(n)
+                if self.local_scope.is_view(n) || (projected && self.local_scope.is_lent_item(n)));
         }
         match &operand.kind {
             ExprKind::Identifier(n) => self.local_scope.is_view(n),

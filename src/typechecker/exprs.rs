@@ -4872,7 +4872,11 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     if let Some(p) = params.get(i) {
                         for n in p.pattern.binding_names() {
-                            self.local_scope.mark_view(&n);
+                            if self.cli_lint_overrides.strict_core {
+                                self.local_scope.mark_view(&n);
+                            } else {
+                                self.local_scope.mark_lent_item(&n);
+                            }
                         }
                     }
                 }
@@ -17307,7 +17311,11 @@ impl<'a> super::TypeChecker<'a> {
             } => {
                 // v2 core §4.6: an adaptor over `.iter()` lends each element,
                 // so the closure's element parameter is a view of it.
-                if self.cli_lint_overrides.strict_core && Self::core_iter_yields_refs(object) {
+                // Outside the strict check the parameter is a `ref` of the
+                // item, marked as lent instead (B-2026-11-20-63).
+                if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                    && Self::core_iter_yields_refs(object)
+                {
                     if let Some(i) = Self::adaptor_item_param(method) {
                         for a in args {
                             if matches!(a.value.kind, ExprKind::Closure { .. }) {
@@ -18850,6 +18858,18 @@ impl<'a> super::TypeChecker<'a> {
                     std::mem::replace(&mut self.current_scrutinee_core_borrowed, core_borrowed);
                 self.bind_pattern_types(pattern, &elem_ty);
                 self.current_scrutinee_core_borrowed = prev_core;
+                // Outside the strict check, the whole item of a loop over
+                // `.iter()` is a `ref` of the element, lent as the strict
+                // check's view is (B-2026-11-20-63).
+                if !self.cli_lint_overrides.strict_core
+                    && self.library_methods_from_source
+                    && (Self::for_iterable_is_core_collection(&iter_ty)
+                        || Self::core_iter_yields_refs(iterable))
+                {
+                    if let PatternKind::Binding(n) = &pattern.kind {
+                        self.local_scope.mark_lent_item(n);
+                    }
+                }
                 let saved_literal_let = self.note_literal_for_binding(pattern, iterable);
                 if core_borrowed {
                     // A `Copy` part of the item copies (§4.6), so `*i` on
@@ -19111,7 +19131,11 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     if let Some(p) = params.get(i) {
                         for n in p.pattern.binding_names() {
-                            self.local_scope.mark_view(&n);
+                            if self.cli_lint_overrides.strict_core {
+                                self.local_scope.mark_view(&n);
+                            } else {
+                                self.local_scope.mark_lent_item(&n);
+                            }
                         }
                     }
                 }

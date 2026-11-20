@@ -904,6 +904,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `*p.0` on an item lent by `.iter()`, as an adaptor's closure parameter
+  (`t.iter().map(|p| *p.0)`) or a `for` loop's item (`for p in t.iter()`,
+  `for p in t`), runs as `karac check` accepts it: the part is read
+  through the same borrow. `karac run`, `karac build` and the MIR
+  interpreter refused it with "unary '*' requires 'ref T'"
+  (B-2026-11-20-63).
 - A channel whose two ends are dropped on different pool workers at the
   same moment no longer reads freed memory. The end that was not last read
   the channel's drop glue after releasing its lock, while the other end
