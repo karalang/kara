@@ -1,4 +1,4 @@
-//! Fixes found by katas 1708 to 1734, each pinned by the smallest
+//! Fixes found by katas 1708 to 1738, each pinned by the smallest
 //! program that shows it.
 
 use std::path::PathBuf;
@@ -236,5 +236,18 @@ fn a_collect_from_a_fold_seeded_let_fixes_the_seeds() {
         "once_fold_seeds",
         "fn decode(encoded: Vec[i32]) -> Vec[i32] {\n    let n = encoded.len() as i32 + 1;\n    let all = (1..n + 1).fold(0, |x, v| x ^ v);\n    let rest = encoded.iter().skip(1).step_by(2).fold(0, |x, c| x ^ c);\n    let first = all ^ rest;\n    once(first).chain(encoded.iter().scan(first, |last, c| Some((last ^ c, last ^ c)))).collect()\n}\nfn main() {\n    println(decode([6, 5, 4, 6]));\n}\n",
         "fold(0i32, |x, c|",
+    );
+}
+
+/// An element read back out of a vector that fill elements were pushed
+/// into, `v[k - 1]` after `v.push(pre[i][j])` with `pre` a fill of fills
+/// of `0`, is fixed on the fill's literal (kata 1738's Rust arm;
+/// B-2026-11-20-69).
+#[test]
+fn an_element_pushed_from_a_fill_fixes_the_fills_literal() {
+    fixes_to(
+        "pushed_fill",
+        "fn kth(matrix: Vec[Vec[i32]], k: i64) -> i32 {\n    let (m, n) = (matrix.len(), matrix[0].len());\n    let mut pre = Vec.filled(m + 1, Vec.filled(n + 1, 0));\n    let mut v = Vec.with_capacity(m * n);\n    for i in 1..m + 1 {\n        for j in 1..n + 1 {\n            pre[i][j] = pre[i - 1][j] ^ pre[i][j - 1] ^ pre[i - 1][j - 1] ^ matrix[i - 1][j - 1];\n            v.push(pre[i][j]);\n        }\n    }\n    v.sort();\n    v[v.len() - k]\n}\nfn main() {\n    println(kth([[5, 2], [1, 6]], 1));\n}\n",
+        "Vec.filled(n + 1, 0i32)",
     );
 }

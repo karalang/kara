@@ -14310,13 +14310,20 @@ impl<'a> super::TypeChecker<'a> {
             }
             return;
         }
-        let ExprKind::Identifier(n) = &args[0].value.kind else {
+        let entry = match &args[0].value.kind {
+            ExprKind::Identifier(n) => self
+                .literal_lets
+                .get(n.as_str())
+                .filter(|e| !e.element)
+                .cloned(),
+            // `v.push(pre[i + 1][j + 1])` with `pre` a fill of a literal
+            // that kept the default: what is read back out of `v` is that
+            // literal's (kata 1738's Rust arm, B-2026-11-20-69).
+            _ => self.element_copy_source(&args[0].value),
+        };
+        let Some(entry) = entry else {
             return;
         };
-        let Some(entry) = self.literal_lets.get(n.as_str()).filter(|e| !e.element) else {
-            return;
-        };
-        let entry = entry.clone();
         if let Some(root) = Self::collection_root_name(object) {
             self.literal_pushes.insert(root.to_string(), entry);
         }
@@ -15124,7 +15131,24 @@ impl<'a> super::TypeChecker<'a> {
         let mut found = Vec::new();
         names(expr, &mut found);
         found.into_iter().find_map(|(name, depth)| {
-            let entry = self.literal_lets.get(name)?;
+            // An element of a collection literal bindings or fill elements
+            // were pushed into, `v[k - 1]` after `v.push(pre[i][j])`, reads
+            // what was pushed (B-2026-11-20-69).
+            let pushed = match self.literal_lets.get(name) {
+                Some(_) => None,
+                None => self
+                    .literal_pushes
+                    .get(name)
+                    .filter(|e| e.depth == 0 && depth == 1)
+                    .map(|e| super::LiteralLet {
+                        depth: 1,
+                        ..e.clone()
+                    }),
+            };
+            let entry = match &pushed {
+                Some(e) => e,
+                None => self.literal_lets.get(name)?,
+            };
             let name = entry.root.as_str();
             if entry.depth != depth
                 || entry.var.is_some_and(|v| self.resolved_now(&Type::TypeVar(v)) != *source)
