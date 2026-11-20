@@ -27293,7 +27293,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok((op, t));
         }
         let args = if n_generic == 0 {
-            Vec::new()
+            self.ctor_value_impl_args(e, d, want)?.unwrap_or_default()
         } else {
             match self.fn_item_value_args(e, d, n_generic, want)? {
                 Some(args) => args,
@@ -27311,6 +27311,44 @@ impl<'l, 'a> Bx<'l, 'a> {
             kind: ConstKind::FnDef(InstanceId { def: d, args, name }),
         });
         Ok((op, t))
+    }
+
+    /// The impl's arguments of `d`, an associated function of a generic impl
+    /// with no receiver (`Set.new`, which is `Set[T, H].default`), named as
+    /// a value: read off the type the value returns, `Fn() -> Set[i64]`.
+    /// The table's hasher is among them, and a parameter that only the
+    /// return names has no other source (B-2026-11-21-3). `None` when the
+    /// return is not the impl's target.
+    fn ctor_value_impl_args(&mut self, e: &Expr, d: DefId, want: Option<Ty>) -> R<Option<Vec<Ty>>> {
+        let Some(info) = self.lcx.fns.get(&d) else {
+            return Ok(None);
+        };
+        if info.impl_params == 0 || info.f.self_param.is_some() {
+            return Ok(None);
+        }
+        let want = match want {
+            Some(t) => t,
+            None => self.expr_ty(e)?,
+        };
+        let tcx = self.tys().tcx();
+        let HK::Fn { ret, .. } = tcx.kind(want) else {
+            return Ok(None);
+        };
+        let info = &self.lcx.fns[&d];
+        Ok(match tcx.kind(ret) {
+            HK::Adt { def, args } if Some(def) == info.impl_target => {
+                info.impl_args(&tcx.list(args))
+            }
+            HK::Intrinsic { kind, args }
+                if info.impl_target.is_some()
+                    && self.lcx.defs.lookup(0, kind.name()) == info.impl_target =>
+            {
+                let full = tcx.list(args);
+                let elems = crate::mir::ty::table_args(kind, full.clone());
+                info.impl_args(info.table_targs(&full, &elems))
+            }
+            _ => None,
+        })
     }
 
     /// The type the parameter `p` of a callee in instance `inst_args` gives
