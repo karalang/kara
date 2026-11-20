@@ -7323,6 +7323,16 @@ A published measurement of how *repairable* a toolchain is by an LLM that has ne
 
 Language extensions and library additions that have a design but no track. Each waits for programs that need it.
 
+### References to References (`mut ref (ref T)`)
+
+**Decision (2026-11-20, review thread, B-2026-11-20-6):** v1 has no reference to a reference. A borrow of a borrow is the borrow: `ref` / `mut ref` of a place whose type is already `ref T` yields that `ref T` (§5.9 reborrow), and the same collapse applies through generic substitution, so `mut ref T` at `T = ref String` is `ref String`. A generic that writes through `mut ref T` therefore cannot be instantiated at a shared-reference `T`; the checker refuses the call with a diagnostic that names the collapse and suggests an owned `T` or reassigning the reference local directly.
+
+**Why deferred:** nested references need a second level in typing (no collapse under substitution), a meaning for `mut ref p` on a reference local ("borrow the binding", not reborrow the referent), borrowck origins for pointer-to-pointer, and MIR lowering for it. No corpus, kata or app program has needed it.
+
+**Why non-breaking:** every program accepted today keeps its meaning, since the collapse only ever produced a `ref T`; programs refused today (writing a reference local through a generic `mut ref T`, e.g. `swap` of two `ref` locals) would become accepted.
+
+**Design shape:** keep `mut ref (ref T)` through substitution; `mut ref p` on `p: ref T` becomes a borrow of `p` itself only where the expected type asks for `mut ref (ref T)`; MIR lowers it as a pointer to the local's slot.
+
 ### Tail-Call Optimization (`#[tailrec]`)
 
 **Decision:** Both verification (compile error if a recursive call is not in tail position) and codegen (LLVM `musttail`) for `#[tailrec]` are deferred together. Keeping both halves together avoids a false promise (verifying tail position without emitting `musttail`).
