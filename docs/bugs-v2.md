@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 610 |
-| false-positive | 323 |
+| diagnostics | 616 |
+| false-positive | 325 |
 | missing-feature | 223 |
-| perf | 189 |
+| perf | 190 |
 | other | 124 |
 | soundness | 106 |
 | miscompile | 98 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 763 |
+| typecheck | 769 |
 | mir-llvm | 313 |
-| mir | 286 |
-| cli | 229 |
+| mir | 287 |
+| cli | 235 |
 | parser | 140 |
 | ownership | 122 |
 | runtime | 101 |
 | interp | 95 |
-| effect | 49 |
-| resolver | 46 |
+| effect | 50 |
+| resolver | 47 |
 | other | 37 |
 | codegen | 22 |
 | autopar | 7 |
@@ -132,6 +132,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-77 | 2026-11-20 | parser | low | Go's declaration forms get bare parse errors with no Kāra form: `x := 4`, `var x i64 = 3`, parameters `a i64`, a result list without `->` (`fn f() (i64, i64)`), fields `x i64`, `type P struct {..}`, `const ( A = 1; B = 2 )`, `package main`, `import "fmt"` and the type `int` | — |
 | B-2026-11-20-78 | 2026-11-20 | parser | low | Go's control flow gets bare parse errors with no Kāra form: `for i := 0; i < n; i++`, `for cond {}`, `for {}`, `for i, x := range v`, `if v, ok := m[k]; ok`, `switch`/`case`/`default`, `select`, and `i++` / `i--` | — |
 | B-2026-11-20-79 | 2026-11-20 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}` literals, `go f(x)`, `<-rx`, `err != nil` without a binding, `errors.New`, `strconv`, `strings`, `sync`, `fmt.Println(a, b)`, the comma-ok `let (v, ok) = m[k]`, and `&T{..}` (mended into an E0283) | — |
+| B-2026-11-20-80 | 2026-11-20 | resolver+cli | low | A std import mixing prelude names with another module's (`import std.collections.{PriorityQueue, Reverse};`, Rust's BinaryHeap and std::cmp::Reverse carried over as one line) is refused as an unknown module, with no word of either name and no fix | — |
+| B-2026-11-20-81 | 2026-11-20 | typecheck+cli | low | E0516 in a `let`-bound `match` on a borrow (`let now = match self.scores.get(id) { Some(old) => { self.f(old); .. } .. };`) has no fix-it, where the same `match` as a statement gets `.cloned()` on the scrutinee | — |
+| B-2026-11-20-82 | 2026-11-20 | typecheck+cli | low | A `ref String` assigned into a `Str` slot gets only "expected 'Str', found 'ref String'", without the `.as_str()` hint and fix an owned `String` gets; Rust's `s.parse_int()`-style names and `s.get(a..b)` on a string name no Kāra spelling | — |
+| B-2026-11-20-83 | 2026-11-20 | typecheck+mir | medium | A `shared` handle read through a borrow cannot become a `dyn` value: `match n.next { Some(m) => Some(m), None => None }` into an `Option[dyn T]` gets E0313 from check and E0509 from the MIR borrow check, as do `fn f(n: Node) -> dyn T { n }` and `out.push(head)` into a `Vec[dyn T]`; the same code into an `Option[Node]` checks clean | — |
+| B-2026-11-20-84 | 2026-11-20 | effect+cli | low | E0400's machine fix for a public function that calls through a clauseless `dyn` value declares `with allocates(*) blocks reads(*) receives(*) sends(*) writes(*)`, which does not parse, so `karac fix` refuses its own edit and asks to have it reported | — |
+| B-2026-11-20-85 | 2026-11-20 | typecheck | low | `let mut cur = Some(head);` over a borrowed parameter makes `cur` an `Option[ref T]`, and the later `cur = node.get_next()` (or `cur = node.next`) gets a bare E0200 "expected 'Option[ref T]', found 'Option[T]'" that names neither the borrowed parameter nor the `own` that fixes it; on a struct list karac fix derives `Clone` and clones instead | — |
+| B-2026-11-20-86 | 2026-11-20 | cli | low | Rust's array literal `[0, i32::MIN, i32::MIN]` becomes a `Vec` under karac fix, so `let mut next = dp;` (a copy in Rust) gets `.clone()`, a heap allocation per number: kata 1262's fixed solution takes 2.60 s where the same code with `dp: Array[i32, 3]` and a plain copy takes 1.40 s | — |
+| B-2026-11-20-87 | 2026-11-20 | typecheck+cli | low | redundant_clone is not reported for an argument to a trait method called through `dyn` or a generic bound: kata 1274's `sea.has_ships(top_right.clone(), bottom_left.clone())` keeps both clones under karac fix, where the same clone into a free function or a concrete method is dropped | — |
+| B-2026-11-20-88 | 2026-11-20 | typecheck | medium | Since B-2026-11-19-86, a `par` branch capturing a value of a generic function-typed parameter needs the parameter `CrossTask`, and nothing can say so: `fn both[F: Fn() -> i64 + CrossTask](f: F) -> i64 { let (a, b) = par { f(), f() }; a + b }` is refused E_NOT_CROSS_TASK "type parameter `F` is not bounded by `CrossTask`", and `[F: CrossTask + Fn() -> i64]` refuses every caller (`Fn() -> i64` cannot cross a task boundary) | — |
 
 ### Relocated
 
