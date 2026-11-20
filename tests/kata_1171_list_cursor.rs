@@ -123,10 +123,47 @@ fn main() {
     assert!(!out.contains("error[mir]"), "{out}");
 }
 
+/// A declared `ref` parameter lends for good, so the move out of it is
+/// fixed with a copy, and the struct that holds itself is offered `Clone`,
+/// never `Copy` (B-2026-11-16-178).
 #[test]
 fn kata_1171_recursive_struct_is_offered_clone_not_copy() {
     let (fixed, out) = one_round(
         "derive",
+        r#"struct Node {
+    val: i64,
+    next: Option[Node],
+}
+
+fn second(head: ref Option[Node]) -> Option[Node] {
+    match head {
+        Some(n) => n.next,
+        None => None,
+    }
+}
+
+fn main() {
+    let l = Some(Node { val: 1, next: Some(Node { val: 2, next: None }) });
+    match second(l) {
+        Some(n) => println(f"{n.val}"),
+        None => println("none"),
+    }
+}
+"#,
+    );
+    assert!(fixed.contains("#[derive(Clone)]\nstruct Node"), "{fixed}");
+    assert!(!fixed.contains("Copy"), "{fixed}");
+    assert!(fixed.contains("Some(n) => n.next.clone(),"), "{fixed}");
+    assert_eq!(out.trim(), "2");
+}
+
+/// A bare parameter borrows only because it is bare, so the move out of a
+/// part of it takes the parameter's `own`, as Rust's by-value `head` does,
+/// rather than a copy of the rest of the list (B-2026-11-20-85).
+#[test]
+fn kata_1171_move_out_of_a_bare_parameter_takes_its_own() {
+    let (fixed, out) = one_round(
+        "own",
         r#"struct Node {
     val: i64,
     next: Option[Node],
@@ -148,9 +185,12 @@ fn main() {
 }
 "#,
     );
-    assert!(fixed.contains("#[derive(Clone)]\nstruct Node"), "{fixed}");
-    assert!(!fixed.contains("Copy"), "{fixed}");
-    assert!(fixed.contains("Some(n) => n.next.clone(),"), "{fixed}");
+    assert!(
+        fixed.contains("fn second(head: own Option[Node])"),
+        "{fixed}"
+    );
+    assert!(!fixed.contains("derive"), "{fixed}");
+    assert!(fixed.contains("Some(n) => n.next,"), "{fixed}");
     assert_eq!(out.trim(), "2");
 }
 
