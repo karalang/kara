@@ -1004,6 +1004,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   moved receiver already did (§4.7, §7.4): `let v = e.eat(r);
   println("after");` printed `after` before `r`'s `Drop`, which ran at the
   end of the function (B-2026-11-19-127).
+- A closure literal handed through a generic call (`keep(|| s.len())` with
+  `fn keep[F: Fn() -> i64](f: own F) -> F`), bound by a `let` and then
+  returned, captures by move as the same call returned directly does
+  (core semantics §9.3): it was refused E0509, "the result borrows `s`"
+  (B-2026-11-20-5).
 - `for x in iter` over an owned parameter `iter: own I` with `I:
   Iterator` binds `x` as `I.Item`, the item `iter.next()` returns. It bound
   the iterator's own type `I`, so `t + x` under `where I.Item: Add[Output

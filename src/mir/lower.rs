@@ -6742,9 +6742,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.replaced_lets.insert(pattern.id);
                 }
             }
-            let (PatternKind::Binding(name), ExprKind::Closure { .. }) =
-                (&pattern.kind, &value.kind)
-            else {
+            let PatternKind::Binding(name) = &pattern.kind else {
                 continue;
             };
             let sym = self
@@ -6752,8 +6750,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .binding_syms
                 .get(&(pattern.id, name.clone()))
                 .copied();
-            if sym.is_some_and(|sym| self.let_closure_escapes(block, sym)) {
+            if !sym.is_some_and(|sym| self.let_closure_escapes(block, sym)) {
+                continue;
+            }
+            if let ExprKind::Closure { .. } = &value.kind {
                 self.escaping_lets.insert(pattern.id);
+            } else {
+                // A value holding closure literals, bound and then
+                // escaping (`let f = keep(|| s.len()); f`), escapes them as
+                // the same value returned directly does (§9.3,
+                // B-2026-11-20-5).
+                self.note_returned_closures(value);
             }
         }
     }
