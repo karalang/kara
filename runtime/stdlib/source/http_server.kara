@@ -44,6 +44,13 @@ impl HttpListener {
     }
 }
 
+// What a connection's request task is answering, for the connection's
+// task to read when that task panics (B-2026-11-20-10).
+struct Answering {
+    req: Request,
+    handling: bool,
+}
+
 impl Server {
     // Answers every request with a 200 and `body`.
     #[unstable(note: "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers")]
@@ -167,17 +174,72 @@ impl Server {
     // the client closes it or asks to. With `upgrades`, a 101 to a
     // WebSocket handshake request is the upgrade instead: the connection,
     // past the request, goes to `ws_handler` as a `WebSocket`.
+    //
+    // The requests are answered in a task of their own, in an isolating
+    // group, so a handler that panics ends that task and this one answers
+    // for it: one line on standard error naming the request, and a 500
+    // when no byte of its response has gone out (review-thread ruling,
+    // B-2026-11-20-10). One task per connection, not per request: a
+    // request pays nothing for it.
     fn __connection(conn: own WsConn, handler: Fn(ref Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask, upgrades: bool) with sends(Network) receives(Network) blocks suspends {
+        let mut state = Answering { req: Request { __id: 0 }, handling: false };
+        match Server.__answer_all(conn, handler, upgrades, mut state) {
+            Ok(None) => {}
+            Ok(Some(rest)) => {
+                let ws = WebSocket {
+                    conn: conn,
+                    buf: rest,
+                    frag_op: 0,
+                    frag: Vec.new(),
+                    closed: false,
+                    close_code: None,
+                    close_sent: false,
+                };
+                // The 101 is out, so a session that panics is only logged;
+                // its connection closes as the session's `WebSocket` drops.
+                let sessions = TaskGroup.isolating();
+                let session = sessions.spawn(|| ws_handler(ws));
+                match session.join() {
+                    Ok(_) => {}
+                    Err(failed) => Server.__log_failure(state.req, "WebSocket session", failed),
+                }
+            }
+            Err(failed) => {
+                Server.__log_failure(state.req, "handler", failed);
+                if state.handling {
+                    let refusal = Server.__refusal(500);
+                    let _ = conn.write_all(refusal.bytes());
+                    let _ = conn.shutdown_write();
+                }
+            }
+        }
+    }
+
+    // `__requests` in a task of an isolating group of its own: its value,
+    // or how it failed.
+    fn __answer_all(conn: WsConn, handler: Fn(ref Request) -> Response + CrossTask, upgrades: bool, state: mut ref Answering) -> Result[Option[Vec[u8]], TaskFailed] with sends(Network) receives(Network) blocks suspends {
+        let group = TaskGroup.isolating();
+        let requests = group.spawn(|| Server.__requests(conn, handler, upgrades, mut state));
+        requests.join()
+    }
+
+    // The request loop of `__connection`: `None` once the connection is
+    // done, or the bytes after the request a WebSocket upgrade answered.
+    // `state` holds the request being answered and whether its handler is
+    // running, for `__connection` to read when this task panics.
+    fn __requests(conn: WsConn, handler: Fn(ref Request) -> Response + CrossTask, upgrades: bool, state: mut ref Answering) -> Option[Vec[u8]] with sends(Network) receives(Network) blocks suspends {
         let mut buf: Vec[u8] = Vec.new();
         loop {
             let used = Server.__next(conn, mut buf);
             if used < 0 {
-                return;
+                return None;
             }
-            // The request is a value of the program's own, as one
-            // `Request.new` made, so a task the handler spawns reads it too.
-            let req = Request { __id: Server.__served() };
-            let resp = handler(req);
+            // The request is the program's own value, so a task the handler
+            // spawns reads it too (B-2026-11-20-54).
+            state.req = Request { __id: Server.__served() };
+            state.handling = true;
+            let resp = handler(state.req);
+            state.handling = false;
             // A 101 under `serve_ws` is the upgrade, for a request that is a
             // valid opening handshake; one that asks to upgrade but is not
             // valid is answered 400, or 426 for a version other than 13
@@ -186,31 +248,21 @@ impl Server {
             // client cannot follow a switch it did not ask for
             // (review-thread ruling 2026-11-17).
             if upgrades and resp.status == 101 {
-                match Server.__handshake_key(req) {
+                match Server.__handshake_key(state.req) {
                     Ok(key) => {
                         let accept = WebSocket.__accept_key(key);
                         let reply = f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n";
                         match conn.write_all(reply.bytes()) {
                             Ok(_) => {}
-                            Err(_) => return,
+                            Err(_) => return None,
                         }
-                        let rest = buf.split_off(used);
-                        ws_handler(WebSocket {
-                            conn: conn,
-                            buf: rest,
-                            frag_op: 0,
-                            frag: Vec.new(),
-                            closed: false,
-                            close_code: None,
-                            close_sent: false,
-                        });
-                        return;
+                        return Some(buf.split_off(used));
                     }
                     Err(status) => {
                         let refusal = Server.__refusal(status);
                         let _ = conn.write_all(refusal.bytes());
                         let _ = conn.shutdown_write();
-                        return;
+                        return None;
                     }
                 }
             }
@@ -220,11 +272,11 @@ impl Server {
             let keep = Server.__keep_alive();
             match conn.write_all(wire) {
                 Ok(_) => {}
-                Err(_) => return,
+                Err(_) => return None,
             }
             if not keep {
                 let _ = conn.shutdown_write();
-                return;
+                return None;
             }
             buf = buf.split_off(used);
         }
@@ -333,6 +385,19 @@ impl Server {
         f"HTTP/1.1 {status} {reason}\r\n{extra}content-length: 0\r\nconnection: close\r\n\r\n"
     }
 
+    // One line on standard error for a handler or session of `req` that
+    // panicked: the request line and the panic (B-2026-11-20-10). A
+    // cancelled one is the server shutting down, which says nothing.
+    fn __log_failure(req: Request, what: Str, failed: TaskFailed) {
+        match failed {
+            TaskFailed.Panicked { message, location } => {
+                let one_line = message.replace("\n", "\\n");
+                Server.__report(f"http server: the {what} for {req.method()} {req.url()} panicked at {location}: {one_line}");
+            }
+            TaskFailed.Cancelled => {}
+        }
+    }
+
     // The current request as a `Request` of its own: its id among the
     // requests a program holds (`Request.new`'s), so every task reads it.
     // The connection keeps what its response reads.
@@ -340,6 +405,12 @@ impl Server {
     fn __served() -> i64 {
         0
     }
+
+    // Writes `line` and a newline to the process's standard error, as the
+    // runtime's own warnings go: no `writes(Stderr)`, and no provider, so
+    // logging a handler's panic leaves `serve`'s effects as documented.
+    #[compiler_builtin]
+    fn __report(line: String) {}
 
     // The session of a server that does not upgrade, which never runs.
     fn __no_session(ws: own WebSocket) {}

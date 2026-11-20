@@ -136,6 +136,21 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, got.into()).map(Some)
             }
+            ("Server", "__report") => {
+                let (b, bn) = self.str_parts(&args[0])?;
+                let i64t = self.llcx.i64_type();
+                let ptr = self.ptr_ty();
+                let f = self.extern_fn(
+                    "karac_mir_http_report",
+                    self.llcx
+                        .void_type()
+                        .fn_type(&[ptr.into(), i64t.into()], false),
+                );
+                self.builder
+                    .build_call(f, &[b.into(), bn.into()], "")
+                    .map_err(e)?;
+                Ok(Some(()))
+            }
             ("Server", "__keep_alive") => {
                 let keep = self.rt_named("karac_mir_http_keep_alive", &[], 8)?;
                 let d = self.place_ptr(dest)?;

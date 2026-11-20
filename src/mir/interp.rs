@@ -3223,7 +3223,7 @@ impl<'a> Interp<'a> {
             (
                 "Server",
                 "__install" | "__need" | "__wait_ms" | "__wire" | "__wire_fixed" | "__keep_alive"
-                | "__served",
+                | "__served" | "__report",
             )
             | ("Request", _) => self.http_server_method(name, base, method, args, arg_tys, ret),
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
@@ -19436,6 +19436,12 @@ impl<'a> Interp<'a> {
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__keep_alive") => Ok(Value::Bool(self.served().keep_alive())),
+            ("Server", "__report") => {
+                // A runtime warning: the process's stderr, no provider.
+                let line = self.string_at(&args[0])?;
+                eprintln!("{line}");
+                Ok(Value::Unit)
+            }
             ("Server", "__served") => {
                 // The served request as one the program holds, so a task
                 // the handler spawns reads it; the connection keeps what

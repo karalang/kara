@@ -861,7 +861,8 @@ fn serve_client(ports: &Ports, _config: &Arc<rustls::ClientConfig>) -> String {
     let mut stalled = tcp(port);
     stalled.write_all(b"GET /slow HT").unwrap();
     t.push_str(&ask(&mut tcp(port), &get("/d")));
-    // A handler's panic ends its own connection and no other.
+    // A handler's panic is answered 500 and ends its own connection and
+    // no other (B-2026-11-20-10).
     t.push_str(&ask(&mut tcp(port), &get("/boom")));
     t.push_str(&ask(&mut kept, &get("/e")));
     // A client that asks the connection closed has it closed.
@@ -893,7 +894,8 @@ fn mir_serve_answers_connections_concurrently_with_keep_alive() {
         transcript,
         "HTTP/1.1 200 OK [you asked /a]\nHTTP/1.1 200 OK [you asked /b]\n\
          then [you asked /c]\nHTTP/1.1 200 OK [you asked /d]\n\
-         no answer (UnexpectedEof)\nHTTP/1.1 200 OK [you asked /e]\n\
+         HTTP/1.1 500 Internal Server Error | connection: close []\n\
+         HTTP/1.1 200 OK [you asked /e]\n\
          HTTP/1.1 200 OK | connection: close [you asked /f]\nthen Ok(0)\n\
          HTTP/1.1 200 OK | connection: close [you asked /g]\n\
          HTTP/1.1 200 OK [you asked /slow]\nno answer (UnexpectedEof)\n"

@@ -1905,6 +1905,28 @@ pub extern "C" fn karac_mir_http_keep_alive() -> u8 {
     u8::from(with_request(http1::Request::keep_alive))
 }
 
+/// `Server.__report(line)`: `line` and a newline on the process's standard
+/// error, as the runtime's own warnings go (a handler's panic,
+/// B-2026-11-20-10): no `Stderr` provider and no effect.
+///
+/// # Safety
+///
+/// `p` points at `n` bytes of UTF-8, or `n` is 0.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_report(p: *const u8, n: i64) {
+    use std::io::Write;
+    let bytes = if n <= 0 || p.is_null() {
+        &[][..]
+    } else {
+        // SAFETY: the caller passes `n` readable bytes at `p`.
+        unsafe { std::slice::from_raw_parts(p, n as usize) }
+    };
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(bytes);
+    let _ = err.write_all(b"\n");
+}
+
 /// `Server.__served()`: the current request as one the program holds
 /// (`built_request`), so a task the handler spawns reads it, as every
 /// task reads a request `Request.new` made; its `__id`. Its target,
