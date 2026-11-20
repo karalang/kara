@@ -128,11 +128,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-85 | 2026-11-20 | typecheck | low | `let mut cur = Some(head);` over a borrowed parameter makes `cur` an `Option[ref T]`, and the later `cur = node.get_next()` (or `cur = node.next`) gets a bare E0200 "expected 'Option[ref T]', found 'Option[T]'" that names neither the borrowed parameter nor the `own` that fixes it; on a struct list karac fix derives `Clone` and clones instead | — |
 | B-2026-11-20-86 | 2026-11-20 | cli | low | Rust's array literal `[0, i32::MIN, i32::MIN]` becomes a `Vec` under karac fix, so `let mut next = dp;` (a copy in Rust) gets `.clone()`, a heap allocation per number: kata 1262's fixed solution takes 2.60 s where the same code with `dp: Array[i32, 3]` and a plain copy takes 1.40 s | — |
 | B-2026-11-20-87 | 2026-11-20 | typecheck+cli | low | redundant_clone is not reported for an argument to a trait method called through `dyn` or a generic bound: kata 1274's `sea.has_ships(top_right.clone(), bottom_left.clone())` keeps both clones under karac fix, where the same clone into a free function or a concrete method is dropped | — |
-| B-2026-11-20-97 | 2026-11-20 | ownership+cli | medium | The Jupyter kernel's `%ownership` and `%rc` check the session with the plain pre-v2 `karac::typecheck` (no library, no core rules), so a session whose cells all ran is refused as having "type errors", and `%rc` reported RC fallbacks core semantics §6.4 removed | — |
 | B-2026-11-20-98 | 2026-11-20 | other | medium | karac does not compile for wasm32 (565 errors on `cargo check -p karac-playground --target wasm32-wasip1`), so the browser playground cannot be built, and its check path (`run_static_checks`) and `cartograph_json` run the plain pre-v2 checker | — |
-| B-2026-11-20-99 | 2026-11-20 | mir | medium | `karac check` passed a reuse of a tuple or array holding an erased function value (`let a = (make(10), 0); let s = a; (a.0)(1)`), which the build's move check refuses: check judged the tuple `Copy` by its parts instead of moving it with the function value | — |
 | B-2026-11-20-100 | 2026-11-20 | mir | medium | `karac check` accepts and `karac run` refuses a `.map` with a named function over `Vec[String]`: the library's `IterMap.next` fails MIR borrow check, "move of (*_5) through a shared reference [E0517]" | — |
-| B-2026-11-20-101 | 2026-11-20 | typecheck | low | `karac check` accepts a comptime reflection `derives` call with the wrong arity that `karac run` refuses ("reflection method `derives` takes exactly one argument"): the arity check runs only on the build's comptime path | — |
 | B-2026-11-20-102 | 2026-11-20 | mir | low | The MIR move check refuses a reuse after copying a tuple of a capture-free closure literal or a function name (`let a = (dbl, 0); let s = a; (a.0)(1)`: "use of _1.0, which may have been moved"), which core semantics §6.1 makes Copy and `karac check` accepts | — |
 
 ### Relocated
@@ -1985,6 +1982,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-94 | cli | medium | `karac repl`'s `:save` wrote a session whose cells used `?` as a plain `fn main()`, so the saved file failed `karac check` (E0200 at the first `?`),… | 6c2663929c |
 | B-2026-11-20-95 | cli | low | `karac repl` ran a line ending in a binary operator (`let t = 1 +`, `ok = a and`) as a whole cell instead of reading on, and input that ended inside… | 6c2663929c |
 | B-2026-11-20-96 | cli | low | `karac repl`'s `:type` errors named the program the expression is checked in (`<repl>:8:11`, snippet `8 \| let __t = nosuch;`) rather than the express… | 6c2663929c |
+| B-2026-11-20-97 | ownership+cli | medium | The Jupyter kernel's `%ownership` and `%rc` check the session with the plain pre-v2 `karac::typecheck` (no library, no core rules), so a session whos… | 6950b39ff0 |
+| B-2026-11-20-99 | mir | medium | `karac check` passed a reuse of a tuple or array holding an erased function value (`let a = (make(10), 0); let s = a; (a.0)(1)`), which the build's m… | 6950b39ff0 |
+| B-2026-11-20-101 | typecheck | low | `karac check` accepts a comptime reflection `derives` call with the wrong arity that `karac run` refuses ("reflection method `derives` takes exactly… | 6950b39ff0 |
 
 </details>
 
