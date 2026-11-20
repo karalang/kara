@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 635 |
+| diagnostics | 637 |
 | false-positive | 333 |
 | missing-feature | 224 |
 | perf | 190 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 786 |
+| typecheck | 788 |
 | mir-llvm | 314 |
 | mir | 291 |
 | cli | 243 |
@@ -2004,6 +2004,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-101 | typecheck | low | `karac check` accepts a comptime reflection `derives` call with the wrong arity that `karac run` refuses ("reflection method `derives` takes exactly… | 6950b39ff0 |
 | B-2026-11-20-92 | typecheck+cli | low | log.md's fix-it for a `Display` field value splits a struct literal over three lines inside the interpolation: `info("y", q: P { v: 2 })` is fixed to… | d823617519 |
 | B-2026-11-20-103 | cli | low | `karac repl` showed a value in its source form, not the Debug form deferred.md specifies (`Vec.new()` for an empty Vec, `["a": 1]` for a map, `Set.fr… | af100c5f34 |
+| B-2026-11-20-105 | typecheck | low | A borrowed `String` parameter bound to a `Str` local, `let mut rest: Str = s;`, gets a bare `expected 'Str', found 'ref String'` and no fix: the `.as… | 21cdf88b69 |
+| B-2026-11-20-106 | typecheck | low | `.unwrap()` on `VecDeque.remove(i)`, Rust's `Option`-returning `remove`, gets a bare `no method 'unwrap' on type 'i32'` and no fix: Kāra's `VecDeque.… | 21cdf88b69 |
 
 </details>
 
