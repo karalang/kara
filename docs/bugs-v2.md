@@ -59,11 +59,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 637 |
-| false-positive | 333 |
+| false-positive | 331 |
 | missing-feature | 224 |
 | perf | 190 |
-| other | 125 |
-| soundness | 107 |
+| other | 126 |
+| soundness | 109 |
 | miscompile | 99 |
 | crash | 64 |
 | run-vs-build | 61 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 788 |
+| typecheck | 789 |
 | mir-llvm | 314 |
-| mir | 291 |
+| mir | 290 |
 | cli | 243 |
 | parser | 142 |
-| ownership | 123 |
+| ownership | 125 |
 | runtime | 101 |
 | interp | 95 |
 | effect | 50 |
@@ -128,9 +128,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-77 | 2026-11-20 | parser | low | Go's declaration forms get bare parse errors with no Kāra form: `x := 4`, `var x i64 = 3`, parameters `a i64`, a result list without `->` (`fn f() (i64, i64)`), fields `x i64`, `type P struct {..}`, `const ( A = 1; B = 2 )`, `package main`, `import "fmt"` and the type `int` | — |
 | B-2026-11-20-78 | 2026-11-20 | parser | low | Go's control flow gets bare parse errors with no Kāra form: `for i := 0; i < n; i++`, `for cond {}`, `for {}`, `for i, x := range v`, `if v, ok := m[k]; ok`, `switch`/`case`/`default`, `select`, and `i++` / `i--` | — |
 | B-2026-11-20-79 | 2026-11-20 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}` literals, `go f(x)`, `<-rx`, `err != nil` without a binding, `errors.New`, `strconv`, `strings`, `sync`, `fmt.Println(a, b)`, the comma-ok `let (v, ok) = m[k]`, and `&T{..}` (mended into an E0283) | — |
-| B-2026-11-20-100 | 2026-11-20 | mir | medium | `karac check` accepts and `karac run` refuses a `.map` with a named function over `Vec[String]`: the library's `IterMap.next` fails MIR borrow check, "move of (*_5) through a shared reference [E0517]" | — |
-| B-2026-11-20-102 | 2026-11-20 | mir | low | The MIR move check refuses a reuse after copying a tuple of a capture-free closure literal or a function name (`let a = (dbl, 0); let s = a; (a.0)(1)`: "use of _1.0, which may have been moved"), which core semantics §6.1 makes Copy and `karac check` accepts | — |
+| B-2026-11-20-100 | 2026-11-20 | typecheck | medium | `karac check` passed `w.iter().map(tag)` with `fn tag(s: own String)`, which the build refuses in the library's `IterMap.next` ("move of (*_5) through a shared reference [E0517]"): a function value for a bound that lends each argument was unified with the bound, never checked against it | — |
+| B-2026-11-20-102 | 2026-11-20 | ownership | low | `karac check` copied a tuple holding a capture-free closure literal or a function name (`let a = (dbl, 0); let s = a; (a.0)(1)`), which the build's move check refuses: stored in a tuple or array, a function value is move-only (design.md § Escaping function values) | — |
 | B-2026-11-20-104 | 2026-11-20 | cli | low | `karac repl` refuses a `?` in a cell under `:provide` (E0200 "`?` on a Result inside this closure requires the closure to return `Result`", placed at `<repl>:8:36` on a hidden `with_provider[Clock](FakeClock {}, || {`), though deferred.md § Cell Scope makes `?` legal in any cell | — |
+| B-2026-11-20-107 | 2026-11-20 | mir+ownership | low | The build's MIR frontend runs the ownership pass without the core rules (`CORE_RULES`), so it lowers closure captures by `ref` that `karac check` verified by move: 24 of 21,387 corpus programs differ, none observably (all pass ASan) | — |
 
 ### Relocated
 

@@ -2,8 +2,9 @@
 //! function value does (design.md § Escaping function values): `karac
 //! check` judged it by its parts, all `Copy` to the structural rule, and
 //! passed a reuse after `let s = a;` that the build's move check refuses
-//! (B-2026-11-20-99). A tuple of a capture-free closure literal or a
-//! function name still copies.
+//! (B-2026-11-20-99). So does one holding a capture-free closure literal or
+//! a function name: stored there, it is a value of a function type
+//! (B-2026-11-20-102).
 
 use std::process::Command;
 
@@ -55,10 +56,22 @@ fn an_array_holding_an_erased_fn_moves() {
     assert!(text.contains("error[E0500]"), "{text}");
 }
 
+/// A capture-free closure literal is `Copy` as itself, and a function name
+/// copies as a bare value, but stored in a tuple either is a value of a
+/// function type, which moves (design.md § Escaping function values). The
+/// build's move check refused this while check passed it (B-2026-11-20-102).
 #[test]
-fn a_tuple_of_a_capture_free_closure_and_a_fn_name_still_copies() {
+fn a_tuple_of_a_capture_free_closure_and_a_fn_name_moves_too() {
     let src = "fn dbl(x: i64) -> i64 { x * 2 }\n\
                fn main() { let a = (|x: i64| x + 1, dbl); let s = a; println((a.0)(1)); println((s.1)(2)); }\n";
-    let (ok, text) = check("copy", src);
+    let (ok, text) = check("stored", src);
+    assert!(!ok, "{text}");
+    assert!(text.contains("error[E0500]"), "{text}");
+}
+
+#[test]
+fn a_bare_capture_free_closure_still_copies() {
+    let src = "fn main() { let g = |x: i64| x + 1; let h = g; println(g(1)); println(h(2)); }\n";
+    let (ok, text) = check("bare", src);
     assert!(ok, "{text}");
 }

@@ -2791,11 +2791,14 @@ impl<'a> UseClassifier<'a> {
         match &value.kind {
             ExprKind::Closure { .. } | ExprKind::Path { .. } => false,
             ExprKind::Identifier(n) => self.erased_fns.contains(n),
-            // A tuple or array literal holds an erased function value when a
-            // part of function type is one (B-2026-11-20-99).
-            ExprKind::Tuple(parts) | ExprKind::ArrayLiteral(parts) => parts.iter().any(|p| {
-                self.tc.expr_type(p).is_some_and(holds_fn_value) && self.value_is_erased_fn(p)
-            }),
+            // A function value stored in a tuple or an array is a stored
+            // `Fn(..)`, erased whatever it was built from: a closure literal
+            // that is `Copy` as itself is not once it is an element
+            // (design.md § Escaping function values, "A value of a function
+            // type is move-only"; B-2026-11-20-99, B-2026-11-20-102).
+            ExprKind::Tuple(parts) | ExprKind::ArrayLiteral(parts) => parts
+                .iter()
+                .any(|p| self.tc.expr_type(p).is_some_and(holds_fn_value)),
             _ => true,
         }
     }

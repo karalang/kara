@@ -124,6 +124,68 @@ impl<'a> super::TypeChecker<'a> {
         Some(self.resolve_assoc_projections(&t))
     }
 
+    /// A function value passed for a parameter whose function-trait bound
+    /// lends each argument (`map`'s `MutFn(own Self.Item)` over `iter()`,
+    /// where the item is a `ref String`) must not take that argument by
+    /// value: an owned parameter would move the value out of what it
+    /// borrows (core semantics §3.7). A closure there is refused at the move
+    /// in its body; a function item was only unified with the bound, so
+    /// `w.iter().map(tag)` with `fn tag(s: own String)` passed check and
+    /// failed the build's borrow check in the library's `IterMap.next`
+    /// (B-2026-11-20-100).
+    pub(super) fn report_owned_param_for_lent_slot(&mut self, sig: &Type, arg: &Type, span: Span) {
+        let resolve = |t: &Type, subs| {
+            super::inference::resolve_type_vars(
+                t,
+                subs,
+                &Default::default(),
+                &Default::default(),
+                &Default::default(),
+            )
+        };
+        let (Type::Function { params: lent, .. }, Type::Function { params: taken, .. }) = (
+            resolve(sig, &self.env.substitutions),
+            resolve(arg, &self.env.substitutions),
+        ) else {
+            return;
+        };
+        if lent.len() != taken.len() {
+            return;
+        }
+        for (slot, param) in lent.iter().zip(&taken) {
+            let (Type::Ref(inner) | Type::MutRef(inner)) = slot else {
+                continue;
+            };
+            let undecided = |t: &Type| {
+                matches!(
+                    t,
+                    Type::Ref(_)
+                        | Type::MutRef(_)
+                        | Type::TypeVar(_)
+                        | Type::TypeParam(_)
+                        | Type::Error
+                )
+            };
+            if undecided(param) || undecided(inner) || self.is_copy_type_during_check(param) {
+                continue;
+            }
+            self.type_error(
+                format!(
+                    "this function takes its parameter as '{}', but each call here lends a '{}': \
+                     an owned parameter would move the value out of what it borrows \
+                     (core-semantics.md §3.7). Pass a function that borrows it (a bare \
+                     parameter), or hand over owned values (`.into_iter()` on the collection, \
+                     or `.cloned()`)",
+                    type_display(param),
+                    type_display(slot)
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return;
+        }
+    }
+
     /// The function type of the in-scope type parameter `param`'s
     /// function-trait bound, for calling a value of type `param`.
     pub(super) fn enclosing_fn_bound(&mut self, param: &str) -> Option<Type> {

@@ -7028,6 +7028,7 @@ impl<'a> super::TypeChecker<'a> {
                             &mut self.env.substitutions,
                             &mut self.env.const_substitutions,
                         );
+                        self.report_owned_param_for_lent_slot(&sig, arg_ty, arg.value.span);
                     }
                 }
             }

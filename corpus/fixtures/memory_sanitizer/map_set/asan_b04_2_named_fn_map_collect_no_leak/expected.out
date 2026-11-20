@@ -1,0 +1,1 @@
+error[E0200]: main.kara:12:48: this function takes its parameter as 'String', but each call here lends a 'ref String': an owned parameter would move the value out of what it borrows (core-semantics.md §3.7). Pass a function that borrows it (a bare parameter), or hand over owned values (`.into_iter()` on the collection, or `.cloned()`)

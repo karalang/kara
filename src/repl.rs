@@ -1018,7 +1018,11 @@ impl Session {
             Ok(t) => t,
             Err(refused) => return refused,
         };
-        let owned = crate::ownershipcheck(&program, &typed);
+        // With the core's copy rules, as check's Pipeline runs the pass.
+        let owned = {
+            let _core = crate::ownership::CoreRulesGuard::new(true);
+            crate::ownershipcheck(&program, &typed)
+        };
 
         // Baseline: every persistent-let binding is owned-stack until
         // the ownership pass overrides it (e.g. with an RC promotion).
@@ -1211,7 +1215,11 @@ impl Session {
             Ok(t) => t,
             Err(refused) => return refused,
         };
-        let owned = crate::ownershipcheck(&program, &typed);
+        // With the core's copy rules, as check's Pipeline runs the pass.
+        let owned = {
+            let _core = crate::ownership::CoreRulesGuard::new(true);
+            crate::ownershipcheck(&program, &typed)
+        };
 
         // Collect rows across every function, sorted by (fn_name,
         // binding) for stable output. RcEntry's spans are AST
