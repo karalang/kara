@@ -242,6 +242,18 @@ impl<'a> super::TypeChecker<'a> {
         else {
             return None;
         };
+        // A generic value still open (`Bag { xs: Vec.new() }`) takes its
+        // arguments from the type's one concrete impl of the trait
+        // (`impl Ac for Bag[String]`), as a call's bound would
+        // (B-2026-11-20-8).
+        let settled;
+        let concrete = match self.open_dyn_value_from_impl(concrete, trait_name) {
+            Some(t) => {
+                settled = t;
+                &settled
+            }
+            None => concrete,
+        };
         let why = self
             .dyn_unfit(concrete, trait_name, args, assoc)
             .or_else(|| {
@@ -382,6 +394,41 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `concrete` with its open type variables fixed by the one impl of
+    /// `trait_name` for its type whose target is concrete, when it has
+    /// open variables and exactly one such impl and no generic one.
+    fn open_dyn_value_from_impl(&mut self, concrete: &Type, trait_name: &str) -> Option<Type> {
+        let Type::Named { name, args } = concrete else {
+            return None;
+        };
+        if !args.iter().any(super::exprs::contains_type_var) {
+            return None;
+        }
+        let impls: Vec<&super::env::ImplInfo> = self
+            .env
+            .impls
+            .iter()
+            .filter(|imp| &imp.target_type == name && imp.trait_name.as_deref() == Some(trait_name))
+            .collect();
+        let [imp] = impls.as_slice() else {
+            return None;
+        };
+        if imp.target_args.len() != args.len() {
+            return None;
+        }
+        let target = Type::Named {
+            name: name.clone(),
+            args: imp.target_args.clone(),
+        };
+        super::inference::unify_types(
+            concrete,
+            &target,
+            &mut self.env.substitutions,
+            &mut self.env.const_substitutions,
+        )
+        .then_some(target)
+    }
+
     fn dyn_unfit(
         &mut self,
         concrete: &Type,
@@ -484,19 +531,31 @@ impl<'a> super::TypeChecker<'a> {
             return Some(format!("`{shown}` does not implement `{trait_name}`"));
         }
         if !args.is_empty() {
-            if let Some(have) = self.env.impl_concrete_trait_args(concrete, trait_name) {
-                let agree = have.len() == args.len()
+            // Any of the type's impls of the trait may be the one at the
+            // `dyn` type's arguments (`impl Cv[Str]` and `impl Cv[i64]`
+            // both, B-2026-11-20-4).
+            let impls: Vec<Vec<Type>> = self
+                .env
+                .impls_concrete_trait_args(concrete, trait_name)
+                .into_iter()
+                .filter(|a| !a.is_empty())
+                .collect();
+            let agrees = |have: &Vec<Type>| {
+                have.len() == args.len()
                     && have
                         .iter()
                         .zip(args)
-                        .all(|(h, w)| types_compatible(h, w) && types_compatible(w, h));
-                if !agree {
-                    let have: Vec<String> = have.iter().map(type_display).collect();
-                    return Some(format!(
-                        "`{shown}` implements `{trait_name}[{}]`",
-                        have.join(", ")
-                    ));
-                }
+                        .all(|(h, w)| types_compatible(h, w) && types_compatible(w, h))
+            };
+            if !impls.is_empty() && !impls.iter().any(agrees) {
+                let have: Vec<String> = impls
+                    .iter()
+                    .map(|a| {
+                        let a: Vec<String> = a.iter().map(type_display).collect();
+                        format!("`{trait_name}[{}]`", a.join(", "))
+                    })
+                    .collect();
+                return Some(format!("`{shown}` implements {}", have.join(" and ")));
             }
         }
         self.settle_existential_literals(concrete, assoc);

@@ -145,12 +145,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             let trait_args: &[Ty] = if tr == own_trait { &own_args } else { &[] };
             let found = self
                 .trait_impl_method(concrete, &tr, &m.name, trait_args)
+                .or_else(|| self.lcx.blanket_impl_method(concrete, &tr, &m.name))
                 .or_else(|| shim.map(|d| (d, vec![concrete])));
             let Some((d, inst)) = found else {
+                // Named as the program writes them, not by def id.
+                let named = |t: Ty| self.tys().tcx().display(t, &|d| self.lcx.def_name(d));
                 let what = format!(
                     "`{}` as `{}` (no `{tr}.{}` of it to put in the method table)",
-                    self.tys().display(concrete),
-                    self.tys().display(dyn_ty),
+                    named(concrete),
+                    named(dyn_ty),
                     m.name
                 );
                 return self.unsupported(m.span, &what);

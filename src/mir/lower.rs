@@ -2278,6 +2278,28 @@ impl<'a> Lcx<'a> {
         self.defs.lookup(0, wrapper)
     }
 
+    /// `method` of the one blanket impl of `tr` over its own parameter
+    /// (`impl[T: Nm] Loud for T`), instanced at `t`, for a type with no
+    /// impl of its own: what fills `t`'s slot in a `dyn Loud` table. The
+    /// checker has held the parameter's bounds at the coercion.
+    pub(super) fn blanket_impl_method(
+        &self,
+        t: Ty,
+        tr: &str,
+        method: &str,
+    ) -> Option<(DefId, Vec<Ty>)> {
+        let label = format!("impl {tr}#");
+        let mut found = self.fns.iter().filter(|(&d, i)| {
+            let path = &self.defs.table.get(d).path.segments;
+            i.f.name == method
+                && self.is_blanket_fn(d)
+                && path.len() >= 2
+                && path[path.len() - 2].starts_with(&label)
+        });
+        let (&d, _) = found.next()?;
+        found.next().is_none().then(|| (d, vec![t]))
+    }
+
     /// Whether `d` is a method of a blanket trait impl over its own
     /// parameter (`impl[I: Iterator] IntoIterator for I`), whose path is
     /// `["<builtin>", "I", "impl IntoIterator#0", method]`.
@@ -13512,11 +13534,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if let Some(p) = self.lcx.primitive(last) {
                         return p == t;
                     }
+                    // `impl Cv[Str] for A` at `dyn Cv[Str]`, whose argument
+                    // is the view, or the library's `StringSlice` it is
+                    // named by as a type argument (B-2026-11-20-1).
+                    if last == "Str" {
+                        return match tcx.kind(t) {
+                            HK::StaticStr => true,
+                            HK::Adt { def, args } => {
+                                tcx.list(args).is_empty() && self.lcx.def_name(def) == "StringSlice"
+                            }
+                            _ => false,
+                        };
+                    }
                 }
                 let (name, args) = match tcx.kind(t) {
                     HK::Adt { def, args } | HK::Shared { def, args } => {
                         (self.lcx.def_name(def), tcx.list(args))
                     }
+                    HK::Slice { elem, .. } => ("Slice".to_string(), vec![elem]),
                     HK::Intrinsic { kind, args } => (kind.name().to_string(), tcx.list(args)),
                     _ => return false,
                 };
