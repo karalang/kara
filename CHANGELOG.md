@@ -2215,6 +2215,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Rust's `eprint!(..)` is repaired to the prelude's `eprint`, an
+  f-string when it has format arguments, as `eprintln!` is; it got no
+  fix (B-2026-11-20-53).
 - `let br = BufReader.new(f); br.read_line(mut s)` is no longer refused with
   E0510 `declared without mut`: `read_line` and `read_to_string` take `ref
   self` (io.md), and the check had read the `buf: mut ref String` after

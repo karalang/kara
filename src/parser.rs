@@ -865,6 +865,7 @@ pub const MACRO_FUNCTION_TWINS: &[&str] = &[
     "println",
     "print",
     "eprintln",
+    "eprint",
     "panic",
     "assert",
     "assert_eq",
@@ -891,7 +892,7 @@ pub(crate) const DOC_DECL: &str = "what follows it takes no doc comment";
 pub(crate) const DOC_IMPL: &str =
     "an `impl` block takes no doc comment; its methods document themselves";
 
-const PRINT_MACROS: &[&str] = &["println", "print", "eprintln", "panic"];
+const PRINT_MACROS: &[&str] = &["println", "print", "eprintln", "eprint", "panic"];
 
 /// Reason an `impl Trait` type expression is rejected at the current
 /// parser position. Encoded as an enum (rather than a single
