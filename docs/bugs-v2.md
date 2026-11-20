@@ -150,7 +150,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-51 | 2026-11-20 | interp+runtime | medium | `fs.copy(p, p)` empties `p` and returns Ok(0), on run and build alike; a copy onto the same file through a symlink does the same. Ruled: refuse with InvalidInput and leave the file intact | — |
 | B-2026-11-20-52 | 2026-11-20 | other | low | `std.path.parent` can end in a `.` component: `parent("/usr//lib/./x")` is `"/usr//lib/."` and `parent("../x/./y")` is `"../x/."`. Ruled: no trailing `.` component, as Python's PurePath | — |
 | B-2026-11-20-53 | 2026-11-20 | typecheck | low | The prelude has `print`, `println` and `eprintln` but no `eprint`: `eprint("x")` is E0100 `undefined name 'eprint'`. Ruled: add it for symmetry | — |
-| B-2026-11-20-54 | 2026-11-20 | runtime | medium | A task an HTTP handler spawns reads an empty Request: `req.path()` inside `group.spawn(..)` is "", with no query, headers or body, on both backends | — |
 
 ### Relocated
 
@@ -1940,6 +1939,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-48 | mir-llvm | low | An `if` of tuple literals returned by a closure into a wider tuple slot, `fold((0, 0i32), \|(best, count), side\| if side > best { (side, count + 1) }… | 93fd9b2078 |
 | B-2026-11-20-49 | typecheck | low | `karac fix` on a Rust template whose literal bindings meet its `usize` parameters spends two rounds on a declaration it ends up not needing: round on… | 93fd9b2078 |
 | B-2026-11-20-50 | typecheck | low | `Set` and `SortedSet` have no `is_disjoint`, `is_subset` or `is_superset`: `known[u].is_disjoint(known[v])`, Rust's `HashSet::is_disjoint` and Python… | 93fd9b2078 |
+| B-2026-11-20-54 | runtime | medium | A task an HTTP handler spawns reads an empty Request: `req.path()` inside `group.spawn(..)` is "", with no query, headers or body, on both backends | 8624b1ee4f |
 
 </details>
 
