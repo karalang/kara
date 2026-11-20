@@ -2601,6 +2601,13 @@ impl<'a> super::TypeChecker<'a> {
         {
             scrutinee = operand;
         }
+        // `let mut cur = Some(head)`: Rust's cursor over a list holds the
+        // parameter, so it borrows as the parameter does (B-2026-11-20-85).
+        if let ExprKind::Call { callee, args, .. } = &scrutinee.kind {
+            if matches!(&callee.kind, ExprKind::Identifier(s) if s == "Some") && args.len() == 1 {
+                scrutinee = &args[0].value;
+            }
+        }
         while let ExprKind::FieldAccess { object, .. } = &scrutinee.kind {
             scrutinee = object;
         }

@@ -10201,6 +10201,24 @@ impl<'a> super::TypeChecker<'a> {
         format!("{LEAD}: `{place}` is reached through {through}")
     }
 
+    /// For a projection whose root is a binding bound out of a bare
+    /// parameter (not the parameter itself): the root, the parameter, where
+    /// its `own` goes, and its type as written (B-2026-11-20-85).
+    pub(super) fn d5_part_owner(&self, value: &Expr) -> Option<(String, String, Span, String)> {
+        let ExprKind::Identifier(root) = &Self::projection_root(value).kind else {
+            return None;
+        };
+        let param = self.local_scope.part_of(root)?;
+        if param == root || self.closure_d5_params.contains(param) {
+            return None;
+        }
+        let at = *self.current_fn_d5_params.get(param)?;
+        let Some(Type::Ref(inner)) = self.local_scope.lookup(param) else {
+            return None;
+        };
+        Some((root.clone(), param.to_string(), at, type_display(inner)))
+    }
+
     /// The root of a field / tuple projection chain.
     fn projection_root(value: &Expr) -> &Expr {
         let mut root = value;
@@ -10831,6 +10849,15 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let has_clone = self.type_supports_clone(ty);
+        // A projection out of a binding bound out of a bare parameter (`node`
+        // of `while let Some(node) = cur` over `let mut cur = Some(head)`):
+        // the parameter's `own` moves it, where a copy would duplicate the
+        // rest of the list per step (B-2026-11-20-85).
+        let d5_owner = if self.cli_lint_overrides.strict_core {
+            self.d5_part_owner(value)
+        } else {
+            None
+        };
         // B-2026-09-27-69 — a bare `for` element is not a field; name what it is.
         let lead = if matches!(value.kind, ExprKind::Identifier(_)) {
             "moving a non-`Copy` element out of a `for` loop over a borrowed collection makes \
@@ -10884,18 +10911,27 @@ impl<'a> super::TypeChecker<'a> {
             };
             let derive_clone =
                 !has_clone && self.copy_derive_fix(ty).is_some_and(|f| f.adds_clone());
-            message += if has_clone {
-                ". Write `.clone()` to take a copy, or keep using it in place"
-            } else if self.core_let_ref_fix {
-                ". This type has no `.clone()`: borrow it instead (`ref <place>`), use it \
-                 in place, or take it with `mem.replace` / `mem.swap` / `Option.take()`"
-            } else if derive_clone {
-                ". This type has no `.clone()` yet: derive `Clone` on it and write \
-                 `.clone()` to take a copy, or keep using it in place"
+            if let Some((root, param, _, shown)) = &d5_owner {
+                message += &format!(
+                    ". `{root}` is bound out of parameter `{param}`, and a bare parameter \
+                     borrows (core-semantics.md §4.1), so nothing can be moved out of it. \
+                     Take `{param}` by value with `{param}: own {shown}`, which moves each \
+                     part where a copy would duplicate it"
+                );
             } else {
-                ". This type has no `.clone()`: use it in place, or take it with \
+                message += if has_clone {
+                    ". Write `.clone()` to take a copy, or keep using it in place"
+                } else if self.core_let_ref_fix {
+                    ". This type has no `.clone()`: borrow it instead (`ref <place>`), use it \
+                 in place, or take it with `mem.replace` / `mem.swap` / `Option.take()`"
+                } else if derive_clone {
+                    ". This type has no `.clone()` yet: derive `Clone` on it and write \
+                 `.clone()` to take a copy, or keep using it in place"
+                } else {
+                    ". This type has no `.clone()`: use it in place, or take it with \
                  `mem.replace` / `mem.swap` / `Option.take()`"
-            };
+                };
+            }
         }
         // `let mut next = team; next.push(p); out[k] = next;`: the copy is
         // taken where `next` is bound, so the writes the `mut` is for act on
@@ -10909,7 +10945,12 @@ impl<'a> super::TypeChecker<'a> {
                 .map(|(end, _)| *end),
             _ => None,
         };
-        let fix_it = if has_clone {
+        let fix_it = if let Some((_, _, at, _)) = &d5_owner {
+            Some(crate::typechecker::FixIt {
+                span: *at,
+                replacement: "own ".to_string(),
+            })
+        } else if has_clone {
             Some(crate::typechecker::FixIt {
                 span: let_mut_init.unwrap_or(Span {
                     offset: value.span.offset + value.span.length,
@@ -13904,6 +13945,7 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(&value.span));
                 }
                 self.check_expr(value, &slot_ty);
+                self.name_d5_cursor_assign(target, &target_ty, value, errors_before_check);
                 let mut errors_before_check = errors_before_check;
                 // An `if`, `if let` or `match` checked against the slot widens
                 // each branch to it, as after `let y: i64 =`; the first walk
@@ -14119,6 +14161,65 @@ impl<'a> super::TypeChecker<'a> {
             value.span,
             TypeErrorKind::TypeMismatch,
         );
+    }
+
+    /// `cur = node.next` with `cur` bound out of a bare parameter (`let mut
+    /// cur = Some(head)`): `cur` holds a borrow because the parameter is
+    /// one, so an owned value does not fit it. The mismatch the slot check
+    /// reported names the parameter and takes its `own` as the fix
+    /// (B-2026-11-20-85).
+    fn name_d5_cursor_assign(
+        &mut self,
+        target: &Expr,
+        target_ty: &Type,
+        value: &Expr,
+        errors_before: usize,
+    ) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let ExprKind::Identifier(name) = &target.kind else {
+            return;
+        };
+        let Some(param) = self.local_scope.part_of(name).map(str::to_string) else {
+            return;
+        };
+        let Some(&at) = self.current_fn_d5_params.get(&param) else {
+            return;
+        };
+        if self.closure_d5_params.contains(&param) {
+            return;
+        }
+        let borrowed = match resolve_type_var_top(target_ty, &self.env.substitutions) {
+            Type::Ref(_) => true,
+            Type::Named { name: n, args } if n == "Option" && args.len() == 1 => matches!(
+                resolve_type_var_top(&args[0], &self.env.substitutions),
+                Type::Ref(_)
+            ),
+            _ => false,
+        };
+        if !borrowed {
+            return;
+        }
+        let Some(Type::Ref(inner)) = self.local_scope.lookup(&param).cloned() else {
+            return;
+        };
+        let shown = type_display(&inner);
+        let Some(e) = self.errors[errors_before..].iter_mut().find(|e| {
+            e.span == value.span && e.kind == TypeErrorKind::TypeMismatch && e.fix_it.is_none()
+        }) else {
+            return;
+        };
+        e.message = format!(
+            "{}: `{name}` is bound out of parameter `{param}`, and a bare parameter borrows \
+             (core-semantics.md §4.1), so `{name}` holds borrows and an owned value does not \
+             fit it. Take `{param}` by value with `{param}: own {shown}`",
+            e.message
+        );
+        e.fix_it = Some(FixIt {
+            span: at,
+            replacement: "own ".to_string(),
+        });
     }
 
     fn reject_owned_value_into_ref_local(&mut self, target: &Expr, value: &Expr, rhs_ty: &Type) {

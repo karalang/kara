@@ -2254,6 +2254,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - The fix-it log.md gives a log field whose value is `Display` but not
   `Serialize` keeps a struct literal on one line inside the interpolation,
   `f"{P { v: 2 }}"`; it was written a field to a line (B-2026-11-20-92).
+- Rust's list cursor over a bare parameter, `let mut cur = Some(head);
+  while let Some(node) = cur { cur = node.next; }`, is refused with the
+  parameter named: `cur` and `node` are bound out of `head`, which
+  borrows, and the fix `karac fix` applies is `head: own ..`, which moves
+  each node. It used to derive `Clone` and copy the rest of the list per
+  step, and the store into `cur` stayed refused with a bare mismatch
+  (B-2026-11-20-85).
 - Rust's `eprint!(..)` is repaired to the prelude's `eprint`, an
   f-string when it has format arguments, as `eprintln!` is; it got no
   fix (B-2026-11-20-53).
