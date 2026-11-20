@@ -1,0 +1,12 @@
+source = "B-2026-11-19-102"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["diagnostics"]
+class = "e"
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-19-102: the smallest program that produces W0321 (a warning; the program still runs), the example behind `karac explain W0321`. tests/diagnostics_corpus.rs checks the code is still produced and explained. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "0c1eb75d1+local"

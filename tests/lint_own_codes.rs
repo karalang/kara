@@ -140,7 +140,7 @@ fn explain_takes_a_lint_name_without_a_code_of_its_own() {
 /// Every lint in the band explains, under both codes.
 #[test]
 fn every_lint_band_code_explains() {
-    for n in 300..=319 {
+    for n in 300..=321 {
         for prefix in ["W", "E"] {
             let code = format!("{prefix}0{n}");
             let out = karac(&["explain", &code]);

@@ -195,6 +195,11 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "An `as` cast to the type its operand already has.",
     },
     LintInfo {
+        name: "vec_per_element",
+        default_level: LintLevel::Warn,
+        description: "`Vec.filled(n, [a, b])` whose rows are only indexed: the list literal is a `Vec` per element; `[v; N]` is an inline `Array`.",
+    },
+    LintInfo {
         name: "redundant_clone",
         default_level: LintLevel::Warn,
         description: "`f(x.clone())` where `f`'s parameter only borrows: the call can borrow `x` itself.",

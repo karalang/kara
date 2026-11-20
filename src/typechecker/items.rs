@@ -5089,6 +5089,7 @@ impl<'a> super::TypeChecker<'a> {
     /// sees the target.
     pub(super) fn check_block_against(&mut self, block: &Block, expected: &Type) -> Type {
         self.note_end_mut_let_rewrites(block);
+        self.lint_filled_list_literals(block);
         self.local_scope.push();
         let mut diverged = false;
         let saved_arm = self.braceless_arm_assign;
@@ -8436,6 +8437,7 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn infer_block(&mut self, block: &Block) -> Type {
         self.note_end_mut_let_rewrites(block);
+        self.lint_filled_list_literals(block);
         self.local_scope.push();
         let mut diverged = false;
         let saved_arm = self.braceless_arm_assign;

@@ -2126,6 +2126,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- New lint `vec_per_element` (warn): `let seen = Vec.filled(n, [false,
+  false]);` whose rows are only indexed puts a separate heap `Vec` in every
+  slot, since a list literal is a `Vec` unless an `Array` is expected
+  (design.md § List literals). The warning says so, and `karac fix` writes
+  `[false; 2]`, an inline `Array`, when the literal repeats one value; kata
+  1654 ran 13x Rust until it did (B-2026-11-19-102).
 - An undefined type in an expression's type arguments (`Vec[Qqq].new()`,
   `Option[Qqq].None`, `Mix[Zzz].N(63)`, `Pair[Ppp] { a: 1 }`) is reported
   as an undefined type at the name, with the did-you-mean a type position

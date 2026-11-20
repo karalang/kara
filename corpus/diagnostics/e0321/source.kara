@@ -1,0 +1,6 @@
+#[deny(vec_per_element)]
+fn main() {
+    let mut seen = Vec.filled(3, [false, false]);
+    seen[1][0] = true;
+    println(seen[1][0]);
+}
