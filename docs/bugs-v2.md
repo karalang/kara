@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 621 |
-| false-positive | 326 |
+| diagnostics | 622 |
+| false-positive | 330 |
 | missing-feature | 223 |
 | perf | 190 |
-| other | 124 |
+| other | 125 |
 | soundness | 106 |
 | miscompile | 98 |
 | crash | 64 |
@@ -76,17 +76,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 772 |
+| typecheck | 773 |
 | mir-llvm | 313 |
-| mir | 287 |
-| cli | 239 |
+| mir | 290 |
+| cli | 240 |
 | parser | 140 |
-| ownership | 122 |
+| ownership | 123 |
 | runtime | 101 |
 | interp | 95 |
 | effect | 50 |
 | resolver | 47 |
-| other | 37 |
+| other | 38 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -128,6 +128,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-85 | 2026-11-20 | typecheck | low | `let mut cur = Some(head);` over a borrowed parameter makes `cur` an `Option[ref T]`, and the later `cur = node.get_next()` (or `cur = node.next`) gets a bare E0200 "expected 'Option[ref T]', found 'Option[T]'" that names neither the borrowed parameter nor the `own` that fixes it; on a struct list karac fix derives `Clone` and clones instead | — |
 | B-2026-11-20-86 | 2026-11-20 | cli | low | Rust's array literal `[0, i32::MIN, i32::MIN]` becomes a `Vec` under karac fix, so `let mut next = dp;` (a copy in Rust) gets `.clone()`, a heap allocation per number: kata 1262's fixed solution takes 2.60 s where the same code with `dp: Array[i32, 3]` and a plain copy takes 1.40 s | — |
 | B-2026-11-20-87 | 2026-11-20 | typecheck+cli | low | redundant_clone is not reported for an argument to a trait method called through `dyn` or a generic bound: kata 1274's `sea.has_ships(top_right.clone(), bottom_left.clone())` keeps both clones under karac fix, where the same clone into a free function or a concrete method is dropped | — |
+| B-2026-11-20-97 | 2026-11-20 | ownership+cli | medium | The Jupyter kernel's `%ownership` and `%rc` check the session with the plain pre-v2 `karac::typecheck` (no library, no core rules), so a session whose cells all ran is refused as having "type errors", and `%rc` reported RC fallbacks core semantics §6.4 removed | — |
+| B-2026-11-20-98 | 2026-11-20 | other | medium | karac does not compile for wasm32 (565 errors on `cargo check -p karac-playground --target wasm32-wasip1`), so the browser playground cannot be built, and its check path (`run_static_checks`) and `cartograph_json` run the plain pre-v2 checker | — |
+| B-2026-11-20-99 | 2026-11-20 | mir | medium | `karac check` passed a reuse of a tuple or array holding an erased function value (`let a = (make(10), 0); let s = a; (a.0)(1)`), which the build's move check refuses: check judged the tuple `Copy` by its parts instead of moving it with the function value | — |
+| B-2026-11-20-100 | 2026-11-20 | mir | medium | `karac check` accepts and `karac run` refuses a `.map` with a named function over `Vec[String]`: the library's `IterMap.next` fails MIR borrow check, "move of (*_5) through a shared reference [E0517]" | — |
+| B-2026-11-20-101 | 2026-11-20 | typecheck | low | `karac check` accepts a comptime reflection `derives` call with the wrong arity that `karac run` refuses ("reflection method `derives` takes exactly one argument"): the arity check runs only on the build's comptime path | — |
+| B-2026-11-20-102 | 2026-11-20 | mir | low | The MIR move check refuses a reuse after copying a tuple of a capture-free closure literal or a function name (`let a = (dbl, 0); let s = a; (a.0)(1)`: "use of _1.0, which may have been moved"), which core semantics §6.1 makes Copy and `karac check` accepts | — |
 
 ### Relocated
 

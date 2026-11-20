@@ -950,18 +950,25 @@ impl Session {
         MagicOutput::ok(out.trim_end())
     }
 
-    fn magic_ownership(&self) -> MagicOutput {
-        // Compute the ownership surface for the current session view:
-        // items_source wrapped in a synthetic `fn main()` so the
-        // ownership pass classifies any binding the user has
-        // accumulated. The pass's `representations` map records
-        // parameters and RC-promoted bindings; owned-stack locals
-        // (the most common case in a `let x = 5;` REPL session) do
-        // not appear there, so we layer a baseline walk over the
-        // session's `persistent_lets` to keep the table populated
-        // for plain `let` bindings. Each row is `<binding>: <mode>`
-        // sorted lexicographically; RC promotions from the
-        // ownership pass win over the baseline owned-stack label.
+    /// The session as one program, its items then its `let`s in a
+    /// synthetic `fn main()`, checked as a cell is (`karac check`'s
+    /// Pipeline: the Kāra library in scope and the core rules), with the
+    /// length of the session's own source. `%ownership` and `%rc` read it;
+    /// they type-checked it with the plain `karac::typecheck`, which runs
+    /// neither, and refused sessions whose cells had all run
+    /// (B-2026-11-20-97). `Err` is the magic's refusal, naming the first
+    /// error.
+    fn session_typed(
+        &self,
+        what: &str,
+    ) -> Result<
+        (
+            crate::ast::Program,
+            crate::typechecker::TypeCheckResult,
+            usize,
+        ),
+        MagicOutput,
+    > {
         let mut synth = String::new();
         if !self.items_source.trim().is_empty() {
             synth.push_str(&strip_main(&self.items_source));
@@ -977,25 +984,32 @@ impl Session {
             }
         }
         synth.push_str("}\n");
-        let parsed = crate::parse(&synth);
-        if !parsed.errors.is_empty() {
-            return MagicOutput::error(
-                "(session source has parse errors — fix them before inspecting ownership)",
-            );
+        match crate::cli::repl_v2::typed(&synth) {
+            Ok((program, typed)) => Ok((program, typed, synth.len())),
+            Err(errors) => Err(MagicOutput::error(format!(
+                "(session source has errors — fix them before inspecting {what})\n{}",
+                errors.first().map(String::as_str).unwrap_or_default()
+            ))),
         }
-        let resolved = crate::resolve(&parsed.program);
-        if !resolved.errors.is_empty() {
-            return MagicOutput::error(
-                "(session source has resolve errors — fix them before inspecting ownership)",
-            );
-        }
-        let typed = crate::typecheck(&parsed.program, &resolved);
-        if !typed.errors.is_empty() {
-            return MagicOutput::error(
-                "(session source has type errors — fix them before inspecting ownership)",
-            );
-        }
-        let owned = crate::ownershipcheck(&parsed.program, &typed);
+    }
+
+    fn magic_ownership(&self) -> MagicOutput {
+        // Compute the ownership surface for the current session view:
+        // items_source wrapped in a synthetic `fn main()` so the
+        // ownership pass classifies any binding the user has
+        // accumulated. The pass's `representations` map records
+        // parameters and RC-promoted bindings; owned-stack locals
+        // (the most common case in a `let x = 5;` REPL session) do
+        // not appear there, so we layer a baseline walk over the
+        // session's `persistent_lets` to keep the table populated
+        // for plain `let` bindings. Each row is `<binding>: <mode>`
+        // sorted lexicographically; RC promotions from the
+        // ownership pass win over the baseline owned-stack label.
+        let (program, typed, _) = match self.session_typed("ownership") {
+            Ok(t) => t,
+            Err(refused) => return refused,
+        };
+        let owned = crate::ownershipcheck(&program, &typed);
 
         // Baseline: every persistent-let binding is owned-stack until
         // the ownership pass overrides it (e.g. with an RC promotion).
@@ -1184,41 +1198,11 @@ impl Session {
                 "usage: %rc (no arguments — lists every RC-fallback decision in the current session)",
             );
         }
-        let mut synth = String::new();
-        if !self.items_source.trim().is_empty() {
-            synth.push_str(&strip_main(&self.items_source));
-            if !synth.is_empty() && !synth.ends_with('\n') {
-                synth.push('\n');
-            }
-        }
-        synth.push_str("fn main() {\n");
-        for prior_let in &self.persistent_lets {
-            synth.push_str(prior_let);
-            if !prior_let.ends_with('\n') {
-                synth.push('\n');
-            }
-        }
-        synth.push_str("}\n");
-
-        let parsed = crate::parse(&synth);
-        if !parsed.errors.is_empty() {
-            return MagicOutput::error(
-                "(session source has parse errors — fix them before inspecting RC fallbacks)",
-            );
-        }
-        let resolved = crate::resolve(&parsed.program);
-        if !resolved.errors.is_empty() {
-            return MagicOutput::error(
-                "(session source has resolve errors — fix them before inspecting RC fallbacks)",
-            );
-        }
-        let typed = crate::typecheck(&parsed.program, &resolved);
-        if !typed.errors.is_empty() {
-            return MagicOutput::error(
-                "(session source has type errors — fix them before inspecting RC fallbacks)",
-            );
-        }
-        let owned = crate::ownershipcheck(&parsed.program, &typed);
+        let (program, typed, user_len) = match self.session_typed("RC fallbacks") {
+            Ok(t) => t,
+            Err(refused) => return refused,
+        };
+        let owned = crate::ownershipcheck(&program, &typed);
 
         // Collect rows across every function, sorted by (fn_name,
         // binding) for stable output. RcEntry's spans are AST
@@ -1237,6 +1221,11 @@ impl Session {
             binding_keys.sort();
             for binding in binding_keys {
                 let entry = entries.get(binding).expect("binding key present");
+                // The library the session is checked with lies past its
+                // source; its own decisions are not the session's.
+                if entry.consume_span.offset >= user_len {
+                    continue;
+                }
                 let is_arc = arc_set.map(|s| s.contains(binding)).unwrap_or(false);
                 rows.push(RcRow {
                     fn_name: fn_name.clone(),
@@ -2363,7 +2352,7 @@ impl Session {
     /// bare expression runs as `let _ = <expr>;` ([`as_statements`]), so a
     /// place after that `let _ = ` is that many columns too far right:
     /// `eat(w)`'s `w` read `cell 3:1:13`, and `--auto-clone`, which finds
-    /// the move by that place, cloned nothing (B-2026-11-20-93).
+    /// the move by that place, cloned nothing (B-2026-11-20-101).
     fn cell_column(
         &self,
         synthetic: &str,
@@ -3067,7 +3056,7 @@ impl Session {
         // A session whose cells use `?` ran as the body of a
         // `fn main() -> Result[(), AnyError]` (deferred.md § Cell Scope), so
         // the saved `main` says so and ends in `Ok(())`; a plain `fn main()`
-        // refused the saved file's first `?` (B-2026-11-20-94).
+        // refused the saved file's first `?` (B-2026-11-20-102).
         let fallible = self.cell_history.iter().any(|c| uses_question(c));
         out.push_str("fn main()");
         if fallible {

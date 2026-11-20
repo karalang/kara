@@ -152,6 +152,21 @@ impl ClassifierPrelude {
 /// names in scope for it, merging an enclosing `impl` block's parameters with
 /// the method's own. Mirrors `OwnershipChecker::check_function`'s walk so the
 /// two phases answer `is_copy_type` identically. B-2026-09-02-19.
+/// A function type, or a tuple or fixed array with one among its parts: the
+/// shapes whose value moves when a function value in it is erased
+/// (design.md § Escaping function values). A tuple holding an erased function
+/// value was judged by its parts, all `Copy` to the structural rule, so
+/// `let s = a;` copied it and check passed a reuse the build's move check
+/// refuses (B-2026-11-20-99).
+pub(crate) fn holds_fn_value(ty: &Type) -> bool {
+    match ty {
+        Type::Function { .. } => true,
+        Type::Tuple(parts) => parts.iter().any(holds_fn_value),
+        Type::Array { element, .. } => holds_fn_value(element),
+        _ => false,
+    }
+}
+
 /// `ty` is a `shared` handle (`top`), or `Copy` (a part, `!top`), or an
 /// `Option` / `Result` / tuple whose parts all are and one is a handle:
 /// a value passed by counting rather than moved.
@@ -1010,7 +1025,7 @@ impl<'a> UseClassifier<'a> {
                 }
                 let erased = crate::ownership::core_rules()
                     && matches!(pattern.kind, PatternKind::Binding(_))
-                    && matches!(self.tc.expr_type(value), Some(Type::Function { .. }))
+                    && self.tc.expr_type(value).is_some_and(holds_fn_value)
                     && self.value_is_erased_fn(value);
                 for name in pattern.binding_names() {
                     if erased {
@@ -2330,7 +2345,7 @@ impl<'a> UseClassifier<'a> {
             // downgrade) or copying a `weak` value moves nothing
             // (B-2026-10-12-20).
             Some(Type::Weak(_)) => UseKind::Read,
-            Some(Type::Function { .. }) if self.erased_fns.contains(name) => UseKind::Consume,
+            Some(t) if holds_fn_value(t) && self.erased_fns.contains(name) => UseKind::Consume,
             Some(t) if !self.is_copy_type(t) => UseKind::Consume,
             _ => UseKind::Read,
         }
@@ -2776,6 +2791,11 @@ impl<'a> UseClassifier<'a> {
         match &value.kind {
             ExprKind::Closure { .. } | ExprKind::Path { .. } => false,
             ExprKind::Identifier(n) => self.erased_fns.contains(n),
+            // A tuple or array literal holds an erased function value when a
+            // part of function type is one (B-2026-11-20-99).
+            ExprKind::Tuple(parts) | ExprKind::ArrayLiteral(parts) => parts.iter().any(|p| {
+                self.tc.expr_type(p).is_some_and(holds_fn_value) && self.value_is_erased_fn(p)
+            }),
             _ => true,
         }
     }

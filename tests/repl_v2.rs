@@ -9,6 +9,8 @@ mod baseline;
 mod book_transcript;
 #[path = "repl_v2/carry.rs"]
 mod carry;
+#[path = "repl_v2/magics_check_as_cells_do.rs"]
+mod magics_check_as_cells_do;
 #[path = "repl_v2/panic_place.rs"]
 mod panic_place;
 #[path = "repl_v2/parity.rs"]

@@ -1688,7 +1688,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_request_rc_magic_broadcasts_display_data() {
+    fn execute_request_rc_magic_reports_no_fallback_under_core_semantics() {
         // `%rc` (line 785) returns `MagicOutput::ok_rich` with a two-mime
         // bundle (text/plain + text/html). The kernel must route the
         // bundle through `display_data` on IOPub — same path as
@@ -1736,37 +1736,23 @@ mod tests {
         let reply = Message::decode(&shell[0], &signer).unwrap();
         assert_eq!(reply.content["status"], "ok");
 
+        // Core semantics §6.4: the compiler never turns an owned value into
+        // a shared one, so the RC fallback this session once showed for
+        // `process.d` does not exist; a bare parameter borrows, and
+        // `karac check` accepts the session. `%rc` checks the session as its
+        // cells are checked (B-2026-11-20-97), so it reports none, as plain
+        // text: no display bundle.
         let iopub = drain_iopub_in_memory(&transport, &signer);
-        let display_frame = iopub
+        assert!(
+            iopub.iter().all(|(k, _)| k != "display_data"),
+            "no rows, so no rich display: {iopub:?}"
+        );
+        let text: String = iopub
             .iter()
-            .find(|(k, _)| k == "display_data")
-            .expect("expected display_data broadcast");
-        let data = &display_frame.1.content["data"];
-        let plain = data["text/plain"]
-            .as_str()
-            .expect("rc magic must populate text/plain");
-        assert!(
-            plain.contains("process.d"),
-            "row must surface qualified binding name; got:\n{plain}",
-        );
-        assert!(
-            plain.contains("direct re-use after consume"),
-            "row must surface trigger label; got:\n{plain}",
-        );
-        assert!(
-            plain.contains("[Rc]"),
-            "row must surface Rc kind; got:\n{plain}",
-        );
-        let html = data["text/html"]
-            .as_str()
-            .expect("rc magic must populate text/html");
-        assert!(
-            html.contains("<table>") && html.contains("<th>Binding</th>"),
-            "html must include the table + Binding header; got: {html}",
-        );
-        // text-only stream is suppressed when the bundle is present.
-        let stream_count = iopub.iter().filter(|(k, _)| k == "stream").count();
-        assert_eq!(stream_count, 0, "stream broadcast must be suppressed");
+            .filter(|(k, _)| k == "stream")
+            .map(|(_, m)| m.content["text"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(text.trim_end(), "(no RC fallbacks in current session)");
     }
 
     #[test]

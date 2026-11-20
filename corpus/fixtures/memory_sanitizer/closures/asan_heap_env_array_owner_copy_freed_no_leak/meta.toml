@@ -1,18 +1,19 @@
 source = "tests/memory_sanitizer/closures.rs::asan_heap_env_array_owner_copy_freed_no_leak"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error"
+exit = 1
 tags = ["closure", "post-m1:escaping"]
 class = "a"
-expected_from = "assert"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "a:refused"
+bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "80c6fc91"
 model_rev = "3acf4472"
 model_src = "80c6fc91"
 v2_reject = "design.md: a value of a function type is move-only, so the program uses the closure after it moved (drop schedule thread's triage) (kata thread, 2026-10-09)"
+note = "B-2026-11-20-99: design.md § Escaping function values, a value of a function type is move-only, and a tuple or array holding one that is erased (here the result of make(..)) moves with it, so the reuse after `let s = a;` is E0500 in karac check as in the build's move check. The expected.out wording of an error pin is guidance, not a byte oracle."

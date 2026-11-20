@@ -1,17 +1,18 @@
 source = "tests/codegen/closures.rs::heap_env_tuple_owner_copied_at_index_one_runs"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error"
+exit = 1
 tags = ["closure", "src:legacy-tests", "post-m1:escaping"]
 class = "e"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "mir-gap:move check"
+bucket = "e-spec"
 classified_with = "9913c6855"
 extracted_src = "c67293f8"
 model_rev = "3acf4472"
 model_src = "c67293f8"
+note = "B-2026-11-20-99: design.md § Escaping function values, a value of a function type is move-only, and a tuple or array holding one that is erased (here the result of make(..)) moves with it, so the reuse after `let s = a;` is E0500 in karac check as in the build's move check. The expected.out wording of an error pin is guidance, not a byte oracle."

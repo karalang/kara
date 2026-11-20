@@ -2230,7 +2230,18 @@ impl Pipeline {
         // `comptime { … }`-block folding adds no items and keeps the original
         // lower→fold order (no re-typecheck cost). This runs in `lower()` so
         // every path that lowers (check / build / run) gets it uniformly.
-        if crate::comptime::has_derives_to_expand(&self.parsed.program)
+        // A program the first pass refused is not evaluated: the re-check
+        // below replaces that pass, so an error inside a `comptime` block
+        // (`P.derives()` with no trait name) was dropped, and check passed
+        // a program the build refuses at its first type error, before any
+        // comptime work (B-2026-11-20-101). A `#[derive]` is evaluated
+        // regardless: until it splices its items, a use of them is an error
+        // of the first pass that the re-check answers.
+        let refused =
+            self.has_type_errors() && !crate::comptime::has_derives_to_expand(&self.parsed.program);
+        if refused {
+            crate::lower(&mut self.parsed.program, self.typed.as_ref().unwrap());
+        } else if crate::comptime::has_derives_to_expand(&self.parsed.program)
             || (on_mir && crate::comptime::has_comptime_work(&self.parsed.program))
         {
             let typed = self.typed.take().unwrap();
