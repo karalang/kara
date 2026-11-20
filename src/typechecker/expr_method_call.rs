@@ -3319,10 +3319,22 @@ impl<'a> super::TypeChecker<'a> {
                 // ends the process, so `join()` gives `T` itself
                 // (B-2026-11-15-150).
                 let on_handle = recv_name.as_deref() == Some("TaskHandle") && inner == "join";
-                if on_mutex || on_handle {
+                // `deque.remove(i).unwrap()`: Rust's `VecDeque::remove`
+                // returns an `Option`. Kāra's returns the element and panics
+                // out of bounds, as `Vec.remove` does (kata 1756, B-2026-11-20-106).
+                let on_deque = recv_name.as_deref() == Some("VecDeque") && inner == "remove";
+                if on_mutex || on_handle || on_deque {
                     let from = object.span.offset + object.span.length;
                     let end = span.offset + span.length;
-                    let why = if on_handle {
+                    let why = if on_deque {
+                        format!(
+                            "no method '{method}' on type '{}': Kāra's `VecDeque.remove` \
+                             returns the element itself and panics out of bounds, as \
+                             `Vec.remove` does, not an `Option` as Rust's does: drop the \
+                             `.{method}(..)` (library/collections.md § `VecDeque[T]`)",
+                            type_display(&obj_ty)
+                        )
+                    } else if on_handle {
                         format!(
                             "no method '{method}' on type '{}': a `TaskHandle`'s `join()` \
                              returns the task's result itself, not a `Result` (a panic in a \

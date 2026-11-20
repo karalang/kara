@@ -10819,10 +10819,16 @@ impl<'a> TypeChecker<'a> {
         // conversion strings.md names for those places (kata 2117). A
         // borrowed `String` (`for w in names.iter() { views[i] = w; }`)
         // takes the same edit (kata 1258).
-        let string_found = match &found {
+        // The borrow's target is resolved too: a `String` parameter read
+        // as `ref String` carries its `String` behind a type variable
+        // (`let mut rest: Str = s;`, kata 1750, B-2026-11-20-105).
+        let found_top = inference::resolve_type_var_top(found, &self.env.substitutions);
+        let is_string =
+            |t: &Type| inference::resolve_type_var_top(t, &self.env.substitutions) == Type::Str;
+        let string_found = match &found_top {
             Type::Str => Some("String"),
-            Type::Ref(t) if matches!(**t, Type::Str) => Some("ref String"),
-            Type::MutRef(t) if matches!(**t, Type::Str) => Some("mut ref String"),
+            Type::Ref(t) if is_string(t) => Some("ref String"),
+            Type::MutRef(t) if is_string(t) => Some("mut ref String"),
             _ => None,
         };
         if matches!(expected, Type::Named { name, args } if (name == "StringSlice" || name == "Str") && args.is_empty())
