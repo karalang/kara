@@ -1148,6 +1148,60 @@ impl super::Parser {
                 continue;
             }
 
+            // Python's `x is None` / `x is not None` (B-2026-11-20-73).
+            if 10 >= min_bp {
+                if let Some((negated, n)) = self.python_is_operator() {
+                    for _ in 0..n {
+                        self.advance();
+                    }
+                    let rhs = self.parse_expr_bp(11)?;
+                    let span = Span {
+                        line: lhs.span.line,
+                        column: lhs.span.column,
+                        offset: lhs.span.offset,
+                        length: (rhs.span.offset + rhs.span.length).saturating_sub(lhs.span.offset),
+                    };
+                    lhs = Expr {
+                        id: crate::ids::NodeId::DUMMY,
+                        span,
+                        kind: ExprKind::Binary {
+                            op: if negated { BinOp::NotEq } else { BinOp::Eq },
+                            left: Box::new(lhs),
+                            right: Box::new(rhs),
+                        },
+                    };
+                    continue;
+                }
+            }
+
+            // Python's `x ** n` lexes as `*` then a unary `*`; read as that,
+            // the checker's "drop the `*`" fix mended it to `x * n`
+            // (B-2026-11-20-70). Two touching stars are the power operator,
+            // binding tighter than `*` and to the right, as Python's does.
+            if self.power_operator_at(self.pos) && min_bp <= 24 {
+                let first = self.current_span();
+                self.advance();
+                self.advance();
+                let rhs = self.parse_expr_bp(24)?;
+                self.report_power_operator(&lhs, first, &rhs);
+                let span = Span {
+                    line: lhs.span.line,
+                    column: lhs.span.column,
+                    offset: lhs.span.offset,
+                    length: (rhs.span.offset + rhs.span.length).saturating_sub(lhs.span.offset),
+                };
+                lhs = Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span,
+                    kind: ExprKind::Binary {
+                        op: BinOp::Mul,
+                        left: Box::new(lhs),
+                        right: Box::new(rhs),
+                    },
+                };
+                continue;
+            }
+
             // Check for infix (binary) operators
             let (op, l_bp, r_bp) = match self.peek_token_ref() {
                 Token::Or => (BinOp::Or, 6, 7),
@@ -1265,6 +1319,88 @@ impl super::Parser {
         }
 
         Some(lhs)
+    }
+
+    /// Two `*` tokens with nothing between them: Python's power operator.
+    fn power_operator_at(&self, at: usize) -> bool {
+        match (self.tokens.get(at), self.tokens.get(at + 1)) {
+            (Some(a), Some(b)) => {
+                matches!(a.token, Token::Star)
+                    && matches!(b.token, Token::Star)
+                    && a.span.offset + a.span.length == b.span.offset
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-11-20-70: `x ** n` is refused with Kāra's `x.pow(n)`. The edit
+    /// is offered only where it is exact: an integer-literal or named exponent
+    /// (the `pow` an integer takes is a `u32`, a float's an `f64`) and a base that
+    /// is a name, a field, an index or a call, or a number literal, which is
+    /// parenthesized.
+    fn report_power_operator(&mut self, base: &Expr, stars: Span, exponent: &Expr) {
+        let pair = Span { length: 2, ..stars };
+        self.error_at(
+            "`**` is Python's power operator: Kāra has none, and raises a number to a \
+             power with `x.pow(n)` (an integer's exponent is a `u32`, a float's an `f64`)",
+            pair,
+        );
+        let float_base = matches!(base.kind, ExprKind::Float(..));
+        let literal_exponent = matches!(exponent.kind, ExprKind::Integer(_, None));
+        // A named exponent keeps its own type, which `pow` then checks.
+        let named_exponent = !float_base && matches!(exponent.kind, ExprKind::Identifier(_));
+        if !literal_exponent && !named_exponent {
+            return;
+        }
+        let literal_base = float_base || matches!(base.kind, ExprKind::Integer(..));
+        let plain_base = matches!(
+            base.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Call { .. }
+        );
+        if !literal_base && !plain_base {
+            return;
+        }
+        // The base's own text must end at the stars (a `MethodCall`'s span
+        // is its receiver's, so a call chain is left without an edit).
+        if base.span.offset + base.span.length > pair.offset {
+            return;
+        }
+        let mut edits = Vec::new();
+        if literal_base {
+            edits.push(crate::resolver::TextEdit {
+                offset: base.span.offset,
+                length: 0,
+                replacement: "(".to_string(),
+            });
+        }
+        edits.push(crate::resolver::TextEdit {
+            offset: base.span.offset + base.span.length,
+            length: pair.offset + pair.length - (base.span.offset + base.span.length),
+            replacement: if literal_base { ").pow(" } else { ".pow(" }.to_string(),
+        });
+        let end = exponent.span.offset + exponent.span.length;
+        let exp_start = exponent.span.offset;
+        // A space after the stars goes too: `x ** 4` -> `x.pow(4)`.
+        edits.push(crate::resolver::TextEdit {
+            offset: pair.offset + pair.length,
+            length: exp_start - (pair.offset + pair.length),
+            replacement: String::new(),
+        });
+        edits.push(crate::resolver::TextEdit {
+            offset: end,
+            length: 0,
+            replacement: if float_base && literal_exponent {
+                ".0)"
+            } else {
+                ")"
+            }
+            .to_string(),
+        });
+        self.fix_diffs
+            .insert(crate::resolver::SpanKey::from_span(&pair), edits);
     }
 
     fn parse_prefix(&mut self) -> Option<Expr> {
@@ -2828,7 +2964,7 @@ impl super::Parser {
                 let has_else = self.check(&Token::Else);
                 self.refuse_let_chain(&value, &then_block, !has_else);
             }
-            let else_branch = if self.eat(&Token::Else) {
+            let else_branch = if self.eat_else_or_elif() {
                 if self.check(&Token::If) {
                     Some(Box::new(self.parse_if_expr()?))
                 } else {
@@ -2856,7 +2992,7 @@ impl super::Parser {
 
         let condition = self.parse_condition_expr()?;
         let then_block = self.parse_block()?;
-        let else_branch = if self.eat(&Token::Else) {
+        let else_branch = if self.eat_else_or_elif() {
             if self.check(&Token::If) {
                 Some(Box::new(self.parse_if_expr()?))
             } else {
@@ -3178,6 +3314,31 @@ impl super::Parser {
         attributes: Vec<Attribute>,
     ) -> Option<Expr> {
         let start = self.current_span();
+        match self.mend_go_for() {
+            Some(Token::While) => {
+                return self.parse_while_expr_with_label_and_attrs(label, attributes)
+            }
+            Some(_) => {
+                self.advance();
+                if let Some(ref l) = label {
+                    self.loop_labels.push((l.clone(), LabelKind::Loop));
+                }
+                let body = self.parse_block();
+                if label.is_some() {
+                    self.loop_labels.pop();
+                }
+                return Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind: ExprKind::Loop {
+                        label,
+                        body: body?,
+                        attributes,
+                    },
+                });
+            }
+            None => {}
+        }
         self.expect(&Token::For)?;
         if let Some(ref l) = label {
             self.loop_labels.push((l.clone(), LabelKind::Loop));

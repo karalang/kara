@@ -1498,7 +1498,7 @@ The first half covers indices `[0, mid)` and the second `[mid, len)`. It panics 
 
 **Indices are `i64`.** Sizes, lengths and indices all use `i64`, so no cast is needed between an index and other integers. `usize` exists only for FFI.
 
-- **`v[i]` is bounds-checked.** An index outside `0..v.len()` panics ([core-semantics.md §10.1](core-semantics.md#10-panics-and-errors-c8)). A negative index is out of bounds like any other: there is no Python-style wrap-around, because `-1` as an index is always a bug.
+- **`v[i]` is bounds-checked.** An index outside `0..v.len()` panics ([core-semantics.md §10.1](core-semantics.md#10-panics-and-errors-c8)). A negative index is out of bounds like any other: there is no Python-style wrap-around, because `-1` as an index is always a bug. A constant negative index (`v[-1]`) is therefore refused at compile time, with `v[v.len() - 1]` as the fix; a computed one panics when it runs.
 - **Accessors return `Option` instead of panicking.** `v.get(i)`, `v.first()` and `v.last()` answer `None` where `v[i]` would panic ([library/collections.md](library/collections.md)).
 - **Indexing does not move.** `v[i]` is a place. Binding a non-`Copy` element by value is an error; borrow it or `.clone()` it ([core-semantics.md §3.7](core-semantics.md#3-moves), and the index operator in [§7](#7-functions-and-closures)).
 - **Range indexing yields a view.** `v[a..b]` is a `Slice[T]`, or a `mut Slice[T]` where a mutable view is needed, and the half-open forms work too ([Loops and labels](#loops-and-labels)). On text, `s[a..b]` is a `Str` and `s[i]` is an error ([Strings](#strings)).

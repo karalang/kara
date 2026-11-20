@@ -14026,6 +14026,55 @@ impl<'a> super::TypeChecker<'a> {
     /// Whether `ty[i]` takes `i` as a position: a `Vec`, `VecDeque`,
     /// fixed array or slice, through any borrow. A `Map` is indexed by its
     /// key type and is not one.
+    /// B-2026-11-20-71: `v[-1]` is Python's last element; a position is never
+    /// negative, so a constant negative index is a panic every time it runs.
+    /// It is refused, with `v[v.len() - 1]` as the edit where the list is a
+    /// name or a field path (whose text is rebuilt from the tree), and
+    /// `.last()` named for a read. A computed negative index stays a run-time
+    /// bounds failure.
+    fn refuse_constant_negative_index(&mut self, object: &Expr, index: &Expr) {
+        let ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } = &index.kind
+        else {
+            return;
+        };
+        let ExprKind::Integer(k, _) = operand.kind else {
+            return;
+        };
+        if k <= 0 {
+            return;
+        }
+        fn place_text(e: &Expr) -> Option<String> {
+            match &e.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                ExprKind::FieldAccess { object, field } => {
+                    Some(format!("{}.{field}", place_text(object)?))
+                }
+                _ => None,
+            }
+        }
+        let message = format!(
+            "a position is never negative: `[-{k}]` is Python's count from the end, and here \
+             it is out of bounds every time it runs; Kāra counts from the end with `.len()`, \
+             `v[v.len() - {k}]`, or reads the last element with `v.last()`, an `Option` \
+             (design.md § Indexing)"
+        );
+        match place_text(object) {
+            Some(place) => self.type_error_with_fix_it(
+                message,
+                index.span,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: index.span,
+                    replacement: format!("{place}.len() - {k}"),
+                },
+            ),
+            None => self.type_error(message, index.span, TypeErrorKind::TypeMismatch),
+        }
+    }
+
     fn indexes_by_position(ty: &Type) -> bool {
         match ty {
             Type::Ref(inner) | Type::MutRef(inner) => Self::indexes_by_position(inner),
@@ -17830,6 +17879,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.user_index_impl(&obj_ty, &idx_ty, index, index_is_lhs, &expr.span)
                 {
                     return t;
+                }
+                if Self::indexes_by_position(&obj_ty) {
+                    self.refuse_constant_negative_index(object, index);
                 }
                 // `t.0[i]` — indexing a `Vec`/`VecDeque` that lives in a TUPLE
                 // element. Codegen resolves the element's storage pointer

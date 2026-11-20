@@ -1940,6 +1940,9 @@ impl<'a> super::TypeChecker<'a> {
                             self.check_assignable(&elem, &ga[0], args[0].value.span);
                         }
                         Type::Error => {}
+                        _ if self.append_is_push.contains(
+                            &crate::resolver::SpanKey::from_span(&args[0].value.span),
+                        ) => {}
                         other => {
                             self.type_error(
                                 format!(

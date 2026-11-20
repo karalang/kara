@@ -91,6 +91,7 @@ impl super::Parser {
                 continue;
             }
             // Try to parse a statement or final expression
+            self.mend_statement_habits();
             let before = self.pos;
             if self.is_statement_start() {
                 match self.parse_statement() {
@@ -685,6 +686,7 @@ impl super::Parser {
     // ── Statements ───────────────────────────────────────────────
 
     pub(crate) fn parse_statement(&mut self) -> Option<Stmt> {
+        self.mend_statement_habits();
         match self.peek_token_ref() {
             Token::Let => self.parse_let_statement(),
             Token::Defer => {

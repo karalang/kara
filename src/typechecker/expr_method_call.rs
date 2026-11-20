@@ -3927,7 +3927,7 @@ impl<'a> super::TypeChecker<'a> {
                 };
             }
             if method == "append" && !deque && self.cli_lint_overrides.strict_core {
-                self.reject_core_vec_append(object, args, args_close_span);
+                self.reject_core_vec_append(object, args, args_close_span, &elem);
             }
             if let Some(ty) = self.infer_vec_method(&elem, method, args, span) {
                 // Stash the element type at the non-aliased close-paren leaf so
@@ -7347,15 +7347,94 @@ fn gpu_reduce_shader_op(op: ReduceOp) -> ReduceOp {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// A type `extend` takes as a source of elements (and `Option`, which is
+    /// not one element of a plain list either).
+    fn is_sequence_type(t: &Type) -> bool {
+        match t {
+            Type::Ref(inner) | Type::MutRef(inner) => Self::is_sequence_type(inner),
+            Type::Array { .. } | Type::Slice { .. } => true,
+            Type::Named { name, .. } => {
+                matches!(
+                    name.as_str(),
+                    "Vec" | "VecDeque" | "Set" | "SortedSet" | "Map" | "SortedMap" | "Option"
+                ) || name.contains("Iter")
+                    || name.contains("Range")
+            }
+            _ => false,
+        }
+    }
+
     /// There is no `Vec.append` (Gowtham, 2026-10-14, B-2026-10-13-24):
     /// `a.extend(b)` moves every element of an owned `b`, and a borrowed `b`
     /// is emptied with `a.extend(mem.take(mut b))`. Reported by the strict
     /// commands, with the rewrite when the argument is a plain place.
-    fn reject_core_vec_append(&mut self, object: &Expr, args: &[CallArg], close: &Span) {
+    fn reject_core_vec_append(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+        close: &Span,
+        elem: &Type,
+    ) {
         let [arg] = args else {
             return;
         };
         let try_ = if self.core_try_companion { "try_" } else { "" };
+        let recv_end = object.span.offset + object.span.length;
+        // Python's `list.append(x)` adds ONE element: that is `push`, not
+        // `extend` (B-2026-11-20-72). Told apart by the argument's own type
+        // where it is a literal or a local of the element's type.
+        let one_element = !arg.mut_marker
+            && arg.label.is_none()
+            && match &arg.value.kind {
+                ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::CharLit(_)
+                | ExprKind::ByteLit(_)
+                | ExprKind::Bool(_)
+                | ExprKind::StringLit(_)
+                | ExprKind::InterpolatedStringLit(_) => !Self::is_sequence_type(elem),
+                ExprKind::Identifier(name) => self.local_scope.lookup(name).is_some_and(|t| {
+                    let t = super::inference::resolve_type_vars(
+                        t,
+                        &self.env.substitutions,
+                        &HashMap::new(),
+                        &self.env.const_substitutions,
+                        &HashMap::new(),
+                    );
+                    let t = match &t {
+                        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                        t => t,
+                    };
+                    // An unsettled literal (`let x = 7`) is not yet `elem`, so
+                    // the test is that the local is no iterable `extend` takes.
+                    !Self::is_sequence_type(elem)
+                        && !Self::is_sequence_type(t)
+                        && !matches!(t, Type::Error)
+                }),
+                _ => false,
+            };
+        if one_element && !self.core_try_companion && arg.value.span.offset > recv_end {
+            self.type_error_with_fix_it(
+                "there is no `Vec.append`: one element is added with `v.push(x)` (Python's \
+                 `list.append`), and another list's elements with `v.extend(b)` \
+                 (docs/library/collections.md)"
+                    .to_string(),
+                arg.value.span,
+                TypeErrorKind::NoMethodFound,
+                super::FixIt {
+                    span: Span {
+                        offset: recv_end,
+                        length: arg.value.span.offset - recv_end,
+                        line: object.span.line,
+                        column: object.span.column + object.span.length,
+                    },
+                    replacement: ".push(".to_string(),
+                },
+            );
+            self.append_is_push
+                .insert(SpanKey::from_span(&arg.value.span));
+            return;
+        }
         let (spelling, rest) = if arg.mut_marker {
             (
                 "mem.take(mut b)",
@@ -7368,7 +7447,6 @@ impl<'a> super::TypeChecker<'a> {
             "there is no `Vec.{try_}append`: write `a.{try_}extend({spelling})`{rest} \
              (docs/library/collections.md, `extend`)"
         );
-        let recv_end = object.span.offset + object.span.length;
         let end = close.offset + close.length;
         // An owned source of any shape keeps its text: only `.append(` is
         // rewritten, up to the argument.

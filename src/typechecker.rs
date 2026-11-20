@@ -4578,6 +4578,10 @@ pub struct TypeChecker<'a> {
     pub(super) open_collection_lets: FxHashMap<String, Span>,
     /// The spans of identifiers that read an `open_collection_lets` binding.
     pub(super) open_collection_let_uses: FxHashMap<SpanKey, String>,
+    /// `v.append(x)` arguments already refused as Python's one-element
+    /// append, with `push` (B-2026-11-20-72): `Vec.append`'s own type check
+    /// says nothing more about them.
+    pub(super) append_is_push: FxHashSet<SpanKey>,
     /// `let name = ["a", "b"]` / `Vec.filled(n, "a")` with no annotation:
     /// a list of string literals, whose elements take `String`. A use as a
     /// `Slice[Str]` offers `: Vec[Str]` on the binding (B-2026-11-19-83).
@@ -5178,6 +5182,7 @@ impl<'a> TypeChecker<'a> {
             list_lit_let_uses: FxHashMap::default(),
             open_collection_lets: FxHashMap::default(),
             open_collection_let_uses: FxHashMap::default(),
+            append_is_push: FxHashSet::default(),
             str_list_lets: FxHashMap::default(),
             str_list_let_uses: FxHashMap::default(),
             peekable_arity_reported: FxHashSet::default(),

@@ -17,6 +17,7 @@ mod items_effects;
 mod items_extern;
 mod items_trait;
 mod patterns;
+mod py_go_habits;
 mod rust_bound;
 mod rust_fn_turbofish;
 mod rust_io_import;
