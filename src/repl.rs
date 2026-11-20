@@ -583,6 +583,13 @@ pub struct Session {
     /// Verbatim cell inputs in submission order, used by `:save` to write a
     /// `.kara` file that reconstructs the session. Excludes meta-commands.
     cell_history: Vec<String>,
+    /// The number each kept cell was submitted as, aligned with
+    /// `cell_history`: every submitted cell takes a number, refused or not,
+    /// as IPython's `In[n]` does, so two inputs are never both "cell N"
+    /// (B-2026-11-20-103). A place names a cell by this number.
+    cell_numbers: Vec<usize>,
+    /// Cells submitted so far, refused ones included.
+    submitted: usize,
     /// Source slices of every top-level `let` / `let mut` / `let ... else`
     /// statement extracted from successfully-evaluated statement cells, in
     /// submission order. Re-emitted at the head of every subsequent
@@ -822,6 +829,8 @@ impl Session {
         Session {
             items_source: String::new(),
             cell_history: Vec::new(),
+            cell_numbers: Vec::new(),
+            submitted: 0,
             persistent_lets: Vec::new(),
             v2_values: Some(Vec::new()),
             v2_pending: None,
@@ -1391,6 +1400,35 @@ impl Session {
 
     /// Inspector for verbatim cell history. Used by `:save` and integration
     /// tests; could back a future `:history` meta-command.
+    /// Keep `src` as the next cell, numbered as the cell last submitted.
+    fn push_cell(&mut self, src: String) {
+        self.cell_history.push(src);
+        self.cell_numbers.push(self.submitted);
+    }
+
+    /// Roll the last kept cell back; its number stays used.
+    fn pop_cell(&mut self) {
+        self.cell_history.pop();
+        self.cell_numbers.pop();
+    }
+
+    /// The number the cell at history position `idx` (from 1) was
+    /// submitted as.
+    fn cell_no(&self, idx: usize) -> usize {
+        idx.checked_sub(1)
+            .and_then(|i| self.cell_numbers.get(i))
+            .copied()
+            .unwrap_or(idx)
+    }
+
+    /// The history position (from 1) of the cell submitted as `no`.
+    fn cell_idx(&self, no: usize) -> Option<usize> {
+        self.cell_numbers
+            .iter()
+            .rposition(|&n| n == no)
+            .map(|i| i + 1)
+    }
+
     pub fn cell_history(&self) -> &[String] {
         &self.cell_history
     }
@@ -1512,7 +1550,8 @@ impl Session {
     /// inside the synthetic `fn main()` wrapper.
     pub fn evaluate_cell(&mut self, src: &str) {
         let trimmed = src.trim_end();
-        self.cell_history.push(trimmed.to_string());
+        self.submitted += 1;
+        self.push_cell(trimmed.to_string());
 
         if self.classify(trimmed) == CellShape::PureItems {
             for e in self.add_items_v2(trimmed) {
@@ -1695,7 +1734,7 @@ impl Session {
                 // A refused or panicking cell leaves the session as it
                 // was, as `evaluate_cell_captured` does: `:save` must not
                 // write it, nor a later cell's replay run it.
-                self.cell_history.pop();
+                self.pop_cell();
             }
         }
     }
@@ -1765,7 +1804,7 @@ impl Session {
             let c = moved.captures(e)?;
             let name = c[1].to_string();
             let [cell, line, col] = [&c[2], &c[3], &c[4]].map(|n| n.parse::<usize>().ok());
-            let (cell, line, col) = (cell?, line?, col?);
+            let (cell, line, col) = (self.cell_idx(cell?)?, line?, col?);
             if cell == 0 || cell >= current {
                 return None;
             }
@@ -1815,7 +1854,9 @@ impl Session {
             names.sort();
             for name in names {
                 notes.push(format!(
-                    "perf[auto-clone-in-repl]: inserted `.clone()` on `{name}` at consume site (cell {cell}, used in cell {current}); cross-cell binding kept alive — `%set auto-clone off` surfaces the underlying use-after-move diagnostic instead"
+                    "perf[auto-clone-in-repl]: inserted `.clone()` on `{name}` at consume site (cell {}, used in cell {}); cross-cell binding kept alive — `%set auto-clone off` surfaces the underlying use-after-move diagnostic instead",
+                    self.cell_no(cell),
+                    self.cell_no(current),
                 ));
             }
         }
@@ -1852,7 +1893,8 @@ impl Session {
     /// process's stdout.
     pub fn evaluate_cell_captured(&mut self, src: &str) -> EvaluatedCell {
         let trimmed = src.trim_end();
-        self.cell_history.push(trimmed.to_string());
+        self.submitted += 1;
+        self.push_cell(trimmed.to_string());
 
         if self.classify(trimmed) == CellShape::PureItems {
             return EvaluatedCell {
@@ -1886,7 +1928,7 @@ impl Session {
             }
             Err(out) => {
                 // Roll back history on diagnostic-side failure.
-                self.cell_history.pop();
+                self.pop_cell();
                 EvaluatedCell {
                     // What a v2 cell printed before it panicked; empty for
                     // a diagnostic.
@@ -1932,7 +1974,7 @@ impl Session {
                 }
             };
         }
-        self.cell_history.pop();
+        self.pop_cell();
         let missing = unresolved_names(&errs);
         if missing.is_empty() {
             return errs;
@@ -2023,7 +2065,7 @@ impl Session {
         }
         self.held_items.retain(|h| !set.contains(h));
         for (src, _) in &set {
-            self.cell_history.push(src.clone());
+            self.push_cell(src.clone());
             self.accept_items_v2(src);
         }
         Ok(new.is_some_and(|n| set.contains(&n)))
@@ -2041,7 +2083,11 @@ impl Session {
         };
         let ident = |c: char| c.is_alphanumeric() || c == '_';
         let mentions = |ty: &str, n: &str| ty.split(|c: char| !ident(c)).any(|w| w == n);
-        let cell = self.cell_history.len();
+        let cell = self
+            .cell_numbers
+            .last()
+            .copied()
+            .unwrap_or(self.cell_history.len());
         let retired = &mut self.retired_values;
         values.retain(|v| {
             let Some(n) = names.iter().find(|n| mentions(&v.ty, n)) else {
@@ -2182,7 +2228,7 @@ impl Session {
                             // takes carried values, is the carry's (a type it
                             // wrote, an earlier cell's function): the cell
                             // starts again without it.
-                            let here = format!("cell {}:", self.cell_history.len());
+                            let here = format!("cell {}:", self.cell_no(self.cell_history.len()));
                             let outside =
                                 |e: &String| !e.lines().next().is_some_and(|l| l.contains(&here));
                             if self.carry_live && relabelled.iter().any(outside) {
@@ -2252,7 +2298,7 @@ impl Session {
                     .map(|e| self.relabel_v2(&synthetic, e))
                     .collect();
                 if let Some(snap) = snap_errors {
-                    let here = format!("cell {}:", self.cell_history.len());
+                    let here = format!("cell {}:", self.cell_no(self.cell_history.len()));
                     let mine = |e: &String| e.lines().next().is_some_and(|l| l.contains(&here));
                     if !errors.iter().any(mine) {
                         errors = snap;
@@ -2289,7 +2335,7 @@ impl Session {
         for (cell, r) in self.cell_byte_ranges.iter().filter(|(_, r)| !r.is_empty()) {
             let file = match *cell {
                 SHOW_CELL => "%show".to_string(),
-                c => format!("cell {c}"),
+                c => format!("cell {}", self.cell_no(c)),
             };
             spans.push((
                 line_of(synthetic, r.start),
@@ -2319,7 +2365,7 @@ impl Session {
                 spans.push((
                     first,
                     line_of(synthetic, end - 1),
-                    format!("cell {cell}"),
+                    format!("cell {}", self.cell_no(cell)),
                     line,
                 ));
             }
@@ -2421,7 +2467,7 @@ impl Session {
                     Some((SHOW_CELL, l)) => format!("%show:{l}:{col}"),
                     Some((cell, l)) => {
                         let col = self.cell_column(synthetic, syn_line, cell, l, col);
-                        format!("cell {cell}:{l}:{col}")
+                        format!("cell {}:{l}:{col}", self.cell_no(cell))
                     }
                     None => c[0].to_string(),
                 }
@@ -3342,7 +3388,7 @@ impl Session {
         }
         match self.try_construct_provider(&resource, &expr_src) {
             Ok(()) => {
-                let opened_cell = self.cell_history.len() + 1;
+                let opened_cell = self.submitted + 1;
                 self.provider_history.push(ProviderHistoryEntry {
                     cells_seen: self.cell_history.len(),
                     kind: ProviderHistoryKind::Open {

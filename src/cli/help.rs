@@ -766,13 +766,19 @@ NOTES:
 karac repl - Launch the interactive REPL
 
 Each cell's program is checked as `karac check` checks a program and run on
-the MIR interpreter. A later cell replays the earlier ones, so it sees what
-they did to a binding; what they printed is not printed again.
+the MIR interpreter. A later cell starts from the values the earlier ones
+left, so it sees what they did to a binding; what they printed is not
+printed again. A cell ending in a bare expression shows its value as `dbg`
+does. Type :help inside the REPL for its commands.
 
 USAGE:
-    karac repl [--interp]
+    karac repl [--auto-clone] [--interp]
 
 FLAGS:
+    --auto-clone   Where an earlier cell moved a binding that a later cell
+                   uses, clone it at the move instead of refusing the later
+                   cell, with a perf[auto-clone-in-repl] note. :save writes
+                   the inserted clones.
     --interp       Accepted for compatibility: cells always run on the MIR
                    interpreter.
     -h, --help     Print this message"

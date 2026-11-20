@@ -238,6 +238,63 @@ fn sorted(n: Node) -> Node {
     }
 }
 
+/// `n` in the `Debug` form `dbg` prints (design.md § `Display` and
+/// `Debug`), which the REPL shows (deferred.md § Rich Output Display
+/// Protocol): a collection by its brackets, not by the source that builds
+/// it. An empty `Vec` is `[]`, not `Vec.new()`; a map is `{"a": 1}`, not
+/// `["a": 1]`; a set is `{3}`, not `Set.from([3])` (B-2026-11-20-103).
+fn debug_form(n: Node) -> Node {
+    let keyed = |name: &str| matches!(name, "Map" | "SortedMap" | "Set" | "SortedSet");
+    match n {
+        Node::Group { head, open, items } => {
+            let mut items: Vec<Node> = items.into_iter().map(debug_form).collect();
+            if open == '(' && items.is_empty() {
+                if let Some(name) = head.strip_suffix(".new") {
+                    let open = if keyed(name) { '{' } else { '[' };
+                    return Node::Group {
+                        head: String::new(),
+                        open,
+                        items,
+                    };
+                }
+            }
+            if open == '(' && items.len() == 1 {
+                if let Some(name) = head.strip_suffix(".from") {
+                    if let Node::Group {
+                        head: inner,
+                        open: '[',
+                        ..
+                    } = &items[0]
+                    {
+                        if inner.is_empty() {
+                            let Some(Node::Group { items: elems, .. }) = items.pop() else {
+                                unreachable!()
+                            };
+                            let open = if keyed(name) { '{' } else { '[' };
+                            return Node::Group {
+                                head: String::new(),
+                                open,
+                                items: elems,
+                            };
+                        }
+                    }
+                }
+            }
+            let map = head.is_empty()
+                && open == '['
+                && !items.is_empty()
+                && items.iter().all(|i| matches!(i, Node::Entry(..)));
+            Node::Group {
+                head,
+                open: if map { '{' } else { open },
+                items,
+            }
+        }
+        Node::Entry(k, v) => Node::Entry(Box::new(debug_form(*k)), Box::new(debug_form(*v))),
+        atom => atom,
+    }
+}
+
 fn has_structure(n: &Node) -> bool {
     match n {
         Node::Atom(_) => false,
@@ -266,7 +323,9 @@ fn inline(n: &Node, out: &mut String) {
         Node::Group { head, open, items } => {
             let (o, c) = group_brackets(head, *open);
             out.push_str(&o);
-            let pad = *open == '{' && !items.is_empty();
+            // A struct's braces are padded (`P { x: 1 }`); a map's or a
+            // set's are not (`{"a": 1}`), as `dbg` prints them.
+            let pad = *open == '{' && !items.is_empty() && !head.is_empty();
             if pad {
                 out.push(' ');
             }
@@ -411,7 +470,7 @@ fn escape_html(s: &str) -> String {
 pub(crate) fn render_source(source: &str) -> Option<DisplayBundle> {
     let n = sorted(parse_source(source)?);
     let mut text = String::new();
-    plain(&n, 0, &mut text);
+    plain(&debug_form(n.clone()), 0, &mut text);
     let mut bundle = DisplayBundle::new().with("text/plain", text);
     if let Some(html) = html_table(&n) {
         bundle = bundle.with("text/html", html);
@@ -448,7 +507,13 @@ mod tests {
         assert_eq!(plain_of("[1i64, 2i64, 3i64]"), "[1, 2, 3]");
         assert_eq!(plain_of("(1i64,)"), "(1,)");
         assert_eq!(plain_of("(1i64, \"a\")"), "(1, \"a\")");
-        assert_eq!(plain_of("Vec.new()"), "Vec.new()");
+        // The `Debug` form `dbg` prints, not the source (B-2026-11-20-103).
+        assert_eq!(plain_of("Vec.new()"), "[]");
+        assert_eq!(plain_of("VecDeque.new()"), "[]");
+        assert_eq!(plain_of("Map.new()"), "{}");
+        assert_eq!(plain_of("Set.new()"), "{}");
+        assert_eq!(plain_of("Set.from([3i64, 1i64])"), "{1, 3}");
+        assert_eq!(plain_of("[\"a\": 1i64]"), "{\"a\": 1}");
         assert_eq!(plain_of("Some(5i64)"), "Some(5)");
         assert_eq!(plain_of("Shape.Unit"), "Shape.Unit");
         assert_eq!(plain_of("P { x: 1i64, y: -2i64 }"), "P { x: 1, y: -2 }");
@@ -472,15 +537,12 @@ mod tests {
     fn show_orders_map_and_set_elements() {
         assert_eq!(
             plain_of("[10i64: \"b\", 9i64: \"a\", 100i64: \"c\"]"),
-            "[9: \"a\", 10: \"b\", 100: \"c\"]"
+            "{9: \"a\", 10: \"b\", 100: \"c\"}"
         );
-        assert_eq!(
-            plain_of("Set.from([3i64, 1i64, 2i64])"),
-            "Set.from([1, 2, 3])"
-        );
+        assert_eq!(plain_of("Set.from([3i64, 1i64, 2i64])"), "{1, 2, 3}");
         assert_eq!(
             plain_of("[\"k\": [2i64, 1i64]]"),
-            "[\n  \"k\": [2, 1]\n]",
+            "{\n  \"k\": [2, 1]\n}",
             "a list's order is its own"
         );
     }

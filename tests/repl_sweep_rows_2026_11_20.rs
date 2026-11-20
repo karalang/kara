@@ -126,3 +126,58 @@ fn repl_sweep_type_errors_name_the_expression() {
     assert!(errs.contains(":type:1:4:"), "{errs}");
     assert!(!errs.contains("__t"), "{errs}");
 }
+
+/// B-2026-11-20-103 (review-thread rulings): a value shows in the `Debug`
+/// form `dbg` prints, every submitted cell takes a number, and
+/// `karac repl --help` lists `--auto-clone`.
+#[test]
+fn repl_sweep_values_show_as_dbg_does() {
+    let out = karac_repl(
+        &[],
+        "let e: Vec[i64] = Vec.new();\ne\nlet mut m: Map[String, i64] = Map.new();\nm.insert(\"k\", 2);\nm\nlet s: Set[i64] = Set.from([3]);\ns\nlet o: Option[String] = Some(\"x\");\no\n",
+    );
+    let stdout = text(&out.stdout);
+    assert!(
+        stdout.contains("\n[]\n{\"k\": 2}\n{3}\nSome(\"x\")\n"),
+        "{stdout}\n{}",
+        text(&out.stderr)
+    );
+}
+
+#[test]
+fn repl_sweep_a_refused_cell_keeps_its_number() {
+    let out = karac_repl(
+        &[],
+        "let a = 1;\nlet b: i64 = \"s\";\nlet c: i64 = \"t\";\nlet v: Vec[i64] = [];\nv[3]\n",
+    );
+    let stderr = text(&out.stderr);
+    assert!(stderr.contains("cell 2:1:14: expected 'i64'"), "{stderr}");
+    assert!(stderr.contains("cell 3:1:14: expected 'i64'"), "{stderr}");
+    assert!(stderr.contains("at cell 5:1:1"), "{stderr}");
+}
+
+#[test]
+fn repl_sweep_auto_clone_note_names_the_submitted_cells() {
+    let out = karac_repl(
+        &["--auto-clone"],
+        "let bad: i64 = \"s\";\nfn eat(x: own Vec[i64]) -> i64 { x.len() }\nlet w: Vec[i64] = [1, 2];\neat(w)\nw.len()\n",
+    );
+    let stderr = text(&out.stderr);
+    assert!(
+        stderr.contains("(cell 4, used in cell 5)"),
+        "{stderr}\n{}",
+        text(&out.stdout)
+    );
+}
+
+#[test]
+fn repl_sweep_help_lists_every_repl_flag() {
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["repl", "--help"])
+        .output()
+        .unwrap();
+    let help = text(&out.stdout) + &text(&out.stderr);
+    for flag in ["--auto-clone", "--interp", "-h, --help"] {
+        assert!(help.contains(flag), "{flag} missing from:\n{help}");
+    }
+}
