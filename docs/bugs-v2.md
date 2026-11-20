@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 617 |
+| diagnostics | 618 |
 | false-positive | 326 |
 | missing-feature | 223 |
 | perf | 190 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 771 |
+| typecheck | 772 |
 | mir-llvm | 313 |
 | mir | 287 |
 | cli | 235 |
@@ -1974,6 +1974,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-88 | typecheck | medium | Since B-2026-11-19-86, a `par` branch capturing a value of a generic function-typed parameter needs the parameter `CrossTask`, and nothing can say so… | b9f95354fb |
 | B-2026-11-20-89 | typecheck | low | `cycle` and `clone` on a library iterator that is not `Clone` always say it "holds a closure (`map`, `filter`, ..)", including on `v.into_iter()`, `o… | c39f49a207 |
 | B-2026-11-20-90 | typecheck | medium | `v.iter().map(f).take(3).cycle()` passes `karac check`, then `karac run` and `karac build` fail with an internal MIR borrow-check error in `IterTake[… | c39f49a207 |
+| B-2026-11-20-91 | typecheck | low | A `scan` closure that writes its by-value state in place and returns only the item, `\|sum, c\| { sum += c; Some(sum) }`, gets two bare type errors (`e… | 039abec2c1 |
 
 </details>
 
