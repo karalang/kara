@@ -522,6 +522,15 @@ struct Exec {
     /// teardown), so a reused block never inherits one, and a stale value
     /// can only be `true`, which costs one extra poll, never a missed one.
     joins: Joins,
+    /// The joins put off the queue until their task ends, by the joined
+    /// task's result block: the keys of the waiting tasks in [`Exec::off`].
+    /// [`task_done`] queues them, so a join that waits costs nothing on the
+    /// queue's scans meanwhile (B-2026-11-21-1). A handle's `join`
+    /// takes it, so one task waits on a block; a list keeps a second waiter
+    /// woken all the same. [`Exec::take_key`] drops a key taken off another
+    /// way, and `task_done` drops the block's entry, so a reused block
+    /// never finds an entry of the task that had it before.
+    joiners: IdMap<usize, Vec<u64>>,
 }
 
 impl Exec {
@@ -604,6 +613,14 @@ impl Exec {
     /// descriptor's list.
     fn take_key(&mut self, key: u64) -> Option<Task> {
         let t = self.off.remove(&key)?;
+        if let Wait::Task(block) = t.wait {
+            if let Some(keys) = self.joiners.get_mut(&block) {
+                keys.retain(|&k| k != key);
+                if keys.is_empty() {
+                    self.joiners.remove(&block);
+                }
+            }
+        }
         if let Wait::Fd(fd, _) | Wait::FdBy(fd, _, _) = t.wait {
             if let Some(keys) = self.parked.get_mut(&fd) {
                 keys.retain(|&k| k != key);
@@ -1463,6 +1480,9 @@ fn task_done(t: &Task) {
         if let Some(ended) = e.joins.get_mut(&(t.b as usize)) {
             *ended = true;
         }
+        for key in e.joiners.remove(&(t.b as usize)).unwrap_or_default() {
+            e.wake_key(key);
+        }
         // A join it waited on itself, torn down meanwhile, waits no more.
         if let Wait::Task(block) = t.wait {
             if block != 0 {
@@ -1807,6 +1827,21 @@ fn settle(t: Task) -> bool {
             }
             false
         }
+        // A join whose task has not ended since it looked waits off the
+        // queue until [`task_done`] queues it ([`Exec::joiners`]). Checked
+        // and put off under one lock, which `task_done` takes to mark the
+        // end: an end that races this is seen here or wakes the join.
+        Wait::Task(block) if block != 0 => EXEC.with(|e| {
+            let mut e = e.borrow_mut();
+            if e.joins.get(&block) == Some(&false) {
+                let key = e.put_off(t);
+                e.joiners.entry(block).or_default().push(key);
+                false
+            } else {
+                e.queue.push_back(t);
+                true
+            }
+        }),
         _ => {
             // Back on the queue, for this worker or the first that looks:
             // no napping worker wakes for a task that was queued already.
@@ -2129,6 +2164,14 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
                     continue;
                 }
                 if !idle_wait(None) {
+                    // A join still put off has nothing left to end its
+                    // task: the tasks are deadlocked.
+                    if EXEC.with(|e| {
+                        let e = e.borrow();
+                        e.joiners.values().flatten().any(|k| e.off.contains_key(k))
+                    }) {
+                        report_deadlock();
+                    }
                     return;
                 }
                 idle = 0;
@@ -2177,9 +2220,14 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             idle += 1;
         }
         t.seen = before;
+        let join = matches!(t.wait, Wait::Task(b) if b != 0);
         let queued = settle_polled(t);
         finished_polling();
         if !queued {
+            // A join put off is not one of the queue's waiting tasks.
+            if join && idle > 0 {
+                idle -= 1;
+            }
             continue;
         }
         let stuck = EXEC.with(|e| {
@@ -2455,17 +2503,24 @@ fn block(quiet: u64) {
         return;
     }
     if !idle_wait(by) {
-        crate::mir::deadlock(&EXEC.with(|e| {
-            let e = e.borrow();
-            let waits: Vec<(bool, On, Option<&str>)> = e
-                .queue
-                .iter()
-                .filter(|t| matches!(t.wait, Wait::Task(_)))
-                .map(|t| (t.root || t.id == 1, t.on, site_text(t.at)))
-                .collect();
-            deadlock_text(&waits)
-        }));
+        report_deadlock();
     }
+}
+
+/// Reports the tasks that wait on another task, on the queue and put off
+/// ([`Exec::joiners`]), as deadlocked.
+fn report_deadlock() -> ! {
+    crate::mir::deadlock(&EXEC.with(|e| {
+        let e = e.borrow();
+        let waits: Vec<(bool, On, Option<&str>)> = e
+            .queue
+            .iter()
+            .chain(e.off.values())
+            .filter(|t| matches!(t.wait, Wait::Task(_)))
+            .map(|t| (t.root || t.id == 1, t.on, site_text(t.at)))
+            .collect();
+        deadlock_text(&waits)
+    }))
 }
 
 /// The `file:line:col` text of a wait's place, as `karac_mir_wait_site`

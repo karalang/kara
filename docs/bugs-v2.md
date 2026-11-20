@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 646 |
 | false-positive | 334 |
 | missing-feature | 232 |
-| perf | 191 |
+| perf | 192 |
 | other | 126 |
 | soundness | 114 |
 | miscompile | 100 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 250 |
 | parser | 143 |
 | ownership | 127 |
-| runtime | 101 |
+| runtime | 102 |
 | interp | 95 |
 | effect | 51 |
 | resolver | 50 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -150,6 +150,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-133 | 2026-11-20 | cli | low | The Jupyter kernel's completion misses the session's own `let` bindings (`ro` after `let rows = ...` offers nothing), offers type and prelude names after a `.` (`rows.`, `Vec.`) instead of methods, and gives nothing for a magic name (`%sh`) | — |
 | B-2026-11-20-134 | 2026-11-20 | cli | low | The Jupyter kernel's `%ownership` (and the REPL's) lists a binding as `owned` after a later cell moved it away (`let w = ...; let z = w;` then `%ownership` shows `w: owned`) | — |
 | B-2026-11-20-135 | 2026-11-20 | cli | low | In the Jupyter kernel a `:`-command cell (`:type x`, `:save f.kara`, `:dep name = "1"`) runs as Kāra source and fails with an error citing the synthetic `<repl>:2:1 fn main() {}`, though deferred.md says `:dep` works in Jupyter through the kernel's meta-command channel | — |
+| B-2026-11-21-1 | 2026-11-21 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on the executor's queue, so each pop and each idle check scans all of them (hello server, 16 clients: about 83k req/s with 1,000 idle connections against about 122k busy) | — |
 
 ### Relocated
 
