@@ -4296,6 +4296,10 @@ impl<'a> OwnershipChecker<'a> {
                         SpanKey::from_span(&w.consume_span),
                         demangle_binding(&f).to_string(),
                     );
+                } else if crate::rc_predicate::unnamed_closure_over_consume(&cfg, &w) {
+                    // No `let` names it: an empty name (B-2026-11-20-7).
+                    self.core_live_closure_moves
+                        .insert(SpanKey::from_span(&w.consume_span), String::new());
                 }
             }
             let binding = demangle_binding(&binding).to_string();

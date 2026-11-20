@@ -1493,7 +1493,14 @@ impl Walk<'_, '_> {
                 self.note_capture_write(object);
             }
             ExprKind::Call { callee, args } => {
-                for a in args.iter().filter(|a| a.mut_marker) {
+                // An argument refused for its collapsed slot is reported
+                // once, there (B-2026-11-20-6).
+                let collapsed = |a: &&CallArg| {
+                    self.tc
+                        .collapsed_mut_ref_args
+                        .contains(&SpanKey::from_span(&a.value.span))
+                };
+                for a in args.iter().filter(|a| a.mut_marker && !collapsed(a)) {
                     self.check_through(&a.value, a.value.span, "a `mut` argument");
                     self.check_borrowed_write(&a.value, a.value.span, "pass `mut`");
                     self.note_capture_write(&a.value);

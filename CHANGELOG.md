@@ -2182,6 +2182,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   gets; it was the internal 'an expression whose type does not lower
   (Type(UnknownName("Qqq")))' at the enclosing `let` (B-2026-11-19-123).
 
+- A generic `mut ref T` parameter given a `mut` argument at a reference
+  `T` (`setv(mut p, q)` with `p`, `q` both `ref String`) is one E0219 that
+  names the reason: a borrow of a borrow is the borrow, so the parameter is
+  a `ref String` and the callee cannot write it; call it with an owned `T`,
+  or reassign `p` directly. It was "parameter expects `ref String` (not a
+  mutable borrow)", whose fix removed the `mut`, beside §5.9's "`p` is a
+  shared `ref`" (B-2026-11-20-6).
+- A move of a place that a closure no `let` names still borrows (`let f =
+  keep(|| s.len()); drop_it(s);`, the closure handed to an `own F` and
+  kept) is E0500 "cannot move 's' … while a closure still borrows it",
+  with a move-site clone as the help. It said "moved inside a loop" in a
+  program with no loop (B-2026-11-20-7).
 - A unit struct's bare name, `Err(TimedOut)` or `let u = Marker;`, is E0206
   naming the struct, with `TimedOut {}` as its machine fix, in expression and
   pattern position alike. With `std.time.TimedOut` imported, the expression

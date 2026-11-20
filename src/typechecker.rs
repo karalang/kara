@@ -3954,6 +3954,12 @@ pub struct TypeChecker<'a> {
     /// parentheses first, or the call binds to its last operand
     /// (`*r.to_string()`, B-2026-11-03-24).
     pub(super) loose_expr_spans: FxHashSet<SpanKey>,
+    /// The `mut` arguments of a generic `mut ref T` parameter whose `T` is
+    /// a reference, by the argument's span: the slot collapsed to that
+    /// `ref` (a borrow of a borrow is the borrow), the call is refused there,
+    /// and §5.9's write check does not report the argument again
+    /// (B-2026-11-20-6).
+    pub(super) collapsed_mut_ref_args: FxHashSet<SpanKey>,
     /// Each `x.as_str()` call with no arguments, by the call's span: the
     /// receiver's span. Where a `ref String` is wanted and the receiver is a
     /// `String`, the fix drops the `.as_str()` rather than appending
@@ -4946,6 +4952,7 @@ impl<'a> TypeChecker<'a> {
             end_mut_let_rewrites: FxHashMap::default(),
             unit_main_questions: Vec::new(),
             loose_expr_spans: FxHashSet::default(),
+            collapsed_mut_ref_args: FxHashSet::default(),
             as_str_calls: FxHashMap::default(),
             ref_operand_spans: FxHashMap::default(),
             call_bound_receiver_subs: None,

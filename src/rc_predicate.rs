@@ -355,6 +355,25 @@ pub(crate) fn live_closure_over_consume(
     })
 }
 
+/// B-2026-11-20-7: the witness's use is in the body of a closure that no
+/// `let` names (`keep(|| s.len())`), made before the consume and not again
+/// after it. The pair is a move of a place that closure borrows, which is
+/// what the error names; the body only looks like an earlier use because
+/// it is written before the move. A consume that reaches the closure's
+/// creation again is a loop's, and keeps that wording.
+pub(crate) fn unnamed_closure_over_consume(cfg: &Cfg, w: &RcWitness) -> bool {
+    let Some(key) = cfg.closure_body_owner.get(&w.other_block) else {
+        return false;
+    };
+    if cfg.let_closures.contains_key(key) {
+        return false;
+    }
+    let Some(&made) = cfg.closure_creations.get(key) else {
+        return false;
+    };
+    made != w.consume_block && !cfg_reaches(cfg, w.consume_block, made)
+}
+
 /// B-2026-10-29-37: whether the body of the `let`-bound closure holding
 /// block `ub` runs only before the consume at `(cb, ci)`: the closure
 /// binding is never moved (a moved closure can be called from wherever it

@@ -182,6 +182,18 @@ impl<'a> super::OwnershipChecker<'a> {
                 })
                 .flatten();
             let message = match entry.trigger {
+                // A closure no `let` names, handed on to a call or a value
+                // that is still alive at the move (B-2026-11-20-7).
+                RcTrigger::DirectReuseAfterConsume
+                    if live_closure.is_some_and(|f| f.is_empty()) =>
+                {
+                    format!(
+                        "cannot move '{binding}' (moved at line {line}:{col}) while a closure \
+                         still borrows it: the closure reads it here, and the value the closure \
+                         was passed into is still alive at the move (core-semantics.md §5.6, \
+                         §9.1)"
+                    )
+                }
                 RcTrigger::DirectReuseAfterConsume if live_closure.is_some() => format!(
                     "cannot move '{binding}' (moved at line {line}:{col}) while the closure `{}` \
                      still borrows it: the closure reads it here and is used after the move \
@@ -278,6 +290,13 @@ impl<'a> super::OwnershipChecker<'a> {
                     .contains(&SpanKey::from_span(&moved_span));
                 let advice = crate::ownership::derive_advice(ty, edit, &binding, first);
                 format!("{advice}, or restructure to avoid the reuse")
+            } else if live_closure.is_some_and(|f| f.is_empty()) && supports_clone {
+                format!(
+                    "clone '{binding}' at the move site (`{binding}.clone()`), or move it only \
+                     after the closure's last use"
+                )
+            } else if live_closure.is_some_and(|f| f.is_empty()) {
+                format!("move '{binding}' only after the closure's last use, or restructure")
             } else if let (Some(f), true) = (live_closure, supports_clone) {
                 format!(
                     "clone '{binding}' at the move site (`{binding}.clone()`), or finish using \

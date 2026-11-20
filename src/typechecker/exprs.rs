@@ -7237,7 +7237,9 @@ impl<'a> super::TypeChecker<'a> {
                     } else if self.cli_lint_overrides.strict_core {
                         self.warn_lent_branch_tails(&arg.value, &resolved);
                     }
-                    if apply_call_site_marker {
+                    if apply_call_site_marker
+                        && !self.refuse_collapsed_mut_ref_arg(arg, formal, &resolved)
+                    {
                         self.check_call_site_marker(arg, &resolved, arg_ty);
                     }
                 }
@@ -16204,6 +16206,38 @@ impl<'a> super::TypeChecker<'a> {
             )
             && (Self::is_literal_tree(e, &Type::Int(IntSize::I64))
                 || Self::is_literal_tree(e, &Type::Float(FloatSize::F64)))
+    }
+
+    /// B-2026-11-20-6: a `mut` argument for a generic `mut ref T` whose `T`
+    /// is a reference. A borrow of a borrow is the borrow, so the slot is
+    /// that `ref` (`mut ref T` at `T = ref String` is a `ref String`) and
+    /// the callee cannot write it. Refused here with that reason, in place
+    /// of the marker check's "not a mutable borrow". v1 has no reference to
+    /// a reference (docs/deferred.md § References to References).
+    fn refuse_collapsed_mut_ref_arg(&mut self, arg: &CallArg, formal: &Type, slot: &Type) -> bool {
+        let (true, Type::MutRef(inner), Type::Ref(_)) = (arg.mut_marker, formal, slot) else {
+            return false;
+        };
+        let Type::TypeParam(t) = inner.as_ref() else {
+            return false;
+        };
+        let place = match &arg.value.kind {
+            ExprKind::Identifier(n) => format!("reassign `{n}` directly"),
+            _ => "assign the place directly".to_string(),
+        };
+        let shown = super::types::type_display(slot);
+        self.type_error(
+            format!(
+                "`{t}` is `{shown}` here, so the parameter `mut ref {t}` is a \
+                 `{shown}`: a borrow of a borrow is the borrow, and the callee cannot write \
+                 through it (core-semantics.md §5.9). Call it with an owned `{t}`, or {place}"
+            ),
+            arg.value.span,
+            TypeErrorKind::InvalidMutMarker,
+        );
+        self.collapsed_mut_ref_args
+            .insert(SpanKey::from_span(&arg.value.span));
+        true
     }
 
     /// An unsuffixed number, its negation, or a tuple of them: what a tuple
