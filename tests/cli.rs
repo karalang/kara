@@ -10779,11 +10779,11 @@ fn test_fix_deletes_redundant_literal_suffixes() {
         "fix failed: stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // One fix per suffixed literal, and the style lint that turns
-    // `i = i + 1` into `i += 1` (B-2026-11-05-31).
+    // One fix per suffixed literal. The `manual_compound_assign` style lint
+    // is off in `fix` as in `check` (B-2026-11-20-68), so `i = i + 1` stays.
     assert!(
-        stdout.contains("applied 8 fix"),
-        "expected one fix per suffixed literal plus one compound assign, got: {stdout}"
+        stdout.contains("applied 7 fix"),
+        "expected one fix per suffixed literal, got: {stdout}"
     );
 
     let rewritten = std::fs::read_to_string(&path).unwrap();
@@ -10792,7 +10792,7 @@ fn test_fix_deletes_redundant_literal_suffixes() {
     assert!(rewritten.contains("let c = -5;"), "got: {rewritten}");
     assert!(rewritten.contains("let d = 2.5;"), "got: {rewritten}");
     assert!(
-        rewritten.contains("while i < 3 { i += 1; }"),
+        rewritten.contains("while i < 3 { i = i + 1; }"),
         "got: {rewritten}"
     );
     assert!(

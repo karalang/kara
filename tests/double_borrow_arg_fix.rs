@@ -42,9 +42,12 @@ fn main() {
         karac(&["fix", file]);
     }
     let out = std::fs::read_to_string(&path).unwrap();
-    // A later pass drops the `.to_string()` an f-string does not need
-    // (B-2026-11-15-131).
-    for want in ["MONTHS.contains(s[..3])", "f\"{v} \".bytes().to_vec();"] {
+    // The `redundant_literal_method` style lint is off in `fix` as in
+    // `check` (B-2026-11-20-68), so the `.to_string()` stays.
+    for want in [
+        "MONTHS.contains(s[..3])",
+        "f\"{v} \".to_string().bytes().to_vec();",
+    ] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
     let run = karac(&["__mir-run", file]);

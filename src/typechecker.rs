@@ -2147,6 +2147,11 @@ pub struct TypeCheckResult {
     /// `MutFn` (§9.6), which the `Type` of a closure does not tell apart
     /// from an `Fn`: what an editor's hover renders (B-2026-11-20-58).
     pub mut_fn_closures: FxHashSet<usize>,
+    /// Each `let` pattern's span and a name it binds as a view of a place
+    /// the function does not own (core semantics §4.6), whose `Type` is the
+    /// part's own (`R` where the binding is a `ref R`): what an editor's
+    /// hover renders `ref R` (B-2026-11-20-60).
+    pub core_view_lets: Vec<(Span, String)>,
     /// The closures in [`Self::core_escaping_closures`] that escape only by
     /// being returned from another closure (B-2026-10-26-9).
     pub core_closure_result_only: FxHashSet<SpanKey>,
@@ -3175,6 +3180,8 @@ pub struct TypeChecker<'a> {
     pub(super) option_unwrap_sites: Vec<Span>,
     /// See [`TypeCheckResult::mut_fn_closures`].
     pub(super) mut_fn_closures: FxHashSet<usize>,
+    /// See [`TypeCheckResult::core_view_lets`].
+    pub(super) core_view_lets: Vec<(Span, String)>,
     /// The start offset of the assignment a `match` arm holds without
     /// braces (`'L' => (dx, dy) = (-dy, dx),`), while its block is checked.
     /// The parser wraps such a body in a block whose span is the
@@ -4774,6 +4781,7 @@ impl<'a> TypeChecker<'a> {
             option_unwrap_receivers: FxHashSet::default(),
             option_unwrap_sites: Vec::new(),
             mut_fn_closures: FxHashSet::default(),
+            core_view_lets: Vec::new(),
             braceless_arm_assign: None,
             core_ref_copy_nodes: FxHashSet::default(),
             core_ref_results: FxHashSet::default(),
@@ -5582,6 +5590,7 @@ impl<'a> TypeChecker<'a> {
             core_escaping_closures,
             option_unwrap_sites: self.option_unwrap_sites,
             mut_fn_closures: self.mut_fn_closures,
+            core_view_lets: self.core_view_lets,
             core_closure_result_only,
             core_task_moved_captures,
             vector_method_receivers: self.vector_method_receivers,

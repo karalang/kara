@@ -214,7 +214,7 @@ pub(super) fn cmd_debug(input: &str, output: OutputMode) {
 /// Set while `karac fix` with no file walks the package.
 static FIXING_PACKAGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub(super) fn cmd_fix_project(dry_run: bool) {
+pub(super) fn cmd_fix_project(dry_run: bool, lints: &crate::lints::CliLintOverrides) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let Some(root) = crate::manifest::discover_project_root(&cwd) else {
         eprintln!(
@@ -238,7 +238,7 @@ pub(super) fn cmd_fix_project(dry_run: bool) {
         // Shown as the user would name it: relative to the working
         // directory when the package is under it.
         let shown = path.strip_prefix(&cwd).unwrap_or(&path);
-        stuck |= !fix_file(&shown.to_string_lossy(), dry_run);
+        stuck |= !fix_file(&shown.to_string_lossy(), dry_run, lints);
     }
     if stuck {
         process::exit(1);
@@ -254,15 +254,15 @@ const FIX_PASSES: usize = 10;
 /// `karac fix <file>`. It fails when the file still has an error once
 /// every fix is in, so a fix loop can tell a clean file from one only a
 /// person can finish (B-2026-11-16-287).
-pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
-    if !fix_file(filename, dry_run) {
+pub(super) fn cmd_fix(filename: &str, dry_run: bool, lints: &crate::lints::CliLintOverrides) {
+    if !fix_file(filename, dry_run, lints) {
         process::exit(1);
     }
 }
 
 /// [`cmd_fix`]'s work: whether the file checks without an error afterwards.
 /// A dry run writes nothing, so it reports only what it would apply.
-fn fix_file(filename: &str, dry_run: bool) -> bool {
+fn fix_file(filename: &str, dry_run: bool, lints: &crate::lints::CliLintOverrides) -> bool {
     // A migration (`KARAC_*_MIGRATE`) is one reviewable rewrite: one pass.
     let migrating = [
         "KARAC_D5_MIGRATE",
@@ -285,7 +285,7 @@ fn fix_file(filename: &str, dry_run: bool) -> bool {
     let mut total = 0;
     let mut seen = std::collections::HashSet::new();
     for pass in 0..passes {
-        let applied = fix_pass(filename, dry_run, pass == 0);
+        let applied = fix_pass(filename, dry_run, pass == 0, lints);
         total += applied;
         if applied == 0 || !seen.insert(read_source(filename)) {
             break;
@@ -312,20 +312,22 @@ fn fix_file(filename: &str, dry_run: bool) -> bool {
 /// One pass of `karac fix` over `filename`: the number of fixes it wrote.
 /// Only the first pass reports a file with nothing to fix, or exits on one it
 /// cannot fix; a later pass returns 0 and leaves the earlier passes' work.
-fn fix_pass(filename: &str, dry_run: bool, first: bool) -> usize {
+fn fix_pass(
+    filename: &str,
+    dry_run: bool,
+    first: bool,
+    lints: &crate::lints::CliLintOverrides,
+) -> usize {
     let source = read_source(filename);
-    // The style lints are off elsewhere and on here (B-2026-11-05-31): fixing
-    // them is what `karac fix` is for. An `#[allow]` in the source still wins.
+    // The lint levels `karac check` has with the same flags: `fix` applies
+    // the machine-applicable fixes of exactly the diagnostics `check
+    // --output=json` reports. The style lints are off in both unless a
+    // `-W NAME`, `#[warn(NAME)]` or `[lints]` entry turns them on
+    // (B-2026-11-20-68, which reverses B-2026-11-05-31's `fix`-only default).
     let mut pipeline = Pipeline::new(filename, &source)
+        .with_lint_overrides(lints.clone())
         .strict_core()
         .with_library();
-    for lint in crate::style_lints::LINTS {
-        pipeline
-            .lint_overrides
-            .levels
-            .entry(lint.to_string())
-            .or_insert(crate::lints::LintLevel::Warn);
-    }
     // Each edit carries the id of the fix it belongs to: a multi-edit
     // envelope is one fix, applied or skipped whole.
     let mut fixes = FixSet::default();
@@ -358,7 +360,7 @@ fn fix_pass(filename: &str, dry_run: bool, first: bool) -> usize {
             }
             process::exit(1);
         }
-    } else if let Some(member) = package_member_fixes(filename, &source) {
+    } else if let Some(member) = package_member_fixes(filename, &source, lints) {
         // A module of a package is fixed from the package's view of it,
         // as `karac check` and `karac run` read it (B-2026-10-25-26).
         fixes = member;
@@ -714,13 +716,17 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
 /// that file; an import is added only to the module whose use asks for it. `None` when the file is no package's module, the package is a
 /// lone `src/main.kara`, or no package view can be formed: the file is then
 /// fixed on its own, as before.
-fn package_member_fixes(filename: &str, source: &str) -> Option<FixSet> {
+fn package_member_fixes(
+    filename: &str,
+    source: &str,
+    cli: &crate::lints::CliLintOverrides,
+) -> Option<FixSet> {
     if std::env::var_os("KARAC_D5_MIGRATE").is_some() {
         return None;
     }
     let root = super::run_check_cmds::package_root_of_member(filename)?;
     let mf = manifest::load_from_root(&root).ok();
-    let mut lints = crate::lints::CliLintOverrides::default();
+    let mut lints = cli.clone();
     if let Some(m) = &mf {
         lints.apply_manifest_lints(&m.lints);
     }

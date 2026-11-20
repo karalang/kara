@@ -1319,7 +1319,7 @@ let t = Token.Integer(42);
 let e = Token.Error { message: describe(), line: 7 };
 ```
 
-A variant is built with its qualified name. In a pattern, the enum name may be left out when the scrutinee's type is known: `Circle { radius }` and `Shape.Circle { radius }` match the same values. The prelude variants `Some`, `None`, `Ok` and `Err` are canonically written bare; the qualified form (`Option.Some(x)`) is accepted, and `karac fix` rewrites it to the bare one (the `qualified_prelude_variant` style lint, [§ `karac fix`](#karac-fix-and-karac-explain)).
+A variant is built with its qualified name. In a pattern, the enum name may be left out when the scrutinee's type is known: `Circle { radius }` and `Shape.Circle { radius }` match the same values. The prelude variants `Some`, `None`, `Ok` and `Err` are canonically written bare; the qualified form (`Option.Some(x)`) is accepted, and the `qualified_prelude_variant` style lint, once turned on, flags it and `karac fix` rewrites it to the bare one ([§ `karac fix`](#karac-fix-and-karac-explain)).
 
 **A payload may be any type, another enum included.**
 
@@ -2373,7 +2373,7 @@ Every parameter has one declared mode, written in its type. Modes are never infe
 
 Receivers follow the same rule: `self` is borrowed, `own self` is owned (consuming), and `mut ref self` is an exclusive borrow. Methods of a `shared` type take `self` only.
 
-- **`ref T` is a redundant spelling.** In a parameter, `x: ref T` means the same as `x: T`. The `redundant_ref_param` style lint flags it; like every style lint it is `allow` by default in `check`, `build` and `run` (§17), and `karac fix` removes the `ref` (review-thread ruling 2026-11-16). `ref` is still written in return types, fields and locals ([Returns, `ref` returns and views](#returns-ref-returns-and-views)).
+- **`ref T` is a redundant spelling.** In a parameter, `x: ref T` means the same as `x: T`. The `redundant_ref_param` style lint flags it; like every style lint it is `allow` by default (§17), and once turned on `karac fix` removes the `ref` (review-thread rulings 2026-11-16, 2026-11-20). `ref` is still written in return types, fields and locals ([Returns, `ref` returns and views](#returns-ref-returns-and-views)).
 - **A reference passes to a borrowed parameter.** A bare `x: T` accepts a `T`, a `ref T` or a `mut ref T`, so a function holding `r: ref Config` calls `show(r)` directly ([core-semantics.md §4.1](core-semantics.md#4-parameters-calls-and-patterns)).
 - **An `escaping` parameter is owned**, and `own` is not written beside it ([Escaping function values](#escaping-function-values)).
 - **Function types use the same forms.** `Fn(own T) -> R` takes an owned argument; a bare argument type borrows ([Function types and kinds](#function-types-and-kinds)).
@@ -7435,7 +7435,7 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 
 **`karac fix`** applies the machine-applicable diffs from the structured output. It is the primary fix path for an AI author: run `karac check --output=json`, apply `karac fix`, and feed the remaining diagnostics back.
 
-`karac fix` also applies the style lints, each a lint with a machine-applicable fix. They are off (`allow`) in `check`, `build` and `run`; `karac fix` turns them on, and `-W NAME` or `#[warn(NAME)]` reports them anywhere:
+`karac fix` applies exactly the machine-applicable fixes of the diagnostics `karac check --output=json` reports, and takes the same lint flags (`-A`, `-W`, `-D`, `-F NAME`), so the two agree in every case (review-thread ruling 2026-11-20). The style lints are lints with a machine-applicable fix. They are off (`allow`) in every command, `fix` included; `-W NAME`, `#[warn(NAME)]` or a `[lints]` entry turns one on, and then `check` reports it and `fix` applies it (`karac fix -W needless_return main.kara`):
 - `counter_while_loop`: a counter `while` loop becomes `for i in a..b`;
 - `manual_compound_assign`: `x = x + e` becomes `x += e`;
 - `needless_return`: a final `return e;` becomes `e`;

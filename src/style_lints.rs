@@ -33,7 +33,9 @@ pub const REDUNDANT_LITERAL_METHOD: &str = "redundant_literal_method";
 pub const REDUNDANT_REF_PARAM: &str = "redundant_ref_param";
 pub const QUALIFIED_PRELUDE_VARIANT: &str = "qualified_prelude_variant";
 
-/// All six, which `karac fix` turns on.
+/// All six. Off (`allow`) in every command, `karac fix` included, until a
+/// `-W NAME`, `#[warn(NAME)]` or `[lints]` entry turns one on
+/// (B-2026-11-20-68).
 pub const LINTS: [&str; 6] = [
     COUNTER_WHILE_LOOP,
     MANUAL_COMPOUND_ASSIGN,

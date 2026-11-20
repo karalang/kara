@@ -57,6 +57,6 @@ fn some_amp_in_if_let_and_while_let_clones_the_scrutinee() {
         "some-amp",
         "fn main() {\n    let mut pos: Vec[Vec[i64]] = [[1, 2], [3]];\n    let d = 0;\n    if let Some(&i) = pos[d].last() {\n        pos[d].pop();\n        println(i);\n    }\n    let mut st: Vec[i64] = [5, 6];\n    while let Some(&top) = st.last() {\n        st.pop();\n        println(top);\n    }\n    for &x in [7, 8].iter() { println(x); }\n}\n",
         "Kāra writes that copy as `.cloned()` on the value matched",
-        "fn main() {\n    let mut pos: Vec[Vec[i64]] = [[1, 2], [3]];\n    let d = 0;\n    if let Some(i) = pos[d].last().cloned() {\n        pos[d].pop();\n        println(i);\n    }\n    let mut st: Vec[i64] = [5, 6];\n    while let Some(top) = st.last().cloned() {\n        st.pop();\n        println(top);\n    }\n    for x in [7, 8] { println(x); }\n}\n",
+        "fn main() {\n    let mut pos: Vec[Vec[i64]] = [[1, 2], [3]];\n    let d = 0;\n    if let Some(i) = pos[d].last().cloned() {\n        pos[d].pop();\n        println(i);\n    }\n    let mut st: Vec[i64] = [5, 6];\n    while let Some(top) = st.last().cloned() {\n        st.pop();\n        println(top);\n    }\n    for x in [7, 8].iter() { println(x); }\n}\n",
     );
 }

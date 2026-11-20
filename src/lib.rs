@@ -1524,8 +1524,13 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
                 });
             }
         }
-        if let Some((ty, offset, length, mut_fn)) = nav.binding_at(byte_offset) {
+        if let Some((ty, offset, length, mut_fn, view)) = nav.binding_at(byte_offset) {
             let mut type_display = nav.shown(ty);
+            // A view of a place the function does not own is a `ref` its
+            // type does not say (§4.6, B-2026-11-20-60).
+            if view && !mut_fn && !type_display.starts_with("ref ") {
+                type_display.insert_str(0, "ref ");
+            }
             // A closure that writes a capture is a `MutFn` (§9.6), which its
             // `Type` does not say (B-2026-11-20-58).
             if mut_fn && type_display.starts_with("Fn(") {

@@ -86,7 +86,7 @@ fn qualified_prelude_variant_warns_under_w_and_fix_writes_the_bare_form() {
         8,
         "{warned}"
     );
-    let fixed = karac(&["fix", p]);
+    let fixed = karac(&["fix", "-W", "qualified_prelude_variant", p]);
     assert!(fixed.status.success(), "{}", text(&fixed.stderr));
     assert_eq!(std::fs::read_to_string(&f).unwrap(), BARE);
     let recheck = text(&karac(&["check", "-W", "qualified_prelude_variant", p]).stderr);

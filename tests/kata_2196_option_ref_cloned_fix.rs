@@ -38,8 +38,9 @@ fn kata_2196_option_ref_return_offers_cloned() {
     assert!(out.contains("\"text\":\".cloned()\""), "{out}");
     let (ok, out, fixed) = karac("fix", &src, &["fix"]);
     assert!(ok, "{out}");
-    // A later pass drops the `return` (B-2026-11-15-131).
-    assert!(fixed.contains("    m.get(k).cloned()\n"), "{fixed}");
+    // `needless_return` is off in `fix` as in `check` (B-2026-11-20-68), so
+    // the `return` stays.
+    assert!(fixed.contains("    return m.get(k).cloned();\n"), "{fixed}");
 }
 
 #[test]

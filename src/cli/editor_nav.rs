@@ -464,26 +464,30 @@ impl Nav {
         out
     }
 
-    /// The type of the `let` (or other pattern) binding whose name is under
-    /// `at`, with the name's span.
-    /// The binding pattern at `at`: its type, its span, and whether it is a
-    /// `let` of a closure that writes a capture, a `MutFn` (§9.6) the type
-    /// does not tell from an `Fn` (B-2026-11-20-58).
-    pub(crate) fn binding_at(&self, at: usize) -> Option<(&Type, usize, usize, bool)> {
+    /// The `let` (or other pattern) binding whose name is under `at`: its
+    /// type, its name's span, whether it is a `let` of a closure that writes
+    /// a capture, a `MutFn` (§9.6) the type does not tell from an `Fn`
+    /// (B-2026-11-20-58), and whether it is a view of a place the function
+    /// does not own, a `ref` its type does not say (B-2026-11-20-60).
+    pub(crate) fn binding_at(&self, at: usize) -> Option<(&Type, usize, usize, bool, bool)> {
         struct Find {
             at: usize,
-            hit: Option<(NodeId, Span)>,
+            hit: Option<(NodeId, Span, String)>,
             /// `let` pattern offset → its closure value's offset.
             closure_lets: Vec<(usize, usize)>,
         }
         impl MutVisitor for Find {
             fn span(&mut self, _: &mut Span) {}
             fn pattern(&mut self, p: &mut Pattern) {
-                if matches!(p.kind, PatternKind::Binding(_))
-                    && span_contains(&p.span, self.at)
-                    && self.hit.is_none_or(|(_, s)| p.span.length < s.length)
-                {
-                    self.hit = Some((p.id, p.span));
+                if let PatternKind::Binding(name) = &p.kind {
+                    if span_contains(&p.span, self.at)
+                        && self
+                            .hit
+                            .as_ref()
+                            .is_none_or(|(_, s, _)| p.span.length < s.length)
+                    {
+                        self.hit = Some((p.id, p.span, name.clone()));
+                    }
                 }
             }
             fn stmt(&mut self, s: &mut crate::ast::Stmt) {
@@ -505,13 +509,16 @@ impl Nav {
                 walk_item_mut_with(&mut item.clone(), &mut find);
             }
         }
-        let (id, span) = find.hit?;
+        let (id, span, name) = find.hit?;
         let (ty, _) = self.typed().node_types.get(&id)?;
         let mut_fn = find
             .closure_lets
             .iter()
             .any(|(p, c)| *p == span.offset && self.typed().mut_fn_closures.contains(c));
-        Some((ty, span.offset, span.length, mut_fn))
+        let view = self.typed().core_view_lets.iter().any(|(s, n)| {
+            *n == name && s.offset <= span.offset && span.offset < s.offset + s.length
+        });
+        Some((ty, span.offset, span.length, mut_fn, view))
     }
 
     /// The definition of `ty.method`, and the declaration's header.

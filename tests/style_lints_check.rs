@@ -3,8 +3,8 @@
 //! `karac fix` applies: a counter `while` becomes a `for` over a range,
 //! `x = x + e` becomes `x += e`, a final `return e;` becomes `e`, a redundant
 //! `.to_string()` / `.iter()` on a literal goes, and so does `ref` on a
-//! parameter. They are off in `check` unless `-W NAME` asks for one, and on
-//! in `karac fix`. `karac lint --list` lists them (§ Lint levels).
+//! parameter. They are off in both `check` and `fix` unless `-W NAME` asks
+//! for one (B-2026-11-20-68). `karac lint --list` lists them (§ Lint levels).
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -45,7 +45,7 @@ fn fix(tag: &str, lint: &str, src: &str) -> Fixed {
     let warnings = text(&karac(&["check", "-W", lint, p]).stderr);
     let before = karac(&["run", "--interp", p]);
     assert!(before.status.success(), "{tag}: {}", text(&before.stderr));
-    let fixed = karac(&["fix", p]);
+    let fixed = karac(&["fix", "-W", lint, p]);
     assert!(fixed.status.success(), "{tag}: {}", text(&fixed.stderr));
     let after = std::fs::read_to_string(&f).unwrap();
     let recheck = text(&karac(&["check", "-W", lint, p]).stderr);

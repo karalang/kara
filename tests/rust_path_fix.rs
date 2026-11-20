@@ -79,9 +79,9 @@ fn rust_path_on_an_associated_call_or_constant_becomes_a_dot_path() {
     assert!(text.contains("Vec.new()"), "{text}");
     assert!(text.contains("v.push(i64.MAX)"), "{text}");
     assert!(text.contains("String.from(\"a\")"), "{text}");
-    // `karac fix` also applies the `qualified_prelude_variant` style lint
-    // (B-2026-11-19-12), so the dot path ends bare.
-    assert!(text.contains("let o = Some(3);"), "{text}");
+    // The `qualified_prelude_variant` style lint (B-2026-11-19-12) is off in
+    // `karac fix` as it is in `check` (B-2026-11-20-68), so the dot path stays.
+    assert!(text.contains("let o = Option.Some(3);"), "{text}");
     assert_eq!(out, "[9223372036854775807] a Some(3)\n");
 }
 

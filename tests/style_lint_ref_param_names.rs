@@ -21,7 +21,7 @@ fn fixed(tag: &str, src: &str) -> (String, String) {
     let f = dir.join("main.kara");
     std::fs::write(&f, src).unwrap();
     let p = f.to_str().unwrap();
-    let out = karac(&["fix", p]);
+    let out = karac(&["fix", "-W", "redundant_ref_param", p]);
     assert!(
         out.status.success(),
         "{}",

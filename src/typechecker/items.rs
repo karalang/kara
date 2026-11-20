@@ -13450,6 +13450,19 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(&value.span));
                     self.core_ref_copy_nodes.insert(value.id);
                 }
+                // The names this `let` binds as views of a place it does not
+                // own, which their type (`R`) does not say: an editor shows
+                // them `ref R` (B-2026-11-20-60).
+                for name in pattern.binding_names() {
+                    if self.local_scope.is_view(&name)
+                        && !matches!(
+                            self.local_scope.lookup(&name),
+                            Some(Type::Ref(_) | Type::MutRef(_))
+                        )
+                    {
+                        self.core_view_lets.push((pattern.span, name));
+                    }
+                }
                 // B-2026-09-24-1 — a plain re-bind of a borrowed String
                 // (`let t = r;` with `r: ref String`, a `Some(w)` payload, or
                 // `let x = ref v[0]`) is `ref String`, which the `let`-route

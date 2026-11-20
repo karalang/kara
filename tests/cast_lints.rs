@@ -62,7 +62,7 @@ fn main() {
     let json = String::from_utf8_lossy(&json.stdout);
     assert_eq!(json.matches("\"W0291\"").count(), 6, "{json}");
 
-    let fix = karac(&["fix", file]);
+    let fix = karac(&["fix", "-W", "needless_return", file]);
     assert!(
         fix.status.success(),
         "{}",
@@ -70,8 +70,8 @@ fn main() {
     );
     let out = std::fs::read_to_string(&path).unwrap();
     for want in [
-        // The cast goes, and `karac fix`'s `needless_return` takes the
-        // `return` with it (B-2026-11-05-31).
+        // The cast goes, and `-W needless_return` takes the
+        // `return` with it (B-2026-11-05-31, B-2026-11-20-68).
         "fn back(b: u8) -> i64 {\n    b\n}",
         "let a = x;",
         "let b: i64 = p.n;",

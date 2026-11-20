@@ -2053,10 +2053,19 @@ fn parse_migrate_command(args: &[String]) -> Command {
 fn parse_fix_command(args: &[String]) -> Command {
     let mut file: Option<String> = None;
     let mut dry_run = false;
-    for arg in args.iter().skip(2) {
-        match arg.as_str() {
+    // `-A` / `-W` / `-D` / `-F NAME`, as `karac check` takes them: `fix`
+    // applies the fixes of the diagnostics `check` with the same flags
+    // reports, and no others (B-2026-11-20-68).
+    let mut lint_overrides = crate::lints::CliLintOverrides::default();
+    let mut i = 2;
+    while i < args.len() {
+        if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
+            i += 1;
+            continue;
+        }
+        match args[i].as_str() {
             "--dry-run" | "-n" => dry_run = true,
-            flag if flag.starts_with("--") => {
+            flag if flag.starts_with('-') => {
                 eprintln!("error: unknown flag '{flag}' for `karac fix`");
                 process::exit(1);
             }
@@ -2068,9 +2077,14 @@ fn parse_fix_command(args: &[String]) -> Command {
                 file = Some(other.to_string());
             }
         }
+        i += 1;
     }
     // No file: the package around the working directory (B-2026-10-30-28).
-    Command::Fix { file, dry_run }
+    Command::Fix {
+        file,
+        dry_run,
+        lint_overrides,
+    }
 }
 
 /// Parser for `karac debug <crash.json> [--output=json|text]`. The positional

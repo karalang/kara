@@ -574,12 +574,17 @@ OPTIONS:
 karac fix - Apply machine-applicable suggestions to a .kara file
 
 USAGE:
-    karac fix <file.kara> [--dry-run]
+    karac fix <file.kara> [--dry-run] [-W NAME]...
 
 DETAILS:
     Runs the full single-file pipeline (resolve → typecheck → lower →
     ownership → ...) and applies every diagnostic that carries a precise
-    byte-range replacement. Coverage today:
+    byte-range replacement: the diagnostics `karac check` reports with
+    the same lint flags, and no others. The style lints
+    (`counter_while_loop`, `manual_compound_assign`, `needless_return`,
+    `redundant_literal_method`, `redundant_ref_param`,
+    `qualified_prelude_variant`) are off in both until `-W NAME`,
+    `#[warn(NAME)]` or a `[lints]` entry turns one on. Coverage today:
       - Parser: Rust spellings rewritten to Kāra's (`::` paths, `&&` /
         `||` / `!`, macros such as `println!` and `vec![..]`, `<..>`
         generics, `Box`, `{x:?}`, a nested `fn`).
@@ -601,6 +606,7 @@ OPTIONS:
     -n, --dry-run      Print the would-be rewrites instead of writing
                        them to disk. Each line shows
                        `<file>:<line>:<col>: \\`old\\` -> \\`new\\``.
+    -A/-W/-D/-F NAME   Set a lint's level, as `karac check` takes it.
     -h, --help         Print this message"
         }
         "migrate" => {

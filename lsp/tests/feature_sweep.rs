@@ -211,3 +211,34 @@ fn feature_sweep_hover_names_a_renamed_type_as_written() {
     let v = hover_text(src, at(src, "let v", 0, 4)).expect("hover");
     assert!(v.contains("Vec[Field]"), "{v}");
 }
+
+/// B-2026-11-20-60: a binding destructured from a place the function does
+/// not own (`let (r, k) = h.pe` with `h` a bare parameter), and a `let`
+/// that copies it, hovered `R` where it is a `ref R`; `let m: R = r` is
+/// refused (E0313).
+#[test]
+fn feature_sweep_hover_a_view_binding_is_a_ref() {
+    let src = "struct R { name: String }
+struct H { pe: (R, i64) }
+fn hh(h: H) -> i64 {
+    let (r, k) = h.pe;
+    let m = r;
+    m.name.len() + k
+}
+fn main() {
+    let r = R { name: \"abc\".to_string() };
+    let x = H { pe: (r, 100) };
+    println(hh(x));
+}
+";
+    for needle in ["(r, k)", "m = r"] {
+        let h = hover_text(
+            src,
+            at(src, needle, 0, usize::from(needle.starts_with('('))),
+        )
+        .expect("hover");
+        assert!(h.contains("ref R"), "{needle}: {h}");
+    }
+    let r = hover_text(src, at(src, "let r", 0, 4)).expect("hover");
+    assert!(r.contains("\nR\n") && !r.contains("ref"), "{r}");
+}

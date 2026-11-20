@@ -458,6 +458,9 @@ pub enum Command {
         /// `None`: every module of the package around the working directory.
         file: Option<String>,
         dry_run: bool,
+        /// `-A` / `-W` / `-D` / `-F NAME`, as `karac check` takes them
+        /// (B-2026-11-20-68).
+        lint_overrides: crate::lints::CliLintOverrides,
     },
     /// Scaffold a new Kāra project. Bare `karac init` scaffolds into the
     /// current directory; `karac init <name>` creates `./<name>/` first. See
@@ -1004,11 +1007,13 @@ pub fn execute(cmd: Command) {
         Command::Fix {
             file: Some(file),
             dry_run,
-        } => cmd_fix(&file, dry_run),
+            lint_overrides,
+        } => cmd_fix(&file, dry_run, &lint_overrides),
         Command::Fix {
             file: None,
             dry_run,
-        } => cmd_fix_project(dry_run),
+            lint_overrides,
+        } => cmd_fix_project(dry_run, &lint_overrides),
         Command::Init {
             directory,
             template,

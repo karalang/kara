@@ -41,7 +41,8 @@ fn checks_and_prints(path: &std::path::Path, want: &str) {
 #[test]
 fn one_fix_invocation_reaches_the_fixpoint() {
     // `s = s + i` becomes `s += i`, and only then is the counted `while` a
-    // `for` over a range: two passes, one invocation.
+    // `for` over a range: two passes, one invocation. Both style lints are
+    // off unless asked for, in `fix` as in `check` (B-2026-11-20-68).
     let path = scratch(
         "fixpoint.kara",
         "fn main() {
@@ -55,11 +56,29 @@ fn one_fix_invocation_reaches_the_fixpoint() {
 }
 ",
     );
-    let fix = karac(&["fix"], &path);
+    let fix = karac(
+        &[
+            "fix",
+            "-W",
+            "manual_compound_assign",
+            "-W",
+            "counter_while_loop",
+        ],
+        &path,
+    );
     let out = text(&fix);
     assert!(fix.status.success(), "{out}");
     assert_eq!(out.matches("applied").count(), 1, "{out}");
-    let again = karac(&["fix"], &path);
+    let again = karac(
+        &[
+            "fix",
+            "-W",
+            "manual_compound_assign",
+            "-W",
+            "counter_while_loop",
+        ],
+        &path,
+    );
     assert!(text(&again).contains("no fixable"), "{}", text(&again));
     let src = std::fs::read_to_string(&path).unwrap();
     assert!(src.contains("for i in 0..3"), "{src}");
@@ -81,7 +100,17 @@ fn a_dry_run_is_still_one_pass() {
 }
 ",
     );
-    let fix = karac(&["fix", "--dry-run"], &path);
+    let fix = karac(
+        &[
+            "fix",
+            "--dry-run",
+            "-W",
+            "manual_compound_assign",
+            "-W",
+            "counter_while_loop",
+        ],
+        &path,
+    );
     assert!(
         text(&fix).contains("would apply 2 fix(es)"),
         "{}",
