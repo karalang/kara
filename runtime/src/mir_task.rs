@@ -368,13 +368,25 @@ struct Task {
     site: Option<Site>,
 }
 
+/// The joins waited on, by the joined task's result block: whether that
+/// task has ended since the join waited ([`Exec::joins`]).
+type Joins = IdMap<usize, bool>;
+
 /// Whether a queued task can get anywhere if polled now, with the progress
 /// count at `progress`: it is runnable, or waits on another task and
-/// something happened since its last poll began, or its wait's deadline
-/// passed. `now` is the clock, read once a deadline needs it.
-fn worth(t: &Task, progress: u64, now: &mut Option<Instant>) -> bool {
+/// something happened since its last poll began (for a join, the joined
+/// task ended), or its wait's deadline passed. `now` is the clock, read
+/// once a deadline needs it.
+fn worth(t: &Task, progress: u64, now: &mut Option<Instant>, joins: &Joins) -> bool {
     match t.wait {
         Wait::None => true,
+        // A join waits for one task's end, not for any progress
+        // ([`Exec::joins`]): an idle connection's supervisor is not polled
+        // for every request another connection answers.
+        Wait::Task(block) if block != 0 => match joins.get(&block) {
+            Some(&ended) => ended,
+            None => t.seen != progress,
+        },
         Wait::Task(_) => t.seen != progress,
         Wait::TaskBy(at) => t.seen != progress || at <= *now.get_or_insert_with(Instant::now),
         _ => false,
@@ -385,6 +397,11 @@ fn worth(t: &Task, progress: u64, now: &mut Option<Instant>) -> bool {
 #[derive(Clone, Copy)]
 struct Cur {
     id: u64,
+    /// [`Exec::ends`] when this poll began: a join that waits is
+    /// registered in [`Exec::joins`] only if no task ended since, as the
+    /// one it joins may have ended between its readiness check and the
+    /// wait.
+    ends: u64,
     group: *mut Group,
     deadline: Option<Instant>,
     slept: bool,
@@ -409,6 +426,7 @@ impl Task {
             log_id: self.log_id,
             hold: self.hold,
             id: self.id,
+            ends: 0,
             group: self.group,
             deadline: self.deadline,
             slept: self.slept,
@@ -491,6 +509,19 @@ struct Exec {
     /// by task id: the message and the location, which the task's handle
     /// takes once its frame has left by its exits ([`task_failure`]).
     panics: IdMap<u64, (String, String)>,
+    /// How many tasks have ended ([`task_done`]).
+    ends: u64,
+    /// The joins tasks wait on, by the joined task's result block (its
+    /// `b`): `false` while that task runs, `true` once it ended. A waiting
+    /// join is worth polling only then ([`worth`]), not at every progress;
+    /// the entry goes when the join finds its task done. Constraints from
+    /// the drop schedule (2026-11-20): `Task(0)` and `TaskBy` keep the
+    /// any-progress rule, and every way a task ends goes through
+    /// [`task_done`], which marks its join. An entry lives only while the
+    /// joiner that recorded it waits (removed on ready or at that joiner's
+    /// teardown), so a reused block never inherits one, and a stale value
+    /// can only be `true`, which costs one extra poll, never a missed one.
+    joins: Joins,
 }
 
 impl Exec {
@@ -1424,7 +1455,21 @@ fn task_done(t: &Task) {
         }
     }
     bump();
-    EXEC.with(|e| e.borrow_mut().panics.remove(&t.id));
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        e.panics.remove(&t.id);
+        // Its join, if one waits, is worth polling now ([`Exec::joins`]).
+        e.ends += 1;
+        if let Some(ended) = e.joins.get_mut(&(t.b as usize)) {
+            *ended = true;
+        }
+        // A join it waited on itself, torn down meanwhile, waits no more.
+        if let Wait::Task(block) = t.wait {
+            if block != 0 {
+                e.joins.remove(&block);
+            }
+        }
+    });
     let hooks = EXEC.with(|e| e.borrow().hooks.clone());
     for h in hooks {
         h(t.id);
@@ -1710,7 +1755,8 @@ fn poll_nested(t: &mut Task) -> bool {
         if let Some(c) = e.cur_mut().take() {
             e.outer_mut().push(c);
         }
-        *e.cur_mut() = Some(t.cur());
+        let ends = e.ends;
+        *e.cur_mut() = Some(Cur { ends, ..t.cur() });
     });
     let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
     let outer_flags = crate::mir_flags::swap_table(std::mem::take(&mut t.flags));
@@ -2037,7 +2083,11 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             let t = if pooled() {
                 let progress = e.progress;
                 let mut now = None;
-                match e.queue.iter().position(|t| worth(t, progress, &mut now)) {
+                match e
+                    .queue
+                    .iter()
+                    .position(|t| worth(t, progress, &mut now, &e.joins))
+                {
                     Some(i) => e.queue.remove(i),
                     None if e.queue.is_empty() => None,
                     None => return Err(Some(progress)),
@@ -2046,7 +2096,8 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
                 e.queue.pop_front()
             };
             let t = t.ok_or(None)?;
-            *e.cur_mut() = Some(t.cur());
+            let ends = e.ends;
+            *e.cur_mut() = Some(Cur { ends, ..t.cur() });
             if pooled() {
                 e.running += 1;
             }
@@ -2246,8 +2297,14 @@ fn finished_polling() {
         let root = e
             .queue
             .iter()
-            .any(|t| t.root && worth(t, progress, &mut now));
-        if root || e.running == 0 && !e.queue.iter().any(|t| worth(t, progress, &mut now)) {
+            .any(|t| t.root && worth(t, progress, &mut now, &e.joins));
+        if root
+            || e.running == 0
+                && !e
+                    .queue
+                    .iter()
+                    .any(|t| worth(t, progress, &mut now, &e.joins))
+        {
             e.rouse_first();
         }
     });
@@ -2266,7 +2323,7 @@ fn nap(quiet: Option<u64>) {
         let napping = !e
             .queue
             .iter()
-            .any(|t| mine(t, me) && worth(t, progress, &mut now))
+            .any(|t| mine(t, me) && worth(t, progress, &mut now, &e.joins))
             && quiet.is_none_or(|q| progress == q);
         if napping {
             woken.store(false, Ordering::Relaxed);
@@ -2322,9 +2379,10 @@ fn worker_loop(w: usize) {
             let at = e
                 .queue
                 .iter()
-                .position(|t| mine(t, w) && worth(t, progress, &mut now));
+                .position(|t| mine(t, w) && worth(t, progress, &mut now, &e.joins));
             let t = at.and_then(|i| e.queue.remove(i))?;
-            *e.cur_mut() = Some(t.cur());
+            let ends = e.ends;
+            *e.cur_mut() = Some(Cur { ends, ..t.cur() });
             e.running += 1;
             Some((t, progress))
         }) else {
@@ -2380,7 +2438,9 @@ fn block(quiet: u64) {
         (
             pooled() && e.running > 0,
             by,
-            e.queue.iter().any(|t| worth(t, progress, &mut now)),
+            e.queue
+                .iter()
+                .any(|t| worth(t, progress, &mut now, &e.joins)),
         )
     });
     // A task another worker polls now may be what the queue waits on;
@@ -2438,7 +2498,9 @@ fn idle_wait(by: Option<Instant>) -> bool {
             e.next_group_deadline(),
             !e.parked.is_empty(),
             pooled() && e.running > 0,
-            e.queue.iter().any(|t| worth(t, progress, &mut now)),
+            e.queue
+                .iter()
+                .any(|t| worth(t, progress, &mut now, &e.joins)),
         )
     });
     // A task another worker's progress made worth polling is queued: that
@@ -2864,17 +2926,35 @@ fn note(ready: bool, wait: Wait) -> u8 {
 fn note_on(ready: bool, wait: Wait, on: On) -> u8 {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
+        let ends = e.ends;
         let Some(cur) = e.cur_mut().as_mut() else {
             return 1;
         };
+        let ended_since = cur.ends != ends;
         if ready {
             cur.wait = Wait::None;
             cur.on = On::Other;
-            e.progress += 1;
-            1
         } else {
             cur.wait = wait;
             cur.on = on;
+        }
+        let join = match wait {
+            Wait::Task(block) if block != 0 => Some(block),
+            _ => None,
+        };
+        if ready {
+            e.progress += 1;
+            if let Some(block) = join {
+                e.joins.remove(&block);
+            }
+            1
+        } else {
+            // A join registers as waiting for its task's end; one whose
+            // task may have ended since this poll began, before the wait
+            // was registered, is polled once more (`true`).
+            if let Some(block) = join {
+                e.joins.insert(block, ended_since);
+            }
             0
         }
     })
