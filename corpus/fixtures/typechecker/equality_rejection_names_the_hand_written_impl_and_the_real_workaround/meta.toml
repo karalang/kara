@@ -1,17 +1,16 @@
 source = "tests/typechecker.rs::equality_rejection_names_the_hand_written_impl_and_the_real_workaround"
 dedup_of = []
-expect = "error:E0208"
-exit = 1
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-expected_from = "legacy-run"
-legacy_backend = "legacy-build"
-legacy_exit = 1
+expected_from = "spec"
 rules = []
 backends = []
 env = {}
-bucket = "e-not-refused:E0208"
-classified_with = "9913c6855"
+note = "design.md § operator traits: `==` calls `PartialEq.eq` and never needs `Eq`, so the hand-written `eq` (ids equal, tags differ) answers true (B-2026-11-20-66). The legacy record was error:E0208; v2 checks it and the interpreter and the ASan build print this. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "becea98f4"
 extracted_src = "486cace3"
 model_rev = "3acf4472"
 model_src = "486cace3"

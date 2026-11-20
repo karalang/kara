@@ -4700,12 +4700,12 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// What the two families can offer differs, so they are not merged:
     ///
-    /// * EQUALITY has a real workaround. Lowering gates `==` on `impl Eq`
-    ///   (`target_type_name` in `lowering.rs` looks up the trait name "Eq", not
-    ///   "PartialEq"), so adding the marker `impl Eq for T {}` makes `==` lower
-    ///   to the user's `eq` and dispatch correctly — verified on both backends
-    ///   with an `eq` that returns `false` for identical values. That is
-    ///   actionable advice, so the message gives it.
+    /// * EQUALITY never reaches here with an impl: `==` calls
+    ///   `PartialEq.eq` (design.md § operator traits), so a hand-written
+    ///   `impl PartialEq` satisfies the gate on every path. The message
+    ///   that told the author to add `impl Eq` described the legacy
+    ///   lowering, which only the plain typecheck path still imitated
+    ///   (B-2026-11-20-66).
     ///
     /// * ORDERING now dispatches through `cmp`, so a complete
     ///   `impl PartialOrd + impl Ord` never reaches this message at all
@@ -4727,16 +4727,6 @@ impl<'a> super::TypeChecker<'a> {
         };
         let disp = type_display(ty);
         if equality {
-            // `has_impl("Eq")` short-circuits the gate, so reaching here with
-            // an `Eq` impl is impossible; only the partial one can be present.
-            if self.env.has_impl("PartialEq", name, &[]) {
-                return Some(format!(
-                    "'==' cannot dispatch to your 'impl PartialEq for {disp}': the \
-                     operator lowers through the 'Eq' marker, so add 'impl Eq for \
-                     {disp} {{}}' to enable it — '#[derive(PartialEq)]' would compile \
-                     but compare structurally and never call your 'eq'"
-                ));
-            }
             return None;
         }
         let has_po = self.env.has_impl("PartialOrd", name, &[]);

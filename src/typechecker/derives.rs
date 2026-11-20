@@ -3042,14 +3042,13 @@ impl super::env::TypeEnv {
                 true
             }
             Type::Named { name, args } => {
-                // A user-provided `impl Eq for Name` is sufficient — the
-                // lowering pass dispatches `==`/`!=` through it. Falls back
-                // to `#[derive(Eq)]`/`#[derive(PartialEq)]` when no impl is
+                // A hand-written `impl PartialEq` (or `Eq`) is sufficient:
+                // `==` calls `PartialEq.eq` (design.md § operator traits),
+                // on every path (B-2026-11-20-66). Falls back to
+                // `#[derive(Eq)]`/`#[derive(PartialEq)]` when no impl is
                 // registered (e.g. for compiler-provided structural eq on
                 // built-in enums like `Option`/`Result`).
-                if self.has_impl("Eq", name, args)
-                    || (self.partial_eq_impl_dispatches && self.has_impl("PartialEq", name, args))
-                {
+                if self.has_impl("Eq", name, args) || self.has_impl("PartialEq", name, args) {
                     return true;
                 }
                 // A derive on a generic type holds for the arguments that have
@@ -3071,9 +3070,7 @@ impl super::env::TypeEnv {
             }
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_partial_eq(inner),
             Type::Shared(name) => {
-                if self.has_impl("Eq", name, &[])
-                    || (self.partial_eq_impl_dispatches && self.has_impl("PartialEq", name, &[]))
-                {
+                if self.has_impl("Eq", name, &[]) || self.has_impl("PartialEq", name, &[]) {
                     return true;
                 }
                 if let Some(info) = self.structs.get(name) {

@@ -5175,7 +5175,6 @@ impl<'a> TypeChecker<'a> {
 
     pub fn library_methods_from_source(mut self) -> Self {
         self.library_methods_from_source = true;
-        self.env.partial_eq_impl_dispatches = true;
         self.env.vec_is_ord = true;
         self
     }

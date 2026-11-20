@@ -46908,35 +46908,27 @@ fn derive_only_bounds_agree_on_impl_and_free_fn_gates() {
 /// works. `..._advice_is_true` below follows that advice literally and checks
 /// the result, so the message cannot rot into a lie.
 #[test]
-fn equality_rejection_names_the_hand_written_impl_and_the_real_workaround() {
-    let errs = typecheck_errors(
-        r#"
+fn equality_through_a_hand_written_partial_eq_calls_it_on_every_path() {
+    // `==` calls `PartialEq.eq` and never needs `Eq` (design.md § operator
+    // traits). The plain typecheck path (run_playground, the REPL's magic
+    // commands) still refused it as the legacy lowering did, telling the
+    // author to add `impl Eq`, while `karac check` accepted it
+    // (B-2026-11-20-66). The ids match and the tags differ, so the user's
+    // `eq` answers true where a structural compare would say false.
+    let src = r#"
 struct Item { id: i64, tag: i64 }
 impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
 fn main() {
     let a = Item { id: 1, tag: 5 };
     let b = Item { id: 1, tag: 9 };
     println(f"{a == b}");
+    println(f"{a != b}");
 }
-"#,
-    );
-    let msg = errs
-        .iter()
-        .find(|e| e.message.contains("cannot dispatch to your"))
-        .map(|e| e.message.clone())
-        .unwrap_or_else(|| panic!("expected `==` to be rejected, got: {errs:?}"));
-    assert!(
-        msg.contains("'impl PartialEq for Item'"),
-        "must name the impl the user wrote, got: {msg}"
-    );
-    assert!(
-        msg.contains("impl Eq for Item {}"),
-        "must give the workaround that enables dispatch, got: {msg}"
-    );
-    assert!(
-        !msg.contains("does not implement PartialEq"),
-        "must not deny an impl that exists, got: {msg}"
-    );
+"#;
+    typecheck_ok(src);
+    let r = karac::run_playground(src);
+    assert!(r.ok, "{:#?}", r.diagnostics);
+    assert_eq!(r.stdout.concat(), "true\nfalse\n");
 }
 
 /// A type with NO operator impl keeps the plain derive advice — the new
