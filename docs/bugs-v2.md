@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 189 |
 | other | 124 |
 | soundness | 105 |
-| miscompile | 98 |
+| miscompile | 99 |
 | crash | 64 |
 | run-vs-build | 60 |
 | codegen-gap | 40 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 754 |
+| typecheck | 755 |
 | mir-llvm | 313 |
-| mir | 285 |
+| mir | 286 |
 | cli | 228 |
 | parser | 135 |
 | ownership | 122 |
@@ -126,13 +126,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-20 | 2026-11-20 | parser | low | A method call on a Rust unit struct's name (`struct A;` ... `A.hi()`) is mended to `struct A {}` and `A.hi()`, which reports E0202 "`A.hi` takes `self`: pass the receiver as the first argument", where the value is `A {}` | — |
 | B-2026-11-20-21 | 2026-11-20 | parser | low | Rust's `impl Iterator<Item = i64>` parameter gets no fix: the angle-bracket rewrite has no edit when the list holds an associated-type binding, and an E0002 "Expected `)`, found `<`" follows; the Kāra form needs `own` too | — |
 | B-2026-11-20-22 | 2026-11-20 | parser | low | An inline Rust `mod m { .. }` is refused with no fix and an E0002 "Expected expression, found `}`" after it, while `m::sq(4)` at the call is fixed to `m.sq(4)`, which still names the deleted module | — |
-| B-2026-11-20-23 | 2026-11-20 | runtime | low | A value check inside a library `Deserialize` impl loses the field path and the position: `{"u":256}` into a `u8` field reads `256 is out of range for u8`, and `"c":"xy"` into a `char` reads `expected one character, found "xy"`, where a wrong type in the same field reads `u: ... at line 1 column 39` | — |
-| B-2026-11-20-27 | 2026-11-20 | runtime+typecheck | medium | A `#[serde(skip)]` field must still implement `Serialize` and `Deserialize`: `#[serde(skip)] c: Cache` with `Cache: Default` is refused E0200 "`Cache` does not implement Serialize", so a cache, handle or lock field cannot be left off the wire; serde needs only `Default` there | — |
 | B-2026-11-20-28 | 2026-11-20 | runtime | low | `Json` implements neither `Serialize` nor `Deserialize`, so a derived type cannot hold a pass-through document (`extra: Json`), `Json.deserialize` cannot read a part as a `Json`, and a `Json` cannot be a log field value | — |
-| B-2026-11-20-30 | 2026-11-20 | other | low | design.md § Serialize and Deserialize lists `Serializer` and `Deserializer` methods that do not exist in serde.kara or have other signatures: `serialize_string(v: Str)` (is `String`), `deserialize_seq_begin -> Result[i64, ..]` (is `Result[(), ..]`), `deserialize_field -> Result[String, ..]` (is `Result[Option[String], ..]`), and `deserialize_seq_end` / `deserialize_struct_end`, which are not there | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
 | B-2026-11-20-60 | 2026-11-20 | cli | low | kara-lsp hover shows `R` for a binding destructured from a borrowed place (`let (r, k) = h.pe` with `h` a bare parameter, then `let m = r`), which is a `ref R`: written back as the binding's type it is refused (E0313) | — |
 | B-2026-11-20-63 | 2026-11-20 | mir | medium | `*p.0` on a closure parameter that views a tuple item checks clean but every MIR backend refuses it: `let t: Vec[(i32, i32)] = [(1, 2), (3, 4)]; let out: Vec[i32] = t.iter().map(|p| *p.0).collect();` passes `karac check`, while `__mir-run` and `__mir-llvm-run` stop at the `*` with "unary '*' requires 'ref T' .. found 'i32'; a 'i32' is copied, so drop the `*`" | — |
+| B-2026-11-20-65 | 2026-11-20 | typecheck+mir | medium | An inherent associated function and a trait function of the same name resolve by impl order: `T.name()` took the first impl in source order, so a trait impl written before `impl T` hid the inherent function, and `let h: W = Get.get(7)` reached the inherent `get` when `impl W` came first; `e.m()` called an inherent `fn m()` with no `self` past a trait's `m(self)`; and a generic body's `T.build(s)` under `T: Build` could not call a `build[S]` the type also has inherently | — |
 
 ### Relocated
 
@@ -1915,10 +1913,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-8 | typecheck | low | Coercing a generic struct literal with an open type parameter to `dyn` does not use the only impl to fix it: `let mut e: dyn Ac = Bag { xs: Vec.new()… | fa4b30aa47 |
 | B-2026-11-20-9 | ownership | medium | A bare (D5-borrowed) `f: MutFn` parameter can be passed to an `own MutFn` slot such as `it.any(f)` and is accepted, although calling `f()` directly i… | 90f0cc48ee |
 | B-2026-11-20-13 | mir | low | Latent: the dyn call's argument lowering (`dyn_param_ty`, B-2026-11-19-128) expects a string literal bound for a `Str` slot to arrive as its String c… | 1ad6644a07 |
+| B-2026-11-20-23 | runtime | low | A value check inside a library `Deserialize` impl loses the field path and the position: `{"u":256}` into a `u8` field reads `256 is out of range for… | bb44db4445 |
 | B-2026-11-20-24 | runtime+typecheck | medium | An unknown `#[serde(...)]` key is ignored silently: `#[serde(skip_serialising)] password: String` writes the password, `#[serde(tagg: "kind")]` leave… | e524c2d0b9 |
 | B-2026-11-20-25 | runtime | low | `Json.serialize` writes a float in Kāra's own text, not the JSON text `Json.stringify` writes: `1e-7` is `1e-07`, `0.00001` is `1e-05`, `0.00001234`… | e524c2d0b9 |
 | B-2026-11-20-26 | runtime | low | `Str` implements no `Serialize`, though log.md § Fields lists it among the value types: `log.info("seen", who: s)` with `s: Str` is refused E0200, an… | e524c2d0b9 |
+| B-2026-11-20-27 | runtime+typecheck | medium | A `#[serde(skip)]` field must still implement `Serialize` and `Deserialize`: `#[serde(skip)] c: Cache` with `Cache: Default` is refused E0200 "`Cache… | bb44db4445 |
 | B-2026-11-20-29 | runtime | medium | An `f64` field reads JSON `null` as NaN: `{"f":null}` deserializes to `f: NaN` with no error, where serde_json refuses `invalid type: null, expected… | e524c2d0b9 |
+| B-2026-11-20-30 | other | low | design.md § Serialize and Deserialize lists `Serializer` and `Deserializer` methods that do not exist in serde.kara or have other signatures: `serial… | bb44db4445 |
 | B-2026-11-20-31 | mir-llvm | high | A channel end dropped while the other side's last end drops on another worker read the channel's drop glue after releasing its lock (karac_mir_chan_e… | 17af81db2d |
 | B-2026-11-20-32 | typecheck | medium | The `let mut` rule reads a library method's receiver off its first parameter after `self`: `let br = BufReader.new(f); br.read_line(mut s)` is refuse… | df407eace1 |
 | B-2026-11-20-33 | typecheck | low | An inner `fold` seeded `0` whose items are `i32`, `rows.iter().fold(0, \|richest, row\| max(richest, row.iter().fold(0, \|sum, money\| sum + money)))` re… | 93fd9b2078 |
