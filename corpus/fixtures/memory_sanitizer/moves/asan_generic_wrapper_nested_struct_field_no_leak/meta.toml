@@ -1,17 +1,16 @@
 source = "tests/memory_sanitizer/moves.rs::asan_generic_wrapper_nested_struct_field_no_leak"
 dedup_of = []
-expect = "error:E0200"
-exit = 1
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-expected_from = "legacy-run"
-legacy_backend = "legacy-build"
-legacy_exit = 1
+expected_from = "spec"
 rules = []
 backends = []
 env = {}
-bucket = "e-not-refused:E0200"
-classified_with = "9913c6855"
+note = "arithmetic: for i in 0..40 two strings of i's digits, 2 x (10 x 1 + 30 x 2) = 140. The legacy record was error:E0200; v2 checks it and the interpreter and the ASan build print this. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "7278fd727+local"
 extracted_src = "4c7cfec8"
 model_rev = "3acf4472"
 model_src = "4c7cfec8"

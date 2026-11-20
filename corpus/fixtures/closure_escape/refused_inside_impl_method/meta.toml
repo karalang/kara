@@ -1,17 +1,16 @@
 source = "tests/closure_escape.rs::refused_inside_impl_method"
 dedup_of = []
-expect = "error:E0200"
-exit = 1
+expect = "stdout"
+exit = 0
 tags = ["closure", "post-m1:escaping"]
 class = "e"
-expected_from = "legacy-run"
-legacy_backend = "legacy-build"
-legacy_exit = 1
+expected_from = "spec"
 rules = []
 backends = []
 env = {}
-bucket = "e-not-refused:E0200"
-classified_with = "9913c6855"
+note = "core-semantics.md §9.3: a returned closure that captures the Copy `b` by move escapes, so `fac.make()(1)` is 1 + 2 = 3. The legacy record was error:E0200; v2 checks it and the interpreter and the ASan build print this. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "7278fd727+local"
 extracted_src = "dc27dfdf"
 model_rev = "3acf4472"
 model_src = "dc27dfdf"

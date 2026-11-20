@@ -1,17 +1,16 @@
 source = "tests/memory_sanitizer/option_result.rs::asan_boxed_optres_payload_view_move_has_one_owner"
 dedup_of = []
-expect = "error:E0200"
-exit = 1
+expect = "stdout"
+exit = 0
 tags = []
 class = "e"
-expected_from = "legacy-run"
-legacy_backend = "legacy-build"
-legacy_exit = 1
+expected_from = "spec"
 rules = []
 backends = []
 env = {}
-bucket = "e-not-refused:E0200"
-classified_with = "9913c6855"
+note = "arithmetic: 200 rounds of six 19-byte names, 200 x 114 = 22800. The legacy record was error:E0200; v2 checks it and the interpreter and the ASan build print this. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "7278fd727+local"
 extracted_src = "dab289d3"
 model_rev = "3acf4472"
 model_src = "dab289d3"

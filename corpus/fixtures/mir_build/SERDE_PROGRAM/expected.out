@@ -1,0 +1,5 @@
+{"server_name":"a\"b","port":9,"shapes":["Dot",{"Circle":2},{"Rect":[3,4]},{"Named":{"label":"t"}}],"sorted":{"1":"one","2":"two"},"nick":null}
+a"b 0 9 4 2
+8080
+[{"type":"Ping"},{"type":"Move","x":1,"y":2}] 2
+[null,3,"t"] 3
