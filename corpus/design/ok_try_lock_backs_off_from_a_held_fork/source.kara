@@ -1,0 +1,55 @@
+import std.sync.{Mutex, TaskGroup};
+import std.time.{sleep, Duration};
+
+// Five philosophers, five forks: each takes its left fork with `lock`, then
+// tries the right one with `try_lock` and backs off (dropping the left)
+// when it is taken. Every philosopher eats 20 times.
+sync struct Table {
+    forks: Vec[Mutex[i64]],
+    meals: Mutex[i64],
+}
+
+fn dine(t: Table, i: i64) {
+    let n = t.forks.len();
+    let mut eaten = 0;
+    while eaten < 20 {
+        let left = t.forks[i].lock();
+        match t.forks[(i + 1) % n].try_lock() {
+            Some(right) => {
+                left.value += 1;
+                right.value += 1;
+                t.meals.lock().value += 1;
+                eaten += 1;
+            }
+            None => {}
+        }
+        drop(left);
+        sleep(Duration.ms(0));
+    }
+}
+
+fn main() {
+    let t = Table { forks: [Mutex.new(0), Mutex.new(0), Mutex.new(0), Mutex.new(0), Mutex.new(0)], meals: Mutex.new(0) };
+    {
+        let g = TaskGroup.new();
+        for i in 0..5 {
+            g.spawn(|| dine(t, i));
+        }
+    }
+    let mut uses = 0;
+    for f in t.forks.iter() {
+        uses += f.lock().value;
+    }
+    println(f"meals {t.meals.lock().value}, fork uses {uses}");
+    // try_lock on a held mutex is None, on a free one Some
+    let m = Mutex.new(7);
+    {
+        let g = m.lock();
+        println(f"held: {m.try_lock().is_none()}");
+        g.value += 1;
+    }
+    match m.try_lock() {
+        Some(g) => println(f"free: {g.value}"),
+        None => println("free: none"),
+    }
+}

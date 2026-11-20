@@ -1,0 +1,9 @@
+source = "B-2026-11-19-30"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "concurrency", "par"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "concurrency.md § Mutex (`try_lock`, B-2026-11-19-30): `try_lock` never waits; it returns the guard when no task holds the mutex and `None` when one does, the calling task included. Five tasks each take their left fork with `lock` and try the right one with `try_lock`, backing off when it is held, until each has eaten 20 times: 100 meals, 200 fork uses. In the TSan corpus lane (tag concurrency) as the try_lock task program of the 2026-11-20 sweep."
