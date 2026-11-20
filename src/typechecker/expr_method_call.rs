@@ -1695,12 +1695,7 @@ impl<'a> super::TypeChecker<'a> {
                 // Every other argument is checked against its slot, as a
                 // plain function's is, so a literal takes the slot's types:
                 // `("abc", 0.5)` for a `(Str, f32)` parameter through a
-                // `dyn` or a bounded `T` (B-2026-11-20-3). A `String` passes
-                // as a `Str` parameter here as it does on the concrete type
-                // (B-2026-10-15-19), so a `Str` slot, or a borrowed one
-                // (a bare `x: X` at `dyn Cv[Str]`), is inferred and judged,
-                // a literal too: MIR passes its `String` constant in the
-                // slot's type (`dyn_param_ty`, B-2026-11-19-128).
+                // `dyn` or a bounded `T` (B-2026-11-20-3).
                 let str_slot = super::exprs::is_str_view(match param {
                     Type::Ref(inner) | Type::MutRef(inner) => inner,
                     t => t,
@@ -1713,11 +1708,35 @@ impl<'a> super::TypeChecker<'a> {
                         let arg_ty = self.check_expr(&arg.value, param);
                         self.check_assignable(param, &arg_ty, arg.value.span);
                     }
+                    // A `Str` slot, or a borrowed one (a bare `x: X` at
+                    // `dyn Cv[Str]`), checks its argument against the view,
+                    // so a literal, or one in an `if`'s arms, is a `Str`;
+                    // a `String` passes as a `Str` here as it does on the
+                    // concrete type (B-2026-10-15-19). MIR passes either
+                    // as the slot takes it, by the argument's own type
+                    // (`dyn_param_ty`, B-2026-11-20-13).
                     _ if str_slot => {
-                        let arg_ty = self.infer_expr(&arg.value);
-                        if !(super::exprs::is_str_view(param)
-                            && super::exprs::is_string_place_type(&arg_ty))
-                        {
+                        let view = match param {
+                            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                            t => t,
+                        };
+                        // A literal, or a branch or block that yields
+                        // one, takes the view from the slot; anything else
+                        // is inferred, so a `String` stays one.
+                        let from_slot = matches!(
+                            arg.value.kind,
+                            ExprKind::StringLit(_)
+                                | ExprKind::If { .. }
+                                | ExprKind::IfLet { .. }
+                                | ExprKind::Match { .. }
+                                | ExprKind::Block(_)
+                        );
+                        let arg_ty = if from_slot {
+                            self.check_expr(&arg.value, view)
+                        } else {
+                            self.infer_expr(&arg.value)
+                        };
+                        if !super::exprs::is_string_place_type(&arg_ty) {
                             self.check_assignable(param, &arg_ty, arg.value.span);
                         }
                     }

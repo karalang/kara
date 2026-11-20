@@ -770,6 +770,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.lcx
             .primitive(n)
             .or_else(|| self.dyn_trait_arg(dyn_ty, tr, n))
+            // `Str` as a type argument (`dyn Cv[Str]`) is named by the
+            // library's `StringSlice`, which is the view (B-2026-11-20-13).
+            .map(|t| match tcx.kind(t) {
+                HK::Adt { def, args }
+                    if tcx.list(args).is_empty() && self.lcx.def_name(def) == "StringSlice" =>
+                {
+                    tcx.intern(HK::StaticStr)
+                }
+                _ => t,
+            })
             .filter(|&t| {
                 matches!(
                     tcx.kind(t),

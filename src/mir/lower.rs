@@ -23072,6 +23072,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.call_native("String.as_str", vec![recv], Place::local(v));
             return Ok(Operand::Move(Place::local(v)));
         }
+        // The same for a borrowed `Str` slot (a bare `x: X` at `dyn
+        // Cv[Str]` or `T: Cv[Str]`): the argument's own type decides, so a
+        // `String` is viewed and the view lent, never the `String` itself
+        // lent as a `ref Str` (B-2026-11-20-13).
+        if let HK::Ref(view) = self.tys().tcx().kind(pt) {
+            if matches!(self.tys().tcx().kind(view), HK::StaticStr)
+                && matches!(self.strip_ty(at), HK::Str)
+            {
+                let recv = self.recv_ref(a, false)?;
+                let v = self.scoped_temp(view);
+                self.call_native("String.as_str", vec![recv], Place::local(v));
+                let r = self.temp(pt);
+                self.assign(r, Rvalue::Ref(BorrowKind::Shared, Place::local(v)));
+                return Ok(Operand::Move(Place::local(r)));
+            }
+        }
         // A tuple literal lent to a bare tuple parameter is built at the
         // parameter's element types and then lent, as one passed by value
         // is below: an owned place for a `ref` element (`g((a[0], b[0]))`
