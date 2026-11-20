@@ -729,53 +729,56 @@ impl<'a> UseClassifier<'a> {
         // what they read, lies after them (kata 1053's
         // `let Some(i) = r.find(|k| v[k] > 2) else { return v; }`).
         let mut extent = (stmt.span.offset, stmt.span.length);
-        let value =
-            match &stmt.kind {
-                StmtKind::Let { value, .. } => {
-                    if !self.tc.expr_type(value).is_some_and(|t| {
-                        holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
-                    }) {
-                        return;
-                    }
-                    value
+        let value = match &stmt.kind {
+            StmtKind::Let { value, .. } => {
+                if !self.statement_value_ends(value) {
+                    return;
                 }
-                StmtKind::LetElse {
-                    value, else_block, ..
-                } => {
-                    if !self.tc.expr_type(value).is_some_and(|t| {
-                        holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
-                    }) || else_block.span.offset <= stmt.span.offset
-                    {
-                        return;
-                    }
-                    extent.1 = else_block.span.offset - stmt.span.offset;
-                    value
+                value
+            }
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                if !self.statement_value_ends(value) || else_block.span.offset <= stmt.span.offset {
+                    return;
                 }
-                // An assignment's value is over by the statement's end as a
-                // `let`'s is (`n = xs.iter().filter(|v| seen.contains(v))
-                // .count();`, B-2026-11-19-36).
-                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
-                    if !self.tc.expr_type(value).is_some_and(|t| {
-                        holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
-                    }) {
-                        return;
-                    }
-                    value
+                extent.1 = else_block.span.offset - stmt.span.offset;
+                value
+            }
+            // An assignment's value is over by the statement's end as a
+            // `let`'s is (`n = xs.iter().filter(|v| seen.contains(v))
+            // .count();`, B-2026-11-19-36).
+            StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                if !self.statement_value_ends(value) {
+                    return;
                 }
-                // An `if`'s condition runs before either branch, so a branch
-                // that moves what the condition's closures read lies after them
-                // (`if ps.iter().any(|p| p.name == name) { .. } Ok(P { name })`,
-                // B-2026-11-07-4).
-                StmtKind::Expr(e) => match &e.kind {
-                    ExprKind::If { condition, .. } => {
-                        extent = (condition.span.offset, condition.span.length);
-                        condition
-                    }
-                    _ => e,
-                },
-                _ => return,
-            };
+                value
+            }
+            // An `if`'s condition runs before either branch, so a branch
+            // that moves what the condition's closures read lies after them
+            // (`if ps.iter().any(|p| p.name == name) { .. } Ok(P { name })`,
+            // B-2026-11-07-4).
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::If { condition, .. } => {
+                    extent = (condition.span.offset, condition.span.length);
+                    condition
+                }
+                _ => e,
+            },
+            _ => return,
+        };
         self.record_chain_closures(value, extent);
+    }
+
+    /// Whether a statement's value can hold none of its chain's closures
+    /// past the statement. A value that failed to type is already reported,
+    /// and nothing runs: reading its closures as outliving the statement
+    /// only added a cascade, a "moved inside a loop" whose machine fix
+    /// cloned what a filter closure borrowed (B-2026-11-19-88).
+    fn statement_value_ends(&self, value: &Expr) -> bool {
+        self.tc.expr_type(value).is_some_and(|t| {
+            matches!(t, Type::Error) || holds_no_closure_in(t, Some(self.tc), &mut Vec::new(), &[])
+        })
     }
 
     /// The closure literals of `value`'s receiver chain (or of the named

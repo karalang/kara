@@ -3353,6 +3353,23 @@ impl Parser {
             }
             return 0;
         }
+        // `std::collections::HashSet::<char>::new()`: the type's list goes
+        // into brackets with the path's fix, so the element type is kept
+        // (B-2026-11-19-89).
+        let mut whole = whole;
+        let mut kara = kara;
+        if !thread_sleep && starts_upper(&names[n - 1]) {
+            if let Some((more, args, method)) =
+                self.rewrite_type_turbofish(segments[segments.len() - 1] + 1)
+            {
+                let end = self.tokens[method].span;
+                whole.length = end.offset + end.length - whole.offset;
+                if let Token::Identifier { name, .. } = &self.tokens[method].token {
+                    kara = format!("{kara}[{args}].{name}");
+                }
+                edits.extend(more);
+            }
+        }
         let sleep_import = if thread_sleep {
             self.std_time_sleep_import()
         } else {
