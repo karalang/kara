@@ -910,6 +910,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   through the same borrow. `karac run`, `karac build` and the MIR
   interpreter refused it with "unary '*' requires 'ref T'"
   (B-2026-11-20-63).
+- A list literal whose later element leaves a type slot open after an
+  earlier one decided it is accepted: `[Err(1), Ok(5), Err(0)]` and `[Ok(5),
+  Err(0), Err(1)]` are a `Vec[Result[i64, i64]]`. The third element was
+  refused as "expected `Result[i64, i64]`, found `Result[T, i64]`", though
+  `[Err(1), Ok(5)]` was accepted (B-2026-11-21-4).
 - A `Map[K, V, H]` or `Set[T, H]` with a user `BuildHasher` keeps its keys
   through `extend`, `retain`, `get_mut`, `Map.from` / `Set.from` and
   `collect`. Those methods are library source written over the default

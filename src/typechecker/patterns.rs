@@ -5225,14 +5225,18 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             }
             // A slot one element leaves open (`None`'s `T`) takes the
-            // other's, as a branch join's does.
+            // other's, as a branch join's does: the open one may come after
+            // the slot is decided, `Err(0)` in `[Err(1), Ok(5), Err(0)]`
+            // (B-2026-11-21-4).
             let in_scope: std::collections::HashSet<&str> = self
                 .enclosing_bounds
                 .keys()
                 .map(|s| s.as_str())
                 .chain(["Self"])
                 .collect();
-            if find_unbound_type_param(&first_ty, &in_scope).is_some() {
+            if find_unbound_type_param(&first_ty, &in_scope).is_some()
+                || find_unbound_type_param(ty, &in_scope).is_some()
+            {
                 if let Some(joined) = self.join_branch_types(&first_ty, ty) {
                     first_ty = joined;
                     continue;
