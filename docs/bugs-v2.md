@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 569 |
 | false-positive | 320 |
-| missing-feature | 214 |
+| missing-feature | 215 |
 | perf | 189 |
 | other | 119 |
 | soundness | 105 |
@@ -83,7 +83,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 127 |
 | ownership | 122 |
 | interp | 94 |
-| runtime | 91 |
+| runtime | 92 |
 | effect | 49 |
 | resolver | 46 |
 | other | 35 |
@@ -124,14 +124,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-97 | 2026-11-19 | ownership | medium | An escaping closure that reads only a Copy field (`hs.push(|| v.id)`, `H { f: || v.id }`) must capture a copy of that field (review ruling 2026-11-19 on §9.1), but (1) for a binding whose type has a Drop body, check AND every MIR lane move the whole binding (E0514 / `move check main: use of _2.0`), and (2) for a type with no Drop body, check still says `v was moved into an escaping closure` (E0500) while the MIR lanes capture the field alone and run | — |
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
 | B-2026-11-19-113 | 2026-11-19 | ownership | medium | A closure literal handed to a named call that is itself an argument of another call (`show(twice(|| s.len()))`, `println(twice(|| s.len()))`) is taken to outlive its statement: a later move of what it reads (`let t = s;`) is refused with E0500 "moved inside a loop" in straight-line code, though `let k = twice(|| s.len()); let t = s;` is accepted | — |
-| B-2026-11-19-121 | 2026-11-19 | cli | medium | kara-lsp references and rename see only the declaration of a method or an enum variant, and miss a unit variant in a pattern and a type argument in an expression path: renaming a method, variant, enum or struct leaves uses behind, so the renamed program no longer checks (36 of 296 corpus renames) | — |
-| B-2026-11-19-122 | 2026-11-19 | cli | low | After an edit that adds an error in one function, kara-lsp keeps a warning from another, unchanged function, where `karac check` and a fresh open of the same text show only the error (warnings are dropped while errors exist) | — |
-| B-2026-11-19-124 | 2026-11-19 | cli | low | kara-lsp completion after `x.` offers methods whose impl bounds the receiver does not meet: `cloned` and `flatten` on an `Option[Wide]`, `to_string` on a `Map[i64, P]` whose `P` is not Display; choosing one gives E0236 'no method' | — |
 | B-2026-11-19-140 | 2026-11-19 | mir-llvm | high | A write through a `mut ref` to a view (`Str`, `Slice`) is lost in compiled code: `set(mut v, "b")` with `fn set(s: mut ref Str, t: Str) { *s = t; }`, `w[1] = "m"` on a `Vec[Str]` and `sl[0] = xs[0..2]` on a `Vec[Slice[i64]]` leave the old value on run, build and ASan; the MIR interpreter is right | — |
 | B-2026-11-20-3 | 2026-11-20 | typecheck | low | A tuple literal argument to a `dyn` method is not typed by the parameter: `e.tp(("abc", 0.5))` with `fn tp(self, t: (Str, f32)) -> f64` through `dyn Tp` is E0200 "expected '(Str, f32)', found '(String, f64)'"; the same literal to a plain function or an annotated `let` is accepted | — |
 | B-2026-11-20-6 | 2026-11-20 | typecheck | low | A generic `mut ref T` parameter instantiated at a reference type refuses its `mut` marker: `fn setv[T](slot: mut ref T, x: own T) { *slot = x; }` called `setv(mut p, q)` with `p`, `q` both `ref String` is E0219 "`mut` marker is not legal here: parameter expects `ref String` (not a mutable borrow)"; with `T = i64` (`setv(mut p, 5)`) it is right | — |
 | B-2026-11-20-7 | 2026-11-20 | typecheck | low | A use after a capture moved into a closure passed to a generic `own F` names a loop that does not exist: `let f = keep(|| s.len()); drop(s); println(f());` is E0500 "value 's' is moved inside a loop and not assigned again before the next iteration" in straight-line `main` | — |
 | B-2026-11-20-9 | 2026-11-20 | ownership | medium | A bare (D5-borrowed) `f: MutFn` parameter can be passed to an `own MutFn` slot such as `it.any(f)` and is accepted, although calling `f()` directly in the same body is refused as 'a borrowed MutFn': the borrowed closure is moved out of a borrow, or mutated through a shared one | — |
+| B-2026-11-20-10 | 2026-11-20 | runtime | medium | An HTTP server handler that panics is silent: the isolating group holds the panic message and the server drops it, so the connection just closes with no response and nothing is logged; ruling: log the panic to standard error and answer 500 when no response has started | — |
 
 ### Relocated
 
@@ -1873,7 +1871,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-118 | typecheck | medium | `stdout`/`stderr` `print`/`println` refused a `Str` (expected 'ref String') and `env.set` refused one for both arguments (expected 'String'), though… | 1e48265c69 |
 | B-2026-11-19-119 | typecheck | medium | `Request.header`, the client `Response.header` and `HttpError.header` took the looked-up name as `own String`, so a borrowed name was refused ("canno… | 1e48265c69 |
 | B-2026-11-19-120 | typecheck | low | `StdinLines`, the documented return type of `stdin.lines()` (io.md § Standard streams), could not be named: `fn f() -> StdinLines` was E0104 undefine… | 1e48265c69 |
+| B-2026-11-19-121 | cli | medium | kara-lsp references and rename see only the declaration of a method or an enum variant, and miss a unit variant in a pattern and a type argument in a… | 4d84505fd0 |
+| B-2026-11-19-122 | cli | low | After an edit that adds an error in one function, kara-lsp keeps a warning from another, unchanged function, where `karac check` and a fresh open of… | 4d84505fd0 |
 | B-2026-11-19-123 | typecheck | low | An undefined type name in an expression path's type arguments (`Vec[Qqq].new()`, `Option[Qqq].None`, `Mix[Zzz].N(63)`) is reported as E0516 'an expre… | 451527ebc9 |
+| B-2026-11-19-124 | cli | low | kara-lsp completion after `x.` offers methods whose impl bounds the receiver does not meet: `cloned` and `flatten` on an `Option[Wide]`, `to_string`… | 4d84505fd0 |
 | B-2026-11-19-125 | typecheck | medium | The bitwise and shift operators are refused on a generic `T` bounded by their trait (`fn f[T: BitAnd[Output = T]](a: own T, b: own T) -> T { a & b }`… | e472f1074f |
 | B-2026-11-19-126 | mir+mir-llvm | high | A `dyn Trait` call to an impl method that declares a parameter or receiver with a weaker mode than the trait (§4.7: `own` trait, borrowed impl) passe… | 44ecc0287e |
 | B-2026-11-19-127 | mir+mir-llvm | medium | A named value moved through a generic bound into an impl that borrows it (§4.7: the trait takes `own`, the instance's impl borrows) drops at the end… | 44ecc0287e |
