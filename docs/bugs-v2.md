@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 189 |
 | other | 119 |
 | soundness | 105 |
-| miscompile | 94 |
+| miscompile | 95 |
 | crash | 62 |
 | run-vs-build | 59 |
 | codegen-gap | 39 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 736 |
 | mir-llvm | 311 |
-| mir | 280 |
+| mir | 281 |
 | cli | 220 |
 | parser | 127 |
 | ownership | 122 |
@@ -118,8 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-74 | 2026-11-19 | typecheck | medium | A closure that mutates its capture (`|| { n += 1; n }`, a `MutFn`) is accepted where a stored `Fn() -> i64` is expected (a struct field, a `Vec` element, a tuple element, a generic field `G[Fn() -> i64]`), and is then called through shared access, so a call can re-enter a mutating closure; the same closure into an `Fn` parameter is refused (E0235) | — |
 | B-2026-11-19-75 | 2026-11-19 | typecheck+ownership | medium | Remainder of B-2026-11-13-3: a `MutFn` in a TUPLE element or a GENERIC struct field (`G[MutFn() -> i64]`) is callable through shared access: `fn use_it(h: (MutFn() -> i64, i64)) -> i64 { (h.0)() + (h.0)() }` and the `G { f }` form check and run (3), while a struct field typed `MutFn` and a `Vec[MutFn]` element are refused | — |
 | B-2026-11-19-76 | 2026-11-19 | typecheck | medium | A generic `F: Fn`/`MutFn`/`OnceFn` bound's kind and call access are checked on the instance, not the bound: a `MutFn` closure is accepted for `F: Fn() -> i64`, a `MutFn` is called through a bare (shared) `f: F`, and an `OnceFn` through a bare or `mut ref` `F`, whenever the instance happens not to move; the concrete function types refuse all of these (core-semantics §9.6) | — |
-| B-2026-11-19-88 | 2026-11-19 | ownership | low | When an assignment's iterator chain fails to type (E0200, `flat_map` over a closure that returns a `Vec`), a closure in the chain is again taken to outlive the statement: a spurious E0500 on a value it borrows, whose machine fix `karac fix` applies beside the real one, cloning the value | — |
-| B-2026-11-19-89 | 2026-11-19 | parser | low | A Rust turbofish on a type path in an expression is not carried: `std::collections::HashSet::<char>::new()` is fixed to `Set.new()` with the `char` argument dropped, and the bare `HashSet::<i64>::new()` stops with E0002; remainder of B-2026-11-19-34 | — |
 | B-2026-11-19-94 | 2026-11-19 | effect | low | Two `par` branches calling a generic function-typed parameter (`fn both[F: Fn() -> i64](f: F) -> i64 { let (a, b) = par { f(), f() }; a + b }`) conflict as `unknown (a call through a value)` even when the instance's closure is pure (`both(|| k)`), though core-semantics §12 computes a generic call's effects on the instance and charges a non-escaping parameter's effects at the call site | — |
 | B-2026-11-19-97 | 2026-11-19 | ownership | medium | An escaping closure that reads only a Copy field (`hs.push(|| v.id)`, `H { f: || v.id }`) must capture a copy of that field (review ruling 2026-11-19 on §9.1), but (1) for a binding whose type has a Drop body, check AND every MIR lane move the whole binding (E0514 / `move check main: use of _2.0`), and (2) for a type with no Drop body, check still says `v was moved into an escaping closure` (E0500) while the MIR lanes capture the field alone and run | — |
 | B-2026-11-19-102 | 2026-11-19 | typecheck | low | `Vec.filled(n, [false, false])`, Rust's `vec![[false, false]; n]` written as it reads, builds a heap `Vec[bool]` per element, since a list literal is a `Vec`; kata 1654's bench ran 13x Rust until it wrote `[false; 2]`, and nothing in `karac check` points at the inline `Array` | — |
@@ -131,6 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-10 | 2026-11-20 | runtime | medium | An HTTP server handler that panics is silent: the isolating group holds the panic message and the server drops it, so the connection just closes with no response and nothing is logged; ruling: log the panic to standard error and answer 500 when no response has started | — |
 | B-2026-11-20-11 | 2026-11-20 | cli | low | Remainder of B-2026-11-09-15: `karac fix` annotates a defaulted literal that reaches a narrower slot through a collection read back by a `for` loop (`a: i32`), but not one read back by index through a view binding (`right[size].push(b)` then `let ys = ref right[n - k]; ys[at]`), so `best.min(..)` stays refused with no edit | — |
 | B-2026-11-20-12 | 2026-11-20 | cli | low | The Rust linked-list cursor step `tail = mut ref tail.as_mut().unwrap().next` is refused (E_REF_OPERAND_UNSUPPORTED, correctly: a borrow through a call result, §5.1/§5.5) with no machine fix, though the accepted spelling `while let Some(n) = tail { tail = mut ref n.next; }` is a mechanical rewrite | — |
+| B-2026-11-20-13 | 2026-11-20 | mir | low | Latent: the dyn call's argument lowering (`dyn_param_ty`, B-2026-11-19-128) expects a string literal bound for a `Str` slot to arrive as its String constant, so a literal the checker types as `Str` reaching a borrowed `Str`/`X = Str` dyn slot is passed wrongly on build (seen as i05 printing 0 for 3 during B-2026-11-20-3, then avoided by keeping the infer-then-judge path) | — |
 
 ### Relocated
 
@@ -1845,6 +1844,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-85 | mir+typecheck | high | A closure that writes a capture and then moves it out (`\|\| { agent.serve(); agent }`) checks clean but `run`/`build` refuse it as "cannot move a non-… | 53f86eb754 |
 | B-2026-11-19-86 | ownership | high | A `shared` handle reaches a `TaskGroup` task through a captured PARAMETER: `fn sp(g: TaskGroup, x: own C) -> TaskHandle[i64] { g.spawn(\|\| { let y = x… | a67e88ba16 |
 | B-2026-11-19-87 | effect | high | A public inherent method with no `with` clause is never checked against its declaration, and a public caller is charged none of its effects: `impl Jo… | 8d7ee29159 |
+| B-2026-11-19-88 | ownership | low | When an assignment's iterator chain fails to type (E0200, `flat_map` over a closure that returns a `Vec`), a closure in the chain is again taken to o… | e68bb1d929 |
+| B-2026-11-19-89 | parser | low | A Rust turbofish on a type path in an expression is not carried: `std::collections::HashSet::<char>::new()` is fixed to `Set.new()` with the `char` a… | e68bb1d929 |
 | B-2026-11-19-90 | mir | medium | `v = v` (a binding assigned its own value) is lowered as `drop(v); v = move v`: the old value is dropped before it is moved into the store, and the M… | bd214fffc0 |
 | B-2026-11-19-91 | typecheck | low | A `Some(x)` inside a tuple pushed into a `Vec[(.., Option[T])]`, `x` a borrowed shared handle or `Copy` value (`below.push((right, Some(node)))` with… | bd214fffc0 |
 | B-2026-11-19-92 | cli+interp | low | In `karac repl`, a panic's place names the line of the program the session runs a cell as, not the cell: an item's uncaught panic reports `<repl>:3:5… | 3a088de48e |
