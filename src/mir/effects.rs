@@ -1780,7 +1780,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Atomic", "load" | "store" | "swap" | "compare_exchange" | "fetch_add" | "fetch_sub") => {
             vec![]
         }
-        ("Mutex", "lock" | "try_lock" | "acquire") => vec![(Blocks, "", None)],
+        ("Mutex", "lock" | "acquire") => vec![(Blocks, "", None)],
+        // The try form never waits (B-2026-11-19-30).
+        ("Mutex", "try_lock" | "try_mark" | "held_value") => vec![],
         // A group's own natives; `spawn` is charged with its task's effects
         // in `call_effects`.
         (

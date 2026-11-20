@@ -176,6 +176,10 @@ const ALWAYS_KEPT: &[&str] = &[
     "acquire",
     "release",
     "lock",
+    // `Mutex.try_lock` and its natives (B-2026-11-19-30).
+    "try_lock",
+    "try_mark",
+    "held_value",
     // What a `select` stands for (`crate::select_desugar`), written after
     // this pass reads the program.
     "__closed",

@@ -367,6 +367,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_mutex_ready,
         mir_task::karac_mir_mutex_acquire,
         mir_task::karac_mir_mutex_release,
+        mir_task::karac_mir_mutex_try_acquire,
         mir::karac_mir_chan_ready,
         mir::karac_mir_chan_closed,
         mir_task::karac_mir_select_epoch,

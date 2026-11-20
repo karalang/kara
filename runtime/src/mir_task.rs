@@ -3170,6 +3170,23 @@ pub extern "C" fn karac_mir_mutex_acquire(cell: *mut u8) {
     }
 }
 
+/// `Mutex[T].try_lock`'s mark: 1 with the mutex at `cell` now held by the
+/// running task when no task held it, else 0. It never waits, so it names
+/// no wait site (B-2026-11-19-30).
+#[no_mangle]
+pub extern "C" fn karac_mir_mutex_try_acquire(cell: *mut u8) -> u8 {
+    let cell = cell as usize;
+    let me = if pooled() { task_id() } else { 0 };
+    HELD.with(|h| {
+        if h.iter().any(|&(c, _)| c == cell) {
+            0
+        } else {
+            h.push((cell, me));
+            1
+        }
+    })
+}
+
 /// `Mutex[T].release`: frees the mutex at `cell` for the next task waiting
 /// on it, in the order they parked.
 #[no_mangle]

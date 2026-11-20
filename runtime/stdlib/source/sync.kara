@@ -180,6 +180,17 @@ impl[T] Mutex[T] {
         MutexGuard { value: self.acquire(), mutex: self }
     }
 
+    /// The guard when no task holds the mutex, else `None`. It never waits:
+    /// the try form of `lock`, for a back-off that lets go of what it holds
+    /// when the second lock is taken (B-2026-11-19-30).
+    fn try_lock(ref self) -> Option[MutexGuard[T]] {
+        if self.try_mark() {
+            Some(MutexGuard { value: self.held_value(), mutex: self })
+        } else {
+            None
+        }
+    }
+
     /// Consumes the mutex and returns the value it protected. The mutex is
     /// owned here, so no task holds it and nothing waits.
     #[compiler_builtin]
@@ -192,6 +203,19 @@ impl[T] Mutex[T] {
     #[compiler_builtin]
     fn acquire(ref self) -> mut ref T with blocks {
         self.acquire()
+    }
+
+    // Marks the mutex held and answers `true` when no task holds it, else
+    // `false`; it never waits. A native of each MIR backend.
+    #[compiler_builtin]
+    fn try_mark(ref self) -> bool {
+        false
+    }
+
+    // The protected value of a mutex `try_mark` marked held.
+    #[compiler_builtin]
+    fn held_value(ref self) -> mut ref T {
+        self.held_value()
     }
 
     // Clears the mark `acquire` set, for the next waiting task.

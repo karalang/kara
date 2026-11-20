@@ -3150,7 +3150,9 @@ impl<'a> Interp<'a> {
             ("Mutex", "new" | "get_mut" | "into_inner") => {
                 self.atomic_method(name, method, args, ret)
             }
-            ("Mutex", "acquire" | "release") => self.mutex_method(name, method, &args),
+            ("Mutex", "acquire" | "release" | "try_mark" | "held_value") => {
+                self.mutex_method(name, method, &args)
+            }
             // Only the library entry's methods: a user `struct Entry` keeps
             // its own (derived `clone`, ...) through the arms below.
             ("Entry", "and_modify" | "or_insert" | "or_insert_with") => {
@@ -9517,6 +9519,14 @@ impl<'a> Interp<'a> {
         let cell = self.atomic_cell(recv, name)?;
         let at = self.held_locks.iter().position(|c| *c == cell);
         match (method, at) {
+            // `try_lock` never waits: a mutex any task holds is a `false`
+            // (B-2026-11-19-30).
+            ("try_mark", None) => {
+                self.held_locks.push(cell);
+                Ok(Value::Bool(true))
+            }
+            ("try_mark", Some(_)) => Ok(Value::Bool(false)),
+            ("held_value", _) => Ok(Value::Ref(cell)),
             ("acquire", None) => {
                 self.held_locks.push(cell.clone());
                 Ok(Value::Ref(cell))

@@ -249,12 +249,24 @@ impl<'ctx> Cx<'ctx, '_> {
         args: &[Operand],
         dest: &Place,
     ) -> R<Option<()>> {
-        let ([recv], "acquire" | "release") = (args, method) else {
+        let ([recv], "acquire" | "release" | "try_mark" | "held_value") = (args, method) else {
             return Ok(None);
         };
         let (cell, _) = self.cell_arg(recv)?;
         if method == "release" {
             self.rt("mutex_release", &[cell.into()])?;
+            return Ok(Some(()));
+        }
+        // `try_lock`'s halves (B-2026-11-19-30): the mark never waits, so
+        // it has no wait site, and the value is the cell it marked.
+        if method == "try_mark" {
+            let ok = self.rt_flag("mutex_try_acquire", &[cell.into()])?;
+            self.store_bool(dest, ok)?;
+            return Ok(Some(()));
+        }
+        if method == "held_value" {
+            let d = self.place_ptr(dest)?;
+            self.store(d, cell.into())?;
             return Ok(Some(()));
         }
         self.wait_site()?;

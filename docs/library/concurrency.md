@@ -201,6 +201,7 @@ Each task borrows its `url` from `urls`, which outlives the group. For a collect
 impl[T] Mutex[T] {
     fn new(value: own T) -> Mutex[T]
     fn lock(self) -> MutexGuard[T] with blocks
+    fn try_lock(self) -> Option[MutexGuard[T]]
     fn into_inner(own self) -> T
 }
 
@@ -230,6 +231,7 @@ impl Stats {
 ```
 
 - **The guard is a view** of the mutex: it cannot outlive the mutex, and it cannot be stored in a field of a `shared`, `sync` or `frozen` type, a global or a channel ([core-semantics.md §5.7](../core-semantics.md#5-references-and-views-c5)).
+- **`try_lock`** never waits: it returns the guard when no task holds the mutex, and `None` when one does, the task that calls it included. It is how a task that already holds one lock tries a second and backs off instead of waiting, as Rust's `Mutex::try_lock`, Go's `TryLock` and Java's `tryLock` do: `if let Some(right) = forks[r].try_lock() { .. }`, else drop the first guard and start again. It adds no effect (B-2026-11-19-30).
 - **`into_inner`** consumes the mutex and returns its value, as Rust's does, once the tasks that shared it are done (after their group has dropped): `let totals = stats.into_inner();`. There is no poisoning, so it returns the value itself, not a `Result` (B-2026-11-15-35).
 - **No poisoning.** A panic ends the process, so a lock is never left held by a failed task.
 - **Effect-transparent.** Code run while holding the lock has its ordinary effects, counted as if there were no lock; `lock` itself adds only `blocks`. The effect system orders access to whole resources at compile time, and a `Mutex` orders access within one resource at run time.

@@ -449,6 +449,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `Mutex[T].try_lock()`: the guard when no task holds the mutex, `None`
+  when one does, without waiting, as Rust's `Mutex::try_lock`, Go's
+  `TryLock` and Java's `tryLock` do. A task holding one lock can try a
+  second and back off (the dining philosophers' deadlock-free form). It
+  adds no effect; `lock` still adds `blocks` (B-2026-11-19-30).
 - `SortedMap.lower(k)` and `SortedMap.higher(k)`, the entries with the
   largest key below `k` and the smallest above it, beside `floor` and
   `ceiling` (B-2026-11-19-82). `Slice.starts_with(prefix)` and
