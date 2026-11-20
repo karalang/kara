@@ -287,14 +287,24 @@ pub fn run_with_options(opts: ReplOptions) {
             // Brace/paren balance probe — fall into multi-line mode while the
             // input is structurally incomplete. Strings and comments are coarse-
             // tracked so braces inside them don't trip the probe.
-            while !is_balanced(&buffer) {
+            while !is_balanced(&buffer) || ends_mid_expression(&buffer) {
                 let next = match editor.readline(prompt) {
                     Ok(l) => l,
                     Err(ReadlineError::Interrupted) => {
                         buffer.clear();
                         break;
                     }
-                    Err(ReadlineError::Eof) => break,
+                    Err(ReadlineError::Eof) => {
+                        // The input ended inside the cell: say so, rather
+                        // than run it and report the program it is spliced
+                        // into (`expected `}`` at a `fn main() {}` the user
+                        // never wrote, B-2026-11-20-95).
+                        eprintln!(
+                            "error: the input ended inside an unfinished cell (an open bracket, or a line ending in an operator); the cell was not run"
+                        );
+                        buffer.clear();
+                        break;
+                    }
                     Err(e) => {
                         eprintln!("error: {e}");
                         buffer.clear();
@@ -304,7 +314,11 @@ pub fn run_with_options(opts: ReplOptions) {
                 buffer.push_str(&next);
                 buffer.push('\n');
             }
-            if !piped || buffer.trim().is_empty() || !is_balanced(&buffer) {
+            if !piped
+                || buffer.trim().is_empty()
+                || !is_balanced(&buffer)
+                || ends_mid_expression(&buffer)
+            {
                 break;
             }
             match editor.readline(prompt) {
@@ -2344,6 +2358,51 @@ impl Session {
             .run(move || crate::mir::interp::set_thread_source_map(Some(map)));
     }
 
+    /// `col` (of line `syn_line` of `synthetic`, line `l` of cell `cell`)
+    /// as a column of the cell as typed. An earlier cell that ended in a
+    /// bare expression runs as `let _ = <expr>;` ([`as_statements`]), so a
+    /// place after that `let _ = ` is that many columns too far right:
+    /// `eat(w)`'s `w` read `cell 3:1:13`, and `--auto-clone`, which finds
+    /// the move by that place, cloned nothing (B-2026-11-20-93).
+    fn cell_column(
+        &self,
+        synthetic: &str,
+        syn_line: usize,
+        cell: usize,
+        l: usize,
+        col: &str,
+    ) -> String {
+        const SHOW: &str = "let _ = ";
+        let unchanged = col.to_string();
+        let Ok(n) = col.parse::<usize>() else {
+            return unchanged;
+        };
+        let Some(src) = cell.checked_sub(1).and_then(|i| self.cell_history.get(i)) else {
+            return unchanged;
+        };
+        let Some(r) = tail_expr(src.trim_end()) else {
+            return unchanged;
+        };
+        let line_start = src[..r.start].rfind('\n').map_or(0, |i| i + 1);
+        if src[..r.start].matches('\n').count() + 1 != l {
+            return unchanged;
+        }
+        // The column the tail starts at, and that line as the program has it.
+        let tail_col = src[line_start..r.start].chars().count() + 1;
+        let Some(text) = synthetic.lines().nth(syn_line.wrapping_sub(1)) else {
+            return unchanged;
+        };
+        let rewritten = text
+            .char_indices()
+            .nth(tail_col - 1)
+            .is_some_and(|(i, _)| text[i..].starts_with(SHOW));
+        if rewritten && n >= tail_col + SHOW.len() {
+            (n - SHOW.len()).to_string()
+        } else {
+            unchanged
+        }
+    }
+
     fn relabel_v2(&self, synthetic: &str, text: &str) -> String {
         let line_of = |at: usize| synthetic[..at.min(synthetic.len())].matches('\n').count() + 1;
         let cells: Vec<(usize, usize, usize)> = self
@@ -2368,9 +2427,13 @@ impl Session {
                     (Some(l), Some(col)) => (l.as_str(), col.as_str()),
                     _ => (&c[3], &c[4]),
                 };
-                match place(line.parse().unwrap_or(0)) {
+                let syn_line: usize = line.parse().unwrap_or(0);
+                match place(syn_line) {
                     Some((SHOW_CELL, l)) => format!("%show:{l}:{col}"),
-                    Some((cell, l)) => format!("cell {cell}:{l}:{col}"),
+                    Some((cell, l)) => {
+                        let col = self.cell_column(synthetic, syn_line, cell, l, col);
+                        format!("cell {cell}:{l}:{col}")
+                    }
                     None => c[0].to_string(),
                 }
             }));
@@ -2891,7 +2954,12 @@ impl Session {
 
         // Checked as a cell is, the library in scope, so a session
         // binding's type (`String`, `Vec[i64]`) is known.
-        let (program, typed) = crate::cli::repl_v2::typed(&s)?;
+        let at_line = s[..s.find(&body).unwrap_or(0)].matches('\n').count() + 1;
+        let (program, typed) = crate::cli::repl_v2::typed(&s).map_err(|errs| {
+            errs.iter()
+                .map(|e| type_place(e, at_line))
+                .collect::<Vec<_>>()
+        })?;
         lookup_let_rhs_type(&program, &typed, "__t").ok_or_else(|| {
             vec!["(could not infer type — typechecker did not record one)".to_string()]
         })
@@ -2996,13 +3064,27 @@ impl Session {
             out.push_str(&items_section);
             out.push_str("\n\n");
         }
+        // A session whose cells use `?` ran as the body of a
+        // `fn main() -> Result[(), AnyError]` (deferred.md § Cell Scope), so
+        // the saved `main` says so and ends in `Ok(())`; a plain `fn main()`
+        // refused the saved file's first `?` (B-2026-11-20-94).
+        let fallible = self.cell_history.iter().any(|c| uses_question(c));
         out.push_str("fn main()");
+        if fallible {
+            out.push_str(" -> Result[(), AnyError]");
+        }
         if !effects.is_empty() {
             out.push_str(" with ");
             out.push_str(&effects);
         }
         out.push_str(" {\n");
         out.push_str(&body);
+        if fallible {
+            if !body.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("    Ok(())\n");
+        }
         out.push_str("}\n");
         out
     }

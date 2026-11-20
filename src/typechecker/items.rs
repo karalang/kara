@@ -12877,6 +12877,19 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `value` is a field or tuple projection (or the name itself) of a
+    /// binding typed `ref T`: `h.pe` with `h: ref H`.
+    fn projection_of_a_ref_binding(&self, value: &Expr) -> bool {
+        let mut root = value;
+        while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+            &root.kind
+        {
+            root = object;
+        }
+        matches!(&root.kind, ExprKind::Identifier(n)
+            if matches!(self.local_scope.lookup(n), Some(Type::Ref(_))))
+    }
+
     fn reject_borrow_by_annotation(&mut self, value: &Expr, declared: &Type) {
         if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source)
             || !super::expr_ops::is_named_place_projection(value)
@@ -12894,6 +12907,17 @@ impl<'a> super::TypeChecker<'a> {
             Some((Type::Ref(_) | Type::MutRef(_), _))
         ) {
             return;
+        }
+        // So is a view (core-semantics.md §5.1): a binding a pattern took
+        // apart from a borrowed place, `let (r, k) = h.pe` with `h` a bare
+        // parameter, is a `ref` whose type reads as the element's, and
+        // `let m: ref R = r` copies it (B-2026-11-20-67).
+        if op == "ref" {
+            if let ExprKind::Identifier(name) = &value.kind {
+                if self.local_scope.is_view(name) || self.local_scope.is_borrowed_part(name) {
+                    return;
+                }
+            }
         }
         self.type_error_with_fix_it(
             format!(
@@ -13433,6 +13457,18 @@ impl<'a> super::TypeChecker<'a> {
                 if borrowed_destructure {
                     for name in pattern.binding_names() {
                         self.local_scope.mark_view(&name);
+                    }
+                }
+                // The MIR pipeline's typecheck marks no views, so it records
+                // the names a pattern takes out of a place reached through a
+                // `ref` (a bare parameter is one there) for
+                // `reject_borrow_by_annotation` (B-2026-11-20-67).
+                if !self.cli_lint_overrides.strict_core
+                    && !matches!(pattern.kind, PatternKind::Binding(_))
+                    && self.projection_of_a_ref_binding(value)
+                {
+                    for name in pattern.binding_names() {
+                        self.local_scope.mark_borrowed_part(&name);
                     }
                 }
                 // B-2026-10-12-28: on the MIR pipeline a `SortedMap.floor` /

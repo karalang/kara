@@ -1084,6 +1084,35 @@ pub(super) fn continues_chain(line: &str) -> bool {
     t.starts_with('.') && !t.starts_with("..")
 }
 
+/// Does `src` end in an operator that needs a right operand (`let t = 1 +`,
+/// `a &&`, `let x =`)? Such a line is not a whole cell, so the REPL reads
+/// on, as it does for an open bracket (B-2026-11-20-95). An open range's
+/// `..` / `..=` is a whole expression, and a `?` or a closing `|` of a
+/// closure's parameters never ends one here.
+pub(super) fn ends_mid_expression(src: &str) -> bool {
+    let Some(last) = src.lines().rev().map(str::trim).find(|l| !l.is_empty()) else {
+        return false;
+    };
+    // A line comment ends the line: read what is before it, when the
+    // line has no string a `//` could be inside.
+    let last = match last.find("//") {
+        Some(at) if !last[..at].contains('"') => last[..at].trim_end(),
+        _ => last,
+    };
+    if last.ends_with("..") || last.ends_with("..=") {
+        return false;
+    }
+    const OPS: [&str; 22] = [
+        "&&", "||", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "??", "|>", "->", "=>",
+        "+", "-", "*", "/", "%", "=", "<",
+    ];
+    let word = last
+        .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("");
+    OPS.iter().any(|op| last.ends_with(op)) || matches!(word, "and" | "or" | "not")
+}
+
 /// Cheap structural-balance probe: returns `false` when the input clearly
 /// has more open delimiters than close. Skips characters inside string
 /// literals (`"..."`), char literals (`'.'`), and line comments (`// …`)
@@ -1252,6 +1281,56 @@ pub(super) fn with_shown_value(cell: &str, tail: std::ops::Range<usize>) -> (Str
         ),
         (false, _) => (format!("{}{head}{rest}", &cell[..tail.start]), 0),
     }
+}
+
+/// A `:type` error (`e`) as a place in the expression the user typed: the
+/// expression is checked as `let __t = <expr>;` on line `at_line` of a
+/// program the user never sees, which the error named (`<repl>:8:11`,
+/// `8 | let __t = nosuch;`). It now reads `:type:1:1` over the expression
+/// itself (B-2026-11-20-96). Places elsewhere are left as they are.
+pub(super) fn type_place(e: &str, at_line: usize) -> String {
+    const HEAD: &str = "let __t = ";
+    let header = format!("<repl>:{at_line}:");
+    let gutter = format!("{at_line} | {HEAD}");
+    let mut out: Vec<String> = Vec::new();
+    let mut shift_caret = false;
+    for line in e.lines() {
+        if std::mem::take(&mut shift_caret) {
+            if let Some(bar) = line.find("| ") {
+                let (lead, rest) = line.split_at(bar + 2);
+                let rest = rest.strip_prefix(&" ".repeat(HEAD.len())).unwrap_or(rest);
+                out.push(format!("{lead}{rest}"));
+                continue;
+            }
+        }
+        if let Some(at) = line.find(&header) {
+            let after = &line[at + header.len()..];
+            let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(col) = digits.parse::<usize>() {
+                let col = col.saturating_sub(HEAD.len()).max(1);
+                out.push(format!(
+                    "{}:type:1:{col}{}",
+                    &line[..at],
+                    &after[digits.len()..]
+                ));
+                continue;
+            }
+        }
+        if let Some(at) = line.find(&gutter) {
+            let width = at + at_line.to_string().len();
+            let code = &line[at + gutter.len()..];
+            let code = code.strip_suffix(';').unwrap_or(code);
+            out.push(format!("{:>width$} | {code}", 1));
+            shift_caret = true;
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    let mut joined = out.join("\n");
+    if e.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 #[cfg(test)]

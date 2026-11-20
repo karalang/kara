@@ -633,6 +633,10 @@ pub(super) struct LocalTypeScope {
     /// tuple literal holds such a binding as the reference it is (core
     /// semantics §4.6, B-2026-11-06-4). Cleared like `views`.
     ref_patterns: Vec<FxHashSet<String>>,
+    /// Per scope, on the MIR pipeline's typecheck (which marks no views),
+    /// the names a pattern bound out of a bare parameter (B-2026-11-20-67).
+    /// Cleared like `views`.
+    borrowed_parts: Vec<FxHashSet<String>>,
 }
 
 impl LocalTypeScope {
@@ -643,6 +647,7 @@ impl LocalTypeScope {
             lent_iters: vec![Default::default()],
             parts_of: vec![Default::default()],
             ref_patterns: vec![Default::default()],
+            borrowed_parts: vec![Default::default()],
         }
     }
 
@@ -652,6 +657,7 @@ impl LocalTypeScope {
         self.lent_iters.push(Default::default());
         self.parts_of.push(Default::default());
         self.ref_patterns.push(Default::default());
+        self.borrowed_parts.push(Default::default());
     }
 
     pub(super) fn pop(&mut self) {
@@ -660,6 +666,7 @@ impl LocalTypeScope {
         self.lent_iters.pop();
         self.parts_of.pop();
         self.ref_patterns.pop();
+        self.borrowed_parts.pop();
     }
 
     pub(super) fn insert(&mut self, name: String, ty: Type) {
@@ -673,6 +680,9 @@ impl LocalTypeScope {
             v.remove(name.as_str());
         }
         if let Some(v) = self.ref_patterns.last_mut() {
+            v.remove(name.as_str());
+        }
+        if let Some(v) = self.borrowed_parts.last_mut() {
             v.remove(name.as_str());
         }
         if let Some(scope) = self.scopes.last_mut() {
@@ -702,6 +712,26 @@ impl LocalTypeScope {
     /// Does `name` resolve to a binding marked by [`Self::mark_ref_pattern`]?
     pub(super) fn is_ref_pattern(&self, name: &str) -> bool {
         for (scope, marks) in self.scopes.iter().zip(self.ref_patterns.iter()).rev() {
+            if scope.contains_key(name) {
+                return marks.contains(name);
+            }
+        }
+        false
+    }
+
+    /// Mark `name`, already bound in the innermost scope, as bound out of a
+    /// bare parameter (B-2026-11-20-67).
+    pub(super) fn mark_borrowed_part(&mut self, name: &str) {
+        if self.scopes.last().is_some_and(|s| s.contains_key(name)) {
+            if let Some(v) = self.borrowed_parts.last_mut() {
+                v.insert(name.to_string());
+            }
+        }
+    }
+
+    /// Does `name` resolve to a binding marked by [`Self::mark_borrowed_part`]?
+    pub(super) fn is_borrowed_part(&self, name: &str) -> bool {
+        for (scope, marks) in self.scopes.iter().zip(self.borrowed_parts.iter()).rev() {
             if scope.contains_key(name) {
                 return marks.contains(name);
             }
