@@ -20,6 +20,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `BufReader.fill_buf` and `BufReader.consume` on a plain `let` (E0510).
+  Both take `mut ref self`, so the reader is `let mut br`, as for any other
+  method that writes its receiver; they were accepted on a plain `let`. A
+  `VolatileCell.write` likewise now needs, and uses, the `let mut` it was
+  told it did not need (B-2026-11-20-32).
 - A bare `MutFn` parameter handed to an `own` function parameter (core
   semantics §9.6, E0518). `fn has(v: ref Vec[i64], f: MutFn(i64) -> bool)
   -> bool { v.iter().cloned().any(f) }` was accepted, though `f` is
@@ -2186,6 +2191,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `let br = BufReader.new(f); br.read_line(mut s)` is no longer refused with
+  E0510 `declared without mut`: `read_line` and `read_to_string` take `ref
+  self` (io.md), and the check had read the `buf: mut ref String` after
+  `self` as the receiver. A `let mut br` that only reads lines now gets the
+  `unused_mut` warning (B-2026-11-20-32).
 - New lint `vec_per_element` (warn): `let seen = Vec.filled(n, [false,
   false]);` whose rows are only indexed puts a separate heap `Vec` in every
   slot, since a list literal is a `Vec` unless an `Array` is expected

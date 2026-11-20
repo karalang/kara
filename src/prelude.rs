@@ -1605,6 +1605,43 @@ pub fn gated_stdlib_program(index: usize) -> &'static Program {
     })
 }
 
+/// The receiver of library method `ty.method` as its source declares it
+/// (`BufReader.read_line` takes `ref self`, `BufReader.consume` takes
+/// `mut ref self`), or `None` for a name no library impl declares. The
+/// environment's method signatures leave the receiver out, so a check that
+/// needs it for a type whose impls are not spliced into the program reads it
+/// here (B-2026-11-20-32).
+pub fn library_method_self_param(ty: &str, method: &str) -> Option<crate::ast::SelfParam> {
+    static MODES: LazyLock<HashMap<String, crate::ast::SelfParam>> = LazyLock::new(|| {
+        let mut out = HashMap::new();
+        let programs = STDLIB_PROGRAMS
+            .iter()
+            .map(|(_, p)| p)
+            .chain(GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| *p));
+        for program in programs {
+            for item in &program.items {
+                let Item::ImplBlock(imp) = item else { continue };
+                let TypeKind::Path(path) = &imp.target_type.kind else {
+                    continue;
+                };
+                let Some(head) = path.segments.last() else {
+                    continue;
+                };
+                for it in &imp.items {
+                    if let crate::ast::ImplItem::Method(m) = it {
+                        if let Some(sp) = &m.self_param {
+                            out.entry(format!("{head}.{}", m.name))
+                                .or_insert_with(|| sp.clone());
+                        }
+                    }
+                }
+            }
+        }
+        out
+    });
+    MODES.get(&format!("{ty}.{method}")).cloned()
+}
+
 /// Where the spans of the [`GATED_STDLIB_SOURCES`] entry at `index` start: a
 /// quarter of the address range up, with room for a 16 MiB module each.
 pub fn gated_span_base(index: usize) -> usize {

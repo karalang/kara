@@ -2540,6 +2540,14 @@ impl Walk<'_, '_> {
             if name == "Atomic" {
                 return Some(false);
             }
+            // A `TaskGroup` is a handle its tasks are spawned through: a
+            // plain `let` group and a bare `group: TaskGroup` parameter
+            // spawn (design.md's `serve`, core-semantics §9.5), though the
+            // library declares the builtin `spawn` with `mut ref self`
+            // (B-2026-11-20-32).
+            if name == "TaskGroup" {
+                return Some(false);
+            }
             // core-types.md's `mut ref self` methods of `Option`. `take` and
             // `replace` are builtins with no Kāra body, so nothing above
             // finds their mode, and a bare parameter's `o.take()` emptied the
@@ -2552,15 +2560,20 @@ impl Walk<'_, '_> {
             {
                 return Some(true);
             }
-            // A baked stdlib impl is in the env only: its receiver is the
-            // method signature's first parameter.
-            let baked = self.tc.env.impls.iter().find_map(|imp| {
-                let sig = imp
-                    .methods
-                    .get(method)
-                    .filter(|_| &imp.target_type == name)?;
-                sig.params.first().map(|p| matches!(p, Type::MutRef(_)))
-            });
+            // A baked stdlib impl is in the env only, and its signature
+            // leaves the receiver out: the first parameter it lists is the
+            // first after `self` (`BufReader.read_line`'s `buf: mut ref
+            // String`), so the receiver comes from the library's source
+            // (B-2026-11-20-32).
+            let baked = crate::prelude::library_method_self_param(name, method)
+                .filter(|_| {
+                    self.tc
+                        .env
+                        .impls
+                        .iter()
+                        .any(|imp| &imp.target_type == name && imp.methods.contains_key(method))
+                })
+                .map(|sp| matches!(sp, SelfParam::MutRef));
             // A growable collection whose methods are compiler builtins
             // (`VecDeque.push_back`) is the one the mutating names describe;
             // a value type's `reverse` (`Vector`) is not (B-2026-11-09-101).
