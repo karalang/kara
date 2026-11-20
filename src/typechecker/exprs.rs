@@ -6129,7 +6129,7 @@ impl<'a> super::TypeChecker<'a> {
     /// a borrow (not `own`, not `mut ref`), no other argument and no receiver
     /// of the call names `x`'s root, and `x`'s type has no hand-written
     /// `impl Clone`, whose body might do more than copy.
-    fn lint_redundant_clones(&mut self, args: &[CallArg], params: &[Type]) {
+    pub(super) fn lint_redundant_clones(&mut self, args: &[CallArg], params: &[Type]) {
         let receiver = self.call_receiver_roots.last().cloned().flatten();
         for (i, (arg, param)) in args.iter().zip(params).enumerate() {
             if !matches!(param, Type::Ref(_)) || arg.mut_marker {

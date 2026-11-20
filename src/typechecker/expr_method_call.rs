@@ -1777,6 +1777,10 @@ impl<'a> super::TypeChecker<'a> {
                 // claimed it covered.
                 self.warn_borrow_projection_copy_at(&arg.value, param, false);
             }
+            // A trait method called through `dyn` or a bound borrows a bare
+            // parameter as a concrete method does, so a clone into it
+            // copies for nothing there too (B-2026-11-20-87).
+            self.lint_redundant_clones(args, &param_types);
         }
 
         let ret = method

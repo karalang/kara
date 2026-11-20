@@ -2254,6 +2254,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - The fix-it log.md gives a log field whose value is `Display` but not
   `Serialize` keeps a struct literal on one line inside the interpolation,
   `f"{P { v: 2 }}"`; it was written a field to a line (B-2026-11-20-92).
+- `redundant_clone` covers a trait method called through `dyn` or a
+  bound on a type parameter: `sea.has_ships(top.clone(), bottom.clone())`
+  over `sea: dyn Sea` or `S: Sea` copies both for parameters that only
+  borrow, and `karac fix` now drops the clones there as it does for a
+  free function or a concrete method (B-2026-11-20-87).
 - Rust's list cursor over a bare parameter, `let mut cur = Some(head);
   while let Some(node) = cur { cur = node.next; }`, is refused with the
   parameter named: `cur` and `node` are bound out of `head`, which
