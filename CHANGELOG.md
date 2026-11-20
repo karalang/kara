@@ -855,6 +855,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A channel whose two ends are dropped on different pool workers at the
+  same moment no longer reads freed memory. The end that was not last read
+  the channel's drop glue after releasing its lock, while the other end
+  could already be freeing it; ThreadSanitizer reported it in every one-shot
+  channel waitlist kata (1114 to 1117, 1188) and nowhere else in the corpus
+  sweep. The glue is now read under the lock (B-2026-11-20-31).
 - A closure literal whose tail is a written `ref` of a `Copy` value,
   passed where the callee leaves the return type open (`ap[T](f: Fn() ->
   T)` called as `ap(|| ref v)`, or `g.spawn(|| ref v)`), gives a `ref`, as

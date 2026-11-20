@@ -4672,7 +4672,7 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
     if h.is_null() {
         return;
     }
-    let (last, orphaned) = {
+    let (last, orphaned, drop) = {
         // SAFETY: the caller's contract.
         let c = unsafe { &*h };
         let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
@@ -4688,7 +4688,9 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
         } else {
             std::collections::VecDeque::new()
         };
-        (last, orphaned)
+        // Read while this end still counts: once the lock is released, the
+        // other side's last end may free the channel (B-2026-11-20-31).
+        (last, orphaned, c.drop)
     };
     // The change is counted once the count has fallen, as `send` and
     // `recv` count theirs after they land: counted before, a receiver
@@ -4698,8 +4700,9 @@ pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
     crate::mir_task::chan_changed();
     if !last {
         // Dropped outside the lock: a value's drop may touch the channel.
-        // SAFETY: the channel is live (a sender holds it).
-        if let Some(d) = unsafe { &*h }.drop {
+        // The channel itself is not touched again: this end no longer
+        // keeps it alive.
+        if let Some(d) = drop {
             for mut b in orphaned {
                 // SAFETY: the bytes are a value the glue drops.
                 unsafe { d(b.as_mut_ptr()) };

@@ -638,7 +638,7 @@ jobs:
 
       # The instrument, then frozen handles counting nothing (B-2026-10-26-15).
       - name: TSan instrument tests
-        run: cargo test --features llvm --test mir_tsan --test mir_frozen_uncounted --test mir_tsan_unicode --test mir_tsan_regex --test mir_frozen_option_match
+        run: cargo test --features llvm --test mir_tsan --test mir_frozen_uncounted --test mir_tsan_unicode --test mir_tsan_regex --test mir_frozen_option_match --test mir_tsan_channel_end
 
       - name: Build karac (llvm)
         run: cargo build --features llvm
