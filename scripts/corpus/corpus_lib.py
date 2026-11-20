@@ -1,6 +1,7 @@
 """Shared pieces of the corpus scripts: paths, meta.toml I/O, backends, and
 running one program on one backend."""
 
+import contextlib
 import json
 import os
 import re
@@ -8,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -77,6 +79,27 @@ def matches_filter(rel: str, filters: list[str]) -> bool:
 REFUSAL = re.compile(rb"^error(\[[A-Za-z_-]+\])?:", re.M)
 
 
+# An entry that opens sockets runs alone among the entries that do. Most of
+# them bind a fixed loopback port (47731 to 47783), inside Linux's ephemeral
+# range (32768 to 60999), so a socket another entry opens at the same moment
+# can already hold that port: the server's bind fails, or a backend meant to
+# be absent answers, and the program prints a different run and exits 0.
+# Measured on the TSan lane's apps:service set at `--jobs 8`: without this
+# lock, 2 of 8 rounds each failed config_svc, jwt_auth and socks5_proxy on
+# "bind failed"; with it, 0 of 8. (tcp_balancer's one miss in a `--jobs 2`
+# sweep did not come back in 390 runs alone under load.)
+# Programs without sockets still run alongside.
+_NET_SOURCE = re.compile(r"\b(TcpListener|TcpStream|UdpSocket)\b")
+_NET_LOCK = threading.Lock()
+
+
+def _net_guard(entry: Path, source: str, template: dict | None):
+    text = (entry / source).read_text(errors="replace")
+    if _NET_SOURCE.search(text) or (template or {}).get("origin"):
+        return _NET_LOCK
+    return contextlib.nullcontext()
+
+
 def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra: dict,
                 source: str = "source.kara") -> dict:
     """Run one entry. Returns {status, exit, stdout, stderr, secs} where status
@@ -92,7 +115,7 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
     prog = (template or {}).get("entry", "source.kara")
     exe = Path(prog).stem
     start = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="corpus-") as tmp:
+    with _net_guard(entry, source, template), tempfile.TemporaryDirectory(prefix="corpus-") as tmp:
         tmpd = Path(tmp)
         origin = None
         if template is None:
