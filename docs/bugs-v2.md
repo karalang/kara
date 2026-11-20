@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 623 |
+| diagnostics | 624 |
 | false-positive | 330 |
-| missing-feature | 223 |
+| missing-feature | 224 |
 | perf | 190 |
 | other | 125 |
 | soundness | 106 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 774 |
 | mir-llvm | 313 |
 | mir | 290 |
-| cli | 241 |
+| cli | 243 |
 | parser | 140 |
 | ownership | 123 |
 | runtime | 101 |
@@ -129,6 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-87 | 2026-11-20 | typecheck+cli | low | redundant_clone is not reported for an argument to a trait method called through `dyn` or a generic bound: kata 1274's `sea.has_ships(top_right.clone(), bottom_left.clone())` keeps both clones under karac fix, where the same clone into a free function or a concrete method is dropped | — |
 | B-2026-11-20-100 | 2026-11-20 | mir | medium | `karac check` accepts and `karac run` refuses a `.map` with a named function over `Vec[String]`: the library's `IterMap.next` fails MIR borrow check, "move of (*_5) through a shared reference [E0517]" | — |
 | B-2026-11-20-102 | 2026-11-20 | mir | low | The MIR move check refuses a reuse after copying a tuple of a capture-free closure literal or a function name (`let a = (dbl, 0); let s = a; (a.0)(1)`: "use of _1.0, which may have been moved"), which core semantics §6.1 makes Copy and `karac check` accepts | — |
+| B-2026-11-20-104 | 2026-11-20 | cli | low | `karac repl` refuses a `?` in a cell under `:provide` (E0200 "`?` on a Result inside this closure requires the closure to return `Result`", placed at `<repl>:8:36` on a hidden `with_provider[Clock](FakeClock {}, || {`), though deferred.md § Cell Scope makes `?` legal in any cell | — |
 
 ### Relocated
 
@@ -1986,6 +1987,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-99 | mir | medium | `karac check` passed a reuse of a tuple or array holding an erased function value (`let a = (make(10), 0); let s = a; (a.0)(1)`), which the build's m… | 6950b39ff0 |
 | B-2026-11-20-101 | typecheck | low | `karac check` accepts a comptime reflection `derives` call with the wrong arity that `karac run` refuses ("reflection method `derives` takes exactly… | 6950b39ff0 |
 | B-2026-11-20-92 | typecheck+cli | low | log.md's fix-it for a `Display` field value splits a struct literal over three lines inside the interpolation: `info("y", q: P { v: 2 })` is fixed to… | d823617519 |
+| B-2026-11-20-103 | cli | low | `karac repl` showed a value in its source form, not the Debug form deferred.md specifies (`Vec.new()` for an empty Vec, `["a": 1]` for a map, `Set.fr… | af100c5f34 |
 
 </details>
 
