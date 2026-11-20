@@ -2254,6 +2254,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - The fix-it log.md gives a log field whose value is `Display` but not
   `Serialize` keeps a struct literal on one line inside the interpolation,
   `f"{P { v: 2 }}"`; it was written a field to a line (B-2026-11-20-92).
+- A list literal copied whole and used again (`let mut dp = [0, i32.MIN,
+  i32.MIN]; .. let mut next = dp; .. dp = next;`, Rust's array idiom) is
+  fixed with `dp: Array[i32, 3]` when the list never changes length and is
+  only indexed, walked, measured or copied: the fixed array copies as
+  Rust's does. It was fixed with `dp.clone()`, a heap allocation per copy
+  (about twice as slow on kata 1262's loop). A list that grows, or is
+  handed on, keeps the `.clone()` (B-2026-11-20-86).
 - `redundant_clone` covers a trait method called through `dyn` or a
   bound on a type parameter: `sea.has_ships(top.clone(), bottom.clone())`
   over `sea: dyn Sea` or `S: Sea` copies both for parameters that only

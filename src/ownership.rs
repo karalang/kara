@@ -23,6 +23,7 @@ mod concurrent_shared;
 mod d5_migrate;
 mod elision;
 mod expr_check;
+mod fixed_array_fix;
 mod frozen_escape;
 mod frozen_freeze_site;
 mod index_let;
@@ -4476,8 +4477,17 @@ impl<'a> OwnershipChecker<'a> {
                 self.typecheck_result,
             );
             let hoisted = hoist.is_some();
+            // A list literal that never changes length copies as Rust's
+            // array does once it is one (B-2026-11-20-86).
+            let fixed_array = if hoisted || !supports_clone {
+                None
+            } else {
+                fixed_array_fix::fixed_array_annotation(&f.body, binding, self.typecheck_result)
+            };
             let replacement = if let Some(edit) = hoist {
                 Some(Box::new(edit))
+            } else if let Some((edit, _)) = &fixed_array {
+                Some(Box::new(edit.clone()))
             } else if supports_clone {
                 Some(Box::new(crate::resolver::TextEdit {
                     offset: w.consume_span.offset + w.consume_span.length,
@@ -4572,6 +4582,13 @@ impl<'a> OwnershipChecker<'a> {
                     .contains(&SpanKey::from_span(&w.consume_span))
                 {
                     raw_move_advice(binding, supports_clone)
+                } else if let Some((_, shown)) = &fixed_array {
+                    format!(
+                        "'{binding}' is a list literal that never changes length, so declare \
+                         it a fixed array, `{binding}: {shown}`, which copies whole as Rust's \
+                         array does with no allocation; or clone it at the move site \
+                         (`{binding}.clone()`)"
+                    )
                 } else if supports_clone {
                     format!(
                         "clone '{}' at the move site (`{}.clone()`), drop `own` from the \
