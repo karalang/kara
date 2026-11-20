@@ -35,6 +35,9 @@ struct RustScan {
     rewrite: Option<Expr>,
     /// Written through an index (`m[k]`) rather than through `*m`.
     indexed: bool,
+    /// Written as a plain binding, `m += x`, with no `*`: the state is
+    /// already Kāra's by-value copy, and only the tail lacks it.
+    in_place: bool,
 }
 
 fn is_deref_of(e: &Expr, name: &str) -> bool {
@@ -118,6 +121,91 @@ fn writes_index_of(body: &Expr, name: &str) -> bool {
     found
 }
 
+/// Whether a statement of `body`, at any depth, assigns `name` itself,
+/// `m = e` or `m += e`.
+fn writes_bare(body: &Expr, name: &str) -> bool {
+    let ExprKind::Block(b) = &body.kind else {
+        return false;
+    };
+    let mut found = false;
+    crate::span_visitor::for_each_stmt_in_block(b, &mut |s| {
+        if let StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } = &s.kind {
+            found |= matches!(&target.kind, ExprKind::Identifier(n) if n == name);
+        }
+    });
+    found
+}
+
+/// `Some(item)` made `Some((name, item))`.
+fn pair_tail(tail: &mut Expr, name: &str) {
+    if let ExprKind::Call { args, .. } = &mut tail.kind {
+        let item = args[0].value.clone();
+        args[0] = CallArg {
+            value: Expr {
+                kind: ExprKind::Tuple(vec![
+                    Expr {
+                        kind: ExprKind::Identifier(name.to_string()),
+                        span: item.span,
+                        id: crate::ids::NodeId::DUMMY,
+                    },
+                    item,
+                ]),
+                span: args[0].span,
+                id: crate::ids::NodeId::DUMMY,
+            },
+            ..args[0].clone()
+        };
+    }
+}
+
+/// Whether `body` holds a `return` of anything but `None`.
+fn returns_a_value(body: &Expr) -> bool {
+    let mut returns = false;
+    crate::span_visitor::for_each_expr(body, &mut |x| {
+        if let ExprKind::Return(value) = &x.kind {
+            let none = matches!(value.as_deref(),
+                Some(Expr { kind: ExprKind::Identifier(n), .. }) if n == "None");
+            returns |= !none;
+        }
+    });
+    returns
+}
+
+/// A closure that writes its state as a plain binding, `|sum, c| { sum
+/// += c; Some(sum) }`, and returns only the item: the writes already
+/// meet Kāra's by-value state, so the tail alone becomes `Some((sum,
+/// sum))` (kata 1744, B-2026-11-20-91).
+fn in_place_scan(closure: &Expr, name: &str) -> Option<RustScan> {
+    let ExprKind::Closure { body, .. } = &closure.kind else {
+        return None;
+    };
+    let ExprKind::Block(b) = &body.kind else {
+        return None;
+    };
+    if !some_item(b.final_expr.as_deref()?) {
+        return None;
+    }
+    let mut found = RustScan {
+        state: name.to_string(),
+        rewrite: None,
+        indexed: false,
+        in_place: true,
+    };
+    if returns_a_value(body) {
+        return Some(found);
+    }
+    let mut new = closure.clone();
+    let ExprKind::Closure { body: new_body, .. } = &mut new.kind else {
+        return None;
+    };
+    let ExprKind::Block(nb) = &mut new_body.kind else {
+        return None;
+    };
+    pair_tail(nb.final_expr.as_deref_mut()?, name);
+    found.rewrite = Some(new);
+    Some(found)
+}
+
 /// `Some(item)` with `item` not already a pair.
 fn some_item(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Call { callee, args }
@@ -191,6 +279,9 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
     // Some(i); Some(*last) }`), and that `*` reads the copy too
     // (B-2026-11-17-105).
     let indexed = writes_index_of(body, name);
+    if !(deref || indexed) && writes_bare(body, name) && !writes_field_of(body, name) {
+        return in_place_scan(closure, name);
+    }
     if !(deref || indexed) || (bare && !indexed) || writes_field_of(body, name) {
         return None;
     }
@@ -205,6 +296,7 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         state: name.clone(),
         rewrite: None,
         indexed,
+        in_place: false,
     };
     // A `return` has no mechanical rewrite. `return None` is the
     // exception: it ends the iteration and carries no state, so it reads
@@ -216,14 +308,7 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         ExprKind::Block(b) => b.stmts.iter().map(|s| s.span).collect(),
         _ => Vec::new(),
     };
-    let mut returns = false;
-    crate::span_visitor::for_each_expr(body, &mut |x| {
-        if let ExprKind::Return(value) = &x.kind {
-            let none = matches!(value.as_deref(),
-                Some(Expr { kind: ExprKind::Identifier(n), .. }) if n == "None");
-            returns |= !none;
-        }
-    });
+    let returns = returns_a_value(body);
     if let ExprKind::Block(b) = &body.kind {
         crate::span_visitor::for_each_stmt_in_block(b, &mut |s| {
             let writes = match &s.kind {
@@ -304,24 +389,7 @@ fn rust_scan(closure: &Expr) -> Option<RustScan> {
         }
     }
     let mut tail = *block.final_expr.take()?;
-    if let ExprKind::Call { args, .. } = &mut tail.kind {
-        let item = args[0].value.clone();
-        args[0] = CallArg {
-            value: Expr {
-                kind: ExprKind::Tuple(vec![
-                    Expr {
-                        kind: ExprKind::Identifier(name.clone()),
-                        span: item.span,
-                        id: crate::ids::NodeId::DUMMY,
-                    },
-                    item,
-                ]),
-                span: args[0].span,
-                id: crate::ids::NodeId::DUMMY,
-            },
-            ..args[0].clone()
-        };
-    }
+    pair_tail(&mut tail, name);
     block.final_expr = Some(Box::new(tail));
     let mut block_expr = Expr {
         kind: ExprKind::Block(block),
@@ -369,6 +437,15 @@ impl TypeChecker<'_> {
         };
         let shape = "Kāra's `scan` closure takes the state by value and returns \
                      `Some((next_state, item))`, where Rust's lends it to be written in place";
+        let opening = if found.in_place {
+            format!(
+                "this closure writes the state `{name}` in place and returns only the item; \
+                 Kāra's `scan` closure takes the state by value and returns it with the item, \
+                 `Some((next_state, item))`"
+            )
+        } else {
+            format!("this closure writes the state `{name}` through {through}, as Rust's `scan` does; {shape}")
+        };
         let how =
             format!("bind each new state with `let {name} = ..` and return `Some(({name}, item))`");
         match found.rewrite {
@@ -419,19 +496,13 @@ impl TypeChecker<'_> {
                     format!("write `{text}`")
                 };
                 self.type_error(
-                    format!(
-                        "this closure writes the state `{name}` through {through}, as Rust's \
-                         `scan` does; {shape}: {write}"
-                    ),
+                    format!("{opening}: {write}"),
                     closure.span,
                     TypeErrorKind::TypeMismatch,
                 );
             }
             None => self.type_error(
-                format!(
-                    "this closure writes the state `{name}` through {through}, as Rust's \
-                     `scan` does; {shape}: {how}"
-                ),
+                format!("{opening}: {how}"),
                 closure.span,
                 TypeErrorKind::TypeMismatch,
             ),

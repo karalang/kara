@@ -1,4 +1,4 @@
-//! Fixes found by katas 1708 to 1738, each pinned by the smallest
+//! Fixes found by katas 1708 to 1744, each pinned by the smallest
 //! program that shows it.
 
 use std::path::PathBuf;
@@ -249,5 +249,17 @@ fn an_element_pushed_from_a_fill_fixes_the_fills_literal() {
         "pushed_fill",
         "fn kth(matrix: Vec[Vec[i32]], k: i64) -> i32 {\n    let (m, n) = (matrix.len(), matrix[0].len());\n    let mut pre = Vec.filled(m + 1, Vec.filled(n + 1, 0));\n    let mut v = Vec.with_capacity(m * n);\n    for i in 1..m + 1 {\n        for j in 1..n + 1 {\n            pre[i][j] = pre[i - 1][j] ^ pre[i][j - 1] ^ pre[i - 1][j - 1] ^ matrix[i - 1][j - 1];\n            v.push(pre[i][j]);\n        }\n    }\n    v.sort();\n    v[v.len() - k]\n}\nfn main() {\n    println(kth([[5, 2], [1, 6]], 1));\n}\n",
         "Vec.filled(n + 1, 0i32)",
+    );
+}
+
+/// A `scan` closure that writes its by-value state in place, `sum += c`,
+/// and returns only the item is rewritten to return the state with it
+/// (kata 1744's scan arm; B-2026-11-20-91).
+#[test]
+fn a_scan_writing_its_state_in_place_returns_it_with_the_item() {
+    fixes_to(
+        "scan_in_place",
+        "fn main() {\n    let v: Vec[i32] = [1, 2, 3];\n    let totals: Vec[i64] = v.iter().scan(0, |sum, c| {\n        sum += c;\n        Some(sum)\n    }).collect();\n    println(totals);\n}\n",
+        "Some((sum, sum))",
     );
 }
