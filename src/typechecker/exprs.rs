@@ -8976,6 +8976,12 @@ impl<'a> super::TypeChecker<'a> {
                                 .cloned()
                             {
                                 message.push_str(&format!(": {why}"));
+                                // The literal's own fix reaches the
+                                // literals that feed it (`all ^ rest`).
+                                if let [w] = want.as_slice() {
+                                    let w = w.clone();
+                                    self.literal_chain_fix(&d.span, &fix, &w);
+                                }
                                 self.type_error_with_fix_it(
                                     message,
                                     d.span,
@@ -11415,6 +11421,14 @@ impl<'a> super::TypeChecker<'a> {
         if !matches!(elem, Type::Int(_) | Type::UInt(_)) || elem == Type::Int(IntSize::I64) {
             return;
         }
+        // `once(first).chain(..)` with `first` bound, through `let`s, to a
+        // literal or a fold seeded with one (kata 1734's fold arm, B-2026-11-20-64).
+        if let ExprKind::Call { callee, args } = &object.kind {
+            if matches!(&callee.kind, ExprKind::Identifier(n) if n == "once") && args.len() == 1 {
+                self.collect_let_literal_fix(expr, &args[0].value, &elem);
+            }
+            return;
+        }
         let ExprKind::MethodCall {
             object: receiver,
             method,
@@ -11439,6 +11453,13 @@ impl<'a> super::TypeChecker<'a> {
         if method == "scan" && args.len() == 2 {
             let start = &args[0].value;
             let Some(v) = Self::unsuffixed_int_literal_value(start) else {
+                // A start bound by a `let` (`scan(first, ..)`).
+                if !self
+                    .collect_literal_fixes
+                    .contains_key(&SpanKey::from_span(&expr.span))
+                {
+                    self.collect_let_literal_fix(expr, start, &elem);
+                }
                 return;
             };
             if !matches!(start.kind, ExprKind::Integer(_, None))
@@ -11496,6 +11517,18 @@ impl<'a> super::TypeChecker<'a> {
         let fix = found
             .into_iter()
             .find_map(|t| self.literal_let_annotation(t, &Type::Int(IntSize::I64), &elem));
+        if let Some((_, fix, why)) = fix {
+            self.collect_literal_fixes
+                .insert(SpanKey::from_span(&expr.span), (fix, why));
+        }
+    }
+
+    /// A value the items are made from, `first` in `once(first)` or
+    /// `scan(first, ..)`, that is an `i64` only because a literal it is
+    /// bound to through `let`s took the default: the fix is that literal's
+    /// type, as for a narrowing return.
+    fn collect_let_literal_fix(&mut self, expr: &Expr, value: &Expr, elem: &Type) {
+        let fix = self.literal_let_annotation(value, &Type::Int(IntSize::I64), elem);
         if let Some((_, fix, why)) = fix {
             self.collect_literal_fixes
                 .insert(SpanKey::from_span(&expr.span), (fix, why));

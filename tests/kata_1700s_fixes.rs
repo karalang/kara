@@ -1,4 +1,4 @@
-//! Fixes found by katas 1708 to 1732, each pinned by the smallest
+//! Fixes found by katas 1708 to 1734, each pinned by the smallest
 //! program that shows it.
 
 use std::path::PathBuf;
@@ -223,5 +223,18 @@ fn sets_say_whether_they_are_disjoint_subsets_or_supersets_compiled() {
     assert_eq!(
         out,
         "true false true false true false true true\nfalse true true false\ntrue\n"
+    );
+}
+
+/// Items made from a value a `let` binds to folds seeded with literals,
+/// `once(first).chain(..scan(first, ..))` collected into a `Vec[i32]`:
+/// the fix gives the folds' seeds the element's suffix, as a narrowing
+/// return of `first` does (kata 1734's fold arm; B-2026-11-20-64).
+#[test]
+fn a_collect_from_a_fold_seeded_let_fixes_the_seeds() {
+    fixes_to(
+        "once_fold_seeds",
+        "fn decode(encoded: Vec[i32]) -> Vec[i32] {\n    let n = encoded.len() as i32 + 1;\n    let all = (1..n + 1).fold(0, |x, v| x ^ v);\n    let rest = encoded.iter().skip(1).step_by(2).fold(0, |x, c| x ^ c);\n    let first = all ^ rest;\n    once(first).chain(encoded.iter().scan(first, |last, c| Some((last ^ c, last ^ c)))).collect()\n}\nfn main() {\n    println(decode([6, 5, 4, 6]));\n}\n",
+        "fold(0i32, |x, c|",
     );
 }
