@@ -1,0 +1,9 @@
+source = "B-2026-11-20-3"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "dyn", "traits"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § dyn Trait: a method called through a `dyn` value has the trait's signature, so its arguments are checked against it as a plain call's are. `e.tp((\"abc\", 0.5))` with `fn tp(self, t: (Str, f32))` through `dyn Tp` was refused \"expected '(Str, f32)', found '(String, f64)'\", and the same call on a `[T: Tp]` parameter too; the concrete receiver accepted it."

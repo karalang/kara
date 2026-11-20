@@ -1679,19 +1679,44 @@ impl<'a> super::TypeChecker<'a> {
             for (arg, param) in args.iter().zip(param_types.iter()) {
                 // A closure takes its parameters' types from the slot
                 // (`it.any(|x| x == 2)` through a `dyn Iterator[Item = i64]`).
-                let arg_ty = match (&arg.value.kind, param) {
+                //
+                // Every other argument is checked against its slot, as a
+                // plain function's is, so a literal takes the slot's types:
+                // `("abc", 0.5)` for a `(Str, f32)` parameter through a
+                // `dyn` or a bounded `T` (B-2026-11-20-3). A `String` passes
+                // as a `Str` parameter here as it does on the concrete type
+                // (B-2026-10-15-19), so a `Str` slot, or a borrowed one
+                // (a bare `x: X` at `dyn Cv[Str]`), is inferred and judged,
+                // a literal too: MIR passes its `String` constant in the
+                // slot's type (`dyn_param_ty`, B-2026-11-19-128).
+                let str_slot = super::exprs::is_str_view(match param {
+                    Type::Ref(inner) | Type::MutRef(inner) => inner,
+                    t => t,
+                });
+                match (&arg.value.kind, param) {
                     (
                         ExprKind::Closure { .. },
                         Type::Function { .. } | Type::OnceFunction { .. },
-                    ) => self.check_expr(&arg.value, param),
-                    _ => self.infer_expr(&arg.value),
-                };
-                // A `String` passes as a `Str` parameter here as it does on
-                // the concrete type (B-2026-10-15-19).
-                if !(super::exprs::is_str_view(param)
-                    && super::exprs::is_string_place_type(&arg_ty))
-                {
-                    self.check_assignable(param, &arg_ty, arg.value.span);
+                    ) => {
+                        let arg_ty = self.check_expr(&arg.value, param);
+                        self.check_assignable(param, &arg_ty, arg.value.span);
+                    }
+                    _ if str_slot => {
+                        let arg_ty = self.infer_expr(&arg.value);
+                        if !(super::exprs::is_str_view(param)
+                            && super::exprs::is_string_place_type(&arg_ty))
+                        {
+                            self.check_assignable(param, &arg_ty, arg.value.span);
+                        }
+                    }
+                    // A value built at the call and lent to a `ref T`
+                    // parameter takes its type from `T`.
+                    (_, Type::Ref(inner)) if self.builds_a_value(&arg.value) => {
+                        self.check_expr(&arg.value, inner);
+                    }
+                    _ => {
+                        self.check_expr(&arg.value, param);
+                    }
                 }
                 self.warn_partial_move_of_drop_struct(&arg.value, param);
                 // B-2026-09-06-31 — the borrowed-root twin.

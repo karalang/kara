@@ -3289,7 +3289,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Whether an argument builds a fresh value rather than naming a place
     /// or lending a borrow: see [`builds_a_value_shape`].
-    fn builds_a_value(&self, e: &Expr) -> bool {
+    pub(super) fn builds_a_value(&self, e: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &e.kind {
             if let ExprKind::Identifier(n) = &callee.kind {
                 if let Some(sig) = self.env.functions.get(n) {

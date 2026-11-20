@@ -865,6 +865,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   refused by the borrow check. Where the slot is the value type (`let f:
   Fn() -> i64 = || ref v`), the closure returns the value: a compiled
   build returned the address (B-2026-11-19-130).
+- A literal argument to a method called through a `dyn` value or a
+  bounded type parameter takes the parameter's types, as one to a plain
+  function does: `e.tp(("abc", 0.5))` with `fn tp(self, t: (Str, f32))`
+  was refused "expected '(Str, f32)', found '(String, f64)'", and a tuple
+  whose parts the parameter writes is passed in the slot's types on the
+  compiled backends (B-2026-11-20-3).
 - The bitwise and shift operators `& | ^ << >>` and unary `~` work on a
   type parameter bounded by their trait (`fn f[T: BitAnd[Output = T]](a:
   own T, b: own T) -> T { a & b }`, `T: Shl[i64, Output = T]`, `T:

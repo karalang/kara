@@ -1,0 +1,41 @@
+// A literal argument to a method called through a `dyn` value or a bounded
+// type parameter takes the parameter's types, as it does for a plain
+// function: `("abc", 0.5)` is a `(Str, f32)` here.
+
+trait Tp {
+    fn tp(self, t: (Str, f32)) -> f64;
+    fn lent(self, t: ref (Str, f32)) -> f64;
+    fn nested(self, t: ((i32, f32), Str)) -> f64;
+}
+
+struct E {
+    k: i64,
+}
+
+impl Tp for E {
+    fn tp(self, t: (Str, f32)) -> f64 {
+        t.0.len() as f64 + t.1 as f64 + self.k as f64
+    }
+
+    fn lent(self, t: ref (Str, f32)) -> f64 {
+        t.0.len() as f64 + t.1 as f64
+    }
+
+    fn nested(self, t: ((i32, f32), Str)) -> f64 {
+        t.0.0 as f64 + t.0.1 as f64 + t.1.len() as f64
+    }
+}
+
+fn through_bound[T: Tp](x: T) -> f64 {
+    x.tp(("ab", 0.25))
+}
+
+fn main() {
+    let e: dyn Tp = E { k: 1 };
+    println(e.tp(("abc", 0.5)));
+    println(e.lent(("abc", 0.5)));
+    println(e.nested(((2, 0.25), "xy")));
+    println(through_bound(E { k: 2 }));
+    let d = E { k: 3 };
+    println(d.tp(("", 1.5)));
+}

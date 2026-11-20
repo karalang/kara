@@ -715,13 +715,40 @@ impl<'l, 'a> Bx<'l, 'a> {
         // then (B-2026-11-19-128).
         match &p.ty.kind {
             ast::TypeKind::Ref(w) => {
-                tcx.reference(self.written_scalar(w, dyn_ty, tr).unwrap_or(base), false)
+                tcx.reference(self.written_ty(w, base, dyn_ty, tr).unwrap_or(base), false)
             }
             ast::TypeKind::MutRef(w) => {
-                tcx.reference(self.written_scalar(w, dyn_ty, tr).unwrap_or(base), true)
+                tcx.reference(self.written_ty(w, base, dyn_ty, tr).unwrap_or(base), true)
             }
-            _ => self.param_mode_ty(p, self.written_scalar(&p.ty, dyn_ty, tr).unwrap_or(at)),
+            _ => self.param_mode_ty(p, self.written_ty(&p.ty, at, dyn_ty, tr).unwrap_or(at)),
         }
+    }
+
+    /// `written_scalar`, and a tuple of them part by part: `("abc", 0.5)`
+    /// for a `(Str, f32)` parameter is a `(String, f64)` literal until it
+    /// meets the slot (B-2026-11-20-3). `at` is the argument's type, which
+    /// a part the parameter does not write keeps.
+    fn written_ty(&self, te: &ast::TypeExpr, at: Ty, dyn_ty: Ty, tr: &str) -> Option<Ty> {
+        if let Some(t) = self.written_scalar(te, dyn_ty, tr) {
+            return Some(t);
+        }
+        let ast::TypeKind::Tuple(parts) = &te.kind else {
+            return None;
+        };
+        let tcx = self.tys().tcx();
+        let HK::Tuple(found) = tcx.kind(at) else {
+            return None;
+        };
+        let found = tcx.list(found).to_vec();
+        if found.len() != parts.len() {
+            return None;
+        }
+        let written: Vec<Ty> = parts
+            .iter()
+            .zip(&found)
+            .map(|(w, &f)| self.written_ty(w, f, dyn_ty, tr).unwrap_or(f))
+            .collect();
+        (written != found).then(|| tcx.intern(HK::Tuple(tcx.intern_list(&written))))
     }
 
     /// The `Str` or scalar type `te` writes, by name or as a type
