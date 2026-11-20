@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 638 |
-| false-positive | 331 |
-| missing-feature | 224 |
+| diagnostics | 645 |
+| false-positive | 334 |
+| missing-feature | 226 |
 | perf | 191 |
 | other | 126 |
-| soundness | 109 |
-| miscompile | 99 |
+| soundness | 114 |
+| miscompile | 100 |
 | crash | 64 |
 | run-vs-build | 61 |
-| codegen-gap | 40 |
+| codegen-gap | 41 |
 | use-after-free | 11 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 789 |
+| typecheck | 803 |
 | mir-llvm | 315 |
-| mir | 290 |
+| mir | 294 |
 | cli | 243 |
 | parser | 143 |
-| ownership | 125 |
+| ownership | 127 |
 | runtime | 101 |
 | interp | 95 |
-| effect | 50 |
-| resolver | 48 |
+| effect | 51 |
+| resolver | 50 |
 | other | 38 |
 | codegen | 22 |
 | autopar | 7 |
@@ -131,6 +131,25 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-104 | 2026-11-20 | cli | low | `karac repl` refuses a `?` in a cell under `:provide` (E0200 "`?` on a Result inside this closure requires the closure to return `Result`", placed at `<repl>:8:36` on a hidden `with_provider[Clock](FakeClock {}, || {`), though deferred.md § Cell Scope makes `?` legal in any cell | — |
 | B-2026-11-20-107 | 2026-11-20 | mir+ownership | low | The build's MIR frontend runs the ownership pass without the core rules (`CORE_RULES`), so it lowers closure captures by `ref` that `karac check` verified by move: 24 of 21,387 corpus programs differ, none observably (all pass ASan) | — |
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
+| B-2026-11-20-110 | 2026-11-20 | typecheck+mir | high | A join of an integer literal and a float literal (`if c { 1 } else { 2.5 }`, or the same `match`) is accepted by check, then fails on both backends with `invalid MIR: assigning f64 to _2 of type i64` | — |
+| B-2026-11-20-111 | 2026-11-20 | typecheck | medium | A type parameter that appears only in another parameter's bound (`fn count[T, S: Source[T]](s: S) -> i64`) is accepted at the declaration but every call is refused: `Ten implements Source[i64], not Source[T]` | — |
+| B-2026-11-20-112 | 2026-11-20 | typecheck | low | The fix for a string literal beside a `ref String` branch writes `arg.clone()` where design.md says it writes `.as_str()` on that branch | — |
+| B-2026-11-20-113 | 2026-11-20 | typecheck+mir | low | A negative argument to a user type's const parameter (`struct Small[const S: i8]`, `Small[-1]`) fails check with E0516 "an expression whose type does not lower (Type(Unsupported(\"array length\"))) is not lowered yet" | — |
+| B-2026-11-20-114 | 2026-11-20 | typecheck | medium | `Self` in a trait's default associated fn is not the implementing type for a primitive: `trait Unit { fn one() -> Self; fn again() -> Self { Self.one() } } impl Unit for i64 {..}` makes `i64.again() + 1` "type 'Self' does not implement trait Add" | — |
+| B-2026-11-20-115 | 2026-11-20 | resolver+typecheck | low | A trait's method is a candidate at `e.m()` when the trait's name does not resolve at the call site: `b.emit(rec)` on a `log.json_backend(..)` value runs without importing `std.log.Backend` | — |
+| B-2026-11-20-116 | 2026-11-20 | typecheck | low | The ambiguous-method diagnostic lists each candidate's trait and signature but not its effects, which design.md says it lists | — |
+| B-2026-11-20-117 | 2026-11-20 | resolver | medium | The marker trait `Pod` cannot be named: `impl Pod for Px { }` and `[T: Pod]` are "undefined type 'Pod'", so `mem.zeroed()` refuses a struct of `u8` fields | — |
+| B-2026-11-20-118 | 2026-11-20 | typecheck | low | Two equality constraints on one associated type in a `where` clause (`where I.Item = i64, I.Item = String`) are accepted at the declaration; the conflict surfaces only at a call | — |
+| B-2026-11-20-119 | 2026-11-20 | ownership | medium | A `mut ref self` method called on an immutable `let` binding of an `impl Trait` value is accepted (`let e = evens(); e.next()`), and `let mut e` gets an unused_mut warning | — |
+| B-2026-11-20-120 | 2026-11-20 | effect | medium | An `impl Trait` return's effect ceiling is not enforced: `-> (impl Iterator[Item = i64] with reads(Clock))` whose hidden `map` closure prints is accepted and prints | — |
+| B-2026-11-20-121 | 2026-11-20 | mir | low | An `impl Trait` result borrows only what its body borrows, not what its signature says: design.md's own `count_logged(xs, log)` example, with `drop(log)` before the iterator is used, is accepted | — |
+| B-2026-11-20-122 | 2026-11-20 | typecheck+mir | medium | `impl Display for (i64, H)` is accepted, but `f"{p}"` prints the library's `(3, h)` and `p.to_string()` fails E0516 "not lowered yet" on both backends | — |
+| B-2026-11-20-123 | 2026-11-20 | typecheck | low | A trait whose method returns `impl Trait`, used as `dyn`, is refused with E_RPITIT_INCOMPATIBLE_WITH_DYN where design.md names E_DYN_NOT_DISPATCHABLE | — |
+| B-2026-11-20-124 | 2026-11-20 | ownership | low | A `mut` marker on an argument to a borrowed method parameter (`s.poke(mut n)` against `fn poke(self, n: i64)`) is accepted, where the same marker to a plain function's borrowed parameter is E0219 | — |
+| B-2026-11-20-125 | 2026-11-20 | typecheck | medium | A generic impl overlapping a standard one is accepted: `impl[T: Display] Display for Vec[T]` replaces the library's (`[1]` prints `mine`), and `impl[T: PartialEq] PartialEq for Vec[T]` is ignored (`[1] == [2]` stays false) | — |
+| B-2026-11-20-126 | 2026-11-20 | typecheck | medium | `.into()` as the argument to a bare (borrowed) parameter gets no expected type: `takes(Celsius { c: 10 }.into())` with `fn takes(f: Fahrenheit)` is refused "nothing here fixes the target type" | — |
+| B-2026-11-20-127 | 2026-11-20 | typecheck | low | E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE has no machine fix: `karac fix` on `enum Status { #[default] Pending, Active }` reports no fixable diagnostics | — |
+| B-2026-11-20-128 | 2026-11-20 | typecheck | low | E_DEFAULT_VARIANT_HAS_PAYLOAD's help suggests an inherent `impl Status { fn default() -> Status }`, which does not implement `Default`, where design.md says it shows an `impl Default` skeleton | — |
 
 ### Relocated
 
