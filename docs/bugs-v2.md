@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 616 |
-| false-positive | 325 |
+| diagnostics | 617 |
+| false-positive | 326 |
 | missing-feature | 223 |
 | perf | 190 |
 | other | 124 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 769 |
+| typecheck | 771 |
 | mir-llvm | 313 |
 | mir | 287 |
 | cli | 235 |
@@ -1972,6 +1972,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-83 | typecheck+mir | medium | A `shared` handle read through a borrow cannot become a `dyn` value: `match n.next { Some(m) => Some(m), None => None }` into an `Option[dyn T]` gets… | cfdae804f3 |
 | B-2026-11-20-84 | effect+cli | low | E0400's machine fix for a public function that calls through a clauseless `dyn` value declares `with allocates(*) blocks reads(*) receives(*) sends(*… | d02c1e3113 |
 | B-2026-11-20-88 | typecheck | medium | Since B-2026-11-19-86, a `par` branch capturing a value of a generic function-typed parameter needs the parameter `CrossTask`, and nothing can say so… | b9f95354fb |
+| B-2026-11-20-89 | typecheck | low | `cycle` and `clone` on a library iterator that is not `Clone` always say it "holds a closure (`map`, `filter`, ..)", including on `v.into_iter()`, `o… | c39f49a207 |
+| B-2026-11-20-90 | typecheck | medium | `v.iter().map(f).take(3).cycle()` passes `karac check`, then `karac run` and `karac build` fail with an internal MIR borrow-check error in `IterTake[… | c39f49a207 |
 
 </details>
 
