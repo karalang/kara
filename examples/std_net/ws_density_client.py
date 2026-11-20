@@ -55,7 +55,7 @@ def open_ws(host, port, timeout=10):
     if b"101" not in status:
         s.close()
         raise OSError(f"expected 101, got {status!r}")
-    # Leave the socket idle (no frame sent) so the server's recv_text parks —
+    # Leave the socket idle (no frame sent) so the server's recv parks —
     # this is what makes the connection a HELD, density-contributing one.
     return s
 
