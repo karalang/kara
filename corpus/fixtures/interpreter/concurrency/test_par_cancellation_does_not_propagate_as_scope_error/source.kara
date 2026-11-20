@@ -9,7 +9,7 @@ let _e = 0;
 let _f = 0;
 let _g = 0;
 let _h = 0;
-}
+},
 {
 return Err("r-fail");
 }

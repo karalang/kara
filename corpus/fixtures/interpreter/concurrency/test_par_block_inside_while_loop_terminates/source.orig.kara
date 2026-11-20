@@ -1,0 +1,14 @@
+fn main() {
+                     let mut total: i64 = 0;
+                     let mut i: i64 = 0;
+                     while i < 2 {
+                         let (a, b) = par {
+                             let a = i + 1;
+                             let b = i + 2;
+                             (a, b)
+                         };
+                         total = total + a + b;
+                         i = i + 1;
+                     }
+                     println(total);
+                 }

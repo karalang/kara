@@ -1,0 +1,6 @@
+shared struct Node { a: i64, b: i64 }
+fn read(n: i64) -> i64 { n }
+fn main() {
+let root = Node { a: 2, b: 3 };
+par { read(root.a); read(root.b); }
+}

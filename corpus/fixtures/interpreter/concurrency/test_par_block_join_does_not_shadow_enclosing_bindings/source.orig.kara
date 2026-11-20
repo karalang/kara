@@ -1,0 +1,8 @@
+fn main() {
+             let mut n: i64 = 0;
+             if 1 < 2 {
+                 par { let a = 1; let b = 2; }
+                 n = n + 5;
+             }
+             println(n);
+         }

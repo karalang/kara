@@ -1,0 +1,6 @@
+fn main() {
+    let v: Vec[i32] = [7, 3];
+    let w: Vec[i32] = [3, 7];
+    let t = par { let x = v[0]; let y = w[1] + 100; x + y };
+    println(t);
+}

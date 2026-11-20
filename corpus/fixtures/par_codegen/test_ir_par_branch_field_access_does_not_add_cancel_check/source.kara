@@ -5,7 +5,7 @@ struct Pair { a: i64, b: i64 }
 fn main() {
     par {
         {
-            let p = Pair { a: 1_i64, b: 2_i64 };
+            let p = Pair { a: 1, b: 2 };
             let r1 = p.a;
             let r2 = p.b;
             let r3 = helper(p.a);
@@ -13,7 +13,7 @@ fn main() {
             r4
         },
         {
-            let q = Pair { a: 3_i64, b: 4_i64 };
+            let q = Pair { a: 3, b: 4 };
             let s1 = q.b;
             let s2 = q.a;
             let s3 = helper(q.b);

@@ -1,0 +1,7 @@
+struct P { a: u8 }
+fn main() {
+    let p = P { a: 7 };
+    let q = P { a: 3 };
+    let t = par { let x: u8 = p.a; let y: u8 = q.a + 100; x + y };
+    println(t);
+}

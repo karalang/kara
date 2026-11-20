@@ -5,7 +5,8 @@
         }
         fn main() {
             let listener = TcpListener.bind("127.0.0.1:0").unwrap();
-            let h: TaskHandle[i64] = spawn(|| { serve_one(listener); 0 });
+            let g = TaskGroup.new();
+            let h: TaskHandle[i64] = g.spawn(|| { serve_one(listener); 0 });
             let _r: i64 = h.join();
             println(2);
         }

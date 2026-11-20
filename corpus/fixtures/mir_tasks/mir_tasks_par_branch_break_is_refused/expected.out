@@ -1,0 +1,1 @@
+error[E0200]: source.kara:6:27: `continue` may not leave a `par` branch: each branch runs as a task of its own (core-semantics.md §11.7)

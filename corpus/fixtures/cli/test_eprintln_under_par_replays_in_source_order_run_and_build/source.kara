@@ -1,6 +1,5 @@
 fn slow_left() -> i64 {
-    let mut i = 0;
-    while i < 20000 { i = i + 1; }
+    for i in 0..20000 {  }
     eprintln("E-left-1");
     println("O-left-1");
     eprintln("E-left-2");
@@ -13,7 +12,7 @@ fn fast_right() -> i64 {
     2
 }
 fn main() {
-    let (a, b) = par { let a = slow_left(); let b = fast_right(); (a, b) };
+    let (a, b) = par { slow_left(), fast_right(), };
     println(f"O-sum-{a + b}");
     eprintln(f"E-sum-{a + b}");
 }

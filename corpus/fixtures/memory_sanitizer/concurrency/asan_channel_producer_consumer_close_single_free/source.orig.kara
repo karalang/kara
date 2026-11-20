@@ -1,0 +1,19 @@
+
+fn producer(tx: Sender[i64]) -> i64 {
+    tx.send(10);
+    tx.send(20);
+    0
+}
+fn consume(rx: Receiver[i64]) -> i64 {
+    let mut sum = 0;
+    while let Some(v) = rx.recv() {
+        sum = sum + v;
+    }
+    sum
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let h: TaskHandle[i64] = spawn(|| producer(tx));
+    println(consume(rx));
+    h.join();
+}

@@ -4,9 +4,9 @@ fn pure_helper(n: i64) -> i64 { n + 1 }
 fn effectful_helper(n: i64) -> i64 writes(Log) { n + 1 }
 fn main() {
     par {
-        pure_helper(1_i64),
-        effectful_helper(2_i64),
-        pure_helper(3_i64),
-        effectful_helper(4_i64),
+        pure_helper(1),
+        effectful_helper(2),
+        pure_helper(3),
+        effectful_helper(4),
     };
 }

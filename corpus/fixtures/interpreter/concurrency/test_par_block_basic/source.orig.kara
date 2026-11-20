@@ -1,0 +1,9 @@
+fn a() -> i32 { println("A"); 1 }
+         fn b() -> i32 { println("B"); 2 }
+         fn main() {
+             par {
+                 let x = a();
+                 let y = b();
+             };
+             println("done");
+         }

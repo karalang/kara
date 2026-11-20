@@ -1,17 +1,18 @@
 
-fn worker(tx: Sender[i64]) -> i64 {
+fn worker(tx: own Sender[i64]) -> i64 {
     let mut acc = 0;
     let mut i = 0;
     while i < 5000000 {
         acc = acc + i;
         i = i + 1;
     }
-    tx.send(acc);
+    let _ = tx.send(acc);
     0
 }
 fn main() {
-    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
-    let h: TaskHandle[i64] = spawn(|| worker(tx));
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let g = TaskGroup.new();
+    let h: TaskHandle[i64] = g.spawn(|| worker(tx));
     let v = rx.recv().unwrap();
     h.join();
     println(v);

@@ -4,14 +4,14 @@ fn helper(n: i64) -> i64 writes(Log) { n + 1 }
 fn main() {
     par {
         {
-            let arr = [10_i64, 20_i64, 30_i64];
+            let arr = [10, 20, 30];
             let x = arr[0];
             let y = arr[1];
             let z = helper(arr[0]);
             z
         },
         {
-            let brr = [40_i64, 50_i64, 60_i64];
+            let brr = [40, 50, 60];
             let u = brr[2];
             let v = helper(brr[1]);
             v

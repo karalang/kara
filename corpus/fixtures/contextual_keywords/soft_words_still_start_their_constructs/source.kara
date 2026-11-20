@@ -1,1 +1,1 @@
-fn main() { let a = 1; par { let x = a; } }
+fn main() { let a = 1; par { a, }; }

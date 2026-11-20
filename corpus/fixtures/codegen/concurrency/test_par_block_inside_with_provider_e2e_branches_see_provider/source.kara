@@ -6,8 +6,8 @@ fn main() {
 let p = Data { x: 100 };
 with_provider[D](p, || {
 par {
-println(D.get());
-println(D.get());
-}
+println(D.get()),
+println(D.get()),
+};
 });
 }

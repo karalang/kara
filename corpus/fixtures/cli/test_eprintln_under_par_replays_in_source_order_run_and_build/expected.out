@@ -1,3 +1,1 @@
-O-left-1
-O-right-1
-O-sum-3
+error[E0418]: source.kara:15:18: branches 1 and 2 of the `par` conflict: `writes(Stderr)` and `writes(Stderr)` (core semantics §11.2: branches may run at once, so none may write, move, mutably borrow or drop a place another uses, or write a resource another uses)

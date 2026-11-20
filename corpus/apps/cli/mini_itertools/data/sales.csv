@@ -1,0 +1,14 @@
+month,region,product,units,price,promo
+2026-01,north,kettle,12,30,0
+2026-01,south,kettle,7,30,1
+2026-01,north,toaster,5,45,0
+2026-02,east,kettle,9,28,1
+2026-02,north,blender,3,80,0
+2026-02,south,toaster,11,45,0
+2026-03,south,kettle,4,30,0
+2026-03,east,blender,6,75,1
+2026-03,east,toaster,2,45,0
+2026-03,north,kettle,15,29,1
+2026-04,west,blender,8,78,0
+2026-04,south,blender,1,80,0
+2026-04,north,toaster,6,44,1

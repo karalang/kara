@@ -3,6 +3,7 @@ impl W { fn get(ref self) -> i32 { self.v } }
 fn main() {
     let a = W { v: 7 };
     let b = W { v: 3 };
-    let t = par { let x = a.get(); let y = b.get() + 100; x + y };
+    let (x, y) = par { a.get(), b.get() + 100, };
+    let t = x + y;
     println(t);
 }

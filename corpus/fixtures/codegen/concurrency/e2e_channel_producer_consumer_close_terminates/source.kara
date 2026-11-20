@@ -1,8 +1,8 @@
 
-fn producer(tx: Sender[i64]) -> i64 {
-    tx.send(10);
-    tx.send(20);
-    tx.send(30);
+fn producer(tx: own Sender[i64]) -> i64 {
+    let _ = tx.send(10);
+    let _ = tx.send(20);
+    let _ = tx.send(30);
     0
 }
 fn consume(rx: Receiver[i64]) -> i64 {
@@ -13,8 +13,9 @@ fn consume(rx: Receiver[i64]) -> i64 {
     sum
 }
 fn main() {
-    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
-    let h: TaskHandle[i64] = spawn(|| producer(tx));
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
+    let g = TaskGroup.new();
+    let h: TaskHandle[i64] = g.spawn(|| producer(tx));
     let total = consume(rx);
     h.join();
     println(total);

@@ -1,5 +1,5 @@
 fn main() {
              par {
-                 println("solo");
+                 println("solo"),
              };
          }

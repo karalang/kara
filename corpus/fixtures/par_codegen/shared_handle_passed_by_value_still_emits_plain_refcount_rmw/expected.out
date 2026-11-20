@@ -1,0 +1,1 @@
+error[E_NOT_CROSS_TASK]: source.kara:6:12: `root` (a `shared` handle of type `Node`) cannot enter a `par` branch (core semantics §11.3: a branch takes owned values, `frozen` and `sync` handles, and views, and a `shared` handle is none of them)

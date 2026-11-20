@@ -1,0 +1,59 @@
+count	10	3	5
+count	-2	-5	4
+count	7	0	3
+cycle	1,2,3	8
+cycle	-	5
+cycle	4	3
+repeat	9	4
+repeat	9	0
+accumulate	1,2,3,4,5	add	-
+accumulate	1,2,3,4,5	mul	-
+accumulate	3,1,4,1,5,9,2,6	max	-
+accumulate	3,1,4,1,5,9,2,6	min	-
+accumulate	1,2,3	add	100
+accumulate	-	add	-
+accumulate	-	add	7
+batched	1,2,3,4,5,6,7	3
+batched	1,2,3	3
+batched	1,2,3	5
+batched	-	2
+chain	1,2;3;;4,5,6
+chain	;;
+compress	1,2,3,4,5,6	1,0,1,0,1,1
+compress	1,2,3	1,1,1,1,1
+compress	1,2,3,4	0,1
+dropwhile	1,4,6,4,1	5
+takewhile	1,4,6,4,1	5
+dropwhile	7,8	5
+takewhile	7,8	5
+filterfalse	1,2,3,4,5,6,7	odd
+groupby	1,1,2,3,3,3,1,1	same
+groupby	1,3,5,2,4,7,9,8	parity
+groupby	-	same
+islice	0,1,2,3,4,5,6,7,8,9	2	8	2
+islice	0,1,2,3,4,5,6,7,8,9	0	-	3
+islice	0,1,2,3,4,5,6,7,8,9	7	3	1
+islice	0,1,2,3,4,5,6,7,8,9	5	50	1
+islice	0,1,2	0	0	1
+pairwise	1,2,4,7,11
+pairwise	5
+pairwise	-
+zip_longest	1,2,3,4	10,20	0
+zip_longest	-	10,20	-1
+product	1,2;3,4	1
+product	0,1	3
+product	1,2;-;3	1
+product	-	0
+permutations	1,2,3	-
+permutations	1,2,3,4	2
+permutations	1,2,3	0
+permutations	1,2	3
+combinations	1,2,3,4,5	3
+combinations	1,2,3	0
+combinations	1,2	3
+combinations	3,1,2	2
+cwr	1,2,3	2
+cwr	1,2	3
+cwr	-	2
+cwr	-	0
+report	@sales.csv

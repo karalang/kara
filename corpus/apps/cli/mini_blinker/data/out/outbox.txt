@@ -1,0 +1,17 @@
+#1 from shop@example.test to ana: order 1001 received
+#2 from shop@example.test to buyer: restock mug-07, 2 left
+#3 from shop@example.test to ben: order 1002 received
+#4 from shop@example.test to buyer: restock tea-01, 4 left
+#5 from shop@example.test to ana: order 1004 received
+#6 from shop@example.test to dee: order 1005 received
+#7 from shop@example.test to ed: order 1006 received
+#8 from shop@example.test to ana: order 1001 shipped
+#9 from shop@example.test to buyer: restock pot-03, 1 left
+#10 from shop@example.test to fay: order 1007 received
+#11 from shop@example.test to buyer: restock tea-02, 2 left
+#12 from shop@example.test to ben: order 1008 received
+#13 from shop@example.test to ana: order 1009 received
+#14 from shop@example.test to gus: order 1010 received
+#15 from shop@example.test to hal: order 1011 received
+#16 from shop@example.test to ivy: order 1012 received
+#17 from shop@example.test to jo: order 1013 received

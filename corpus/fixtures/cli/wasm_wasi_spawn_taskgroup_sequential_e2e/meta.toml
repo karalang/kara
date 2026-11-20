@@ -3,15 +3,16 @@ dedup_of = []
 expect = "stdout"
 exit = 0
 tags = ["closure", "par", "post-m1:par"]
-class = "e"
-expected_from = "assert"
+class = "a"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
-env = {}
-bucket = "b-fix-incomplete:E0520"
-classified_with = "9913c6855"
+env = { KARAC_THREADS = "1" }
+note = "concurrency.md:137-148: `TaskGroup.spawn` returns a `TaskHandle` whose `join` gives the task's result, and the group's drop joins every task. Nothing orders the tasks' prints against main's `println(0)` (§11.1, No order between tasks), so the entry pins the one-worker executor's order with KARAC_THREADS=1, as §11.1 allows. Source migrated to the current spelling (source.orig.kara is the extracted text)."
+bucket = "a"
+classified_with = "17b497330"
 extracted_src = "f1d758d2"
 model_rev = "3acf4472"
 model_src = "f1d758d2"

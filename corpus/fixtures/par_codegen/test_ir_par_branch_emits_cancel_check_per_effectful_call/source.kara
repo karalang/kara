@@ -3,8 +3,8 @@ effect resource Log;
 fn helper(n: i64) -> i64 writes(Log) { n + 1 }
 fn main() {
     par {
-        helper(1_i64),
-        helper(2_i64),
-        helper(3_i64),
+        helper(1),
+        helper(2),
+        helper(3),
     };
 }

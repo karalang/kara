@@ -1,0 +1,25 @@
+09:00:01 order_placed checkout order=1001 customer=ana sku=tea-01 qty=2 total=18.40
+09:00:05 order_placed checkout order=1002 customer=ben sku=mug-07 qty=1 total=12.00
+09:00:05 stock_low inventory sku=mug-07 left=2
+09:00:09 order_placed phone order=1003 customer=cy sku=tea-01 qty=6 total=55.20
+09:00:09 stock_low inventory sku=tea-01 left=4
+09:00:12 payment_received checkout order=1001 amount=18.40
+09:00:15 payment_received checkout order=1003 amount=812.00
+09:00:30 order_placed checkout order=1004 customer=ana sku=tea-01 qty=1 total=9.20
+09:00:31 order_placed checkout order=1005 customer=dee sku=cup-11 qty=1 total=4.00
+09:00:32 order_placed checkout order=1006 customer=ed sku=vase-9 qty=1 total=30.00
+09:00:40 order_shipped warehouse order=1001 customer=ana
+09:00:45 order_cancelled checkout order=1003 customer=cy sku=tea-01 qty=6
+09:01:05 order_placed checkout order=1007 customer=fay sku=pot-03 qty=4 total=88.00
+09:01:05 stock_low inventory sku=pot-03 left=1
+09:01:10 order_placed checkout order=1008 customer=ben sku=tea-02 qty=6 total=41.40
+09:01:10 stock_low inventory sku=tea-02 left=2
+09:01:15 order_placed checkout order=1009 customer=ana sku=tea-02 qty=1 total=6.90
+09:01:25 order_placed checkout order=1010 customer=gus sku=mug-07 qty=2 total=24.00
+09:01:31 order_shipped warehouse order=1007 customer=fay
+09:01:40 refund_issued accounts order=1003 amount=55.20
+09:01:45 order_placed checkout order=1011 customer=hal sku=tea-01 qty=x total=1.00
+09:01:46 order_placed checkout order=1012 customer=ivy qty=1 total=3.00
+09:01:50 payment_received checkout order=1010 amount=24.00
+09:02:05 order_shipped warehouse order=1008 customer=ben
+09:02:10 order_placed checkout order=1013 customer=jo sku=pot-03 qty=1 total=22.00

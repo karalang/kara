@@ -1,0 +1,1 @@
+error[E0520]: source.kara:32:32: free `spawn` is removed (§11.1); a task starts only in `par { … }`, `par for` or `TaskGroup.spawn`, so it cannot outlive its scope

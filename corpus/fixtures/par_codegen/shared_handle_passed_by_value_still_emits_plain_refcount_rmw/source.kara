@@ -3,5 +3,5 @@ fn take(n: Node) -> i64 { n.a }
 fn other(n: i64) -> i64 { n }
 fn main() {
 let root = Node { a: 2 };
-par { take(root); other(7); }
+par { take(root), other(7), };
 }
