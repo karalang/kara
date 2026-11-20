@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 568 |
-| false-positive | 315 |
-| missing-feature | 212 |
+| diagnostics | 569 |
+| false-positive | 320 |
+| missing-feature | 214 |
 | perf | 189 |
 | other | 119 |
 | soundness | 104 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 731 |
+| typecheck | 736 |
 | mir-llvm | 311 |
-| mir | 277 |
+| mir | 280 |
 | cli | 218 |
 | parser | 127 |
 | ownership | 121 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -127,15 +127,20 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-121 | 2026-11-19 | cli | medium | kara-lsp references and rename see only the declaration of a method or an enum variant, and miss a unit variant in a pattern and a type argument in an expression path: renaming a method, variant, enum or struct leaves uses behind, so the renamed program no longer checks (36 of 296 corpus renames) | — |
 | B-2026-11-19-122 | 2026-11-19 | cli | low | After an edit that adds an error in one function, kara-lsp keeps a warning from another, unchanged function, where `karac check` and a fresh open of the same text show only the error (warnings are dropped while errors exist) | — |
 | B-2026-11-19-124 | 2026-11-19 | cli | low | kara-lsp completion after `x.` offers methods whose impl bounds the receiver does not meet: `cloned` and `flatten` on an `Option[Wide]`, `to_string` on a `Map[i64, P]` whose `P` is not Display; choosing one gives E0236 'no method' | — |
-| B-2026-11-19-126 | 2026-11-19 | mir+mir-llvm | high | A `dyn Trait` call to an impl method that declares a parameter or receiver with a weaker mode than the trait (§4.7: `own` trait, borrowed impl) passes the argument in the trait's convention while the impl reads it in its own: wrong values on build (`784` for a 3-byte String's len, a pointer as `i64`), heap ASan crashes, a SIGSEGV, and 'deref of non-reference' in the interpreter | — |
-| B-2026-11-19-127 | 2026-11-19 | mir+mir-llvm | medium | A named value moved through a generic bound into an impl that borrows it (§4.7: the trait takes `own`, the instance's impl borrows) drops at the end of the enclosing function, not at the end of the call's statement: `let v = e.eat(r); println("after");` prints `after` before `r`'s Drop | — |
 | B-2026-11-19-130 | 2026-11-19 | typecheck | medium | A `ref` of a `Copy` value returned by a closure literal solves a generic `T` to the value type, not `ref`: `ap[T](f: Fn() -> T)` with `ap(|| ref v)` is `i64`, and `g.spawn(|| ref v)` is `TaskHandle[i64]`, while the closure body still returns `ref i64`. So check accepts it, `h.join()` read as `i64` prints a pointer's bits under `karac run`, and `p = h.join()` with `p: ref i64` stops every lane with invalid MIR | — |
 | B-2026-11-19-135 | 2026-11-19 | typecheck | medium | An unannotated generic struct literal or variant with an empty list `[]` in a field whose element type mentions the type parameter is refused with the internal E0516 'a type that failed to check is not lowered yet': `struct W[T] { v: T, xs: Vec[T] }` `W { v: 1, xs: [] }` (when xs is later used), and every generic tree `Tr { v: 1, kids: [] }`, `Tree.Node(1, [])`, even inside `fn leaf[T](v: own T) -> Tr[T] { Tr { v: v, kids: [] } }` | — |
 | B-2026-11-19-136 | 2026-11-19 | typecheck | medium | A generic struct with a self-referential `Option` field (`struct Ls[T] { v: T, next: Option[Ls[T]] }`) cannot be built with a literal: `Ls { v: 1, next: None }` is E0200 'field next has type Option[i64], but the type parameter was already bound to Option[Ls[i64]] by an earlier field', also with an annotation, `shared`, and `T = String` | — |
-| B-2026-11-19-137 | 2026-11-19 | mir | low | Inside a closure body, a borrowck conflict on a captured variable names neither the place nor the holder: 'mutable borrow of (*a temporary value) while it is borrowed', where the same code in a `for` loop says 'cannot mutably borrow `seen` while `more` still holds a borrow of it' | — |
 | B-2026-11-19-138 | 2026-11-19 | mir | low | A function that uses a provider, erased to a function type (`twice(read_clk)` with `fn twice[G: Fn() -> i64](g: G)`), still stops every lane with `a function used as a value that uses Clk's provider is not lowered yet`; it should carry the provider as an erased closure does | — |
 | B-2026-11-19-140 | 2026-11-19 | mir-llvm | high | A write through a `mut ref` to a view (`Str`, `Slice`) is lost in compiled code: `set(mut v, "b")` with `fn set(s: mut ref Str, t: Str) { *s = t; }`, `w[1] = "m"` on a `Vec[Str]` and `sl[0] = xs[0..2]` on a `Vec[Slice[i64]]` leave the old value on run, build and ASan; the MIR interpreter is right | — |
 | B-2026-11-19-141 | 2026-11-19 | typecheck | low | A `mut ref MutFn` passed to a non-generic eager iterator slot (`any(f)`, `all(f)` with `f: mut ref MutFn`) is still refused: the checker's Function type there carries no Fn/MutFn kind, so -106's kind-checked solving of a ref to a function value does not reach it | — |
+| B-2026-11-20-1 | 2026-11-20 | mir | medium | A `dyn` of a generic trait at a VIEW type argument cannot be built: `let e: dyn Cv[Str] = A { };` with `trait Cv[T] { fn cv(self, x: T) -> i64; }` and `impl Cv[Str] for A` is E0516 "`A` as `dyn def#1019[def#414]` (no `Cv.cv` of it to put in the method table) is not lowered yet" on every lane; `dyn Cv[Slice[i64]]` the same, while `Cv[i64|String|bool|f64|Vec[i64]|Option[i64]|(i64, i64)|ref String]` all work | — |
+| B-2026-11-20-2 | 2026-11-20 | mir | medium | A `dyn` coercion through a blanket impl cannot be built: `impl[T: Nm] Loud for T { .. }`, `impl Nm for A`, `let e: dyn Loud = A { };` is E0516 "`A` as `dyn def#1021` (no `Loud.loud` of it to put in the method table) is not lowered yet" on every lane, while `A { }.loud()` and `fn go[L: Loud](l: L)` work | — |
+| B-2026-11-20-3 | 2026-11-20 | typecheck | low | A tuple literal argument to a `dyn` method is not typed by the parameter: `e.tp(("abc", 0.5))` with `fn tp(self, t: (Str, f32)) -> f64` through `dyn Tp` is E0200 "expected '(Str, f32)', found '(String, f64)'"; the same literal to a plain function or an annotated `let` is accepted | — |
+| B-2026-11-20-4 | 2026-11-20 | typecheck | medium | A type with two impls of one generic trait cannot coerce to `dyn` of the second: with `impl Cv[Str] for A` and `impl Cv[i64] for A`, `let f: dyn Cv[i64] = A { };` is E0200 "expected 'dyn Cv[i64]', found 'A': `A` implements `Cv[Str]`"; swapping the impls flips which one is accepted, and the generic bound `go[C: Cv[i64]](A { })` is right | — |
+| B-2026-11-20-5 | 2026-11-20 | mir | low | A closure handed through a generic identity on `own F` and then returned from a let is refused E0509: `fn keep[F: Fn() -> i64](f: own F) -> F { f }`, `fn mk() -> Fn() -> i64 { let s = "abc".to_string(); let f = keep(|| s.len()); f }` gets "the result borrows `s`, which this function owns"; returning `keep(|| s.len())` as the tail, or `let f = || s.len(); f` without keep, is accepted and prints 3 | — |
+| B-2026-11-20-6 | 2026-11-20 | typecheck | low | A generic `mut ref T` parameter instantiated at a reference type refuses its `mut` marker: `fn setv[T](slot: mut ref T, x: own T) { *slot = x; }` called `setv(mut p, q)` with `p`, `q` both `ref String` is E0219 "`mut` marker is not legal here: parameter expects `ref String` (not a mutable borrow)"; with `T = i64` (`setv(mut p, 5)`) it is right | — |
+| B-2026-11-20-7 | 2026-11-20 | typecheck | low | A use after a capture moved into a closure passed to a generic `own F` names a loop that does not exist: `let f = keep(|| s.len()); drop(s); println(f());` is E0500 "value 's' is moved inside a loop and not assigned again before the next iteration" in straight-line `main` | — |
+| B-2026-11-20-8 | 2026-11-20 | typecheck | low | Coercing a generic struct literal with an open type parameter to `dyn` does not use the only impl to fix it: `let mut e: dyn Ac = Bag { xs: Vec.new() };` with only `impl Ac for Bag[String]` is E0200 "expected 'dyn Ac', found 'Bag[?T0]': `Bag[?T0]` does not implement `Ac`" | — |
 
 ### Relocated
 
@@ -1879,12 +1884,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-120 | typecheck | low | `StdinLines`, the documented return type of `stdin.lines()` (io.md § Standard streams), could not be named: `fn f() -> StdinLines` was E0104 undefine… | 1e48265c69 |
 | B-2026-11-19-123 | typecheck | low | An undefined type name in an expression path's type arguments (`Vec[Qqq].new()`, `Option[Qqq].None`, `Mix[Zzz].N(63)`) is reported as E0516 'an expre… | 451527ebc9 |
 | B-2026-11-19-125 | typecheck | medium | The bitwise and shift operators are refused on a generic `T` bounded by their trait (`fn f[T: BitAnd[Output = T]](a: own T, b: own T) -> T { a & b }`… | e472f1074f |
+| B-2026-11-19-126 | mir+mir-llvm | high | A `dyn Trait` call to an impl method that declares a parameter or receiver with a weaker mode than the trait (§4.7: `own` trait, borrowed impl) passe… | 44ecc0287e |
+| B-2026-11-19-127 | mir+mir-llvm | medium | A named value moved through a generic bound into an impl that borrows it (§4.7: the trait takes `own`, the instance's impl borrows) drops at the end… | 44ecc0287e |
 | B-2026-11-19-128 | mir-llvm | high | A `dyn Trait` method call with a `Str` or an `f32` parameter passes it wrongly on build, with the impl's modes EQUAL to the trait's: `e.nm("abcd")` w… | d7c3bfeed2 |
 | B-2026-11-19-129 | typecheck | low | §5.10's Copy read through a reference is not applied to an arithmetic operand of a bounded generic `T: Add + Copy`: `for x in v.iter() { s = s + x; }… | e472f1074f |
 | B-2026-11-19-131 | typecheck | low | An indexed list of string literals where a `Str` is wanted (`fn arm_name(a: i64) -> Str { ["one", "two"][a] }`) was refused "expected 'Str', found 'S… | 67cd85419b |
 | B-2026-11-19-132 | cli | low | The E0238 `from_iter` fix for a `collect` compared with a typed value broke the text on a parenthesized range receiver: `seen != (0..n).collect()` wa… | 4e5c719df5 |
 | B-2026-11-19-133 | ownership | high | Remainder of B-2026-11-19-95: a task or `par` result of a struct with a `ref` FIELD (`struct Hd { r: ref i64 }`, `g.spawn(\|\| Hd { r: ref v })`, `par… | 98f0b86a32 |
 | B-2026-11-19-134 | typecheck | medium | Assigning a plain value to a `ref` binding passes `karac check` and then stops every lane with invalid MIR: `let mut p: ref i64 = ref e; let x: i64 =… | 98f0b86a32 |
+| B-2026-11-19-137 | mir | low | Inside a closure body, a borrowck conflict on a captured variable names neither the place nor the holder: 'mutable borrow of (*a temporary value) whi… | 215758a164 |
 | B-2026-11-19-139 | typecheck | medium | A by-value struct without `#[repr(C)]` in an `extern "C"` signature passed `karac check`, though its field order and padding are unspecified, so C re… | ed72632c6e |
 
 </details>
