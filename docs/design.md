@@ -3272,7 +3272,7 @@ When the wrapper must also have its inner type's ABI, add `#[repr(transparent)]`
 ### Method resolution
 
 For a call `e.m(args)` where `e` has type `T`:
-1. **Inherent methods.** If `T`'s own impls declare `m` (including generic inherent impls whose bounds hold), that method is chosen. Trait methods named `m` are not considered.
+1. **Inherent methods.** If `T`'s own impls declare `m` (including generic inherent impls whose bounds hold), that method is chosen. Trait methods named `m` are not considered. Only a function with a `self` receiver is a method here: an inherent associated function `fn m(..)` without `self` does not hide a trait's `m(self)` at `e.m()`, as in Rust. It is reached as `T.m(..)`, where it hides the trait's associated function of the same name (§ Associated functions above). Which impl comes first in the source never matters.
 2. **Trait methods.** Otherwise the candidates are the methods named `m` of every trait in scope that `T` implements, including conditional impls whose bounds hold for `T`. One candidate is chosen. Two or more are an ambiguity error.
 3. **Receiver check.** The chosen method's receiver is then checked against `e`. `own self` moves `e` (or copies it, if `T` is `Copy`), `self` borrows it, and `mut ref self` borrows it mutably and needs a mutable place. A mismatch is an error at the call. The check never changes which method was chosen.
 
