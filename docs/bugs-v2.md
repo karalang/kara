@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 598 |
-| false-positive | 322 |
+| diagnostics | 599 |
+| false-positive | 323 |
 | missing-feature | 223 |
 | perf | 189 |
 | other | 124 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 756 |
+| typecheck | 757 |
 | mir-llvm | 313 |
 | mir | 286 |
-| cli | 228 |
+| cli | 229 |
 | parser | 135 |
 | ownership | 122 |
 | runtime | 101 |
@@ -128,9 +128,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-22 | 2026-11-20 | parser | low | An inline Rust `mod m { .. }` is refused with no fix and an E0002 "Expected expression, found `}`" after it, while `m::sq(4)` at the call is fixed to `m.sq(4)`, which still names the deleted module | — |
 | B-2026-11-20-28 | 2026-11-20 | runtime | low | `Json` implements neither `Serialize` nor `Deserialize`, so a derived type cannot hold a pass-through document (`extra: Json`), `Json.deserialize` cannot read a part as a `Json`, and a `Json` cannot be a log field value | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
-| B-2026-11-20-60 | 2026-11-20 | cli | low | kara-lsp hover shows `R` for a binding destructured from a borrowed place (`let (r, k) = h.pe` with `h` a bare parameter, then `let m = r`), which is a `ref R`: written back as the binding's type it is refused (E0313) | — |
 | B-2026-11-20-63 | 2026-11-20 | mir | medium | `*p.0` on a closure parameter that views a tuple item checks clean but every MIR backend refuses it: `let t: Vec[(i32, i32)] = [(1, 2), (3, 4)]; let out: Vec[i32] = t.iter().map(|p| *p.0).collect();` passes `karac check`, while `__mir-run` and `__mir-llvm-run` stop at the `*` with "unary '*' requires 'ref T' .. found 'i32'; a 'i32' is copied, so drop the `*`" | — |
 | B-2026-11-20-65 | 2026-11-20 | typecheck+mir | medium | An inherent associated function and a trait function of the same name resolve by impl order: `T.name()` took the first impl in source order, so a trait impl written before `impl T` hid the inherent function, and `let h: W = Get.get(7)` reached the inherent `get` when `impl W` came first; `e.m()` called an inherent `fn m()` with no `self` past a trait's `m(self)`; and a generic body's `T.build(s)` under `T: Build` could not call a `build[S]` the type also has inherently | — |
+| B-2026-11-20-67 | 2026-11-20 | typecheck | low | `let m: ref R = r` is refused (E0200 "a type annotation does not borrow: this let would move the place") when `r` is destructured from a borrowed field (`let (r, k) = h.pe`, `h` a bare parameter), though `r` is already a view; the same let from a tuple parameter (`let (r, k) = p`) passes | — |
 
 ### Relocated
 
@@ -1947,9 +1947,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-56 | cli | medium | kara-lsp goto-definition and references at a binding inside a tuple-variant pattern (`E.A(r)`, `Some(w)`), a closure parameter or a field name inside… | 0b47a3dbea |
 | B-2026-11-20-57 | cli | low | kara-lsp document symbols select the whole item rather than its name, and list the library functions a file imports with spans from their library fil… | 0b47a3dbea |
 | B-2026-11-20-58 | cli | medium | kara-lsp hover shows the enclosing block's type on `let _`, `Fn(..)` for a closure that writes a capture (a `MutFn`), and the renamed-apart name (`Fi… | 0b47a3dbea |
+| B-2026-11-20-60 | cli | low | kara-lsp hover shows `R` for a binding destructured from a borrowed place (`let (r, k) = h.pe` with `h` a bare parameter, then `let m = r`), which is… | a33f6ff6ed |
 | B-2026-11-20-59 | cli | medium | kara-lsp signature help gives nothing for library methods outside four library pages (`tx.send`, `Duration.ms`), module functions (`sleep`, `log.init… | 0b47a3dbea |
 | B-2026-11-20-64 | typecheck | low | Items made from a value a `let` binds to literal-seeded folds, `once(first).chain(encoded.iter().scan(first, ..)).collect()` into a `Vec[i32]` with `… | 045accc7ad |
 | B-2026-11-20-66 | typecheck | medium | `==` on a type with only a hand-written `impl PartialEq` is refused ("'==' cannot dispatch to your 'impl PartialEq for Item': .. | 95f3257492 |
+| B-2026-11-20-68 | cli | medium | `karac fix` turns on the six style lints that `karac check --output=json` leaves off, so it rewrites code (needless_return, manual_compound_assign, q… | a33f6ff6ed |
 
 </details>
 
