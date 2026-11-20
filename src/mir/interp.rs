@@ -3220,7 +3220,8 @@ impl<'a> Interp<'a> {
             }
             (
                 "Server",
-                "__install" | "__need" | "__wait_ms" | "__wire" | "__wire_fixed" | "__keep_alive",
+                "__install" | "__need" | "__wait_ms" | "__wire" | "__wire_fixed" | "__keep_alive"
+                | "__served",
             )
             | ("Request", _) => self.http_server_method(name, base, method, args, arg_tys, ret),
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
@@ -19425,6 +19426,15 @@ impl<'a> Interp<'a> {
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__keep_alive") => Ok(Value::Bool(self.served().keep_alive())),
+            ("Server", "__served") => {
+                // The served request as one the program holds, so a task
+                // the handler spawns reads it; the connection keeps what
+                // its response reads (`Request::detach`, B-2026-11-20-54).
+                let task = self.cur_task;
+                let req = self.http_requests.entry(task).or_default().detach();
+                let id = self.keep_request(req.target.clone(), req);
+                Ok(Value::Int(id as i128))
+            }
             ("Request", "new") => {
                 let method = text_of(self, 0)?;
                 let url = text_of(self, 1)?;

@@ -53,6 +53,21 @@ pub struct Request {
 }
 
 impl Request {
+    /// The request as a value of its own, for `Server.__served`
+    /// (B-2026-11-20-54): its target, headers and body move to it, and
+    /// `self` keeps what the response to it reads (`response_bytes`,
+    /// `keep_alive`): its method and how it keeps the connection.
+    pub fn detach(&mut self) -> Request {
+        Request {
+            method: self.method.clone(),
+            target: std::mem::take(&mut self.target),
+            headers: std::mem::take(&mut self.headers),
+            body: std::mem::take(&mut self.body),
+            keep_alive: self.keep_alive,
+            http10: self.http10,
+        }
+    }
+
     /// A request a program builds (`Request.new(method, url)`, core
     /// semantics §14.12): an absolute URL's target is its path and query,
     /// `/` when it has neither, and any other URL is the target itself.

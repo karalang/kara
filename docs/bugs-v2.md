@@ -60,11 +60,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 593 |
 | false-positive | 322 |
-| missing-feature | 220 |
+| missing-feature | 221 |
 | perf | 189 |
-| other | 122 |
+| other | 124 |
 | soundness | 105 |
-| miscompile | 97 |
+| miscompile | 98 |
 | crash | 63 |
 | run-vs-build | 59 |
 | codegen-gap | 40 |
@@ -76,17 +76,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 751 |
+| typecheck | 752 |
 | mir-llvm | 313 |
 | mir | 284 |
 | cli | 223 |
 | parser | 135 |
 | ownership | 122 |
-| runtime | 99 |
-| interp | 94 |
+| runtime | 101 |
+| interp | 95 |
 | effect | 49 |
 | resolver | 46 |
-| other | 36 |
+| other | 37 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -147,6 +147,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-30 | 2026-11-20 | other | low | design.md § Serialize and Deserialize lists `Serializer` and `Deserializer` methods that do not exist in serde.kara or have other signatures: `serialize_string(v: Str)` (is `String`), `deserialize_seq_begin -> Result[i64, ..]` (is `Result[(), ..]`), `deserialize_field -> Result[String, ..]` (is `Result[Option[String], ..]`), and `deserialize_seq_end` / `deserialize_struct_end`, which are not there | — |
 | B-2026-11-20-32 | 2026-11-20 | typecheck | medium | The `let mut` rule reads a library method's receiver off its first parameter after `self`: `let br = BufReader.new(f); br.read_line(mut s)` is refused (E0510) though read_line takes `ref self`, and `br.consume(n)` / `br.fill_buf()` (mut ref self) are accepted on a plain `let` | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
+| B-2026-11-20-51 | 2026-11-20 | interp+runtime | medium | `fs.copy(p, p)` empties `p` and returns Ok(0), on run and build alike; a copy onto the same file through a symlink does the same. Ruled: refuse with InvalidInput and leave the file intact | — |
+| B-2026-11-20-52 | 2026-11-20 | other | low | `std.path.parent` can end in a `.` component: `parent("/usr//lib/./x")` is `"/usr//lib/."` and `parent("../x/./y")` is `"../x/."`. Ruled: no trailing `.` component, as Python's PurePath | — |
+| B-2026-11-20-53 | 2026-11-20 | typecheck | low | The prelude has `print`, `println` and `eprintln` but no `eprint`: `eprint("x")` is E0100 `undefined name 'eprint'`. Ruled: add it for symmetry | — |
+| B-2026-11-20-54 | 2026-11-20 | runtime | medium | A task an HTTP handler spawns reads an empty Request: `req.path()` inside `group.spawn(..)` is "", with no query, headers or body, on both backends | — |
 
 ### Relocated
 

@@ -1905,6 +1905,18 @@ pub extern "C" fn karac_mir_http_keep_alive() -> u8 {
     u8::from(with_request(http1::Request::keep_alive))
 }
 
+/// `Server.__served()`: the current request as one the program holds
+/// (`built_request`), so a task the handler spawns reads it, as every
+/// task reads a request `Request.new` made; its `__id`. Its target,
+/// headers and body move; the connection keeps what its response reads
+/// (`http1::Request::detach`, B-2026-11-20-54).
+#[cfg(feature = "net")]
+#[no_mangle]
+pub extern "C" fn karac_mir_http_served() -> i64 {
+    let req = with_request_mut(http1::Request::detach);
+    built_request(req.target.clone(), req)
+}
+
 /// The `n` `(String, String)` pairs at `headers`.
 ///
 /// # Safety

@@ -174,7 +174,9 @@ impl Server {
             if used < 0 {
                 return;
             }
-            let req = Request { __id: 0 };
+            // The request is a value of the program's own, as one
+            // `Request.new` made, so a task the handler spawns reads it too.
+            let req = Request { __id: Server.__served() };
             let resp = handler(req);
             // A 101 under `serve_ws` is the upgrade, for a request that is a
             // valid opening handshake; one that asks to upgrade but is not
@@ -329,6 +331,14 @@ impl Server {
         };
         let extra = if status == 426 { "Sec-WebSocket-Version: 13\r\n" } else { "" };
         f"HTTP/1.1 {status} {reason}\r\n{extra}content-length: 0\r\nconnection: close\r\n\r\n"
+    }
+
+    // The current request as a `Request` of its own: its id among the
+    // requests a program holds (`Request.new`'s), so every task reads it.
+    // The connection keeps what its response reads.
+    #[compiler_builtin]
+    fn __served() -> i64 {
+        0
     }
 
     // The session of a server that does not upgrade, which never runs.

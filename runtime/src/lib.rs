@@ -683,6 +683,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_http_wait_ms,
         mir_io::karac_mir_http_wire,
         mir_io::karac_mir_http_keep_alive,
+        mir_io::karac_mir_http_served,
     );
     // A `RequestBuilder`'s request for a `Network` provider's `send` (core
     // semantics §14.12; full archive only, with the client).

@@ -126,9 +126,10 @@ impl<'ctx> Cx<'ctx, '_> {
             ("Server", "__install") => self.http_install_native(args, dest).map(Some),
             ("Server", "__wire") => self.http_wire_native(args, dest).map(Some),
             ("Server", "__wire_fixed") => self.http_wire_fixed_native(args, dest).map(Some),
-            ("Server", "__need" | "__wait_ms") => {
+            ("Server", "__need" | "__wait_ms" | "__served") => {
                 let entry = match method {
                     "__need" => "karac_mir_http_need",
+                    "__served" => "karac_mir_http_served",
                     _ => "karac_mir_http_wait_ms",
                 };
                 let got = self.rt_named(entry, &[], 64)?;
