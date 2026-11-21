@@ -150,7 +150,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-134 | 2026-11-20 | cli | low | The Jupyter kernel's `%ownership` (and the REPL's) lists a binding as `owned` after a later cell moved it away (`let w = ...; let z = w;` then `%ownership` shows `w: owned`) | — |
 | B-2026-11-20-135 | 2026-11-20 | cli | low | In the Jupyter kernel a `:`-command cell (`:type x`, `:save f.kara`, `:dep name = "1"`) runs as Kāra source and fails with an error citing the synthetic `<repl>:2:1 fn main() {}`, though deferred.md says `:dep` works in Jupyter through the kernel's meta-command channel | — |
 | B-2026-11-21-5 | 2026-11-21 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword ... write `r#struct`" plus a cascade (Expected expression at the body's `}`, E0001 top-level statements beside `fn main`), where a nested `fn` gets one "no nested items ... move it above the item it is in" diagnostic with a hoisting fix | — |
-| B-2026-11-21-6 | 2026-11-21 | mir-llvm | high | `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure the address of the slot holding each reference, not the reference: compiled, `v.sort_by(|a, b| b[1].cmp(a[1]))` on a `Vec[ref Vec[i32]]` stops on an index out of bounds (`karac run`), leaves the vector unsorted (`karac build`) and reads past a stack slot under ASan; the MIR interpreter sorts it | — |
 
 ### Relocated
 
@@ -2041,6 +2040,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-3 | mir | high | A `Map[K, V, H]` / `Set[T, H]` with a user `BuildHasher` loses keys through the library's Kāra-source methods (`extend`, `retain`, `get_mut`, `from`,… | f81b6087e5 |
 | B-2026-11-21-4 | typecheck | medium | A list literal refuses an element that leaves a type slot open after an earlier element decided it: `[Err(1), Ok(5), Err(0)]` is 'expected Result[i64… | 1a5c923642 |
 | B-2026-11-21-1 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on t… | cecef40ef6 |
+| B-2026-11-21-6 | mir-llvm | high | `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure the address of the slot holding each reference, not the reference: compiled,… | 6e5c5d0a95 |
 
 </details>
 
