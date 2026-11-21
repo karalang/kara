@@ -141,8 +141,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-49 | 2026-11-21 | typecheck | medium | An empty `[]` inside a tuple inside an array literal typed through `.to_vec()`, `let xs: Vec[(i64, Vec[i64])] = [(1, [1, 2]), (2, [])].to_vec();`, stops with the internal E0516 "a type that failed to check is not lowered yet" at the `[]`; without `.to_vec()` it checks | — |
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
-| B-2026-11-21-52 | 2026-11-21 | other | low | Corpus entry fixtures/codegen/generics/a_qualified_channel_pins_through_a_tuple_return expected `5` from `println(rx.recv())`, but `Receiver.recv` returns `Option[T]`, so every backend prints `Some(5)` and the entry failed on mir-interp and mir-llvm | — |
-| B-2026-11-21-53 | 2026-11-21 | interp | low | The 1116 and 1117 kata differentials run 26 s and 45 s on a release MIR interpreter and about 60 s on a debug one, so under the corpus runner's 60 s default they fail as timeouts, intermittently for 1116 | — |
 
 ### Relocated
 
@@ -2090,6 +2088,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-43 | typecheck | low | `ans + last.iter().map(\|j\| pre[j]).sum()` in an `i32` tail, with `pre` a `Vec.filled(n, 0)`, is refused as a narrowing with the generic "write as i32… | 002770bf68 |
 | B-2026-11-21-44 | typecheck | medium | `best = r` with `r: ref (i64, i64)` from `runs.iter()` and `let mut best = (0, 0)` is refused "expected '(i64, i64)', found 'ref (i64, i64)'" with no… | 002770bf68 |
 | B-2026-11-21-45 | typecheck | medium | A tuple of two `collect`s, `let p = (a.map(f).collect(), b.map(g).collect())`, is refused as if both had one type ('(?T, ?T)'), and one `collect` in… | 002770bf68 |
+| B-2026-11-21-52 | other | low | Corpus entry fixtures/codegen/generics/a_qualified_channel_pins_through_a_tuple_return expected `5` from `println(rx.recv())`, but `Receiver.recv` re… | 322c1d9075 |
+| B-2026-11-21-53 | interp | low | The 1116 and 1117 kata differentials run 26 s and 45 s on a release MIR interpreter and about 60 s on a debug one, so under the corpus runner's 60 s… | 322c1d9075 |
 
 </details>
 
