@@ -357,7 +357,7 @@ impl Server {
             }
         }
         // A request the server refuses is answered with its status (400,
-        // 408, 413, 431 or 501) without the handler, and its connection
+        // 408, 413, 414, 431, 501 or 505) without the handler, and its connection
         // closes (docs/library/io.md).
         if used < -1 {
             let refusal = Server.__refusal(0 - used);
@@ -377,8 +377,10 @@ impl Server {
             408 => "Request Timeout",
             413 => "Content Too Large",
             426 => "Upgrade Required",
+            414 => "URI Too Long",
             431 => "Request Header Fields Too Large",
             501 => "Not Implemented",
+            505 => "HTTP Version Not Supported",
             _ => "Bad Request",
         };
         let extra = if status == 426 { "Sec-WebSocket-Version: 13\r\n" } else { "" };
@@ -452,7 +454,7 @@ impl Server {
     // one, which `Request`'s methods read: the bytes it took, 0 when `buf`
     // holds no whole request yet (and `eof` says more may come; -100 when
     // the client also waits for a `100 Continue`), -1 when the connection
-    // holds no request, or minus the status (400, 413, 431, 501) of the
+    // holds no request, or minus the status (400, 413, 414, 431, 501, 505) of the
     // answer to one the server refuses (src/http1.rs `Progress::install`).
     #[compiler_builtin]
     fn __install(buf: Slice[u8], eof: bool) -> i64 {

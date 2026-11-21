@@ -147,8 +147,15 @@ fn form_decode(s: &str) -> String {
 
 /// The largest request head the server reads, request line and headers
 /// together (and a chunked body's trailers): a bigger one is answered
-/// `431` (docs/library/io.md, B-2026-11-17-50).
+/// `431`, or `414` when its request line alone is bigger (docs/library/io.md,
+/// B-2026-11-17-50, B-2026-11-21-54).
 pub const HEAD_LIMIT: usize = 64 * 1024;
+
+/// The refusal of a request line over [`HEAD_LIMIT`] (RFC 9112 §3).
+const URI_TOO_LONG: (u16, &str) = (414, "the request line is too long");
+/// The refusal of a head over [`HEAD_LIMIT`] whose request line fits.
+const HEAD_TOO_LARGE: (u16, &str) = (431, "the request head is too large");
+
 /// The largest request body the server reads: a bigger one is answered
 /// `413`.
 pub const BODY_LIMIT: usize = 16 * 1024 * 1024;
@@ -262,7 +269,7 @@ pub fn response_bytes(
 }
 
 /// The bytes of the answer to a request the server refuses with `status`
-/// (400, 408, 413, 431 or 501) before any handler sees it; its connection
+/// (400, 408, 413, 414, 431, 501 or 505) before any handler sees it; its connection
 /// closes.
 pub fn refusal_bytes(status: i64) -> Vec<u8> {
     format!(
@@ -281,7 +288,7 @@ pub enum Parse {
     /// Nothing but blank lines, and the client closed the connection.
     Closed,
     /// Bytes the server refuses, with the status it answers (400, 413,
-    /// 431 or 501) and why; the connection closes.
+    /// 414, 431, 501 or 505) and why; the connection closes.
     Bad(u16, &'static str),
 }
 
@@ -318,12 +325,14 @@ fn short(eof: bool, pending: Pending, what: &'static str) -> Parse {
 /// A request is refused unless it is unambiguous (RFC 9112, review-thread
 /// ruling 2026-11-17 in docs/library/io.md, B-2026-11-17-44, -46): `400`
 /// for a malformed request line or header (no colon, whitespace before
-/// the colon, an empty or non-token name, CR, LF or NUL in a value), a
-/// version other than HTTP/1.0 and HTTP/1.1, an HTTP/1.1 request without
+/// the colon, an empty or non-token name, a control other than HTAB in a
+/// value), a malformed version, an HTTP/1.1 request without
 /// exactly one `Host`, and ambiguous framing (`Content-Length` with
 /// `Transfer-Encoding`, two `Content-Length`s, one that is not plain
 /// digits, `chunked` that is not the last coding); `501` for a transfer
-/// coding other than `chunked`; `431` for a head over [`HEAD_LIMIT`];
+/// coding other than `chunked`; `505` for a major version other than 1
+/// (`HTTP/1.x` above 1.1 is read as 1.1); `414` for a request line over
+/// [`HEAD_LIMIT`] and `431` for a head over it;
 /// `413` for a body over [`BODY_LIMIT`].
 pub fn parse_request(buf: &[u8], eof: bool) -> Parse {
     Parser::default().advance(buf, eof)
@@ -410,7 +419,12 @@ impl Parser {
                             self.started = true;
                         }
                         self.blank_upto = buf.len();
-                        return self.head_short(buf, eof, "the request line ends early");
+                        return self.head_short(
+                            buf,
+                            eof,
+                            URI_TOO_LONG,
+                            "the request line ends early",
+                        );
                     }
                     Some(Err(e)) => return Parse::Bad(400, e),
                     Some(Ok(l)) if l.trim().is_empty() => {
@@ -432,7 +446,9 @@ impl Parser {
         if matches!(self.stage, Stage::Headers) {
             loop {
                 let h = match p.line() {
-                    None => return self.head_short(buf, eof, "the headers end early"),
+                    None => {
+                        return self.head_short(buf, eof, HEAD_TOO_LARGE, "the headers end early")
+                    }
                     Some(Err(e)) => return Parse::Bad(400, e),
                     Some(Ok(h)) => h,
                 };
@@ -562,10 +578,18 @@ impl Parser {
         Parse::Done(req, used)
     }
 
-    /// The answer for a head that needs more than `buf` holds.
-    fn head_short(&self, buf: &[u8], eof: bool, what: &'static str) -> Parse {
+    /// The answer for a head that needs more than `buf` holds: `over`
+    /// once it holds more than [`HEAD_LIMIT`], 414 while the request line
+    /// has not ended and 431 after (RFC 9112 §3, RFC 6585 §5).
+    fn head_short(
+        &self,
+        buf: &[u8],
+        eof: bool,
+        over: (u16, &'static str),
+        what: &'static str,
+    ) -> Parse {
         if !eof && buf.len() > HEAD_LIMIT {
-            Parse::Bad(431, "the request head is too large")
+            Parse::Bad(over.0, over.1)
         } else {
             let more = Pending {
                 need: buf.len() + 1,
@@ -578,7 +602,13 @@ impl Parser {
 
     /// `method SP target SP HTTP/x.y` (RFC 9112 §3); anything else is
     /// answered 400 without reaching the handler (docs/library/io.md).
+    /// A line over [`HEAD_LIMIT`] is 414. `HTTP/1.x` with `x` above 1 is
+    /// read as HTTP/1.1, and another major version is 505 (RFC 9112 §2.3,
+    /// B-2026-11-21-54).
     fn request_line(&mut self, first: &str) -> Result<(), Parse> {
+        if first.len() > HEAD_LIMIT {
+            return Err(Parse::Bad(URI_TOO_LONG.0, URI_TOO_LONG.1));
+        }
         let mut words = first.split(' ');
         let (Some(method), Some(target), Some(version), None) =
             (words.next(), words.next(), words.next(), words.next())
@@ -590,10 +620,13 @@ impl Parser {
         if !is_token(method) || target.is_empty() || !target.bytes().all(|b| b.is_ascii_graphic()) {
             return Err(Parse::Bad(400, "a malformed request line"));
         }
-        let http10 = match version {
-            "HTTP/1.1" => false,
-            "HTTP/1.0" => true,
-            _ => return Err(Parse::Bad(400, "an HTTP version other than 1.0 and 1.1")),
+        let http10 = match version.strip_prefix("HTTP/").map(str::as_bytes) {
+            Some(&[b'1', b'.', b'0']) => true,
+            Some(&[b'1', b'.', minor]) if minor.is_ascii_digit() => false,
+            Some(&[major, b'.', minor]) if major.is_ascii_digit() && minor.is_ascii_digit() => {
+                return Err(Parse::Bad(505, "an HTTP major version other than 1"))
+            }
+            _ => return Err(Parse::Bad(400, "a malformed HTTP version")),
         };
         self.req = Request {
             method: method.to_string(),
@@ -1139,10 +1172,10 @@ mod tests {
             h("X-A: a\0b\r\n\r\n"),
             // obs-fold.
             h("X-A: a\r\n b\r\n\r\n"),
-            // S27 versions.
-            "GET / HTTP/2.0\r\nHost: h\r\n\r\n".to_string(),
-            "GET / HTTP/1.2\r\nHost: h\r\n\r\n".to_string(),
+            // S27 malformed versions.
             "GET / HTTP/1.1x\r\nHost: h\r\n\r\n".to_string(),
+            "GET / HTTP/1.10\r\nHost: h\r\n\r\n".to_string(),
+            "GET / http/1.1\r\nHost: h\r\n\r\n".to_string(),
             // S28b NUL in the target, two spaces.
             "GET /a\0b HTTP/1.1\r\nHost: h\r\n\r\n".to_string(),
             "GET  / HTTP/1.1\r\nHost: h\r\n\r\n".to_string(),
@@ -1156,6 +1189,32 @@ mod tests {
         for raw in &bad {
             assert_eq!(refused(raw.as_bytes()), 400, "{raw:?}");
         }
+        // RFC 9112 §2.3 (B-2026-11-21-54): another major version is 505,
+        // a 1.x above 1.1 is read as 1.1, and a request line over the
+        // head limit is 414 whether or not it has ended.
+        for v in ["HTTP/2.0", "HTTP/0.9", "HTTP/3.1"] {
+            let raw = format!("GET / {v}\r\nHost: h\r\n\r\n");
+            assert_eq!(refused(raw.as_bytes()), 505, "{raw:?}");
+        }
+        let r = parse("GET /v HTTP/1.2\r\nHost: h\r\n\r\n");
+        assert!(!r.http10() && r.keep_alive);
+        assert_eq!(
+            refused(b"GET / HTTP/1.2\r\n\r\n"),
+            400,
+            "1.2 wants a Host as 1.1 does"
+        );
+        let long = format!(
+            "GET /{} HTTP/1.1\r\nHost: h\r\n\r\n",
+            "a".repeat(HEAD_LIMIT)
+        );
+        assert_eq!(refused(long.as_bytes()), 414);
+        assert_eq!(refused(&long.as_bytes()[..HEAD_LIMIT + 10]), 414);
+        let fat = format!(
+            "GET / HTTP/1.1\r\nHost: h\r\nX-L: {}\r\n\r\n",
+            "a".repeat(HEAD_LIMIT)
+        );
+        assert_eq!(refused(fat.as_bytes()), 431);
+        assert_eq!(refused(&fat.as_bytes()[..HEAD_LIMIT + 10]), 431);
         // S11 an unknown coding before chunked.
         assert_eq!(
             refused(h("Transfer-Encoding: gzip, chunked\r\n\r\n").as_bytes()),
@@ -1174,7 +1233,8 @@ mod tests {
         }
     }
 
-    /// A head over 64 KiB is 431 whether or not it is whole, and a body
+    /// A head over 64 KiB is 431 (414 while its request line is) whether
+    /// or not it is whole, and a body
     /// over 16 MiB is 413 before it is read (B-2026-11-17-50).
     #[test]
     fn heads_and_bodies_have_limits() {
@@ -1184,8 +1244,10 @@ mod tests {
         );
         assert_eq!(refused(big.as_bytes()), 431);
         assert_eq!(refused(format!("{big}\r\n").as_bytes()), 431);
+        // A request line that alone is over the limit is 414 (RFC 9112 §3,
+        // B-2026-11-21-54).
         let target = format!("GET /{} HTTP/1.1\r\n", "a".repeat(HEAD_LIMIT));
-        assert_eq!(refused(target.as_bytes()), 431);
+        assert_eq!(refused(target.as_bytes()), 414);
         let just = format!(
             "GET / HTTP/1.1\r\nHost: h\r\nX-L: {}\r\n\r\n",
             "a".repeat(60_000)

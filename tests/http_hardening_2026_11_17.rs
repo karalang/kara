@@ -3,7 +3,7 @@
 //!
 //! - the server refuses an ambiguous or malformed request before a handler
 //!   sees it (B-2026-11-17-44, -46), and limits a request's head, body and
-//!   time (-50): 400, 413, 431, 501, 408;
+//!   time (-50): 400, 413, 431, 501, 408 (and 414, 505 since B-2026-11-21-54);
 //! - a response is framed by the server: a handler's header holding CR,
 //!   LF or NUL is a 500 (-45), `HEAD`, `1xx`, `204` and `304` go without a
 //!   body (-47), a status outside 100..=999 is a 500 and a handler's
@@ -211,7 +211,20 @@ fn server_refuses_and_frames(mode: &str) {
         ("S04 space colon", h("X-A : 1\r\n\r\n"), bad.clone(), true),
         ("S48 empty name", h(": v\r\n\r\n"), bad.clone(), true),
         ("S29 CR in value", h("X-A: a\rb\r\n\r\n"), bad.clone(), true),
-        ("S27 HTTP/2.0", "GET / HTTP/2.0\r\nHost: h\r\n\r\n".into(), bad.clone(), true),
+        // RFC 9112 §2.3 (B-2026-11-21-54): another major version is 505,
+        // and a 1.x above 1.1 is served as 1.1.
+        (
+            "S27 HTTP/2.0",
+            "GET / HTTP/2.0\r\nHost: h\r\n\r\n".into(),
+            refusal("505 HTTP Version Not Supported"),
+            true,
+        ),
+        (
+            "S27b HTTP/1.2",
+            "GET /v HTTP/1.2\r\nHost: h\r\n\r\n".into(),
+            ok("GET /v n=0 body="),
+            false,
+        ),
         ("S27c HTTP/1.1x", "GET / HTTP/1.1x\r\nHost: h\r\n\r\n".into(), bad.clone(), true),
         ("S25 no Host", "GET / HTTP/1.1\r\n\r\n".into(), bad.clone(), true),
         ("S26 two Hosts", "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n".into(), bad.clone(), true),
@@ -219,6 +232,12 @@ fn server_refuses_and_frames(mode: &str) {
             "S32 big head",
             format!("GET / HTTP/1.1\r\nHost: h\r\nX-L: {}\r\n\r\n", "a".repeat(70_000)),
             refusal("431 Request Header Fields Too Large"),
+            true,
+        ),
+        (
+            "S33 long target",
+            format!("GET /{} HTTP/1.1\r\nHost: h\r\n\r\n", "a".repeat(70_000)),
+            refusal("414 URI Too Long"),
             true,
         ),
         (
