@@ -789,7 +789,7 @@ FLAGS:
 karac test - Run the project's tests
 
 USAGE:
-    karac test [<filter>] [--all] [--interp]
+    karac test [<filter>] [--all] [--interp] [--output=jsonl]
 
 The package is checked as `karac check` checks it, built to MIR, and
 every case is a run of its own on the JIT (or the MIR interpreter under
@@ -812,12 +812,22 @@ OPTIONS:
     --interp   Execute tests on the MIR interpreter instead of the JIT.
                Equivalent to `KARAC_TEST_JIT=0`; the flag wins over the
                env var. No effect on a build without the `llvm` feature.
+    --output=jsonl
+               The output, one JSON event per line on stdout, which is
+               the default and the only output (`--output=json` is the
+               same). A failing case's panic is in its `test_fail`.
 
 OUTPUT:
     JSONL on stdout, one event per line. Event types: `run_start`,
-    `test_pass`, `test_fail`, `test_skip`, `summary`. See
-    `docs/design.md § Testing › Test runner output format` for the full
+    `test_pass`, `test_fail`, `test_skip`, `test_timeout`, `summary`.
+    See `docs/design.md § 14 Testing › Runner output` for the full
     schema and forward-compatibility rules.
+
+TIME LIMIT:
+    Each case is killed after `#[test(timeout_seconds: N)]`, else
+    `kara.toml`'s `[test] timeout_seconds`, else
+    `KARAC_TEST_TIMEOUT_SECS`, else 30 seconds, and reported by a
+    `test_timeout` event, which counts as a failure.
 
 RESOURCE PROBES:
     For each resource in a test's `requires` list, the runner checks
@@ -828,8 +838,9 @@ RESOURCE PROBES:
          Available iff the variable is set and non-empty.
 
 EXIT CODE:
-    0 if every test passed or was skipped under permitted conditions.
-    Non-zero if any test failed, or if any test was skipped under `--all`."
+    0 if every test passed or was skipped. Non-zero if any `test_fail`
+    or `test_timeout` was emitted (under `--all`, an unmet `requires` is
+    a `test_fail`)."
         }
         "cache" => {
             "\

@@ -2488,7 +2488,29 @@ pub(super) const CASCADE_CAP: usize = 20;
 /// phase's end, so the JSONL stream, which emits a prefix of this list at each
 /// phase boundary, reports the batch document's entries and markers
 /// (invariant 4). The ids of dropped entries are not reused.
-pub(super) fn cap_cascade(diags: DiagnosticJson) -> DiagnosticJson {
+///
+/// A package's combined source passes `remap`, which names its entries by
+/// their own files: the cap counts each module file's errors, as it counts
+/// each file's (B-2026-11-21-93). Entries stay as `diags` holds them, for
+/// the caller to remap; a marker names its module file, which `remap`
+/// leaves as it is.
+pub(super) fn cap_cascade(
+    mut diags: DiagnosticJson,
+    remap: Option<&dyn Fn(&str) -> String>,
+) -> DiagnosticJson {
+    if let Some(remap) = remap {
+        for i in 0..diags.entries.len() {
+            if diags.severities[i] != "error" {
+                continue;
+            }
+            let own = serde_json::from_str::<serde_json::Value>(&remap(&diags.entries[i]))
+                .ok()
+                .and_then(|v| v.get("file").and_then(|f| f.as_str()).map(str::to_string));
+            if let Some(file) = own {
+                diags.files[i] = file;
+            }
+        }
+    }
     let mut out = DiagnosticJson::new();
     let mut errors: FxHashMap<String, usize> = FxHashMap::default();
     // The current phase's suppressed counts, per file, in first-seen order.
@@ -2541,7 +2563,7 @@ pub(super) fn emit_json_output(pipeline: &Pipeline) {
 /// [`emit_json_output`] with each diagnostic's places named by `remap`: a
 /// package's combined source reports in its files (B-2026-11-05-26).
 pub(super) fn emit_json_output_remapped(pipeline: &Pipeline, remap: &dyn Fn(&str) -> String) {
-    let diags = cap_cascade(collect_diagnostics(pipeline));
+    let diags = cap_cascade(collect_diagnostics(pipeline), Some(remap));
     let entries: Vec<String> = diags.entries.iter().map(|d| remap(d)).collect();
     let effects = program_effects_json(pipeline);
     let pub_effects = public_function_effects_json(pipeline);
@@ -2842,7 +2864,7 @@ impl JsonlStream<'_> {
             .iter()
             .position(|p| *p == phase)
             .map_or(0, |i| i + 1);
-        let diags = cap_cascade(collect_diagnostics(pipeline));
+        let diags = cap_cascade(collect_diagnostics(pipeline), self.remap);
         let (mut errors, mut warnings, mut notes) = (0, 0, 0);
         while self.emitted < diags.entries.len()
             && DIAGNOSTIC_PHASES[..done].contains(&diags.phases[self.emitted].as_str())

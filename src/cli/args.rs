@@ -1774,6 +1774,18 @@ fn parse_test_command(args: &[String]) -> Command {
             // (LLJIT Slice 5). Parsed on every build for CLI uniformity; only
             // consulted under `--features llvm` (see `cmd_test`).
             "--interp" => interp = true,
+            // The runner writes JSONL whatever is asked: `--output=jsonl`
+            // names the default, and `--output=json` is accepted as `karac
+            // run`'s is, since design.md § 17's panic record promises both
+            // (B-2026-11-21-94). A text mode is not there yet (§ 14).
+            "--output=jsonl" | "--output=json" => {}
+            flag if flag.starts_with("--output") => {
+                eprintln!(
+                    "error: `karac test` writes JSONL (design.md § 14); `{flag}` is not an output it has: \
+                     use `--output=jsonl` or leave the flag out"
+                );
+                process::exit(1);
+            }
             flag if flag.starts_with("--") => {
                 eprintln!("error: unknown flag '{flag}' for `karac test`");
                 process::exit(1);
