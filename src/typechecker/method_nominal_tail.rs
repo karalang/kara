@@ -326,6 +326,38 @@ impl<'a> super::TypeChecker<'a> {
             );
             return Some(Type::Error);
         }
+        // A RAW-POINTER receiver reaching this point has no method
+        // (B-2026-11-21-80): the same silent-poison fall-through tuples left in
+        // B-2026-08-11-11. `try_pointer_receiver_method` claims the pointer's
+        // inherent surface early in the chain and returns `None` for every
+        // other name, `method_callee_type_name` has no arm for `Type::Pointer`,
+        // and the call poisoned to `Type::Error` with no diagnostic, so
+        // `karac check` printed only MIR's root-less E0516 "a type that failed
+        // to check is not lowered yet". Name the surface instead, and the
+        // `ptr` functions an address-shaped name was probably reaching for.
+        if let Type::Pointer { .. } = receiver_for_lookup {
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            let mut msg = format!(
+                "no method '{}' on type '{}'; a raw pointer's methods are \
+                 `offset`, `add`, `read`, `read_unaligned`, `read_volatile`, \
+                 `write`, `write_unaligned`, `write_volatile` and `is_null`",
+                method,
+                type_display(receiver_for_lookup)
+            );
+            if method.contains("addr") || method.contains("expose") {
+                msg.push_str(
+                    "; the address is a `ptr` function, not a method: `ptr.addr(p)` \
+                     for the address bits, `ptr.expose(p)` / `ptr.expose_mut(p)` for an \
+                     address that will be turned back into a pointer (design.md § Pointer provenance)",
+                );
+            } else if method == "clone" {
+                msg.push_str("; a raw pointer is `Copy`, so use it directly");
+            }
+            self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
+            return Some(Type::Error);
+        }
         None
     }
 }
