@@ -33077,6 +33077,12 @@ fn result_borrows(
                     // A copy of the elements carries what they borrow, not
                     // a borrow of the sequence (B-2026-11-09-50).
                     | "to_vec"
+                    // Every entry moved out of a `Map`, `Set` or sorted
+                    // one, the library's `into_iter`, `into_keys`,
+                    // `into_values` and `retain`: a `Map[ref String, i64]`
+                    // gives its keys' borrows, not one of the map
+                    // (B-2026-11-21-60).
+                    | "drain_entries"
             )
         );
     // An element read out of a sequence of shared references
