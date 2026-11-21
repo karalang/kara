@@ -5947,18 +5947,18 @@ What this namespace does NOT give you
 ────────────────────────────────────────────────────────────────────
 
 `StableHash.siphash24` is the whole namespace. Two things a reader
-may arrive looking for are deliberately absent, and design.md § `Hash`
-and `Hasher` agrees with this page on both.
+may arrive looking for are not in it.
 
-    A CRYPTOGRAPHIC HASH.  There is none in the stdlib — no sha256,
-    no blake3, no `crypto` namespace. Do NOT reach for `siphash24`
-    instead: SipHash is a fast keyed PRF, not a collision-resistant
-    hash, and it is unfit for signatures, for deduplication against
-    an adversary, or for anything where a chosen collision is a
-    problem. This is scheduled rather than undesigned —
-    `deferred.md § std.crypto` commits BLAKE3 as the general-hashing
-    algorithm; it is not in 0.8. Until then the honest answer is an
-    external library.
+    A CRYPTOGRAPHIC HASH.  That is `std.crypto`, not this namespace:
+    SHA-256, SHA-384 and SHA-512 (`std.crypto.sha2`), HMAC over each
+    (`std.crypto.hmac`) and `constant_time_eq`, with SHA-1 in
+    `std.crypto.legacy` (docs/library/crypto.md; native targets only,
+    a wasm build refuses it). Do NOT reach for `siphash24` instead:
+    SipHash is a fast keyed PRF, not a collision-resistant hash, and
+    it is unfit for signatures, for deduplication against an
+    adversary, or for anything where a chosen collision is a problem.
+    BLAKE3, which `deferred.md § std.crypto` commits as the default
+    general hash for new designs, is not in 0.8.
 
     A FASTER UNKEYED DIGEST.  `xxh3` was named in an earlier draft of
     the spec and is NOT planned: BLAKE3 above is in the same speed

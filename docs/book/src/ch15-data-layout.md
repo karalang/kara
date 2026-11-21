@@ -11,7 +11,7 @@ Modern CPUs are memory-bound, not compute-bound. Cache misses dominate performan
 A `layout` block will reorganize the memory of a collection, a `Vec[T]` or
 `Array[T, N]`, without touching the struct definition or the code that uses it:
 
-```kara,ignore
+```kara,error=E_DEFERRED_LAYOUT_BLOCK
 struct Particle { x: f64, y: f64, name: String }
 
 // x and y share one contiguous array (the physics hot path);

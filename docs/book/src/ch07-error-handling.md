@@ -8,7 +8,7 @@ This sounds strict, but in practice it makes error handling *easier* — the com
 
 An operation that can fail returns `Result[T, E]`:
 
-```kara,ignore
+```kara,ignore,fragment
 fn parse_port(s: String) -> Result[u16, ParseError] {
     // returns Ok(port) or Err(error)
 }

@@ -588,7 +588,7 @@ A `///` before `self` in a method signature is ignored: `self` is not a document
 
 Every reference to another module's item is brought into scope by an `import` at the top of the file. Paths are absolute: from the current package's root, or from a dependency's name. There is no `self.`, `super.` or relative form.
 
-```kara
+```kara,fragment
 import db.connection.Connection;                       // one item
 import db.connection.Connection as Conn;               // rename
 import db.connection.{Connection, Pool};               // several items
@@ -609,7 +609,7 @@ import db.{connection.{Connection, Pool}, auth.Token}; // nested groups
 
 **Re-exports.** `pub import` re-exports an item from the current module. Users see it at the shorter path; the identity is unchanged, so `mylib.Connection` and `mylib.db.connection.Connection` are the same type.
 
-```kara
+```kara,fragment
 // mylib/lib.kara
 pub import db.connection.Connection;
 
@@ -1169,8 +1169,8 @@ Canonicalizing NaN is not cosmetic. Raw totalOrder distinguishes NaNs by sign, w
 The naming follows Kāra's convention: lowercase primitives (`f64`) have a minimal trait surface, and PascalCase library types (`F64`) carry richer semantics, like Java's `double` and `Double`.
 
 ```kara
-Map[f64, String]                 // compile error: f64 does not implement Hash
-Map[F64, String]                 // OK: F64 has a total order, NaN sorts last
+let by_value: Map[f64, String] = Map.new();   // compile error: f64 does not implement Hash
+let by_total: Map[F64, String] = Map.new();   // OK: F64 has a total order, NaN sorts last
 
 let mut scores: Vec[f64] = [1.0, f64.NAN, 2.0];
 scores.sort();                   // compile error: f64 has no total order
@@ -2636,7 +2636,7 @@ fn bump(counter: mut ref i64) {
 
 **`ref place` borrows a place.** `ref v[i]` and `ref s.field` produce a `ref` to that place. This is how a read that must not move or copy is written:
 
-```kara
+```kara,fragment
 let t = ref heap.items[i];       // borrow an element
 let first = Some(ref self.items[0]);   // build an `Option[ref T]` in a method body
 ```
@@ -2688,7 +2688,7 @@ There is no pipe operator `|>`. Method chains cover pipelines, and UFCS covers f
 
 A closure is written `|params| expr` or `|params| { block }`:
 
-```kara
+```kara,fragment
 |x| x + 1
 |x, y| x * y
 |(a, b)| a + b                  // destructuring, as for function parameters
@@ -3837,7 +3837,7 @@ trait Not { type Output; fn not(own self) -> Self.Output; }
 
 **The `Ordering` type** returned by `Ord.cmp`, and its helpers:
 
-```kara
+```kara,fragment
 enum Ordering {
     Less,
     Equal,
@@ -4010,7 +4010,7 @@ trait Into[T] {
 
 `Into` is never implemented directly. A blanket impl in the standard library derives it from every `From` impl:
 
-```kara
+```kara,fragment
 impl[T, U: From[T]] Into[U] for T {
     fn into(own self) -> U { U.from(self) }
 }
@@ -5025,7 +5025,7 @@ impl Counter {
 
 **From `shared` to `sync`.** A type that started in one task and must now be mutated across tasks is converted by renaming the keyword and replacing each `mut` field with an `Atomic[T]` or `Mutex[T]` field, without `mut`:
 
-```kara
+```kara,fragment
 // Before: one task
 shared struct Session { id: u64, mut request_count: u64, mut last_path: String }
 
@@ -6204,7 +6204,7 @@ Every `unsafe` block is an assertion by the author: "I have checked the invarian
 
 **Rule.** An `unsafe { ... }` block is preceded by a line comment (or doc comment) whose first non-whitespace content after `//` begins with `Safety:` (case-insensitive), followed by at least one word:
 
-```kara
+```kara,fragment
 // Safety: p points into a live buffer of at least one u32.
 unsafe { *p }
 ```
@@ -6255,7 +6255,7 @@ Treating the whole body as one implicit `unsafe { }` block would lose the per-op
 /// # Safety
 ///
 /// `n` must be less than `xs.len()`.
-unsafe fn read_unchecked(xs: Slice[i64], n: i64) -> i64 {
+unsafe fn read_unchecked(xs: Vec[i64], n: i64) -> i64 {
     let p = xs.as_ptr();            // safe
     // Safety: the caller guarantees n < xs.len(), so p.offset(n) is in bounds.
     unsafe { *p.offset(n) }

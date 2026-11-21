@@ -44,7 +44,7 @@ You only annotate the boundaries:
 
 ## Imports
 
-```kara,ignore
+```kara,ignore,fragment
 import db.connection.Connection;
 import auth.token.Token;
 
@@ -61,7 +61,7 @@ import db.connection.Connection as DbConn;
 
 Libraries can present a clean public surface:
 
-```kara,ignore
+```kara,ignore,fragment
 // lib.kara
 pub import db.connection.Connection;
 pub import db.pool.Pool;

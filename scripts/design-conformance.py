@@ -85,6 +85,97 @@ def expects_error_annotation(code):
     return False
 
 
+CODE_IN_ANNOTATION_RE = re.compile(r"\b(E\d{4}|W\d{4}|E_[A-Z0-9_]+|W_[A-Z0-9_]+)\b")
+
+
+def annotated_error_lines(code):
+    """(the 0-based lines of the block the spec says are rejected, the
+    diagnostic codes its annotations name).
+
+    A trailing `// ERROR …` / `// compile error: …` marks its own line; a
+    caret-underline marks the code line above it. A code (`E0200`,
+    `E_MODULE_LET`) written in the annotation must be the one reported.
+    """
+    lines, codes = set(), set()
+    for i, line in enumerate(code):
+        if CARET_ERROR_RE.match(line):
+            j = i - 1
+            while j >= 0 and (CARET_ERROR_RE.match(code[j]) or not code[j].strip()):
+                j -= 1
+            if j >= 0:
+                lines.add(j)
+            codes |= set(CODE_IN_ANNOTATION_RE.findall(line))
+            continue
+        head, sep, tail = line.partition("//")
+        if sep and head.strip() and ERROR_MARKER_RE.search(tail):
+            lines.add(i)
+            codes |= set(CODE_IN_ANNOTATION_RE.findall(tail))
+    return lines, codes
+
+
+def rejection_outcome_any_rung(block, karac):
+    """[`rejection_outcome`] over every framing of the ladder: the best one,
+    and its diagnostics. A block the spec says is rejected is confirmed when
+    any framing reports the marked error (`Map[f64, String]` is a type, which
+    only the type-alias rung can state)."""
+    rank = {"confirmed-rejection": 0, "unresolved-rejection": 1, "REJECTED-ELSEWHERE": 2}
+    best = None
+    for name, source, offset in rungs(block):
+        rc, diags = run_karac(karac, source)
+        if rc == 0 and not diags:
+            continue
+        for d in diags:
+            d["design_line"] = block.line + max(0, d.get("line", 1) - 1) + offset
+        outcome = rejection_outcome(block, diags)
+        if best is None or rank[outcome] < rank[best[0]]:
+            best = (outcome, name, diags)
+        if outcome == "confirmed-rejection":
+            break
+    return best
+
+
+def rejection_outcome(block, diags):
+    """What an expect-error block's rejection proves (B-2026-11-22-20).
+
+    `confirmed-rejection` only when an error is reported ON a line the
+    annotation marks, with the code it names if it names one. A rejection
+    whose every error is an undefined name from another block proves
+    nothing either way (`unresolved-rejection`). Any other is
+    `REJECTED-ELSEWHERE`: the block fails, but not where or how the spec
+    says it does, so the spec's claim is untested.
+    """
+    lines, codes = annotated_error_lines(block.code)
+    # A fence that names the code (```kara,error=E0205) is confirmed by that
+    # code wherever it is reported, unless a line annotation also says where.
+    fence = block.fence_codes
+    if fence and not lines:
+        if any(d.get("code") in fence for d in diags):
+            return "confirmed-rejection"
+        return "REJECTED-ELSEWHERE"
+    codes |= fence
+    for d in diags:
+        at = d.get("design_line", block.line) - block.line
+        # An annotation on an attribute (`#[derive(Copy)]  // ERROR`) is
+        # reported at the item the attribute is on.
+        above = at - 1
+        on_attribute = (above in lines and 0 <= above < len(block.code)
+                        and block.code[above].lstrip().startswith("#["))
+        if at not in lines and not on_attribute:
+            continue
+        if codes:
+            if d.get("code") in codes:
+                return "confirmed-rejection"
+            continue
+        # An undefined name, or the parser giving up, on the marked line is
+        # the harness's framing failing, not the rule the spec states.
+        if UNRESOLVED_RE.match(d.get("message", "")) or d.get("phase") == "parse":
+            continue
+        return "confirmed-rejection"
+    if diags and all(UNRESOLVED_RE.match(d.get("message", "")) for d in diags):
+        return "unresolved-rejection"
+    return "REJECTED-ELSEWHERE"
+
+
 # "// OK" / "// ok —" marks a line the spec says is ACCEPTED. A block may carry
 # both, in which case the error annotation wins: it must be rejected somewhere.
 EXPECT_OK_RE = re.compile(r"//\s*OK\b")
@@ -183,7 +274,19 @@ class Block:
         return "\n".join(self.code)
 
     @property
+    def fence_codes(self):
+        """The codes a ```kara,error=E0205 fence says the block is rejected
+        with (`error=A|B` for either)."""
+        out = set()
+        for part in re.split(r"[,\s]+", self.info):
+            if part.startswith("error="):
+                out |= {c for c in part[len("error="):].split("|") if c}
+        return out
+
+    @property
     def expects_error(self):
+        if self.fence_codes:
+            return True
         if "expect-error" in self.info:
             return True
         if "expect-ok" in self.info:
@@ -193,6 +296,13 @@ class Block:
     @property
     def skipped(self):
         return "ignore" in self.info
+
+    @property
+    def fragment(self):
+        """```kara,fragment: the doc says this block is not a program on its
+        own (a catalogue of alternative forms, one statement lifted from a
+        function, a library item shown as an exhibit). Counted, never run."""
+        return "fragment" in self.info
 
     @property
     def deferred(self):
@@ -587,6 +697,104 @@ def evaluate(block, karac):
     return ("rejected", name, diags)
 
 
+def is_program(block):
+    return any(re.match(r"^fn main\s*\(", l) for l in block.code)
+
+
+def documented_output(lines, end):
+    """The output the doc shows for the program block whose closing fence is
+    at line index `end`, or None: a ```text / ```output / ```console block
+    right after it, or a `karac run <file>  # <output>` line in a ```bash /
+    ```sh block right after it."""
+    k = end + 1
+    while k < len(lines) and not lines[k].strip():
+        k += 1
+    if k >= len(lines) or k - end > 3:
+        return None
+    fence = re.match(r"^```(\w*)\s*$", lines[k].strip())
+    if not fence:
+        return None
+    lang = fence.group(1)
+    j = k + 1
+    while j < len(lines) and lines[j].strip() != "```":
+        j += 1
+    body = lines[k + 1 : j]
+    if lang in ("text", "output", "console", ""):
+        return "\n".join(body).rstrip("\n") + "\n" if body else None
+    if lang in ("bash", "sh", "shell"):
+        for line in body:
+            m = re.match(r"^\$?\s*karac run \S+\s+#\s?(.*)$", line)
+            if m:
+                return m.group(1).rstrip() + "\n"
+    return None
+
+
+def mir_run(karac, source, cwd=None, timeout=30):
+    """`karac __mir-run` of `source` in a scratch directory: (exit, stdout,
+    stderr), exit None on a timeout."""
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "main.kara"
+        f.write_text(source, encoding="utf-8")
+        try:
+            p = subprocess.run([karac, "__mir-run", str(f)], capture_output=True,
+                               text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                               cwd=cwd or d, env={"KARAC_HASH_SEED": "1",
+                                                  "PATH": "/usr/bin:/bin"})
+        except subprocess.TimeoutExpired:
+            return None, "", "timeout"
+        return p.returncode, p.stdout, p.stderr
+
+
+def run_and_compare(block, karac, result, path):
+    """A whole program that checks is also run (B-2026-11-22-20): against the
+    output the doc shows after it when it shows one, else it must exit 0.
+    Sets `result["run"]` and, on a difference, its outcome."""
+    if not (is_program(block) and result.get("rung") == "items"):
+        return
+    lines = path.read_text(encoding="utf-8").split("\n")
+    end = block.line - 2 + len(block.code) + 1
+    expected = documented_output(lines, end)
+    rc, stdout, stderr = mir_run(karac, block.text + "\n")
+    result["run"] = {"exit": rc, "stdout": stdout[-2000:], "stderr": stderr[-1000:]}
+    if expected is not None:
+        result["expected"] = expected
+    outcome = judge_run(block, rc, stdout, stderr, expected)
+    if outcome:
+        result["outcome"] = outcome
+
+
+def fence_exit(block):
+    """The exit code a ```kara,exit=101 fence says the program ends with."""
+    m = re.search(r"\bexit=(\d+)", block.info)
+    return int(m.group(1)) if m else None
+
+
+_KARA_PATH_RE = re.compile(r"\S*?([A-Za-z0-9_\-]+)\.kara\b")
+
+
+def judge_run(block, rc, stdout, stderr, expected):
+    """The outcome a run changes (`None` when it stands as `conforms`).
+
+    A program exits 0 and prints what the doc shows after it. A
+    ```kara,exit=N fence says it ends with N instead (a runbook's deliberate
+    panic), and then the text shown is its stderr, read with every
+    `<dir>/<name>.kara` path as `main.kara`, since the doc names its own
+    file."""
+    if rc is None:
+        return "ran-timeout"
+    want_exit = fence_exit(block)
+    if want_exit is not None:
+        if rc != want_exit:
+            return "RUN-FAILED"
+        if expected is None:
+            return None
+        norm = lambda t: _KARA_PATH_RE.sub("main.kara", t)
+        return None if norm(stderr) == norm(expected) else "OUTPUT-DIFFERS"
+    if expected is not None:
+        return None if stdout == expected else "OUTPUT-DIFFERS"
+    return "RUN-FAILED" if rc != 0 else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--karac", default=str(ROOT / "target" / "debug" / "karac"))
@@ -612,8 +820,8 @@ def main():
 
     results = []
     for b in blocks:
-        if b.skipped or b.elided or b.deferred:
-            outcome = ("skipped" if b.skipped
+        if b.fragment or b.skipped or b.elided or b.deferred:
+            outcome = ("fragment" if b.fragment else "skipped" if b.skipped
                        else "deferred" if b.deferred else "elided")
             results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
                             "outcome": outcome, "rung": None, "diagnostics": []})
@@ -624,8 +832,9 @@ def main():
         # weak spot: we check that it was rejected, not that it was rejected for
         # the annotated reason. Matching the message is the next increment.)
         if b.expects_error and status == "rejected":
+            outcome, rung, diags = rejection_outcome_any_rung(b, args.karac)
             results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
-                            "outcome": "confirmed-rejection", "rung": rung,
+                            "outcome": outcome, "rung": rung,
                             "expects_error": True, "diagnostics": diags[:4]})
             continue
         if (diags and all(UNRESOLVED_RE.match(d.get("message", "")) for d in diags)
@@ -658,10 +867,13 @@ def main():
             outcome = "signatures-ok" if status == "pass" else "SIGNATURE-MISSING"
         else:
             outcome = "conforms" if status == "pass" else "REJECTED"
-        results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
-                        "outcome": outcome, "rung": rung,
-                        "expects_error": b.expects_error,
-                        "diagnostics": diags[:4]})
+        result = {"hash": b.hash, "line": b.line, "heading": b.heading,
+                  "outcome": outcome, "rung": rung,
+                  "expects_error": b.expects_error,
+                  "diagnostics": diags[:4]}
+        if outcome == "conforms":
+            run_and_compare(b, args.karac, result, DESIGN)
+        results.append(result)
         if args.only:
             print(f"# block {b.hash} @ design.md:{b.line}  [{b.heading}]")
             print(f"# expects_error={b.expects_error} outcome={outcome} rung={rung}")
@@ -671,7 +883,8 @@ def main():
                       f"(design.md:{d.get('design_line')})")
 
     good = {"conforms", "confirmed-rejection", "skipped", "elided", "unresolved",
-            "deferred", "signatures-ok"}
+            "deferred", "signatures-ok", "unresolved-rejection", "fragment",
+            "ran-timeout"}
     bad = [r for r in results if r["outcome"] not in good]
 
     if args.update_baseline:
@@ -710,8 +923,13 @@ def main():
     if orphans:
         top = ", ".join(f"{n}({c})" for n, c in orphans.most_common(12))
         print(f"  names NOTHING defines — not design.md, not the compiler: {top}")
-    print(f"\ndesign.md conformance: {total} blocks — {conf} accepted, "
-          f"{rej} rejected-as-specified, {eli} elided (prose with `...`), "
+    frag = sum(1 for r in results if r["outcome"] == "fragment")
+    unrej = sum(1 for r in results if r["outcome"] == "unresolved-rejection")
+    ran = sum(1 for r in results if "run" in r)
+    print(f"\ndesign.md conformance: {total} blocks — {conf} accepted ({ran} of them run), "
+          f"{rej} rejected-as-specified (at the marked line), "
+          f"{unrej} rejections unverifiable (names from other blocks), "
+          f"{frag} marked fragments, {eli} elided (prose with `...`), "
           f"{dfr} under Deferred Items, "
           f"{len(unres)} referencing out-of-block declarations, "
           f"{sigok} signature catalogues whose names all resolve, "

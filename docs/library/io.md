@@ -670,7 +670,7 @@ Its inferred effects are `writes(Stdin), writes(Stdout), blocks`. Like any priva
 
 A command-line tool skeleton:
 
-```kara
+```kara,exit=1
 fn main() -> Result[(), IoError] {
     let args = env.args();
     if args.len() < 2 {

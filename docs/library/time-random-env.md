@@ -31,7 +31,7 @@ All time sources are one resource, `Clock`: wall and monotonic time differ in th
 
 `Duration` is a span of time:
 
-```kara
+```kara,fragment
 impl Duration {
     fn secs(secs: i64) -> Duration
     fn ms(ms: i64) -> Duration

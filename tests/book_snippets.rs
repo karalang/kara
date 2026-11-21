@@ -22,7 +22,8 @@
 //! | ```` ```kara ```` | Must pass the full **static** pipeline (parse → desugar → resolve → typecheck → effect → ownership), the same gate `karac check` / the LSP use. Not executed. |
 //! | ```` ```kara,run ```` | Must additionally **execute** cleanly on the interpreter — every phase clean *and* no runtime error (`run_playground(...).ok`). |
 //! | ```` ```kara,norun ```` | Static-only, and explicitly *never* executed even though it may have a `main` (e.g. it would block on I/O or loop forever). Same gate as plain `kara`; the annotation documents intent. |
-//! | ```` ```kara,ignore ```` | Skipped entirely — an illustrative fragment that is not a standalone compilable unit (a bare signature, a `// ...`-elided body, a snippet that references names defined elsewhere in the chapter's prose). |
+//! | ```` ```kara,ignore ```` | Skipped entirely — an illustrative fragment that is not a standalone compilable unit (a bare signature, a `// ...`-elided body, a snippet that references names defined elsewhere in the chapter's prose). `kara,fragment` (or `kara,ignore,fragment`) says the same, in the word `scripts/design-conformance.py` and `scripts/library-conformance.py` also read. |
+//! | ```` ```kara,error=E0205 ```` | Must be **rejected**, with that code among its errors (`error=A\|B` for either): a chapter's deliberate counter-example. A block that compiles, or fails only with other codes, fails here (B-2026-11-22-20). |
 //!
 //! Non-`kara` fences (```` ```text ````, ```` ```toml ````, ```` ```rust ````,
 //! …) are ignored.
@@ -66,8 +67,10 @@ enum Class {
     Run,
     /// `kara,norun` — static-only, explicitly never executed.
     NoRun,
-    /// `kara,ignore` — skipped (illustrative fragment).
+    /// `kara,ignore` / `kara,fragment` — skipped (illustrative fragment).
     Ignore,
+    /// `kara,error=CODE` — must be rejected with `CODE`.
+    CompileFail,
 }
 
 /// One fenced `kara` block extracted from a chapter.
@@ -76,6 +79,8 @@ struct Snippet {
     /// 1-based line of the opening fence, so a failure points at the source.
     line: usize,
     class: Class,
+    /// The codes a `kara,error=` fence names.
+    codes: Vec<String>,
     code: String,
 }
 
@@ -94,13 +99,25 @@ fn classify(info: &str) -> Option<Class> {
     let mut class = Class::Typecheck;
     for ann in parts {
         match ann {
-            "ignore" => return Some(Class::Ignore), // ignore wins outright
+            "ignore" | "fragment" => return Some(Class::Ignore), // ignore wins outright
+            a if a.starts_with("error=") => class = Class::CompileFail,
             "run" => class = Class::Run,
             "norun" => class = Class::NoRun,
             _ => {} // unknown / empty annotation — keep the default
         }
     }
     Some(class)
+}
+
+/// The codes in a fence's `error=A|B` annotation.
+fn fence_codes(info: &str) -> Vec<String> {
+    info.split(',')
+        .map(str::trim)
+        .filter_map(|a| a.strip_prefix("error="))
+        .flat_map(|c| c.split('|'))
+        .filter(|c| !c.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Fence scanner state. Fence length is tracked so a longer fence (```` ````
@@ -111,6 +128,7 @@ enum State {
     InKara {
         fence_len: usize,
         class: Class,
+        codes: Vec<String>,
         start: usize,
         code: String,
     },
@@ -147,6 +165,7 @@ fn extract(chapter: &str, md: &str) -> Vec<Snippet> {
                             state = State::InKara {
                                 fence_len: bt,
                                 class,
+                                codes: fence_codes(after),
                                 start: lineno,
                                 code: String::new(),
                             };
@@ -158,6 +177,7 @@ fn extract(chapter: &str, md: &str) -> Vec<Snippet> {
             State::InKara {
                 fence_len,
                 class,
+                codes,
                 start,
                 code,
             } => {
@@ -166,6 +186,7 @@ fn extract(chapter: &str, md: &str) -> Vec<Snippet> {
                         chapter: chapter.to_string(),
                         line: *start,
                         class: *class,
+                        codes: std::mem::take(codes),
                         code: std::mem::take(code),
                     });
                     state = State::Outside;
@@ -284,6 +305,31 @@ fn book_snippets_compile() {
     for s in &snippets {
         match s.class {
             Class::Ignore => ignored += 1,
+            Class::CompileFail => {
+                checked += 1;
+                // As written, and wrapped in `main` when it has none: the
+                // code must be reported by one of them.
+                let mut seen = errors(&s.code);
+                if !declares_main(&s.code) {
+                    seen.extend(errors(&wrapped(&s.code)));
+                }
+                if !seen
+                    .iter()
+                    .any(|d| d.code.as_ref().is_some_and(|c| s.codes.contains(c)))
+                {
+                    failures.push(format!(
+                        "{}:{} (error={}) — not rejected with that code; got [{}]\n  --- snippet ---\n{}",
+                        s.chapter,
+                        s.line,
+                        s.codes.join("|"),
+                        seen.iter()
+                            .map(|d| d.code.as_deref().unwrap_or("-"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        indent(&s.code)
+                    ));
+                }
+            }
             Class::Typecheck | Class::NoRun => {
                 checked += 1;
                 let diags = static_check(&s.code);

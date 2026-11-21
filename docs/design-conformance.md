@@ -49,9 +49,32 @@ block, whose header comment reads *"Heap use anywhere below this boundary is a
 compile error"* — a description of what the attribute does, in a block that
 contains no heap use and compiles correctly.
 
-Current weak spot: the suite checks *that* such a block was rejected, not that it
-was rejected **for the annotated reason**. Matching the message is the next
-increment.
+A rejection is confirmed only when it is **where the annotation says**: an error
+reported on a marked line (the caret's code line; for an annotation on an
+attribute, the item under it), with the code the annotation names when it names
+one (`// error[E0200]`). An undefined name or a parse failure on that line is the
+framing failing, not the rule, so it does not count. Every rung is tried, and
+the best answer stands. A block rejected only for names declared in other blocks
+is `unresolved-rejection`: it proves nothing either way, and is counted apart.
+Before B-2026-11-22-20 any rejection confirmed the block, so a block failing for
+an unrelated reason read as the spec upheld.
+
+## Fence words
+
+The info string after ```` ```kara ```` says what a block is, in the same words
+`tests/book_snippets.rs` reads for the book (comma-separated):
+
+| fence | meaning |
+|---|---|
+| ```` ```kara ```` | must check; a whole program (`fn main` at column 0) is also run, and must exit 0 and print the ```` ```text ```` block after it when there is one |
+| ```` ```kara,fragment ```` | not a program on its own: a catalogue of alternative forms, a statement lifted from a function, a library item shown as an exhibit. Counted, never run |
+| ```` ```kara,error=E0205 ```` | must be rejected with that code (`error=A\|B` for either), wherever it is reported |
+| ```` ```kara,exit=101 ```` | a program that ends with that exit code on purpose (a runbook's panic); the text block after it is its **stderr**, every `<dir>/<name>.kara` read as `main.kara` |
+| ```` ```kara,ignore ```` | skipped (the book's word; `library-conformance.py` still reads a book block marked only `ignore`) |
+
+`tests/docs_conformance.rs` runs both sweeps with `--check` in the default
+`cargo test --all` leg (about two minutes on a debug build), and both baselines
+are empty, so a new finding fails the gate rather than joining a list.
 
 ## The wrapping ladder
 
@@ -118,8 +141,12 @@ modelling either. A declaration whose next non-blank line is `{` has a **body**
 
 | outcome | meaning |
 |---|---|
-| `conforms` | accepted, as the spec implies |
-| `confirmed-rejection` | rejected, as the spec's annotation says it should be |
+| `conforms` | accepted, as the spec implies (and, for a whole program, ran as shown) |
+| `confirmed-rejection` | rejected at the marked line, or with the fence's code |
+| `unresolved-rejection` | rejected only for names other blocks declare: unverified |
+| `REJECTED-ELSEWHERE` | rejected, but not where or how the annotation says |
+| `fragment` | marked ```` ```kara,fragment ```` |
+| `OUTPUT-DIFFERS` / `RUN-FAILED` / `ran-timeout` | a whole program that checks but prints other than the doc shows, exits other than it should, or did not finish in 30 s |
 | `elided` | contains `...` — prose with holes, not a program |
 | `deferred` | under design.md's own **Deferred Items** heading — future syntax, not a contract |
 | `unresolved` | fails only with `undefined name/type` — names declared in another block |
@@ -170,9 +197,9 @@ Reasons fall into five kinds, and only two of them are defects:
 - *deferred feature* — documented in `deferred.md` as post-v1.
 
 `UNTRIAGED` means nobody has decided yet. **That count is the queue**, and the
-point of the file is for it to shrink. It is currently **zero**: all 53 entries
-carry a reason, filed across `B-2026-08-21-9` through `-12` and `-29` through
-`-32`.
+point of the file is for it to shrink. Since B-2026-11-22-20 the baseline is
+**empty**: its last nine entries were fragments, now marked as such, or doc
+bugs, now fixed.
 
 ## Known limits
 

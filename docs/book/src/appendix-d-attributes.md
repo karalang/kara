@@ -112,7 +112,7 @@ unsafe extern "C" {
 
 **Deferred past v1** (the systems track, [deferred.md](https://github.com/karalang/kara/blob/main/docs/deferred.md#systems)): Kāra has no module-level `let` or `let mut` in v1, so there is nothing to mark yet. The planned form gives each OS thread its own copy of a module-level binding whose initializer is a compile-time constant.
 
-```kara,ignore
+```kara,error=E_MODULE_LET
 #[thread_local]
 let mut request_count: i64 = 0;
 ```

@@ -148,13 +148,17 @@ def rel(p):
 
 def classify_block(b, karac, declared):
     """design-conformance's outcome for one block, plus the run."""
-    if b.skipped or b.elided:
-        return {"outcome": "skipped" if b.skipped else "elided", "rung": None,
-                "diagnostics": []}
+    if b.fragment or b.skipped or b.elided:
+        return {"outcome": "fragment" if b.fragment else "skipped" if b.skipped
+                else "elided", "rung": None, "diagnostics": []}
     status, rung, diags = dc.evaluate(b, karac)
     if b.expects_error:
-        return {"outcome": "confirmed-rejection" if status == "rejected"
-                else "MISSING-REJECTION", "rung": rung, "diagnostics": diags[:4]}
+        if status != "rejected":
+            return {"outcome": "MISSING-REJECTION", "rung": rung, "diagnostics": diags[:4]}
+        # Rejected where the annotation says, and with the code it names
+        # (B-2026-11-22-20).
+        outcome, rung, diags = dc.rejection_outcome_any_rung(b, karac)
+        return {"outcome": outcome, "rung": rung, "diagnostics": diags[:4]}
     if (diags and all(dc.UNRESOLVED_RE.match(d.get("message", "")) for d in diags)
             and (status == "rejected" or rung == "signatures")):
         missing = sorted({dc.UNRESOLVED_RE.match(d["message"]).group(2)
@@ -173,14 +177,12 @@ def classify_block(b, karac, declared):
     if is_program(b) and rung == "items":
         rc, stdout, stderr = mir_run(karac, b.text + "\n")
         out["run"] = {"exit": rc, "stdout": stdout[-2000:], "stderr": stderr[-1000:]}
-        if rc is None:
-            out["outcome"] = "ran-timeout"
-        elif b.expected is not None:
+        if b.expected is not None:
             out["expected"] = b.expected
-            if stdout != b.expected:
-                out["outcome"] = "OUTPUT-DIFFERS"
-        elif rc != 0:
-            out["outcome"] = "RUN-FAILED"
+        # design-conformance's judgement, `kara,exit=N` included.
+        outcome = dc.judge_run(b, rc, stdout, stderr, b.expected)
+        if outcome:
+            out["outcome"] = outcome
     return out
 
 
@@ -262,7 +264,7 @@ def main():
                         "diagnostics": diags[:4]})
 
     good = {"conforms", "confirmed-rejection", "skipped", "elided", "unresolved",
-            "signatures-ok", "ran-timeout"}
+            "signatures-ok", "ran-timeout", "fragment", "unresolved-rejection"}
     bad = [r for r in results if r["outcome"] not in good]
     baseline = {}
     if BASELINE.exists():

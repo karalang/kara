@@ -22,7 +22,7 @@ panic; an ordinary error exit from `main` is code 1.
 
 Here is a small program that indexes past the end of a vector:
 
-```kara
+```kara,exit=101
 fn dashboard(ids: Vec[i64], k: i64) -> i64 {
     ids[k]
 }
@@ -58,7 +58,7 @@ and its exit code is 101. The record has three parts worth reading in order:
 The most common production panic is an `unwrap()` on an error that travelled up
 through several `?`s. The record shows the path it took:
 
-```kara
+```kara,exit=101
 fn parse_port(s: Str) -> Result[i64, String] {
     match i64.parse(s) {
         Ok(n) => Ok(n),
@@ -100,7 +100,7 @@ unwrapping (`fn main() -> Result[(), String]`).
 
 ## Worked example: a panic in a parallel branch
 
-```kara
+```kara,exit=101
 fn fetch(ids: Vec[i64], k: i64) -> i64 { ids[k] }
 
 fn main() {
@@ -156,7 +156,7 @@ A program can define one panic handler. It runs after the record is written and
 before the process exits; it can't resume execution. Use it to feed a watchdog,
 release a hardware handle, or send one last line of telemetry:
 
-```kara
+```kara,exit=101
 #[panic_handler]
 fn on_panic(info: PanicInfo) {
     eprintln(f"PANIC: {info.message} at {info.location}");

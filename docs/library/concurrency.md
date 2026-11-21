@@ -76,7 +76,7 @@ select {
 
 **Timeouts.** `recv_timeout` and `send_timeout` behave as a two-arm `select` of the channel operation and `after(d)`:
 
-```kara
+```kara,fragment
 impl[T] Receiver[T] {
     fn recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError] with receives(self) blocks
 }

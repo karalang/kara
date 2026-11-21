@@ -100,7 +100,7 @@ The compiler requires that `match` covers every possible case. This is enforced 
      pattern lowered to a wildcard in the exhaustiveness engine, so the missing
      `Blue` went unnoticed), and the snippet harness certified the book's own
      counter-example as valid Kāra. -->
-```kara,ignore
+```kara,error=E0205
 enum Color {
     Red,
     Green,

@@ -13077,7 +13077,11 @@ fn main() {
 ///
 ///   1. `StableHash.siphash24(bytes, k0, k1)` exists and compiles.
 ///   2. `xxh3` does not exist, and is not planned (B-2026-08-26-2).
-///   3. There is no `crypto` module.
+///   3. A cryptographic hash is `std.crypto`'s (SHA-2, HMAC), not this
+///      namespace's. The page said there was no `crypto` module long after
+///      `std.crypto` shipped, because this test probed `crypto.sha256`, a
+///      spelling nothing ever had (B-2026-11-22-20); it now compiles the
+///      import the page names.
 ///
 /// (2) and (3) are the dangerous ones. A page that says "does not exist" about
 /// something that later ships is worse than silence — it actively tells a user
@@ -13126,29 +13130,31 @@ fn test_stable_hash_page_claims_match_the_compiler() {
          scheduling it, so silence here would read as an oversight"
     );
 
-    // (3) The `crypto` module. Checked through a plausible spelling rather
-    // than a contrived one, so the day a real `crypto` lands this trips.
+    // (3) The crypto hashes the page sends a reader to must compile.
     let crypto = check_source_output(
         "stablehash-crypto",
-        "fn main() { println(crypto.sha256([1u8, 2u8])); }\n",
+        "import std.crypto.sha2.{sha256};\n\
+         fn main() { println(sha256(\"abc\".bytes()).len()); }\n",
     );
     assert!(
-        crypto.contains("error"),
-        "a `crypto` module now resolves — the stable-hash page still says it \
-         DOES NOT EXIST and must be updated:\n{crypto}"
+        !crypto.contains("error"),
+        "the page sends a reader to `std.crypto.sha2`, but it does not \
+         compile:\n{crypto}"
+    );
+    assert!(
+        page.contains("std.crypto.sha2"),
+        "the page must name the module that has the cryptographic hashes"
     );
     assert!(
         page.contains("A CRYPTOGRAPHIC HASH") && page.contains("keyed PRF"),
-        "the page must say a crypto hash is absent AND why `siphash24` is \
+        "the page must say where a crypto hash is AND why `siphash24` is \
          not a substitute — the omission is what makes a user reach for the \
          wrong one"
     );
-    // The crypto gap is SCHEDULED, not undesigned, and the page has to say so:
-    // "there is none" alone invites someone to build one here.
+    // BLAKE3, the general hash still to come, is scheduled, not undesigned.
     assert!(
         page.contains("deferred.md § std.crypto") && page.contains("BLAKE3"),
-        "the page must point at where the crypto work actually lives, so the \
-         absence reads as a schedule rather than a hole to fill locally"
+        "the page must point at where the rest of the crypto work lives"
     );
 }
 

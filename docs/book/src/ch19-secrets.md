@@ -43,7 +43,7 @@ Authorization: Bearer sk-live-abc123
 
 The point of the wrapper is what it *refuses* to do. Comparing two secrets with `==` doesn't type-check:
 
-```kara,ignore
+```kara,error=E0208
 import std.secret.{Secret};
 
 let a = Secret.new("x");
@@ -57,7 +57,7 @@ error[typecheck]: type 'Secret[String]' does not implement PartialEq, so == and 
 
 Writing the missing trait yourself is a dead end *on purpose*: the wrapper refuses it.
 
-```kara,ignore
+```kara,error=E_SECRET_TRAIT_FORBIDDEN
 import std.secret.{Secret};
 
 impl Display for Secret[String] {

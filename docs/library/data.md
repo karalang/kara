@@ -8,7 +8,7 @@ Design calls that were open when this page was written are marked **Decision Qn*
 
 The package is the table-shaped half of a general-purpose program: the batch job that cleans an export and loads it somewhere else, the report that rolls a month of orders up by region, the script that reads an access log and finds the slow routes. It is not a warehouse engine. A query over a handful of joins and a few million rows belongs here, and a 20-way join over a terabyte belongs in DuckDB, which reads the same Arrow data ([Arrow IPC](#arrow-ipc)).
 
-```kara
+```kara,fragment
 import data.{Column, DataFrame, DataError, col};
 import std.regex.{Regex};
 

@@ -90,7 +90,7 @@ $ karac query concurrency app.kara.report      # trimmed
 
 **Structured diagnostics with machine-applicable fixes.** `karac check --output=json` reports each diagnostic with its phase, code, span and, where the compiler knows the answer, the fix as an exact edit. `karac fix` applies it. Here is the loop on a common mistake, using a value after giving it away:
 
-```kara
+```kara,error=E0500
 fn archive(log: own Vec[String]) -> i64 {
     log.len()
 }

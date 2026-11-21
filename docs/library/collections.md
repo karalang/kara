@@ -164,7 +164,7 @@ impl[K: Hash + Eq, V] Entry[K, V] {
 
 Append to a per-key `Vec` without cloning:
 
-```kara
+```kara,fragment
 self.table.entry(key).or_insert_with(Vec.new).push(row);
 ```
 
