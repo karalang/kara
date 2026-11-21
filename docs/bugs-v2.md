@@ -62,8 +62,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 336 |
 | missing-feature | 234 |
 | perf | 193 |
-| other | 136 |
-| soundness | 115 |
+| other | 137 |
+| soundness | 116 |
 | miscompile | 102 |
 | crash | 64 |
 | run-vs-build | 61 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 254 |
 | parser | 144 |
 | ownership | 127 |
-| runtime | 102 |
+| runtime | 104 |
 | interp | 95 |
 | effect | 51 |
 | resolver | 50 |
@@ -2058,6 +2058,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-6 | mir-llvm | high | `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure the address of the slot holding each reference, not the reference: compiled,… | 6e5c5d0a95 |
 | B-2026-11-21-13 | other | medium | Test infra: tests/cli.rs has 4 reasoned #[ignore]s that now pass and 3 more whose reason is stale (they fail on the test's own legacy expectations, n… | c5e6292c56 |
 | B-2026-11-21-16 | typecheck | low | `s + *t`, with `s` a `String` and `t` a `ref Str` (an item lent by `.iter()` over a `Vec[Str]`), is refused as "'+' on 'String' requires a 'String' r… | 9b905182ea |
+| B-2026-11-21-22 | runtime | high | The HTTP/1.1 server reads framing a peer could read differently: a control character other than a tab inside a field value is accepted (so `Transfer-… | 0f93256ca8 |
+| B-2026-11-21-23 | runtime | low | A WebSocket opening handshake without `Upgrade` among its `Connection` options is accepted with 101, on WebSocket.accept and Server.serve_ws alike (R… | 0f93256ca8 |
 
 </details>
 
