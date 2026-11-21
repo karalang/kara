@@ -438,6 +438,8 @@ A project-wide switch that rejects the panicking forms is part of the systems tr
 
 ## Hashing
 
+To key a table by handle identity rather than by value, use `Identity[T]` (`Map[Identity[Node], Node]`, `Set[Identity[Node]]`): see [design.md §11 Identity keys](../design.md#shared-types).
+
 `Map` and `Set` hash their keys through two traits. `Hash` (a type's way of feeding itself to a hasher) and `derive(Hash)` are in [design.md §9](../design.md#9-traits), together with the rule that equal values must feed identical bytes. The other half, in `std.hash`, is the hasher:
 
 ```kara

@@ -4909,6 +4909,8 @@ let alias = root;          // `alias` and `root` name the same node
 
 **Equality.** A `shared` type has no default `==`. `#[derive(PartialEq, Eq)]` gives structural equality. `a.ref_eq(b)` compares identity: it is a method the compiler provides on every `shared`, `sync` and `frozen` handle type, with no bound.
 
+**Identity keys.** `Identity[T]`, in `std.hash`, keys a `Map` or `Set` by handle identity, for any `shared`, `sync` or `frozen` handle type `T`. `Identity.of(h)` (or `h.identity()`) copies the handle, so the count rises and the object cannot be freed and its address reused while the key exists. `Identity[T]` is `Hash + Eq + Clone`, never `Ord`: two keys are equal exactly when `.ref_eq` holds, and the hash is of the address, so iteration order is the per-process hash order like any `Map`. `.get()` returns a copy of the handle. It is `CrossTask` exactly when `T` is. This is the form for a deep copy that maps each original node to its copy, a visited set over a graph of shared nodes, or a memo keyed by node (Rust's `Rc::as_ptr` key, Python's `id()`, Java's `IdentityHashMap`). A plain address (`ref_id`) is deliberately not offered, because it would stay valid after the object died and collide with a later one.
+
 **One task only.** A `shared` handle never crosses a task boundary (`E_NOT_CROSS_TASK`, [core-semantics.md §6.3](core-semantics.md#6-sharing-c7)). Its count is not atomic and its borrow flags are not synchronized. For mutation across tasks use a [`sync` type](#sync-types); for reads across tasks, [freeze](#frozen-handles) the value.
 
 **`shared enum`** has the same semantics. It suits recursive data such as JSON values and ASTs.
