@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 665 |
-| false-positive | 340 |
-| missing-feature | 239 |
+| diagnostics | 676 |
+| false-positive | 343 |
+| missing-feature | 241 |
 | perf | 196 |
 | other | 142 |
 | soundness | 116 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 823 |
-| mir-llvm | 317 |
-| mir | 296 |
+| typecheck | 837 |
+| mir-llvm | 319 |
+| mir | 300 |
 | cli | 263 |
-| parser | 146 |
+| parser | 148 |
 | ownership | 127 |
 | runtime | 105 |
 | interp | 98 |
@@ -112,7 +112,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-17-112 | 2026-11-17 | typecheck | low | Next minor release: refuse the prefix collection literal (`Vec[a, b]`, `Set[..]`, `Map[k: v]`, `Array[v; n]`, `VecDeque[..]`, `SortedMap[..]`), which B-2026-11-16-255 made a deprecation warning with a fix | — |
 | B-2026-11-18-90 | 2026-11-18 | typecheck | low | A `fold` with a bare `0` seed over an adapter chain of `i32` items in an `i32` tail (`nums.into_iter().skip(1).fold(0, |a, b| a | b)`) is refused as a narrowing from `i64`: the expected `i32` does not reach the seed through `skip`, `take`, `filter` or `map`, though it does with no adapter | — |
 | B-2026-11-18-91 | 2026-11-18 | parser | low | Rust's `let (x, y, z);` followed by assignments in each branch is first told to add a type (`let x: T;`), and following that advice (`let (x, y, z): (i32, i32, i32);`) only gets the second refusal that a destructuring `let` needs an initializer | — |
-| B-2026-11-18-92 | 2026-11-18 | typecheck | low | A narrowing at `r + dirs[d].0` with `r: i32` and `dirs` an unannotated list of literal pairs gets only the bare `as i32` advice and no fix, where the same literal in a plain `let k = 1` is named and offered `k: i32` | — |
 | B-2026-11-18-93 | 2026-11-18 | typecheck | low | `f([(1..=10).collect()].to_vec())` with `f`'s parameter a `Vec[Vec[i64]]` is refused with the MIR builder's internal text "an expression whose type does not lower (Type(UnknownParam(\"C\"))) is not lowered yet", though the same expression under `let g: Vec[Vec[i64]] =` type-checks and runs | — |
 | B-2026-11-18-94 | 2026-11-18 | typecheck | low | Rust's `[node.left, node.right].iter().filter_map(|child| child)` is refused with a bare "expected 'Option[_]', found 'ref Option[TreeNode]'" at the closure's body and no hint toward `into_iter()` or a copy | — |
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
@@ -126,7 +125,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-78 | 2026-11-20 | parser | low | Go's control flow gets bare parse errors with no Kāra form: `for i := 0; i < n; i++`, `for cond {}`, `for {}`, `for i, x := range v`, `if v, ok := m[k]; ok`, `switch`/`case`/`default`, `select`, and `i++` / `i--` | — |
 | B-2026-11-20-79 | 2026-11-20 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}` literals, `go f(x)`, `<-rx`, `err != nil` without a binding, `errors.New`, `strconv`, `strings`, `sync`, `fmt.Println(a, b)`, the comma-ok `let (v, ok) = m[k]`, and `&T{..}` (mended into an E0283) | — |
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
-| B-2026-11-20-120 | 2026-11-20 | effect | medium | An `impl Trait` return's effect ceiling is not enforced: `-> (impl Iterator[Item = i64] with reads(Clock))` whose hidden `map` closure prints is accepted and prints | — |
 | B-2026-11-21-7 | 2026-11-21 | mir-llvm | low | A temporary String consumed only by a borrowing parameter is still allocated: `w.push_str("abcde".substring(k, k + 1))` materialises a one-character String per call and frees it after the borrow (kata 2255 shape: 104 ms, against 33 ms for the same words built with `w.push(c)`; Rust 29 ms) | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
 | B-2026-11-21-30 | 2026-11-21 | typecheck | low | A trait impl for a tuple type (`impl Show for (i64, i64)`) is not supported; it was accepted and then never found (`no method 'show' on type '(i64, i64)'`), and is now refused as not supported yet | — |
@@ -1793,6 +1791,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-18-87 | typecheck | low | An annotated closure parameter that is a tuple pattern, `\|(stack, most): (Vec[(i64, i64)], i64), x\|` as a `fold` accumulator, gets a bare "expected `… | 2bfd5c3d7e |
 | B-2026-11-18-88 | typecheck | medium | `self.left.len().saturating_sub(10)`, carried from Rust where `len()` is a `usize` and the subtraction floors at 0, passes `karac check` and `karac f… | 2bfd5c3d7e |
 | B-2026-11-18-89 | mir | medium | `[0, 1, 2].into_iter().min_by_key(\|i\| ref names[i])` is refused by the MIR borrow check inside the library's `min_by_key` ("write of _9 while it is b… | 2bfd5c3d7e |
+| B-2026-11-18-92 | typecheck | low | A narrowing at `r + dirs[d].0` with `r: i32` and `dirs` an unannotated list of literal pairs gets only the bare `as i32` advice and no fix, where the… | 125f1e1b95 |
 | B-2026-11-19-4 | typecheck | medium | `.into()` from a `Str` (or a string literal) to `String` is refused, though `String.from(s)` works and design.md §9 lists `impl From[Str] for String`… | 700d4fe00b |
 | B-2026-11-19-5 | typecheck | low | `v[a..b] = other` with a `Vec` (or a list literal) on the right is refused "expected 'Slice[i64]', found 'Vec[i64]'"; only a slice expression is acce… | 700d4fe00b |
 | B-2026-11-19-7 | typecheck | medium | A struct update `P { b: 3, ..x }` whose base supplies a field of a type with its own `impl Drop` is refused as `partial_move_of_drop_struct` 'cannot… | ad1246f40d |
@@ -2030,6 +2029,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-117 | resolver | medium | The marker trait `Pod` cannot be named: `impl Pod for Px { }` and `[T: Pod]` are "undefined type 'Pod'", so `mem.zeroed()` refuses a struct of `u8` f… | e758d6acb6 |
 | B-2026-11-20-118 | typecheck | low | Two equality constraints on one associated type in a `where` clause (`where I.Item = i64, I.Item = String`) are accepted at the declaration; the conf… | e758d6acb6 |
 | B-2026-11-20-119 | ownership | medium | A `mut ref self` method called on an immutable `let` binding of an `impl Trait` value is accepted (`let e = evens(); e.next()`), and `let mut e` gets… | 6dc3701ec6 |
+| B-2026-11-20-120 | effect | medium | An `impl Trait` return's effect ceiling is not enforced: `-> (impl Iterator[Item = i64] with reads(Clock))` whose hidden `map` closure prints is acce… | 125f1e1b95 |
 | B-2026-11-20-121 | mir | low | An `impl Trait` result borrows only what its body borrows, not what its signature says: design.md's own `count_logged(xs, log)` example, with `drop(l… | ffb9b4d08b |
 | B-2026-11-20-122 | typecheck+mir | medium | `impl Display for (i64, H)` is accepted, but `f"{p}"` prints the library's `(3, h)` and `p.to_string()` fails E0516 "not lowered yet" on both backends | e758d6acb6 |
 | B-2026-11-20-123 | typecheck | low | A trait whose method returns `impl Trait`, used as `dyn`, is refused with E_RPITIT_INCOMPATIBLE_WITH_DYN where design.md named E_DYN_NOT_DISPATCHABLE… | e758d6acb6 |
@@ -2092,6 +2092,22 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-52 | other | low | Corpus entry fixtures/codegen/generics/a_qualified_channel_pins_through_a_tuple_return expected `5` from `println(rx.recv())`, but `Receiver.recv` re… | 322c1d9075 |
 | B-2026-11-21-53 | interp | low | The 1116 and 1117 kata differentials run 26 s and 45 s on a release MIR interpreter and about 60 s on a debug one, so under the corpus runner's 60 s… | 322c1d9075 |
 | B-2026-11-21-54 | runtime | low | The HTTP/1.1 server refuses `HTTP/1.2` with 400 where RFC 9112 §2.3 serves a higher 1.x minor as 1.1, answers another major version (`HTTP/2.0`) 400… | 607c0006c1 |
+| B-2026-11-21-56 | typecheck+mir+mir-llvm | low | `div_ceil`, the quotient rounded up, is missing on every integer width: `n.div_ceil(d)`, as Rust writes a smallest-divisor sum, gets E0236 "no method… | 449dd49566 |
+| B-2026-11-21-57 | typecheck | medium | A tuple of number literals passed for a generic parameter the call returns, a `fold((0, 0), ..)` seed or `id((0, 0))`, settles its numbers at `i64` a… | 449dd49566 |
+| B-2026-11-21-58 | typecheck+mir+mir-llvm | low | Integer logarithms are missing: `n.ilog10()`, `ilog2()`, `ilog(base)` and their `checked_` forms get E0236 "no method" on every integer width | 01caac922e |
+| B-2026-11-21-59 | typecheck | low | A method whose parameter has a fixed integer type (`char.from_digit`'s digit and radix, `to_digit`'s and `is_digit`'s radix, `wrapping_shl`'s amount,… | a1acb32852 |
+| B-2026-11-21-60 | mir | medium | A `Map`, `SortedMap`, `Set` or `SortedSet` with reference keys (`Map[ref String, i64]`) passes `karac check`, but its library `into_iter`, `into_keys… | 95abf7e2ac |
+| B-2026-11-21-61 | typecheck | low | Rust's `v.binary_search_by_key(&k, f).unwrap()` (and `.expect(..)`) gets only "no method 'binary_search_by_key'" beside "tuple pattern used but type… | 125f1e1b95 |
+| B-2026-11-21-62 | typecheck | low | `products.into_iter().zip(prices)` with `prices` a borrowed collection (a bare parameter) gets the bare trait failure "`ref Vec[i32]` does not implem… | 125f1e1b95 |
+| B-2026-11-21-63 | typecheck | low | Rust's `digits.iter().map(\|d\| d.to_string()).collect()` into a `String` (`FromIterator<String> for String`) is refused with advice to collect a `Vec[… | 125f1e1b95 |
+| B-2026-11-21-64 | typecheck | low | A value that is an `if` over arithmetic with a defaulted literal binding (`let changed = if d == 6 { num + 3 * place } else { num - 3 * place }`, `le… | 125f1e1b95 |
+| B-2026-11-21-65 | typecheck | low | `karac fix` rewrites `if let Some(below) = self.owed.last_mut() { *below += extra; }` as `r#self.owed[self.owed.len() - 1] += extra` and then refuses… | 125f1e1b95 |
+| B-2026-11-21-66 | typecheck | medium | A `ref` to a narrower integer does not widen at a numeric method's argument: `mx.max(f)` with `mx: i64` and `f: ref i32` is refused "`max` expects an… | 125f1e1b95 |
+| B-2026-11-21-67 | typecheck | low | `let key = (start, station_name); trips.get(key)` with `station_name` a bare parameter is refused with a bare "expected '(String, String)', found '(S… | 125f1e1b95 |
+| B-2026-11-21-68 | typecheck+mir | low | `self.names[name] = at` with `name` a bare parameter stores a borrowed key: only MIR's §3.7 backstop refuses it, after `karac check` passed, with no… | 125f1e1b95 |
+| B-2026-11-21-69 | typecheck+parser | low | The fix that hoists a key out of `self.total[key] = self.total.get(key).unwrap_or(0) + (t - at)` (the key moves before the value runs) writes `t - at… | 125f1e1b95 |
+| B-2026-11-21-70 | typecheck | medium | (remainder of B-2026-11-18-59) `karac fix` keeps a `usize`'s floor at 0 only for a `saturating_sub`/`checked_sub` whose receiver is a written `usize`… | 125f1e1b95 |
+| B-2026-11-21-71 | parser | low | `while let P = v and c { . | 125f1e1b95 |
 
 </details>
 
