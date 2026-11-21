@@ -133,6 +133,7 @@ fn link_wasm_executable(
     if crate::target::wasm_export_marshalling() {
         cmd.arg("--export=cabi_realloc");
     }
+    append_wasm_strip_flag(&mut cmd);
     cmd.args(["-o", exe_path]);
 
     let output = cmd
@@ -289,6 +290,7 @@ pub fn link_wasm_executable_threaded(
     // Phase-10 WASM entry-point discovery — same per-target `pub fn`
     // exports as the sequential path (see [`link_wasm_executable`]).
     append_wasm_export_flags(&mut cmd, wasm_exports);
+    append_wasm_strip_flag(&mut cmd);
     cmd.args(["-o", exe_path]);
 
     let output = cmd
@@ -309,6 +311,21 @@ pub fn link_wasm_executable_threaded(
 /// both pins them through wasm-ld's default dead-section GC and lists
 /// them in the module's export section so JS / a component host can call
 /// them. No-op for programs with no tagged exports.
+/// The wasm half of the native link's `strip -x` (B-2026-11-21-18): wasm-ld
+/// keeps the objects' `.debug_*` sections, which are most of a module (a
+/// hello was 964526 B with them), so the final link drops them with
+/// `--strip-debug`. The module's exports and its `name` section stay, so a
+/// trap still names its function. `KARAC_WASM_KEEP_DEBUG=1` keeps the DWARF
+/// for a debugger, and so does a build that asked for debug info
+/// (`KARAC_DEBUG_INFO`), as the native strip is skipped for one
+/// (B-2026-07-27-4).
+fn append_wasm_strip_flag(cmd: &mut std::process::Command) {
+    let keep = matches!(std::env::var("KARAC_WASM_KEEP_DEBUG"), Ok(v) if v != "0");
+    if !keep && !debug_info_requested() {
+        cmd.arg("--strip-debug");
+    }
+}
+
 fn append_wasm_export_flags(cmd: &mut std::process::Command, wasm_exports: &[String]) {
     for name in wasm_exports {
         cmd.arg(format!("--export={name}"));

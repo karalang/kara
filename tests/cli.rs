@@ -4474,7 +4474,6 @@ fn test_rc_promoted_param_reached_through_a_let_rebind_frees_once() {
 /// `left: ""` and macOS a truncated prefix of the same run.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn test_param_view_assign_to_a_carrier_struct_frees_once() {
     use std::process::Command;
 
@@ -4484,7 +4483,7 @@ fn test_param_view_assign_to_a_carrier_struct_frees_once() {
                \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
                }\n\
                struct Holder { r: Res }\n\
-               fn take(h: Holder) {\n\
+               fn take(h: own Holder) {\n\
                \x20   let mut h2 = Holder { r: Res { id: 9, name: f\"z{9}\" } };\n\
                \x20   h2 = h;\n\
                \x20   println(f\"held {h2.r.id}\");\n\
@@ -4556,34 +4555,36 @@ fn test_param_view_assign_to_a_carrier_struct_frees_once() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn test_eprintln_under_par_replays_in_source_order_run_and_build() {
     use std::process::Command;
 
     let tmp = scratch_project("par-stderr-order");
+    // v2 port (B-2026-11-21-21): two `par` branches that both print conflict
+    // (core-semantics.md §11.2, E0418), so the slow branch now owns standard
+    // error and the fast one standard output. What stays pinned is the half of
+    // B-2026-08-23-15 v2 still has: a branch's output reaches its own stream
+    // in order, before the statements after the `par`, on every backend.
     let src = "fn slow_left() -> i64 {\n\
                \x20   let mut i = 0;\n\
                \x20   while i < 20000 { i = i + 1; }\n\
                \x20   eprintln(\"E-left-1\");\n\
-               \x20   println(\"O-left-1\");\n\
                \x20   eprintln(\"E-left-2\");\n\
                \x20   1\n\
                }\n\
                fn fast_right() -> i64 {\n\
-               \x20   eprintln(\"E-right-1\");\n\
                \x20   println(\"O-right-1\");\n\
-               \x20   eprintln(\"E-right-2\");\n\
+               \x20   println(\"O-right-2\");\n\
                \x20   2\n\
                }\n\
                fn main() {\n\
-               \x20   let (a, b) = par { let a = slow_left(); let b = fast_right(); (a, b) };\n\
+               \x20   let (a, b) = par { slow_left(), fast_right() };\n\
                \x20   println(f\"O-sum-{a + b}\");\n\
                \x20   eprintln(f\"E-sum-{a + b}\");\n\
                }\n";
     write(&tmp.join("po.kara"), src);
 
-    let want_err = "E-left-1\nE-left-2\nE-right-1\nE-right-2\nE-sum-3\n";
-    let want_out = "O-left-1\nO-right-1\nO-sum-3\n";
+    let want_err = "E-left-1\nE-left-2\nE-sum-3\n";
+    let want_out = "O-right-1\nO-right-2\nO-sum-3\n";
 
     // Interpreter: repeat, because the bug was a RACE — one green run proves
     // nothing about a scheduling-order defect.
@@ -4650,20 +4651,24 @@ fn test_eprintln_under_par_replays_in_source_order_run_and_build() {
 /// expected string below comes from, but `stdbuf` is not portable enough to
 /// assert on.) The per-stream AOT parity is covered by the test above.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn test_par_console_capture_preserves_stdout_stderr_interleaving() {
     use std::fs::File;
     use std::process::{Command, Stdio};
 
     let tmp = scratch_project("par-console-interleave");
+    // v2 port (B-2026-11-21-21): only one branch may print (core-semantics.md
+    // §11.2), so `right` computes. The property is unchanged: that branch's
+    // stdout and stderr stay interleaved with each other.
     let src = "fn left() -> i64 {\n\
                \x20   eprintln(\"E-left-1\"); println(\"O-left-1\"); eprintln(\"E-left-2\"); 1\n\
                }\n\
                fn right() -> i64 {\n\
-               \x20   eprintln(\"E-right-1\"); println(\"O-right-1\"); eprintln(\"E-right-2\"); 2\n\
+               \x20   let mut i = 0;\n\
+               \x20   while i < 20000 { i = i + 1; }\n\
+               \x20   2\n\
                }\n\
                fn main() {\n\
-               \x20   let (a, b) = par { let a = left(); let b = right(); (a, b) };\n\
+               \x20   let (a, b) = par { left(), right() };\n\
                \x20   println(f\"O-sum-{a + b}\");\n\
                \x20   eprintln(f\"E-sum-{a + b}\");\n\
                }\n";
@@ -4671,7 +4676,6 @@ fn test_par_console_capture_preserves_stdout_stderr_interleaving() {
 
     let merged = tmp.join("merged.txt");
     let want = "E-left-1\nO-left-1\nE-left-2\n\
-                E-right-1\nO-right-1\nE-right-2\n\
                 O-sum-3\nE-sum-3\n";
 
     for attempt in 0..3 {
@@ -6837,7 +6841,6 @@ fn test_build_project_codegen_two_files_runs() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn test_build_generic_struct_reconstruct_heap_field_no_double_free_at_o0() {
     // B-2026-07-18-32 — a generic fn that RECONSTRUCTS a struct out of another
     // owned generic-struct param's heap fields (`Pair { a: p.b, b: p.a }`),
@@ -6862,7 +6865,7 @@ fn test_build_generic_struct_reconstruct_heap_field_no_double_free_at_o0() {
     write(
         &tmp.join("src/main.kara"),
         "struct Pair[T] { a: T, b: T }\n\
-         fn swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }\n\
+         fn swap[T](p: own Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }\n\
          fn main() {\n\
         \x20    let p = Pair { a: \"x\".to_string(), b: \"y\".to_string() };\n\
         \x20    let q = swap(p);\n\
@@ -12179,7 +12182,6 @@ fn test_explain_concept_module_state_renders_page() {
 /// wording it teaches no longer matches what they saw in their terminal,
 /// and hand-pinned strings drift silently because nothing links them.
 #[test]
-#[ignore = "v2 gap after M3: the page quotes a legacy-only rejection the v2 front end does not emit (B-2026-11-21-19)"]
 fn test_operators_page_quotes_live_diagnostics() {
     let page = concept_page("operators");
 
@@ -12267,9 +12269,11 @@ fn test_operators_page_quotes_live_diagnostics() {
             "operators page must quote the live diagnostic `{fragment}`"
         );
     }
-    // Rejection 4 is the legacy pipeline's alone since the v2 pipelines take
-    // every user operator impl, `Index` and `IndexMut` included
-    // (B-2026-10-14-37), so it is measured on `run --interp`.
+    // Rejection 4: a user operator impl is accepted for every operator
+    // trait (B-2026-10-14-37), so what the page teaches is the one thing such
+    // an impl can still get wrong, a missing method. It is the same refusal
+    // on every command (B-2026-11-21-19 retired the legacy "stdlib-only"
+    // wording the page used to quote).
     let tmp =
         std::env::temp_dir().join(format!("karac-cli-explain-userimpl-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
@@ -12279,19 +12283,24 @@ fn test_operators_page_quotes_live_diagnostics() {
         "struct P { x: i64 }\nimpl Index for P { type Output = i64; }\nfn main() { }\n",
     )
     .unwrap();
-    let out = karac_bin()
-        .args(["run", "--interp", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let emitted = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let fragment = "impl of trait 'Index' for 'P' is missing method 'index'";
+    for cmd in [&["check"][..], &["run", "--interp"][..]] {
+        let out = karac_bin()
+            .args(cmd)
+            .arg(path.to_str().unwrap())
+            .output()
+            .unwrap();
+        let emitted = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!out.status.success(), "userimpl {cmd:?} must be refused");
+        assert!(emitted.contains(fragment), "userimpl {cmd:?}: {emitted}");
+    }
     let _ = std::fs::remove_dir_all(&tmp);
-    let fragment = "operator traits are stdlib-only";
-    assert!(emitted.contains(fragment), "userimpl: {emitted}");
-    assert!(page.contains(fragment));
+    assert!(page.contains("impl of trait 'Index' for 'T' is missing method 'index'"));
+    assert!(!page.contains("operator traits are stdlib-only"));
 }
 
 /// The operators page must not quote diagnostics the compiler has STOPPED
@@ -21072,20 +21081,19 @@ fn main() {
 /// That is B-2026-08-30-42; when it is fixed, add the bf16 lines from
 /// `tests/codegen.rs`'s `test_e2e_generic_arithmetic_at_reduced_precision` here.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_f16_generic_arithmetic_build_and_run_e2e() {
     let tmp = wasm_test_dir("f16generic");
     let path = tmp.join("f16generic.kara");
     std::fs::write(
         &path,
         r#"
-fn g_add[T: Add](a: T, b: T) -> T { a + b }
-fn g_sub[T: Sub](a: T, b: T) -> T { a - b }
-fn g_mul[T: Mul](a: T, b: T) -> T { a * b }
-fn g_div[T: Div](a: T, b: T) -> T { a / b }
-fn g_neg[T: Neg](a: T) -> T { -a }
-fn g_poly[T: Add + Mul](a: T, b: T) -> T { g_add(g_mul(a, b), b) }
-fn g_sum[T: Add](xs: Vec[T], zero: T) -> T {
+fn g_add[T: Add[Output = T] + Copy](a: T, b: T) -> T { a + b }
+fn g_sub[T: Sub[Output = T] + Copy](a: T, b: T) -> T { a - b }
+fn g_mul[T: Mul[Output = T] + Copy](a: T, b: T) -> T { a * b }
+fn g_div[T: Div[Output = T] + Copy](a: T, b: T) -> T { a / b }
+fn g_neg[T: Neg[Output = T] + Copy](a: T) -> T { -a }
+fn g_poly[T: Add[Output = T] + Mul[Output = T] + Copy](a: T, b: T) -> T { g_add(g_mul(a, b), b) }
+fn g_sum[T: Add[Output = T] + Copy](xs: Vec[T], zero: T) -> T {
     let mut acc = zero;
     for x in xs { acc = acc + x; }
     acc
@@ -21102,7 +21110,7 @@ fn main() {
     println(f"h {g_add(p,q)} {g_sub(p,q)} {g_mul(p,q)} {g_div(p,q)} {g_neg(p)}");
     println(f"o {g_mul(big,three)} {g_mul(tiny,tiny)}");
     println(f"y {g_poly(p,q)}");
-    let mut hx: Vec[f16] = vec![];
+    let mut hx: Vec[f16] = [];
     let mut i: i64 = 0;
     while i < 10 { hx.push(p); i = i + 1; }
     println(f"a {g_sum(hx, (one * 0.0f32) as f16)}");
@@ -21169,13 +21177,15 @@ fn main() {
         node_out.status.success(),
         "wasm module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
     );
-    // Byte-identical to the native binary and to `karac run --interp`.
+    // Byte-identical to the native binary and to `karac run --interp`. A
+    // whole float keeps its `.0` (core-types.md: "always a `.` or an
+    // exponent"); the legacy expectation printed `0` and `1`.
     assert_eq!(
         node_stdout,
         "h 0.39990234375 -0.2000732421875 0.029998779296875 0.333251953125 -0.0999755859375\n\
-         o inf 0\n\
+         o inf 0.0\n\
          y 0.330078125\n\
-         a 1\n"
+         a 1.0\n"
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -21192,7 +21202,6 @@ fn main() {
 /// gracefully when the wasm archive, a wasm linker, the wasi sysroot, or
 /// node are absent.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_string_split_build_and_run_e2e() {
     let tmp = wasm_test_dir("split");
     let path = tmp.join("split_wasm.kara");
@@ -21202,7 +21211,7 @@ fn wasm_string_split_build_and_run_e2e() {
 fn main() {
     // Interior empty piece (",,") plus a single-char and multi-char piece.
     let s: String = "a,bb,,ccc";
-    let parts: Vec[String] = s.split(",");
+    let parts: Vec[String] = s.split(",").map(|p| p.to_string()).collect();
     println(parts.len());
     for p in parts {
         println(p);
@@ -21280,21 +21289,24 @@ fn main() {
 /// source order on the calling thread. The output is therefore
 /// **deterministic** — branch order then the post-join statement — where
 /// the native pool's output would be racy. Same node:wasi embedder
-/// shape as `wasm_wasi_build_and_run_e2e`.
+/// shape as `wasm_wasi_build_and_run_e2e`. v2 port (B-2026-11-21-21): the
+/// branches compute and `main` prints their results, since two printing
+/// branches conflict (core-semantics.md §11.2); the join before the
+/// following statement is what the output still pins.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn wasm_wasi_explicit_par_block_runs_sequentially() {
     let tmp = wasm_test_dir("par-seq");
     let path = tmp.join("par_seq.kara");
     std::fs::write(
         &path,
         r#"
+fn tenfold(x: i64) -> i64 { x * 10 }
+
 fn main() {
-    par {
-        println(100);
-        println(200);
-        println(300);
-    }
+    let (a, b, c) = par { tenfold(10), tenfold(20), tenfold(30) };
+    println(a);
+    println(b);
+    println(c);
     println(999);
 }
 "#,
@@ -21354,16 +21366,19 @@ fn main() {
 /// 2. **the group drop drives the queue FIFO** — worker output arrives
 ///    in spawn order `1..=5` (deterministic, where native is racy), and
 ///    main's exit code pins that the join barrier completed;
-/// 3. **`h.join()` transports the result** — the free-spawned task's
-///    `40 + 2` crosses back through the handle's result buffer.
+/// 3. **`h.join()` transports the result** — a group task's `40 + 2`
+///    crosses back through the handle's result buffer. (The legacy program
+///    used a free `spawn` here; v2 has none, core-semantics.md §11.1, so the
+///    joined task is a `TaskGroup` one: B-2026-11-21-21.)
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_wasi_spawn_taskgroup_sequential_e2e() {
     let tmp = wasm_test_dir("spawn-seq");
     let path = tmp.join("spawn_seq.kara");
     std::fs::write(
         &path,
         r#"
+import std.sync.{TaskGroup, TaskHandle};
+
 fn worker(id: i64) {
     println(id);
 }
@@ -21373,11 +21388,12 @@ fn add(a: i64, b: i64) -> i64 {
 }
 
 fn main() {
-    let h: TaskHandle[i64] = spawn(|| add(40, 2));
+    let g = TaskGroup.new();
+    let h: TaskHandle[i64] = g.spawn(|| add(40, 2));
     let r: i64 = h.join();
     println(r);
 
-    let mut tg = TaskGroup.new();
+    let tg = TaskGroup.new();
     tg.spawn(|| worker(1));
     tg.spawn(|| worker(2));
     tg.spawn(|| worker(3));
@@ -21432,15 +21448,14 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Strip-by-default: `karac build --target=wasm_*` runs `wasm-tools strip`
-/// on every emitted `.wasm` artifact. The native link path strips by
-/// default, but wasm-ld keeps the `.debug_*` DWARF sections — ~90%+ of an
-/// unstripped module (a 482 KiB browser hello is 93% DWARF). Proven by the
-/// ~10x size delta against the `KARAC_WASM_KEEP_DEBUG=1` opt-out build.
-/// Uses the wasm_wasi component path, so `wasm_build_skip_reason` already
-/// covers a missing wasm-tools / runtime archive / linker.
+/// Strip-by-default: `karac build --target=wasm_*` links with wasm-ld's
+/// `--strip-debug` (B-2026-11-21-18; the legacy build ran `wasm-tools
+/// strip` afterwards). The native link path strips by default, but wasm-ld
+/// keeps the `.debug_*` DWARF sections unless told: ~93% of a 964526 B
+/// wasi hello. Proven by the size delta against the `KARAC_WASM_KEEP_DEBUG=1`
+/// opt-out build. `wasm_build_skip_reason` covers a missing runtime archive
+/// or linker.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build does not strip debug info by default yet (B-2026-11-21-18)"]
 fn wasm_build_strips_debug_info_by_default() {
     let tmp = wasm_test_dir("strip-default");
     let path = tmp.join("strip_hello.kara");
@@ -21633,7 +21648,6 @@ fn main() {
 /// `f16` rides along as the control: it is a legal wasm type, was never
 /// affected, and must not be rewritten by the bf16 ABI.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_bf16_signature_positions_build_and_match_native() {
     let tmp = wasm_test_dir("bf16abi");
     let path = tmp.join("bf16_abi.kara");
@@ -21654,7 +21668,7 @@ pub fn mixed(a: i64, b: bf16, c: f32, d: bf16) -> bf16 {
     return b + d + (a as bf16) + (c as bf16)
 }
 pub fn lit() -> bf16 { return 0.5 }
-fn pick[T](a: T, b: T) -> T { return a }
+fn pick[T: Copy](a: T, b: T) -> T { return a }
 pub fn addh(a: f16, b: f16) -> f16 { return a + b }
 
 fn main() {
@@ -28316,13 +28330,12 @@ fn test_dbg_json_form_is_identical_across_backends() {
 /// so this asserts the SET of lines, sorted — the tag is the property under
 /// test, not the interleaving.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn test_dbg_tags_par_branches_with_task_ids_on_every_backend() {
     let tmp = scratch_project("dbg-par-task-ids");
     let src = "fn left() -> i64 { dbg(11); 1 }\n\
                fn right() -> i64 { dbg(22); 2 }\n\
                fn main() {\n\
-               \x20   let (a, b) = par { let a = left(); let b = right(); (a, b) };\n\
+               \x20   let (a, b) = par { left(), right() };\n\
                \x20   dbg(a + b);\n\
                \x20   println(f\"{a + b}\");\n\
                }\n";
@@ -29768,7 +29781,6 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
 /// rather than a deleted line nobody can find again.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
     let tmp = scratch_project("mainerr-failclosed");
     write(
@@ -29798,12 +29810,11 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
     );
 
     // The retired examples, each renderable since the row that retired it: the
-    // tuple payload (B-2026-08-31-10), the vector one (-18 / -19), the slice
-    // one (-25) and `VecDeque`, which has `Display` since B-2026-10-21-30. The slice case builds its `Vec` in `main` and returns a slice
-    // of it, which DANGLES — the cleanup drain frees the buffer before the error
-    // line is rendered (B-2026-08-31-41) — so it uses an ARRAY-backed slice,
-    // whose storage is not freed, and is a genuine Display assertion rather than
-    // an accidental use-after-free.
+    // tuple payload (B-2026-08-31-10), the vector one (-18 / -19) and
+    // `VecDeque`, which has `Display` since B-2026-10-21-30. The legacy slice
+    // case (-25) is gone: it returned a slice of `main`'s own array, which v2
+    // refuses as a borrow outliving its owner (E0509, core-semantics.md §5.4),
+    // so a `Slice` error payload has no v2 program to build (B-2026-11-21-21).
     for (stem, src, want_line) in [
         (
             "n",
@@ -29818,15 +29829,6 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
              }\n"
             .to_string(),
             "Error: Some(Vector(1, 2, 3, 4))",
-        ),
-        (
-            "q",
-            "fn main() -> Result[(), Option[Slice[i64]]] {\n\
-             \x20   let a: Array[i64, 2] = [1, 2];\n\
-             \x20   return Err(Some(a[0..2]));\n\
-             }\n"
-            .to_string(),
-            "Error: Some([1, 2])",
         ),
         (
             "r",

@@ -5762,8 +5762,14 @@ will actually see, followed by the fix.
     earlier stays visible. A numeric LITERAL takes the other operand's
     type, so `(x: i32) + 2` is fine.
 
-4.  user-defined `impl Index for T` is not supported in 0.8;
-    operator traits are stdlib-only
+4.  impl of trait 'Index' for 'T' is missing method 'index', which the
+      trait declares without a default body
+
+    A user operator impl is accepted for every operator trait; what it
+    must do is define the trait's method. `impl Index[K] for T` supplies
+    `type Output` and `fn index(self, k: K) -> ref Output`, and
+    `IndexMut` the same with
+    `fn index_mut(mut ref self, k: K) -> mut ref Output`.
 
     Every command dispatches the arithmetic and bitwise
     operators to a user impl: `a + b` on a type with `impl Add` calls its

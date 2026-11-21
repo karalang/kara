@@ -3174,6 +3174,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `karac build --target=wasm_*` strips the DWARF sections again, linking
+  with wasm-ld's `--strip-debug`: a wasi hello is 65757 B rather than
+  964526 B. `KARAC_WASM_KEEP_DEBUG=1`, or `KARAC_DEBUG_INFO`, keeps them
+  (B-2026-11-21-18).
+- `karac explain operators` no longer quotes the legacy "operator traits
+  are stdlib-only" refusal for a user `impl Index`: every operator trait
+  takes a user impl, and its rejection 4 now quotes the E0203 missing-method
+  error such an impl can still draw (B-2026-11-21-19).
 - `KARAC_LLVM_ARGS` forwards raw LLVM `cl::opt` flags to the backend
   again, as clang's `-mllvm` does (`KARAC_LLVM_ARGS=-align-all-functions=8`);
   the v2 backend had dropped it, so a build given it built the default
