@@ -1,0 +1,2 @@
+import db.inner.open;
+fn main() { println(open()); }

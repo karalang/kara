@@ -781,6 +781,67 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// A constant's initializer is computed at compile time, so it may not
+    /// call anything (design.md § Constants); the typechecker refuses the
+    /// initializer as not constant. When the call it refuses performs an
+    /// effect, this note names that effect at the call, so the reader sees
+    /// WHY the value cannot be built at compile time (`writes(Stdout)` via
+    /// `println`, `reads(Fs)` via a loader) rather than only that a call is
+    /// not a constant form. A note, never an error: the typechecker's refusal
+    /// is what fails the build. One note per constant, at its first
+    /// effectful call.
+    pub(crate) fn check_const_initializer_effects(&mut self) {
+        let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
+        let mut notes: Vec<(String, Span)> = Vec::new();
+        for item in &self.program.items {
+            let Item::ConstDecl(c) = item else { continue };
+            let mut calls = Vec::new();
+            self.collect_calls_in_expr(&c.value, &mut calls, &empty_bounds);
+            for &(callee, call_span) in &calls {
+                let mut rendered: Vec<String> = Vec::new();
+                for effect in self.callee_effect_sets(callee).iter() {
+                    if effect.verb == EffectVerbKind::Panics {
+                        continue;
+                    }
+                    let r = if effect.resource.is_empty() {
+                        super::verb_name(&effect.verb)
+                    } else {
+                        effect.to_string()
+                    };
+                    if !rendered.contains(&r) {
+                        rendered.push(r);
+                    }
+                }
+                if rendered.is_empty() {
+                    continue;
+                }
+                rendered.sort();
+                let via = self.interner.resolve(callee).to_string();
+                notes.push((
+                    format!(
+                        "the initializer of constant '{}' performs `{}` here, through `{via}`: \
+                         a constant is computed at compile time, so its initializer can have \
+                         no effects (design.md § Constants)",
+                        c.name,
+                        rendered.join(", ")
+                    ),
+                    call_span,
+                ));
+                break;
+            }
+        }
+        for (message, span) in notes {
+            self.errors.push(super::EffectError {
+                message,
+                span,
+                kind: super::EffectErrorKind::ConstInitEffectNote,
+                subtype_trace: None,
+                replacement: None,
+                undeclared: None,
+            });
+        }
+    }
+
     /// The effect sets a callee contributes, BY REFERENCE — no
     /// `HashSet` build, no `Effect` clone, no `Vec` (DHAT put the old
     /// collecting version at ~9% of all front-end allocation bytes;

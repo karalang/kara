@@ -1,0 +1,6 @@
+// design.md § Re-exports: the identity is unchanged, so the re-exported
+// name and the original are the same type.
+import api.Connection;
+import db.connection;
+fn take(c: connection.Connection) -> i64 { c.n }
+fn main() { let c = Connection { n: 6 }; println(take(c)); }

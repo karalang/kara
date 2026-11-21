@@ -1,0 +1,2 @@
+`#[cfg(...)]` is not implemented yet
+#[target(native)]

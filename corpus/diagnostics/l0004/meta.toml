@@ -1,0 +1,9 @@
+source = "B-2026-11-22-32"
+dedup_of = []
+expect = "error:E_MODULE_BINDING_EFFECTFUL_INIT"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-22-32: the smallest program that produces L0004, the note naming the effect behind a refused constant initializer, and the example behind `karac explain L0004`. tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

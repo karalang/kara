@@ -2111,7 +2111,7 @@ pub(super) fn print_cycles_text(cycles: &[Cycle], tree: &ProgramTree) {
         for &id in &c.nodes {
             let m = &tree.modules[id];
             let label = if m.path.is_empty() {
-                "<crate root>".to_string()
+                "(package root)".to_string()
             } else {
                 m.path.join(".")
             };

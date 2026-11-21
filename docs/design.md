@@ -703,11 +703,11 @@ proptest = "0.4"                   # only in tests and examples
 target = "x86_64-unknown-linux-gnu" # the triple the build emits for; a non-host triple cross-builds; --target overrides
 ```
 
-- `[package].name` is required. It is the package's identity, and it gives the name dependents use as a path's first segment.
+- `[package].name` is required. It is the package's identity, and it gives the name dependents use as a path's first segment, so with each `-` read as `_` it must be an identifier: `name = "my app"` is an error whose help suggests `"my_app"` (review-thread ruling 2026-11-21, B-2026-11-22-34).
 - **Hyphens in a package name.** A package name may contain `-`, and a path segment may not, so a dependent's path starts with the name with each `-` replaced by `_`: a dependency on `kara-data` is imported from `kara_data`. Two dependencies whose names differ only by `-` against `_` would claim one segment, which is an error at the manifest; an `alias` resolves it.
 - `[package].import` is optional. It declares the import name dependents use instead of the name, and must be an identifier: `kara-data` declares `import = "data"`, so its dependents write `import data.{Column, DataFrame}`. A dependent's `alias` overrides both.
 - `[package].edition` is optional and validated.
-- `version` and `authors` are recognized. `version` is a semver version, `MAJOR.MINOR.PATCH`, and anything else is an error (review-thread ruling 2026-11-16). An unknown key in `[package]` is a warning; invalid TOML is an error.
+- `version` and `authors` are recognized. `version` is a semver version, `MAJOR.MINOR.PATCH`, and anything else is an error (review-thread ruling 2026-11-16). `authors` is a list of strings; any other value is an error (review-thread ruling 2026-11-21). An unknown key in `[package]` and an unknown top-level table (`[dependecies]`) are warnings; invalid TOML is an error.
 - `[build].target` selects the default manifest overlay ([Conditional compilation](#conditional-compilation)); `[build].targets` lists the targets `karac check` verifies ([§16](#16-targets-and-compilation)).
 - **Dependencies in 0.8.** `check`, `run`, `build` and `test` resolve dependencies the same way. A path dependency (`{ path = "../logging" }`) resolves, type-checks across the package boundary and links. A git dependency (`{ git = "<url>" }`, optionally with one of `branch`, `tag` or `rev`) is fetched; a fetch that fails is `E_GIT_FETCH_FAILED`. A registry dependency (`"1.2"`, `{ version = .. }`) is fetched through the registry proxy named by `KARAC_REGISTRY_PROXY`. With no proxy configured it is the error `E_REGISTRY_DEP_UNSUPPORTED`, with a help line to use a `path` dependency on a local checkout instead, never a warning: a declared dependency that is silently dropped would surface later as an unknown module (review-thread ruling 2026-11-13, B-2026-11-13-41). A dependency cycle is `E_DEPENDENCY_CYCLE` in every command.
 
@@ -810,6 +810,8 @@ Each `karac build --target X` produces one artifact. Building a matrix of target
 - Function calls. Calls to `const fn` come with the comptime track.
 - Closures, which may capture state and carry effects.
 - Anything that allocates. `String` is heap-allocated, so it cannot be a constant's type; use `Str`.
+
+A refused initializer is reported at the expression, and when what it calls has an effect, a note names the effect at the call: `const X: i64 = shout();` adds `the initializer of constant 'X' performs writes(Stdout) here, through shout` (review-thread ruling 2026-11-21, B-2026-11-22-32). A constant declared in a block is visible to the rest of the block only, so it takes no visibility keyword; `pub const` there is an error.
 
 ```kara
 // allowed
@@ -934,6 +936,8 @@ An unknown key or value is an error.
 - Under `karac check` with several targets, each target's pass sees exactly the declarations that target's build sees ([§16](#checking-several-targets)).
 
 `#[cfg]` is not yet implemented. Until it is, `#[target(native)]` or `#[target(wasm_wasi)]` gates an item on one target, with the same rules (the item does not exist elsewhere; a use there is an error naming the target). `#[target]` is an interim spelling: when `#[cfg]` lands it becomes a deprecation warning whose fix rewrites it to `#[cfg(target: "...")]`.
+
+`#[target(gpu)]` and `#[target(wasm_browser)]` name later tracks' targets ([§16](#16-targets-and-compilation)). They are accepted, so code written for those tracks still parses, with a `later_track` warning: an item gated only on them does not exist in a v1 build, and `karac check` runs no `gpu` or `wasm_browser` pass, so its body is not checked (review-thread ruling 2026-11-21, B-2026-11-22-35).
 
 #### Platform files
 
@@ -6944,12 +6948,12 @@ When a package declares several targets, `karac check` type-checks and effect-ch
 
 - **Declaration.** The manifest declares `[build] targets = ["native", "wasm_wasi"]`, an array of target names. It is distinct from `[build].target`, a rustc-style triple that selects the per-target manifest overlay for `karac build`.
 - **Building.** A plain `karac build` builds each declared target in order, as `--target=<name>` would, and stops at the first that fails; `--target` builds one. `karac run` runs on the host, so it refuses a package whose targets leave out `native`, naming them (review-thread ruling 2026-11-16).
-- **Errors.** Unknown names and duplicates are hard manifest errors. A soft warning would let a typo silently drop a target from a CI matrix.
+- **Errors.** Unknown names, duplicates, a value that is not an array and an empty array are hard manifest errors. A soft warning would let a typo silently drop a target from a CI matrix; a package that means the host leaves the key out (review-thread ruling 2026-11-21, B-2026-11-22-34).
 - **Discovery.** `karac check <file>` finds the manifest by walking upward from the file's directory, the same rule as `karac run`.
 - **Override.** `karac check <file> --targets=<list|all>`.
 - **Each pass sees one target.** Each pass re-parameterizes the provided-resource set and the `#[cfg(target: ...)]` filtering, so it sees exactly what that target's build would see.
 - **Deduplication.** A finding identical on every target is reported once, in an "all targets" group (text) or a `shared_diagnostics` array (JSON): it is a target-agnostic bug. JSONL output streams each target between `target_start` and `target_complete` events and leaves deduplication to the consumer.
-- **One target.** A single declared target is not a matrix but still runs with that target's resource set: a `wasm_wasi`-only package is checked against `wasm_wasi`, not the host.
+- **One target.** A single declared target is not a matrix but still runs with that target's resource set: a `wasm_wasi`-only package is checked against `wasm_wasi`, not the host, and so is `--targets=wasm_wasi`. Check never checks the host alone when the package or the command names another target (review-thread ruling 2026-11-21, B-2026-11-22-31).
 
 #### CPU baseline
 

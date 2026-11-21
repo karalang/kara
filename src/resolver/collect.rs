@@ -2026,7 +2026,7 @@ impl<'a> super::Resolver<'a> {
                 let mut suggestion = suggest_similar(&item.name, &candidates);
 
                 let module_label = if imp.path.is_empty() {
-                    "<crate root>".to_string()
+                    "(package root)".to_string()
                 } else {
                     imp.path.join(".")
                 };
@@ -2080,7 +2080,7 @@ impl<'a> super::Resolver<'a> {
                 if let Some(vis) = module_item_visibility(tree, &imp.path, &item.name) {
                     if !visibility_allows_access(vis, &def_path, &importer_path) {
                         let def_label = if def_path.is_empty() {
-                            "<crate root>".to_string()
+                            "(package root)".to_string()
                         } else {
                             def_path.join(".")
                         };

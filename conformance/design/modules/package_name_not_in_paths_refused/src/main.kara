@@ -1,0 +1,3 @@
+// design.md § The package name in paths: inside a package, paths omit it.
+import app.util.f;
+fn main() { println(f()); }

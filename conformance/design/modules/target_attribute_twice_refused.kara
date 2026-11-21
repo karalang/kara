@@ -1,0 +1,4 @@
+#[target(native)]
+#[target(native)]
+fn g() -> i64 { 2 }
+fn main() { println(g()); }

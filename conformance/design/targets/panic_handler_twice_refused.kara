@@ -1,0 +1,5 @@
+#[panic_handler]
+fn a(info: PanicInfo) { }
+#[panic_handler]
+fn b(info: PanicInfo) { }
+fn main() { }

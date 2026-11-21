@@ -1,0 +1,5 @@
+#[target(wasm_browser)]
+fn in_browser() -> i64 { "not checked" }
+#[target(gpu)]
+fn on_gpu() -> i64 { 1 }
+fn main() { println("hi"); }

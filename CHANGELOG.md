@@ -20,6 +20,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `karac check` of a package checks every target it declares, and every
+  target `--targets` names, never the host alone: a package with
+  `[build] targets = ["wasm_wasi"]` whose main uses `std.net` now fails check
+  as it fails build (B-2026-11-22-31).
+- `kara.toml`: a `[package].name` that is not an identifier once each `-`
+  reads as `_` (`"my app"`, `"fn"`) is an error suggesting one; `authors`
+  must be a list of strings; `[build] targets = []` is an error (leave the key
+  out to build for the host); an unknown top-level table warns
+  (B-2026-11-22-34).
+- `pub const` / `private const` in a block is an error saying a block
+  constant takes no visibility (B-2026-11-22-33).
 - `karac run` of a single file that imports `std.web` is refused with the
   same E0411 target-gate errors `karac check` reports (the native target
   provides no `Display` or `Storage` resource); it used to run on stubs.
@@ -2328,6 +2339,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A constant whose initializer calls something effectful gets a note naming
+  the effect at the call (`performs writes(Stdout) here, through shout`)
+  (B-2026-11-22-32).
+- `#[target(gpu)]` and `#[target(wasm_browser)]` draw a `later_track` warning,
+  and `karac check` no longer runs gpu or wasm_browser passes, so a one-file
+  program with a gpu-gated item no longer fails check with E0411 on `main`
+  (B-2026-11-22-35).
+- E0221 says a type "is not `pub`" rather than "private" when it has default
+  visibility; module-cycle messages name "(package root)", not "<crate root>";
+  a one-file package's diagnostics name `src/main.kara` relative to the
+  package; `karac build --help` no longer lists the internal `KARAC_MIR_OPT`
+  (B-2026-11-22-33).
 - Printing a `Secret[T]` (`println(tok)`, `f"{tok}"`) is refused with the
   reason `dbg` and `==` already gave: `Secret` withholds `Display` on
   purpose (docs/library/secret.md), read it with `.expose()` (B-2026-11-21-24).

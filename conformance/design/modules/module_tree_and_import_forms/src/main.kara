@@ -1,0 +1,19 @@
+// design.md § Imports: every import form binds its last segment; an
+// explicit import beats a wildcard; other wildcard names work normally.
+import db.connection.Connection;
+import db.connection.Connection as Conn;
+import db.connection.{Pool as P};
+import db.connection;
+import db.{connection.{open}, auth.token};
+import http.resp.which;
+import net.resp.*;
+import http.resp.*;
+fn main() {
+    let a = Connection { n: 1 };
+    let b = Conn { n: 2 };
+    let p = P { size: 3 };
+    let c = connection.Connection { n: 4 };
+    println(f"{a.n} {b.n} {p.size} {c.n} {open()} {token()} {connection.open()}");
+    println(which());
+    println(only_net());
+}

@@ -1,0 +1,5 @@
+── all targets ──
+expected 'i64', found 'String'
+── target: wasm_wasi ──
+E0411
+main → helper → fetch → TcpStream.connect

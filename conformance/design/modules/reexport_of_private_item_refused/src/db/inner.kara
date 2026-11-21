@@ -1,0 +1,2 @@
+private fn secret() -> i64 { 1 }
+pub fn open() -> i64 { secret() }

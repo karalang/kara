@@ -1,0 +1,4 @@
+── target: native ──
+All checks passed
+E0411
+1 of 2 target(s) failed: wasm_wasi

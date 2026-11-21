@@ -1,0 +1,2 @@
+const N: i64 = { println("x"); 1 };
+fn main() { println(N); }

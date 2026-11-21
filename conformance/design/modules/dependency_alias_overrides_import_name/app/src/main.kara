@@ -1,0 +1,2 @@
+import kd.col;
+fn main() { println(col()); }

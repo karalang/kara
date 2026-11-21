@@ -1,0 +1,2 @@
+import db.helpers.helper;
+pub fn u() -> i64 { helper() }

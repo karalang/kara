@@ -895,6 +895,10 @@ pub struct Program {
     /// to module scope under a name no source can write, and the formatter
     /// writes `const` back.
     pub block_const_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Each `#[target(...)]` argument naming a later track's target (`gpu`,
+    /// `wasm_browser`), with that name: the typechecker warns that it is not
+    /// in v1 (lint `later_track`, B-2026-11-22-35).
+    pub later_track_target_gates: Vec<(crate::token::Span, String)>,
     /// Unsuffixed integer literals past `i128::MAX` (B-2026-11-13-28): only
     /// `u128` holds one, so the parser gives it the `u128` suffix, with the
     /// wrapped bit pattern a written `u128` suffix gets, and marks its span

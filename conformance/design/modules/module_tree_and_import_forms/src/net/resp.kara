@@ -1,0 +1,3 @@
+pub fn which() -> String { "net" }
+pub fn only_net() -> String { "only" }
+pub fn shared() -> String { "net-shared" }

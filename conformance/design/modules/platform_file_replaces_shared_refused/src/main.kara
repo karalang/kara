@@ -1,0 +1,2 @@
+import net.poller.only_shared;
+fn main() { println(only_shared()); }

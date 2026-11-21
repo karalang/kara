@@ -1,0 +1,1 @@
+fn main() { println(K); const K: i64 = 1; }

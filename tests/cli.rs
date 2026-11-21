@@ -19623,7 +19623,7 @@ fn target_skip_fixture(dir: &str) -> std::path::PathBuf {
     // that the check never runs.
     std::fs::write(
         &path,
-        "#[target(wasm_browser)]\npub fn gated(a: i32) -> i32 {\n\
+        "#[target(wasm_wasi)]\nfn gated(a: i32) -> i32 {\n\
          \x20   let s: String = a;\n    return s;\n}\n\nfn main() {}\n",
     )
     .unwrap();
@@ -19656,7 +19656,7 @@ fn single_target_check_notes_the_items_it_skipped() {
     assert!(
         stderr.contains("1 item NOT checked")
             && stderr.contains("gated")
-            && stderr.contains("wasm_browser"),
+            && stderr.contains("wasm_wasi"),
         "expected the skip note naming the item and its gate, got: {stderr}"
     );
     assert!(
@@ -19684,7 +19684,7 @@ fn single_target_check_json_reports_skipped_items() {
     // The Mend loop reads this stream; an empty `diagnostics` must no longer
     // be indistinguishable from "nothing was skipped".
     assert!(
-        stdout.contains("\"target_skipped\":[{\"name\":\"gated\",\"gated_for\":\"wasm_browser\"}]"),
+        stdout.contains("\"target_skipped\":[{\"name\":\"gated\",\"gated_for\":\"wasm_wasi\"}]"),
         "expected target_skipped to name the gated item, got: {stdout}"
     );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -19695,37 +19695,34 @@ fn matrix_notes_only_items_no_target_checked() {
     // The note's original rule — never mention an item a sibling pass
     // checked — leaves a hole one level up: a matrix that admits the item
     // NOWHERE checks it nowhere and used to say nothing, which is the
-    // exact silence the note exists to break. `--targets=native,wasm_wasi`
-    // over a `#[target(gpu)]` item is that case.
+    // exact silence the note exists to break. `--targets=native` over a
+    // `#[target(wasm_wasi)]` item is that case. (A later track's `gpu` item
+    // is checked by no v1 pass at all; its `later_track` warning says so,
+    // B-2026-11-22-35.)
     let tmp = multi_target_dir("matrix-blind");
-    let path = tmp.join("gpu_gated.kara");
+    let path = tmp.join("wasi_gated.kara");
     std::fs::write(
         &path,
-        "#[target(gpu)]\npub fn gpu_only(a: i32) -> i32 { return a; }\nfn main() {}\n",
+        "#[target(wasm_wasi)]\nfn wasi_only(a: i32) -> i32 { return a; }\nfn main() {}\n",
     )
     .unwrap();
 
     let uncovered = karac_bin()
-        .args([
-            "check",
-            path.to_str().unwrap(),
-            "--targets=native,wasm_wasi",
-        ])
+        .args(["check", path.to_str().unwrap(), "--targets=native"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&uncovered.stderr);
     assert!(uncovered.status.success(), "{stderr}");
     assert!(
         stderr.contains("1 item NOT checked")
-            && stderr.contains("gpu_only (gpu)")
-            && stderr.contains("every checked target (native, wasm_wasi)"),
+            && stderr.contains("wasi_only (wasm_wasi)")
+            && stderr.contains("gated away from target 'native'"),
         "a matrix that checks the item nowhere must say so: {stderr}",
     );
 
     // ...and a matrix that DOES cover it stays silent, which is the
     // property the original single-target-only rule was protecting.
-    // `--targets` refuses `gpu` (B-2026-11-15-54); the default check
-    // sweeps the target a gated item names.
+    // The default check sweeps the target a gated item names.
     let covered = karac_bin()
         .args(["check", path.to_str().unwrap()])
         .output()
@@ -19742,14 +19739,15 @@ fn matrix_notes_only_items_no_target_checked() {
         .args([
             "check",
             path.to_str().unwrap(),
-            "--targets=native,wasm_wasi",
+            "--targets=native",
             "--output=json",
         ])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&json.stdout);
     assert!(
-        stdout.contains("\"target_skipped\":[{\"name\":\"gpu_only\",\"gated_for\":\"gpu\"}]"),
+        stdout
+            .contains("\"target_skipped\":[{\"name\":\"wasi_only\",\"gated_for\":\"wasm_wasi\"}]"),
         "matrix JSON must carry the uncovered item: {stdout}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
@@ -20084,8 +20082,8 @@ fn check_targets_single_target_parameterizes_resource_set() {
 /// two textbook type errors — and `karac check --output=json` is the
 /// Mend loop's front door.
 const GATED_TYPE_ERROR: &str = "\
-#[target(wasm_browser)]
-pub fn blatantly_wrong(a: i32) -> i32 {
+#[target(wasm_wasi)]
+fn blatantly_wrong(a: i32) -> i32 {
     let s: String = a;
     return s;
 }
@@ -20108,7 +20106,7 @@ fn check_examines_a_target_gated_body_by_default() {
         "a file whose only errors are in a gated body must still fail check: {stderr}",
     );
     assert!(
-        stderr.contains("── target: wasm_browser ──")
+        stderr.contains("── target: wasm_wasi ──")
             && stderr.contains("expected 'String', found 'i32'")
             && stderr.contains("expected 'i32', found 'String'"),
         "both errors must be reported, tagged with the target that found them: {stderr}",
@@ -20137,7 +20135,7 @@ fn check_json_surfaces_a_gated_body_error() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!out.status.success());
     assert!(
-        stdout.contains("\"target\":\"wasm_browser\",\"success\":false")
+        stdout.contains("\"target\":\"wasm_wasi\",\"success\":false")
             && stdout.contains("expected 'String', found 'i32'"),
         "JSON envelope must carry the gated-target finding: {stdout}",
     );

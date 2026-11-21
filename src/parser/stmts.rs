@@ -437,6 +437,16 @@ impl super::Parser {
                 Token::While | Token::For | Token::Loop
             );
         }
+        // `pub const` / `private const` in a block: the statement parser
+        // refuses the keyword and parses the constant.
+        if matches!(self.peek_token_ref(), Token::Pub | Token::Private)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.token),
+                Some(Token::Const)
+            )
+        {
+            return true;
+        }
         matches!(
             self.peek_token(),
             Token::Let
@@ -771,6 +781,32 @@ impl super::Parser {
             Token::Struct => self.hoist_nested_type("struct"),
             Token::Enum => self.hoist_nested_type("enum"),
             Token::Const => self.parse_block_const(),
+            // `pub const` in a block: a block constant's scope is the rest of
+            // the block, so it takes no visibility keyword (design.md §
+            // Constants). Said so, then parsed as the constant it declares
+            // (B-2026-11-22-33).
+            Token::Pub | Token::Private
+                if matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.token),
+                    Some(Token::Const)
+                ) =>
+            {
+                let span = self.current_span();
+                let kw = if self.check(&Token::Pub) {
+                    "pub"
+                } else {
+                    "private"
+                };
+                self.error_at(
+                    &format!(
+                        "a constant declared in a block takes no visibility keyword: it is \
+                         visible to the rest of the block only; remove `{kw}`"
+                    ),
+                    span,
+                );
+                self.advance();
+                self.parse_block_const()
+            }
             _ => self.parse_expression_statement(),
         }
     }

@@ -339,6 +339,7 @@ pub fn kind_blocks_production(kind: &EffectErrorKind) -> bool {
         EffectErrorKind::FfiLintHint
             | EffectErrorKind::TargetGateViolation
             | EffectErrorKind::MutualRecursionNote
+            | EffectErrorKind::ConstInitEffectNote
             | EffectErrorKind::PureLoopInPar
     )
 }
@@ -661,7 +662,9 @@ pub fn kind_is_lint_warning(kind: &EffectErrorKind) -> bool {
 pub fn kind_is_note(kind: &EffectErrorKind) -> bool {
     matches!(
         kind,
-        EffectErrorKind::FfiLintHint | EffectErrorKind::MutualRecursionNote
+        EffectErrorKind::FfiLintHint
+            | EffectErrorKind::MutualRecursionNote
+            | EffectErrorKind::ConstInitEffectNote
     )
 }
 
@@ -713,6 +716,11 @@ pub enum EffectErrorKind {
     /// sentence promises was already populated; only the note was missing, so
     /// `#[allow]` had nothing to suppress and `#[deny]` passed vacuously.
     MutualRecursionNote,
+    /// A constant's initializer calls something that performs an effect
+    /// (B-2026-11-22-32). The typechecker already refuses the call as not a
+    /// constant form; this note names the effect at the call. Never an
+    /// error on its own.
+    ConstInitEffectNote,
     /// `pure_loop_in_par` (B-2026-08-21-2) — a loop inside a `par { }` branch
     /// whose body has no effect boundary, so cooperative cancellation has
     /// nowhere to observe the flag. design.md § Parallel Failure and Cleanup
@@ -950,6 +958,7 @@ pub(crate) fn class_for_effect_error_kind(
         | EffectErrorKind::NoEffectViolated
         | EffectErrorKind::PubFnSyntheticResource
         | EffectErrorKind::ForbiddenEffectInContract
+        | EffectErrorKind::ConstInitEffectNote
         | EffectErrorKind::ResourceReceiverContradiction => None,
     }
 }
@@ -2763,6 +2772,7 @@ impl<'a> EffectChecker<'a> {
         self.infer_effects();
         self.infer_private_trait_ceilings();
         self.check_contract_purity();
+        self.check_const_initializer_effects();
         self.verify_declarations();
         self.verify_written_declarations();
         self.verify_extern_export_panics();

@@ -1,0 +1,2 @@
+pub fn which() -> String { "http" }
+pub fn shared() -> String { "http-shared" }

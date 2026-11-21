@@ -1,0 +1,2 @@
+pub fn name() -> String { "shared" }
+pub fn only_shared() -> i64 { 1 }

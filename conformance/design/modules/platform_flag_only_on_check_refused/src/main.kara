@@ -1,0 +1,2 @@
+import net.poller.name;
+fn main() { println(name()); }

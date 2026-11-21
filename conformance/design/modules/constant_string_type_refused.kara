@@ -1,0 +1,2 @@
+pub const HOST: String = "localhost";
+fn main() { }

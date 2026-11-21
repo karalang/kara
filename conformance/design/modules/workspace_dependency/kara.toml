@@ -1,0 +1,5 @@
+[workspace]
+members = ["core", "cli"]
+
+[workspace.dependencies]
+logx = { path = "logx" }

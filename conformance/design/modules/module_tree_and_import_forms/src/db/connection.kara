@@ -1,0 +1,3 @@
+pub struct Connection { pub n: i64 }
+pub struct Pool { pub size: i64 }
+pub fn open() -> i64 { 9 }

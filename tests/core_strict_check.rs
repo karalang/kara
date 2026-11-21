@@ -11012,7 +11012,7 @@ fn a_pub_fn_may_name_a_library_type() {
         "struct Mine { a: i64 }\n\
          pub fn bad(m: Mine) -> i64 { m.a }\n\
          fn main() { println(f\"{bad(Mine { a: 1 })}\"); }\n",
-        "private type 'Mine' leaks through parameter of 'bad'",
+        "type 'Mine', which is not `pub`, leaks through parameter of 'bad'",
     );
 }
 

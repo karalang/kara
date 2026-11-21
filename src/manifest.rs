@@ -42,6 +42,25 @@ pub const MANIFEST_FILENAME: &str = "kara.toml";
 /// against the wrong language rules.
 const KNOWN_EDITIONS: &[&str] = &["2026"];
 
+/// The top-level tables (and keys) `kara.toml` reads; anything else is
+/// warned about.
+const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
+    "package",
+    "dependencies",
+    "dev-dependencies",
+    "build",
+    "profile",
+    "release",
+    "target",
+    "lib",
+    "link",
+    "lints",
+    "test",
+    "toolchain",
+    "wasm",
+    "workspace",
+];
+
 /// `[package]` keys recognized in v1. Beyond `name` and `edition` (which drive
 /// compilation), `version` and `authors` are accepted silently so that
 /// manifests emitted by `karac init` (which writes the canonical template) do
@@ -781,11 +800,19 @@ impl std::fmt::Display for ManifestError {
                 key,
                 expected,
             ),
+            ManifestError::InvalidPackageName { path, value } if value.is_empty() => write!(
+                f,
+                "`{}`: `[package].name` cannot be empty (got `\"\"`)",
+                path.display(),
+            ),
             ManifestError::InvalidPackageName { path, value } => write!(
                 f,
-                "`{}`: `[package].name` cannot be empty (got `\"{}\"`)",
+                "`{}`: `[package].name = \"{}\"` is not a package name: a dependent imports \
+                 from it by name, `-` read as `_`, so that must be an identifier; \
+                 did you mean `name = \"{}\"`?",
                 path.display(),
                 value,
+                suggest_package_name(value),
             ),
             ManifestError::UnknownEdition { path, value } => write!(
                 f,
@@ -909,7 +936,10 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
 
     let name = match package.get("name") {
         Some(toml::Value::String(s)) => {
-            if s.is_empty() {
+            // A dependent writes the name, `-` read as `_`, as an import
+            // path's first segment, so that form must be an identifier
+            // (review-thread ruling 2026-11-21, B-2026-11-22-34).
+            if s.is_empty() || !is_import_identifier(&s.replace('-', "_")) {
                 return Err(ManifestError::InvalidPackageName {
                     path: path.to_path_buf(),
                     value: s.clone(),
@@ -991,11 +1021,40 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         None => {}
     }
 
+    // `authors` is a list of strings, as `karac init` writes it; a bare
+    // string or a number is a typo to report, not a value to drop
+    // (review-thread ruling 2026-11-21, B-2026-11-22-34).
+    match package.get("authors") {
+        Some(toml::Value::Array(a)) if a.iter().all(|v| v.is_str()) => {}
+        Some(_) => {
+            return Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "authors".to_string(),
+                expected: "a list of strings, such as [\"Alice <alice@example.com>\"]",
+            });
+        }
+        None => {}
+    }
+
     // `version` and `authors` are recognized at `[package]` level but carry no
     // v1 semantic behavior — they parse silently so `karac init`'s canonical
     // manifest does not warn on first build. Anything else inside `[package]`
     // produces a soft warning so real typos surface without blocking the build.
     let mut warnings = Vec::new();
+    // A top-level table the manifest does not read is a typo as likely as an
+    // unknown `[package]` key, so it is reported the same way
+    // (review-thread ruling 2026-11-21, B-2026-11-22-34).
+    for key in table.keys() {
+        if !KNOWN_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            warnings.push(ManifestWarning {
+                line: None,
+                message: format!(
+                    "unknown table `[{key}]` — ignored in 0.8 (recognized: {})",
+                    KNOWN_TOP_LEVEL_KEYS.join(", ")
+                ),
+            });
+        }
+    }
     for key in package.keys() {
         if !KNOWN_PACKAGE_KEYS.contains(&key.as_str()) {
             warnings.push(ManifestWarning {
@@ -2084,12 +2143,24 @@ fn parse_build_targets(path: &Path, table: &toml::Table) -> Result<Vec<String>, 
         return Ok(Vec::new());
     };
     let toml::Value::Array(entries) = targets_value else {
-        return Err(ManifestError::InvalidFieldType {
+        return Err(ManifestError::InvalidBuildTargets {
             path: path.to_path_buf(),
-            key: "build.targets".to_string(),
-            expected: "an array of target names (e.g. [\"native\", \"wasm_wasi\"])",
+            message: "must be an array of target names (e.g. [\"native\", \"wasm_wasi\"])"
+                .to_string(),
         });
     };
+    // An empty list names no target to check or build; leaving it out is
+    // how a package says "the host" (review-thread ruling 2026-11-21,
+    // B-2026-11-22-34).
+    if entries.is_empty() {
+        return Err(ManifestError::InvalidBuildTargets {
+            path: path.to_path_buf(),
+            message: format!(
+                "is empty; name at least one target ({}), or leave the key out to build for the host",
+                crate::target::ALL_CHECK_TARGETS.join(", "),
+            ),
+        });
+    }
     let mut out: Vec<String> = Vec::new();
     for entry in entries {
         let toml::Value::String(name) = entry else {
@@ -2333,6 +2404,29 @@ impl Manifest {
             .or_else(|| declared.map(str::to_string))
             .unwrap_or_else(|| default_import_name(dep))
     }
+}
+
+/// A package name close to `value` that `[package].name` accepts: letters,
+/// digits, `_` and `-` kept, anything else read as `_`, a leading digit
+/// prefixed, and a keyword suffixed with `_pkg`.
+fn suggest_package_name(value: &str) -> String {
+    let mut out: String = value
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
+        out.insert(0, 'p');
+    }
+    if !is_import_identifier(&out.replace('-', "_")) {
+        out.push_str("_pkg");
+    }
+    out
 }
 
 /// `true` when `s` lexes as exactly one plain identifier: no keyword, no
@@ -4256,9 +4350,59 @@ targets = "native"
 "#;
         let err = parse_manifest(&p(), src).unwrap_err();
         match err {
-            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "build.targets"),
-            other => panic!("expected InvalidFieldType on `build.targets`, got {other:?}"),
+            ManifestError::InvalidBuildTargets { message, .. } => {
+                assert!(message.contains("must be an array"), "{message}")
+            }
+            other => panic!("expected InvalidBuildTargets, got {other:?}"),
         }
+    }
+
+    /// An empty list names no target; leaving the key out means the host
+    /// (B-2026-11-22-34).
+    #[test]
+    fn build_targets_empty_is_hard_error() {
+        let src = "[package]\nname = \"hello\"\n\n[build]\ntargets = []\n";
+        let err = parse_manifest(&p(), src).unwrap_err();
+        assert!(
+            err.to_string().contains("`[build].targets`: is empty"),
+            "{err}"
+        );
+    }
+
+    /// The package name, `-` read as `_`, is an import path's first
+    /// segment, so it must be an identifier (B-2026-11-22-34).
+    #[test]
+    fn package_name_must_be_an_identifier() {
+        for (name, suggest) in [("my app", "my_app"), ("fn", "fn_pkg"), ("1st", "p1st")] {
+            let src = format!("[package]\nname = \"{name}\"\n");
+            let err = parse_manifest(&p(), &src).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("did you mean `name = \"{suggest}\"`")),
+                "{err}"
+            );
+        }
+        assert!(parse_manifest(&p(), "[package]\nname = \"kara-data\"\n").is_ok());
+    }
+
+    #[test]
+    fn authors_must_be_a_list_of_strings() {
+        let src = "[package]\nname = \"hello\"\nauthors = \"Alice\"\n";
+        let err = parse_manifest(&p(), src).unwrap_err().to_string();
+        assert!(err.contains("a list of strings"), "{err}");
+        assert!(parse_manifest(&p(), "[package]\nname = \"hello\"\nauthors = []\n").is_ok());
+    }
+
+    #[test]
+    fn unknown_top_level_table_warns() {
+        let src = "[package]\nname = \"hello\"\n\n[dependecies]\nx = \"1\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.message.contains("unknown table `[dependecies]`")),
+            "{:?}",
+            m.warnings
+        );
     }
 
     #[test]

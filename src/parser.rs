@@ -664,6 +664,8 @@ pub struct Parser {
     pub(crate) ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Moved onto [`crate::ast::Program::block_const_spans`] at the end.
     pub(crate) block_const_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Moved onto [`crate::ast::Program::later_track_target_gates`] at the end.
+    pub(crate) later_track_target_gates: Vec<(crate::token::Span, String)>,
     /// Moved onto [`crate::ast::Program::unsuffixed_u128_literals`] at the end.
     pub(crate) unsuffixed_u128_literals: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `mut ref name` binding spans, moved onto
@@ -975,6 +977,7 @@ impl Parser {
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
             block_const_spans: rustc_hash::FxHashSet::default(),
+            later_track_target_gates: Vec::new(),
             unsuffixed_u128_literals: rustc_hash::FxHashSet::default(),
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
             ref_binding_keywords: rustc_hash::FxHashMap::default(),
@@ -1445,6 +1448,7 @@ impl Parser {
             freeze_spans: std::mem::take(&mut self.freeze_spans),
             ref_binding_spans: std::mem::take(&mut self.ref_binding_spans),
             block_const_spans: std::mem::take(&mut self.block_const_spans),
+            later_track_target_gates: std::mem::take(&mut self.later_track_target_gates),
             unsuffixed_u128_literals: std::mem::take(&mut self.unsuffixed_u128_literals),
             mut_ref_binding_spans: std::mem::take(&mut self.mut_ref_binding_spans),
             ref_binding_keywords: std::mem::take(&mut self.ref_binding_keywords),

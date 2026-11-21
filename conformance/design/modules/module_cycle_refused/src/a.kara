@@ -1,0 +1,3 @@
+import b.g;
+pub fn f() -> i64 { g() }
+pub fn h() -> i64 { 2 }

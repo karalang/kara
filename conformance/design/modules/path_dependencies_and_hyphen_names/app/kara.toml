@@ -1,0 +1,6 @@
+[package]
+name = "app"
+version = "0.1.0"
+[dependencies]
+kara-data = { path = "../kara-data" }
+logx = { path = "../logx" }

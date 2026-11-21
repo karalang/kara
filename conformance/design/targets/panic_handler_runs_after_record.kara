@@ -1,0 +1,10 @@
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    eprintln(f"PANIC: {info.message} at {info.location}");
+}
+fn main() {
+    println("before");
+    let v = [1, 2];
+    let i = 7;
+    println(v[i]);
+}

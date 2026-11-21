@@ -1,0 +1,4 @@
+// design.md § Platform files (run on a Linux or macOS host).
+import net.poller.name;
+import foo_linux_x86_64.v;
+fn main() { println(f"{name()} {v()}"); }

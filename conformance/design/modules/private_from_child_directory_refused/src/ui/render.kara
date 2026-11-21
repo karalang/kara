@@ -1,0 +1,2 @@
+import db.helpers.internal;
+pub fn render() -> i64 { internal() }

@@ -52,7 +52,9 @@ fn kata_1080_a_pub_fn_of_a_pub_type_still_may_not() {
     let (clean, diags, _) = checked("public", src);
     assert!(!clean, "a pub type's pub fn leaks the private type");
     assert!(
-        diags.contains("private type 'Hidden' leaks through method return type of 'peek'"),
+        diags.contains(
+            "type 'Hidden', which is not `pub`, leaks through method return type of 'peek'"
+        ),
         "{diags}"
     );
 }

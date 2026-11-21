@@ -832,18 +832,19 @@ pub(super) fn cmd_check_project(
     // which project mode used to parse and then quietly check once under the
     // default target (B-2026-08-20-29).
     let declared: Vec<String> = mf.build_targets.clone();
+    // Check is the verdict, so it checks every declared target and never the
+    // host alone: a one-entry `--targets=wasm_wasi`, or a package whose one
+    // declared target is not the host's, is swept too, or a program check
+    // passes would be refused by `karac build` (B-2026-11-22-31).
+    let declared_off_host = declared.len() > 1
+        || declared
+            .first()
+            .is_some_and(|t| t != crate::target::CURRENT_TARGET);
     let target_sweep: Option<&[String]> = match (targets, target.is_some()) {
-        (Some(list), _)
-            if list.len() > 1
-                || list
-                    .iter()
-                    .any(|t| t == crate::target::ALL_TARGETS_SENTINEL) =>
-        {
-            Some(list)
-        }
+        (Some(list), _) if !list.is_empty() => Some(list),
         // An explicit singular `--target=` is a request for ONE target and
         // outranks the manifest's list.
-        (None, false) if declared.len() > 1 => Some(&declared),
+        (None, false) if declared_off_host => Some(&declared),
         _ => None,
     };
     if let Some(list) = target_sweep {
@@ -873,8 +874,10 @@ pub(super) fn cmd_check_project(
             }
             process::exit(1);
         }
+        // Named as the package's other files are, from where check runs,
+        // not by its absolute path (B-2026-11-22-33).
         cmd_check(
-            &entry.display().to_string(),
+            &super::project_v2::shown(&entry),
             output,
             None,
             None,

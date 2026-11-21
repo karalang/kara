@@ -1,0 +1,5 @@
+fn fetch() -> i64 {
+    match TcpStream.connect("127.0.0.1:1") { Ok(_) => 1, Err(_) => 0 }
+}
+fn helper() -> i64 { fetch() }
+fn main() { let x: i64 = "s"; println(helper()); }

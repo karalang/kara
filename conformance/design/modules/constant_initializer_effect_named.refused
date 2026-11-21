@@ -1,0 +1,2 @@
+constant 'X' initializer must be a compile-time constant
+the initializer of constant 'X' performs `writes(Stdout)` here, through `shout`

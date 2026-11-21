@@ -1,0 +1,2 @@
+import logx.log;
+fn main() { println(log()); }

@@ -1,0 +1,5 @@
+fn shout() -> i64 { println("computing"); 42 }
+
+const ANSWER: i64 = shout();
+
+fn main() { println(ANSWER); }

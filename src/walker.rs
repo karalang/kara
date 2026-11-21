@@ -284,7 +284,7 @@ impl std::fmt::Display for WalkerError {
 
 fn format_module_path(path: &[String]) -> String {
     if path.is_empty() {
-        "<crate root>".to_string()
+        "(package root)".to_string()
     } else {
         path.join(".")
     }

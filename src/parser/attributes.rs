@@ -389,6 +389,10 @@ impl super::Parser {
                     .and_then(crate::target::classify_target_arg);
                 match classified {
                     Some((target_name, negated)) => {
+                        if !negated && crate::target::later_track(&target_name).is_some() {
+                            self.later_track_target_gates
+                                .push((arg.span, target_name.clone()));
+                        }
                         if !crate::target::V1_TARGETS.contains(&target_name.as_str()) {
                             self.errors.push(super::ParseError {
                                 kind: crate::parser::ParseErrorKind::Syntax,

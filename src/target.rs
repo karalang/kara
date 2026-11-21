@@ -714,7 +714,11 @@ pub fn extra_check_targets_for(items: &[Item], base: &str) -> Vec<&'static str> 
             if spec.is_active_on(base) {
                 continue;
             }
-            for target in V1_TARGETS {
+            // A later track's target (`gpu`, `wasm_browser`) gets no pass of
+            // its own: it is not in v1, so an item gated only on it does not
+            // exist in a v1 build (review-thread ruling 2026-11-21,
+            // B-2026-11-22-35; the typechecker's `later_track` warning says so).
+            for target in V1_TARGETS.iter().filter(|t| later_track(t).is_none()) {
                 if *target != base && spec.is_active_on(target) && !out.contains(target) {
                     out.push(target);
                 }
@@ -849,18 +853,26 @@ mod extra_check_target_tests {
     #[test]
     fn positive_gate_names_the_target_to_check_under() {
         assert_eq!(
-            extra("#[target(wasm_browser)]\npub fn f() {}\nfn main() {}\n"),
-            vec!["wasm_browser"],
+            extra("#[target(wasm_wasi)]\npub fn f() {}\nfn main() {}\n"),
+            vec!["wasm_wasi"],
         );
+    }
+
+    /// A later track's target (`gpu`, `wasm_browser`) is in no v1 build, so
+    /// check runs no pass for it (B-2026-11-22-35).
+    #[test]
+    fn later_track_gate_needs_no_pass() {
+        assert!(extra("#[target(wasm_browser)]\npub fn f() {}\nfn main() {}\n").is_empty());
+        assert!(extra("#[target(gpu)]\npub fn f() {}\nfn main() {}\n").is_empty());
     }
 
     #[test]
     fn multi_name_gate_yields_every_admitted_target_in_canonical_order() {
-        // Both are admitted and the two differ in provided resources, so
-        // checking under only one would leave the other unexamined.
+        // Both are admitted, so checking under neither would leave the
+        // body unexamined; the later-track `wasm_browser` adds no pass.
         assert_eq!(
             extra("#[target(wasm_wasi, wasm_browser)]\npub fn f() {}\nfn main() {}\n"),
-            vec!["wasm_browser", "wasm_wasi"],
+            vec!["wasm_wasi"],
         );
     }
 
@@ -875,7 +887,7 @@ mod extra_check_target_tests {
     fn negated_gate_excluding_native_covers_the_rest() {
         assert_eq!(
             extra("#[target(not(native))]\npub fn f() {}\nfn main() {}\n"),
-            vec!["wasm_browser", "wasm_wasi", "gpu"],
+            vec!["wasm_wasi"],
         );
     }
 
@@ -883,10 +895,10 @@ mod extra_check_target_tests {
     fn repeated_gates_dedupe() {
         assert_eq!(
             extra(
-                "#[target(wasm_browser)]\npub fn a() {}\n\
-                 #[target(wasm_browser)]\npub struct S { x: i32 }\nfn main() {}\n"
+                "#[target(wasm_wasi)]\npub fn a() {}\n\
+                 #[target(wasm_wasi)]\npub struct S { x: i32 }\nfn main() {}\n"
             ),
-            vec!["wasm_browser"],
+            vec!["wasm_wasi"],
         );
     }
 }

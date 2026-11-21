@@ -1,0 +1,5 @@
+struct Hidden { n: i64 }
+pub fn make() -> Hidden { Hidden { n: 1 } }
+pub fn take(h: Hidden) -> i64 { 1 }
+pub struct S { pub h: Hidden }
+pub enum E { A(Hidden) }

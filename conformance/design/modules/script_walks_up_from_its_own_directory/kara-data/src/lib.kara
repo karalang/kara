@@ -1,0 +1,2 @@
+pub fn col() -> String { "col" }
+fn internal() -> i64 { 1 }

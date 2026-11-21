@@ -1598,7 +1598,7 @@ impl Cycle {
 
 fn format_module_path(path: &[String]) -> String {
     if path.is_empty() {
-        "<crate root>".to_string()
+        "(package root)".to_string()
     } else {
         path.join(".")
     }
@@ -2191,6 +2191,6 @@ mod tests {
         );
         let cycles = detect_cycles(&tree);
         let rendered = cycles[0].format(&tree);
-        assert_eq!(rendered, "<crate root> → helper → <crate root>");
+        assert_eq!(rendered, "(package root) → helper → (package root)");
     }
 }

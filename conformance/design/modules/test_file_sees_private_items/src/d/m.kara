@@ -1,0 +1,1 @@
+private fn k() -> i64 { 2 }

@@ -1,0 +1,7 @@
+// design.md § The package name in paths: a dependency's path starts with
+// its name, `-` mapped to `_`; two dependencies' `utils` stay distinct.
+import kara_data.col;
+import kara_data.utils.x.u as du;
+import logx.utils.x.u as lu;
+import logx.log;
+fn main() { println(f"{col()} {du()} {lu()} {log()}"); }

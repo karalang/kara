@@ -1,0 +1,2 @@
+a constant declared in a block takes no visibility keyword
+remove `pub`

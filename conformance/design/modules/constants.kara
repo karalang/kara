@@ -1,0 +1,22 @@
+// design.md § Constants: the allowed initializers, a block constant, and
+// each use a fresh value.
+struct Point { x: i64, y: i64 }
+pub const MAX_RETRIES: i32 = 5;
+pub const TIMEOUT_MS: i64 = 60 * 1000;
+pub const APP_NAME: Str = "karac";
+const ORIGIN: Point = Point { x: 0, y: 0 };
+const T: (i64, bool) = (1, true);
+const A: Array[i64, 3] = [1, 2, 3];
+const Z: Array[i64, 4] = [0; 4];
+const NEXT: i32 = MAX_RETRIES + 1;
+const OPT: Option[i64] = Some(42);
+const C: char = 'x';
+const BIG: bool = TIMEOUT_MS > 1000 and true;
+fn main() {
+    let mut p = ORIGIN;
+    p.x = 5;
+    let q = ORIGIN;
+    println(f"{MAX_RETRIES} {TIMEOUT_MS} {APP_NAME} {p.x} {q.x} {T.0} {A[2]} {Z[3]} {NEXT} {OPT.unwrap()} {C} {BIG}");
+    const MOD: i64 = 1_000_000_007;
+    println(MOD % 10);
+}

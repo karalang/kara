@@ -266,6 +266,38 @@ impl<'a> super::TypeChecker<'a> {
         self.type_error(message, span, kind);
     }
 
+    /// `#[target(gpu)]` / `#[target(wasm_browser)]`: a later track's target
+    /// is accepted, so a program written for it still builds, but it is not
+    /// in v1, so an item gated only on it does not exist in a v1 build and no
+    /// check pass runs for it (review-thread ruling 2026-11-21,
+    /// B-2026-11-22-35).
+    fn warn_later_track_targets(&mut self) {
+        if self.compiling_stdlib {
+            return;
+        }
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let gates: Vec<(Span, String)> = self
+            .program
+            .later_track_target_gates
+            .iter()
+            .filter(|(span, _)| span.offset < library)
+            .cloned()
+            .collect();
+        for (span, name) in gates {
+            let track = crate::target::later_track(&name).unwrap_or("a later track");
+            self.type_lint_warning(
+                format!(
+                    "`#[target({name})]` names a target that is not in v1 ({track}; design.md \
+                     § 16): an item gated only on it does not exist in a v1 build, and \
+                     `karac check` does not check it"
+                ),
+                span,
+                TypeErrorKind::LaterTrack,
+                "later_track",
+            );
+        }
+    }
+
     fn warn_later_track(&mut self, f: &Function, derive_backers: &HashSet<String>) {
         if f.stdlib_origin || self.compiling_stdlib {
             return;
@@ -467,6 +499,7 @@ impl<'a> super::TypeChecker<'a> {
         for item in items {
             self.refuse_deferred_item(item);
         }
+        self.warn_later_track_targets();
         self.warn_acronym_names();
         // A `#[deprecated]` trait in a type's own bound warns, inside the
         // declaration's lint frame (B-2026-11-18-41).
@@ -1270,7 +1303,7 @@ impl<'a> super::TypeChecker<'a> {
                 if type_vis.get(last).copied() == Some(false) {
                     self.type_error(
                         format!(
-                            "private trait '{last}' leaks through a bound of '{owner}': a \
+                            "trait '{last}', which is not `pub`, leaks through a bound of '{owner}': a \
                              caller must implement it to call '{owner}' and cannot name it; \
                              mark the trait `pub` or remove the bound from the public surface"
                         ),
@@ -1320,7 +1353,7 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(false) = type_vis.get(&last).copied() {
                     self.type_error(
                         format!(
-                            "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
+                            "type '{}', which is not `pub`, leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
                             last, context, owner
                         ),
                         ty.span,
@@ -1386,7 +1419,7 @@ impl<'a> super::TypeChecker<'a> {
                         if let Some(false) = type_vis.get(last).copied() {
                             self.type_error(
                                 format!(
-                                    "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
+                                    "type '{}', which is not `pub`, leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
                                     last, context, owner
                                 ),
                                 ty.span,
@@ -1413,7 +1446,7 @@ impl<'a> super::TypeChecker<'a> {
                         if let Some(false) = type_vis.get(last).copied() {
                             self.type_error(
                                 format!(
-                                    "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
+                                    "type '{}', which is not `pub`, leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
                                     last, context, owner
                                 ),
                                 ty.span,

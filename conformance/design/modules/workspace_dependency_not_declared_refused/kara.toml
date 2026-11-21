@@ -1,0 +1,5 @@
+[workspace]
+members = ["core"]
+
+[workspace.dependencies]
+logx = "1.0"

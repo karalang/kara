@@ -1,0 +1,5 @@
+// design.md § Visibility: `private` reaches its directory; the default
+// reaches the whole package.
+import db.connection.conn;
+import ui.render.render;
+fn main() { println(conn() + render()); }

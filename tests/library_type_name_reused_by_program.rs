@@ -59,7 +59,7 @@ fn main() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{err}");
     assert!(
-        err.contains("private type 'Receiver' leaks through return type of 'make'"),
+        err.contains("type 'Receiver', which is not `pub`, leaks through return type of 'make'"),
         "{err}"
     );
 }

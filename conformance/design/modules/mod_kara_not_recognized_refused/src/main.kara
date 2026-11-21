@@ -1,0 +1,2 @@
+import db.f;
+fn main() { println(f()); }

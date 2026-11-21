@@ -1,0 +1,2 @@
+pub fn shared() -> String { "net" }
+pub fn only_net() -> String { "only" }

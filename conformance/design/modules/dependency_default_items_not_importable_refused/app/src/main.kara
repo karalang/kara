@@ -1,0 +1,2 @@
+import kara_data.internal;
+fn main() { println(internal()); }

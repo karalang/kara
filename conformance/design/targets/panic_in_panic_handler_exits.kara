@@ -1,0 +1,3 @@
+#[panic_handler]
+fn on_panic(info: PanicInfo) { panic("again"); }
+fn main() { panic("first"); }

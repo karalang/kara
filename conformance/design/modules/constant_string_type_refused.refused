@@ -1,0 +1,2 @@
+'String', which is heap-allocated
+use 'Str'

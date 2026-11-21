@@ -1,0 +1,1 @@
+pub fn println(s: String) with writes(Stdout) { print(f"mine:{s}\n") }

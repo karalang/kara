@@ -1,0 +1,2 @@
+import kara_data.col;
+fn main() { println(col()); }

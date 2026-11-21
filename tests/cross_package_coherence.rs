@@ -146,7 +146,7 @@ fn a_pub_fn_bounded_on_a_private_trait_leaks_it() {
     let (ok, out) = check(&dir.join("lib"));
     assert!(!ok, "{out}");
     assert!(
-        out.contains("E0221") && out.contains("private trait 'Hid'"),
+        out.contains("E0221") && out.contains("trait 'Hid', which is not `pub`"),
         "{out}"
     );
     assert!(

@@ -1,0 +1,5 @@
+[package]
+name = "logx"
+version = "0.1.0"
+[dependencies]
+app = { path = "../app" }

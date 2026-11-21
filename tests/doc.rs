@@ -911,7 +911,7 @@ fn doc_signature_renders_no_with_clause_for_pure_pub_fn() {
     let scratch = ScratchDir::new("pure-fn");
     scratch.write(
         "kara.toml",
-        "[package]\nname = \"pure\"\nedition = \"2026\"\n",
+        "[package]\nname = \"purefn\"\nedition = \"2026\"\n",
     );
     scratch.write(
         "src/main.kara",

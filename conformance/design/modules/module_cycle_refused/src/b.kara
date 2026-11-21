@@ -1,0 +1,2 @@
+import a.h;
+pub fn g() -> i64 { h() }

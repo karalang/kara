@@ -1,0 +1,2 @@
+import d.m.k;
+test "sees private" { assert_eq(k(), 2); }

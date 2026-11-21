@@ -1,0 +1,2 @@
+`[package].name = "my app"` is not a package name
+did you mean `name = "my_app"`?

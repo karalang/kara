@@ -108,12 +108,6 @@ const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[];
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
     (
-        "ssr_counter/ssr_counter.kara",
-        "typecheck under wasm_browser: `pub fn hydrate` is a WASM export, which \
-         went to the archive with the legacy backend at M3 and `karac check` \
-         refuses by name.",
-    ),
-    (
         "interop/kernel.kara",
         "typecheck: `pub extern \"C\" fn` is the exported C ABI, which went to \
          the archive with the legacy backend at M3 and `karac check` refuses by name.",

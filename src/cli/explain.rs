@@ -939,6 +939,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "L0003",
         eff("PureLoopInPar", Some(DiagnosticClass::LintWarning)),
     ),
+    ("L0004", eff("ConstInitEffectNote", None)),
     // ── ownership ───────────────────────────────────────────────
     //
     // `N0503` / `N0507` are notes on the same `OwnershipErrorKind` enum as the
@@ -3312,6 +3313,17 @@ const CODE_PROSE: &[(&str, &str)] = &[
          literals, and other constants (design.md § Constants). A function \
          call is evaluated at run time. Compute the value in `main` and \
          pass it down (module-level cells such as `LazyLock` are deferred).",
+    ),
+    (
+        "L0004",
+        "A note beside E_MODULE_BINDING_EFFECTFUL_INIT: the constant's \
+         initializer calls a function that performs an effect, and the note \
+         names that effect at the call (`writes(Stdout)` through `println`, \
+         `reads(Fs)` through a loader). A constant is computed at compile \
+         time, before any provider exists, so its initializer can have no \
+         effects (design.md § Constants). The note never fails a build on its \
+         own; the error beside it does. Build the value in `main`, or a \
+         function it calls, and pass it down.",
     ),
     (
         "E_MODULE_BINDING_HEAP_TYPE",
@@ -7002,6 +7014,7 @@ mod tests {
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),
+            ("L0004", E::ConstInitEffectNote),
             ("E0802", E::GpuEffectViolation),
             ("E0230", E::ImplExceedsTraitCeiling),
         ];

@@ -1,0 +1,1 @@
+private fn h() -> i64 { 2 }

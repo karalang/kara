@@ -1,0 +1,1 @@
+fn main() { let n = 3; const K: i64 = n + 1; println(K); }

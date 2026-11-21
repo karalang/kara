@@ -1,0 +1,2 @@
+`#[target(wasm_browser)]` names a target that is not in v1
+`#[target(gpu)]` names a target that is not in v1

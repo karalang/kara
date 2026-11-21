@@ -1,0 +1,3 @@
+#[target(wasm_wasi)]
+fn g() -> i64 { 2 }
+fn main() { println(g()); }

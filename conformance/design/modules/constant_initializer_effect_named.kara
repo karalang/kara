@@ -1,0 +1,3 @@
+fn shout() -> i64 { println("x"); 1 }
+const X: i64 = shout() + 1;
+fn main() { println(X); }

@@ -2399,13 +2399,21 @@ pub(super) fn render_target_skip_note(
     skipped: &std::collections::HashMap<String, String>,
     scope: &str,
 ) -> Option<String> {
-    if skipped.is_empty() {
-        return None;
-    }
+    // An item gated only on a later track's target (`gpu`, `wasm_browser`)
+    // exists in no v1 build and no `--targets` value checks it; the
+    // `later_track` warning at its attribute says so (B-2026-11-22-35).
+    let later_only = |spec: &str| {
+        spec.split(", ")
+            .all(|t| crate::target::later_track(t.trim()).is_some())
+    };
     let mut items: Vec<_> = skipped
         .iter()
+        .filter(|(_, spec)| !later_only(spec))
         .map(|(name, spec)| format!("{name} ({spec})"))
         .collect();
+    if items.is_empty() {
+        return None;
+    }
     items.sort();
     let n = items.len();
     let plural = if n == 1 { "" } else { "s" };
@@ -3534,6 +3542,8 @@ pub(crate) fn effect_error_code(
         // `mutual_recursion_note` — a note, never an error, exactly as
         // design.md words it ("emits a note (not an error)").
         crate::effectchecker::EffectErrorKind::MutualRecursionNote => ("L0002", "note"),
+        // The effect behind a refused constant initializer (B-2026-11-22-32).
+        crate::effectchecker::EffectErrorKind::ConstInitEffectNote => ("L0004", "note"),
         // `pure_loop_in_par` — design.md spells it `warn[...]`, so it
         // is a WARNING: advisory like the two notes above (it never
         // blocks a build), but rendered and counted as a warning

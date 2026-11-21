@@ -1,0 +1,3 @@
+// design.md § The prelude: any import shadows a prelude name.
+import out.println;
+fn main() { println("x"); }

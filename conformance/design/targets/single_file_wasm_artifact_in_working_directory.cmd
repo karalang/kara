@@ -1,0 +1,1 @@
+[[['build', '--target=wasm_wasi', 'prog/hello.kara'], ['@node', '--no-turbo-fast-api-calls', '-e', 'const {WASI}=require("wasi");const fs=require("fs");const w=new WASI({version:"preview1"});WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:w.wasiImport}).then(({instance})=>{w.start(instance)})', 'hello.wasm']]]

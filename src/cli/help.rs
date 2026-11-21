@@ -251,8 +251,8 @@ file of a package with other modules builds the whole package. Without a
 file, builds the package in the current directory from `src/main.kara` into
 `<root>/dist/native/<package name>` (`dist/wasm/<package name>.wasm` with
 `--target=wasm_wasi`). The program is checked as `karac check` checks it,
-built to MIR and compiled to native code (KARAC_MIR_OPT=0..3 sets the IR
-optimisation level, -O2 by default). The flags marked Not in 0.8 below are
+built to MIR and compiled to native code, at -O2 unless -O or
+KARAC_OPT_LEVEL names another level. The flags marked Not in 0.8 below are
 refused by name. A library package (`src/lib.kara`) has no `main`: its build
 checks it, and the packages that depend on it build it.
 

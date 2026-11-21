@@ -1,0 +1,3 @@
+import net.resp.*;
+import http.resp.*;
+fn main() { println(only_net()); println(shared()); }

@@ -1,0 +1,6 @@
+E0221
+type 'Hidden', which is not `pub`, leaks through
+'make'
+'take'
+'S.h'
+'E.A'
