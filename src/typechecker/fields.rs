@@ -58,9 +58,11 @@ impl<'a> super::TypeChecker<'a> {
     /// receiver leaked through. Numeric tuple indexing (`t.0`) is a distinct AST
     /// node (`TupleIndex`) and never reaches here.
     fn field_access_on_fieldless_type(&mut self, field: &str, obj_ty: &Type, span: &Span) -> Type {
-        // A tuple, closure or function type has no table key; it is named by
-        // its type as written, never by a placeholder.
+        // A tuple, closure or function type is named by its type as written,
+        // never by a placeholder: a tuple's table key is the internal
+        // `Tuple` its trait impls are filed under (B-2026-11-21-30).
         let ty_name = super::types::impl_table_key(obj_ty)
+            .filter(|_| !matches!(obj_ty, Type::Tuple(_)))
             .map(|(n, _)| n)
             .unwrap_or_else(|| super::types::type_display(obj_ty));
         self.type_error(

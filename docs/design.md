@@ -3226,6 +3226,7 @@ For any trait and type, at most one impl applies. The compiler checks this where
 - **Blanket impls.** `impl[T: B1 + B2] Trait for T` is allowed only if the package defines `Trait` (or is the application). Owning one of the bounds is not enough: `T` ranges over every type, so no package owns it.
 - **Inherent impls only on your own types.** A package may write `impl Type { ... }` only for a type it declares; the application exemption does not change this. Outside the standard library, `impl Vec[i64] { ... }` is an error. Write a trait, or wrap the type in a `distinct type`.
 - **`Copy` and `Drop` are exclusive.** See [`Copy`, `Clone` and `Drop`](#copy-clone-and-drop).
+- **Tuples.** A tuple type is foreign to every package, so a program implements its own trait for it (`impl Show for (i64, i64)`), and the trait impls the standard library gives tuples (`Display`, `Clone`, `PartialEq` and the rest, when the elements have them) are the only ones of those traits. An impl's tuple must be concrete for now; one over type parameters (`impl[A: Show, B: Show] Show for (A, B)`) is refused ([deferred.md](deferred.md#generic-trait-impls-for-tuple-types)). A tuple has no inherent impl: write a trait, or wrap it in a struct.
 - **Every impl form follows these rules**: unconditional, conditional, blanket, and impls with associated types.
 
 ```kara
@@ -6414,7 +6415,7 @@ impl[T] MaybeUninit[T] {
 
 **No `mem.uninitialized()`.** Kāra never offers a primitive that hands out a `T` whose bits are uninitialised. Holding such a `T` is immediate undefined behaviour for every type with a validity invariant (`bool`, `char`, references, enum discriminants, `NonZero`, anything with a niche). The function does not exist under any name, and `import std.mem.uninitialized` is an unresolved-name error.
 
-**`mem.zeroed()` is bounded by `T: Pod`.** Zero-filling is well defined exactly when the all-zeros bit pattern is a valid `T`. The stdlib `Pod` marker trait ([§9](#9-traits)) is the precise bound. It is implemented for the integer and float primitives, `bool` (zero is `false`), and tuples, arrays and structs of `Pod`. It is not implemented for any type with a validity invariant: references, function pointers, `NonZero`, enums with no zero-discriminant variant, `Option[ref T]`. With the bound, `mem.zeroed()` returns a `T` directly, in safe code, with `T` taken from the expected type:
+**`mem.zeroed()` is bounded by `T: Pod`.** Zero-filling is well defined exactly when the all-zeros bit pattern is a valid `T`. The stdlib `Pod` marker trait ([§9](#9-traits)) is the precise bound. It is implemented for the integer and float primitives, `bool` (zero is `false`), and tuples and arrays of `Pod`. A struct is `Pod` only when it says so: it may `#[derive(Pod)]`, or write an empty `impl Pod for S { }`, when every field is `Pod`, and the compiler checks each field. The opt-in is deliberate, as `Copy`'s is: an automatic `Pod` would change silently when a field is added (review-thread ruling 2026-11-21). It is not implemented for any type with a validity invariant: references, function pointers, `NonZero`, enums with no zero-discriminant variant, `Option[ref T]`. With the bound, `mem.zeroed()` returns a `T` directly, in safe code, with `T` taken from the expected type:
 
 ```kara
 let buf: Array[u8, 4096] = mem.zeroed();    // ok: u8 is Pod, all zeros is valid

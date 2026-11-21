@@ -4976,10 +4976,12 @@ impl TraitImplOrdinals {
 /// `None` for non-Path target types — those don't currently surface a
 /// `Type.method` callee key from the typechecker either.
 fn impl_target_name(target_type: &TypeExpr) -> Option<String> {
-    if let TypeKind::Path(path) = &target_type.kind {
-        path.segments.last().cloned()
-    } else {
-        None
+    match &target_type.kind {
+        TypeKind::Path(path) => path.segments.last().cloned(),
+        // A tuple impl's methods, keyed as the typechecker records their
+        // calls: `(i64, i64).bump` (B-2026-11-21-30).
+        TypeKind::Tuple(_) => Some(crate::formatter::render_type_expr(target_type)),
+        _ => None,
     }
 }
 

@@ -707,6 +707,10 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
         // did not. Shared structs are non-generic at v1, so there are no args
         // to carry (see `Type::Shared`'s own doc).
         Type::Shared(name) => Some((name.clone(), Vec::new())),
+        // A tuple keys under `Tuple` with its elements, as a slice keys
+        // under `Slice` with its element: `impl Show for (i64, i64)` answers
+        // for that tuple only (B-2026-11-21-30).
+        Type::Tuple(elems) => Some(("Tuple".to_string(), elems.clone())),
         Type::Ref(inner) | Type::MutRef(inner) => impl_table_key(inner),
         _ => None,
     }

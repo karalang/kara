@@ -2869,11 +2869,14 @@ fn collect_method_self_modes_in_items(items: &[Item]) -> FxHashMap<String, SelfP
     for item in items {
         match item {
             Item::ImplBlock(impl_block) => {
-                let Some(target_name) = (if let TypeKind::Path(path) = &impl_block.target_type.kind
-                {
-                    path.segments.last().cloned()
-                } else {
-                    None
+                let Some(target_name) = (match &impl_block.target_type.kind {
+                    TypeKind::Path(path) => path.segments.last().cloned(),
+                    // A trait impl for a tuple, keyed as the typechecker
+                    // records its calls: `(i64, i64).bump` (B-2026-11-21-30).
+                    TypeKind::Tuple(_) if impl_block.trait_name.is_some() => {
+                        Some(crate::formatter::render_type_expr(&impl_block.target_type))
+                    }
+                    _ => None,
                 }) else {
                     continue;
                 };

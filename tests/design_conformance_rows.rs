@@ -403,9 +403,8 @@ fn main() { println(f\"{g(1)} {g(true)} {g(2)}\"); }
 }
 
 /// B-2026-11-20-122: a user `Display` for a tuple overlaps the library's
-/// and is refused; a tuple's `to_string()` is the library's rendering. A
-/// user trait's tuple impl is refused until tuple impls land
-/// (B-2026-11-21-30), where it was accepted and then never found.
+/// and is refused; a tuple's `to_string()` is the library's rendering.
+/// A user trait's tuple impl works: tests/tuple_trait_impls.rs.
 #[test]
 fn design_tuple_display_is_the_librarys() {
     let out = refused(
@@ -421,17 +420,6 @@ fn main() { let p = (3, H {}); println(f\"{p}\"); }
         "tuple-to-string",
         "fn main() {\n    let p = (3, \"h\");\n    println(f\"{p}\");\n    println(p.to_string());\n}\n",
         "(3, h)\n(3, h)\n",
-    );
-    let out = refused(
-        "tuple-user-trait",
-        "trait Show { fn show(self) -> String; }
-impl Show for (i64, i64) { fn show(self) -> String { f\"{self.0}-{self.1}\" } }
-fn main() { let p = (1, 2); println(p.show()); }
-",
-    );
-    assert!(
-        out.contains("a trait impl for a tuple type is not supported yet"),
-        "{out}"
     );
 }
 

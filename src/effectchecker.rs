@@ -3009,6 +3009,11 @@ impl<'a> EffectChecker<'a> {
                 Item::ImplBlock(imp) => {
                     let type_name = match &imp.target_type.kind {
                         TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                        // A trait impl for a tuple, keyed by the tuple as
+                        // written: `(i64, i64).show` (B-2026-11-21-30).
+                        TypeKind::Tuple(_) if imp.trait_name.is_some() => {
+                            crate::formatter::render_type_expr(&imp.target_type)
+                        }
                         _ => continue,
                     };
                     for item in &imp.items {
@@ -3291,6 +3296,11 @@ impl<'a> EffectChecker<'a> {
                 Item::ImplBlock(imp) => {
                     let type_name = match &imp.target_type.kind {
                         TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                        // A trait impl for a tuple, keyed by the tuple as
+                        // written: `(i64, i64).show` (B-2026-11-21-30).
+                        TypeKind::Tuple(_) if imp.trait_name.is_some() => {
+                            crate::formatter::render_type_expr(&imp.target_type)
+                        }
                         _ => continue,
                     };
                     let type_sym = self.interner.intern(&type_name);

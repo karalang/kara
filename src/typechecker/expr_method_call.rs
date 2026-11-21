@@ -4102,6 +4102,7 @@ impl<'a> super::TypeChecker<'a> {
         // nominal name so the generic search finds the refinement's own
         // impl (phase-9 step 2, §1C).
         let receiver_for_lookup: Type = receiver_for_method_lookup(&obj_ty);
+        let receiver_for_lookup = self.tuple_receiver_for_impls(receiver_for_lookup);
         // B-2026-08-11-21 leg 2: stash a SCALAR receiver's type at the
         // closing-paren span for `to_string`.
         //

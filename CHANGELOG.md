@@ -44,8 +44,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`impl[T: Display] Display for Vec[T]`) is refused as the concrete form
   was; it replaced or was ignored beside the library's (B-2026-11-20-125).
 - `impl Display for (i64, H)` overlaps the library's tuple `Display` and is
-  refused; a tuple impl of any other trait is refused as not supported yet
-  (B-2026-11-21-30). Both were accepted and then ignored (B-2026-11-20-122).
+  refused; it was accepted and then ignored (B-2026-11-20-122). An impl over
+  type parameters (`impl[A, B] Show for (A, B)`) is refused as not supported
+  yet, and an inherent `impl (i64, i64)` as not allowed (B-2026-11-21-30).
 - A use of an `impl Trait` result after what its signature lends it is
   moved or written: `let it = count_logged(xs, log); drop(log);
   it.count()` is E0516, as design.md § `impl Trait` says. The result
@@ -495,6 +496,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (design.md § Vec; B-2026-11-11-51, tracker B-2026-11-11-81).
 
 ### Added
+
+- A program's trait impl for a concrete tuple type (`impl Show for (i64,
+  i64)`) answers method calls, default methods, `Show.show(p)`, `T: Show`
+  bounds and `dyn Show`, with its receiver mode and effects checked; it was
+  accepted and then never found (B-2026-11-21-30).
 
 - `Mutex[T].try_lock()`: the guard when no task holds the mutex, `None`
   when one does, without waiting, as Rust's `Mutex::try_lock`, Go's

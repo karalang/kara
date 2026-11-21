@@ -3037,49 +3037,77 @@ impl<'a> super::TypeChecker<'a> {
             // parameter's name; a bound asks it through the parameter's
             // bounds (`type_satisfies_bound`), never by that name.
             Type::TypeParam(name) if imp.trait_name.is_some() => (name.clone(), Vec::new()),
-            // A trait impl for a tuple is not registered, so it was accepted
-            // and never used: `f"{p}"` kept the library's text
-            // (B-2026-11-20-122). The library's own `Display`, `Clone`, ..
-            // for tuples makes such an impl an overlap (design.md
-            // § Coherence); any other trait is refused until tuple impls
-            // are registered.
-            Type::Tuple(_) if !self.registering_baked => {
+            // A trait impl for a tuple. The library's own `Display`, `Clone`,
+            // .. for tuples makes an impl of one of those an overlap
+            // (design.md § Coherence, B-2026-11-20-122). Any other trait's
+            // impl for a concrete tuple registers under `Tuple` with the
+            // elements as its arguments, as `impl_table_key` keys a tuple
+            // receiver (B-2026-11-21-30). A tuple with type-parameter
+            // elements (`impl[A, B] Show for (A, B)`) is refused until a
+            // generic tuple impl can be instanced.
+            Type::Tuple(elems) if !self.registering_baked => {
                 let library_start = self.program.library_start.unwrap_or(usize::MAX);
-                if let (Some(t), true) = (
-                    imp.trait_name.as_ref().and_then(|p| p.segments.last()),
-                    imp.span.offset < library_start,
-                ) {
-                    let shown = type_display(&lowered_target);
-                    let builtin = matches!(
-                        t.as_str(),
-                        "Clone"
-                            | "Copy"
-                            | "Debug"
-                            | "Display"
-                            | "Hash"
-                            | "Eq"
-                            | "PartialEq"
-                            | "Ord"
-                            | "PartialOrd"
-                            | "Default"
-                    );
-                    let message = if builtin {
-                        format!(
-                            "conflicting impl: the standard library already implements `{t}` \
-                             for tuples whose elements implement it, so `impl {t} for {shown}` \
-                             overlaps the library's (design.md § Coherence); wrap the tuple \
-                             in a struct to give it its own `{t}`"
-                        )
-                    } else {
-                        format!(
-                            "`impl {t} for {shown}`: a trait impl for a tuple type is not \
-                             supported yet; wrap the tuple in a struct and implement `{t}` \
-                             for the struct"
-                        )
-                    };
-                    self.type_error(message, imp.span, TypeErrorKind::ConflictingImpl);
+                let user = imp.span.offset < library_start;
+                let Some(t) = imp.trait_name.as_ref().and_then(|p| p.segments.last()) else {
+                    if user {
+                        self.type_error(
+                            format!(
+                                "`impl {}`: a tuple type has no inherent impl; wrap the \
+                                 tuple in a struct, or declare a trait and implement it for \
+                                 the tuple",
+                                type_display(&lowered_target)
+                            ),
+                            imp.span,
+                            TypeErrorKind::ConflictingImpl,
+                        );
+                    }
+                    return;
+                };
+                let shown = type_display(&lowered_target);
+                let builtin = matches!(
+                    t.as_str(),
+                    "Clone"
+                        | "Copy"
+                        | "Debug"
+                        | "Display"
+                        | "Hash"
+                        | "Eq"
+                        | "PartialEq"
+                        | "Ord"
+                        | "PartialOrd"
+                        | "Default"
+                );
+                if builtin {
+                    if user {
+                        self.type_error(
+                            format!(
+                                "conflicting impl: the standard library already implements \
+                                 `{t}` for tuples whose elements implement it, so `impl {t} \
+                                 for {shown}` overlaps the library's (design.md § Coherence); \
+                                 wrap the tuple in a struct to give it its own `{t}`"
+                            ),
+                            imp.span,
+                            TypeErrorKind::ConflictingImpl,
+                        );
+                    }
+                    return;
                 }
-                return;
+                if !elems.iter().all(type_is_fully_concrete) {
+                    if user {
+                        self.type_error(
+                            format!(
+                                "`impl {t} for {shown}`: a trait impl for a tuple whose \
+                                 elements are type parameters is not supported yet; implement \
+                                 `{t}` for each concrete tuple type, or wrap the tuple in a \
+                                 generic struct (deferred.md § Generic trait impls for tuple types)"
+                            ),
+                            imp.span,
+                            TypeErrorKind::ConflictingImpl,
+                        );
+                    }
+                    return;
+                }
+                ("Tuple".to_string(), elems.clone())
             }
             // Other non-path target types are unsupported in v1; bail
             // without registering. Matches the pre-Theme-4 behavior of the

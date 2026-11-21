@@ -1,0 +1,3 @@
+trait Show { fn show(self) -> String; }
+impl[A, B] Show for (A, B) { fn show(self) -> String { "p" } }
+fn main() { }

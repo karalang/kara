@@ -311,6 +311,45 @@ impl<'a> super::TypeChecker<'a> {
         {
             return Some(receiver_for_lookup.clone());
         }
+        // A program's impl of a trait for this tuple type (`impl Show for
+        // (i64, i64)`) answers its methods (B-2026-11-21-30).
+        if let Type::Tuple(elems) = receiver_for_lookup {
+            let impls: Vec<(String, Option<Span>)> = self
+                .env
+                .impls
+                .iter()
+                .filter(|i| i.target_type == "Tuple" && i.target_args == *elems)
+                .filter_map(|i| Some((i.trait_name.clone()?, i.target_span)))
+                .collect();
+            if !impls.is_empty() {
+                // The impl whose method this is, keyed `(i64, i64).show`
+                // as the effect checker and the ownership pass key a tuple
+                // impl's methods (a tuple has no type name of its own).
+                // MIR finds the method by the receiver's type instead.
+                let owners: Vec<&(String, Option<Span>)> = impls
+                    .iter()
+                    .filter(|(t, _)| self.find_trait_method(t, method).is_some())
+                    .collect();
+                if let [(_, Some(at))] = owners.as_slice() {
+                    let shown = self.program.items.iter().find_map(|it| match it {
+                        Item::ImplBlock(b)
+                            if matches!(b.target_type.kind, TypeKind::Tuple(_))
+                                && b.target_type.span == *at =>
+                        {
+                            Some(crate::formatter::render_type_expr(&b.target_type))
+                        }
+                        _ => None,
+                    });
+                    if let Some(shown) = shown {
+                        self.method_callee_types.insert(
+                            crate::resolver::SpanKey::from_span(span),
+                            format!("{shown}.{method}"),
+                        );
+                    }
+                }
+                return None;
+            }
+        }
         if matches!(receiver_for_lookup, Type::Tuple(_)) {
             for arg in args {
                 self.infer_expr(&arg.value);
@@ -359,5 +398,131 @@ impl<'a> super::TypeChecker<'a> {
             return Some(Type::Error);
         }
         None
+    }
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// A tuple receiver with the program's trait impls for tuples
+    /// (B-2026-11-21-30): its elements resolved through the substitutions
+    /// so far, and an element that is still an unsuffixed literal fixed
+    /// to the matching impl's element type, as a literal argument is fixed
+    /// by its parameter. `(1, 2).show()` beside `impl Show for (i64, i64)`
+    /// is that impl's; beside impls for `(i32, i32)` and `(i64, i64)` the
+    /// literals keep their default. Any other receiver is returned as is.
+    pub(super) fn tuple_receiver_for_impls(&mut self, ty: Type) -> Type {
+        let Type::Tuple(elems) = &ty else {
+            return ty;
+        };
+        if !self.env.impls.iter().any(|i| i.target_type == "Tuple") {
+            return ty;
+        }
+        let resolved: Vec<Type> = elems
+            .iter()
+            .map(|e| {
+                super::inference::resolve_type_vars(
+                    e,
+                    &self.env.substitutions,
+                    &std::collections::HashMap::new(),
+                    &self.env.const_substitutions,
+                    &std::collections::HashMap::new(),
+                )
+            })
+            .collect();
+        // The literal kind of each still-open element.
+        let kinds: Vec<Option<super::inference::LiteralKind>> = resolved
+            .iter()
+            .map(|e| match e {
+                Type::TypeVar(v) => self.body_literal_vars.iter().find_map(|s| {
+                    let root = super::inference::resolve_type_var_top(
+                        &Type::TypeVar(s.id),
+                        &self.env.substitutions,
+                    );
+                    (root == Type::TypeVar(*v)).then_some(s.kind)
+                }),
+                _ => None,
+            })
+            .collect();
+        let fits =
+            |impl_elem: &Type, have: &Type, kind: Option<super::inference::LiteralKind>| match kind
+            {
+                Some(super::inference::LiteralKind::Int) => {
+                    matches!(impl_elem, Type::Int(_) | Type::UInt(_))
+                }
+                Some(super::inference::LiteralKind::Float) => matches!(impl_elem, Type::Float(_)),
+                None => impl_elem == have,
+            };
+        let candidates: Vec<Vec<Type>> = self
+            .env
+            .impls
+            .iter()
+            .filter(|i| {
+                i.target_type == "Tuple"
+                    && i.target_args.len() == resolved.len()
+                    && i.target_args
+                        .iter()
+                        .zip(resolved.iter().zip(&kinds))
+                        .all(|(ie, (h, k))| fits(ie, h, *k))
+            })
+            .map(|i| i.target_args.clone())
+            .collect();
+        let mut distinct: Vec<Vec<Type>> = Vec::new();
+        for c in candidates {
+            if !distinct.contains(&c) {
+                distinct.push(c);
+            }
+        }
+        let [chosen] = distinct.as_slice() else {
+            return Type::Tuple(resolved);
+        };
+        for (e, c) in resolved.iter().zip(chosen) {
+            if let Type::TypeVar(v) = e {
+                self.env.substitutions.insert(*v, c.clone());
+            }
+        }
+        Type::Tuple(chosen.clone())
+    }
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// A tuple whose elements include an open unsuffixed literal, with each
+    /// such element at its default (`i64`, `f64`) and the rest resolved; or
+    /// `None` when `ty` is not a tuple or the program has no tuple impl.
+    pub(super) fn tuple_with_literal_defaults(&self, ty: &Type) -> Option<Type> {
+        let Type::Tuple(elems) = ty else {
+            return None;
+        };
+        if !self.env.impls.iter().any(|i| i.target_type == "Tuple") {
+            return None;
+        }
+        let out = elems
+            .iter()
+            .map(|e| {
+                let r = super::inference::resolve_type_vars(
+                    e,
+                    &self.env.substitutions,
+                    &std::collections::HashMap::new(),
+                    &self.env.const_substitutions,
+                    &std::collections::HashMap::new(),
+                );
+                let Type::TypeVar(v) = r else { return r };
+                let kind = self.body_literal_vars.iter().find_map(|s| {
+                    let root = super::inference::resolve_type_var_top(
+                        &Type::TypeVar(s.id),
+                        &self.env.substitutions,
+                    );
+                    (root == Type::TypeVar(v)).then_some(s.kind)
+                });
+                match kind {
+                    Some(super::inference::LiteralKind::Int) => {
+                        Type::Int(super::types::IntSize::I64)
+                    }
+                    Some(super::inference::LiteralKind::Float) => {
+                        Type::Float(super::types::FloatSize::F64)
+                    }
+                    None => r,
+                }
+            })
+            .collect();
+        Some(Type::Tuple(out))
     }
 }

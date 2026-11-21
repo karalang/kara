@@ -7323,6 +7323,12 @@ A published measurement of how *repairable* a toolchain is by an LLM that has ne
 
 Language extensions and library additions that have a design but no track. Each waits for programs that need it.
 
+### Generic trait impls for tuple types
+
+**Status (2026-11-21, B-2026-11-21-30):** a trait impl for a concrete tuple (`impl Show for (i64, i64)`) works on every surface. One whose elements are type parameters, `impl[A: Show, B: Show] Show for (A, B)`, is refused: "a trait impl for a tuple whose elements are type parameters is not supported yet".
+
+**Why deferred:** a concrete tuple impl is keyed by its exact element types, as an `Array[i64, 3]` impl is. A generic one needs the impl table to match a tuple receiver by unification against the impl's parameters, solving `A` and `B` per call, and MIR to instance the impl's methods per tuple as it does for a blanket impl. No program in the corpus or the katas needs it yet; a struct wrapper (`struct Pair[A, B] { a: A, b: B }`) covers the case today.
+
 ### References to References (`mut ref (ref T)`)
 
 **Decision (2026-11-20, review thread, B-2026-11-20-6):** v1 has no reference to a reference. A borrow of a borrow is the borrow: `ref p` with `p: ref T` is a §5.9 reborrow of type `ref T`, and `mut ref p` is a mutable reborrow through a shared reference, refused (E0517). The same collapse applies through generic substitution, so `mut ref T` at `T = ref String` is `ref String`. A generic that writes through `mut ref T` therefore cannot be instantiated at a shared-reference `T`; the checker refuses the call with a diagnostic that names the collapse and suggests an owned `T` or reassigning the reference local directly.

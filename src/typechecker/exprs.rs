@@ -11095,6 +11095,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Some(if imp.target_args.is_empty() {
                     imp.target_type.clone()
+                } else if imp.target_type == "Tuple" {
+                    // A tuple impl names its tuple (B-2026-11-21-30).
+                    type_display(&Type::Tuple(imp.target_args.clone()))
                 } else {
                     let args = imp
                         .target_args
@@ -12510,6 +12513,10 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         // Other traits: explicit impl in the table, with supertrait closure.
+        // A tuple's open literal elements read as their default, which is
+        // what they will be (B-2026-11-21-30).
+        let defaulted = self.tuple_with_literal_defaults(ty);
+        let ty = defaulted.as_ref().unwrap_or(ty);
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
             return false;
         };
