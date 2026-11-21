@@ -1105,6 +1105,13 @@ pub struct Program {
     /// `as T` takes the parentheses too and leaves `let run = j - i;`
     /// (kata 1128, B-2026-11-11-87).
     pub whole_value_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// A `let` that binds names to themselves and nothing else, `let n =
+    /// n;` or `let (a, b) = (a, b);`, with no `mut` and no type, keyed by
+    /// the statement's start offset: the source its deletion takes, the
+    /// line's indentation and newline too when the statement is alone on
+    /// its line. What `karac fix` leaves of `let n = n as i64;` once the
+    /// cast goes (katas 2851, 2852); the `self_rebinding` lint reads it.
+    pub self_rebinding_lets: rustc_hash::FxHashMap<usize, Span>,
     /// A cast that is a whole index, `pos[(b - b'a') as usize]`, keyed by
     /// its span: the slot takes an `i64`, so an `as usize` over a narrower
     /// integer can go entirely rather than become `as i64`
@@ -1660,6 +1667,24 @@ pub use types::*;
 
 /// The root binding name of an assignment target place expression
 /// (`c` → `c`; `c.f` / `c[i]` / `c.0` → `c`). `None` for a non-place root.
+/// Whether a `let`'s pattern and value are the same names, `n` and `n`,
+/// or a tuple of them, `(a, b)` and `(a, b)`: a binding of each name to
+/// itself.
+pub fn binds_names_to_themselves(pattern: &Pattern, value: &Expr) -> bool {
+    match (&pattern.kind, &value.kind) {
+        (PatternKind::Binding(name), ExprKind::Identifier(read)) => name == read,
+        (PatternKind::Tuple(patterns), ExprKind::Tuple(values)) => {
+            !patterns.is_empty()
+                && patterns.len() == values.len()
+                && patterns
+                    .iter()
+                    .zip(values)
+                    .all(|(p, v)| binds_names_to_themselves(p, v))
+        }
+        _ => false,
+    }
+}
+
 pub fn assign_target_root(target: &Expr) -> Option<String> {
     match &target.kind {
         ExprKind::Identifier(n) => Some(n.clone()),

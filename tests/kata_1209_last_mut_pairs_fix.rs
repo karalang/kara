@@ -84,7 +84,7 @@ fn main() {
                 stack.pop();
             }
         } else { stack.push((c, 1)); }"
-        ) && text.contains("let k = k;")
+        ) && !text.contains("let k = k")
             && text.contains("Vec[(char, i64)]"),
         "{text}"
     );

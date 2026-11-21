@@ -342,6 +342,13 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              `(x.len() - n).max(0)`.",
     },
     LintInfo {
+        name: "self_rebinding",
+        default_level: LintLevel::Warn,
+        description: "A `let` that binds names to themselves and nothing else (`let n = n;`, \
+             what `karac fix` leaves of Rust's `let n = n as i64;`), where none of them is \
+             `mut`. `karac fix` deletes it.",
+    },
+    LintInfo {
         name: "weak_read_unwrap",
         default_level: LintLevel::Warn,
         description:

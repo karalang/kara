@@ -3017,6 +3017,7 @@ impl<'a> super::TypeChecker<'a> {
         // declarations — never legal on function generic params
         // (design.md § Variance).
         self.reject_user_variance_markers(&f.generic_params, false);
+        self.lint_self_rebinding(f);
 
         let mut gp = enclosing_generics.to_vec();
         gp.extend(Self::generic_param_names(&f.generic_params));
@@ -13925,13 +13926,17 @@ impl<'a> super::TypeChecker<'a> {
                     // fixed yet stays open here, so the place it is stored
                     // into fixes it below, as a typed `let` does: `res = k`
                     // after `let k = t[1]` with `t = Vec.filled(n, 0)` and
-                    // `res: i32` (kata 1139).
-                    let rhs_ty =
-                        if matches!(value.kind, ExprKind::Identifier(_) | ExprKind::Index { .. }) {
-                            self.infer_expr_open(value)
-                        } else {
-                            self.infer_expr(value)
-                        };
+                    // `res: i32` (kata 1139). So does arithmetic on one
+                    // (`dist[r][c] = dist[i][j] + 1` over a `Vec.filled(n,
+                    // -1)`, design.md §8 Literals, B-2026-11-21-201).
+                    let rhs_ty = if matches!(
+                        value.kind,
+                        ExprKind::Identifier(_) | ExprKind::Index { .. } | ExprKind::Binary { .. }
+                    ) {
+                        self.infer_expr_open(value)
+                    } else {
+                        self.infer_expr(value)
+                    };
                     self.reject_index_move_non_copy(value, &rhs_ty);
                     // B-2026-09-01-4 — sibling of the rule above, same
                     // value position. v2 core §1.1: assigning to a `ref`

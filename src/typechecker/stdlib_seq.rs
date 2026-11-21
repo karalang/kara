@@ -1012,7 +1012,7 @@ impl<'a> super::TypeChecker<'a> {
                     } else if !is_str_like(&arg_ty) && !is_char_arg(&arg_ty) {
                         self.type_error(
                             format!(
-                                "'find' expects a String or char needle, found '{}'",
+                                "'find' takes a `Str` pattern, found '{}'",
                                 type_display(&arg_ty)
                             ),
                             args[0].value.span,

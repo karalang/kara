@@ -3170,7 +3170,7 @@ impl super::Parser {
         self.expect(&Token::LeftBrace)?;
         let mut variants = Vec::new();
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
-            let variant = self.parse_variant()?;
+            let variant = self.parse_variant(!is_pub)?;
             variants.push(variant);
             if !self.eat(&Token::Comma) {
                 break;
@@ -3203,7 +3203,9 @@ impl super::Parser {
         })
     }
 
-    fn parse_variant(&mut self) -> Option<Variant> {
+    /// `offer_rename`: the enum is private, so a variant's every use is in
+    /// this file and a misclassed name can be renamed at each of them.
+    fn parse_variant(&mut self, offer_rename: bool) -> Option<Variant> {
         // Collect any `///` doc comments preceding this variant. Mirrors
         // the item-level pattern in `parse_item` — collect first, then
         // consume via `take_pending_doc` at construction.
@@ -3216,6 +3218,9 @@ impl super::Parser {
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Type, "enum variant", name_span);
+        if offer_rename {
+            self.offer_variant_rename(&name, name_span);
+        }
         // Take the variant-level doc *before* descending into a struct
         // payload — per-field doc collection inside `parse_struct_fields`
         // would otherwise overwrite it. Mirrors the same fix in

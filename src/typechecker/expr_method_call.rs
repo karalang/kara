@@ -639,6 +639,31 @@ impl<'a> super::TypeChecker<'a> {
                 bounds.push(b.clone());
             }
         }
+        // `(1..100).collect().iter()`: a generic call with nothing to say
+        // what its type parameter is, `collect`'s `C` above all, leaves the
+        // receiver that bare parameter. It is not one of this function's,
+        // so a bound here is not what the program lacks (kata 2855).
+        let in_scope = self
+            .node_generic_frames
+            .get(self.current_generic_frame as usize)
+            .is_some_and(|frame| frame.iter().any(|g| g == type_param_name));
+        if bounds.is_empty() && !in_scope {
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            self.type_error(
+                format!(
+                    "no method '{method}' here: the value it is called on still has the \
+                     open type '{type_param_name}' of a generic call with nothing to settle \
+                     it, such as a `collect()` with no target type. Bind the value with its \
+                     type first, `let v: Vec[T] = ...collect();`, and call `{method}` on `v` \
+                     (library/iterators.md, `collect` and `FromIterator`)"
+                ),
+                *span,
+                TypeErrorKind::NoMethodFound,
+            );
+            return Type::Error;
+        }
         let self_ty = Type::TypeParam(type_param_name.to_string());
         self.dispatch_bounded_receiver_method(type_param_name, self_ty, bounds, method, args, span)
     }
@@ -3931,6 +3956,9 @@ impl<'a> super::TypeChecker<'a> {
                 .is_empty()
                 || !self.blanket_impl_candidates(&Type::Str, method).is_empty());
         if obj_ty == Type::Str && !str_routes_to_user_impl {
+            if let Some(ty) = self.find_with_closure(object, method, args, args_close_span) {
+                return ty;
+            }
             return self.infer_str_method(method, args, span);
         }
 
@@ -3947,6 +3975,9 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(&obj_ty, Type::Ref(i) | Type::MutRef(i) if **i == Type::Str)
             && !str_routes_to_user_impl
         {
+            if let Some(ty) = self.find_with_closure(object, method, args, args_close_span) {
+                return ty;
+            }
             return self.infer_str_method(method, args, span);
         }
 
@@ -4087,6 +4118,51 @@ impl<'a> super::TypeChecker<'a> {
             }
             if method == "append" && !deque && self.cli_lint_overrides.strict_core {
                 self.reject_core_vec_append(object, args, args_close_span, &elem);
+            }
+            // `[first].to_vec()`: the list literal is already the `Vec`
+            // (design.md § Collection literals), so a copy of it only clones a
+            // temporary, and an element with no `.clone()` refuses it. The edit is to
+            // drop the copy, not to derive `Clone` (B-2026-11-20-148). A list of
+            // function values keeps its own refusal, which already names the
+            // list literal and adds the `shared struct` way (B-2026-11-03-3).
+            if method == "to_vec"
+                && !deque
+                && args.is_empty()
+                && self.cli_lint_overrides.strict_core
+                && matches!(object.kind, ExprKind::ArrayLiteral(_))
+                && super::dyn_trait::fn_within(&elem).is_none()
+                && !self.type_supports_clone(&Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem.clone()],
+                })
+            {
+                let from = object.span.offset + object.span.length;
+                let fix = super::FixIt {
+                    span: Span {
+                        offset: from,
+                        length: span.offset + span.length - from,
+                        line: object.span.line,
+                        column: object.span.column,
+                    },
+                    replacement: String::new(),
+                };
+                self.type_error_with_fix_it(
+                    format!(
+                        "`.to_vec()` copies a list literal that is already a '{}', and its \
+                         elements have no `.clone()`: drop `.to_vec()`, the literal is the list",
+                        type_display(&Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![elem.clone()],
+                        })
+                    ),
+                    *span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                    fix,
+                );
+                return Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem],
+                };
             }
             if let Some(ty) = self.infer_vec_method(&elem, method, args, span) {
                 // Stash the element type at the non-aliased close-paren leaf so
@@ -7988,5 +8064,76 @@ impl super::TypeChecker<'_> {
             TypeErrorKind::TypeMismatch,
         );
         Some(Type::Error)
+    }
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// `s.find(|c| c != 'a')`: Rust's `str::find` with a closure. A
+    /// `String`'s `find` takes a `Str` pattern only; the first char that
+    /// passes a test is `char_indices().find(..)`, and its byte offset the
+    /// `.map(|(i, _)| i)` of that, which is what the fix writes (kata 2734,
+    /// B-2026-11-20-140). `None` when the call is not that shape.
+    fn find_with_closure(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        args_close_span: &Span,
+    ) -> Option<Type> {
+        if method != "find" || args.len() != 1 {
+            return None;
+        }
+        let arg = &args[0].value;
+        let ExprKind::Closure { params, body, .. } = &arg.kind else {
+            return None;
+        };
+        let [param] = params.as_slice() else {
+            return None;
+        };
+        let PatternKind::Binding(name) = &param.pattern.kind else {
+            return None;
+        };
+        if param.ty.is_some() || param.is_own {
+            return None;
+        }
+        let end = args_close_span.offset + args_close_span.length;
+        if end <= object.span.offset {
+            return None;
+        }
+        let receiver = crate::formatter::render_expr(object);
+        let receiver = match &object.kind {
+            ExprKind::Identifier(_)
+            | ExprKind::MethodCall { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::StringLit(_) => receiver,
+            _ => format!("({receiver})"),
+        };
+        let fixed = format!(
+            "{receiver}.char_indices().find(|(_, {name})| {}).map(|(i, _)| i)",
+            crate::formatter::render_expr(body)
+        );
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(&arg.span),
+            vec![crate::resolver::TextEdit {
+                offset: object.span.offset,
+                length: end - object.span.offset,
+                replacement: fixed.clone(),
+            }],
+        );
+        self.type_error(
+            format!(
+                "a `String`'s `find` takes a `Str` pattern, not a closure; the first char \
+                 that passes a test is `char_indices().find(..)`: write `{fixed}` \
+                 (docs/library/strings.md)"
+            ),
+            arg.span,
+            TypeErrorKind::TypeMismatch,
+        );
+        Some(Type::Named {
+            name: "Option".to_string(),
+            args: vec![Type::Int(IntSize::I64)],
+        })
     }
 }

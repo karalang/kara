@@ -211,8 +211,10 @@ A B-tree map, `K: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `insert` | `fn insert(mut ref self, key: own K, val: own V) -> Option[V]` | Returns the previous value if the key was present |
 | `extend` | `fn extend[I: IntoIterator[Item = (K, V)]](mut ref self, items: own I)` | Inserts every pair, in order; a later pair replaces an earlier value |
 | `get` | `fn get(self, key: K) -> Option[ref V]` | |
+| `get_mut` | `fn get_mut(mut ref self, key: K) -> Option[mut ref V]` | Lookup for in-place change, as for `Map` |
 | `remove` | `fn remove(mut ref self, key: K) -> Option[V]` | |
 | `contains_key` | `fn contains_key(self, key: K) -> bool` | |
+| `entry` | `fn entry(mut ref self, key: own K) -> Entry[K, V]` | The slot for `key`, occupied or vacant, as for `Map` |
 | `len` | `fn len(self) -> i64` | |
 | `is_empty` | `fn is_empty(self) -> bool` | |
 | `keys` | `fn keys(self) -> impl Iterator[Item = ref K]` | Ascending |

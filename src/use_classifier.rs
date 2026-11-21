@@ -2527,6 +2527,14 @@ impl<'a> UseClassifier<'a> {
         ) {
             return b;
         }
+        if let Some(b) = crate::ownership::sequence_receiver_arg_is_borrow(
+            self.tc,
+            self.method_param_modes,
+            method_call,
+            arg_index,
+        ) {
+            return b;
+        }
         // Trust the span-resolved modes whenever they carry an entry for THIS
         // arg position; only when the entry is missing (the chained-call span
         // collision resolved the inner call to a sibling with fewer params —

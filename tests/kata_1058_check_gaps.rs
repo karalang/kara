@@ -114,7 +114,7 @@ fn kata_1058_usize_cast_let_that_mixes_is_dropped() {
     assert!(first.contains("this `as usize` makes a `usize`"), "{first}");
     assert!(clean, "still refused after fix:\n{text}");
     assert!(
-        text.contains("let need = need;") && !text.contains("usize"),
+        !text.contains("let need = need") && !text.contains("usize"),
         "{text}"
     );
     assert_eq!(out.trim_end(), "25", "{text}");

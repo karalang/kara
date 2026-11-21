@@ -80,7 +80,9 @@ fn kata_1061_parenthesized_lossless_cast_is_dropped() {
     let src = "fn index(i: i64) -> i64 {\n    i * 2\n}\n\nfn main() {\n    let c = b'd';\n    let a = index((c - b'a') as i64);\n    let b: i64 = (( c - b'b' )) as i64;\n    println(f\"{a} {b}\");\n}";
     let (first, text, clean, last, out) = mend(&scratch("cast"), src);
     assert!(first.contains("widens to 'i64' implicitly"), "{first}");
-    assert!(text.contains("index((c - b'a'));"), "{text}");
+    // The argument's own parentheses go with the cast (kata 2842); this
+    // pinned `index((c - b'a'))` before.
+    assert!(text.contains("index(c - b'a');"), "{text}");
     // A `let`'s whole value needs no parentheses once the `as` is gone
     // (B-2026-11-11-87); this pinned `(( c - b'b' ))` before.
     assert!(text.contains("let b: i64 = c - b'b';"), "{text}");
@@ -124,7 +126,9 @@ fn kata_1061_usize_cast_where_i64_is_wanted_becomes_i64() {
         first.contains("unnecessary cast: 'u8' widens to 'usize'"),
         "{first}"
     );
-    assert!(text.contains("find(parent, (b[0] - b'a'))"), "{text}");
+    // The parentheses go with the cast (kata 2842); this pinned
+    // `find(parent, (b[0] - b'a'))` before.
+    assert!(text.contains("find(parent, b[0] - b'a')"), "{text}");
     assert!(clean && !last.contains("warning"), "{text}\n{last}");
     assert_eq!(out, "3\n");
 }

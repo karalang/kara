@@ -1084,10 +1084,30 @@ impl super::Parser {
         let PatternKind::Binding(_) = pattern.kind else {
             return;
         };
-        if !matches!(value.kind, ExprKind::MethodCall { .. }) {
-            return;
-        }
-        let value_end = value.span.offset + value.span.length;
+        // The call is the initializer, or the tail of a closure that is:
+        // `let to32 = |v: ref Vec[i64]| v.iter().map(..).collect::<Vec<i32>>();`
+        // loses its return type with the list, and the binding then takes
+        // the closure's whole type, `Fn(ref Vec[i64]) -> Vec[i32]`, as the
+        // arrow's fix does (move_closure_return_to_binding; kata 2861).
+        let (call, params) = match &value.kind {
+            ExprKind::MethodCall { .. } => (value, None),
+            ExprKind::Closure { params, body, .. } => {
+                let tail = match &body.kind {
+                    ExprKind::Block(b) => b.final_expr.as_deref(),
+                    _ => Some(&**body),
+                };
+                let Some(tail) = tail.filter(|t| matches!(t.kind, ExprKind::MethodCall { .. }))
+                else {
+                    return;
+                };
+                let Some(types) = closure_param_types(params) else {
+                    return;
+                };
+                (tail, Some(types))
+            }
+            _ => return,
+        };
+        let value_end = call.span.offset + call.span.length;
         let mut found = None;
         for (span, method, after, ty) in &self.turbofishes[since..] {
             if !matches!(
@@ -1133,7 +1153,10 @@ impl super::Parser {
                 crate::resolver::TextEdit {
                     offset: name_end,
                     length: 0,
-                    replacement: format!(": {ty}"),
+                    replacement: match params {
+                        None => format!(": {ty}"),
+                        Some(types) => format!(": Fn({}) -> {ty}", types.join(", ")),
+                    },
                 },
                 delete,
             ],
@@ -1217,31 +1240,9 @@ impl super::Parser {
         else {
             return;
         };
-        let mut types = Vec::new();
-        for p in params {
-            let Some(ty) = &p.ty else {
-                return;
-            };
-            let ty = crate::formatter::render_type_expr(ty);
-            // A bare closure parameter borrows, as a `fn`'s does, so the
-            // closure's type is `Fn(ref T)`: an `Fn(T)` annotation takes the
-            // argument owned and moves it out of every caller (kata 2224,
-            // B-2026-11-17-141). A scalar copies either way and stays bare.
-            const SCALARS: &[&str] = &[
-                "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize",
-                "usize", "f32", "f64", "bool", "char",
-            ];
-            types.push(if p.is_own {
-                format!("own {ty}")
-            } else if SCALARS.contains(&ty.as_str())
-                || ty.starts_with("ref ")
-                || ty.starts_with("mut ref ")
-            {
-                ty
-            } else {
-                format!("ref {ty}")
-            });
-        }
+        let Some(types) = closure_param_types(params) else {
+            return;
+        };
         let key = crate::resolver::SpanKey::from_span(&arrow);
         let Some(delete) = self.fix_edits.remove(&key) else {
             return;
@@ -1388,6 +1389,9 @@ impl super::Parser {
         let semi = self.current_span();
         self.expect(&Token::Semicolon)?;
         self.note_rust_heap_collect(ty.as_ref(), &value, semi.offset);
+        if !is_mut && ty.is_none() && crate::ast::binds_names_to_themselves(&pattern, &value) {
+            self.note_self_rebinding(&start, semi.offset + semi.length);
+        }
 
         Some(Stmt {
             id: crate::ids::NodeId::DUMMY,
@@ -1400,4 +1404,32 @@ impl super::Parser {
             },
         })
     }
+}
+
+/// The parameter list of an `Fn(..)` annotation for a closure whose every
+/// parameter is typed, or None when one is not. A bare closure parameter
+/// borrows, as a `fn`'s does, so the closure's type is `Fn(ref T)`: an
+/// `Fn(T)` annotation takes the argument owned and moves it out of every
+/// caller (kata 2224, B-2026-11-17-141). A scalar copies either way and
+/// stays bare.
+fn closure_param_types(params: &[crate::ast::ClosureParam]) -> Option<Vec<String>> {
+    const SCALARS: &[&str] = &[
+        "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize", "usize",
+        "f32", "f64", "bool", "char",
+    ];
+    let mut types = Vec::new();
+    for p in params {
+        let ty = crate::formatter::render_type_expr(p.ty.as_ref()?);
+        types.push(if p.is_own {
+            format!("own {ty}")
+        } else if SCALARS.contains(&ty.as_str())
+            || ty.starts_with("ref ")
+            || ty.starts_with("mut ref ")
+        {
+            ty
+        } else {
+            format!("ref {ty}")
+        });
+    }
+    Some(types)
 }

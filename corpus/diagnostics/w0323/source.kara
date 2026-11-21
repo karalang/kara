@@ -1,0 +1,6 @@
+fn main() {
+    let v = [1, 2, 3].to_vec();
+    let n = v.len();
+    let n = n;
+    println(n);
+}

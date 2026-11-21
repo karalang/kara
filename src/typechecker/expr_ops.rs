@@ -4052,6 +4052,18 @@ impl<'a> super::TypeChecker<'a> {
         (right, right_ty): (&Expr, &Type),
         span: Span,
     ) {
+        // `a > o ?? d` with `o` a wrapper: the `??` that holds this
+        // comparison says what was meant (B-2026-11-20-147).
+        if let Some((key, hit)) = self.nil_coalesce_compare.as_mut() {
+            let wrapper = |t: &Type| {
+                matches!(strip_refs_for_compare(t),
+                    Type::Named { name, .. } if name == "Option" || name == "Result")
+            };
+            if *key == SpanKey::from_span(&span) && wrapper(right_ty) && !wrapper(left_ty) {
+                *hit = true;
+                return;
+            }
+        }
         let message = format!(
             "cannot compare '{}' and '{}'",
             type_display(left_ty),
@@ -7424,7 +7436,63 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_nil_coalesce(&mut self, left: &Expr, right: &Expr, span: &Span) -> Type {
-        let l_ty = resolve_type_var_top(&self.infer_expr(left), &self.env.substitutions);
+        // `a > o ?? d` is `(a > o) ?? d`: `??` binds loosest of all
+        // (design.md § `?` and `??`). A comparison whose right side is the
+        // wrapper meant `a > (o ?? d)`; say so once, with that edit, rather
+        // than a mismatch and a `??` over a `bool` whose help is to drop the
+        // fallback (B-2026-11-20-147).
+        let compared = match &left.kind {
+            ExprKind::Binary {
+                op:
+                    op @ (BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq),
+                right: wrapped,
+                ..
+            } => Some((op.clone(), wrapped)),
+            _ => None,
+        };
+        let saved = self.nil_coalesce_compare.take();
+        if compared.is_some() {
+            self.nil_coalesce_compare = Some((SpanKey::from_span(&left.span), false));
+        }
+        let l_ty = self.infer_expr(left);
+        let hit = std::mem::replace(&mut self.nil_coalesce_compare, saved).is_some_and(|(_, h)| h);
+        if let (true, Some((op, wrapped))) = (hit, compared) {
+            self.infer_expr(right);
+            let sym = match op {
+                BinOp::Eq => "==",
+                BinOp::NotEq => "!=",
+                BinOp::Lt => "<",
+                BinOp::LtEq => "<=",
+                BinOp::Gt => ">",
+                _ => ">=",
+            };
+            self.error_fix_diffs.insert(
+                SpanKey::from_span(span),
+                vec![
+                    crate::resolver::TextEdit {
+                        offset: wrapped.span.offset,
+                        length: 0,
+                        replacement: "(".to_string(),
+                    },
+                    crate::resolver::TextEdit {
+                        offset: span.offset + span.length,
+                        length: 0,
+                        replacement: ")".to_string(),
+                    },
+                ],
+            );
+            self.type_error(
+                format!(
+                    "`??` binds more loosely than `{sym}`: `a {sym} b ?? c` is \
+                     `(a {sym} b) ?? c`, which compares the wrapper itself; write \
+                     `a {sym} (b ?? c)` to compare the value it holds"
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Bool;
+        }
+        let l_ty = resolve_type_var_top(&l_ty, &self.env.substitutions);
         // design.md § `*` and `ref` in expressions: a `ref` of a wrapper is
         // read as the wrapper, an operator operand included, so `v ?? 0`
         // over `values.iter()` is `*v ?? 0` (B-2026-10-14-40). Its payload

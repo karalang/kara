@@ -2211,6 +2211,38 @@ impl<'a> super::TypeChecker<'a> {
                         );
                         return Type::Error;
                     }
+                    // `it.to_vec()`: Rust's slice method on an iterator, as
+                    // where Rust's array `.map(f)` became `.into_iter().map(f)`
+                    // and its `.to_vec()` followed. An iterator's items become
+                    // a `Vec` by `collect()` (kata 2744, B-2026-11-20-141).
+                    if method == "to_vec"
+                        && args.is_empty()
+                        && self.library_iter_item_type(receiver_for_lookup).is_some()
+                    {
+                        let from = object.span.offset + object.span.length;
+                        let to = span.offset + span.length;
+                        if to > from {
+                            self.type_error_with_fix_it(
+                                format!(
+                                    "no method 'to_vec' on type '{type_name}', an iterator: \
+                                     `to_vec` copies a `Vec` / `Slice` / `Array`, and an \
+                                     iterator's items become a `Vec` by `collect()`"
+                                ),
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                                FixIt {
+                                    span: Span {
+                                        line: object.span.line,
+                                        column: object.span.column,
+                                        offset: from,
+                                        length: to - from,
+                                    },
+                                    replacement: ".collect()".to_string(),
+                                },
+                            );
+                            return Type::Error;
+                        }
+                    }
                     // `chunks` / `windows` are slice methods, not iterator
                     // adaptors (B-2026-10-22-22): `v.iter().chunks(n)` drops
                     // the `.iter()` hop, any other iterator collects first.

@@ -857,7 +857,12 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(&arg_ty)
                 );
                 self.cast_argument_error(message, arg, &arg_ty, "u32");
-                return Some(Type::Error);
+                // The power is the receiver's type whatever the exponent's
+                // mistake: `let p = i.pow(x)` keeps `p` an `i64`, so a use of
+                // it after (`(p..=n).rev()`) does not fail a second time on an
+                // unknown type (B-2026-11-20-149).
+                self.record_expr_type(args_close_span, receiver_for_lookup);
+                return Some(receiver_for_lookup.clone());
             }
             self.record_expr_type(args_close_span, receiver_for_lookup);
             return Some(receiver_for_lookup.clone());

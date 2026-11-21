@@ -885,6 +885,31 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(ty) = self.lower_array_type(&path.generic_args, generic_scope) {
                     return ty;
                 }
+                // `Array[T]` with no length: Rust's `&[T]`, a list of any
+                // length, is a `Slice[T]` here (kata 2764, B-2026-11-20-143).
+                if let Some([GenericArg::Type(element)]) = path.generic_args.as_deref() {
+                    let element = crate::formatter::render_type_expr(element);
+                    if self
+                        .array_arity_reported
+                        .insert(crate::resolver::SpanKey::from_span(&path.span))
+                    {
+                        self.type_error_with_fix_it(
+                            format!(
+                                "`Array` takes an element type and a length, `Array[{element}, N]`; \
+                                 a list of any length is borrowed as `Slice[{element}]`"
+                            ),
+                            path.span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                            FixIt {
+                                span: path.span,
+                                replacement: format!("Slice[{element}]"),
+                            },
+                        );
+                    }
+                    if let Some(ty) = self.lower_slice_type(&path.generic_args, generic_scope) {
+                        return ty;
+                    }
+                }
             }
             // Built-in `Vector[T: Numeric, const N: i64]` — portable-SIMD lane
             // vector (design.md § Portable SIMD). Mirrors `Array` lowering but

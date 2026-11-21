@@ -2048,6 +2048,7 @@ impl<'a> super::TypeChecker<'a> {
 
     fn check_expr_unexplained(&mut self, expr: &Expr, expected: &Type) -> Type {
         self.note_call_args(expr);
+        self.settle_places_lent_to_ref_slots(expr, expected);
         self.note_tuple_literal(expr);
         self.warn_vec_macro(expr, Some(expected));
         self.warn_prefix_in_tuple(expr, expected);
@@ -2572,8 +2573,10 @@ impl<'a> super::TypeChecker<'a> {
     /// element holding a `Str` (`Vec[(Str, Json)]`): each element of the
     /// array literal is checked against `E`, so a string literal in it is
     /// the `Str` the slot wants (design.md § String literals) rather than a
-    /// `String` that mismatches the whole `Vec` (B-2026-11-09-49). Leaves a
-    /// hint for the literal and lets the call be checked as usual.
+    /// `String` that mismatches the whole `Vec` (B-2026-11-09-49). Likewise
+    /// a literal whose every element waits for a type, a bare `collect()` or
+    /// `[]`, takes `E` from the slot (B-2026-11-20-138). Leaves a hint for the literal
+    /// and lets the call be checked as usual.
     fn str_elements_to_vec(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
         let ExprKind::MethodCall {
             object,
@@ -2600,7 +2603,11 @@ impl<'a> super::TypeChecker<'a> {
         let [elem] = targs.as_slice() else {
             return None;
         };
-        if name != "Vec" || contains_type_var(elem) || !mentions_str_view(elem) {
+        // An element that names no type of its own, a bare `collect()` or
+        // an empty `[]`, takes the slot's too when no sibling names one:
+        // `f([(0..n).map(g).collect()].to_vec())` (kata 2713).
+        let waits = items.iter().all(tail_waits_for_sibling);
+        if name != "Vec" || contains_type_var(elem) || !(mentions_str_view(elem) || waits) {
             return None;
         }
         if object.id.is_dummy() {
@@ -6064,6 +6071,69 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The type a place names now, for a binding or an index into one
+    /// (`a`, `a[0]`, `g[i][j]`), without inferring anything.
+    fn place_type_now(&self, e: &Expr) -> Option<Type> {
+        match &e.kind {
+            ExprKind::Identifier(name) => {
+                self.local_scope.lookup(name).map(|t| self.resolved_now(t))
+            }
+            ExprKind::Index { object, .. } => match self.place_type_now(object)? {
+                Type::Ref(t) | Type::MutRef(t) => match *t {
+                    Type::Array { element, .. } => Some(self.resolved_now(&element)),
+                    Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                        Some(self.resolved_now(&args[0]))
+                    }
+                    _ => None,
+                },
+                Type::Array { element, .. } => Some(self.resolved_now(&element)),
+                Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                    Some(self.resolved_now(&args[0]))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// A tuple literal of places lent part by part to `ref` slots
+    /// (`g((a[0], b[0]))` for `p: (ref i64, ref i64)`): each place's open
+    /// literal is fixed by its slot, as a binding lent to a `ref` parameter
+    /// is ([`Self::settle_binding_lent_to_ref`]). A place in a tuple stays
+    /// open (B-2026-11-21-201), and an open number cannot be lent to a `ref`
+    /// slot until it has a type (B-2026-11-15-22's fixture).
+    pub(super) fn settle_places_lent_to_ref_slots(&mut self, expr: &Expr, expected: &Type) {
+        let ExprKind::Tuple(elems) = &expr.kind else {
+            return;
+        };
+        let expected = self.resolved_now(expected);
+        let slots = match &expected {
+            Type::Tuple(slots) => slots,
+            Type::Ref(t) => match t.as_ref() {
+                Type::Tuple(slots) => slots,
+                _ => return,
+            },
+            _ => return,
+        };
+        if slots.len() != elems.len() {
+            return;
+        }
+        for (e, slot) in elems.iter().zip(slots.iter()) {
+            match (&e.kind, slot) {
+                (ExprKind::Tuple(_), _) => self.settle_places_lent_to_ref_slots(e, slot),
+                (ExprKind::Identifier(_), Type::Ref(_) | Type::MutRef(_)) => {
+                    self.settle_binding_lent_to_ref(e, slot)
+                }
+                (ExprKind::Index { .. }, Type::Ref(inner) | Type::MutRef(inner)) => {
+                    if let Some(Type::TypeVar(v)) = self.place_type_now(e) {
+                        self.settle_literal_var_to(v, inner);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn settle_binding_lent_to_ref(&mut self, arg: &Expr, param_ty: &Type) {
         let (Type::Ref(inner) | Type::MutRef(inner), ExprKind::Identifier(name)) =
             (param_ty, &arg.kind)
@@ -6074,25 +6144,27 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         if let Type::TypeVar(v) = self.resolved_now(&t) {
-            // An open literal lent to a `ref i32` / `mut ref i32` parameter
-            // is fixed by it, as a by-value argument fixes one (design.md §8
-            // Literals: an argument fixes a literal's type): `let mut best =
-            // 0; bump(mut best);` is an `i32` (B-2026-11-17-130).
-            let literal_fits = match inference::literal_var_kind(v) {
-                None => true,
-                Some(inference::LiteralKind::Int) => {
-                    matches!(&**inner, Type::Int(_) | Type::UInt(_))
-                }
-                Some(inference::LiteralKind::Float) => matches!(&**inner, Type::Float(_)),
-            };
-            if literal_fits {
-                unify_types(
-                    &Type::TypeVar(v),
-                    inner,
-                    &mut self.env.substitutions,
-                    &mut self.env.const_substitutions,
-                );
-            }
+            self.settle_literal_var_to(v, inner);
+        }
+    }
+
+    fn settle_literal_var_to(&mut self, v: super::types::TypeVarId, inner: &Type) {
+        // An open literal lent to a `ref i32` / `mut ref i32` parameter is
+        // fixed by it, as a by-value argument fixes one (design.md §8
+        // Literals: an argument fixes a literal's type): `let mut best = 0;
+        // bump(mut best);` is an `i32` (B-2026-11-17-130).
+        let literal_fits = match inference::literal_var_kind(v) {
+            None => true,
+            Some(inference::LiteralKind::Int) => matches!(inner, Type::Int(_) | Type::UInt(_)),
+            Some(inference::LiteralKind::Float) => matches!(inner, Type::Float(_)),
+        };
+        if literal_fits {
+            unify_types(
+                &Type::TypeVar(v),
+                inner,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
         }
     }
 
@@ -13564,14 +13636,12 @@ impl<'a> super::TypeChecker<'a> {
                 // i64)` to `x * k`: the operand is a single term here (a
                 // parenthesized operand, `closed`, keeps its own), so it
                 // needs none (kata 1121).
-                let parens = closed
-                    .is_none()
-                    .then(|| {
-                        self.program
-                            .paren_casts
-                            .get(&SpanKey::from_span(&expr.span))
-                    })
-                    .flatten();
+                // A parenthesized operand keeps its own parentheses there,
+                // `c * ((need - i) as i64)` to `c * (need - i)`.
+                let parens = self
+                    .program
+                    .paren_casts
+                    .get(&SpanKey::from_span(&expr.span));
                 // A `let`'s whole value, `let run = (j - i) as i64;`, needs
                 // no parentheses once the `as` is gone (kata 1128).
                 let parens = parens.or_else(|| {
@@ -20374,6 +20444,22 @@ impl<'a> super::TypeChecker<'a> {
                                     && (Self::is_number_literal_tree(e)
                                         || matches!(e.kind, ExprKind::Tuple(_))))
                             {
+                                self.infer_expr_open(e)
+                            } else if matches!(
+                                e.kind,
+                                ExprKind::Identifier(_)
+                                    | ExprKind::Index { .. }
+                                    | ExprKind::FieldAccess { .. }
+                                    | ExprKind::TupleIndex { .. }
+                            ) {
+                                // A place whose literal no use has fixed
+                                // stays open in a tuple, as a binding does as
+                                // an argument, so a later use of the tuple's
+                                // part fixes it (`let x = -1; q.push((x,
+                                // 0))`, or `dist[0]` of a `Vec.filled(n,
+                                // -1)`, with the pop's part returned as
+                                // `i32`; design.md §8 Literals,
+                                // B-2026-11-21-201).
                                 self.infer_expr_open(e)
                             } else {
                                 self.infer_expr(e)

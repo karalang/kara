@@ -57,8 +57,9 @@ fn a_mut_closure_parameter_with_an_expression_body_is_wrapped() {
         "fn main() {\n    let v = [1, 2, 3].to_vec();\n    let s: i64 = v.iter().fold(0, |mut n, x| n + x);\n    println(s);\n}\n",
     );
     // The wrap's `mut` is never written, and the next pass drops it
-    // (B-2026-11-15-131).
-    assert!(out.contains("|n, x| { let n = n; n + x })"), "{out}");
+    // (B-2026-11-15-131); the `let n = n;` left then binds `n` to itself,
+    // and `self_rebinding` takes it out (kata 2851).
+    assert!(out.contains("|n, x| { n + x })"), "{out}");
     assert!(out.ends_with("6\n"), "{out}");
 }
 

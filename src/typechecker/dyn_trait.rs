@@ -791,7 +791,7 @@ impl crate::span_visitor::MutVisitor for ExprsBySpan<'_> {
 }
 
 /// The first function type inside `ty`, whose values do not clone.
-fn fn_within(ty: &Type) -> Option<&Type> {
+pub(super) fn fn_within(ty: &Type) -> Option<&Type> {
     match ty {
         Type::Function { .. } | Type::OnceFunction { .. } => Some(ty),
         Type::Named { args, .. } | Type::Tuple(args) => args.iter().find_map(fn_within),

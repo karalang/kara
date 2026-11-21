@@ -836,6 +836,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
+                    // Compared resolved, as `Vec.push` compares: a number
+                    // in a tuple literal took its slot's type through a
+                    // variable, and `(0, v)` with `v: ref i64` copies `v`
+                    // into an `(i64, i64)` slot as it does in a push
+                    // (kata 2737, B-2026-11-20-139).
+                    let at = self.resolve_deep(&at);
                     self.check_assignable(&elem, &at, arg.value.span);
                 }
                 Type::Bool
@@ -1320,6 +1326,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
+                    // Compared resolved, as `Vec.push` compares: a number
+                    // in a tuple literal took its slot's type through a
+                    // variable, and `(0, v)` with `v: ref i64` copies `v`
+                    // into an `(i64, i64)` slot as it does in a push
+                    // (kata 2737, B-2026-11-20-139).
+                    let at = self.resolve_deep(&at);
                     self.check_assignable(&elem, &at, arg.value.span);
                 }
                 Type::Bool
@@ -1449,3 +1461,19 @@ const ENTRY_DEFAULT_CONTAINERS: &[&str] = &[
     "SortedSet",
     "PriorityQueue",
 ];
+
+impl<'a> super::TypeChecker<'a> {
+    /// `ty` with every variable the substitutions bind replaced, at every
+    /// depth.
+    fn resolve_deep(&self, ty: &Type) -> Type {
+        let no_names = std::collections::HashMap::new();
+        let no_const_names = std::collections::HashMap::new();
+        super::inference::resolve_type_vars(
+            ty,
+            &self.env.substitutions,
+            &no_names,
+            &self.env.const_substitutions,
+            &no_const_names,
+        )
+    }
+}

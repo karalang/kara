@@ -40,6 +40,78 @@ pub(super) const DEFAULT_NAMES_NO_TYPE: &str =
      `default` is called on the type, `T.default()` (design.md § `Default`)";
 
 impl<'a> super::TypeChecker<'a> {
+    /// `Vec.from(src)`, Rust's `Vec::from` carried over (kata 2897). Kāra
+    /// has no such constructor: a list literal is already a `Vec` where no
+    /// array is asked for, and a sequence is copied by `.to_vec()`
+    /// (library/collections.md). The fix writes the literal alone, or
+    /// `src.to_vec()`; the call keeps its `Vec` type so that nothing after
+    /// it cascades. Any other argument is named with no fix.
+    pub(super) fn check_vec_from(&mut self, src: &Expr, span: &Span) -> Type {
+        let src_ty = self.infer_expr(src);
+        let resolved = resolve_type_var_top(&src_ty, &self.env.substitutions);
+        let element = match &resolved {
+            Type::Slice { element, .. } | Type::Array { element, .. } => Some((**element).clone()),
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => Some(args[0].clone()),
+            _ => None,
+        };
+        let Some(element) = element else {
+            self.type_error(
+                "no associated function 'from' on type 'Vec': Kāra builds a `Vec` \
+                 from a list literal, `.to_vec()` or `collect` (library/collections.md)"
+                    .to_string(),
+                *span,
+                TypeErrorKind::NoMethodFound,
+            );
+            return Type::Error;
+        };
+        let literal = matches!(src.kind, ExprKind::ArrayLiteral(_));
+        let rendered = crate::formatter::render_expr(src);
+        let replacement = if literal {
+            rendered.clone()
+        } else {
+            let tight = matches!(
+                src.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::Index { .. }
+                    | ExprKind::Call { .. }
+                    | ExprKind::MethodCall { .. }
+            );
+            if tight {
+                format!("{rendered}.to_vec()")
+            } else {
+                format!("({rendered}).to_vec()")
+            }
+        };
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(span),
+            vec![crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: replacement.clone(),
+            }],
+        );
+        let how = if literal {
+            "a list literal is already a `Vec` where no array is asked for"
+        } else {
+            "a sequence is copied into a new `Vec` by `.to_vec()`"
+        };
+        self.type_error(
+            format!(
+                "no associated function 'from' on type 'Vec': {how}; write `{replacement}` \
+                 (library/collections.md)"
+            ),
+            *span,
+            TypeErrorKind::NoMethodFound,
+        );
+        let ty = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![element],
+        };
+        self.record_expr_type(span, &ty);
+        ty
+    }
+
     /// `Array.from_fn(n, f)` against `expected`, an `Array[T, N]` when the
     /// call has one: `f` is `Fn(i64) -> T` and `n` must be `N`. Without one
     /// `n` is an integer literal, which is the length (B-2026-10-21-30).
@@ -2652,6 +2724,15 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2 && segments[0] == "Array" && segments[1] == "from_fn" {
                 return self.check_array_from_fn(args, None, span);
+            }
+        }
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Vec"
+                && segments[1] == "from"
+                && args.len() == 1
+            {
+                return self.check_vec_from(&args[0].value, span);
             }
         }
         if let ExprKind::Path { segments, .. } = &callee.kind {

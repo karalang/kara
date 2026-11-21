@@ -7,6 +7,11 @@
 //! satisfied" with no fix. The `map` closure's results read the filled
 //! collection's elements, so the fix is the fill's literal suffix, as for a
 //! narrowing return (B-2026-11-08-53).
+//!
+//! The fill is settled here by a method on one of its elements
+//! (`prefix[0].abs()`, design.md §8): the assignment
+//! `prefix[i + 1] = prefix[i] + 2` alone leaves it open since
+//! B-2026-11-21-201, and the `collect` then fixes it to `i32` as written.
 
 use std::process::{Command, Stdio};
 
@@ -31,6 +36,7 @@ fn kata_2055_collect_of_filled_elements_into_narrower_vec_gets_the_fill_suffix()
     for i in 0..n {
         prefix[i + 1] = prefix[i] + 2;
     }
+    let _w = prefix[0].abs();
     queries
         .iter()
         .map(|q| {

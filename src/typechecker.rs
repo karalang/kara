@@ -94,6 +94,7 @@ mod method_iterator_agg;
 mod method_mapset;
 mod method_nominal_tail;
 mod method_numeric;
+mod self_rebinding_lint;
 pub(crate) use method_numeric::{
     FLOAT_METHODS, INT_METHODS, SIGNED_INT_METHODS, UNSIGNED_INT_METHODS,
 };
@@ -1065,6 +1066,10 @@ pub(crate) struct ListLitLet {
     /// first one wants.
     uses: Vec<(usize, SpanKey)>,
     want: Option<Type>,
+    /// For `let b = a` of such a binding `a`, `a`'s name: `b` is the same
+    /// `Vec`, and the `: Array[T, N]` goes on `a` (whose span `name` then
+    /// is), from which `b` takes its type (kata 2851).
+    copy_of: Option<String>,
 }
 
 /// The lengths of a list literal and, when its elements are list literals
@@ -3440,6 +3445,11 @@ pub struct TypeChecker<'a> {
     /// The `ref ` insertions for the by-value, non-`Copy` bindings found
     /// while a scrutinee's pattern is checked.
     pub(super) core_pattern_moves: Vec<crate::resolver::TextEdit>,
+    /// The comparison standing on the left of a `??` being checked, and
+    /// whether its mismatch was a wrapper on its right: `a > o ?? d` is
+    /// `(a > o) ?? d`, and the `??` reports the precedence instead
+    /// (B-2026-11-20-147).
+    pub(super) nil_coalesce_compare: Option<(SpanKey, bool)>,
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: FxHashMap<SpanKey, Type>,
@@ -4620,6 +4630,9 @@ pub struct TypeChecker<'a> {
     /// The `Peekable[I]` writes already refused (a signature is lowered
     /// more than once).
     pub(super) peekable_arity_reported: FxHashSet<SpanKey>,
+    /// The `Array[T]` paths, written with no length, already reported, as
+    /// for `peekable_arity_reported`: a type is lowered more than once.
+    pub(super) array_arity_reported: FxHashSet<SpanKey>,
     /// `let x = 0` with no annotation, by name, and the literals a binding's
     /// type comes from in `let (a, b) = (0, 0)` and `let v = [0; n]` /
     /// `Vec.filled(n, 0)`. A narrowing or a `min`/`max` argument refused at
@@ -4945,6 +4958,7 @@ impl<'a> TypeChecker<'a> {
             core_let_ref_name: None,
             core_call_sites: Vec::new(),
             core_pattern_moves: Vec::new(),
+            nil_coalesce_compare: None,
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
@@ -5225,6 +5239,7 @@ impl<'a> TypeChecker<'a> {
             str_list_lets: FxHashMap::default(),
             str_list_let_uses: FxHashMap::default(),
             peekable_arity_reported: FxHashSet::default(),
+            array_arity_reported: FxHashSet::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
             retyped_int_literal: None,
@@ -8567,8 +8582,38 @@ impl<'a> TypeChecker<'a> {
                         literal_only: true,
                         uses: Vec::new(),
                         want: None,
+                        copy_of: None,
                     },
                 );
+            }
+            // `let b = a` of another such binding: the same literal's `Vec`
+            // under a second name, `a` the one to declare (kata 2851).
+            ExprKind::Identifier(src) if src != name => {
+                let root = self.list_lit_lets.get(src.as_str()).map(|r| {
+                    (
+                        r.copy_of.clone().unwrap_or_else(|| src.clone()),
+                        r.name,
+                        r.shape.clone(),
+                    )
+                });
+                match root {
+                    Some((root, root_span, shape)) => {
+                        self.list_lit_lets.insert(
+                            name.to_string(),
+                            ListLitLet {
+                                name: root_span,
+                                shape,
+                                literal_only: true,
+                                uses: Vec::new(),
+                                want: None,
+                                copy_of: Some(root),
+                            },
+                        );
+                    }
+                    None => {
+                        self.list_lit_lets.remove(name);
+                    }
+                }
             }
             _ => {
                 self.list_lit_lets.remove(name);
@@ -8658,15 +8703,26 @@ impl<'a> TypeChecker<'a> {
     /// holds that literal, offer `: Array[T, N]` on the `let` with the first
     /// use (B-2026-11-10-47).
     pub(super) fn explain_list_lit_lets(&mut self) {
-        let recs: Vec<(String, ListLitLet)> = self
-            .list_lit_lets
-            .drain()
+        let all: FxHashMap<String, ListLitLet> = std::mem::take(&mut self.list_lit_lets);
+        let mut recs: Vec<(String, ListLitLet)> = all
+            .iter()
             .filter(|(_, r)| !r.uses.is_empty())
+            .map(|(n, r)| (n.clone(), r.clone()))
             .collect();
-        for (name, rec) in recs {
+        recs.sort_by_key(|(_, r)| r.uses.first().map(|(at, _)| *at));
+        // One `: Array[T, N]` for a literal, however many names use it.
+        let mut fixed: FxHashSet<usize> = FxHashSet::default();
+        for (name, mut rec) in recs {
             let Some(want) = rec.want.as_ref().map(type_display) else {
                 continue;
             };
+            // A copy is declared through the binding it copies, which must
+            // itself hold only the literal.
+            let copy = rec.copy_of.clone();
+            if let Some(root) = &copy {
+                rec.literal_only &= all.get(root.as_str()).is_none_or(|r| r.literal_only);
+            }
+            let declared = copy.clone().unwrap_or_else(|| name.clone());
             let fix = rec.literal_only.then(|| FixIt {
                 span: Span {
                     line: rec.name.line,
@@ -8676,8 +8732,12 @@ impl<'a> TypeChecker<'a> {
                 },
                 replacement: format!(": {want}"),
             });
+            let held = match &copy {
+                Some(root) => format!(": `{name}` holds `{root}`, and `{root}`"),
+                None => format!(": `{name}`"),
+            };
             let because = format!(
-                ": `{name}` (bound at {}:{}) is a `Vec`, because a list literal with no \
+                "{held} (bound at {}:{}) is a `Vec`, because a list literal with no \
                  expected type is one (design.md § Collection literals)",
                 rec.name.line, rec.name.column
             );
@@ -8700,8 +8760,8 @@ impl<'a> TypeChecker<'a> {
                 e.message.push_str(&because);
                 if rec.literal_only {
                     e.message
-                        .push_str(&format!("; declare it `{name}: {want}`"));
-                    if i == 0 {
+                        .push_str(&format!("; declare it `{declared}: {want}`"));
+                    if i == 0 && fixed.insert(rec.name.offset) {
                         e.fix_it = fix.clone();
                     }
                 }

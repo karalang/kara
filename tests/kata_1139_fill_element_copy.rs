@@ -11,6 +11,11 @@
 //! binding holding an element (`let k = g[i][j]`, through `min`/`max` or a
 //! range's loop variable) is traced to it, and an assignment's value is
 //! open for the place it is stored in, as a typed `let`'s is.
+//!
+//! The fill is settled here by a method on one of its elements
+//! (`t[0].abs()`, design.md §8). It was `t[1] = t[0] + 7`, which stopped
+//! settling it once arithmetic stored by an assignment was left open
+//! (B-2026-11-21-201).
 
 use std::process::{Command, Output, Stdio};
 
@@ -57,19 +62,19 @@ fn an_element_copied_out_of_a_settled_fill_is_fixed_on_the_fill() {
     let shapes = [
         (
             "let",
-            "let mut t = Vec.filled(3, 0); t[1] = t[0] + 7; let k = t[1]; let r: i32 = k; r",
+            "let mut t = Vec.filled(3, 0); let _w = t[0].abs(); t[1] = 7; let k = t[1]; let r: i32 = k; r",
         ),
         (
             "max",
-            "let mut t = Vec.filled(3, 0); t[1] = t[0] + 7; let k = max(t[1], t[0]); let r: i32 = k; r",
+            "let mut t = Vec.filled(3, 0); let _w = t[0].abs(); t[1] = 7; let k = max(t[1], t[0]); let r: i32 = k; r",
         ),
         (
             "range",
-            "let mut t = Vec.filled(3, 0); t[1] = t[0] + 7; let mut r: i32 = 0; for k in (1..=t[1]).rev() { if k > r { r = k; } } r",
+            "let mut t = Vec.filled(3, 0); let _w = t[0].abs(); t[1] = 7; let mut r: i32 = 0; for k in (1..=t[1]).rev() { if k > r { r = k; } } r",
         ),
         (
             "assign",
-            "let mut t = Vec.filled(3, 0); t[1] = t[0] + 7; let mut r: i32 = 0; let k = t[1]; r = k; r",
+            "let mut t = Vec.filled(3, 0); let _w = t[0].abs(); t[1] = 7; let mut r: i32 = 0; let k = t[1]; r = k; r",
         ),
     ];
     for (tag, body) in shapes {
@@ -85,10 +90,10 @@ fn an_element_copied_out_of_a_settled_fill_is_fixed_on_the_fill() {
 
 #[test]
 fn a_fill_of_fills_is_read_to_its_innermost_literal() {
-    // Settled by an operator: the suffix goes on the inner `0`.
+    // Settled by a method: the suffix goes on the inner `0`.
     let (err, edits, out) = check_fix_run(
         "nested",
-        "let mut g = Vec.filled(2, Vec.filled(3, 0)); g[1][2] = g[0][0] + 9; let r: i32 = g[1][2]; r",
+        "let mut g = Vec.filled(2, Vec.filled(3, 0)); let _w = g[0][0].abs(); g[1][2] = 9; let r: i32 = g[1][2]; r",
     );
     assert!(err.contains("the elements of `g` are 'i64'"), "{err}");
     assert!(edits.contains(":2:46: `` → `i32`"), "{edits}");

@@ -760,6 +760,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0321", lint_own("vec_per_element")),
     ("W0322", lint_own("len_saturating_sub")),
     ("E0322", lint_own("len_saturating_sub")),
+    ("W0323", lint_own("self_rebinding")),
+    ("E0323", lint_own("self_rebinding")),
     ("E0801", ty("GpuNotSafe", None)),
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),
@@ -3242,13 +3244,13 @@ const CODE_PROSE: &[(&str, &str)] = &[
         "E_LINT_LEVEL_NO_ARGS",
         "A lint-level attribute (`#[allow]`, `#[warn]`, `#[deny]`, \
          `#[expect]`) needs the names of the lints it applies to; with none \
-         it would change nothing. Write `#[allow(unused_variables)]`, \
+         it would change nothing. Write `#[allow(unused_mut)]`, \
          naming one or more lints.",
     ),
     (
         "E_LINT_LEVEL_NON_IDENT_ARG",
         "A lint-level attribute takes lint names as bare identifiers, \
-         `#[allow(deprecated, unused_variables)]`. A string, a number or a \
+         `#[allow(deprecated, unused_mut)]`. A string, a number or a \
          `key: value` argument is refused, so a typo cannot hide inside a \
          value that is never checked against the lint list.",
     ),

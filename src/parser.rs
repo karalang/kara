@@ -596,6 +596,8 @@ pub struct Parser {
     pub(crate) paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
     /// See [`crate::ast::Program::whole_value_casts`].
     pub(crate) whole_value_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// See [`crate::ast::Program::self_rebinding_lets`].
+    pub(crate) self_rebinding_lets: rustc_hash::FxHashMap<usize, Span>,
     /// See [`crate::ast::Program::index_casts`].
     pub(crate) index_casts: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::mut_fn_types`].
@@ -959,6 +961,7 @@ impl Parser {
             cast_operand_ends: rustc_hash::FxHashMap::default(),
             paren_casts: rustc_hash::FxHashMap::default(),
             whole_value_casts: rustc_hash::FxHashMap::default(),
+            self_rebinding_lets: rustc_hash::FxHashMap::default(),
             index_casts: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
@@ -1481,6 +1484,7 @@ impl Parser {
             cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
             paren_casts: std::mem::take(&mut self.paren_casts),
             whole_value_casts: std::mem::take(&mut self.whole_value_casts),
+            self_rebinding_lets: std::mem::take(&mut self.self_rebinding_lets),
             index_casts: std::mem::take(&mut self.index_casts),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
@@ -4145,6 +4149,48 @@ impl Parser {
         self.whole_value_casts.insert(key, (whole, text));
     }
 
+    /// A `let` of names to themselves, `let n = n;` from `start` to `end`
+    /// (past its `;`): see [`crate::ast::Program::self_rebinding_lets`].
+    pub(crate) fn note_self_rebinding(&mut self, start: &Span, end: usize) {
+        let Some((source, base)) = self.source.as_ref() else {
+            return;
+        };
+        let (Some(from), Some(to)) = (start.offset.checked_sub(*base), end.checked_sub(*base))
+        else {
+            return;
+        };
+        let bytes = source.as_bytes();
+        let mut line_start = from;
+        while line_start > 0 && matches!(bytes[line_start - 1], b' ' | b'\t') {
+            line_start -= 1;
+        }
+        let mut line_end = to;
+        while line_end < bytes.len() && matches!(bytes[line_end], b' ' | b'\t') {
+            line_end += 1;
+        }
+        let (from, to) = if (line_start == 0 || bytes[line_start - 1] == b'\n')
+            && line_end < bytes.len()
+            && bytes[line_end] == b'\n'
+        {
+            (line_start, line_end + 1)
+        } else {
+            // Inside a line, `{ let n = n; n + x }`, the spaces after it go
+            // too, so one space is left where it stood.
+            (from, line_end)
+        };
+        let span = Span {
+            offset: from + base,
+            length: to - from,
+            line: start.line,
+            column: if from == start.offset - base {
+                start.column
+            } else {
+                1
+            },
+        };
+        self.self_rebinding_lets.insert(start.offset, span);
+    }
+
     fn source_at(&self, offset: usize, length: usize) -> Option<&str> {
         let (source, base) = self.source.as_ref()?;
         let at = offset.checked_sub(*base)?;
@@ -4636,6 +4682,21 @@ impl Parser {
         if let Some(edits) = self.rename_edits(name, &new_name) {
             self.fix_diffs
                 .insert(crate::resolver::SpanKey::from_span(&error_span), edits);
+        }
+    }
+
+    /// The same rename for a private enum's variant written as Rust allows,
+    /// `AA` (kata 2745, B-2026-11-20-142): Const class here, and renamed
+    /// `Aa` at every use of the name in the file. Withheld when the file
+    /// also declares a `const` of that name, which the token edits would
+    /// rename with it.
+    fn offer_variant_rename(&mut self, name: &str, error_span: Span) {
+        let declares_const = self.tokens.windows(2).any(|w| {
+            matches!(w[0].token, Token::Const)
+                && matches!(&w[1].token, Token::Identifier { name: n, .. } if n == name)
+        });
+        if !declares_const {
+            self.offer_type_rename(name, error_span);
         }
     }
 

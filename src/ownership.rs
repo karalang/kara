@@ -286,6 +286,41 @@ pub(crate) fn string_receiver_arg_is_borrow(
         .then_some(true)
 }
 
+/// Whether argument `arg_index` of a method called on a `Vec`, an `Array`
+/// or a `Slice` is a borrow, decided by the receiver's type: the `Vec`
+/// declaration when there is one, else the `Slice` one, since a `Vec` finds
+/// every `Slice` method (B-2026-10-23-5). The name lookup it stands before
+/// took `words.join(sep)`'s `sep` for a move because `LazyFrame.join` owns
+/// its first argument, though `Slice.join(self, sep: Str)` reads it
+/// (B-2026-11-20-150). `None` for any other receiver, or a method neither
+/// declares.
+pub(crate) fn sequence_receiver_arg_is_borrow(
+    tc: &crate::typechecker::TypeCheckResult,
+    method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
+    method_call: &Expr,
+    arg_index: usize,
+) -> Option<bool> {
+    let ExprKind::MethodCall { object, method, .. } = &method_call.kind else {
+        return None;
+    };
+    let (ty, _) = tc.node_types.get(&object.id)?;
+    let ty = match ty {
+        Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+        t => t,
+    };
+    let sequence = matches!(ty, Type::Named { name, args } if name == "Vec" && args.len() == 1)
+        || matches!(ty, Type::Array { .. } | Type::Slice { .. });
+    if !sequence {
+        return None;
+    }
+    let modes = method_param_modes
+        .get(&format!("Vec.{method}"))
+        .or_else(|| method_param_modes.get(&format!("Slice.{method}")))?;
+    modes
+        .get(arg_index)
+        .map(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
+}
+
 /// A named place and its projections: `w`, `w.p`, `w.ps[i].n`, `self.x`.
 pub(crate) fn is_place_projection(e: &Expr) -> bool {
     match &e.kind {

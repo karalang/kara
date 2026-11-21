@@ -3811,12 +3811,21 @@ impl super::Parser {
             // `(k as i64)`: see `Program::paren_casts`.
             if let ExprKind::Cast { expr: operand, .. } = &first.kind {
                 let whole = self.span_from(&start);
-                if let Some(text) = self.source_at(operand.span.offset, operand.span.length) {
+                let key = crate::resolver::SpanKey::from_span(&first.span);
+                // `((need - i) as i64)`: the operand keeps its own
+                // parentheses, from just inside the outer `(` to its `)`,
+                // which group it wherever it stands.
+                let text = match self.cast_operand_ends.get(&key).copied() {
+                    Some(closed) if closed > start.offset + 1 => self
+                        .source_at(start.offset + 1, closed - (start.offset + 1))
+                        .map(str::trim)
+                        .filter(|t| t.starts_with('(') && t.ends_with(')')),
+                    Some(_) => None,
+                    None => self.source_at(operand.span.offset, operand.span.length),
+                };
+                if let Some(text) = text {
                     let text = text.to_string();
-                    self.paren_casts.insert(
-                        crate::resolver::SpanKey::from_span(&first.span),
-                        (whole, text),
-                    );
+                    self.paren_casts.insert(key, (whole, text));
                 }
             }
             Some(first)
@@ -5833,7 +5842,11 @@ impl super::Parser {
                 false
             };
 
+            let value_start = self.current_span();
             let value = self.parse_expression()?;
+            // Nothing binds around an argument, so a fix that deletes `as
+            // T` from `pow((i + 1) as i64, e)` takes the parentheses too.
+            self.note_whole_value_cast(&value_start, &value);
             args.push(CallArg {
                 label,
                 mut_marker,

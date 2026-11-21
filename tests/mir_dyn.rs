@@ -985,7 +985,9 @@ fn mir_dyn_refuses_other_trait_arguments_and_uncloned_copies() {
     check_refuses(
         "to-vec-struct",
         &format!("{shape}fn main() {{\n    let v: Vec[Sq] = [Sq {{ s: 1 }}].to_vec();\n}}\n"),
-        "`.to_vec()` on 'Vec[Sq]' clones each element, and 'Sq' has no `.clone()`",
+        // A list literal is already the list: the refusal says so
+        // (B-2026-11-20-148).
+        "`.to_vec()` copies a list literal that is already a 'Vec[Sq]', and its elements have no `.clone()`",
     );
 }
 
