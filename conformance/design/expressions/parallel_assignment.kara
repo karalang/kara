@@ -1,0 +1,36 @@
+// design.md §6 Parallel assignment: every value left to right, then each target's place and write.
+fn ix(tag: String, i: i64) -> i64 {
+    println(tag);
+    i
+}
+fn val(tag: String, v: i64) -> i64 {
+    println(tag);
+    v
+}
+fn div_rem(a: i64, b: i64) -> (i64, i64) { (a / b, a % b) }
+fn main() {
+    let mut a = 1;
+    let mut b = 2;
+    a, b = b, a;
+    println(f"{a} {b}");
+    let mut x = 1;
+    let mut y = 2;
+    let mut z = 3;
+    x, y, z = z, x, y;
+    println(f"{x} {y} {z}");
+    let mut v: Vec[i64] = [0, 0, 0, 0, 0, 0];
+    let mut i = 2;
+    v[i], i = 7, 5;
+    println(f"{v[2]} {v[5]} {i}");
+    v[ix("p1", 0)], v[ix("p2", 1)] = val("v1", 8), val("v2", 9);
+    println(f"{v[0]} {v[1]}");
+    let mut q = 0;
+    let mut r = 0;
+    q, r = div_rem(17, 5);
+    println(f"{q} {r}");
+    let c = true;
+    let mut lo = 0;
+    let mut hi = 10;
+    lo, hi = if c { (lo, 4) } else { (5, hi) };
+    println(f"{lo} {hi}");
+}

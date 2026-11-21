@@ -15,7 +15,9 @@ compiled. Both must give the expected output.
 | `json_suite.py` | json.md | JSONTestSuite's `y_`/`n_`/`i_` files (`JSONTESTSUITE=<checkout>`); `stringify` against Python's parse laid out as serde_json 1.0.149 writes it; random `f64` bit patterns round-tripped |
 | `ct_timing.py` | crypto.md, secret.md | `constant_time_eq` and `Secret.ct_eq` timed on a first-byte vs last-byte difference, compiled only, with `==` as the control that shows the instrument sees an early exit |
 | `channel_model.py` | concurrency.md | Random single-task channel scripts against a model of the page's rules, the model itself checked against Go's buffered channels (`go run`) on every script Go can express |
-| `cases.py <dir>...` | log.md, secret.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
+| `precedence.py` | design.md §6 | Every pair of binary operators, alone, around each comparison and under the logical words, against a parser of the page's table, that parser checked against Python's `ast.parse` wherever the two grammars agree (all but `not`); a pair counts only where a tuple tells its two groupings apart |
+| `overflow.py` | design.md §5 Integer overflow, Division, remainder and shifts | Every integer type: the edges that must not trap, computed from the page's rules, and each trap the page lists exiting 101 with its message |
+| `cases.py <dir>...` | design.md §3 and §6 (`design/lexical`, `design/expressions`), log.md, secret.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
 
 A fixed case is `<name>.kara` with files beside it, each written from the page:
 
@@ -42,12 +44,16 @@ python3 conformance/crypto.py --seed 1
 JSONTESTSUITE=../JSONTestSuite python3 conformance/json_suite.py --seed 1
 python3 conformance/ct_timing.py
 python3 conformance/channel_model.py --seed 1
+python3 conformance/precedence.py --seed 1
+python3 conformance/overflow.py
 python3 conformance/cases.py conformance/log conformance/secret conformance/pool conformance/encoding conformance/crypto \
-    conformance/concurrency conformance/random_env conformance/data
+    conformance/concurrency conformance/random_env conformance/data \
+    conformance/design/lexical conformance/design/expressions
 ```
 
 `CONF_LANES=interp,build,asan,tsan` adds the AddressSanitizer and
-ThreadSanitizer builds to `cases.py` and `channel_model.py` (`karac
+ThreadSanitizer builds to `cases.py`, `channel_model.py`, `precedence.py` and
+`overflow.py` (`karac
 __mir-llvm-asan` / `__mir-llvm-tsan`; TSan on four workers, at least three
 runs, against `libkarac_runtime_tsan.a` built over an instrumented std as
 CLAUDE.md § Runtime archives says), and any sanitizer report fails the run.

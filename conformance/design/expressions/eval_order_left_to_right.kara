@@ -1,0 +1,36 @@
+// core-semantics.md §8.1: left to right, everywhere.
+struct P { a: i64, b: i64 }
+struct Chain { n: i64 }
+impl Chain {
+    fn step(own self, tag: String) -> Chain {
+        println(tag);
+        Chain { n: self.n + 1 }
+    }
+}
+fn t(tag: String, v: i64) -> i64 {
+    println(tag);
+    v
+}
+fn two(x: i64, y: i64) -> i64 { x * 10 + y }
+fn mk(tag: String) -> Chain {
+    println(tag);
+    Chain { n: 0 }
+}
+fn vecs(tag: String) -> Vec[i64] {
+    println(tag);
+    [10, 20, 30]
+}
+fn main() {
+    println(t("op-l", 1) + t("op-r", 2) * t("op-rr", 3));
+    let p = P { b: t("field-b", 1), a: t("field-a", 2) };
+    println(p.a * 10 + p.b);
+    println(two(t("arg-1", 1), t("arg-2", 2)));
+    let v: Vec[i64] = [t("elem-0", 1), t("elem-1", 2), t("elem-2", 3)];
+    println(v.len());
+    let tup = (t("tup-0", 1), t("tup-1", 2));
+    println(tup.0 + tup.1);
+    println(vecs("index-base")[t("index", 2)]);
+    println(f"{t("hole-1", 1)} {t("hole-2", 2)}");
+    println(mk("chain-0").step("chain-1").step("chain-2").n);
+    println(mk("recv").step(f"{t("arg", 9)}").n);
+}

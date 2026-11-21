@@ -1,0 +1,23 @@
+// core-semantics.md §8.3: `and`, `or` and `??` evaluate the right side only when needed.
+fn side(tag: String, v: bool) -> bool {
+    println(tag);
+    v
+}
+fn dflt(tag: String) -> i64 {
+    println(tag);
+    0
+}
+fn main() {
+    println(side("a1", false) and side("NOT-a2", true));
+    println(side("b1", true) and side("b2", false));
+    println(side("c1", true) or side("NOT-c2", false));
+    println(side("d1", false) or side("d2", true));
+    let none: Option[i64] = None;
+    let some: Option[i64] = Some(4);
+    println(none ?? dflt("e-default"));
+    println(some ?? dflt("NOT-f-default"));
+    let ok: Result[i64, String] = Ok(5);
+    let err: Result[i64, String] = Err("x");
+    println(ok ?? dflt("NOT-g-default"));
+    println(err ?? dflt("h-default"));
+}

@@ -1,0 +1,35 @@
+// design.md §6 Operators and precedence: the page's worked examples.
+fn half(x: i64) -> Option[i64] {
+    if x % 2 == 0 { Some(x / 2) } else { None }
+}
+fn neg_half(x: i64) -> Option[i64] {
+    Some(-half(x)?)
+}
+fn main() {
+    let a: f64 = 1.5;
+    let b: i64 = 2;
+    println(a + b as f64);
+    let x: i64 = 5;
+    println(-x as u8);
+    let big: i64 = 300;
+    println(big as u32 as u8);
+    let mut n = 0;
+    for _ in 0..2 + 1 { n += 1; }
+    println(n);
+    let none: Option[i64] = None;
+    let some: Option[i64] = Some(10);
+    println(none ?? 1 + 2);
+    println(some ?? 1 + 2);
+    println(neg_half(8).unwrap());
+    println(neg_half(3).is_none());
+    let p = true;
+    let q = false;
+    println(not p == q);
+    println(not (p == q));
+    println(1 + 2 * 3 - 4 / 2 % 3);
+    println(2 - 3 - 4);
+    println(64 / 4 / 2);
+    println(1 << 2 + 1);
+    println(6 & 3 | 8 ^ 1);
+    println(1 < 2 and 3 > 4 or 5 == 5);
+}
