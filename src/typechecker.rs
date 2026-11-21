@@ -3721,6 +3721,9 @@ pub struct TypeChecker<'a> {
     /// Whether the function being checked takes `mut ref self` (a library
     /// method that hands out `mut ref` parts of its receiver).
     pub(super) current_fn_mut_self: bool,
+    /// Whether the function being checked is a `pub fn`, whose parameters'
+    /// `own` is part of the package's API.
+    pub(super) current_fn_is_pub: bool,
     /// This function's parameters (and `self`) that borrow only because D5
     /// reads a bare parameter as a borrow, each with where `own ` would be
     /// written to make it owned. Feeds the give-away diagnostic in
@@ -4948,6 +4951,7 @@ impl<'a> TypeChecker<'a> {
             fn_owned_slot_args: FxHashSet::default(),
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,
+            current_fn_is_pub: false,
             current_fn_d5_params: FxHashMap::default(),
             closure_d5_params: FxHashSet::default(),
             closure_d5_spellings: FxHashMap::default(),

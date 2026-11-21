@@ -3317,6 +3317,7 @@ impl<'a> super::TypeChecker<'a> {
             &mut self.current_fn_mut_self,
             matches!(f.self_param, Some(SelfParam::MutRef)),
         );
+        let saved_fn_is_pub = std::mem::replace(&mut self.current_fn_is_pub, f.is_pub);
         let saved_d5_params = std::mem::replace(
             &mut self.current_fn_d5_params,
             if self.cli_lint_overrides.strict_core && crate::d5_params::on() {
@@ -3407,6 +3408,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_fn_fn_markers = saved_fn_markers;
         self.current_fn_ref_params = saved_ref_params;
         self.current_fn_d5_params = saved_d5_params;
+        self.current_fn_is_pub = saved_fn_is_pub;
         self.current_fn_mut_self = saved_mut_self;
         if comptime_fn {
             self.comptime_depth -= 1;
@@ -10221,6 +10223,31 @@ impl<'a> super::TypeChecker<'a> {
         Some((root.clone(), param.to_string(), at, type_display(inner)))
     }
 
+    /// Whether `own` on a parameter of the function being checked changes
+    /// a signature other packages call: it is a `pub fn` and the program is
+    /// a library, with no `fn main` of its own. An application's `pub fn`s
+    /// are called only from inside it, so its fix takes `own` like a private
+    /// function's (B-2026-11-20-85).
+    pub(super) fn d5_own_breaks_api(&self) -> bool {
+        if !self.current_fn_is_pub {
+            return false;
+        }
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        !self.program.items.iter().any(|item| {
+            matches!(item, Item::Function(f)
+                if f.name == "main" && f.self_param.is_none() && f.span.offset < library)
+        })
+    }
+
+    /// The note a library's `pub fn` gets in place of the `own` fix.
+    pub(super) fn d5_own_api_note(param: &str, shown: &str) -> String {
+        format!(
+            ". Taking `{param}: own {shown}` would move it instead of copying, but this is \
+             a `pub fn` of a library, and `own` changes its signature for every caller \
+             outside the package"
+        )
+    }
+
     /// The root of a field / tuple projection chain.
     fn projection_root(value: &Expr) -> &Expr {
         let mut root = value;
@@ -10855,10 +10882,17 @@ impl<'a> super::TypeChecker<'a> {
         // of `while let Some(node) = cur` over `let mut cur = Some(head)`):
         // the parameter's `own` moves it, where a copy would duplicate the
         // rest of the list per step (B-2026-11-20-85).
+        // On a `pub fn` of a library, `own` would change a signature other
+        // packages call, so the copy's own fix stands and `own` is a note.
         let d5_owner = if self.cli_lint_overrides.strict_core {
             self.d5_part_owner(value)
         } else {
             None
+        };
+        let (d5_owner, d5_note) = if d5_owner.is_some() && self.d5_own_breaks_api() {
+            (None, d5_owner)
+        } else {
+            (d5_owner, None)
         };
         // B-2026-09-27-69 — a bare `for` element is not a field; name what it is.
         let lead = if matches!(value.kind, ExprKind::Identifier(_)) {
@@ -10921,6 +10955,12 @@ impl<'a> super::TypeChecker<'a> {
                      part where a copy would duplicate it"
                 );
             } else {
+                if let Some((root, param, _, _)) = &d5_note {
+                    message += &format!(
+                        ". `{root}` is bound out of parameter `{param}`, and a bare parameter \
+                         borrows (core-semantics.md §4.1), so nothing can be moved out of it"
+                    );
+                }
                 message += if has_clone {
                     ". Write `.clone()` to take a copy, or keep using it in place"
                 } else if self.core_let_ref_fix {
@@ -10933,6 +10973,9 @@ impl<'a> super::TypeChecker<'a> {
                     ". This type has no `.clone()`: use it in place, or take it with \
                  `mem.replace` / `mem.swap` / `Option.take()`"
                 };
+                if let Some((_, param, _, shown)) = &d5_note {
+                    message += &Self::d5_own_api_note(param, shown);
+                }
             }
         }
         // `let mut next = team; next.push(p); out[k] = next;`: the copy is
@@ -14194,13 +14237,17 @@ impl<'a> super::TypeChecker<'a> {
         if self.closure_d5_params.contains(&param) {
             return;
         }
-        let borrowed = match resolve_type_var_top(target_ty, &self.env.substitutions) {
-            Type::Ref(_) => true,
-            Type::Named { name: n, args } if n == "Option" && args.len() == 1 => matches!(
-                resolve_type_var_top(&args[0], &self.env.substitutions),
-                Type::Ref(_)
+        let (borrowed, option_slot) = match resolve_type_var_top(target_ty, &self.env.substitutions)
+        {
+            Type::Ref(_) => (true, false),
+            Type::Named { name: n, args } if n == "Option" && args.len() == 1 => (
+                matches!(
+                    resolve_type_var_top(&args[0], &self.env.substitutions),
+                    Type::Ref(_)
+                ),
+                true,
             ),
-            _ => false,
+            _ => (false, false),
         };
         if !borrowed {
             return;
@@ -14209,17 +14256,69 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         let shown = type_display(&inner);
+        let api_break = self.d5_own_breaks_api();
         let Some(e) = self.errors[errors_before..].iter_mut().find(|e| {
             e.span == value.span && e.kind == TypeErrorKind::TypeMismatch && e.fix_it.is_none()
         }) else {
             return;
         };
-        e.message = format!(
+        let lead = format!(
             "{}: `{name}` is bound out of parameter `{param}`, and a bare parameter borrows \
              (core-semantics.md §4.1), so `{name}` holds borrows and an owned value does not \
-             fit it. Take `{param}` by value with `{param}: own {shown}`",
+             fit it",
             e.message
         );
+        if api_break {
+            // A library's `pub fn` keeps its signature: the cursor borrows
+            // what it steps to, which `.as_ref()` says for an `Option` field
+            // and `ref` for a plain one. That also answers the move out of
+            // the borrowed place reported at the same site.
+            let place = super::core_ref_write::place_text(value);
+            let borrow_fix = match (&place, option_slot) {
+                (Some(p), true) => Some((
+                    format!("`{p}.as_ref()`"),
+                    FixIt {
+                        span: Span {
+                            offset: value.span.offset + value.span.length,
+                            length: 0,
+                            ..value.span
+                        },
+                        replacement: ".as_ref()".to_string(),
+                    },
+                )),
+                (Some(p), false) => Some((
+                    format!("`ref {p}`"),
+                    FixIt {
+                        span: Span {
+                            length: 0,
+                            ..value.span
+                        },
+                        replacement: "ref ".to_string(),
+                    },
+                )),
+                (None, _) => None,
+            };
+            let note = Self::d5_own_api_note(&param, &shown);
+            match borrow_fix {
+                Some((shown_fix, fix)) => {
+                    e.message = format!(
+                        "{lead}. Borrow what it steps to with {shown_fix}, which keeps \
+                         `{param}` borrowed{note}"
+                    );
+                    e.fix_it = Some(fix);
+                    // The move was reported when the assignment's value was
+                    // first inferred, before `errors_before`.
+                    let at = value.span;
+                    self.errors.retain(|moved| {
+                        moved.span != at
+                            || moved.lint_name.as_deref() != Some("borrow_projection_copy")
+                    });
+                }
+                None => e.message = lead + &note,
+            }
+            return;
+        }
+        e.message = format!("{lead}. Take `{param}` by value with `{param}: own {shown}`");
         e.fix_it = Some(FixIt {
             span: at,
             replacement: "own ".to_string(),

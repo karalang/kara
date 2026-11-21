@@ -2301,7 +2301,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   borrows, and the fix `karac fix` applies is `head: own ..`, which moves
   each node. It used to derive `Clone` and copy the rest of the list per
   step, and the store into `cur` stayed refused with a bare mismatch
-  (B-2026-11-20-85).
+  (B-2026-11-20-85). On a library's `pub fn`, where `own` would break
+  every caller outside the package, the fix keeps the signature and the
+  cursor borrows instead, `cur = node.next.as_ref()`, with `own` only a
+  note; an application's `pub fn` takes `own` like a private one.
 - Rust's `eprint!(..)` is repaired to the prelude's `eprint`, an
   f-string when it has format arguments, as `eprintln!` is; it got no
   fix (B-2026-11-20-53).
