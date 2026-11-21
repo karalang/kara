@@ -307,6 +307,68 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The item of a `par for` enters each iteration's task as a capture
+    /// does (core semantics §11.3), so its TYPE must be cross-task safe: a
+    /// `shared` handle, or a view of one, handed to every iteration counts
+    /// its references from many workers at once (B-2026-11-21-15). The
+    /// item pattern's bindings are not captures, so the capture walk never
+    /// saw them.
+    pub(super) fn check_par_for_item(
+        &mut self,
+        pattern: &Pattern,
+        item_ty: &Type,
+        par_span: &Span,
+    ) {
+        if !self.cli_lint_overrides.strict_core || matches!(item_ty, Type::Error) {
+            return;
+        }
+        let name = match &pattern.kind {
+            PatternKind::Binding(n) => n.clone(),
+            _ => "the item".to_string(),
+        };
+        let shown = if name == "the item" {
+            name.clone()
+        } else {
+            format!("`{name}`")
+        };
+        self.check_cross_task_params(
+            item_ty,
+            &format!("the item {shown} of a `par for`"),
+            &pattern.span,
+        );
+        let Err(path) = is_cross_task_safe_with(item_ty, &self.env.structs, &self.env.enums) else {
+            return;
+        };
+        if path.fix_it != CrossTaskUnsafeFixIt::SharedToPar {
+            self.emit_cross_task_unsafe(&name, item_ty, &path, &pattern.span, par_span, "par for");
+            return;
+        }
+        let ty_text = type_display(item_ty);
+        let what = if ty_text == path.unsafe_leaf {
+            format!("a `shared` handle of type `{ty_text}`")
+        } else {
+            format!(
+                "of type `{ty_text}`, which holds the `shared` type `{}`",
+                path.unsafe_leaf
+            )
+        };
+        self.type_error(
+            format!(
+                "error[E_NOT_CROSS_TASK]: the item {shown} of this `par for` ({what}) cannot \
+                 enter its iterations (core \
+                 semantics §11.3: each iteration is a task, and a task takes owned values, \
+                 `frozen` and `sync` handles, and views of them, and a `shared` handle is none \
+                 of them)\n\
+                 help: declare `{leaf}` as a `sync` type, or read what the iterations need out \
+                 of the elements before the `par for`{promote}",
+                leaf = path.unsafe_leaf,
+                promote = self.sync_promotion_note(&path.unsafe_leaf),
+            ),
+            pattern.span,
+            TypeErrorKind::CrossTaskUnsafeCapture,
+        );
+    }
+
     /// The `sync` form of the program's `shared struct leaf`, as a note for
     /// the programmer to review (design.md § From `shared` to `sync`): each
     /// `mut` field loses `mut` and goes in an `Atomic[T]` (for `bool`,

@@ -19292,6 +19292,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let prev_core =
                     std::mem::replace(&mut self.current_scrutinee_core_borrowed, core_borrowed);
+                if par.is_some() {
+                    self.check_par_for_item(pattern, &elem_ty, &expr.span);
+                }
                 self.bind_pattern_types(pattern, &elem_ty);
                 self.current_scrutinee_core_borrowed = prev_core;
                 // Outside the strict check, the whole item of a loop over

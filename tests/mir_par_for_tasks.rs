@@ -89,11 +89,12 @@ fn runs(name: &str, src: &str) -> Vec<(String, Duration)> {
 
 /// The values come back in iteration order, whatever each body holds: a
 /// struct built in the task, a nested `par for`, an element borrowed from
-/// the iterated `Vec`, and a generic function's loop.
+/// the iterated `Vec`, and a generic function's loop, whose item type is
+/// bounded `CrossTask` as each iteration's task needs (B-2026-11-21-15).
 #[test]
 fn mir_par_for_values_keep_iteration_order() {
     let src = r#"struct P { name: String, n: i64 }
-fn total[T: Copy](xs: ref Vec[T], f: Fn(T) -> i64 + CrossTask) -> Vec[i64] {
+fn total[T: Copy + CrossTask](xs: ref Vec[T], f: Fn(T) -> i64 + CrossTask) -> Vec[i64] {
     let r: Vec[i64] = par for x in xs.iter() { f(*x) };
     r
 }
