@@ -1,0 +1,4 @@
+// DataFrame, the other half of data.md, is refused the same way.
+fn main() {
+    let f = DataFrame.new();
+}

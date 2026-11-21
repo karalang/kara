@@ -1,0 +1,34 @@
+import std.sync.{channel, Sender, Receiver, TaskGroup};
+
+// concurrency.md § Channels, across tasks: a three-stage pipeline over
+// capacity-1 and capacity-2 channels, so every send waits on the next
+// stage. FIFO holds end to end, and each stage ends when the one before it
+// drops its Sender (recv drains, then None). The mirror is
+// pipeline_backpressure.go: Go's buffered channels with close.
+fn source(tx: own Sender[i64], n: i64) {
+    for i in 1..=n {
+        tx.send(i).unwrap();
+    }
+}
+
+fn square(rx: own Receiver[i64], tx: own Sender[i64]) {
+    for x in rx.into_iter() {
+        tx.send((x * x) % 1000003).unwrap();
+    }
+}
+
+fn main() {
+    let (ta, ra): (Sender[i64], Receiver[i64]) = channel(1);
+    let (tb, rb): (Sender[i64], Receiver[i64]) = channel(2);
+    let g = TaskGroup.new();
+    let _ = g.spawn(|| source(ta, 2000));
+    let _ = g.spawn(|| square(ra, tb));
+    let mut acc: i64 = 0;
+    let mut count: i64 = 0;
+    for y in rb.into_iter() {
+        acc = (acc * 31 + y) % 1000000007;
+        count += 1;
+    }
+    println(f"count {count}");
+    println(f"acc {acc}");
+}

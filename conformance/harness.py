@@ -70,6 +70,25 @@ def run(src: str, backends=("interp", "build"), stdin: str = "", timeout: int = 
         if "interp" in backends:
             cmd = [KARAC, "run", "--interp", str(path), "--", *argv] if args is not None else [KARAC, "__mir-run", str(path)]
             out["interp"] = [once(cmd) for _ in range(repeat)]
+        # The sanitizer lanes (CONF_LANES=asan,tsan in cases.py): the same IR
+        # built with AddressSanitizer or ThreadSanitizer, as the corpus runner's
+        # mir-llvm-asan and mir-llvm-tsan backends build it. A report exits 86.
+        # TSan runs on four workers and at least three times, since a race is
+        # schedule-sensitive. They pass no command-line arguments.
+        if "asan" in backends and has_backend() and args is None:
+            out["asan"] = [once([KARAC, "__mir-llvm-asan", str(path)]) for _ in range(repeat)]
+        if "tsan" in backends and has_backend() and args is None:
+            tsan_env = dict(run_env, KARAC_THREADS="4")
+
+            def tsan_once():
+                try:
+                    r = subprocess.run([KARAC, "__mir-llvm-tsan", str(path)], capture_output=True, text=True,
+                                       input=stdin, timeout=timeout, env=tsan_env)
+                    return (r.returncode, r.stdout, r.stderr)
+                except subprocess.TimeoutExpired:
+                    return (-999, "", f"timed out after {timeout}s")
+
+            out["tsan"] = [tsan_once() for _ in range(max(repeat, 3))]
         if "build" in backends and has_backend():
             exe = Path(d) / "main.bin"
             b = subprocess.run([KARAC, "build", "-o", str(exe), str(path)], capture_output=True,

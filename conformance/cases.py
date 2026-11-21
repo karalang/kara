@@ -22,9 +22,16 @@ expectation, written from the page it checks (the oracle is the page).
   file on stderr.
 
     python3 conformance/cases.py conformance/log conformance/pool
+
+`CONF_LANES` names the backends a running case is held to, comma-separated:
+`interp,build` by default; `asan` and `tsan` add the sanitizer builds
+(`karac __mir-llvm-asan` / `__mir-llvm-tsan`, TSan on four workers and at
+least three runs), and a sanitizer report fails the run with its first line.
 """
 
 import ast
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +39,14 @@ import tempfile
 from pathlib import Path
 
 from harness import KARAC, Report, run
+
+
+LANES = tuple(os.environ.get("CONF_LANES", "interp,build").split(","))
+
+
+def report_line(err: str) -> str:
+    m = re.search(r"(?:ERROR|WARNING): (?:Address|Leak|Thread)Sanitizer: [^\n]*", err)
+    return m.group(0)[:200] if m else ""
 
 
 def main():
@@ -76,7 +91,7 @@ def main():
             rfile = src.with_suffix(".repeat")
             repeat = int(rfile.read_text().strip() or 20) if rfile.exists() else 1
             envf, argsf = src.with_suffix(".env"), src.with_suffix(".args")
-            res = run(text, repeat=repeat, timeout=120,
+            res = run(text, backends=LANES, repeat=repeat, timeout=300,
                       env=ast.literal_eval(envf.read_text()) if envf.exists() else None,
                       args=ast.literal_eval(argsf.read_text()) if argsf.exists() else None)
             if res["check"][0] != 0:
@@ -92,10 +107,13 @@ def main():
             def same(a, b):
                 return sorted(a.splitlines()) == sorted(b.splitlines()) if unordered else a == b
 
-            for backend in ("interp", "build"):
-                for i, (code, out, err) in enumerate(res.get(backend, [])):
-                    tag = f"{src} [{backend} run {i + 1}/{repeat}]"
-                    if code != want_exit:
+            for backend in LANES:
+                runs = res.get(backend, [])
+                for i, (code, out, err) in enumerate(runs):
+                    tag = f"{src} [{backend} run {i + 1}/{len(runs)}]"
+                    if report_line(err):
+                        rep.failed.append(f"{tag} {report_line(err)}")
+                    elif code != want_exit:
                         rep.failed.append(f"{tag} exit {code}, want {want_exit}: {err[-1500:]}")
                     elif not same(out, want_out):
                         rep.failed.append(f"{tag} stdout:\n{out}--- want:\n{want_out}")

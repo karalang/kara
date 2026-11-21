@@ -1,0 +1,5 @@
+// data.md: nothing on the page runs on the v2 pipeline yet, and check says
+// so, naming the page, instead of an unknown-name error.
+fn main() {
+    let c: Column[i64] = Column.new();
+}

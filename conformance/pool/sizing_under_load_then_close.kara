@@ -1,0 +1,48 @@
+import std.pool.{Pool, PoolError};
+import std.sync.{Atomic, TaskGroup};
+import std.time.{Duration, sleep};
+
+struct Conn { id: i64 }
+
+// pool.md: at most `max_connections` values exist at once, a full pool's
+// acquire waits for a loan to come back, and after `close` every acquire
+// fails with PoolClosed. Twelve tasks share a pool of three; each counts
+// itself in while it holds a loan, so the peak shows the cap held.
+fn main() {
+    let pool: Pool[Conn, String] = Pool.new(|| Ok(Conn { id: 1 }), 3, 16);
+    let inuse: Atomic[i64] = Atomic.new(0);
+    let peak: Atomic[i64] = Atomic.new(0);
+    let served: Atomic[i64] = Atomic.new(0);
+    {
+        let g = TaskGroup.new();
+        for _ in 0..12 {
+            let _ = g.spawn(|| {
+                match pool.acquire(Duration.ms(5000)) {
+                    Ok(c) => {
+                        let now = inuse.fetch_add(1) + 1;
+                        let mut seen = peak.load();
+                        while now > seen {
+                            match peak.compare_exchange(seen, now) {
+                                Ok(_) => { seen = now; }
+                                Err(actual) => { seen = actual; }
+                            }
+                        }
+                        sleep(Duration.ms(5));
+                        let _ = c.val.id;
+                        inuse.fetch_sub(1);
+                        served.fetch_add(1);
+                    }
+                    Err(e) => println(f"acquire failed: {e}"),
+                }
+            });
+        }
+    }
+    println(f"served {served.load()}");
+    println(f"peak within cap {peak.load() <= 3}");
+    pool.close();
+    match pool.acquire(Duration.ms(10)) {
+        Err(PoolError.PoolClosed) => println("after close: pool closed"),
+        Ok(_) => println("after close: lent a value"),
+        Err(e) => println(f"after close: {e}"),
+    }
+}
