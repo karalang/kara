@@ -904,6 +904,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure
+  each element's reference. Compiled, they handed it the address of the slot
+  holding the reference, so `v.sort_by(|a, b| b[1].cmp(a[1]))` on a
+  `Vec[ref Vec[i32]]` stopped on an index out of bounds under `karac run`,
+  left the vector unsorted under `karac build` and read past a stack slot
+  under ASan; the MIR interpreter was right (B-2026-11-21-6).
 - `*p.0` on an item lent by `.iter()`, as an adaptor's closure parameter
   (`t.iter().map(|p| *p.0)`) or a `for` loop's item (`for p in t.iter()`,
   `for p in t`), runs as `karac check` accepts it: the part is read

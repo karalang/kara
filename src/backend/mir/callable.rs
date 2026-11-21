@@ -1091,7 +1091,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 env: None,
             },
         };
-        let el_ref = self.tys.intern(TyKind::Ref(el));
+        let (a, el_ref) = self.elem_ref_arg(a, el)?;
+        let (b, _) = self.elem_ref_arg(b, el)?;
         let (sa, sb) = (self.entry_slot(8, "a")?, self.entry_slot(8, "b")?);
         self.store(sa, a.into())?;
         self.store(sb, b.into())?;
@@ -1117,6 +1118,24 @@ impl<'ctx> Cx<'ctx, '_> {
             self.call_glue(kb, ret_ty)?;
         }
         Ok(o)
+    }
+
+    /// What a callee that takes an element by `ref` is handed, given the
+    /// element's address `at`: that address as a `ref el`, or, when the
+    /// element is itself a reference, the reference stored there. A borrow
+    /// of a borrow is the borrow, so the closure's parameter is then the
+    /// element's own type, and the slot's address would be read as the
+    /// referent (B-2026-11-21-6).
+    pub(super) fn elem_ref_arg(
+        &mut self,
+        at: PointerValue<'ctx>,
+        el: Ty,
+    ) -> R<(PointerValue<'ctx>, Ty)> {
+        if matches!(self.tys.kind(el), TyKind::Ref(_)) {
+            Ok((self.load_ptr(at)?, el))
+        } else {
+            Ok((at, self.tys.intern(TyKind::Ref(el))))
+        }
     }
 
     /// The return type of what `c` calls.

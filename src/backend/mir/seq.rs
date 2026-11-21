@@ -2847,12 +2847,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 let c = self.callee_by_ref(f)?;
                 let w = self.entry_slot(8, "retain.w")?;
                 self.store(w, self.i64(0).into())?;
-                let el_ref = self.tys.intern(TyKind::Ref(el));
                 let arg = self.entry_slot(8, "retain.arg")?;
                 let keep = self.entry_slot(1, "retain.keep")?;
                 self.count_loop(n, |cx, i| {
                     let x = cx.elem_ptr(p, i, size)?;
-                    cx.store(arg, x.into())?;
+                    let (a, el_ref) = cx.elem_ref_arg(x, el)?;
+                    cx.store(arg, a.into())?;
                     cx.call_callee(&c, keep, &[(arg, el_ref)])?;
                     let k = cx
                         .builder
