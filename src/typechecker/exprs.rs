@@ -17129,10 +17129,16 @@ impl<'a> super::TypeChecker<'a> {
                                 inner_expr.span,
                             );
                         } else if ty != Type::Error && !self.type_supports_display(&ty) {
+                            // A `Secret` says why it has no `Display`, as its
+                            // `Debug` and `==` refusals do (secret.md).
+                            let hint = self
+                                .secret_withheld_hint(&ty, "Display")
+                                .map(|h| format!(": {h}"))
+                                .unwrap_or_default();
                             self.type_error(
                                 format!(
                                     "type '{}' does not implement Display; \
-                                     cannot interpolate in f-string",
+                                     cannot interpolate in f-string{hint}",
                                     type_display(&ty)
                                 ),
                                 inner_expr.span,

@@ -3070,10 +3070,14 @@ impl<'a> super::TypeChecker<'a> {
                             && self.unbound_literal_var(&arg_ty).is_none()
                             && !self.type_supports_display(&arg_ty)
                         {
+                            let hint = self
+                                .secret_withheld_hint(&arg_ty, "Display")
+                                .map(|h| format!(": {h}"))
+                                .unwrap_or_default();
                             self.type_error(
                                 format!(
                                     "{}() argument must implement Display, \
-                                     but '{}' does not",
+                                     but '{}' does not{hint}",
                                     name,
                                     type_display(&arg_ty)
                                 ),

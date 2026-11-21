@@ -2288,6 +2288,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Printing a `Secret[T]` (`println(tok)`, `f"{tok}"`) is refused with the
+  reason `dbg` and `==` already gave: `Secret` withholds `Display` on
+  purpose (docs/library/secret.md), read it with `.expose()` (B-2026-11-21-24).
 - `s + *t`, with `t` a `ref Str` such as an item lent by `.iter()`, gets the
   machine-applicable fix `s + t.to_string()` that `s + t` and `s + ref t`
   already had; it was refused with no fix (B-2026-11-21-16).

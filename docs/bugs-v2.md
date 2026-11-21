@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 650 |
+| diagnostics | 651 |
 | false-positive | 336 |
 | missing-feature | 234 |
 | perf | 193 |
@@ -90,6 +90,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
+| typechecker | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-21). Do not edit this block by hand; edit the ledger and regenerate._
@@ -150,6 +151,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-11 | 2026-11-21 | other | medium | Test infra: 92 `karac build` call sites hand the BUILD's exit status to `common::link_or_skip` with no check that the failure is a link, and 33 more in tests/cli.rs (plus tests/run_v2.rs:245) skip the AOT leg whenever the build fails or leaves no binary, so any build-time failure, such as an E0516 'not lowered yet', a backend error or a karac panic, reads as 'no runtime archive' on a local gate run | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
 | B-2026-11-21-15 | 2026-11-21 | typecheck | high | A `par for` item that is a `shared` handle enters each iteration unchecked: `par for x in v.iter() { .. }` (and `par for x in v`, `v.into_iter()`) over a `Vec[S]` of one `shared struct S` passes `karac check`, and iterations copying or writing through `x` race on the non-atomic count and the `mut` fields: heap-use-after-free and double-free under ASan, data races under TSan | — |
+| B-2026-11-21-24 | 2026-11-21 | typechecker | low | Printing a `Secret[T]` with `println(tok)` or `f"{tok}"` is refused with the generic "does not implement Display", where `dbg`, `==` and a hand-written `impl Debug` say `Secret` withholds the trait on purpose and point at docs/library/secret.md | — |
 
 ### Relocated
 
