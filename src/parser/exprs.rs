@@ -1179,6 +1179,52 @@ impl super::Parser {
                 }
             }
 
+            // Python's `x in v` / `x not in v` (B-2026-11-20-73): a
+            // membership test, whose method (`contains` or `contains_key`)
+            // the checker names once it knows the collection's type.
+            if 10 >= min_bp {
+                let negated = matches!(self.peek_token_ref(), Token::Not)
+                    && matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.token),
+                        Some(Token::In)
+                    );
+                if negated || matches!(self.peek_token_ref(), Token::In) {
+                    self.advance();
+                    if negated {
+                        self.advance();
+                    }
+                    let rhs = self.parse_expr_bp(11)?;
+                    let end = rhs.span.offset + rhs.span.length;
+                    let span = Span {
+                        length: end.saturating_sub(lhs.span.offset),
+                        ..lhs.span
+                    };
+                    let item_span = lhs.span;
+                    lhs = Expr {
+                        id: crate::ids::NodeId::DUMMY,
+                        span,
+                        kind: ExprKind::MethodCall {
+                            object: Box::new(rhs),
+                            method: if negated {
+                                crate::typechecker::PYTHON_NOT_IN.to_string()
+                            } else {
+                                crate::typechecker::PYTHON_IN.to_string()
+                            },
+                            turbofish: None,
+                            args: vec![CallArg {
+                                label: None,
+                                mut_marker: false,
+                                mut_marker_span: None,
+                                value: lhs,
+                                span: item_span,
+                            }],
+                            args_close_span: span,
+                        },
+                    };
+                    continue;
+                }
+            }
+
             // Python's `x ** n` lexes as `*` then a unary `*`; read as that,
             // the checker's "drop the `*`" fix mended it to `x * n`
             // (B-2026-11-20-70). Two touching stars are the power operator,
@@ -1418,6 +1464,9 @@ impl super::Parser {
     fn parse_prefix(&mut self) -> Option<Expr> {
         self.mend_python_lambda();
         self.mend_python_comprehension();
+        self.mend_python_ternary();
+        self.mend_python_dict();
+        self.mend_go_value_forms();
         let start = self.current_span();
 
         match self.peek_token_ref() {

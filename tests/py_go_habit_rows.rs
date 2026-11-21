@@ -326,3 +326,195 @@ fn a_par_branch_return_keeps_its_comma_b_2026_11_20_77() {
     assert_eq!(m.text, src);
     assert!(!m.first.contains("several values"), "{}", m.first);
 }
+
+#[test]
+fn python_in_and_not_in_name_the_collections_method_b_2026_11_20_73() {
+    mended(
+        "fn main() { let mut d: Map[String, i64] = Map.new(); d[\"a\"] = 1; if \"a\" in d { println(\"in\"); } }\n",
+        "d.contains_key(\"a\")",
+        "in\n",
+    );
+    mended(
+        "fn main() { let v = [1, 2]; if 3 not in v { println(\"out\"); } }\n",
+        "not v.contains(3)",
+        "out\n",
+    );
+}
+
+#[test]
+fn python_conditional_expression_becomes_an_if_b_2026_11_20_73() {
+    mended(
+        "fn main() { let x = 5; let s = \"big\" if x > 3 else \"small\"; println(s); }\n",
+        "if x > 3 { \"big\" } else { \"small\" }",
+        "big\n",
+    );
+    // Kāra's own `if` expression and a match guard are left alone.
+    let src = "fn main() { let x = 5; let s = if x > 3 { 1 } else { 2 }; match x { n if n > 1 => println(s), _ => {} } }\n";
+    let m = mend(src);
+    assert!(m.clean, "{}", m.first);
+    assert_eq!(m.text, src);
+}
+
+#[test]
+fn python_floor_division_is_told_not_read_as_a_comment_b_2026_11_20_73() {
+    // A name operand may be negative: told, with no edit.
+    let m = mend("fn main() { let x = 17; println(x // 5); }\n");
+    assert!(!m.clean);
+    assert!(m.first.contains("floor division"), "{}", m.first);
+    assert!(!m.first.contains("Expected `)`"), "{}", m.first);
+    // Two literals truncate and floor alike: mended.
+    mended("fn main() { println(17 // 5); }\n", "17 / 5", "3\n");
+    // A comment after an expression is still a comment.
+    let src = "fn main() {\n    let x = 4 // the count\n    println(x)\n}\n";
+    let m = mend(src);
+    assert!(!m.first.contains("floor division"), "{}", m.first);
+    // Nor is a note with a `;` in its prose, or one set off by spaces.
+    for src in [
+        "fn f(n: i64) -> i64 {\n    -1   // a sentinel; never reached.\n}\nfn main() { println(f(1)); }\n",
+        "fn f(x: f64) -> f64 {\n    1.0 / x // x^n = 1 / x^(-n); -n in i64 so it is safe\n}\nfn main() { println(f(2.0)); }\n",
+    ] {
+        let m = mend(src);
+        assert!(m.clean, "{}", m.first);
+        assert_eq!(m.text, src);
+    }
+}
+
+#[test]
+fn python_dict_literal_get_and_items_are_mended_b_2026_11_20_75() {
+    mended(
+        "fn main() { let d = {\"a\": 1, \"b\": 2}; println(d[\"b\"]); }\n",
+        "Map.from([(\"a\", 1), (\"b\", 2)])",
+        "2\n",
+    );
+    mended(
+        "fn main() { let mut d: Map[String, i64] = Map.new(); d[\"a\"] = 1; println(d.get(\"z\", 0)); }\n",
+        "d.get(\"z\").unwrap_or(0)",
+        "0\n",
+    );
+    mended(
+        "fn main() { let d: Map[String, String] = Map.new(); println(d.get(\"z\", \"q\".to_string())); }\n",
+        ".cloned().unwrap_or(",
+        "q\n",
+    );
+    mended(
+        "fn main() { let mut d: Map[String, i64] = Map.new(); d[\"a\"] = 2; for (k, v) in d.items() { println(f\"{k}={v}\"); } }\n",
+        "d.iter()",
+        "a=2\n",
+    );
+}
+
+#[test]
+fn python_print_of_two_values_and_max_of_a_list_b_2026_11_20_76() {
+    mended(
+        "fn main() { let a = 1; let b = 2; print(a, b); }\n",
+        "println(f\"{a} {b}\")",
+        "1 2\n",
+    );
+    let m = mend("fn main() { let v = [4, 9, 2]; println(max(v)); }\n");
+    assert!(m.first.contains("an `Option`"), "{}", m.first);
+    assert!(m.text.contains("v.iter().max()"), "{}", m.text);
+    // Two values keep the library's `max`.
+    let src = "fn main() { println(max(4, 2)); }\n";
+    let m = mend(src);
+    assert!(m.clean, "{}", m.first);
+}
+
+#[test]
+fn go_type_struct_and_const_block_are_mended_b_2026_11_20_77() {
+    mended(
+        "type P struct { x i64 }\nfn main() { let p = P { x: 1 }; println(p.x); }\n",
+        "struct P { x: i64 }",
+        "1\n",
+    );
+    mended(
+        "const ( A = 1; B = 2 )\nfn main() { println(A + B); }\n",
+        "const A: i64 = 1;\nconst B: i64 = 2;",
+        "3\n",
+    );
+}
+
+#[test]
+fn go_if_init_moves_out_only_when_the_name_is_not_read_after_b_2026_11_20_78() {
+    mended(
+        "fn f() -> i64 { 4 }\nfn main() {\n    if x := f(); x > 3 { println(x); }\n}\n",
+        "let x = f();\n    if x > 3",
+        "4\n",
+    );
+    let m = mend(
+        "fn f() -> i64 { 4 }\nfn main() {\n    let x = 1;\n    if x := f(); x > 3 { println(x); }\n    println(x);\n}\n",
+    );
+    assert!(!m.clean);
+    assert!(m.first.contains("init statement"), "{}", m.first);
+    let m = mend(
+        "fn main() { let mut m: Map[String, i64] = Map.new(); m[\"a\"] = 3; if v, ok := m[\"a\"]; ok { println(v); } }\n",
+    );
+    assert!(m.first.contains("if let Some(v) = m.get(k)"), "{}", m.first);
+    let m = mend(
+        "fn main() { let mut m: Map[String, i64] = Map.new(); m[\"a\"] = 1; v, ok := m[\"b\"]; if not ok { println(v); } }\n",
+    );
+    assert!(m.first.contains("comma-ok"), "{}", m.first);
+}
+
+#[test]
+fn go_make_literals_and_channel_arrows_are_mended_b_2026_11_20_79() {
+    mended(
+        "fn main() { let v = make([]i64, 3); println(v.len()); }\n",
+        "Vec.filled(3, 0)",
+        "3\n",
+    );
+    mended(
+        "fn main() { let m = make(map[string]i64); println(m.len()); }\n",
+        "Map[String, i64].new()",
+        "0\n",
+    );
+    mended(
+        "fn main() { let m = map[string]i64{\"a\": 1}; println(m[\"a\"]); }\n",
+        "Map.from([(\"a\", 1)])",
+        "1\n",
+    );
+    mended(
+        "fn main() { let v = []i64{1, 2, 3}; println(v[1]); }\n",
+        "[1, 2, 3]",
+        "2\n",
+    );
+    mended(
+        "fn main() { let (tx, rx) = channel(1); tx <- 3; let x = <-rx; println(x.unwrap()); }\n",
+        "tx.send(3); let x = rx.recv();",
+        "3\n",
+    );
+    for (src, word) in [
+        ("fn work() {}\nfn main() { go work(); }\n", "`go f(x)`"),
+        (
+            "fn main() { let (tx, rx) = channel(1); select { case x := <-rx: println(x); } }\n",
+            "`select { case .. }`",
+        ),
+        ("fn main() { let c = make(chan i64); }\n", "`make(chan T)`"),
+    ] {
+        let m = mend(src);
+        assert!(!m.clean);
+        assert!(m.first.contains(word), "{}", m.first);
+    }
+}
+
+#[test]
+fn a_programs_own_make_is_left_alone_b_2026_11_20_79() {
+    let src = "fn make(n: i64) -> i64 { n * 2 }\nfn main() { println(make(3)); }\n";
+    let m = mend(src);
+    assert!(m.clean, "{}", m.first);
+    assert_eq!(m.out, "6\n");
+}
+
+#[test]
+fn a_binding_named_range_is_iterated_as_written_b_2026_11_22_1() {
+    let src = "fn main() {\n    let range = [1, 2, 3];\n    let mut s = 0;\n    for d in range {\n        s += d;\n    }\n    println(s);\n}\n";
+    let m = mend(src);
+    assert!(m.clean, "{}", m.first);
+    assert_eq!(m.text, src);
+    assert_eq!(m.out, "6\n");
+    // Go's `for x in range v` with no such binding is still mended.
+    mended(
+        "fn main() { let v = [1, 2]; for x in range v { println(x); } }\n",
+        "for x in v",
+        "1\n2\n",
+    );
+}

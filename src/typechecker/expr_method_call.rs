@@ -2041,6 +2041,11 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
         args_close_span: &Span,
     ) -> Type {
+        if method == super::py_go_habits::PYTHON_IN || method == super::py_go_habits::PYTHON_NOT_IN
+        {
+            let negated = method == super::py_go_habits::PYTHON_NOT_IN;
+            return self.check_python_membership(object, negated, args, span);
+        }
         let ends = (
             super::expr_ops::appended_cast_end_offset(object),
             args.iter()

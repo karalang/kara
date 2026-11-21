@@ -204,6 +204,7 @@ impl super::Parser {
             self.error("cannot combine `private` and `pub` on the same item");
             self.advance();
         }
+        self.mend_go_item_forms();
         if !self.foreign_fn_keyword() {
             return None;
         }

@@ -224,6 +224,11 @@ impl<'a> super::TypeChecker<'a> {
                     let key = type_args.first().cloned().unwrap_or(Type::Error);
                     let val = type_args.get(1).cloned().unwrap_or(Type::Error);
                     let hasher = type_args.get(2).cloned();
+                    if let Some(t) =
+                        self.python_map_habit(method, args, span, args_close_span, &val)
+                    {
+                        return Some(t);
+                    }
                     return Some(self.infer_map_method(&key, &val, hasher, method, args, span));
                 }
             }
@@ -289,6 +294,10 @@ impl<'a> super::TypeChecker<'a> {
             if name == "SortedMap" && !user_impl_method(self, SORTED_MAP_BUILTIN_METHODS) {
                 let key = type_args.first().cloned().unwrap_or(Type::Error);
                 let value = type_args.get(1).cloned().unwrap_or(Type::Error);
+                if let Some(t) = self.python_map_habit(method, args, span, args_close_span, &value)
+                {
+                    return Some(t);
+                }
                 return Some(self.infer_sorted_map_method(&key, &value, method, args, span));
             }
             if name == "Set" {

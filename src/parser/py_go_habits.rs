@@ -139,6 +139,22 @@ impl Parser {
         })
     }
 
+    /// Whether the file binds `range` as a name: `let range`, `let mut
+    /// range`, a parameter or field `range:`, a closure's `|range|`, or a
+    /// `for range in`.
+    fn range_is_a_name(&self) -> bool {
+        (0..self.tokens.len()).any(|i| {
+            self.ident_at(i) == Some("range")
+                && (matches!(self.tok_at(i + 1), Some(Token::Colon | Token::Equal))
+                    && !matches!(self.tok_at(i + 2), Some(Token::Equal | Token::Colon))
+                    || i > 0
+                        && matches!(
+                            self.tok_at(i - 1),
+                            Some(Token::Let | Token::Mut | Token::Pipe | Token::For)
+                        ))
+        })
+    }
+
     /// Statement-start habits, rewritten in place before the statement is
     /// parsed.
     pub(super) fn mend_statement_habits(&mut self) {
@@ -146,6 +162,9 @@ impl Parser {
         // text is an expression, never a statement written by hand, and
         // its names are bound outside it (`f"{pass}"`).
         if self.ident_at(1) == Some("__interp__") {
+            return;
+        }
+        if self.mend_go_statement_forms() {
             return;
         }
         let p = self.pos;
@@ -351,6 +370,17 @@ impl Parser {
             let start = self.span_at(p);
             let colon = self.span_at(at + 1);
             let tuple = names.len() > 1;
+            // `v, ok := m[k]`: Go's comma-ok lookup, whose Kāra form depends
+            // on what the program does with `ok`.
+            let comma_ok = names.len() == 2
+                && self.ident_at(at + 3).is_some()
+                && matches!(self.tok_at(at + 4), Some(Token::LeftBracket))
+                && self.matching_close(at + 4).is_some_and(|c| {
+                    matches!(
+                        self.tok_at(c + 1),
+                        Some(Token::Semicolon | Token::RightBrace)
+                    )
+                });
             let mut edits = vec![Self::edit(
                 start.offset,
                 0,
@@ -379,6 +409,14 @@ impl Parser {
                 self.tokens.insert(p, Self::synth(Token::LeftParen, start));
             }
             self.tokens.insert(p, Self::synth(Token::Let, start));
+            if comma_ok {
+                self.error_at(
+                    "`v, ok := m[k]` is Go's comma-ok lookup: Kāra's lookup returns an \
+                     `Option`, so the test is `if let Some(v) = m.get(k) { .. }`",
+                    colon,
+                );
+                return;
+            }
             self.habit(
                 "`:=` is Go's short declaration: Kāra binds with `let x = v` (`let (a, b) = \
                  f()` for several values, `let mut` for one that is reassigned)",
@@ -904,10 +942,16 @@ impl Parser {
         let p = self.pos;
         let at = self.span_at(p);
         // `for x in range v`: the `range` goes.
+        // Only in Go's shape, a collection named after the word, and only
+        // where the program binds no `range` of its own: `for d in range {`
+        // iterates a binding named `range` (B-2026-11-22-1).
         if self.ident_at(p + 1).is_some()
             && matches!(self.tok_at(p + 2), Some(Token::In))
             && self.ident_at(p + 3) == Some("range")
-            && !matches!(self.tok_at(p + 4), Some(Token::LeftParen))
+            && (self.ident_at(p + 4).is_some()
+                || (matches!(self.tok_at(p + 4), Some(Token::LeftBracket))
+                    && !self.touching(p + 3, p + 4)))
+            && !self.range_is_a_name()
         {
             let r = self.span_at(p + 3);
             let next = self.span_at(p + 4);
@@ -1293,5 +1337,896 @@ impl Parser {
             t.span = Span { length: 0, ..first };
         }
         self.tokens.splice(open..=close, toks);
+    }
+
+    /// The source text of tokens `[a, b)`.
+    fn tokens_text(&self, a: usize, b: usize) -> Option<String> {
+        if a >= b {
+            return None;
+        }
+        let (x, y) = (self.span_at(a), self.span_at(b - 1));
+        if x.length == 0 || y.length == 0 {
+            return None;
+        }
+        self.source_between(x.offset, y.offset + y.length)
+    }
+
+    /// Tokens `[from, to]` replaced by `text`, lexed, each spanned at `at`.
+    fn splice_text(&mut self, from: usize, to: usize, text: &str, at: Span) {
+        let mut toks = crate::tokenize(text);
+        toks.retain(|t| !matches!(t.token, Token::EOF));
+        for t in &mut toks {
+            t.span = Span { length: 0, ..at };
+        }
+        self.tokens.splice(from..=to, toks);
+    }
+
+    /// A refused habit whose tokens `[from, to]` the Kāra `text` replaces,
+    /// in the source and in the token stream.
+    fn rewrite(&mut self, note: &str, at: Span, from: usize, to: usize, text: &str) {
+        let first = self.span_at(from);
+        let last = self.span_at(to);
+        self.habit(
+            note,
+            at,
+            vec![Self::edit(
+                first.offset,
+                last.offset + last.length - first.offset,
+                text,
+            )],
+        );
+        self.splice_text(from, to, text, first);
+    }
+
+    /// The index of the `)` or `]` closing the bracket at `open`.
+    fn matching_close(&self, open: usize) -> Option<usize> {
+        let mut depth = 0i32;
+        let mut i = open;
+        loop {
+            match self.tok_at(i)? {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                Token::EOF => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// `k: v, ..` between `from` and `to` (exclusive) as text pairs: a
+    /// Python dict's or a Go map literal's entries.
+    fn key_value_pairs(&self, from: usize, to: usize) -> Option<Vec<(String, String)>> {
+        let mut pairs = Vec::new();
+        let mut depth = 0i32;
+        let (mut start, mut colon) = (from, None);
+        let mut i = from;
+        while i <= to {
+            let tok = if i == to { None } else { self.tok_at(i) };
+            match tok {
+                Some(Token::LeftParen | Token::LeftBracket | Token::LeftBrace) => depth += 1,
+                Some(Token::RightParen | Token::RightBracket | Token::RightBrace) => depth -= 1,
+                Some(Token::Colon) if depth == 0 && colon.is_none() => colon = Some(i),
+                Some(Token::Semicolon | Token::EOF) => return None,
+                Some(Token::Comma) | None if depth == 0 => {
+                    if start < i {
+                        let c = colon?;
+                        pairs.push((self.tokens_text(start, c)?, self.tokens_text(c + 1, i)?));
+                    } else if tok.is_some() {
+                        return None;
+                    }
+                    start = i + 1;
+                    colon = None;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        Some(pairs)
+    }
+
+    /// Go's (and Python's) type names, as Kāra writes them: `int` -> `i64`,
+    /// `string` -> `String`, `[]T` -> `Vec[T]`, `map[K]V` -> `Map[K, V]`.
+    /// `None` for a type with no one-to-one Kāra form (`chan T`, `*T`).
+    fn go_type(text: &str) -> Option<String> {
+        let t = text.trim();
+        if let Some(rest) = t.strip_prefix("[]") {
+            return Some(format!("Vec[{}]", Self::go_type(rest)?));
+        }
+        if let Some(rest) = t.strip_prefix("map[") {
+            let mut depth = 1;
+            let close = rest.char_indices().find_map(|(i, c)| {
+                match c {
+                    '[' => depth += 1,
+                    ']' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(i)
+            })?;
+            let k = Self::go_type(&rest[..close])?;
+            let v = Self::go_type(&rest[close + 1..])?;
+            return Some(format!("Map[{k}, {v}]"));
+        }
+        let mapped = match t {
+            "int" | "int64" => "i64",
+            "int32" | "rune" => {
+                if t == "rune" {
+                    "char"
+                } else {
+                    "i32"
+                }
+            }
+            "int16" => "i16",
+            "int8" => "i8",
+            "uint" | "uint64" => "u64",
+            "uint32" => "u32",
+            "uint16" => "u16",
+            "uint8" | "byte" => "u8",
+            "float64" => "f64",
+            "float32" => "f32",
+            "string" => "String",
+            "bool" => "bool",
+            _ => "",
+        };
+        if !mapped.is_empty() {
+            return Some(mapped.to_string());
+        }
+        // A Kāra name as written (`i64`, `String`, a struct of the program).
+        (!t.is_empty() && t.chars().all(|c| c.is_alphanumeric() || c == '_')).then(|| t.to_string())
+    }
+
+    /// Python's conditional expression `a if c else b`, Kāra's
+    /// `if c { a } else { b }` (B-2026-11-20-73). Rewritten where the
+    /// expression starts, the whole of it on one line.
+    pub(super) fn mend_python_ternary(&mut self) {
+        if self.ident_at(1) == Some("__interp__") {
+            return;
+        }
+        let p = self.pos;
+        if matches!(
+            self.tok_at(p),
+            Some(
+                Token::Return
+                    | Token::Break
+                    | Token::Continue
+                    | Token::If
+                    | Token::Match
+                    | Token::Loop
+                    | Token::While
+                    | Token::For
+                    | Token::Let
+                    | Token::Pipe
+                    | Token::PipePipe
+                    | Token::LeftBrace
+                    | Token::Else
+                    | Token::EOF
+            ) | None
+        ) {
+            return;
+        }
+        let line = self.span_at(p).line;
+        // Scans for `stop` at depth 0, on `line`; `None` at anything that
+        // ends the expression first.
+        let scan = |me: &Self, from: usize, stop: &Token| -> Option<usize> {
+            let mut depth = 0i32;
+            let mut i = from;
+            loop {
+                let t = me.tok_at(i)?;
+                if me.span_at(i).line != line {
+                    return None;
+                }
+                match t {
+                    Token::LeftParen | Token::LeftBracket => depth += 1,
+                    Token::RightParen | Token::RightBracket => {
+                        depth -= 1;
+                        if depth < 0 {
+                            return None;
+                        }
+                    }
+                    t if depth == 0 && t == stop => return Some(i),
+                    Token::LeftBrace
+                    | Token::RightBrace
+                    | Token::Semicolon
+                    | Token::Equal
+                    | Token::FatArrow
+                    | Token::PlusEqual
+                    | Token::MinusEqual
+                    | Token::StarEqual
+                    | Token::SlashEqual
+                    | Token::PercentEqual
+                    | Token::EOF => return None,
+                    Token::Comma if depth == 0 => return None,
+                    _ => {}
+                }
+                i += 1;
+            }
+        };
+        let Some(if_at) = scan(self, p, &Token::If).filter(|&i| i > p) else {
+            return;
+        };
+        let Some(else_at) = scan(self, if_at + 1, &Token::Else).filter(|&i| i > if_at + 1) else {
+            return;
+        };
+        if matches!(
+            self.tok_at(else_at + 1),
+            Some(Token::LeftBrace | Token::If) | None
+        ) {
+            return;
+        }
+        // The else value runs to whatever ends the expression.
+        let mut depth = 0i32;
+        let mut end = else_at + 1;
+        loop {
+            match self.tok_at(end) {
+                Some(Token::LeftParen | Token::LeftBracket | Token::LeftBrace) => depth += 1,
+                Some(Token::RightParen | Token::RightBracket | Token::RightBrace) if depth > 0 => {
+                    depth -= 1
+                }
+                Some(
+                    Token::RightParen
+                    | Token::RightBracket
+                    | Token::RightBrace
+                    | Token::Semicolon
+                    | Token::Comma
+                    | Token::EOF,
+                )
+                | None => break,
+                // A nested conditional is declined: its edit would land in
+                // the text this one writes.
+                Some(Token::If) if depth == 0 => return,
+                _ => {}
+            }
+            if self.span_at(end).line != line {
+                break;
+            }
+            end += 1;
+        }
+        let (Some(a), Some(c), Some(b)) = (
+            self.tokens_text(p, if_at),
+            self.tokens_text(if_at + 1, else_at),
+            self.tokens_text(else_at + 1, end),
+        ) else {
+            return;
+        };
+        let at = self.span_at(if_at);
+        self.rewrite(
+            "`a if c else b` is Python's conditional expression: Kāra's `if` is an \
+             expression, `if c { a } else { b }`",
+            at,
+            p,
+            end - 1,
+            &format!("if {c} {{ {a} }} else {{ {b} }}"),
+        );
+    }
+
+    /// Python's dict literal `{"a": 1}`, Kāra's `Map.from([("a", 1)])`
+    /// (B-2026-11-20-75).
+    pub(super) fn mend_python_dict(&mut self) {
+        let p = self.pos;
+        if self.ident_at(1) == Some("__interp__")
+            || !matches!(self.tok_at(p), Some(Token::LeftBrace))
+            || !matches!(
+                self.tok_at(p + 1),
+                Some(Token::StringLiteral(_) | Token::Integer(..))
+            )
+            || !matches!(self.tok_at(p + 2), Some(Token::Colon))
+        {
+            return;
+        }
+        let Some(close) = self.matching_close(p) else {
+            return;
+        };
+        let Some(pairs) = self.key_value_pairs(p + 1, close).filter(|v| !v.is_empty()) else {
+            return;
+        };
+        let items: Vec<String> = pairs.iter().map(|(k, v)| format!("({k}, {v})")).collect();
+        let at = self.span_at(p);
+        self.rewrite(
+            "`{k: v}` is Python's dict literal: Kāra builds a map from its pairs, \
+             `Map.from([(k, v), ..])`",
+            at,
+            p,
+            close,
+            &format!("Map.from([{}])", items.join(", ")),
+        );
+    }
+
+    /// Go's value forms where an operand starts (B-2026-11-20-79):
+    /// `make(..)`, `[]T{..}`, `map[K]V{..}` and `<-ch`.
+    pub(super) fn mend_go_value_forms(&mut self) {
+        if self.ident_at(1) == Some("__interp__") {
+            return;
+        }
+        let p = self.pos;
+        // `<-rx`: a receive.
+        if matches!(self.tok_at(p), Some(Token::LessThan))
+            && matches!(self.tok_at(p + 1), Some(Token::Minus))
+            && self.touching(p, p + 1)
+            && self.ident_at(p + 2).is_some()
+        {
+            let name = self.ident_at(p + 2).unwrap_or_default().to_string();
+            let at = self.span_at(p);
+            self.rewrite(
+                "`<-rx` is Go's receive: Kāra's is `rx.recv()`, an `Option` that is `None` \
+                 once every sender is gone (library/concurrency.md)",
+                at,
+                p,
+                p + 2,
+                &format!("{name}.recv()"),
+            );
+            return;
+        }
+        // `[]T{a, b}`: a slice literal.
+        if matches!(self.tok_at(p), Some(Token::LeftBracket))
+            && matches!(self.tok_at(p + 1), Some(Token::RightBracket))
+            && self.touching(p, p + 1)
+            && self.ident_at(p + 2).is_some()
+        {
+            let mut brace = p + 2;
+            while !matches!(self.tok_at(brace), Some(Token::LeftBrace)) {
+                match self.tok_at(brace) {
+                    Some(Token::Identifier { .. } | Token::LeftBracket | Token::RightBracket) => {
+                        brace += 1
+                    }
+                    _ => return,
+                }
+            }
+            let Some(close) = self.matching_close(brace) else {
+                return;
+            };
+            let ty = self.tokens_text(p, brace).and_then(|t| Self::go_type(&t));
+            let items = self.tokens_text(brace + 1, close);
+            let text = match (items, ty) {
+                (Some(items), _) => format!("[{}]", items.trim().trim_end_matches(',')),
+                (None, Some(ty)) => format!("{ty}.new()"),
+                (None, None) => return,
+            };
+            let at = self.span_at(p);
+            self.rewrite(
+                "`[]T{..}` is Go's slice literal: Kāra writes the list, `[a, b, c]`",
+                at,
+                p,
+                close,
+                &text,
+            );
+            return;
+        }
+        // `map[K]V{k: v}`: a map literal.
+        if self.ident_at(p) == Some("map") && matches!(self.tok_at(p + 1), Some(Token::LeftBracket))
+        {
+            let Some(kclose) = self.matching_close(p + 1) else {
+                return;
+            };
+            let mut brace = kclose + 1;
+            while !matches!(self.tok_at(brace), Some(Token::LeftBrace)) {
+                match self.tok_at(brace) {
+                    Some(Token::Identifier { .. } | Token::LeftBracket | Token::RightBracket) => {
+                        brace += 1
+                    }
+                    _ => return,
+                }
+            }
+            let Some(close) = self.matching_close(brace) else {
+                return;
+            };
+            let Some(pairs) = self.key_value_pairs(brace + 1, close) else {
+                return;
+            };
+            let text = if pairs.is_empty() {
+                match self.tokens_text(p, brace).and_then(|t| Self::go_type(&t)) {
+                    Some(ty) => format!("{ty}.new()"),
+                    None => return,
+                }
+            } else {
+                let items: Vec<String> = pairs.iter().map(|(k, v)| format!("({k}, {v})")).collect();
+                format!("Map.from([{}])", items.join(", "))
+            };
+            let at = self.span_at(p);
+            self.rewrite(
+                "`map[K]V{..}` is Go's map literal: Kāra builds a map from its pairs, \
+                 `Map.from([(k, v), ..])`",
+                at,
+                p,
+                close,
+                &text,
+            );
+            return;
+        }
+        // `make(map[K]V)`, `make([]T, n)`, `make(chan T)`.
+        // Only with a Go type first: `make` is a common name for a function.
+        let go_type_arg = (self.ident_at(p + 2) == Some("map")
+            && matches!(self.tok_at(p + 3), Some(Token::LeftBracket)))
+            || (matches!(self.tok_at(p + 2), Some(Token::LeftBracket))
+                && matches!(self.tok_at(p + 3), Some(Token::RightBracket))
+                && self.touching(p + 2, p + 3)
+                && self.ident_at(p + 4).is_some())
+            || (self.ident_at(p + 2) == Some("chan") && self.ident_at(p + 3).is_some());
+        if self.ident_at(p) == Some("make")
+            && matches!(self.tok_at(p + 1), Some(Token::LeftParen))
+            && go_type_arg
+        {
+            let Some(close) = self.matching_close(p + 1) else {
+                return;
+            };
+            let Some(inner) = self.tokens_text(p + 2, close) else {
+                return;
+            };
+            let at = self.span_at(p);
+            // The arguments, split at depth-0 commas.
+            let mut parts = Vec::new();
+            let mut depth = 0i32;
+            let mut cur = String::new();
+            for ch in inner.chars() {
+                match ch {
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' => depth -= 1,
+                    _ => {}
+                }
+                if ch == ',' && depth == 0 {
+                    parts.push(std::mem::take(&mut cur));
+                } else {
+                    cur.push(ch);
+                }
+            }
+            parts.push(cur);
+            let ty = parts[0].trim().to_string();
+            let text = if ty.starts_with("map[") && parts.len() == 1 {
+                Self::go_type(&ty).map(|t| format!("{t}.new()"))
+            } else if ty.starts_with("[]") && (2..=3).contains(&parts.len()) {
+                let zero = match Self::go_type(&ty[2..]).as_deref() {
+                    Some("i64") => Some("0"),
+                    Some("f64") => Some("0.0"),
+                    Some("bool") => Some("false"),
+                    Some("String") => Some("String.new()"),
+                    _ => None,
+                };
+                zero.map(|z| format!("Vec.filled({}, {z})", parts[1].trim()))
+            } else {
+                None
+            };
+            match text {
+                Some(text) => self.rewrite(
+                    "`make` is Go's: Kāra builds a map with `Map[K, V].new()` and a list of \
+                     `n` zeroes with `Vec.filled(n, 0)`",
+                    at,
+                    p,
+                    close,
+                    &text,
+                ),
+                None if ty.starts_with("chan") => self.error_at(
+                    "`make(chan T)` is Go's: a Kāra channel is a sender and a receiver, \
+                     `let (tx, rx) = channel(n)`, its capacity `n` required \
+                     (library/concurrency.md)",
+                    at,
+                ),
+                None => self.error_at(
+                    "`make` is Go's: Kāra builds a map with `Map[K, V].new()`, and a list \
+                     with `Vec.filled(n, value)` (the value written out: Kāra has no zero \
+                     value for every type)",
+                    at,
+                ),
+            }
+        }
+    }
+
+    /// Go's statement forms (B-2026-11-20-78, -79): `ch <- v`, `go f(x)`,
+    /// `select { case .. }` and `if x := f(); c { .. }`. `true` when the
+    /// statement was rewritten or replaced.
+    pub(super) fn mend_go_statement_forms(&mut self) -> bool {
+        let p = self.pos;
+        // `tx <- v`: a send.
+        if self.ident_at(p).is_some()
+            && matches!(self.tok_at(p + 1), Some(Token::LessThan))
+            && matches!(self.tok_at(p + 2), Some(Token::Minus))
+            && self.touching(p + 1, p + 2)
+        {
+            let mut depth = 0i32;
+            let mut end = p + 3;
+            loop {
+                match self.tok_at(end) {
+                    Some(Token::LeftParen | Token::LeftBracket | Token::LeftBrace) => depth += 1,
+                    Some(Token::RightParen | Token::RightBracket) => depth -= 1,
+                    Some(Token::RightBrace) if depth > 0 => depth -= 1,
+                    Some(Token::Semicolon | Token::RightBrace | Token::EOF) | None => break,
+                    _ => {}
+                }
+                end += 1;
+            }
+            let (Some(name), Some(value)) = (
+                self.ident_at(p).map(str::to_string),
+                self.tokens_text(p + 3, end),
+            ) else {
+                return false;
+            };
+            let at = self.span_at(p + 1);
+            self.rewrite(
+                "`tx <- v` is Go's send: Kāra's is `tx.send(v)` (library/concurrency.md)",
+                at,
+                p,
+                end - 1,
+                &format!("{name}.send({value})"),
+            );
+            return true;
+        }
+        let word = self.ident_at(p).unwrap_or_default();
+        let go_stmt = word == "go"
+            && self.ident_at(p + 1).is_some()
+            && matches!(self.tok_at(p + 2), Some(Token::LeftParen | Token::Dot));
+        let select_stmt = word == "select"
+            && matches!(self.tok_at(p + 1), Some(Token::LeftBrace))
+            && self.ident_at(p + 2) == Some("case");
+        if go_stmt || select_stmt {
+            let note = if go_stmt {
+                "`go f(x)` is Go's: Kāra starts a task in `par { .. }`, `par for`, or a \
+                 `TaskGroup`'s `spawn`, and the group waits for it before it ends \
+                 (library/concurrency.md); there is no detached task"
+            } else {
+                "`select { case .. }` is Go's: Kāra's `select` waits on several channels, \
+                 each arm `msg = rx.recv() => handle(msg)`, with an optional `default` \
+                 (library/concurrency.md)"
+            };
+            let at = self.span_at(p);
+            self.error_at(note, at);
+            // The statement goes, so nothing cascades from it.
+            let mut depth = 0i32;
+            let mut i = p;
+            loop {
+                match self.tok_at(i) {
+                    Some(Token::LeftParen | Token::LeftBracket | Token::LeftBrace) => depth += 1,
+                    Some(Token::RightParen | Token::RightBracket) => depth -= 1,
+                    Some(Token::RightBrace) => {
+                        depth -= 1;
+                        if depth <= 0 {
+                            if depth == 0 {
+                                i += 1;
+                            }
+                            break;
+                        }
+                    }
+                    Some(Token::Semicolon) if depth == 0 => {
+                        i += 1;
+                        break;
+                    }
+                    Some(Token::EOF) | None => break,
+                    _ => {}
+                }
+                i += 1;
+            }
+            self.tokens.drain(p..i);
+            self.tokens.insert(p, Self::synth(Token::LeftBrace, at));
+            self.tokens
+                .insert(p + 1, Self::synth(Token::RightBrace, at));
+            return true;
+        }
+        // `if x := f(); c { .. }`: Go's if with an init statement.
+        if matches!(self.tok_at(p), Some(Token::If)) {
+            let mut names = vec![];
+            let mut at = p + 1;
+            while self.ident_at(at).is_some() {
+                names.push(at);
+                if matches!(self.tok_at(at + 1), Some(Token::Comma)) {
+                    at += 2;
+                } else {
+                    break;
+                }
+            }
+            let Some(&last) = names.last() else {
+                return false;
+            };
+            if !(matches!(self.tok_at(last + 1), Some(Token::Colon))
+                && matches!(self.tok_at(last + 2), Some(Token::Equal))
+                && self.touching(last + 1, last + 2))
+            {
+                return false;
+            }
+            let Some((brace, semis)) = self.header_brace(p + 1) else {
+                return false;
+            };
+            let [semi] = semis[..] else {
+                return false;
+            };
+            let at_span = self.span_at(p);
+            // Where the if (and its else chain) ends.
+            let mut end = self.matching_brace(brace);
+            while let Some(e) = end {
+                if !matches!(self.tok_at(e + 1), Some(Token::Else)) {
+                    break;
+                }
+                end = if matches!(self.tok_at(e + 2), Some(Token::If)) {
+                    self.header_brace(e + 3)
+                        .and_then(|(b, _)| self.matching_brace(b))
+                } else {
+                    self.matching_brace(e + 2)
+                };
+            }
+            let Some(end) = end else {
+                return false;
+            };
+            // A name the rest of the enclosing block reads keeps Go's
+            // scope only inside the `if`: moving it out would change what
+            // that later name means.
+            let name_texts: Vec<String> = names
+                .iter()
+                .filter_map(|&n| self.ident_at(n).map(str::to_string))
+                .collect();
+            let mut depth = 0i32;
+            let mut i = end + 1;
+            let mut used_after = false;
+            while let Some(t) = self.tok_at(i) {
+                match t {
+                    Token::LeftBrace => depth += 1,
+                    Token::RightBrace => {
+                        depth -= 1;
+                        if depth < 0 {
+                            break;
+                        }
+                    }
+                    Token::EOF => break,
+                    _ => {}
+                }
+                if self
+                    .ident_at(i)
+                    .is_some_and(|n| name_texts.iter().any(|x| x == n))
+                {
+                    used_after = true;
+                }
+                i += 1;
+            }
+            let init = self.tokens_text(last + 3, semi);
+            let comma_ok = names.len() > 1;
+            match init {
+                Some(init) if !comma_ok && !used_after => {
+                    let name = &name_texts[0];
+                    let indent = " ".repeat(at_span.column.saturating_sub(1));
+                    let after = self.span_at(semi + 1);
+                    self.habit(
+                        "`if x := f(); c` is Go's if with an init statement: Kāra binds first, \
+                         `let x = f();`, then tests, `if c { .. }`",
+                        at_span,
+                        vec![
+                            Self::edit(
+                                at_span.offset,
+                                0,
+                                &format!("let {name} = {init};\n{indent}"),
+                            ),
+                            Self::edit(
+                                at_span.offset + at_span.length,
+                                after.offset - (at_span.offset + at_span.length),
+                                " ",
+                            ),
+                        ],
+                    );
+                    // Tokens: `let x = init;` then `if c {`.
+                    let mut head = vec![
+                        Self::synth(Token::Let, at_span),
+                        self.tokens[names[0]].clone(),
+                        Self::synth(Token::Equal, at_span),
+                    ];
+                    head.extend(self.tokens[last + 3..=semi].iter().cloned());
+                    head.push(self.tokens[p].clone());
+                    self.tokens.splice(p..=semi, head);
+                }
+                _ => {
+                    let note = if comma_ok {
+                        "`v, ok := m[k]` is Go's comma-ok lookup: Kāra's lookup returns an \
+                         `Option`, so the test is `if let Some(v) = m.get(k) { .. }`"
+                    } else {
+                        "`if x := f(); c` is Go's if with an init statement: Kāra binds first, \
+                         `let x = f();`, then tests, `if c { .. }` (here `x` is read after \
+                         the `if`, so the binding needs a name of its own)"
+                    };
+                    self.error_at(note, at_span);
+                    self.tokens.drain(p..=end);
+                    self.tokens
+                        .insert(p, Self::synth(Token::LeftBrace, at_span));
+                    self.tokens
+                        .insert(p + 1, Self::synth(Token::RightBrace, at_span));
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Go's item forms (B-2026-11-20-77): `type P struct { .. }` and a
+    /// `const ( A = 1; B = 2 )` block.
+    pub(super) fn mend_go_item_forms(&mut self) {
+        let p = self.pos;
+        if matches!(self.tok_at(p), Some(Token::Type))
+            && self.ident_at(p + 1).is_some()
+            && matches!(self.tok_at(p + 2), Some(Token::Struct))
+            && matches!(self.tok_at(p + 3), Some(Token::LeftBrace))
+        {
+            let (kw, st) = (self.span_at(p), self.span_at(p + 2));
+            let name_text = self.ident_at(p + 1).unwrap_or_default().to_string();
+            self.habit(
+                "`type P struct { .. }` is Go's: Kāra declares it `struct P { x: T }`",
+                kw,
+                vec![Self::edit(
+                    kw.offset,
+                    st.offset + st.length - kw.offset,
+                    &format!("struct {name_text}"),
+                )],
+            );
+            self.tokens.remove(p + 2);
+            self.tokens[p].token = Token::Struct;
+            return;
+        }
+        if matches!(self.tok_at(p), Some(Token::Const))
+            && matches!(self.tok_at(p + 1), Some(Token::LeftParen))
+        {
+            let at = self.span_at(p);
+            let note = "`const ( .. )` is Go's const block: Kāra declares each constant on \
+                        its own, `const A: i64 = 1;`, with its type";
+            let Some(close) = self.matching_close(p + 1) else {
+                return;
+            };
+            // `NAME = literal` entries, split by `;` or by line.
+            let mut lines = Vec::new();
+            let mut i = p + 2;
+            let mut ok = true;
+            while i < close {
+                if matches!(self.tok_at(i), Some(Token::Semicolon)) {
+                    i += 1;
+                    continue;
+                }
+                let (Some(name), Some(Token::Equal)) =
+                    (self.ident_at(i).map(str::to_string), self.tok_at(i + 1))
+                else {
+                    ok = false;
+                    break;
+                };
+                let ty = match self.tok_at(i + 2) {
+                    Some(Token::Integer(_, None)) => "i64",
+                    Some(Token::Float(_, None)) => "f64",
+                    Some(Token::True | Token::False) => "bool",
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                };
+                let next = self.tok_at(i + 3);
+                let same_line_end = matches!(next, Some(Token::Semicolon))
+                    || i + 3 == close
+                    || self.span_at(i + 3).line != self.span_at(i).line;
+                if !same_line_end {
+                    ok = false;
+                    break;
+                }
+                let Some(value) = self.tokens_text(i + 2, i + 3) else {
+                    ok = false;
+                    break;
+                };
+                lines.push(format!("const {name}: {ty} = {value};"));
+                i += 3;
+            }
+            if !ok || lines.is_empty() {
+                self.error_at(note, at);
+                return;
+            }
+            let text = lines.join("\n");
+            self.rewrite(note, at, p, close, &text);
+        }
+    }
+
+    /// Python's floor division `a // b`, which Kāra lexes as a comment to
+    /// the end of the line (B-2026-11-20-73). Found where an operand is
+    /// followed by a "comment" that reads as code: it starts with an operand
+    /// and holds a `;` or a closing bracket with no opener. Told, and the
+    /// line is parsed as `a / b`; the edit to `/` is offered only for two
+    /// integer literals, where truncating and flooring agree.
+    pub(super) fn mend_floor_division(&mut self) {
+        let Some((src, base)) = self.source.clone() else {
+            return;
+        };
+        let mut i = 0;
+        while i + 1 < self.tokens.len() {
+            let a = self.tokens[i].span;
+            let operand = matches!(
+                self.tokens[i].token,
+                Token::Identifier { .. }
+                    | Token::Integer(..)
+                    | Token::Float(..)
+                    | Token::RightParen
+                    | Token::RightBracket
+            );
+            let a_end = a.offset + a.length;
+            let b = self.tokens[i + 1].span;
+            if !operand || a.length == 0 || b.offset < a_end {
+                i += 1;
+                continue;
+            }
+            let Some(gap) = a_end
+                .checked_sub(base)
+                .zip(b.offset.checked_sub(base))
+                .and_then(|(x, y)| src.get(x..y))
+            else {
+                i += 1;
+                continue;
+            };
+            let lead = gap.len() - gap.trim_start_matches([' ', '\t']).len();
+            let rest = &gap[lead..];
+            if !rest.starts_with("//") || rest.starts_with("///") || rest.starts_with("//!") {
+                i += 1;
+                continue;
+            }
+            let line_text = rest[2..].split('\n').next().unwrap_or("");
+            let mut toks = crate::tokenize(line_text);
+            toks.retain(|t| !matches!(t.token, Token::EOF));
+            let starts_operand = matches!(
+                toks.first().map(|t| &t.token),
+                Some(
+                    Token::Identifier { .. }
+                        | Token::Integer(..)
+                        | Token::Float(..)
+                        | Token::LeftParen
+                )
+            );
+            let mut depth = 0i32;
+            let mut code_like = false;
+            for t in &toks {
+                match t.token {
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth -= 1;
+                        if depth < 0 {
+                            code_like = true;
+                        }
+                    }
+                    Token::Semicolon => code_like = true,
+                    _ => {}
+                }
+            }
+            // Prose is not code: two words in a row, or a comment set off
+            // by more than one space (`x   // note`), is a comment.
+            let prose = toks.windows(2).any(|w| {
+                matches!(w[0].token, Token::Identifier { .. } | Token::In)
+                    && matches!(w[1].token, Token::Identifier { .. })
+            });
+            let spaced = lead == 1 && rest[2..].starts_with(' ') && !rest[3..].starts_with(' ');
+            if !starts_operand || !code_like || prose || !spaced {
+                i += 1;
+                continue;
+            }
+            let slash_at = a_end + lead;
+            let at = Span {
+                offset: slash_at,
+                length: 2,
+                line: a.line,
+                column: a.column + (slash_at - a.offset),
+            };
+            let note = "`//` starts a comment in Kāra, so the rest of this line was dropped: \
+                        Python's floor division `a // b` is `a / b` here, which truncates \
+                        toward zero, so it differs from `//` when one operand is negative";
+            let both_literals = matches!(self.tokens[i].token, Token::Integer(..))
+                && matches!(toks.first().map(|t| &t.token), Some(Token::Integer(..)));
+            if both_literals {
+                self.habit(note, at, vec![Self::edit(slash_at, 2, "/")]);
+            } else {
+                self.error_at(note, at);
+            }
+            // The line's tokens, at their places after the `//`.
+            let text_at = slash_at + 2;
+            let col0 = at.column + 2;
+            for t in &mut toks {
+                t.span.offset += text_at;
+                t.span.column = col0 + t.span.column.saturating_sub(1);
+                t.span.line = a.line;
+            }
+            let n = toks.len();
+            self.tokens.insert(
+                i + 1,
+                SpannedToken {
+                    token: Token::Slash,
+                    span: Span { length: 1, ..at },
+                },
+            );
+            self.tokens.splice(i + 2..i + 2, toks);
+            i += 2 + n;
+        }
     }
 }

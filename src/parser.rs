@@ -1018,6 +1018,7 @@ impl Parser {
     /// offset `base`. See [`Self::source`].
     pub fn with_source(mut self, source: &str, base: usize) -> Self {
         self.source = Some((std::sync::Arc::from(source), base));
+        self.mend_floor_division();
         self
     }
 

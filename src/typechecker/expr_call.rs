@@ -3050,6 +3050,11 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Python's `print(a, b)` and `max(xs)` (B-2026-11-20-76).
+        if let Some(t) = self.python_call_habit(callee, args, span) {
+            return t;
+        }
+
         // Built-in output functions: println() / print() / eprint() / eprintln().
         // Accept 0 or 1 Display-implementing argument; return Unit.
         // Local-binding shadow guard (B-2026-08-01-26), as above.
