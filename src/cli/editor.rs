@@ -23,6 +23,14 @@ pub(super) fn checked(source: &str) -> Pipeline {
     pipeline
 }
 
+/// [`checked`] as far as a position query reads: through the effect check
+/// (B-2026-11-21-90).
+pub(super) fn checked_for_nav(source: &str) -> Pipeline {
+    let mut pipeline = Pipeline::new(BUFFER, source).strict_core().with_library();
+    pipeline.run_checks_through_effects();
+    pipeline
+}
+
 /// [`checked`], against the whole library rather than the part the buffer
 /// reaches: completion offers what the buffer has not named yet.
 pub(super) fn checked_whole_library(source: &str) -> Pipeline {
@@ -63,11 +71,14 @@ pub(crate) fn check_detailed(source: &str) -> Checked {
                 .collect()
         })
         .unwrap_or_default();
-    Checked {
+    let checked = Checked {
         diags: diagnostics_of(&pipeline),
         effects,
         hints: super::editor_hints::hints_of(&pipeline, source),
-    }
+    };
+    // A position query on this text reads the same check (B-2026-11-21-90).
+    super::editor_nav::remember(source, pipeline);
+    checked
 }
 
 fn diagnostics_of(pipeline: &Pipeline) -> Vec<PlaygroundDiagnostic> {
@@ -109,7 +120,7 @@ pub(crate) fn analyze(
     crate::typechecker::TypeCheckResult,
     crate::effectchecker::EffectCheckResult,
 )> {
-    let mut pipeline = checked(source);
+    let mut pipeline = checked_for_nav(source);
     Some((
         pipeline.resolved.take()?,
         pipeline.typed.take()?,

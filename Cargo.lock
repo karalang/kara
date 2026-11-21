@@ -1241,6 +1241,7 @@ dependencies = [
 name = "kara-lsp"
 version = "0.8.1"
 dependencies = [
+ "crossbeam-channel",
  "karac",
  "lsp-server",
  "lsp-types",

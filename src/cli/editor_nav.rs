@@ -105,14 +105,73 @@ pub(crate) fn with_path<R>(path: &std::path::Path, f: impl FnOnce() -> R) -> R {
 /// Under [`with_path`], a module of a package is checked against the
 /// package's other modules, so the names it imports resolve
 /// (B-2026-11-17-71).
-pub(crate) fn analyze(source: &str) -> Option<Nav> {
+pub(crate) fn analyze(source: &str) -> Option<std::rc::Rc<Nav>> {
     let path = BUFFER_PATH.with(|p| p.borrow().clone());
     analyze_at(source, path.as_deref())
 }
 
 /// [`analyze`] for the buffer of the file at `path`: a module of a package
 /// with other modules is checked against them; any other file alone.
-pub(crate) fn analyze_at(source: &str, path: Option<&std::path::Path>) -> Option<Nav> {
+pub(crate) fn analyze_at(source: &str, path: Option<&std::path::Path>) -> Option<std::rc::Rc<Nav>> {
+    // Outside a package the file is checked alone, as its text says.
+    let path = path
+        .filter(|p| super::run_check_cmds::package_root_of_member(&p.to_string_lossy()).is_some());
+    let key =
+        |(p, t, _): &(Option<std::path::PathBuf>, String, _)| p.as_deref() == path && t == source;
+    if let Some(hit) = RECENT.with(|r| {
+        r.borrow()
+            .iter()
+            .find(|e| key(e))
+            .map(|(_, _, nav)| nav.clone())
+    }) {
+        return hit;
+    }
+    let nav = analyze_uncached(source, path).map(std::rc::Rc::new);
+    keep(path, source, nav.clone());
+    nav
+}
+
+fn keep(path: Option<&std::path::Path>, source: &str, nav: Option<std::rc::Rc<Nav>>) {
+    RECENT.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.len() >= RECENT_KEPT {
+            r.remove(0);
+        }
+        r.push((path.map(|p| p.to_path_buf()), source.to_string(), nav));
+    });
+}
+
+/// Keep the full check of `source` that diagnostics just made, for the
+/// position queries on the same text that follow (B-2026-11-21-90).
+pub(super) fn remember(source: &str, pipeline: super::Pipeline) {
+    let nav = nav_of(pipeline, source).map(std::rc::Rc::new);
+    keep(None, source, nav);
+}
+
+/// How many checked buffers [`analyze_at`] keeps: a revision's hover,
+/// definition and signature help share one, and completion checks a few
+/// variants of it with a hole at the cursor.
+const RECENT_KEPT: usize = 6;
+
+std::thread_local! {
+    /// The buffers [`analyze_at`] checked last, oldest first, by file and
+    /// text. A package module's check also reads its other modules from
+    /// disk, so [`forget_checked_buffers`] drops them all when anything may
+    /// have changed (B-2026-11-21-90).
+    #[allow(clippy::type_complexity)]
+    static RECENT: std::cell::RefCell<
+        Vec<(Option<std::path::PathBuf>, String, Option<std::rc::Rc<Nav>>)>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Drop what [`analyze_at`] keeps: a language server calls it when a
+/// document opens, changes, is saved or closes, so a check that read
+/// another module's old text is not answered again.
+pub(crate) fn forget_checked_buffers() {
+    RECENT.with(|r| r.borrow_mut().clear());
+}
+
+fn analyze_uncached(source: &str, path: Option<&std::path::Path>) -> Option<Nav> {
     if let Some(t) = path.and_then(|p| super::build_cmds::editor_module_tables(p, source)) {
         return Some(Nav {
             program: t.program,
@@ -126,7 +185,7 @@ pub(crate) fn analyze_at(source: &str, path: Option<&std::path::Path>) -> Option
             renames: Vec::new(),
         });
     }
-    nav_of(super::editor::checked(source), source)
+    nav_of(super::editor::checked_for_nav(source), source)
 }
 
 /// [`analyze`] against the whole library, for completion.

@@ -1868,8 +1868,18 @@ pub fn goto_definition_site_in(
             .and_then(|m| m.def)
             .or_else(|| nav.resolved_def(byte_offset))
             .map(def_site_of),
-        _ => goto_definition_site(source, byte_offset),
+        // Under the path, so its check is the one just made (B-2026-11-21-90).
+        _ => cli::editor_nav::with_path(path, || goto_definition_site(source, byte_offset)),
     }
+}
+
+/// Forget the checks position queries keep for the buffers they were last
+/// asked about. A language server calls it whenever a document opens,
+/// changes, is saved or closes: until then a revision's hover, definition
+/// and completion share one check (B-2026-11-21-90).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn forget_checked_buffers() {
+    cli::editor_nav::forget_checked_buffers();
 }
 
 /// [`hover_at`] for the buffer of the file at `path`: a module of a package

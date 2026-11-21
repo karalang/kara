@@ -17,8 +17,11 @@
 pub mod analysis;
 pub mod workspace;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
+use std::time::{Duration, Instant};
+
+use crossbeam_channel::RecvTimeoutError;
 
 use lsp_server::{Connection, Message};
 use lsp_types::notification::{
@@ -109,16 +112,50 @@ pub fn serve_until_exit(connection: Connection) -> Result<i32, Box<dyn Error + S
 fn main_loop(connection: Connection) -> Result<i32, Box<dyn Error + Sync + Send>> {
     // Latest known text per open document, keyed by the URI's string form
     // (`Uri` itself carries an internal hash-cache cell, so it is a poor map
-    // key — `clippy::mutable_key_type`). FULL sync means open/change carry the
-    // whole buffer; we keep it so `save` (which need not carry text) and future
-    // position-based requests can re-analyze the current revision.
+    // key — `clippy::mutable_key_type`).
     let mut docs: HashMap<String, String> = HashMap::new();
     // Each open document's last check, so an edit inside one function body
     // re-checks that body (B-2026-11-09-33).
     let mut checkers: HashMap<String, karac::DocumentChecker> = HashMap::new();
+    // Documents edited since their diagnostics were published, and when the
+    // check is due (B-2026-11-21-90): an edit waits [`debounce`] for the next
+    // keystroke, so a burst of typing is checked once, at its end, and a
+    // request that arrives meanwhile is answered first.
+    let mut pending: HashMap<String, Uri> = HashMap::new();
+    let mut due: Option<Instant> = None;
+    // Messages read ahead of the one being handled, so a request a later
+    // `$/cancelRequest` cancels is answered `RequestCancelled` unrun.
+    let mut queue: VecDeque<Message> = VecDeque::new();
 
     let mut shut_down = false;
-    for msg in &connection.receiver {
+    loop {
+        while let Ok(m) = connection.receiver.try_recv() {
+            queue.push_back(m);
+        }
+        let msg = match queue.pop_front() {
+            Some(m) => m,
+            None => {
+                let next = match due {
+                    Some(at) => connection
+                        .receiver
+                        .recv_timeout(at.saturating_duration_since(Instant::now())),
+                    None => connection
+                        .receiver
+                        .recv()
+                        .map_err(|_| RecvTimeoutError::Disconnected),
+                };
+                match next {
+                    Ok(m) => m,
+                    Err(RecvTimeoutError::Timeout) => {
+                        flush(&connection, &docs, &mut checkers, &mut pending, None);
+                        due = None;
+                        continue;
+                    }
+                    // The client went away without `exit`.
+                    Err(RecvTimeoutError::Disconnected) => return Ok(1),
+                }
+            }
+        };
         match msg {
             Message::Request(req) => {
                 let resp = if shut_down {
@@ -130,7 +167,28 @@ fn main_loop(connection: Connection) -> Result<i32, Box<dyn Error + Sync + Send>
                 } else if req.method == "shutdown" {
                     shut_down = true;
                     lsp_server::Response::new_ok(req.id, ())
+                } else if cancelled(&queue, &req.id) {
+                    lsp_server::Response::new_err(
+                        req.id,
+                        REQUEST_CANCELLED,
+                        "cancelled".to_string(),
+                    )
                 } else {
+                    // What reads the document's last check sees this
+                    // revision's.
+                    if matches!(
+                        req.method.as_str(),
+                        InlayHintRequest::METHOD | CodeActionRequest::METHOD
+                    ) {
+                        let uri = req
+                            .params
+                            .pointer("/textDocument/uri")
+                            .and_then(|u| u.as_str())
+                            .map(str::to_string);
+                        if let Some(uri) = uri {
+                            flush(&connection, &docs, &mut checkers, &mut pending, Some(&uri));
+                        }
+                    }
                     handle_request(&docs, &checkers, req)
                 };
                 connection.sender.send(Message::Response(resp))?;
@@ -139,17 +197,98 @@ fn main_loop(connection: Connection) -> Result<i32, Box<dyn Error + Sync + Send>
                 return Ok(if shut_down { 0 } else { 1 });
             }
             Message::Notification(_) if shut_down => {}
+            // Answered (or dropped) where its request is read.
+            Message::Notification(not) if not.method == "$/cancelRequest" => {}
             Message::Notification(not) => {
-                handle_notification(&connection, &mut docs, &mut checkers, not)?;
+                // Whatever a position query kept from the text before is
+                // stale now.
+                karac::forget_checked_buffers();
+                if not.method == DidChangeTextDocument::METHOD {
+                    let params: lsp_types::DidChangeTextDocumentParams =
+                        serde_json::from_value(not.params)?;
+                    let uri = params.text_document.uri;
+                    // Each change applies to the text the one before it left;
+                    // one without a range is the whole buffer.
+                    if !params.content_changes.is_empty() {
+                        let text = docs.entry(uri.to_string()).or_default();
+                        for change in params.content_changes {
+                            apply_change(text, change);
+                        }
+                        pending.insert(uri.to_string(), uri);
+                        due = Some(Instant::now() + debounce());
+                    }
+                } else {
+                    if let Some(uri) = not
+                        .params
+                        .pointer("/textDocument/uri")
+                        .and_then(|u| u.as_str())
+                    {
+                        // Opening, saving or closing checks (or clears) the
+                        // document now.
+                        pending.remove(uri);
+                    }
+                    handle_notification(&connection, &mut docs, &mut checkers, not)?;
+                }
             }
             Message::Response(_) => {
-                // We issue no server→client requests in slice 1, so there are
-                // no responses to correlate.
+                // We issue no server→client requests, so there are no
+                // responses to correlate.
             }
         }
     }
-    // The client went away without `exit`.
-    Ok(1)
+}
+
+/// `$/cancelRequest`'s `RequestCancelled` (LSP 3.17).
+const REQUEST_CANCELLED: i32 = -32800;
+
+/// How long an edited document waits for the next edit before it is
+/// checked: `KARA_LSP_DEBOUNCE_MS`, else 100 ms.
+fn debounce() -> Duration {
+    static MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    Duration::from_millis(*MS.get_or_init(|| {
+        std::env::var("KARA_LSP_DEBOUNCE_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100)
+    }))
+}
+
+/// Whether a `$/cancelRequest` read ahead names `id`.
+fn cancelled(queue: &VecDeque<Message>, id: &lsp_server::RequestId) -> bool {
+    queue.iter().any(|m| match m {
+        Message::Notification(n) if n.method == "$/cancelRequest" => match n.params.get("id") {
+            Some(serde_json::Value::Number(k)) => {
+                k.as_i64().map(|k| lsp_server::RequestId::from(k as i32)) == Some(id.clone())
+            }
+            Some(serde_json::Value::String(k)) => lsp_server::RequestId::from(k.clone()) == *id,
+            _ => false,
+        },
+        _ => false,
+    })
+}
+
+/// Check and publish the pending documents (only `only`, when given).
+fn flush(
+    connection: &Connection,
+    docs: &HashMap<String, String>,
+    checkers: &mut HashMap<String, karac::DocumentChecker>,
+    pending: &mut HashMap<String, Uri>,
+    only: Option<&str>,
+) {
+    let keys: Vec<String> = match only {
+        Some(k) if pending.contains_key(k) => vec![k.to_string()],
+        Some(_) => Vec::new(),
+        None => pending.keys().cloned().collect(),
+    };
+    for key in keys {
+        let Some(uri) = pending.remove(&key) else {
+            continue;
+        };
+        if let Some(text) = docs.get(&key) {
+            let checker = checkers.entry(key.clone()).or_default();
+            publish(connection, checker, &uri, text, false);
+        }
+    }
 }
 
 fn handle_notification(

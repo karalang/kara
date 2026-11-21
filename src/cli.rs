@@ -3161,6 +3161,32 @@ impl Pipeline {
         self.run_all_checks_observed(&mut |_, _, _| {});
     }
 
+    /// [`Self::run_all_checks`] through the effect check and no further:
+    /// what a position query reads (the resolved names, the types with the
+    /// derives spliced in, the effects). The ownership and MIR checks after
+    /// it lower the program a second time, and were half of a hover's time
+    /// on a program that derives `Serialize` (B-2026-11-21-90).
+    pub(crate) fn run_checks_through_effects(&mut self) {
+        let mut t = std::time::Instant::now();
+        let t = &mut t;
+        self.drop_library_diagnostics();
+        self.resolve();
+        crate::mir::lower::phase_time("check resolve", t);
+        self.drop_library_diagnostics();
+        self.typecheck();
+        crate::mir::lower::phase_time("check typecheck", t);
+        self.drop_library_diagnostics();
+        // No MIR check follows, so the copy `lower` keeps for one is not
+        // wanted.
+        self.lower();
+        self.mir_program = None;
+        crate::mir::lower::phase_time("check lower", t);
+        self.drop_library_diagnostics();
+        self.effectcheck();
+        crate::mir::lower::phase_time("check effects", t);
+        self.drop_library_diagnostics();
+    }
+
     /// [`Self::run_all_checks`], telling `on` where it is: `on(p, phase,
     /// false)` before a phase runs and `on(p, phase, true)` once it has and its
     /// library diagnostics are dropped. `parse` is reported done first, then

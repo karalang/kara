@@ -79,7 +79,7 @@ pub(crate) fn complete(source: &str, at: usize) -> Vec<CompletionEntry> {
 
 /// Check `before HOLE rest`, then, when that does not parse, with a `;`
 /// after the hole, as a statement left unfinished needs.
-fn check_with_hole(before: &str, rest: &str) -> Option<(Nav, usize, String)> {
+fn check_with_hole(before: &str, rest: &str) -> Option<(std::rc::Rc<Nav>, usize, String)> {
     let hole_at = before.len();
     [
         format!("{before}{HOLE}{rest}"),
@@ -92,7 +92,7 @@ fn check_with_hole(before: &str, rest: &str) -> Option<(Nav, usize, String)> {
 /// [`editor_nav::analyze`] of the text with every body but the one at `at`
 /// emptied ([`super::editor_incremental::focus`]), or of the text itself
 /// when nothing was emptied.
-pub(super) fn analyze_focused(text: &str, at: usize) -> Option<Nav> {
+pub(super) fn analyze_focused(text: &str, at: usize) -> Option<std::rc::Rc<Nav>> {
     match super::editor_incremental::focus(text, at) {
         Some(focused) => editor_nav::analyze(&focused),
         None => editor_nav::analyze(text),
@@ -199,7 +199,7 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
         Item::EnumDef(e) => e.name == head,
         _ => false,
     });
-    let views: Vec<&Nav> = std::iter::once(&nav)
+    let views: Vec<&Nav> = std::iter::once(&*nav)
         .chain(editor_nav::whole_library().filter(|_| !declared))
         .collect();
     let mut out = Vec::new();
@@ -296,7 +296,7 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
     }
     // A library trait's provided methods reach a type the buffer declares
     // too (`impl Iterator for C` offers `filter`).
-    for view in std::iter::once(&nav).chain(editor_nav::whole_library()) {
+    for view in std::iter::once(&*nav).chain(editor_nav::whole_library()) {
         let (text, _) = view.text();
         for item in &view.program().items {
             let Item::TraitDef(td) = item else { continue };
