@@ -140,6 +140,7 @@ impl WebSocket {
         let checked = WebSocket.__handshake(
             method,
             WebSocket.header(head, "upgrade"),
+            WebSocket.header(head, "connection"),
             WebSocket.header(head, "sec-websocket-version"),
             WebSocket.header(head, "sec-websocket-key"),
         );
@@ -175,13 +176,14 @@ impl WebSocket {
 
     // The client's key when a request with `method` and these headers is
     // an opening handshake (RFC 6455 §4.2.1): a GET asking to upgrade to
-    // `websocket`, version 13, with a key that is the base64 of 16 bytes;
+    // `websocket`, with `Upgrade` among its `Connection` options, version
+    // 13, with a key that is the base64 of 16 bytes;
     // else the status the server refuses it with: 426 (with
     // `Sec-WebSocket-Version: 13`) for another version or none, 400 for
     // anything else (B-2026-11-17-57); 500 for a request that does not
     // ask to upgrade at all, whose 101 is the handler's error (`accept`
     // answers it 400 as any other request that is no handshake).
-    fn __handshake(method: Str, upgrade: Option[String], version: Option[String], key: Option[String]) -> Result[String, i64] {
+    fn __handshake(method: Str, upgrade: Option[String], connection: Option[String], version: Option[String], key: Option[String]) -> Result[String, i64] {
         let upgrades = match upgrade {
             Some(v) => v.to_lowercase().contains("websocket"),
             None => false,
@@ -190,6 +192,22 @@ impl WebSocket {
             return Err(500);
         }
         if method != "GET" {
+            return Err(400);
+        }
+        // `Connection: Upgrade`, among any other options (RFC 6455
+        // §4.2.1 item 4, RFC 9110 §7.6.1).
+        let mut connects = false;
+        match connection {
+            Some(c) => {
+                for option in c.split(",") {
+                    if option.trim().to_lowercase() == "upgrade" {
+                        connects = true;
+                    }
+                }
+            }
+            None => {}
+        }
+        if not connects {
             return Err(400);
         }
         let k = match key {

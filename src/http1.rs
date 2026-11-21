@@ -159,6 +159,15 @@ pub const HEAD_TIMEOUT_MS: i64 = 30_000;
 /// reads, before it is closed.
 pub const IDLE_TIMEOUT_MS: i64 = 60_000;
 
+/// Whether a received field value holds a control character: anything
+/// below 0x20 but HTAB, or DEL. RFC 9110 §5.5's field-content is VCHAR,
+/// obs-text, SP and HTAB; a value with CR, LF or NUL MUST be refused, and
+/// one with another control (a vertical tab before `chunked`) reads
+/// differently to a peer that trims it (B-2026-11-21-22).
+fn bad_field_value(s: &str) -> bool {
+    s.bytes().any(|b| (b < 0x20 && b != b'\t') || b == 0x7f)
+}
+
 /// Whether `s` is an RFC 9110 token (a method or a header name).
 fn is_token(s: &str) -> bool {
     !s.is_empty()
@@ -436,9 +445,9 @@ impl Parser {
                 // No whitespace before the colon (RFC 9112 §5.1), which is
                 // also how an obs-fold continuation line is refused; a
                 // value is trimmed of the spaces and tabs around it (OWS),
-                // and may hold neither CR nor NUL (RFC 9110 §5.5).
+                // and may hold no control but HTAB (RFC 9110 §5.5).
                 let v = v.trim_matches([' ', '\t']);
-                if !is_token(k) || breaks_line(v) {
+                if !is_token(k) || bad_field_value(v) {
                     return Parse::Bad(400, "a malformed header");
                 }
                 // Names lowercased, as hyper gives them to legacy's
@@ -467,7 +476,7 @@ impl Parser {
                     break;
                 }
                 Stage::ChunkSize => {
-                    let size = match p.line() {
+                    let size = match p.crlf_line() {
                         None => {
                             return short(
                                 eof,
@@ -478,14 +487,9 @@ impl Parser {
                         Some(Err(e)) => return Parse::Bad(400, e),
                         Some(Ok(l)) => l,
                     };
-                    let size = size
-                        .split(';')
-                        .next()
-                        .unwrap_or_default()
-                        .trim_matches([' ', '\t']);
-                    if size.is_empty() || !size.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    let Some(size) = chunk_size(size) else {
                         return Parse::Bad(400, "a malformed chunk size");
-                    }
+                    };
                     let n = match usize::from_str_radix(size, 16) {
                         Ok(n) if self.req.body.len().saturating_add(n) <= BODY_LIMIT => n,
                         _ => return Parse::Bad(413, "the body is too large"),
@@ -508,10 +512,11 @@ impl Parser {
                     // The chunk's line end, and nothing before it; the end
                     // of the input stands for it.
                     let at = p.pos;
-                    match p.line() {
+                    match p.crlf_line() {
                         None if eof => p.pos = buf.len(),
                         None => return Parse::More(self.body_more(at + 2)),
                         Some(Ok("")) => {}
+                        Some(Err(e)) => return Parse::Bad(400, e),
                         Some(_) => return Parse::Bad(400, "a chunk longer than its size"),
                     }
                     self.stage = Stage::ChunkSize;
@@ -520,7 +525,7 @@ impl Parser {
                     // Up to the blank line or the end.
                     loop {
                         let at = p.pos;
-                        match p.line() {
+                        match p.crlf_line() {
                             None if eof => {
                                 p.pos = buf.len();
                                 break;
@@ -533,7 +538,12 @@ impl Parser {
                                 return Parse::More(self.body_more(buf.len() + 1));
                             }
                             Some(Err(e)) => return Parse::Bad(400, e),
-                            Some(Ok(l)) if l.trim().is_empty() => break,
+                            Some(Ok("")) => break,
+                            // A trailer is a field line as a header is
+                            // (RFC 9112 §7.1.2).
+                            Some(Ok(l)) if !field_line(l) => {
+                                return Parse::Bad(400, "a malformed trailer")
+                            }
                             Some(Ok(_)) => {
                                 trailers += p.pos - at;
                                 if trailers > HEAD_LIMIT {
@@ -575,8 +585,9 @@ impl Parser {
         else {
             return Err(Parse::Bad(400, "a malformed request line"));
         };
-        if !is_token(method) || target.is_empty() || target.bytes().any(|b| b <= b' ' || b == 0x7f)
-        {
+        // The target is visible ASCII (RFC 9112 §3.2, RFC 3986 §2): a
+        // byte outside it, UTF-8 included, is refused (B-2026-11-21-22).
+        if !is_token(method) || target.is_empty() || !target.bytes().all(|b| b.is_ascii_graphic()) {
             return Err(Parse::Bad(400, "a malformed request line"));
         }
         let http10 = match version {
@@ -622,8 +633,11 @@ impl Parser {
         // header in order, and every Content-Length.
         let codings: Vec<String> = all(&req.headers, "transfer-encoding")
             .flat_map(|(_, v)| v.split(','))
-            .map(|c| c.trim().to_ascii_lowercase())
+            .map(|c| c.trim_matches([' ', '\t']).to_ascii_lowercase())
             .collect();
+        if codings.iter().any(|c| !is_token(c)) {
+            return Err(Parse::Bad(400, "a malformed Transfer-Encoding"));
+        }
         let lengths: Vec<&str> = all(&req.headers, "content-length")
             .map(|(_, v)| v.as_str())
             .collect();
@@ -637,6 +651,12 @@ impl Parser {
             && req
                 .header("expect")
                 .is_some_and(|e| e.eq_ignore_ascii_case("100-continue"));
+        // An HTTP/1.0 message with a Transfer-Encoding has faulty framing:
+        // it is read as chunked and its connection closes after it (RFC
+        // 9112 §6.1, B-2026-11-21-22).
+        if http10 && !codings.is_empty() {
+            req.keep_alive = false;
+        }
         self.stage = if !codings.is_empty() {
             if codings.last().map(String::as_str) != Some("chunked") {
                 return Err(Parse::Bad(
@@ -741,6 +761,78 @@ impl Progress {
     }
 }
 
+/// The size in a chunk's size line (RFC 9112 §7.1): `1*HEXDIG`, then any
+/// chunk extensions, `*( BWS ";" BWS name [ BWS "=" BWS value ] )` with a
+/// token for the name and a token or a quoted string for the value; `None`
+/// for a line that is not that (B-2026-11-21-22).
+fn chunk_size(l: &str) -> Option<&str> {
+    let b = l.as_bytes();
+    let digits = b.iter().take_while(|c| c.is_ascii_hexdigit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let mut i = digits;
+    let tchar = |c: u8| c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c);
+    let bws = |i: &mut usize| {
+        while *i < b.len() && matches!(b[*i], b' ' | b'\t') {
+            *i += 1;
+        }
+    };
+    let token = |i: &mut usize| {
+        let at = *i;
+        while *i < b.len() && tchar(b[*i]) {
+            *i += 1;
+        }
+        *i > at
+    };
+    while i < b.len() {
+        bws(&mut i);
+        if b.get(i) != Some(&b';') {
+            return None;
+        }
+        i += 1;
+        bws(&mut i);
+        if !token(&mut i) {
+            return None;
+        }
+        let mut j = i;
+        bws(&mut j);
+        if b.get(j) == Some(&b'=') {
+            i = j + 1;
+            bws(&mut i);
+            if b.get(i) == Some(&b'"') {
+                i += 1;
+                loop {
+                    match b.get(i) {
+                        Some(b'"') => {
+                            i += 1;
+                            break;
+                        }
+                        Some(b'\\')
+                            if b.get(i + 1)
+                                .is_some_and(|&c| c == b'\t' || c >= 0x20 && c != 0x7f) =>
+                        {
+                            i += 2
+                        }
+                        Some(&c) if c == b'\t' || (c >= 0x20 && c != 0x7f && c != b'\\') => i += 1,
+                        _ => return None,
+                    }
+                }
+            } else if !token(&mut i) {
+                return None;
+            }
+        }
+    }
+    Some(&l[..digits])
+}
+
+/// Whether `l` is a field line, `name ":" OWS value OWS`, as a header's
+/// is read.
+fn field_line(l: &str) -> bool {
+    l.split_once(':')
+        .is_some_and(|(k, v)| is_token(k) && !bad_field_value(v.trim_matches([' ', '\t'])))
+}
+
 /// A cursor over the bytes [`parse_request`] reads.
 struct Lines<'a> {
     buf: &'a [u8],
@@ -767,6 +859,19 @@ impl<'a> Lines<'a> {
         self.pos += i + 1;
         let l = rest[..i].strip_suffix(b"\r").unwrap_or(&rest[..i]);
         Some(std::str::from_utf8(l).map_err(|_| "a line that is not UTF-8"))
+    }
+
+    /// [`Lines::line`], for a chunked body's lines, which end in CRLF: a
+    /// bare LF there is refused, since a peer that ends lines only at CRLF
+    /// reads the chunks differently (RFC 9112 §7.1, B-2026-11-21-22).
+    fn crlf_line(&mut self) -> Option<Result<&'a str, &'static str>> {
+        let from = self.pos;
+        let l = self.line()?;
+        if self.buf[from..self.pos].ends_with(b"\r\n") {
+            Some(l)
+        } else {
+            Some(Err("a chunked body's line not ended by CRLF"))
+        }
     }
 
     /// The next `n` bytes, or `None` when fewer are left.
@@ -831,6 +936,7 @@ fn reason(status: i64) -> &'static str {
         408 => "Request Timeout",
         409 => "Conflict",
         413 => "Content Too Large",
+        414 => "URI Too Long",
         422 => "Unprocessable Entity",
         426 => "Upgrade Required",
         429 => "Too Many Requests",
@@ -838,6 +944,7 @@ fn reason(status: i64) -> &'static str {
         500 => "Internal Server Error",
         501 => "Not Implemented",
         503 => "Service Unavailable",
+        505 => "HTTP Version Not Supported",
         _ => "",
     }
 }
@@ -950,6 +1057,60 @@ mod tests {
             Parse::Done(..) => 0,
             Parse::More(_) => 1,
             Parse::Closed => 2,
+        }
+    }
+
+    /// The 2026-11-21 conformance pass's cells (B-2026-11-21-22): a control
+    /// in a field value, a chunked body whose lines a CRLF-only peer reads
+    /// differently, a malformed chunk extension or trailer, and a target
+    /// outside visible ASCII are refused; well-formed ones still parse.
+    #[test]
+    fn framing_a_peer_could_read_differently_is_refused() {
+        let post = |rest: &str| format!("POST / HTTP/1.1\r\nHost: h\r\n{rest}");
+        let chunked = |body: &str| post(&format!("Transfer-Encoding: chunked\r\n\r\n{body}"));
+        for raw in [
+            post("Transfer-Encoding:\x0bchunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"),
+            post("Transfer-Encoding: chunked\x0c\r\n\r\n0\r\n\r\n"),
+            post("X-A: a\x01b\r\n\r\n"),
+            post("X-A: a\x7fb\r\n\r\n"),
+            post("Transfer-Encoding: chun ked\r\n\r\n"),
+            chunked("3\nabc\r\n0\r\n\r\n"),
+            chunked("3;x\nabc\r\n0\r\n\r\n"),
+            chunked("3\r\nabc\n0\r\n\r\n"),
+            chunked("3\r\nabc\r\n0\n\r\n"),
+            chunked("3\r\nabc\r\n0\r\n\n"),
+            chunked("3;\x01\r\nabc\r\n0\r\n\r\n"),
+            chunked("3;\r\nabc\r\n0\r\n\r\n"),
+            chunked("3;a=\r\nabc\r\n0\r\n\r\n"),
+            chunked("3;a=\"b\r\nabc\r\n0\r\n\r\n"),
+            chunked("3 \r\nabc\r\n0\r\n\r\n"),
+            chunked("3x\r\nabc\r\n0\r\n\r\n"),
+            chunked("3\r\nabc\r\n0\r\nnot a field\r\n\r\n"),
+            chunked("3\r\nabc\r\n0\r\n \r\n\r\n"),
+            "GET /\u{e9} HTTP/1.1\r\nHost: h\r\n\r\n".to_string(),
+        ] {
+            assert_eq!(refused(raw.as_bytes()), 400, "{raw:?}");
+        }
+        for raw in [
+            chunked("3;name=val\r\nabc\r\n0\r\n\r\n"),
+            chunked("3 ; a = \"q \\\" d\" ;b\r\nabc\r\n0\r\n\r\n"),
+            chunked("3\r\nabc\r\n0\r\nX-T: 1\r\n\r\n"),
+            post("Transfer-Encoding: chunked\t\r\nX-A: a\tb\r\n\r\n0\r\n\r\n"),
+            "GET /lf HTTP/1.1\nHost: h\n\n".to_string(),
+        ] {
+            assert_eq!(refused(raw.as_bytes()), 0, "{raw:?}");
+        }
+        // Chunk data that ends in a CR is data: its line end is still due.
+        assert_eq!(refused(chunked("3\r\nab\r\n0\r\n\r\n").as_bytes()), 400);
+        // HTTP/1.0 with a Transfer-Encoding is read, then its connection
+        // closes (RFC 9112 §6.1).
+        let ten = "POST / HTTP/1.0\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+        match parse_request(ten.as_bytes(), false) {
+            Parse::Done(req, _) => {
+                assert_eq!(req.body, b"abc");
+                assert!(!req.keep_alive());
+            }
+            _ => panic!("{ten:?} parses"),
         }
     }
 

@@ -422,6 +422,7 @@ impl Server {
         WebSocket.__handshake(
             req.method(),
             req.header("upgrade".to_string()),
+            req.header("connection".to_string()),
             req.header("sec-websocket-version".to_string()),
             req.header("sec-websocket-key".to_string()),
         )
