@@ -633,6 +633,45 @@ impl<T: Transport + 'static> Kernel<T> {
     /// cell shape.
     fn run_cell(&self, code: &str) -> CellOutcome {
         let trimmed = code.trim_start();
+        let meta =
+            trimmed.starts_with(':') && trimmed[1..].starts_with(|c: char| c.is_ascii_alphabetic());
+        if meta {
+            // A REPL meta-command (`:type x`, `:dep name = "1"`) is
+            // answered as the REPL answers it, not run as Kāra source
+            // (B-2026-11-20-135).
+            let cmd = trimmed.split_whitespace().next().unwrap_or("");
+            let out = if matches!(cmd, ":quit" | ":q" | ":exit") {
+                karac::repl::MagicOutput::error(
+                    "`:quit` leaves the terminal REPL; in a notebook, shut the kernel down or restart it",
+                )
+            } else {
+                self.session
+                    .lock()
+                    .unwrap()
+                    .meta_command(trimmed.trim_end())
+            };
+            return if out.ok {
+                CellOutcome::Ok {
+                    stdout: if out.text.is_empty() || out.text.ends_with('\n') {
+                        out.text
+                    } else {
+                        format!("{}\n", out.text)
+                    },
+                    stderr: String::new(),
+                    effect_footer: String::new(),
+                    display_bundle: None,
+                    result: None,
+                }
+            } else {
+                CellOutcome::Error {
+                    stdout: String::new(),
+                    stderr: out.text.clone(),
+                    ename: "CommandError".to_string(),
+                    evalue: out.text.lines().next().unwrap_or("").to_string(),
+                    traceback: out.text.lines().map(|l| l.to_string()).collect(),
+                }
+            };
+        }
         if trimmed.starts_with('%') {
             // Magic surface from line 721 — slice 4's load-bearing
             // forward-wiring of `%effects` / `%ownership` / etc.,
@@ -1666,6 +1705,59 @@ mod tests {
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.contains("println(\"hi\");"), "{saved}");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn kernel_meta_commands_answer_as_the_repl_does() {
+        let (iopub, replies) = run_cells(&[
+            "let n = 7;",
+            ":type n",
+            ":dep foo = \"1.0\"",
+            ":effects",
+            ":type nope",
+            ":quit",
+            "%dep bar = \"2\"",
+        ]);
+        let streams: Vec<&str> = iopub
+            .iter()
+            .filter(|(k, m)| k == "stream" && m.content["name"] == "stdout")
+            .map(|(_, m)| m.content["text"].as_str().unwrap())
+            .collect();
+        assert!(streams.contains(&"i64\n"), "{streams:?}");
+        assert!(
+            streams
+                .iter()
+                .any(|t| t.starts_with("(:dep registered: foo = \"1.0\")")),
+            "{streams:?}"
+        );
+        assert!(
+            streams
+                .iter()
+                .any(|t| t.starts_with("(:dep registered: bar = \"2\")")),
+            "{streams:?}"
+        );
+        assert!(
+            streams.iter().any(|t| t.starts_with("session effects:")),
+            "{streams:?}"
+        );
+        for i in 1..4 {
+            assert_eq!(replies[i].content["status"], "ok", "{:?}", replies[i]);
+        }
+        let evalue = replies[4].content["evalue"].as_str().unwrap();
+        assert_eq!(replies[4].content["ename"], "CommandError");
+        assert!(
+            evalue.contains("nope") && !evalue.contains("<repl>"),
+            "{evalue}"
+        );
+        assert!(
+            replies[5].content["evalue"]
+                .as_str()
+                .unwrap()
+                .contains("restart"),
+            "{:?}",
+            replies[5]
+        );
+        assert_eq!(replies[6].content["status"], "ok", "{:?}", replies[6]);
     }
 
     #[test]

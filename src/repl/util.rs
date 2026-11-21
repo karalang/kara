@@ -75,8 +75,12 @@ pub(super) fn is_valid_resource_ident(s: &str) -> bool {
 }
 
 pub(super) fn print_help() {
-    println!(
-        "Kāra REPL meta-commands:
+    println!("{}", help_text());
+}
+
+/// What `:help` prints.
+pub(super) fn help_text() -> String {
+    "Kāra REPL meta-commands:
   :help              show this help
   :quit / :q         exit the REPL
   :type <expr>       print the inferred type of <expr>
@@ -118,7 +122,7 @@ Cell semantics:
     definition — the prior decl is pruned from the items buffer before
     the new one is appended. `impl` blocks are anonymous and are never
     pruned (multiple impls for the same target type compose as expected)."
-    );
+        .to_string()
 }
 
 /// Render statement-style cell bodies into the body of a synthetic

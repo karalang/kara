@@ -936,6 +936,9 @@ impl Session {
         match cmd {
             "effects" => self.magic_effects(),
             "save" => self.magic_save(rest),
+            // `%dep` is `:dep` under the `%pip`-shaped name (deferred.md,
+            // "Jupyter parity").
+            "dep" => self.meta_command(&format!(":dep {rest}")),
             "ownership" => self.magic_ownership(),
             "explain" => self.magic_explain(rest),
             "set" => self.magic_set(rest),
@@ -951,10 +954,10 @@ impl Session {
                 Err(msg) => MagicOutput::error(msg),
             },
             "" => MagicOutput::error(
-                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R, %save <path.kara>",
+                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R, %save <path.kara>, %dep <name> = ...",
             ),
             other => MagicOutput::error(format!(
-                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R, %save <path.kara>"
+                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R, %save <path.kara>, %dep <name> = ..."
             )),
         }
     }
@@ -973,12 +976,9 @@ impl Session {
         if path.is_empty() {
             return MagicOutput::error("usage: %save <path.kara>");
         }
-        if self.cell_history.is_empty() {
-            return MagicOutput::ok("(no cells to save)");
-        }
-        match std::fs::write(path, self.render_exported_session()) {
-            Ok(()) => MagicOutput::ok(format!("session saved to {path}")),
-            Err(e) => MagicOutput::error(format!("error: failed to write {path}: {e}")),
+        match self.save(path) {
+            Ok(msg) => MagicOutput::ok(msg),
+            Err(msg) => MagicOutput::error(msg),
         }
     }
 
@@ -1517,74 +1517,67 @@ impl Session {
     /// Handle a `:meta` command. Returns `false` when the user requested
     /// quit, `true` to continue the loop.
     pub fn dispatch_meta(&mut self, line: &str) -> bool {
-        // Split on first whitespace.
+        let cmd = line.split_whitespace().next().unwrap_or("");
+        if matches!(cmd, ":quit" | ":q" | ":exit") {
+            return false;
+        }
+        let out = self.meta_command(line);
+        if out.ok {
+            if !out.text.is_empty() {
+                println!("{}", out.text.trim_end());
+            }
+        } else {
+            eprintln!("{}", out.text.trim_end());
+        }
+        true
+    }
+
+    /// A `:` meta-command's output, captured: `ok` text is what the REPL
+    /// prints on stdout, an error what it prints on stderr. The REPL and
+    /// the Jupyter kernel both answer `:` lines through it, so a notebook
+    /// cell `:type x` or `:dep name = "1"` does what the REPL's does
+    /// (deferred.md, "Jupyter parity"; B-2026-11-20-135). `:quit` is the
+    /// caller's: a notebook has no prompt to leave.
+    pub fn meta_command(&mut self, line: &str) -> MagicOutput {
+        let line = line.trim();
         let (cmd, rest) = match line.split_once(char::is_whitespace) {
             Some((c, r)) => (c.trim(), r.trim()),
-            None => (line.trim(), ""),
+            None => (line, ""),
+        };
+        let result = |r: Result<String, String>| match r {
+            Ok(msg) => MagicOutput::ok(msg),
+            Err(msg) => MagicOutput::error(msg),
         };
         match cmd {
-            ":help" => {
-                print_help();
-            }
-            ":quit" | ":q" | ":exit" => {
-                return false;
-            }
-            ":type" => {
-                if rest.is_empty() {
-                    eprintln!("usage: :type <expr>");
-                } else {
-                    self.show_type(rest);
-                }
-            }
-            ":effects" => {
-                self.show_effects();
-            }
-            ":save" => {
-                if rest.is_empty() {
-                    eprintln!("usage: :save <path.kara>");
-                } else {
-                    self.save(rest);
-                }
-            }
+            ":help" => MagicOutput::ok(help_text()),
+            ":type" if rest.is_empty() => MagicOutput::error("usage: :type <expr>"),
+            ":type" => result(self.type_of(rest).map_err(|errs| errs.join("\n"))),
+            ":effects" => MagicOutput::ok(self.effects_report().trim_end()),
+            ":save" if rest.is_empty() => MagicOutput::error("usage: :save <path.kara>"),
+            ":save" => result(self.save(rest)),
             ":reset" => {
                 let cleared = self.persistent_lets.len();
                 self.reset_persistent_lets();
-                println!("(cleared {cleared} persistent let binding(s); items + history kept)");
+                MagicOutput::ok(format!(
+                    "(cleared {cleared} persistent let binding(s); items + history kept)"
+                ))
             }
-            ":dep" => {
-                if rest.is_empty() {
-                    eprintln!(
-                        "usage: :dep <name> = \"<version>\"  or  :dep <name> = {{ git = \"...\" }}"
-                    );
-                } else {
-                    self.add_dep(rest);
-                }
+            ":dep" if rest.is_empty() => MagicOutput::error(
+                "usage: :dep <name> = \"<version>\"  or  :dep <name> = { git = \"...\" }",
+            ),
+            ":dep" => result(self.add_dep(rest)),
+            ":provide" if rest.is_empty() => {
+                MagicOutput::error("usage: :provide <Resource> = <expr>")
             }
-            ":provide" => {
-                if rest.is_empty() {
-                    eprintln!("usage: :provide <Resource> = <expr>");
-                } else {
-                    match self.add_provider(rest) {
-                        Ok(msg) => println!("{msg}"),
-                        Err(msg) => eprintln!("{msg}"),
-                    }
-                }
+            ":provide" => result(self.add_provider(rest)),
+            ":end-provide" if rest.is_empty() => {
+                MagicOutput::error("usage: :end-provide <Resource>")
             }
-            ":end-provide" => {
-                if rest.is_empty() {
-                    eprintln!("usage: :end-provide <Resource>");
-                } else {
-                    match self.end_provider(rest) {
-                        Ok(msg) => println!("{msg}"),
-                        Err(msg) => eprintln!("{msg}"),
-                    }
-                }
-            }
-            other => {
-                eprintln!("unknown meta-command '{other}'. Try :help for the supported list.");
-            }
+            ":end-provide" => result(self.end_provider(rest)),
+            other => MagicOutput::error(format!(
+                "unknown meta-command '{other}'. Try :help for the supported list."
+            )),
         }
-        true
     }
 
     /// Evaluate one cell. Classification is best-effort: the cell is
@@ -3026,17 +3019,6 @@ impl Session {
     /// Type a single expression by wrapping it as `let __t = <expr>;` inside
     /// a synthetic main, after the session's bindings as a cell starts
     /// from them, and reporting the inferred type of the binding.
-    fn show_type(&self, expr: &str) {
-        match self.type_of(expr) {
-            Ok(ty) => println!("{ty}"),
-            Err(errs) => {
-                for e in errs {
-                    eprintln!("{e}");
-                }
-            }
-        }
-    }
-
     /// What `:type <expr>` prints: the expression's type, or the errors
     /// that stopped it. The expression sees the session's bindings and
     /// open providers, as a cell would; nothing runs.
@@ -3083,10 +3065,6 @@ impl Session {
     /// first (`session effects: reads(FileSystem), panics`), then one line
     /// per function (and method of a session type) that has any. The
     /// library's own functions are left out.
-    fn show_effects(&self) {
-        print!("{}", self.effects_report());
-    }
-
     /// What `:effects` prints. The session's effects are those of its
     /// functions and of its cells, which run as the saved file's `main`
     /// does (`Session::render_exported_session`).
@@ -3133,15 +3111,14 @@ impl Session {
         out
     }
 
-    fn save(&self, path: &str) {
+    fn save(&self, path: &str) -> Result<String, String> {
         if self.cell_history.is_empty() {
-            eprintln!("(no cells to save)");
-            return;
+            return Err("(no cells to save)".to_string());
         }
         let out = self.render_exported_session();
         match std::fs::write(path, out) {
-            Ok(()) => println!("session saved to {path}"),
-            Err(e) => eprintln!("error: failed to write {path}: {e}"),
+            Ok(()) => Ok(format!("session saved to {path}")),
+            Err(e) => Err(format!("error: failed to write {path}: {e}")),
         }
     }
 
@@ -3369,7 +3346,7 @@ impl Session {
     /// plus a v1.1 caveat: the package manager is not yet wired, so the
     /// surface symbols are NOT yet in scope. When the resolver lands the
     /// stored map is what it consumes.
-    fn add_dep(&mut self, rest: &str) {
+    fn add_dep(&mut self, rest: &str) -> Result<String, String> {
         // Wrap the user's `name = value` pair as a one-table TOML snippet
         // and lean on `toml::Table` to do the heavy lifting (string
         // escaping, inline-table parsing, etc.). The synthetic table name
@@ -3378,31 +3355,29 @@ impl Session {
         let table: toml::Table = match snippet.parse() {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("error: invalid `:dep` syntax — {}", e.message());
-                eprintln!(
-                    "  expected: :dep <name> = \"version\"  or  :dep <name> = {{ git = \"...\" }}"
-                );
-                return;
+                return Err(format!(
+                    "error: invalid `:dep` syntax — {}\n  expected: :dep <name> = \"version\"  or  :dep <name> = {{ git = \"...\" }}",
+                    e.message()
+                ));
             }
         };
         let inner = match table.get("__kara_repl_dep__").and_then(|v| v.as_table()) {
             Some(t) => t,
             None => {
-                eprintln!("error: `:dep` argument must be a single `name = value` pair");
-                return;
+                return Err(
+                    "error: `:dep` argument must be a single `name = value` pair".to_string(),
+                );
             }
         };
         if inner.len() != 1 {
-            eprintln!(
+            return Err(format!(
                 "error: `:dep` accepts exactly one dependency per command (got {})",
                 inner.len()
-            );
-            return;
+            ));
         }
         let (name, value) = inner.iter().next().expect("len == 1 just checked");
         if name.is_empty() {
-            eprintln!("error: `:dep` package name cannot be empty");
-            return;
+            return Err("error: `:dep` package name cannot be empty".to_string());
         }
         // For inline-table forms (`{ git = "..." }`) reuse the user's
         // original RHS slice verbatim — `toml::Value` doesn't impl Display
@@ -3415,16 +3390,16 @@ impl Session {
             toml::Value::Table(_) => match rest.split_once('=') {
                 Some((_, rhs)) => rhs.trim().to_string(),
                 None => {
-                    eprintln!("error: `:dep` syntax must include `=` between name and value");
-                    return;
+                    return Err(
+                        "error: `:dep` syntax must include `=` between name and value".to_string(),
+                    );
                 }
             },
             other => {
-                eprintln!(
+                return Err(format!(
                     "error: `:dep {name} = ...` must be a version string or an inline table (got {})",
                     other.type_str()
-                );
-                return;
+                ));
             }
         };
         let updated = self.pending_deps.insert(name.clone(), normalized.clone());
@@ -3433,10 +3408,9 @@ impl Session {
         } else {
             "registered"
         };
-        println!("(:dep {verb}: {name} = {normalized})");
-        println!(
-            "  note: package resolution is not in 0.8: the entry is recorded but `{name}`'s symbols are not in scope."
-        );
+        Ok(format!(
+            "(:dep {verb}: {name} = {normalized})\n  note: package resolution is not in 0.8: the entry is recorded but `{name}`'s symbols are not in scope."
+        ))
     }
 
     /// Open a new cross-cell `:provide R = expr` scope. The construction
