@@ -484,6 +484,7 @@ impl DocumentChecker {
         let t0 = std::time::Instant::now();
         let focused_check = super::editor::check_detailed(focused.as_deref().unwrap_or(nt));
         let (fdiags, feffects) = (focused_check.diags, focused_check.effects);
+        let focused_stop = first_error_phase(&fdiags);
         if std::env::var("KARAC_LSP_INCREMENTAL_DEBUG").is_ok() {
             eprintln!(
                 "[incremental] focused check {:.0} ms",
@@ -540,6 +541,13 @@ impl DocumentChecker {
         // drops their typecheck warnings, and one that removes it brings
         // them back (B-2026-11-19-122). Only a whole check knows that set.
         if first_error_phase(&last.diags) != first_error_phase(&diags) {
+            return None;
+        }
+        // And the focused check stopped where the whole one does: a resolve
+        // error in a body it emptied stops the whole check's ownership pass,
+        // but not the focused one's, whose edited bodies then had ownership
+        // errors `karac check` does not report (B-2026-11-21-32).
+        if focused_stop != first_error_phase(&diags) {
             return None;
         }
         // Any error holds back the `unused_mut` lint (W0301) over the whole

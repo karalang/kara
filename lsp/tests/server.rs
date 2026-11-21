@@ -95,8 +95,8 @@ fn server_publishes_diagnostics_and_shuts_down_cleanly() {
     else {
         panic!("expected initialize response, got {init:?}");
     };
-    // FULL text sync == numeric kind 1.
-    assert_eq!(caps["capabilities"]["textDocumentSync"], json!(1));
+    // Incremental: range edits (B-2026-11-21-33).
+    assert_eq!(caps["capabilities"]["textDocumentSync"], json!(2));
     notify(&client, "initialized", json!({}));
 
     // 2. open a document with a type error → one diagnostic on line 0.

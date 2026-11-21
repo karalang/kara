@@ -594,8 +594,9 @@ DETAILS:
         such as `.to_string()` for a kept `Str` view.
       - Ownership: `let mut` for a written binding, `mut ref` for a
         written parameter, `shared enum` for a recursive enum.
-    A fix can expose the next diagnostic, so run it again until it
-    reports nothing to apply.
+    A fix can expose the next diagnostic, so `karac fix` runs pass after
+    pass (at most 10) until one applies nothing; `--dry-run` shows the
+    first pass only.
     Each `TextEdit { offset, length, replacement }` is applied in
     reverse byte-offset order so earlier edits don't invalidate later
     offsets. Other diagnostic kinds carry descriptive (sentence)

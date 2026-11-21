@@ -15,6 +15,7 @@
 //! static.
 
 pub mod analysis;
+pub mod workspace;
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -45,7 +46,12 @@ pub fn serve(connection: Connection) -> LspResult {
     // re-analyze) drives the diagnostics loop; hover is served from the same
     // per-document text.
     let capabilities = ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+        // Range edits (B-2026-11-21-33): a client sends what a
+        // keystroke changed, not the whole buffer, which on a large file is
+        // most of the traffic; [`apply_change`] splices it in.
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::INCREMENTAL,
+        )),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
@@ -145,9 +151,13 @@ fn handle_notification(
             let params: lsp_types::DidChangeTextDocumentParams =
                 serde_json::from_value(not.params)?;
             let uri = params.text_document.uri;
-            // FULL sync: the last content change holds the entire new buffer.
-            if let Some(change) = params.content_changes.into_iter().next_back() {
-                let text = change.text;
+            // Each change applies to the text the one before it left; one
+            // without a range is the whole buffer.
+            if !params.content_changes.is_empty() {
+                let mut text = docs.get(&uri.to_string()).cloned().unwrap_or_default();
+                for change in params.content_changes {
+                    apply_change(&mut text, change);
+                }
                 let checker = checkers.entry(uri.to_string()).or_default();
                 publish(connection, checker, &uri, &text, false);
                 docs.insert(uri.to_string(), text);
@@ -175,6 +185,21 @@ fn handle_notification(
         _ => {}
     }
     Ok(())
+}
+
+/// Splice one `didChange` content change into `text`: its range, in
+/// UTF-16 positions, replaced by its text, or the whole buffer when it has
+/// no range. A position past a line's end or the buffer's clamps to it.
+pub fn apply_change(text: &mut String, change: lsp_types::TextDocumentContentChangeEvent) {
+    match change.range {
+        None => *text = change.text,
+        Some(range) => {
+            let index = analysis::LineIndex::new(text);
+            let start = index.offset(range.start);
+            let end = index.offset(range.end).max(start);
+            text.replace_range(start..end, &change.text);
+        }
+    }
 }
 
 // JSON-RPC error codes (LSP inherits these from JSON-RPC 2.0).
@@ -237,18 +262,28 @@ fn handle_request(
                 let pos = p.text_document_position.position;
                 let uri = p.text_document_position.text_document.uri;
                 let include_decl = p.context.include_declaration;
-                let locs: Vec<Location> = docs
-                    .get(&uri.to_string())
-                    .map(|text| {
-                        analysis::references(text, pos, include_decl)
-                            .into_iter()
-                            .map(|range| Location {
-                                uri: uri.clone(),
-                                range,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                // A `pub` item of a package module: its references in every
+                // module of the package.
+                let across = analysis::file_path(&uri).and_then(|path| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        workspace::references(&path, docs, pos, include_decl)
+                    }))
+                    .ok()
+                    .flatten()
+                });
+                let locs: Vec<Location> = across.unwrap_or_else(|| {
+                    docs.get(&uri.to_string())
+                        .map(|text| {
+                            analysis::references(text, pos, include_decl)
+                                .into_iter()
+                                .map(|range| Location {
+                                    uri: uri.clone(),
+                                    range,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                });
                 lsp_server::Response::new_ok(id, locs)
             }
             Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
@@ -309,14 +344,43 @@ fn handle_request(
                 // `None` (not on a renameable name) → a null result, which
                 // the client reports as "cannot rename here"; a new name
                 // that is no name → an error that says why (B-2026-11-15-123).
-                let renamed = match docs.get(&uri.to_string()) {
-                    Some(text) => analysis::rename(text, pos, &p.new_name),
-                    None => Ok(None),
+                //
+                // A `pub` item of a package module is renamed in every
+                // module (B-2026-11-21-34), and no rename is
+                // offered that would add an error.
+                let path = analysis::file_path(&uri);
+                let across = path.as_deref().map(|path| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        workspace::rename(path, docs, pos, &p.new_name)
+                    }))
+                    .unwrap_or(Ok(None))
+                });
+                #[allow(clippy::mutable_key_type)]
+                let renamed = match across {
+                    Some(Err(why)) => Err(why),
+                    Some(Ok(Some(changes))) => Ok(Some(changes)),
+                    _ => match docs.get(&uri.to_string()) {
+                        Some(text) => {
+                            analysis::rename(text, pos, &p.new_name).and_then(|edits| match edits {
+                                Some(edits) => {
+                                    workspace::checked_single_file(
+                                        text,
+                                        path.as_deref(),
+                                        &edits,
+                                        &p.new_name,
+                                    )?;
+                                    Ok(Some(std::iter::once((uri.clone(), edits)).collect()))
+                                }
+                                None => Ok(None),
+                            })
+                        }
+                        None => Ok(None),
+                    },
                 };
                 match renamed {
-                    Ok(edits) => {
-                        let edit = edits.map(|edits| lsp_types::WorkspaceEdit {
-                            changes: Some(std::iter::once((uri.clone(), edits)).collect()),
+                    Ok(changes) => {
+                        let edit = changes.map(|changes| lsp_types::WorkspaceEdit {
+                            changes: Some(changes),
                             ..Default::default()
                         });
                         lsp_server::Response::new_ok(id, edit)

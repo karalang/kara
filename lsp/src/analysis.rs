@@ -249,7 +249,7 @@ fn library_file_uri(file: &str, text: &str) -> Option<Uri> {
 }
 
 /// The `file:` URI of a local path.
-fn path_uri(path: &std::path::Path) -> Option<Uri> {
+pub fn path_uri(path: &std::path::Path) -> Option<Uri> {
     let mut uri = String::from("file://");
     for b in path.to_str()?.replace('\\', "/").bytes() {
         if b.is_ascii_alphanumeric() || b"/-._~:".contains(&b) {
