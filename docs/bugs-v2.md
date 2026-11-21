@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 336 |
 | missing-feature | 232 |
 | perf | 193 |
-| other | 131 |
+| other | 133 |
 | soundness | 114 |
 | miscompile | 102 |
 | crash | 64 |
@@ -86,7 +86,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 95 |
 | effect | 51 |
 | resolver | 50 |
-| other | 43 |
+| other | 45 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -152,6 +152,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-10 | 2026-11-21 | other | medium | Test infra: 21 helpers skip a compiled lane on `stderr.contains("Linker failed")` without the undefined-symbol panic `link_or_skip` has, so a STALE runtime archive or a missing keep-list entry (`Linker failed: ... undefined reference to karac_*`) is skipped instead of failing | — |
 | B-2026-11-21-11 | 2026-11-21 | other | medium | Test infra: 92 `karac build` call sites hand the BUILD's exit status to `common::link_or_skip` with no check that the failure is a link, and 33 more in tests/cli.rs (plus tests/run_v2.rs:245) skip the AOT leg whenever the build fails or leaves no binary, so any build-time failure, such as an E0516 'not lowered yet', a backend error or a karac panic, reads as 'no runtime archive' on a local gate run | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
+| B-2026-11-21-13 | 2026-11-21 | other | medium | Test infra: tests/cli.rs has 4 reasoned #[ignore]s that now pass and 3 more whose reason is stale (they fail on the test's own legacy expectations, not on the gap named), so the suite hides 4 live regression gates and misstates 3 gaps | — |
+| B-2026-11-21-14 | 2026-11-21 | other | high | Test infra: 22 #[ignore]s in tests/http_server.rs blame a missing v2 HTTP server ('services track, M4a'), but the server exists; 19 fail only because the legacy spawn_kara_server helper reads BOUND_PORT from stdout without KARAC_ANNOUNCE_PORT, and 16 pass once the handshake is fixed | — |
 
 ### Relocated
 
