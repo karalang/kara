@@ -5,7 +5,7 @@
 //! body)`, links it against `libkarac_runtime.a` (which carries the
 //! hyper-backed `karac_runtime_serve_http_static` export), spawns the
 //! resulting binary as a subprocess, reads the bound port from the
-//! binary's `BOUND_PORT=<n>` stdout line, performs a `GET /dashboard/1`
+//! binary's `BOUND_PORT=<n>` stderr line, performs a `GET /dashboard/1`
 //! against `127.0.0.1:<port>`, and asserts the response is `200` with
 //! the expected JSON body.
 //!
@@ -17,18 +17,13 @@
 //! free-fn-arg codegen or effect-set-parameter syntax. Polymorphic
 //! `serve[E]` + arbitrary handler dispatch lands in a follow-up.
 //!
-//! **Subprocess + port-from-stdout pattern.** Precedent in
-//! `tests/memory_sanitizer.rs`. The binary writes `BOUND_PORT=<n>\n`
-//! to stdout from inside `karac_runtime_serve_http_static` immediately
-//! before entering the accept loop; the test harness reads stdout
-//! until it observes that line, parses the port, and only then
-//! attempts the HTTP request.
-//!
-//! **Effect-propagation pin (`#[ignore]` placeholder).** v1's smoke
-//! path uses `Server.serve_static` which has no handler — there's no
-//! handler-effect-set to propagate. The placeholder lives at the end
-//! of this file as documentation of what the polymorphic-`serve[E]`
-//! follow-up needs to test.
+//! **Subprocess + announced-port pattern.** Each test spawns the built
+//! binary with `KARAC_ANNOUNCE_PORT=1`, under which the v2 server writes
+//! `BOUND_PORT=<n>\n` to stderr just before its accept loop
+//! (B-2026-10-31-20); the harness reads stderr until it sees that line,
+//! parses the port, and only then sends the request. Reading stdout
+//! without the variable, as these tests did before B-2026-11-21-14, never
+//! sees the line.
 
 mod common;
 
@@ -111,9 +106,9 @@ mod http_server_tests {
         Ok(())
     }
 
-    /// Read stdout line-by-line until we see `BOUND_PORT=<n>` (returns
+    /// Read the child's stderr line by line until we see `BOUND_PORT=<n>` (returns
     /// the parsed port), or until `timeout` elapses (returns `None`).
-    /// The reader thread keeps the child's stdout drained so the OS
+    /// The reader thread keeps the stream drained so the OS
     /// pipe buffer doesn't fill up and block the binary.
     fn await_bound_port<R: std::io::Read + Send + 'static>(
         stdout: R,
@@ -245,7 +240,6 @@ mod http_server_tests {
     /// `examples/parallax/` holds the source-of-truth multi-file form
     /// for human readers.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http_server_serves_hardcoded_handler() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Build the runtime statically; soft-skip if it can't be
@@ -288,14 +282,15 @@ mod http_server_tests {
         }
 
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
 
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
 
         let port = match port_opt {
             Some(p) => p,
@@ -366,28 +361,6 @@ mod http_server_tests {
         );
     }
 
-    /// Effect-propagation pin (placeholder).
-    ///
-    /// **Conditional on the polymorphic-`serve[E]` follow-up.** v1's
-    /// `Server.serve_static` is a fixed-body responder with no handler,
-    /// so there's no handler-effect-set to propagate. Once free-fn
-    /// effect-set parameter syntax + fn-pointer-as-arg codegen lands
-    /// (a Phase 7/8 follow-up), this test fills in to exercise the
-    /// signature
-    /// `Server.serve[E](handler: fn(Request) -> Response with E)`
-    /// against a handler with explicit `with reads(MockResource),
-    /// writes(MockResource)` annotations and asserts the typechecker
-    /// admits the call without effect-set mismatch.
-    ///
-    /// Per Slice B's locked test surface (item 2): "stays as a
-    /// `#[ignore]` placeholder until effect-set parameter syntax on
-    /// free fns lands."
-    #[test]
-    #[ignore]
-    fn test_http_server_handler_effects_propagate() {
-        // Placeholder — see doc comment.
-    }
-
     /// Slice B follow-up (2026-05-09) — `Server.serve(handler)` smoke.
     ///
     /// Compiles a Kāra program that calls `Server.serve(handle)` with a
@@ -407,7 +380,6 @@ mod http_server_tests {
     /// `tests/codegen.rs::test_server_serve_handler_shim_caches`;
     /// this test is the end-to-end runtime exercise.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_smoke() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
@@ -449,14 +421,15 @@ mod http_server_tests {
         }
 
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
 
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
 
         let port = match port_opt {
             Some(p) => p,
@@ -526,13 +499,14 @@ mod http_server_tests {
             panic!("compile/link failed: {e}");
         }
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -579,7 +553,6 @@ mod http_server_tests {
     /// response body. Pins F2 (opaque-ptr Request shape) + F3
     /// (`path()` method dispatch) end-to-end.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_path() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -608,7 +581,6 @@ mod http_server_tests {
     /// the HTTP method verb and returns it as the response body. Pins
     /// the `method()` arm.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_method() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -683,13 +655,14 @@ mod http_server_tests {
             panic!("compile/link failed: {e}");
         }
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -737,7 +710,6 @@ mod http_server_tests {
     /// both the codegen path (`compile_request_body`) and the runtime
     /// externs (`karac_runtime_http_request_body_ptr/_len`).
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_body() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -768,7 +740,6 @@ mod http_server_tests {
     /// `body_len == 0` branch of `compile_request_body` and the
     /// null-pointer-on-empty branch of `karac_runtime_http_request_body_ptr`.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_empty_body_for_get() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -855,13 +826,14 @@ mod http_server_tests {
             panic!("compile/link failed: {e}");
         }
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -909,7 +881,6 @@ mod http_server_tests {
     /// `karac_runtime_http_request_header` + the codegen path
     /// (`compile_request_header`) + the `Option[String]` unwrap shape.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_header() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -946,7 +917,6 @@ mod http_server_tests {
     /// `eq_ignore_ascii_case` branch in
     /// `karac_runtime_http_request_header`.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_header_lookup_case_insensitive() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -982,7 +952,6 @@ mod http_server_tests {
     /// `karac_runtime_http_request_header` and the `None` PHI arm of
     /// `compile_request_header`.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_header_absent_returns_none() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -1022,7 +991,6 @@ mod http_server_tests {
     /// capture of the loop value) keeps the body bytes owned independent
     /// of the iterated Vec.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_iterates_headers() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // The handler iterates every `(name, value)` pair and reports a
@@ -1081,7 +1049,6 @@ mod http_server_tests {
     /// shared `compile_request_pairs` loop. `out = "" + v` allocates a
     /// fresh String so the body outlives the iterated Vec.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_query_param() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // The handler scans the parsed params for `q` and confirms its
@@ -1257,7 +1224,6 @@ mod http_server_tests {
     /// `Server.serve_tls` dispatch + the shared handler shim across
     /// the TLS layer.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_tls_https_smoke() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -1332,14 +1298,15 @@ mod http_server_tests {
         }
 
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn HTTPS server binary");
 
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -1398,7 +1365,6 @@ mod http_server_tests {
     /// in the response. Also verifies that a user-set `Content-Type`
     /// overrides the default `text/plain; charset=utf-8`.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_sets_response_headers() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -1437,13 +1403,14 @@ mod http_server_tests {
         }
 
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -1522,7 +1489,6 @@ mod http_server_tests {
     /// `Connection: close` so the server tears down after responding
     /// and the test can clean up.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_keep_alive_persistence() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -1557,13 +1523,14 @@ mod http_server_tests {
         }
 
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -1707,7 +1674,6 @@ mod http_server_tests {
     /// transfer encoding round-trips through `serve_request`'s
     /// `body.collect().await` correctly.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_chunked_request_body_decode() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -1742,13 +1708,14 @@ mod http_server_tests {
         }
 
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn server binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -2522,70 +2489,6 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
             panic!("compile/link failed: {e}");
         }
         let mut child = Command::new(&exe_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("failed to spawn server binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
-        match port_opt {
-            Some(p) => {
-                assert!(p > 0, "BOUND_PORT must be a non-zero ephemeral port");
-                Some((child, p, exe_path))
-            }
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = std::fs::remove_file(&exe_path);
-                panic!("server did not emit BOUND_PORT line within timeout");
-            }
-        }
-    }
-
-    /// [`spawn_kara_server`] on v2: `karac check`, then `karac build --mir`,
-    /// then spawn. The v2 server prints `BOUND_PORT=` on stderr when
-    /// `KARAC_ANNOUNCE_PORT` is set (B-2026-10-31-20). A program
-    /// `check` refuses fails the test rather than soft-skipping as a link
-    /// problem would.
-    fn spawn_kara_server_v2(
-        src: &str,
-        prefix: &str,
-    ) -> Option<(std::process::Child, u16, PathBuf)> {
-        let karac = env!("CARGO_BIN_EXE_karac");
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let src_path = PathBuf::from(format!("/tmp/{prefix}_{pid}_{nanos}.kara"));
-        let exe_path = PathBuf::from(format!("/tmp/{prefix}_{pid}_{nanos}"));
-        std::fs::write(&src_path, src).expect("write the server source");
-        let checked = Command::new(karac)
-            .arg("check")
-            .arg(&src_path)
-            .output()
-            .expect("run karac check");
-        assert!(
-            checked.status.success(),
-            "karac check refused the server: {}",
-            String::from_utf8_lossy(&checked.stderr)
-        );
-        let built = Command::new(karac)
-            .arg("build")
-            .arg("--mir")
-            .arg(&src_path)
-            .arg("-o")
-            .arg(&exe_path)
-            .output()
-            .expect("run karac build --mir");
-        let _ = std::fs::remove_file(&src_path);
-        super::common::link_or_skip(if built.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&built.stderr).to_string())
-        })?;
-        let mut child = Command::new(&exe_path)
             .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -2595,7 +2498,10 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         let stderr = child.stderr.take().expect("child stderr missing");
         let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         match port_opt {
-            Some(p) => Some((child, p, exe_path)),
+            Some(p) => {
+                assert!(p > 0, "BOUND_PORT must be a non-zero ephemeral port");
+                Some((child, p, exe_path))
+            }
             None => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -2788,7 +2694,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     /// HTTP/2 connection. Proves `auto::Builder` negotiates h2 on the
     /// plain-TCP path and the handler bridge is protocol-agnostic.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
+    #[ignore = "server-side HTTP/2 is deferred (docs/deferred.md, Server-side HTTP/2); the v1 servers speak HTTP/1.1"]
     fn test_http2_h2c_prior_knowledge_handler() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -2821,7 +2727,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     /// Two concurrent requests on one h2c connection both succeed,
     /// exercising HTTP/2 stream multiplexing through the karac handler.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
+    #[ignore = "server-side HTTP/2 is deferred (docs/deferred.md, Server-side HTTP/2); the v1 servers speak HTTP/1.1"]
     fn test_http2_multiplexed_streams() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -2861,7 +2767,6 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     /// regression from the line-145 swap). Drives the existing sync
     /// HTTP/1.1 client against a `Server.serve` handler.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http1_still_served_under_auto_builder() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -2894,7 +2799,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     /// `serve_request` path). Also asserts a client offering only
     /// `http/1.1` still negotiates `http/1.1` (fallback intact).
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
+    #[ignore = "server-side HTTP/2 is deferred (docs/deferred.md, Server-side HTTP/2); the v1 servers speak HTTP/1.1"]
     fn test_http2_alpn_over_tls() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -2978,7 +2883,6 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     ///      `Sec-WebSocket-Accept` digest, then a masked text frame is
     ///      echoed back unmasked by the Kāra ws_handler.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http_server_serve_ws_upgrade_and_echo() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
@@ -2999,19 +2903,16 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
                 }
             }
 
-            fn on_ws(ws: WebSocket) {
-                let mut buf: Array[u8, 4096] = [0u8; 4096];
+            fn on_ws(ws: own WebSocket) {
+                let mut ws = ws;
                 loop {
-                    let r = ws.recv_text(mut buf);
-                    match r {
-                        Result.Ok(n) => {
-                            if n == 0 { break; }
-                            match ws.send_text(buf[0..n]) {
-                                Result.Ok(_) => {}
-                                Result.Err(_) => { break; }
-                            }
+                    match ws.recv() {
+                        Ok(WsMessage.Text(t)) => {
+                            if ws.send_text(t).is_err() { break; }
                         }
-                        Result.Err(_) => { break; }
+                        Ok(WsMessage.Close(_)) => { break; }
+                        Ok(_) => {}
+                        Err(_) => { break; }
                     }
                 }
             }
@@ -3035,13 +2936,14 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         }
 
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn serve_ws binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -3105,7 +3007,10 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
             }
 
             // (3) Full /ws session: 101 + accept digest + frame echo.
-            let key = "c2VydmVfd3NfdGVzdF9rZXk=";
+            // RFC 6455 §1.3's sample nonce: a key must be the base64 of 16
+            // bytes (§4.2.1, B-2026-11-17-57); this test's old key decoded
+            // to 17 and is refused with 400 now (B-2026-11-21-14).
+            let key = "dGhlIHNhbXBsZSBub25jZQ==";
             let mut s = std::net::TcpStream::connect(("127.0.0.1", port))
                 .map_err(|e| format!("connect ws: {e}"))?;
             s.set_read_timeout(Some(Duration::from_secs(5))).ok();
@@ -3129,15 +3034,12 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
             if !head_str.starts_with("HTTP/1.1 101") {
                 return Err(format!("/ws should 101; got: {head_str}"));
             }
-            // RFC 6455 §4.2.2 digest for the fixed key above, precomputed:
-            // base64(SHA1("c2VydmVfd3NfdGVzdF9rZXk=258EAFA5-E914-47DA-95CA-C5AB0DC85B11")).
-            // Recomputing here would re-implement SHA-1 in the test; instead
-            // assert the header exists and is non-empty plus the upgrade
-            // headers — the runtime's digest fn itself is pinned by the
-            // ws_accept unit tests in `runtime/src/event_loop.rs`.
+            // RFC 6455 §1.3 gives this key's digest.
             let lower = head_str.to_lowercase();
-            if !lower.contains("sec-websocket-accept:") {
-                return Err(format!("101 missing Sec-WebSocket-Accept: {head_str}"));
+            if !lower.contains("sec-websocket-accept: s3pplmbitxaq9kygzzhzrbk+xoo=") {
+                return Err(format!(
+                    "101 without the RFC 6455 §1.3 accept digest: {head_str}"
+                ));
             }
             if !lower.contains("upgrade: websocket") {
                 return Err(format!("101 missing Upgrade header: {head_str}"));
@@ -3189,7 +3091,6 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     /// registry. Asserts an HTTPS `/health` 200 and a full wss:// echo
     /// round-trip over one rustls client session.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http_server_serve_ws_tls_upgrade_and_echo() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let cert_path = workspace_root().join("tests/fixtures/tls/cert.pem");
@@ -3227,18 +3128,16 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
                 }}
             }}
 
-            fn on_ws(ws: WebSocket) {{
-                let mut buf: Array[u8, 4096] = [0u8; 4096];
+            fn on_ws(ws: own WebSocket) {{
+                let mut ws = ws;
                 loop {{
-                    match ws.recv_text(mut buf) {{
-                        Result.Ok(n) => {{
-                            if n == 0 {{ break; }}
-                            match ws.send_text(buf[0..n]) {{
-                                Result.Ok(_) => {{}}
-                                Result.Err(_) => {{ break; }}
-                            }}
+                    match ws.recv() {{
+                        Ok(WsMessage.Text(t)) => {{
+                            if ws.send_text(t).is_err() {{ break; }}
                         }}
-                        Result.Err(_) => {{ break; }}
+                        Ok(WsMessage.Close(_)) => {{ break; }}
+                        Ok(_) => {{}}
+                        Err(_) => {{ break; }}
                     }}
                 }}
             }}
@@ -3261,13 +3160,14 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
             panic!("compile/link failed: {e}");
         }
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn serve_ws_tls binary");
-        let stdout = child.stdout.take().expect("child stdout missing");
-        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let stderr = child.stderr.take().expect("child stderr missing");
+        let (port_opt, _join) = await_bound_port(stderr, Duration::from_secs(15));
         let port = match port_opt {
             Some(p) => p,
             None => {
@@ -3418,8 +3318,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = include_str!("../examples/shortener/shortener.kara")
             .replace("127.0.0.1:8080", "127.0.0.1:0");
-        let Some((mut child, port, exe_path)) = spawn_kara_server_v2(&src, "karac_shortener")
-        else {
+        let Some((mut child, port, exe_path)) = spawn_kara_server(&src, "karac_shortener") else {
             return;
         };
         let run = || -> Result<(), String> {
@@ -3802,7 +3701,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     /// ~1000 ms a serialized per-connection dispatch would need —
     /// the empirical pin for h2 stream concurrency.
     #[test]
-    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
+    #[ignore = "server-side HTTP/2 is deferred (docs/deferred.md, Server-side HTTP/2); the v1 servers speak HTTP/1.1"]
     fn test_http2_sibling_streams_run_concurrently() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
