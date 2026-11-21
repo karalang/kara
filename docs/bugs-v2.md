@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 651 |
+| diagnostics | 656 |
 | false-positive | 336 |
-| missing-feature | 234 |
+| missing-feature | 235 |
 | perf | 193 |
-| other | 137 |
+| other | 138 |
 | soundness | 116 |
 | miscompile | 102 |
 | crash | 64 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 809 |
+| typecheck | 814 |
 | mir-llvm | 317 |
 | mir | 295 |
-| cli | 254 |
+| cli | 255 |
 | parser | 144 |
 | ownership | 127 |
 | runtime | 104 |
 | interp | 95 |
-| effect | 51 |
+| effect | 52 |
 | resolver | 50 |
 | other | 47 |
 | codegen | 22 |
@@ -149,7 +149,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-10 | 2026-11-21 | other | medium | Test infra: 21 helpers skip a compiled lane on `stderr.contains("Linker failed")` without the undefined-symbol panic `link_or_skip` has, so a STALE runtime archive or a missing keep-list entry (`Linker failed: ... undefined reference to karac_*`) is skipped instead of failing | — |
 | B-2026-11-21-11 | 2026-11-21 | other | medium | Test infra: 92 `karac build` call sites hand the BUILD's exit status to `common::link_or_skip` with no check that the failure is a link, and 33 more in tests/cli.rs (plus tests/run_v2.rs:245) skip the AOT leg whenever the build fails or leaves no binary, so any build-time failure, such as an E0516 'not lowered yet', a backend error or a karac panic, reads as 'no runtime archive' on a local gate run | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
-| B-2026-11-21-15 | 2026-11-21 | typecheck | high | A `par for` item that is a `shared` handle enters each iteration unchecked: `par for x in v.iter() { .. }` (and `par for x in v`, `v.into_iter()`) over a `Vec[S]` of one `shared struct S` passes `karac check`, and iterations copying or writing through `x` race on the non-atomic count and the `mut` fields: heap-use-after-free and double-free under ASan, data races under TSan | — |
+| B-2026-11-21-25 | 2026-11-21 | typecheck | low | A branch mismatch reads `match arms have incompatible types: 'i64' and 'String'` with no note, where design.md § Type inference specifies `type mismatch in branches: expected X, found Y` with each branch's type and an annotate suggestion | — |
+| B-2026-11-21-26 | 2026-11-21 | cli | low | `karac query monomorphization` reports `instance_count: 0` for most programs: its walk skipped f-string holes, struct literals and other node kinds, so a generic called only inside `println(f"{g(1)}")` was never counted | — |
+| B-2026-11-21-27 | 2026-11-21 | typecheck | low | `derive(Hash)` alone warns that `Hash` needs `PartialEq` and `Eq` without naming what is implied, and design.md says the derive needs no other derive | — |
+| B-2026-11-21-28 | 2026-11-21 | typecheck | low | The overlap error for a concrete impl beside a generic one says "0.8 does not support ...", which reads as temporary, and does not point at the other impl | — |
+| B-2026-11-21-29 | 2026-11-21 | effect | low | E0400 names the internal symbol `Connection.access#Writer` ("via call to 'Connection.access#Writer'") for a UFCS trait-method call | — |
+| B-2026-11-21-30 | 2026-11-21 | typecheck | low | A trait impl for a tuple type (`impl Show for (i64, i64)`) is not supported; it was accepted and then never found (`no method 'show' on type '(i64, i64)'`), and is now refused as not supported yet | — |
+| B-2026-11-21-31 | 2026-11-21 | typecheck | low | The const-parameter type refusal omits `i128` from its list of allowed types though `i128` is accepted, and a failed const bound says `predicate is false` without naming the predicate | — |
 
 ### Relocated
 
@@ -2052,6 +2058,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-6 | mir-llvm | high | `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure the address of the slot holding each reference, not the reference: compiled,… | 6e5c5d0a95 |
 | B-2026-11-21-13 | other | medium | Test infra: tests/cli.rs has 4 reasoned #[ignore]s that now pass and 3 more whose reason is stale (they fail on the test's own legacy expectations, n… | c5e6292c56 |
 | B-2026-11-21-14 | other | high | Test infra: 22 #[ignore]s in tests/http_server.rs blame a missing v2 HTTP server ('services track, M4a'), but the server exists; 19 fail only because… | 290d97a608 |
+| B-2026-11-21-15 | typecheck | high | A `par for` item that is a `shared` handle enters each iteration unchecked: `par for x in v.iter() { . | 2ca604b4e6 |
 | B-2026-11-21-16 | typecheck | low | `s + *t`, with `s` a `String` and `t` a `ref Str` (an item lent by `.iter()` over a `Vec[Str]`), is refused as "'+' on 'String' requires a 'String' r… | 9b905182ea |
 | B-2026-11-21-17 | cli | low | `karac build` with `KARAC_LLVM_ARGS=<flags>` did not reach the v2 backend: test_build_llvm_args_lever_reaches_the_backend builds with `KARAC_LLVM_ARG… | 914daa6d1d |
 | B-2026-11-21-18 | cli | low | `karac build --target=wasm_*` does not strip debug info by default: the stripped and `KARAC_WASM_KEEP_DEBUG=1` builds of the same program are the sam… | 3e1b767e5e |
