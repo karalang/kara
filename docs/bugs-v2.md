@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 656 |
+| diagnostics | 658 |
 | false-positive | 336 |
-| missing-feature | 235 |
+| missing-feature | 237 |
 | perf | 193 |
-| other | 138 |
+| other | 139 |
 | soundness | 116 |
 | miscompile | 102 |
 | crash | 64 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 814 |
 | mir-llvm | 317 |
 | mir | 295 |
-| cli | 255 |
+| cli | 260 |
 | parser | 144 |
 | ownership | 127 |
 | runtime | 104 |
@@ -135,6 +135,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-11 | 2026-11-21 | other | medium | Test infra: 92 `karac build` call sites hand the BUILD's exit status to `common::link_or_skip` with no check that the failure is a link, and 33 more in tests/cli.rs (plus tests/run_v2.rs:245) skip the AOT leg whenever the build fails or leaves no binary, so any build-time failure, such as an E0516 'not lowered yet', a backend error or a karac panic, reads as 'no runtime archive' on a local gate run | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
 | B-2026-11-21-30 | 2026-11-21 | typecheck | low | A trait impl for a tuple type (`impl Show for (i64, i64)`) is not supported; it was accepted and then never found (`no method 'show' on type '(i64, i64)'`), and is now refused as not supported yet | — |
+| B-2026-11-21-32 | 2026-11-21 | cli | medium | kara-lsp's incremental check reported errors `karac check` does not: a resolve error in one body stops check at resolve, but the focused (emptied-bodies) re-check went on to type errors in the changed body | — |
+| B-2026-11-21-33 | 2026-11-21 | cli | medium | kara-lsp offered only full-document sync: every keystroke resent the whole file, and a range edit (TextDocumentSyncKind.Incremental) was not supported | — |
+| B-2026-11-21-34 | 2026-11-21 | cli | medium | kara-lsp's references and rename stayed in one document: a `pub` item used from another module got no cross-file references, and a rename left the importing files referring to the old name (the package then failed check) | — |
+| B-2026-11-21-35 | 2026-11-21 | cli | low | `karac fix --help` said one pass and `--dry-run` previews everything, but karac fix runs up to 10 passes itself and `--dry-run` shows only the first | — |
+| B-2026-11-21-36 | 2026-11-21 | cli | low | kara-lsp broke the LSP shutdown/exit order: it stopped reading at `shutdown`, so a request after it went unanswered, and it exited 0 even when `exit` came without `shutdown` | — |
 
 ### Relocated
 
