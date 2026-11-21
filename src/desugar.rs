@@ -1521,6 +1521,29 @@ fn default_field_expr(
             .collect::<Option<Vec<_>>>()?;
         return Some(dummy(ExprKind::Tuple(parts)));
     }
+    // An `Array[T, N]` of a `Default` element is `N` defaults, as Rust's
+    // `[T; N]` is: the repeat literal `Array[d; N]` (kata 2416's trie,
+    // `children: Array[Option[Trie], 26]`).
+    let array_parts = match &ty.kind {
+        TypeKind::Array { element, size } => Some(((**element).clone(), (**size).clone())),
+        TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Array" => {
+            match p.generic_args.as_deref() {
+                Some([GenericArg::Type(element), GenericArg::Const(size)]) => {
+                    Some((element.clone(), size.clone()))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    if let Some((element, size)) = array_parts {
+        let value = default_field_expr(&element, defaultable)?;
+        return Some(dummy(ExprKind::RepeatLiteral {
+            type_name: Some("Array".to_string()),
+            value: Box::new(value),
+            count: Box::new(size),
+        }));
+    }
     if let TypeKind::Path(p) = &ty.kind {
         if let [head] = p.segments.as_slice() {
             match head.as_str() {

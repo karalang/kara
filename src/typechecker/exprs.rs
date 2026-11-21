@@ -15404,6 +15404,7 @@ impl<'a> super::TypeChecker<'a> {
         &self,
         use_span: &Span,
         elem: &Type,
+        depth: usize,
     ) -> Option<(String, FixIt, String)> {
         if !matches!(elem, Type::Int(_) | Type::UInt(_)) || *elem == Type::Int(IntSize::I64) {
             return None;
@@ -15412,7 +15413,7 @@ impl<'a> super::TypeChecker<'a> {
             .literal_collection_uses
             .get(&SpanKey::from_span(use_span))?;
         let entry = self.literal_lets.get(name.as_str())?;
-        if entry.depth != 1 || !entry.suffix {
+        if entry.depth != depth || !entry.suffix {
             return None;
         }
         if entry
@@ -15554,9 +15555,65 @@ impl<'a> super::TypeChecker<'a> {
         // `CALLED` for a closure called by name (`cost(nums)`), which reads
         // the literal binding its body ends in (B-2026-11-18-80).
         const CALLED: usize = usize::MAX;
+        // `last.iter().map(|j| pre[j]).sum()`: a pick through a `map`
+        // yields what the closure's body does, so the body's reads are the
+        // value's (kata 2391's Rust arm, B-2026-11-21-22).
+        fn mapped_tail(e: &Expr) -> Option<&Expr> {
+            const PICK: &[&str] = &[
+                "sum",
+                "product",
+                "max",
+                "min",
+                "unwrap",
+                "unwrap_or",
+                "expect",
+                "next",
+                "last",
+            ];
+            let ExprKind::MethodCall { method, .. } = &e.kind else {
+                return None;
+            };
+            if !PICK.contains(&method.as_str()) {
+                return None;
+            }
+            let mut at = e;
+            while let ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } = &at.kind
+            {
+                if method == "map" {
+                    let [arg] = args.as_slice() else {
+                        return None;
+                    };
+                    let ExprKind::Closure { body, .. } = &arg.value.kind else {
+                        return None;
+                    };
+                    return match &body.kind {
+                        ExprKind::Block(b) if b.stmts.is_empty() => b.final_expr.as_deref(),
+                        ExprKind::Block(_) => None,
+                        _ => Some(body),
+                    };
+                }
+                if !PICK.contains(&method.as_str())
+                    && !matches!(method.as_str(), "copied" | "cloned" | "rev")
+                {
+                    return None;
+                }
+                at = object;
+            }
+            None
+        }
         fn names<'e>(e: &'e Expr, out: &mut Vec<(&'e str, usize)>) {
             match &e.kind {
                 ExprKind::Identifier(n) => out.push((n.as_str(), 0)),
+                ExprKind::MethodCall { .. } if mapped_tail(e).is_some() => {
+                    if let Some(t) = mapped_tail(e) {
+                        names(t, out);
+                    }
+                }
                 // `min(firsts, seconds) * less`: the free `min` and `max`
                 // keep their arguments' type, as the methods do (kata
                 // 1717's counts arm, B-2026-11-20-45).

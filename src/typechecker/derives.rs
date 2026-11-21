@@ -3938,6 +3938,8 @@ impl super::env::TypeEnv {
             Type::Named { name, .. } if is_builtin_default_head(name) => true,
             Type::Named { name, .. } | Type::Shared(name) => self.type_has_default_method(name),
             Type::Tuple(parts) => parts.iter().all(|t| self.type_supports_default(t)),
+            // `N` defaults of the element, as Rust's `[T; N]: Default`.
+            Type::Array { element, .. } => self.type_supports_default(element),
             Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => true,
             _ => false,
         }

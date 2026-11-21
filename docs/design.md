@@ -4423,7 +4423,7 @@ struct Point { x: i64, y: i64 }
 //            which is Point { x: 0, y: 0 }
 ```
 
-Every field type must implement `Default`. Otherwise the derive is rejected at the type with `E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT` ("cannot #[derive(Default)] for 'Point' — field 'name' of type 'T' does not implement 'Default'"), and the field is labelled. On `Pair[T]` the derive generates `impl[T: Default] Default for Pair[T]`.
+A field's default is its type's: `0`, `false`, `""`, an empty collection, `None` for an `Option`, the tuple of its parts' defaults, and for an `Array[T, N]` of a `Default` element, `N` defaults of `T` (`Array[d; N]`, as Rust's `[T; N]` is), so a trie node's `children: Array[Option[Node], 26]` starts with 26 `None`s. Every field type must implement `Default`. Otherwise the derive is rejected at the type with `E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT` ("cannot #[derive(Default)] for 'Point' — field 'name' of type 'T' does not implement 'Default'"), and the field is labelled. On `Pair[T]` the derive generates `impl[T: Default] Default for Pair[T]`.
 
 **On an enum**, exactly one variant must be marked `#[default]`, and it must be a unit variant:
 

@@ -1128,10 +1128,50 @@ impl super::Parser {
             ExprKind::Block(b) => b.final_expr.as_deref(),
             _ => Some(&**body),
         };
-        if !tail.is_some_and(|t| {
-            matches!(&t.kind, ExprKind::MethodCall { method, .. }
-                if matches!(method.as_str(), "collect" | "sum" | "product"))
-        }) {
+        // A tail naming a local the body bound with no annotation from a
+        // value holding a bare numeral (`let mut dist = vec![-1; n]; ...
+        // dist`) also takes its element type from the deleted return type:
+        // without it the literal defaults to `i64` and every caller's
+        // `i32` comparison narrows (kata 2359, B-2026-11-21-20).
+        fn bare_numeral(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Integer(_, None) | ExprKind::Float(_, None) => true,
+                ExprKind::Unary { operand, .. } => bare_numeral(operand),
+                ExprKind::RepeatLiteral { value, .. } => bare_numeral(value),
+                ExprKind::ArrayLiteral(elems) => elems.iter().any(bare_numeral),
+                ExprKind::Call { args, .. } => args.iter().any(|a| bare_numeral(&a.value)),
+                ExprKind::MethodCall { object, args, .. } => {
+                    bare_numeral(object) || args.iter().any(|a| bare_numeral(&a.value))
+                }
+                _ => false,
+            }
+        }
+        let literal_local = |t: &Expr| {
+            let (ExprKind::Identifier(name), ExprKind::Block(b)) = (&t.kind, &body.kind) else {
+                return false;
+            };
+            b.stmts.iter().rev().find_map(|s| match &s.kind {
+                StmtKind::Let {
+                    pattern, ty, value, ..
+                } if matches!(&pattern.kind, PatternKind::Binding(n) if n == name) => {
+                    Some(ty.is_none() && bare_numeral(value))
+                }
+                _ => None,
+            }) == Some(true)
+        };
+        // `days[..m - 1].iter().sum::<i32>() + d`: arithmetic over such a
+        // call takes its type from it too (kata 2409, B-2026-11-21-20).
+        fn typed_by_use(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::MethodCall { method, .. } => {
+                    matches!(method.as_str(), "collect" | "sum" | "product")
+                }
+                ExprKind::Binary { left, right, .. } => typed_by_use(left) || typed_by_use(right),
+                ExprKind::Unary { operand, .. } => typed_by_use(operand),
+                _ => false,
+            }
+        }
+        if !tail.is_some_and(|t| typed_by_use(t) || literal_local(t)) {
             return;
         }
         let Some((_, arrow, ret)) = self.closure_returns[since..]

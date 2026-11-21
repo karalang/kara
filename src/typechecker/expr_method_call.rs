@@ -3717,6 +3717,39 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Error;
             }
         }
+        // Kata 2343: `a.byte_at(p)`, after `char_at`, is the byte at an
+        // index, which Kāra reads as `a.bytes()[p]`; the refusal named
+        // neither (B-2026-11-21-17).
+        let stringy_text = *text == Type::Str
+            || matches!(text, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+        if method == "byte_at"
+            && args.len() == 1
+            && stringy_text
+            && ["String", "StringSlice"]
+                .iter()
+                .all(|ty| self.env.find_methods_with_args(ty, &[], method).is_empty())
+        {
+            let replacement = format!(
+                "{}.bytes()[{}]",
+                crate::formatter::render_expr_one_line(object),
+                crate::formatter::render_expr_one_line(&args[0].value)
+            );
+            self.type_error_with_fix_it(
+                format!(
+                    "no method 'byte_at' on type '{}': the byte at an index is \
+                     `.bytes()[i]`, a `u8`; `char_at(i)` is the `i`-th character, \
+                     an `Option[char]` (library/strings.md)",
+                    type_display(text)
+                ),
+                *span,
+                TypeErrorKind::NoMethodFound,
+                super::FixIt {
+                    span: *span,
+                    replacement,
+                },
+            );
+            return Type::Error;
+        }
         // B-2026-11-01-9: Rust's `str` methods with a Kāra twin that no edit
         // distance reaches, named instead of a bare "no method". Returning
         // here also skips the arguments, so a closure passed to

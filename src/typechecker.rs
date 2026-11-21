@@ -10852,13 +10852,24 @@ impl<'a> TypeChecker<'a> {
             Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
             t => t,
         };
-        let elem = match want {
-            Type::Array { element, .. } => Some(element.as_ref().clone()),
-            Type::Named { name, args } if name == "Vec" && args.len() == 1 => Some(args[0].clone()),
-            _ => None,
-        };
+        // A fill of fills, `Vec.filled(n, Vec.filled(n, 0))` returned as a
+        // `Vec[Vec[i32]]`, holds its literal two levels down (kata 2373,
+        // B-2026-11-21-21).
+        let mut elem = None;
+        let mut depth = 0;
+        let mut at = want;
+        loop {
+            let inner = match at {
+                Type::Array { element, .. } => element.as_ref(),
+                Type::Named { name, args } if name == "Vec" && args.len() == 1 => &args[0],
+                _ => break,
+            };
+            depth += 1;
+            elem = Some(inner.clone());
+            at = inner;
+        }
         if let Some((name, fix, lit)) =
-            elem.and_then(|e| self.literal_collection_annotation(&span, &e))
+            elem.and_then(|e| self.literal_collection_annotation(&span, &e, depth))
         {
             self.type_error_with_fix_it(
                 format!(

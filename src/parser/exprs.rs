@@ -4218,14 +4218,34 @@ impl super::Parser {
         let Some((source, base)) = self.source.as_ref() else {
             return;
         };
-        let start = value.span.offset;
-        let Some(text) = start
+        let mut start = value.span.offset;
+        let Some(mut text) = start
             .checked_sub(*base)
             .zip(end.checked_sub(*base))
             .and_then(|(s, e)| source.get(s..e))
         else {
             return;
         };
+        // A chain on a parenthesized receiver, `(0..n).map(..).collect()`,
+        // starts its span inside the `(`: take the opening parens back in,
+        // or the wrap would open inside them (kata 2402, B-2026-11-21-19).
+        let unclosed = |t: &str| {
+            t.chars().filter(|&c| c == ')').count() > t.chars().filter(|&c| c == '(').count()
+        };
+        while unclosed(text) {
+            let Some(before) = start.checked_sub(*base).and_then(|s| source.get(..s)) else {
+                return;
+            };
+            let trimmed = before.trim_end();
+            if !trimmed.ends_with('(') {
+                return;
+            }
+            start = *base + trimmed.len() - 1;
+            let Some(wider) = source.get(start - *base..end - *base) else {
+                return;
+            };
+            text = wider;
+        }
         let text = text.trim_end();
         let edit = crate::resolver::TextEdit {
             offset: start,

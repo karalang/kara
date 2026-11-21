@@ -8914,6 +8914,19 @@ impl<'a> super::TypeChecker<'a> {
             return slot;
         }
         let (value_ty, _) = self.open_unbound_params(value_ty);
+        // A `ref` to a `Copy` value is read as the value where one is
+        // expected (core-semantics §5.10), so `best = r` with `r: ref
+        // (i64, i64)` solves the open `(0, 0)` slot as a tuple, not as a
+        // reference (kata 2419, B-2026-11-21-23).
+        let value_ty = match value_ty {
+            Type::Ref(inner) | Type::MutRef(inner)
+                if !matches!(slot, Type::Ref(_) | Type::MutRef(_))
+                    && self.is_copy_type_during_check(&inner) =>
+            {
+                *inner
+            }
+            t => t,
+        };
         super::inference::unify_types(
             &slot,
             &value_ty,
@@ -9076,6 +9089,27 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn open_unsolved_let_params(&mut self, inferred: Type, value: &Expr) -> Type {
         if matches!(inferred, Type::Error | Type::Pointer { .. }) {
             return inferred;
+        }
+        // A tuple literal of calls that each leave a parameter open
+        // (`(a.collect(), b.collect())`, both `collect`'s `C`) opens each
+        // element on its own: opened by name over the whole tuple, the two
+        // `C`s became one variable, so the elements had to be one type
+        // (kata 2353, B-2026-11-21-24).
+        if let (ExprKind::Tuple(elems), Type::Tuple(tys)) = (&value.kind, &inferred) {
+            if elems.len() == tys.len() && tys.iter().any(super::types::contains_type_param) {
+                let opened = elems
+                    .iter()
+                    .zip(tys.clone())
+                    .map(|(e, t)| self.open_unsolved_let_params(t, e))
+                    .collect();
+                let ty = Type::Tuple(opened);
+                // The tuple's own node takes the opened type too, so it
+                // lowers at what the elements solve.
+                if let Some((_, frame)) = self.node_types.get(&value.id).cloned() {
+                    self.node_types.insert(value.id, (ty.clone(), frame));
+                }
+                return ty;
+            }
         }
         // A call whose whole type is a parameter it left open (`collect`'s
         // `C`, which the generic path keeps out of its frame) takes the
@@ -13992,6 +14026,23 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(&value.span));
                 }
                 self.check_expr(value, &slot_ty);
+                // The first walk read a call with no slot, so a generic
+                // constructor's parameters (`b = Bag.new()`, `m[1] =
+                // PriorityQueue.new()`) stayed open there and were reported
+                // unsolved though the slot fixes them, as a typed `let` does.
+                // Join the first walk's type to the slot when it fits
+                // (kata 2349, B-2026-11-21-18).
+                if matches!(
+                    value.kind,
+                    ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+                ) {
+                    let mut subs = self.env.substitutions.clone();
+                    let mut consts = self.env.const_substitutions.clone();
+                    if super::inference::unify_types(&rhs_ty, &slot_ty, &mut subs, &mut consts) {
+                        self.env.substitutions = subs;
+                        self.env.const_substitutions = consts;
+                    }
+                }
                 self.name_d5_cursor_assign(target, &target_ty, value, errors_before_check);
                 let mut errors_before_check = errors_before_check;
                 // An `if`, `if let` or `match` checked against the slot widens
