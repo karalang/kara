@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 647 |
 | false-positive | 336 |
 | missing-feature | 232 |
-| perf | 192 |
+| perf | 193 |
 | other | 126 |
 | soundness | 114 |
 | miscompile | 102 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 805 |
-| mir-llvm | 316 |
+| mir-llvm | 317 |
 | mir | 295 |
 | cli | 250 |
 | parser | 144 |
@@ -150,6 +150,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-134 | 2026-11-20 | cli | low | The Jupyter kernel's `%ownership` (and the REPL's) lists a binding as `owned` after a later cell moved it away (`let w = ...; let z = w;` then `%ownership` shows `w: owned`) | — |
 | B-2026-11-20-135 | 2026-11-20 | cli | low | In the Jupyter kernel a `:`-command cell (`:type x`, `:save f.kara`, `:dep name = "1"`) runs as Kāra source and fails with an error citing the synthetic `<repl>:2:1 fn main() {}`, though deferred.md says `:dep` works in Jupyter through the kernel's meta-command channel | — |
 | B-2026-11-21-5 | 2026-11-21 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword ... write `r#struct`" plus a cascade (Expected expression at the body's `}`, E0001 top-level statements beside `fn main`), where a nested `fn` gets one "no nested items ... move it above the item it is in" diagnostic with a hoisting fix | — |
+| B-2026-11-21-7 | 2026-11-21 | mir-llvm | low | A temporary String consumed only by a borrowing parameter is still allocated: `w.push_str("abcde".substring(k, k + 1))` materialises a one-character String per call and frees it after the borrow (kata 2255 shape: 104 ms, against 33 ms for the same words built with `w.push(c)`; Rust 29 ms) | — |
 
 ### Relocated
 
