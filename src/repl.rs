@@ -982,6 +982,76 @@ impl Session {
         }
     }
 
+    /// What a front end can offer at byte `cursor` of `code`, a cell not
+    /// yet run: after `%` or `:` at the cell's start, the magic or
+    /// meta-command names; elsewhere what [`crate::completions_at`] offers
+    /// at that place in the session's program with the cell as the end of
+    /// its `main` (after a `.`, the value's fields and methods; otherwise
+    /// the bindings and items in scope). Each starts with what is typed of
+    /// the name at the cursor (B-2026-11-20-133).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn completions(&self, code: &str, cursor: usize) -> Vec<String> {
+        let cursor = cursor.min(code.len());
+        let before = &code[..cursor];
+        let word_start = before
+            .rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+            .map_or(0, |i| i + 1);
+        let word = &before[word_start..];
+        let head = before[..word_start].trim_start();
+        if (head == "%" || head == ":") && !before[..word_start].contains('\n') {
+            let names: &[&str] = if head == "%" {
+                &[
+                    "dep",
+                    "effects",
+                    "end-provide",
+                    "explain",
+                    "ownership",
+                    "provide",
+                    "rc",
+                    "save",
+                    "set",
+                    "show",
+                    "timeline",
+                ]
+            } else {
+                &[
+                    "dep",
+                    "effects",
+                    "end-provide",
+                    "help",
+                    "provide",
+                    "reset",
+                    "save",
+                    "type",
+                ]
+            };
+            return names
+                .iter()
+                .filter(|n| n.starts_with(word))
+                .map(|n| n.to_string())
+                .collect();
+        }
+        let mut synth = strip_main(&self.items_source);
+        if !synth.is_empty() && !synth.ends_with('\n') {
+            synth.push('\n');
+        }
+        synth.push_str("fn main() {\n");
+        for prior_let in &self.persistent_lets {
+            synth.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        let at = synth.len() + cursor;
+        synth.push_str(code);
+        synth.push_str("\n}\n");
+        crate::completions_at(&synth, at)
+            .into_iter()
+            .map(|e| e.label)
+            .filter(|l| !l.starts_with("__"))
+            .collect()
+    }
+
     /// Number the next submitted cell `n`, so a front end that counts
     /// its own inputs (Jupyter's `In[n]`, which magics advance too) names
     /// the cell its errors cite as it does (B-2026-11-20-131). Numbers

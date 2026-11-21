@@ -535,8 +535,30 @@ impl<T: Transport + 'static> Kernel<T> {
             .map(|n| n as usize)
             .unwrap_or(code.len());
 
-        let (cursor_start, prefix) = identifier_prefix_at(code, cursor_pos);
-        let mut candidates = self.collect_completion_candidates();
+        let (mut cursor_start, mut prefix) = identifier_prefix_at(code, cursor_pos);
+        // A magic's name runs from its sigil (`%end-provide`).
+        let lead = code.len() - code.trim_start().len();
+        if let Some(name) = code
+            .get(lead + 1..cursor_pos)
+            .filter(|n| code[lead..].starts_with(['%', ':']) && !n.contains(char::is_whitespace))
+        {
+            cursor_start = lead + 1;
+            prefix = name;
+        }
+        // What the session offers there (a value's members after `.`,
+        // the bindings in scope, magic names after `%`); after a `.` or
+        // a `%`/`:` that is all, and elsewhere the prelude and the
+        // session's items join it (B-2026-11-20-133).
+        let offered = self.session.lock().unwrap().completions(code, cursor_pos);
+        let before = code[..cursor_start.min(code.len())].trim_start();
+        let member = before.ends_with('.') || before == "%" || before == ":";
+        let mut candidates = if member {
+            offered
+        } else {
+            let mut all = self.collect_completion_candidates();
+            all.extend(offered);
+            all
+        };
         candidates.retain(|c| c.starts_with(prefix));
         candidates.sort();
         candidates.dedup();
@@ -564,7 +586,6 @@ impl<T: Transport + 'static> Kernel<T> {
             .collect();
         let session = self.session.lock().unwrap();
         out.extend(extract_top_level_names(session.items_source()));
-        out.extend(session.persistent_lets().iter().cloned());
         out
     }
 
@@ -1762,6 +1783,58 @@ mod tests {
             replies[5]
         );
         assert_eq!(replies[6].content["status"], "ok", "{:?}", replies[6]);
+    }
+
+    #[test]
+    fn kernel_completion_offers_bindings_members_and_magics() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        let complete = |code: &str, pos: usize| {
+            transport.push_incoming(
+                Channel::Shell,
+                build_request(
+                    &signer,
+                    "complete_request",
+                    json!({"code": code, "cursor_pos": pos}),
+                    vec![],
+                ),
+            );
+            run_one_pass(&kernel);
+            let sent = transport.drain_outgoing(Channel::Shell);
+            let reply = Message::decode(sent.last().unwrap(), &signer).unwrap();
+            let matches: Vec<String> = reply.content["matches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m.as_str().unwrap().to_string())
+                .collect();
+            (matches, reply.content["cursor_start"].as_u64().unwrap())
+        };
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "let rows = [1, 2].to_vec();", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let _ = transport.drain_outgoing(Channel::Shell);
+        let (m, _) = complete("ro", 2);
+        assert!(m.contains(&"rows".to_string()), "{m:?}");
+        let (m, start) = complete("rows.le", 7);
+        assert!(m.contains(&"len".to_string()), "{m:?}");
+        assert!(m.iter().all(|x| x.starts_with("le")), "{m:?}");
+        assert_eq!(start, 5);
+        let (m, start) = complete("%sh", 3);
+        assert_eq!(m, vec!["show".to_string()]);
+        assert_eq!(start, 1);
+        let (m, _) = complete("%end-pr", 7);
+        assert_eq!(m, vec!["end-provide".to_string()]);
+        let (m, _) = complete(":ty", 3);
+        assert_eq!(m, vec!["type".to_string()]);
     }
 
     #[test]
