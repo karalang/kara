@@ -19282,6 +19282,35 @@ impl<'a> super::TypeChecker<'a> {
                         (n, prev)
                     })
                     .collect();
+                // A loop over a bare parameter: an element given away is
+                // fixed by the parameter's `own` and `.into_iter()`.
+                let param_iter = match &iterable.kind {
+                    ExprKind::Identifier(p)
+                        if self.cli_lint_overrides.strict_core
+                            && !self.closure_d5_params.contains(p.as_str()) =>
+                    {
+                        self.current_fn_d5_params.get(p).map(|at| {
+                            let end = Span {
+                                offset: iterable.span.offset + iterable.span.length,
+                                length: 0,
+                                ..iterable.span
+                            };
+                            (p.clone(), *at, end, self.local_scope.depth())
+                        })
+                    }
+                    _ => None,
+                };
+                let saved_param_elements: Vec<(String, Option<super::ForParamElement>)> = pattern
+                    .binding_names()
+                    .into_iter()
+                    .map(|n| {
+                        let prev = match &param_iter {
+                            Some(e) => self.core_for_param_elements.insert(n.clone(), e.clone()),
+                            None => self.core_for_param_elements.remove(&n),
+                        };
+                        (n, prev)
+                    })
+                    .collect();
                 // See the `While` arm: valueless frame, so an unlabeled
                 // `break` stops here instead of reaching an outer `loop`.
                 let mut frame = BreakFrame::for_valueless_loop(label.clone());
@@ -19299,6 +19328,12 @@ impl<'a> super::TypeChecker<'a> {
                     match prev {
                         Some(at) => self.core_for_into_iter.insert(n, at),
                         None => self.core_for_into_iter.remove(&n),
+                    };
+                }
+                for (n, prev) in saved_param_elements {
+                    match prev {
+                        Some(e) => self.core_for_param_elements.insert(n, e),
+                        None => self.core_for_param_elements.remove(&n),
                     };
                 }
                 for (n, prev) in saved_literal_let {

@@ -3105,6 +3105,11 @@ pub(crate) enum ScrutineePart {
     Tuple(Vec<ScrutineePart>),
 }
 
+/// A bare `for` element whose loop iterates a bare parameter: the
+/// parameter, where its `own` goes, where `.into_iter()` goes, and the
+/// loop's scope depth (B-2026-11-20-136).
+pub(super) type ForParamElement = (String, Span, Span, usize);
+
 pub struct TypeChecker<'a> {
     pub(super) program: &'a Program,
     pub(super) resolve_result: &'a ResolveResult,
@@ -3386,6 +3391,12 @@ pub struct TypeChecker<'a> {
     /// The depth is the loop's scope, so a shadowing binding of the same
     /// name is not mistaken for the element.
     pub(super) core_for_into_iter: FxHashMap<String, (Span, usize)>,
+    /// Under the strict commands, each bare `for` element in scope whose loop
+    /// iterates a bare parameter (`for h in headers`), mapped to that
+    /// parameter, where its `own` goes, the end of the iterable and the
+    /// loop's scope depth: moving the element out is fixed by both, the
+    /// parameter's `own` and `.into_iter()` (§4.1, §4.6).
+    pub(super) core_for_param_elements: FxHashMap<String, ForParamElement>,
     /// The `let` bindings in [`Self::core_for_into_iter`] that re-bind a
     /// `for` element (`let mut next = team;`): views by `view_let_bindings`
     /// rather than by the scope's own view marks.
@@ -4904,6 +4915,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_core_key: None,
             core_let_ref_fix: false,
             core_for_into_iter: FxHashMap::default(),
+            core_for_param_elements: FxHashMap::default(),
             core_for_into_iter_aliases: FxHashSet::default(),
             core_let_mut_views: FxHashMap::default(),
             core_into_iter_loops: FxHashMap::default(),
@@ -9112,6 +9124,75 @@ impl<'a> TypeChecker<'a> {
         Some((sym.name.clone(), at))
     }
 
+    /// A use at `span` of a bare `for` element whose loop iterates a bare
+    /// parameter: the element, the parameter, where its `own` goes and where
+    /// `.into_iter()` goes.
+    fn d5_for_element_at(&self, span: Span) -> Option<(String, String, Span, Span)> {
+        let (name, _, _) = self.named_binding_at(span)?;
+        let (param, own_at, iter_at, depth) = self.core_for_param_elements.get(&name)?;
+        (self.local_scope.depth_of(&name) == Some(*depth))
+            .then(|| (name.clone(), param.clone(), *own_at, *iter_at))
+    }
+
+    /// The refusal for a [`Self::d5_for_element_at`] element given away
+    /// where an owned value is wanted, with both edits as its fix; on a
+    /// library's `pub fn` the signature stays and `own` is a note.
+    fn d5_for_element_give_away(&mut self, span: Span, expected: &Type, kw: &str) -> bool {
+        let Some((elem, param, own_at, iter_at)) = self.d5_for_element_at(span) else {
+            return false;
+        };
+        let shown = type_display(expected);
+        let api_break = self.d5_own_breaks_api();
+        let mut message = format!(
+            "expected '{shown}', found '{kw} {shown}': `{elem}` is an element of `{param}`, \
+             which a bare `for` borrows (core-semantics.md §4.6), and `{param}` is a bare \
+             parameter, which borrows too (§4.1), so the element cannot be moved out"
+        );
+        if api_break {
+            message += if self.type_supports_clone(expected) {
+                ". Take an owned copy with `.clone()`"
+            } else {
+                ". Read it in place, or derive `Clone` on it and take a copy"
+            };
+            message += &format!(
+                ". Taking `{param}` by value with `own` and iterating `{param}.into_iter()` \
+                 would move the elements, but this is a `pub fn` of a library, and `own` \
+                 changes its signature for every caller outside the package"
+            );
+        } else {
+            message += &format!(
+                ". Take `{param}` by value with `own` and iterate `{param}.into_iter()`, \
+                 which moves each element out"
+            );
+            self.error_fix_diffs.insert(
+                SpanKey::from_span(&span),
+                vec![
+                    crate::resolver::TextEdit {
+                        offset: own_at.offset,
+                        length: 0,
+                        replacement: "own ".to_string(),
+                    },
+                    crate::resolver::TextEdit {
+                        offset: iter_at.offset,
+                        length: 0,
+                        replacement: ".into_iter()".to_string(),
+                    },
+                ],
+            );
+        }
+        self.errors.push(TypeError {
+            message,
+            span,
+            kind: TypeErrorKind::TypeMismatch,
+            lint_name: None,
+            fix_it: None,
+            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+            expected: Some(shown.clone()),
+            got: Some(format!("{kw} {shown}")),
+        });
+        true
+    }
+
     fn d5_param_of_local_at(&self, span: Span) -> Option<(String, Span)> {
         let id = self
             .resolve_result
@@ -10157,9 +10238,10 @@ impl<'a> TypeChecker<'a> {
                         _ => true,
                     };
                 let bare_param = self.d5_bare_param_at(span);
+                let param_element = self.d5_for_element_at(span).is_some();
                 if **inner == *expected
                     && self.type_cannot_leave_a_borrowed_place(expected)
-                    && (cloneable || bare_param.is_some())
+                    && (cloneable || bare_param.is_some() || param_element)
                 {
                     let shown = type_display(expected);
                     let kw = if matches!(found, Type::MutRef(_)) {
@@ -10193,6 +10275,13 @@ impl<'a> TypeChecker<'a> {
                             expected: Some(shown.clone()),
                             got: Some(format!("{kw} {shown}")),
                         });
+                        return false;
+                    }
+                    // `for h in headers { out.push(h) }` over a bare
+                    // parameter: the element borrows twice over, so the fix
+                    // is the parameter's `own` and `.into_iter()`, which
+                    // moves the elements out.
+                    if self.d5_for_element_give_away(span, expected, kw) {
                         return false;
                     }
                     // Kata 2046: a local bound out of a bare parameter

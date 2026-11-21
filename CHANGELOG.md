@@ -2305,6 +2305,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   every caller outside the package, the fix keeps the signature and the
   cursor borrows instead, `cur = node.next.as_ref()`, with `own` only a
   note; an application's `pub fn` takes `own` like a private one.
+- A bare `for` element of a bare parameter moved out, `for h in headers {
+  out.push(h) }` over `headers: Vec[Header]`, names both borrows and is
+  fixed by both, `headers: own Vec[Header]` and `headers.into_iter()`,
+  with `own` only a note on a library's `pub fn`. It was a bare
+  `expected 'Header', found 'ref Header'` with no fix (B-2026-11-20-136).
 - Rust's `eprint!(..)` is repaired to the prelude's `eprint`, an
   f-string when it has format arguments, as `eprintln!` is; it got no
   fix (B-2026-11-20-53).

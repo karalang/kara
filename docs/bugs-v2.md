@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 647 |
+| diagnostics | 648 |
 | false-positive | 336 |
 | missing-feature | 232 |
 | perf | 193 |
-| other | 133 |
+| other | 134 |
 | soundness | 115 |
 | miscompile | 102 |
 | crash | 64 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 806 |
+| typecheck | 807 |
 | mir-llvm | 317 |
 | mir | 295 |
 | cli | 250 |
@@ -86,7 +86,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 95 |
 | effect | 51 |
 | resolver | 50 |
-| other | 45 |
+| other | 46 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -145,6 +145,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-126 | 2026-11-20 | typecheck | medium | `.into()` as the argument to a bare (borrowed) parameter gets no expected type: `takes(Celsius { c: 10 }.into())` with `fn takes(f: Fahrenheit)` is refused "nothing here fixes the target type" | — |
 | B-2026-11-20-127 | 2026-11-20 | typecheck | low | E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE has no machine fix: `karac fix` on `enum Status { #[default] Pending, Active }` reports no fixable diagnostics | — |
 | B-2026-11-20-128 | 2026-11-20 | typecheck | low | E_DEFAULT_VARIANT_HAS_PAYLOAD's help suggests an inherent `impl Status { fn default() -> Status }`, which does not implement `Default`, where design.md says it shows an `impl Default` skeleton | — |
+| B-2026-11-20-136 | 2026-11-20 | typecheck | low | A bare `for` element of a bare parameter moved out (`for h in headers { out.insert(at, h) }`) is a bare `expected 'Header', found 'ref Header'` with no fix, so the Mend task canonical_request no longer converges | — |
+| B-2026-11-20-137 | 2026-11-20 | other | low | Two Mend tasks drifted with nothing to catch it: two_source_totals' own solution is refused (E_NO_PROVIDER) and concurrent_emails' canned run answers the task before its rewrite; examples/mend is outside every test | — |
 | B-2026-11-21-5 | 2026-11-21 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword ... write `r#struct`" plus a cascade (Expected expression at the body's `}`, E0001 top-level statements beside `fn main`), where a nested `fn` gets one "no nested items ... move it above the item it is in" diagnostic with a hoisting fix | — |
 | B-2026-11-21-7 | 2026-11-21 | mir-llvm | low | A temporary String consumed only by a borrowing parameter is still allocated: `w.push_str("abcde".substring(k, k + 1))` materialises a one-character String per call and frees it after the borrow (kata 2255 shape: 104 ms, against 33 ms for the same words built with `w.push(c)`; Rust 29 ms) | — |
 | B-2026-11-21-8 | 2026-11-21 | other | high | Test infra: six more helpers feed a RUN lane's exit status to `common::link_or_skip`, the shape B-2026-11-21-6 fixed in two others, so a runtime error, refusal or sanitizer report on `__mir-llvm-run` / `__mir-llvm-asan` / `karac run` reads as a skipped link and the test passes | — |
