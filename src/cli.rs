@@ -2823,6 +2823,50 @@ impl Pipeline {
         }
         self.report_unused_muts();
         self.report_unmarked_method_mut_args();
+        self.report_marked_method_non_mut_args();
+    }
+
+    /// A `mut` marker at a method parameter that does not borrow mutably is
+    /// E0219, as at a function's (design.md § Declarations and impls: a
+    /// call on a known type uses the impl's modes; B-2026-11-20-124). The
+    /// fix deletes the marker.
+    fn report_marked_method_non_mut_args(&mut self) {
+        let user = self
+            .library_len
+            .unwrap_or_else(|| crate::prelude::gated_span_base(0));
+        let (Some(own), Some(typed)) = (self.ownership.as_ref(), self.typed.as_mut()) else {
+            return;
+        };
+        let mut seen = std::collections::HashSet::new();
+        for m in &own.marked_method_non_mut_args {
+            if m.span.offset >= user || !seen.insert(m.span.offset) {
+                continue;
+            }
+            typed.errors.push(crate::typechecker::TypeError {
+                message: "`mut` marker is not legal here — the method's parameter is not a \
+                          mutable borrow (`mut ref`), and only an argument to one is marked. \
+                          Remove `mut`."
+                    .to_string(),
+                span: m.span,
+                kind: crate::typechecker::TypeErrorKind::InvalidMutMarker,
+                lint_name: None,
+                fix_it: m
+                    .deletion
+                    .map(|(offset, length)| crate::typechecker::FixIt {
+                        span: crate::token::Span {
+                            offset,
+                            length,
+                            ..m.span
+                        },
+                        replacement: String::new(),
+                    }),
+                class: crate::typechecker::class_for_type_error_kind(
+                    &crate::typechecker::TypeErrorKind::InvalidMutMarker,
+                ),
+                expected: None,
+                got: None,
+            });
+        }
     }
 
     /// An argument at a method's `mut ref` parameter needs the call-site

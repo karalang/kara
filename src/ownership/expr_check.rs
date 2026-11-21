@@ -990,6 +990,9 @@ impl<'a> super::OwnershipChecker<'a> {
                     // A marked argument is a write, as in the `Call` arms
                     // (design.md §7: the marker does not grant mutability).
                     self.report_mut_marked_arg_write(arg);
+                    if arg.mut_marker {
+                        self.note_marked_method_non_mut_arg(expr, i, arg);
+                    }
                     // An unmarked one at a `mut ref` parameter writes its
                     // place too: it uses a `let mut` (`unused_mut`).
                     if !arg.mut_marker && self.method_arg_is_mut_ref(expr, i) {

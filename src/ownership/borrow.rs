@@ -259,6 +259,37 @@ impl<'a> super::OwnershipChecker<'a> {
         self.unmarked_method_mut_args.push(arg.span);
     }
 
+    /// A `mut` marker on an argument at a method parameter the resolved
+    /// method declares without a mutable borrow (B-2026-11-20-124). Only
+    /// the span-resolved method decides: a name-only match is no evidence
+    /// of the parameter's mode.
+    pub(crate) fn note_marked_method_non_mut_arg(
+        &mut self,
+        method_call: &Expr,
+        arg_index: usize,
+        arg: &crate::ast::CallArg,
+    ) {
+        let Some(mode) = self
+            .resolved_method_mode_key(method_call)
+            .and_then(|key| self.method_param_modes.get(key))
+            .and_then(|modes| modes.get(arg_index))
+        else {
+            return;
+        };
+        if matches!(mode, OwnershipMode::MutRef) {
+            return;
+        }
+        let deletion = arg
+            .mut_marker_span
+            .filter(|m| arg.value.span.offset > m.offset)
+            .map(|m| (m.offset, arg.value.span.offset - m.offset));
+        self.marked_method_non_mut_args
+            .push(crate::ownership::MarkedNonMutArg {
+                span: arg.span,
+                deletion,
+            });
+    }
+
     pub(crate) fn method_arg_is_mut_ref(&self, method_call: &Expr, arg_index: usize) -> bool {
         if let Some(m) = self
             .resolved_method_mode_key(method_call)

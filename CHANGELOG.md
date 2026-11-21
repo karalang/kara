@@ -20,6 +20,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A `mut ref self` method called on a `let` binding of a return-position
+  `impl Trait` value (`let e = evens(); e.next()`) is E0510, as on the
+  concrete type and on `dyn Trait`; the fix is `let mut e`, which no longer
+  draws `unused_mut` (B-2026-11-20-119).
+- A `mut` marker on an argument to a method parameter that is not a
+  mutable borrow (`s.poke(mut n)` for `fn poke(self, n: i64)`) is E0219,
+  as at a function's parameter, and `karac fix` deletes it
+  (B-2026-11-20-124).
 - `cycle` on `take`, `skip`, `enumerate`, `step_by`, `rev`, `zip` or
   `cloned` over a closure adaptor (`v.iter().map(f).take(3).cycle()`),
   with the diagnostic a bare `map(f).cycle()` gets. `karac check`

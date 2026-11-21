@@ -950,6 +950,11 @@ impl<'a> super::TypeChecker<'a> {
             Some(m.clone())
         });
         if let Some(m) = trait_method {
+            // The ownership check reads the trait method's modes here, as
+            // for a `dyn` receiver: a `mut ref self` method needs a `let
+            // mut` binding (B-2026-11-20-119).
+            self.method_typeparam_trait_key
+                .insert(SpanKey::from_span(span), format!("{trait_name}.{method}"));
             if self.library_methods_from_source {
                 let key = SpanKey::from_span(span);
                 if let Some((node, _)) = self.current_call_node.filter(|(_, k)| *k == key) {

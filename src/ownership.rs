@@ -721,6 +721,16 @@ pub struct RcEntry {
 
 // ── Errors ──────────────────────────────────────────────────────
 
+/// A `mut` marker on an argument at a method parameter that does not
+/// borrow mutably ([`OwnershipCheckResult::marked_method_non_mut_args`]).
+#[derive(Debug, Clone)]
+pub struct MarkedNonMutArg {
+    /// The argument, marker included.
+    pub span: Span,
+    /// The bytes that delete the marker and the space after it.
+    pub deletion: Option<(usize, usize)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OwnershipError {
     pub message: String,
@@ -1140,6 +1150,12 @@ pub struct OwnershipCheckResult {
     /// (design.md § Call-site `mut` markers). A deprecation in 0.8.x, an
     /// error at the next minor (B-2026-11-09-100).
     pub unmarked_method_mut_args: Vec<Span>,
+    /// Arguments marked `mut` at a method parameter that does not borrow
+    /// mutably (`s.poke(mut n)` for `fn poke(self, n: i64)`), each with the
+    /// marker's deletion when its span is on record: refused as E0219, as
+    /// at a function's parameter
+    /// (B-2026-11-20-124).
+    pub marked_method_non_mut_args: Vec<MarkedNonMutArg>,
     /// RC-elision safety set (env `KARAC_RC_ELIDE_REF_PARAMS`): function name →
     /// `(param_name, position)` of every `Ref`-mode parameter that is sound to
     /// RC-elide — no call site passes it a fresh rvalue and its function never
@@ -2276,6 +2292,7 @@ pub struct OwnershipChecker<'a> {
     fn_allows_deprecated: bool,
     unused_muts: Vec<UnusedMut>,
     unmarked_method_mut_args: Vec<Span>,
+    marked_method_non_mut_args: Vec<MarkedNonMutArg>,
     /// `Type.method` → declared receiver mode (`self` / `ref self` /
     /// `mut ref self`). Populated once at construction by walking the
     /// program's impl blocks and trait declarations. Consulted at every
@@ -2866,6 +2883,7 @@ impl<'a> OwnershipChecker<'a> {
             fn_allows_deprecated: false,
             unused_muts: Vec::new(),
             unmarked_method_mut_args: Vec::new(),
+            marked_method_non_mut_args: Vec::new(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
             trait_static_methods: collect_trait_static_methods(program),
@@ -3136,6 +3154,7 @@ impl<'a> OwnershipChecker<'a> {
             use_after_move_consume_sites,
             unused_muts: std::mem::take(&mut self.unused_muts),
             unmarked_method_mut_args: std::mem::take(&mut self.unmarked_method_mut_args),
+            marked_method_non_mut_args: std::mem::take(&mut self.marked_method_non_mut_args),
             elidable_ref_params,
             closure_param_modes: self.closure_param_modes,
             closure_captures: self.closure_captures,
