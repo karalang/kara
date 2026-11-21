@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 645 |
+| diagnostics | 646 |
 | false-positive | 334 |
-| missing-feature | 226 |
+| missing-feature | 232 |
 | perf | 191 |
 | other | 126 |
 | soundness | 114 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 803 |
 | mir-llvm | 315 |
 | mir | 294 |
-| cli | 243 |
+| cli | 250 |
 | parser | 143 |
 | ownership | 127 |
 | runtime | 101 |
@@ -125,7 +125,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-77 | 2026-11-20 | parser | low | Go's declaration forms get bare parse errors with no Kāra form: `x := 4`, `var x i64 = 3`, parameters `a i64`, a result list without `->` (`fn f() (i64, i64)`), fields `x i64`, `type P struct {..}`, `const ( A = 1; B = 2 )`, `package main`, `import "fmt"` and the type `int` | — |
 | B-2026-11-20-78 | 2026-11-20 | parser | low | Go's control flow gets bare parse errors with no Kāra form: `for i := 0; i < n; i++`, `for cond {}`, `for {}`, `for i, x := range v`, `if v, ok := m[k]; ok`, `switch`/`case`/`default`, `select`, and `i++` / `i--` | — |
 | B-2026-11-20-79 | 2026-11-20 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}` literals, `go f(x)`, `<-rx`, `err != nil` without a binding, `errors.New`, `strconv`, `strings`, `sync`, `fmt.Println(a, b)`, the comma-ok `let (v, ok) = m[k]`, and `&T{..}` (mended into an E0283) | — |
-| B-2026-11-20-104 | 2026-11-20 | cli | low | `karac repl` refuses a `?` in a cell under `:provide` (E0200 "`?` on a Result inside this closure requires the closure to return `Result`", placed at `<repl>:8:36` on a hidden `with_provider[Clock](FakeClock {}, || {`), though deferred.md § Cell Scope makes `?` legal in any cell | — |
 | B-2026-11-20-107 | 2026-11-20 | mir+ownership | low | The build's MIR frontend runs the ownership pass without the core rules (`CORE_RULES`), so it lowers closure captures by `ref` that `karac check` verified by move: 24 of 21,387 corpus programs differ, none observably (all pass ASan) | — |
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
 | B-2026-11-20-110 | 2026-11-20 | typecheck+mir | high | A join of an integer literal and a float literal (`if c { 1 } else { 2.5 }`, or the same `match`) is accepted by check, then fails on both backends with `invalid MIR: assigning f64 to _2 of type i64` | — |
@@ -147,6 +146,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-126 | 2026-11-20 | typecheck | medium | `.into()` as the argument to a bare (borrowed) parameter gets no expected type: `takes(Celsius { c: 10 }.into())` with `fn takes(f: Fahrenheit)` is refused "nothing here fixes the target type" | — |
 | B-2026-11-20-127 | 2026-11-20 | typecheck | low | E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE has no machine fix: `karac fix` on `enum Status { #[default] Pending, Active }` reports no fixable diagnostics | — |
 | B-2026-11-20-128 | 2026-11-20 | typecheck | low | E_DEFAULT_VARIANT_HAS_PAYLOAD's help suggests an inherent `impl Status { fn default() -> Status }`, which does not implement `Default`, where design.md says it shows an `impl Default` skeleton | — |
+| B-2026-11-20-132 | 2026-11-20 | cli | medium | An `interrupt_request` to the Jupyter kernel never stops a running cell: the kernel sets a flag nothing polls, so `loop {}` (or any long cell) runs until the kernel is restarted | — |
+| B-2026-11-20-133 | 2026-11-20 | cli | low | The Jupyter kernel's completion misses the session's own `let` bindings (`ro` after `let rows = ...` offers nothing), offers type and prelude names after a `.` (`rows.`, `Vec.`) instead of methods, and gives nothing for a magic name (`%sh`) | — |
+| B-2026-11-20-134 | 2026-11-20 | cli | low | The Jupyter kernel's `%ownership` (and the REPL's) lists a binding as `owned` after a later cell moved it away (`let w = ...; let z = w;` then `%ownership` shows `w: owned`) | — |
+| B-2026-11-20-135 | 2026-11-20 | cli | low | In the Jupyter kernel a `:`-command cell (`:type x`, `:save f.kara`, `:dep name = "1"`) runs as Kāra source and fails with an error citing the synthetic `<repl>:2:1 fn main() {}`, though deferred.md says `:dep` works in Jupyter through the kernel's meta-command channel | — |
 
 ### Relocated
 
@@ -2025,9 +2028,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-102 | ownership | low | `karac check` copied a tuple holding a capture-free closure literal or a function name (`let a = (dbl, 0); let s = a; (a.0)(1)`), which the build's m… | b400126a7a |
 | B-2026-11-20-92 | typecheck+cli | low | log.md's fix-it for a `Display` field value splits a struct literal over three lines inside the interpolation: `info("y", q: P { v: 2 })` is fixed to… | d823617519 |
 | B-2026-11-20-103 | cli | low | `karac repl` showed a value in its source form, not the Debug form deferred.md specifies (`Vec.new()` for an empty Vec, `["a": 1]` for a map, `Set.fr… | af100c5f34 |
+| B-2026-11-20-104 | cli | low | `karac repl` refuses a `?` in a cell under `:provide` (E0200 "`?` on a Result inside this closure requires the closure to return `Result`", placed at… | cc614704be |
 | B-2026-11-20-105 | typecheck | low | A borrowed `String` parameter bound to a `Str` local, `let mut rest: Str = s;`, gets a bare `expected 'Str', found 'ref String'` and no fix: the `.as… | 21cdf88b69 |
 | B-2026-11-20-106 | typecheck | low | `.unwrap()` on `VecDeque.remove(i)`, Rust's `Option`-returning `remove`, gets a bare `no method 'unwrap' on type 'i32'` and no fix: Kāra's `VecDeque.… | 21cdf88b69 |
 | B-2026-11-20-108 | parser+resolver | low | A `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string hole is refused as `undefined name 'std'`, without the import form or the fix… | 3c0ebd591e |
+| B-2026-11-20-129 | cli | low | `karac repl`'s `:type` printed "(could not infer type — typechecker did not record one)" for every expression while a `:provide` scope was open (`:ty… | cc614704be |
+| B-2026-11-20-130 | cli | medium | The Jupyter kernel (karac-kernel) spoke the protocol only in part: a cell's value went out as stdout text rather than an `execute_result`, the per-ce… | e5fb04c369 |
+| B-2026-11-20-131 | cli | low | The Jupyter kernel's `%effects` answered "(no items defined yet)" for a session of statement cells (it read the session's items alone, unlike `:effec… | e5fb04c369 |
 
 </details>
 
