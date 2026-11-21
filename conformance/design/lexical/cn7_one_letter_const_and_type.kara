@@ -1,0 +1,7 @@
+const N: i64 = 100_001;
+struct W[T] { v: T }
+fn main() {
+    let w = W { v: N };
+    println(w.v);
+    let _unused = 3;
+}

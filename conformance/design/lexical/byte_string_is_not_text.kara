@@ -1,0 +1,2 @@
+fn take(s: String) { println(s); }
+fn main() { take(b"hi"); }

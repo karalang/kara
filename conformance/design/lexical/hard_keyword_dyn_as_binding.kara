@@ -1,0 +1,1 @@
+fn main() { let dyn = 1; }

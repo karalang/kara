@@ -1,0 +1,1 @@
+fn main() { let k = 2; let f = move |x: i64| x + k; println(f(1)); }

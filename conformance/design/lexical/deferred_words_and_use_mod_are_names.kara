@@ -1,0 +1,7 @@
+fn main() {
+    let lock = 1; let seq = 2; let layout = 3; let group = 4; let stable = 5; let alias = 6;
+    let independent = 7; let providers = 8; let requires = 9; let ensures = 10; let invariant = 11;
+    let suspends = 12; let r#use = 13; let r#mod = 14;
+    println(lock + seq + layout + group + stable + alias + independent + providers + requires + ensures + invariant + suspends);
+    println(r#use + r#mod);
+}

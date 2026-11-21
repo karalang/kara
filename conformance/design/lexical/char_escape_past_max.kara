@@ -1,0 +1,1 @@
+fn main() { let c = '\u{110000}'; println(c); }

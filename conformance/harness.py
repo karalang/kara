@@ -93,8 +93,8 @@ def run(src: str, backends=("interp", "build"), stdin: str = "", timeout: int = 
             exe = Path(d) / "main.bin"
             b = subprocess.run([KARAC, "build", "-o", str(exe), str(path)], capture_output=True,
                                text=True, timeout=timeout)
-            if b.returncode != 0:
-                out["build"] = [(b.returncode, "", b.stdout + b.stderr)]
+            if b.returncode != 0 or not exe.exists():
+                out["build"] = [(b.returncode or 1, "", b.stdout + b.stderr)]
             else:
                 out["build"] = [once([str(exe), *argv]) for _ in range(repeat)]
     return out
@@ -114,7 +114,9 @@ def has_backend() -> bool:
                 path.write_text("fn main() { println(1); }\n")
                 b = subprocess.run([KARAC, "build", "-o", str(Path(d) / "m"), str(path)],
                                    capture_output=True, text=True)
-                _backend = b.returncode == 0
+                # A karac without the llvm feature type-checks, exits 0 and
+                # writes nothing (src/cli/build_v2.rs), so the file decides.
+                _backend = b.returncode == 0 and (Path(d) / "m").exists()
     return _backend
 
 

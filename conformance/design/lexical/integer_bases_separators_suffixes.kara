@@ -1,0 +1,22 @@
+fn main() {
+    println(1_000_000);
+    println(0xFF);
+    println(0xff_ff);
+    println(0b1010);
+    println(0o17);
+    println(255u8);
+    println(0x7Fi8);
+    println(-128i8);
+    println(65535u16);
+    println(4294967295u32);
+    println(18446744073709551615u64);
+    println(170141183460469231731687303715884105727i128);
+    println(-170141183460469231731687303715884105728i128);
+    println(340282366920938463463374607431768211455u128);
+    println(9223372036854775807);
+    println(-9223372036854775808);
+    let x: i8 = -128;
+    let y: u8 = 0b1111_1111;
+    println(x);
+    println(y);
+}

@@ -1,0 +1,1 @@
+fn main() { let x: i8 = 128; println(x); }

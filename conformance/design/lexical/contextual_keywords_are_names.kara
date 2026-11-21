@@ -1,0 +1,20 @@
+struct IoStats { reads: i64, writes: i64, blocks: i64, union: i64, test: i64, where: i64 }
+fn create_server(host: String, port: i64, own: i64, shared: i64) -> i64 { port + own + shared + host.len() }
+fn main() {
+    let s = IoStats { reads: 1, writes: 2, blocks: 3, union: 4, test: 5, where: 6 };
+    let par = 7;
+    let distinct = 8;
+    let marker = 9;
+    let effect = 10;
+    let resource = 11;
+    let with = 12;
+    let freeze = 13;
+    let escaping = 14;
+    let weak = 15;
+    let frozen = 16;
+    let sync = 17;
+    let panics = 18;
+    println(s.reads + s.writes + s.blocks + s.union + s.test + s.where);
+    println(par + distinct + marker + effect + resource + with + freeze + escaping + weak + frozen + sync + panics);
+    println(create_server("ab".to_string(), 80, 1, 2));
+}

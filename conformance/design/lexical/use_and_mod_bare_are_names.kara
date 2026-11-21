@@ -1,0 +1,5 @@
+fn main() {
+    let use = 1;
+    let mod = 2;
+    println(use + mod);
+}

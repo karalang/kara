@@ -1,0 +1,10 @@
+fn main() {
+    let magic: u8 = b'U';
+    println(magic);
+    println(b'\xFF');
+    let eth: Array[u8, 2] = b"\x08\x00";
+    println(eth.len());
+    let banner = b"hello world\n\0";
+    println(banner.len());
+    for x in b"\t\r\\\'\"" { println(x); }
+}

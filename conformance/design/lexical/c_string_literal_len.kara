@@ -1,0 +1,6 @@
+fn main() {
+    let msg: ref CStr = c"hello";
+    println(msg.len());
+    let u: ref CStr = c"caf\u{e9}";
+    println(u.len());
+}

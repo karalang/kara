@@ -1,0 +1,7 @@
+fn main() {
+    let m: Vec[i64] = [10, 20, 30];
+    let i = 1;
+    let (a, b) = (3, 4);
+    println(f"{{literal}} {m[i]} {(a, b)} {a + b * 2}");
+    println("plain {braces}");
+}

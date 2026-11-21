@@ -1,0 +1,1 @@
+fn main() { let c = '\u{D800}'; println(c); }

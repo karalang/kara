@@ -1,0 +1,13 @@
+fn main() {
+    let query = """
+        SELECT * FROM users
+          WHERE age > 25
+        ORDER BY name
+        """;
+    println(query);
+    println(query.len());
+    let e = """
+        a\tb
+        """;
+    println(e.len());
+}

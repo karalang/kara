@@ -1,0 +1,13 @@
+//! Module doc.
+
+/// A doc comment.
+fn one() -> i64 { /* outer /* inner */ still comment */ 1 }
+
+fn main() {
+    // line
+    println(one()); /* trailing */
+    /* a
+       /* b */
+    */
+    println(2);
+}

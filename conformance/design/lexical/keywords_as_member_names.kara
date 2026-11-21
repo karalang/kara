@@ -1,0 +1,15 @@
+struct Flag { on: bool }
+impl Flag {
+    fn not(own self) -> Flag { Flag { on: not self.on } }
+    fn or(own self, other: own Flag) -> Flag { Flag { on: self.on or other.on } }
+    fn match(self) -> i64 { if self.on { 1 } else { 0 } }
+}
+fn main() {
+    let f = Flag { on: false };
+    let g = f.not();
+    println(g.on);
+    let h = Flag { on: false }.or(Flag { on: true });
+    println(h.match());
+    let o: Option[i64] = None;
+    println(o.or(Some(4)).unwrap());
+}

@@ -1,0 +1,2 @@
+struct user_account { a: i64 }
+fn main() {}

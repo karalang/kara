@@ -1,0 +1,2 @@
+const max_retries: i64 = 3;
+fn main() { println(max_retries); }

@@ -1,0 +1,1 @@
+fn main() { let b = b"\u{41}"; }

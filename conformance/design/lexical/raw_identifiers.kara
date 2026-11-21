@@ -1,0 +1,13 @@
+struct Config { r#move: bool, r#fn: i64 }
+fn r#try() -> i64 { 7 }
+fn r#async(r#let: i64) -> i64 { r#let + 1 }
+fn main() {
+    let r#async = r#async(r#try());
+    let r#foo = 3;
+    let c = Config { r#move: true, r#fn: 2 };
+    println(r#async);
+    println(foo);
+    println(c.r#move);
+    println(c.r#fn);
+    println(c.fn);
+}

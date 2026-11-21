@@ -1,0 +1,1 @@
+fn main() { let café = 1; println(café); }

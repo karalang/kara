@@ -1,0 +1,7 @@
+fn main() {
+    let cs = ['a', '\n', '\t', '\r', '\\', '\'', '"', '\0', '\u{1F600}', '\x41'];
+    for c in cs { println(c as u32); }
+    let s = "q\"\\\t\x41\u{e9}\0z";
+    println(s.len());
+    for b in s.bytes() { println(b); }
+}

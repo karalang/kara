@@ -1,0 +1,7 @@
+fn main() {
+    let q = """
+        a
+      b
+        """;
+    println(q);
+}

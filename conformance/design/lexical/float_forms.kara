@@ -1,0 +1,12 @@
+fn main() {
+    println(3.14);
+    println(1.5e-3);
+    println(6.022e23 == 602200000000000000000000.0);
+    println(1e10 == 10000000000.0);
+    println(2.5E+6_f32 == 2500000.0f32);
+    println(1_000.000_5);
+    println(1e1_0 == 1e10);
+    println(1e-400 == 0.0);
+    let s: f32 = 1.0f32;
+    println(s);
+}

@@ -1,0 +1,1 @@
+fn main() { let x = 1.0e5; println(x); }

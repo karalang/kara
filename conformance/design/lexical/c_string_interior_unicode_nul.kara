@@ -1,0 +1,1 @@
+fn main() { let m: ref CStr = c"a\u{0}b"; }
