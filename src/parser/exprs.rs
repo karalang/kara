@@ -384,7 +384,10 @@ impl super::Parser {
         let first = self.current_span();
         let mut branches = Vec::new();
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
-            branches.push(self.parse_expression()?);
+            let outer = std::mem::replace(&mut self.in_par_branch, true);
+            let branch = self.parse_expression();
+            self.in_par_branch = outer;
+            branches.push(branch?);
             if !self.eat(&Token::Comma) {
                 break;
             }
@@ -905,6 +908,8 @@ impl super::Parser {
                     continue;
                 }
                 Token::LeftBracket => {
+                    // Python's and Go's `v[a:b]` slice (B-2026-11-20-75).
+                    self.mend_colon_slice(&lhs);
                     // Generic-args call disambiguation (const generics
                     // slice 1b): `Identifier[T1, T2, ...](...)` shapes
                     // where the bracket contents contain a `,` separator
@@ -1404,6 +1409,8 @@ impl super::Parser {
     }
 
     fn parse_prefix(&mut self) -> Option<Expr> {
+        self.mend_python_lambda();
+        self.mend_python_comprehension();
         let start = self.current_span();
 
         match self.peek_token_ref() {
@@ -2596,7 +2603,8 @@ impl super::Parser {
                     && !self.check(&Token::RightBrace)
                     && !self.check(&Token::Comma)
                 {
-                    Some(Box::new(self.parse_expression()?))
+                    let first = self.parse_expression()?;
+                    Some(Box::new(self.mend_go_multi_return(first)?))
                 } else {
                     None
                 };

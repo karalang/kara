@@ -267,7 +267,7 @@ impl super::Parser {
             && matches!(self.peek_token_ref_at(2), Token::RightParen)
     }
 
-    fn is_effect_start(&self) -> bool {
+    pub(super) fn is_effect_start(&self) -> bool {
         self.at_kw("with") || self.kw_here().is_some_and(|w| EFFECT_VERBS.contains(&w))
     }
 

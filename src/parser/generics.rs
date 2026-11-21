@@ -741,6 +741,8 @@ impl super::Parser {
                 "struct field",
                 name_span_from_start,
             );
+            let name_end = self.tokens[self.pos.saturating_sub(1)].span;
+            self.mend_go_missing_colon(name_end, "struct field");
             self.expect(&Token::Colon)?;
             let inner_ty = self.parse_type()?;
             let ty = if let Some(span) = weak_modifier_span {
@@ -764,6 +766,7 @@ impl super::Parser {
                 name_span: name_token_span,
                 ty,
             });
+            self.mend_field_semicolon();
             if !self.eat(&Token::Comma) {
                 break;
             }

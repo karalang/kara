@@ -42,6 +42,29 @@ impl super::Parser {
             return true;
         };
         let word = name.clone();
+        // Python's `class Name { .. }` with braces is a struct
+        // (B-2026-11-20-74): its fields are Kāra's, written `x: T`.
+        if word == "class"
+            && matches!(self.peek_token_at(1), Token::Identifier { .. })
+            && self.peek_token_at(2) == Token::LeftBrace
+        {
+            let span = self.current_span();
+            self.error_at(
+                "`class` is Python: Kāra declares a type with `struct Name { x: T }` and \
+                 its methods in an `impl Name { .. }` block",
+                span,
+            );
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&span),
+                crate::resolver::TextEdit {
+                    offset: span.offset,
+                    length: span.length,
+                    replacement: "struct".to_string(),
+                },
+            );
+            self.tokens[self.pos].token = Token::Struct;
+            return true;
+        }
         if !matches!(word.as_str(), "func" | "def" | "function" | "fun")
             || !matches!(self.peek_token_at(1), Token::Identifier { .. })
             || self.peek_token_at(2) != Token::LeftParen
@@ -719,6 +742,8 @@ impl super::Parser {
         let self_is_own = std::mem::take(&mut self.own_self_consumed);
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
+        let close = self.tokens[self.pos.saturating_sub(1)].span;
+        self.mend_go_result_without_arrow(close);
 
         let return_type = if self.eat(&Token::Arrow) {
             Some(self.parse_return_type()?)
@@ -2128,6 +2153,8 @@ impl super::Parser {
         self.allow_type_class_param_name = is_comptime;
         let pattern = self.parse_param_pattern()?;
         self.allow_type_class_param_name = false;
+        let name_end = self.tokens[self.pos.saturating_sub(1)].span;
+        self.mend_go_missing_colon(name_end, "parameter");
         self.expect(&Token::Colon)?;
         // The one position stage 1 accepts `frozen` (B-2026-08-01-33). Scoped
         // to this single call so the flag cannot leak into a default-value
@@ -3071,6 +3098,8 @@ impl super::Parser {
                 "struct field",
                 name_span_from_start,
             );
+            let name_end = self.tokens[self.pos.saturating_sub(1)].span;
+            self.mend_go_missing_colon(name_end, "struct field");
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
             let doc_comment = self.take_pending_doc();

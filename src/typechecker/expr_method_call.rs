@@ -3750,6 +3750,110 @@ impl<'a> super::TypeChecker<'a> {
             );
             return Type::Error;
         }
+        // B-2026-11-20-76: Python's `str` methods, renamed where Kāra's
+        // takes the same arguments and returns the same text.
+        let py_stringy = *text == Type::Str
+            || matches!(text, Type::Named { name, args } if (name == "StringSlice" || name == "String") && args.is_empty());
+        let python_twin = match method {
+            "strip" => Some("trim"),
+            "lstrip" => Some("trim_start"),
+            "rstrip" => Some("trim_end"),
+            "upper" => Some("to_uppercase"),
+            "lower" => Some("to_lowercase"),
+            "startswith" => Some("starts_with"),
+            "endswith" => Some("ends_with"),
+            "split" if args.is_empty() => Some("split_whitespace"),
+            _ => None,
+        }
+        .filter(|_| {
+            py_stringy
+                && ["String", "StringSlice"]
+                    .iter()
+                    .all(|ty| self.env.find_methods_with_args(ty, &[], method).is_empty())
+        })
+        // `strip(chars)` strips those characters, which `trim()` does not.
+        .filter(|_| !matches!(method, "strip" | "lstrip" | "rstrip") || args.is_empty());
+        if let Some(to) = python_twin {
+            // The name ends at the `(`: just before the `)` with no
+            // arguments, else just before the first argument (unspaced).
+            let paren_after = match args.first() {
+                None => Some(args_close_span.offset),
+                Some(a) => Some(a.value.span.offset),
+            };
+            if let Some(offset) = paren_after
+                .and_then(|o| o.checked_sub(1 + method.len()))
+                .filter(|&o| o > object.span.offset)
+            {
+                self.type_error_with_fix_it(
+                    format!(
+                        "no method '{method}' on type '{}': `{method}` is Python's; Kāra's is \
+                         `{to}` (library/strings.md)",
+                        type_display(text)
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                    super::FixIt {
+                        span: Span {
+                            offset,
+                            length: method.len(),
+                            ..*args_close_span
+                        },
+                        replacement: to.to_string(),
+                    },
+                );
+                return Type::Error;
+            }
+            // With arguments the name's offset is not at hand: say it.
+            self.type_error(
+                format!(
+                    "no method '{method}' on type '{}': `{method}` is Python's; Kāra's is \
+                     `{to}` (library/strings.md)",
+                    type_display(text)
+                ),
+                *span,
+                TypeErrorKind::NoMethodFound,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Error;
+        }
+        // Python's `sep.join(v)` is Kāra's `v.join(sep)`.
+        if method == "join" && py_stringy && args.len() == 1 {
+            let lit = |e: &Expr| match &e.kind {
+                ExprKind::StringLit(s)
+                    if !s.contains(['\\', '"', '{', '}']) && !s.contains('\n') =>
+                {
+                    Some(format!("\"{s}\""))
+                }
+                ExprKind::Identifier(n) => Some(n.clone()),
+                _ => None,
+            };
+            let message = format!(
+                "no method 'join' on type '{}': Python joins with `sep.join(items)`; Kāra \
+                 joins the list, `items.join(sep)` (library/collections.md)",
+                type_display(text)
+            );
+            match (lit(object), lit(&args[0].value)) {
+                (Some(sep), Some(items)) => self.type_error_with_fix_it(
+                    message,
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                    super::FixIt {
+                        span: Span {
+                            offset: object.span.offset,
+                            length: args_close_span.offset + args_close_span.length
+                                - object.span.offset,
+                            ..object.span
+                        },
+                        replacement: format!("{items}.join({sep})"),
+                    },
+                ),
+                _ => self.type_error(message, *span, TypeErrorKind::NoMethodFound),
+            }
+            self.infer_expr(&args[0].value);
+            return Type::Error;
+        }
         // B-2026-11-01-9: Rust's `str` methods with a Kāra twin that no edit
         // distance reaches, named instead of a bare "no method". Returning
         // here also skips the arguments, so a closure passed to

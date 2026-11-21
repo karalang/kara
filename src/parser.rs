@@ -553,6 +553,9 @@ pub struct Parser {
     /// position `escaping Fn(...)` is accepted (`docs/core-semantics.md`
     /// §9.3). Taken by `parse_type` like [`Self::frozen_ok`].
     pub(crate) escaping_ok: bool,
+    /// `true` while a `par { a, b }` branch parses: there a comma after
+    /// `return x` ends the branch, so Go's `return a, b` mend declines.
+    pub(crate) in_par_branch: bool,
     /// See [`crate::ast::Program::escaping_fn_types`].
     pub(crate) escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::vec_macro_literals`].
@@ -936,6 +939,7 @@ impl Parser {
             frozen_ok: false,
             generic_defaults_ok: false,
             escaping_ok: false,
+            in_par_branch: false,
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             vec_macro_literals: rustc_hash::FxHashMap::default(),
             prefix_collection_literals: rustc_hash::FxHashMap::default(),

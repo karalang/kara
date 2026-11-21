@@ -2022,6 +2022,9 @@ impl<'a> Resolver<'a> {
         args: &[CallArg],
     ) {
         let argc = args.len();
+        if self.python_go_builtin(name, span, args) {
+            return;
+        }
         // B-2026-10-12-18: `abs(a)` written as another language spells it.
         // `abs` is a method of the argument, so say so instead of offering
         // whatever name happens to be close (`a`, the argument itself).
@@ -2067,6 +2070,121 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+    }
+
+    /// Python's and Go's free-function builtins, which Kāra spells as a
+    /// method of the first argument (B-2026-11-20-76, -79). Each one names
+    /// its Kāra form; where that form is a one-to-one rewrite of the call
+    /// (`sum(v)` -> `v.iter().sum()`), the edit goes with it. A builtin whose
+    /// Kāra form returns something else (`max(v)` is an `Option`) or needs a
+    /// statement of its own (`sorted`) is told without an edit.
+    fn python_go_builtin(&mut self, name: &str, span: Span, args: &[CallArg]) -> bool {
+        if self.wildcard_hides_unresolved_names() {
+            return false;
+        }
+        // (name, arity, method chain before the call's own `(`, or None for no edit, note)
+        let (arity, chain, note): (usize, Option<&str>, &str) = match name {
+            "len" if args.len() == 1 => (1, Some(".len("), "`len` is a method: `v.len()`"),
+            "sum" => (
+                1,
+                Some(".iter().sum("),
+                "`sum` is an iterator's: `v.iter().sum()`",
+            ),
+            "enumerate" => (
+                1,
+                Some(".iter().enumerate("),
+                "`enumerate` is an iterator's: `v.iter().enumerate()`",
+            ),
+            "reversed" => (
+                1,
+                Some(".iter().rev("),
+                "`reversed` is Python's: `v.iter().rev()`",
+            ),
+            "str" => (
+                1,
+                Some(".to_string("),
+                "`str(x)` is Python's: `x.to_string()`",
+            ),
+            "zip" => (2, None, "`zip` is an iterator's: `a.iter().zip(b.iter())`"),
+            "sorted" => (
+                1,
+                None,
+                "`sorted` is Python's: sort a copy, `let mut w = v.clone(); w.sort();`",
+            ),
+            "int" | "float" => (
+                1,
+                None,
+                "a number is read from text with `s.parse()`, which returns a `Result` \
+                 (`s.parse().unwrap()` stops the program on bad text, as Python's raises)",
+            ),
+            "append" => (
+                2,
+                None,
+                "`append` is Go's: Kāra adds an element in place, `v.push(x)`, with no \
+                 `v = ` (and a list's elements with `v.extend(w)`)",
+            ),
+            _ => return false,
+        };
+        if args.len() != arity || args.iter().any(|a| a.label.is_some() || a.mut_marker) {
+            return false;
+        }
+        let simple = |e: &Expr| {
+            matches!(
+                e.kind,
+                ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::StringLit(_)
+            )
+        };
+        let mut edits = Vec::new();
+        let first = &args[0].value;
+        let first_end = first.span.offset + first.span.length;
+        if let Some(chain) = chain {
+            let wrap = !simple(first);
+            edits.push(TextEdit {
+                offset: span.offset,
+                length: first.span.offset - span.offset,
+                replacement: if wrap { "(".to_string() } else { String::new() },
+            });
+            edits.push(TextEdit {
+                offset: first_end,
+                length: 0,
+                replacement: if wrap {
+                    format!("){chain}")
+                } else {
+                    chain.to_string()
+                },
+            });
+        } else if name == "zip" && simple(first) && simple(&args[1].value) {
+            let second = &args[1].value;
+            let second_end = second.span.offset + second.span.length;
+            edits.push(TextEdit {
+                offset: span.offset,
+                length: first.span.offset - span.offset,
+                replacement: String::new(),
+            });
+            edits.push(TextEdit {
+                offset: first_end,
+                length: second.span.offset - first_end,
+                replacement: ".iter().zip(".to_string(),
+            });
+            edits.push(TextEdit {
+                offset: second_end,
+                length: 0,
+                replacement: ".iter()".to_string(),
+            });
+        }
+        self.errors.push(ResolveError {
+            message: format!("undefined name '{name}': {note}"),
+            span,
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+        if !edits.is_empty() {
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&span), edits);
+        }
+        true
     }
 
     /// design.md § Module System, wildcard precedence rule 2: a name offered
@@ -2584,6 +2702,12 @@ impl<'a> Resolver<'a> {
             "Dict" => Some("Map"),
             "TreeSet" => Some("SortedSet"),
             "Deque" | "ArrayDeque" | "deque" | "Queue" | "LinkedList" => Some("VecDeque"),
+            // Python's and Go's type names (B-2026-11-20-74, -77).
+            "int" => Some("i64"),
+            "float" | "float64" => Some("f64"),
+            "list" => Some("Vec"),
+            "dict" => Some("Map"),
+            "set" => Some("Set"),
             _ => crate::parser::rust_collection_rename(name),
         }
     }
