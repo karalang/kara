@@ -1073,11 +1073,53 @@ impl Session {
         if rows.is_empty() {
             return MagicOutput::ok("(no bindings to inspect)");
         }
+        for name in self.moved_bindings(rows.keys()) {
+            rows.insert(name, "moved".to_string());
+        }
         let mut out = String::new();
         for (binding, mode) in rows {
             out.push_str(&format!("{binding}: {mode}\n"));
         }
         MagicOutput::ok(out.trim_end())
+    }
+
+    /// Which of `names`, the session's bindings, a cell has moved away:
+    /// the session's `let`s again, each name then lent to a probe, and the
+    /// names the ownership pass reports a use after move for. `%ownership`
+    /// listed a moved binding as `owned` (B-2026-11-20-134).
+    fn moved_bindings<'n>(&self, names: impl Iterator<Item = &'n String>) -> Vec<String> {
+        const PROBE: &str = "__kara_ownership_probe";
+        let mut synth = strip_main(&self.items_source);
+        if !synth.is_empty() && !synth.ends_with('\n') {
+            synth.push('\n');
+        }
+        synth.push_str(&format!("fn {PROBE}[T](x: T) {{}}\nfn main() {{\n"));
+        for prior_let in &self.persistent_lets {
+            synth.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        let first = synth.matches('\n').count() + 1;
+        let names: Vec<&String> = names.collect();
+        for name in &names {
+            synth.push_str(&format!("{PROBE}({name});\n"));
+        }
+        synth.push_str("}\n");
+        let Ok((program, typed)) = crate::cli::repl_v2::typed(&synth) else {
+            return Vec::new();
+        };
+        let owned = {
+            let _core = crate::ownership::CoreRulesGuard::new(true);
+            crate::ownershipcheck(&program, &typed)
+        };
+        owned
+            .errors
+            .iter()
+            .filter(|e| e.kind == crate::ownership::OwnershipErrorKind::UseAfterMove)
+            .filter_map(|e| e.span.line.checked_sub(first))
+            .filter_map(|i| names.get(i).map(|n| n.to_string()))
+            .collect()
     }
 
     fn magic_explain(&self, rest: &str) -> MagicOutput {
