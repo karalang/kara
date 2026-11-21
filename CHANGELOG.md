@@ -51,7 +51,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   moved or written: `let it = count_logged(xs, log); drop(log);
   it.count()` is E0516, as design.md § `impl Trait` says. The result
   borrowed only what its hidden type held, so a body returning a
-  `VecIntoIter` borrowed nothing (B-2026-11-20-121).
+  `VecIntoIter` borrowed nothing (B-2026-11-20-121). The value is live
+  until its scope ends unless it is consumed, as if its type had a `Drop`
+  body (B-2026-11-21-92).
 
 - `cycle` on `take`, `skip`, `enumerate`, `step_by`, `rev`, `zip` or
   `cloned` over a closure adaptor (`v.iter().map(f).take(3).cycle()`),

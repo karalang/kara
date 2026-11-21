@@ -104,3 +104,20 @@ fn impl_trait_result_borrows_nothing_from_owned_and_copy_params() {
     let (code, out, err) = karac(&format!("{LOGGER}{main}"), "__mir-run");
     assert_eq!((code, out.as_str()), (Some(0), "3\n5\n"), "{err}");
 }
+
+#[test]
+fn impl_trait_result_is_live_until_its_scope_ends() {
+    // Its drop counts as a use: the hidden type may gain a `Drop` body
+    // without the signature changing (B-2026-11-21-92).
+    refused(
+        "fn main() { let log = Logger { lines: Vec.new() }; let mut it = count_logged([1, 2, 3], log); println(it.next()); drop(log); }\n",
+        "cannot move `log` while `it` still holds a borrow of it",
+    );
+}
+
+#[test]
+fn impl_trait_result_consumed_before_the_move_is_accepted() {
+    let main = "fn main() { let log = Logger { lines: Vec.new() }; let it = count_logged([1, 2, 3], log); println(it.count()); drop(log); }\n";
+    let (code, out, err) = karac(&format!("{LOGGER}{main}"), "__mir-run");
+    assert_eq!((code, out.as_str()), (Some(0), "3\n"), "{err}");
+}

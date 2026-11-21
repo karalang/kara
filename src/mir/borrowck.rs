@@ -403,7 +403,13 @@ pub fn borrow_errors_in(
     let scopes = scope_dataflow(body, &loans);
     let by_site: std::collections::HashMap<(usize, usize), usize> =
         loans.iter().enumerate().map(|(li, l)| (l.at, li)).collect();
-    let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
+    // An `impl Trait` value's drop is a use of what it borrows: the hidden
+    // type may change to one with a `Drop` body without the signature
+    // changing, so the caller counts on one (B-2026-11-21-92). A `Copy`
+    // hidden type has no drop to count.
+    let drop_uses = |p: &Place| {
+        drop_reads_borrows(body, tys, p) || cx.opaque.contains_key(&p.local) && cx.holds(p)
+    };
     let live_out = liveness_with(body, &drop_uses);
     let view = body.arg_count > 0
         && matches!(
