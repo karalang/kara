@@ -2284,6 +2284,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A `struct` or `enum` declared inside a function body, with or without
+  attributes, gets the one "Kāra has no nested items" diagnostic a nested
+  `fn` gets, and the same fix, which moves it above the item it is in; it
+  read as the keyword misused as an identifier (`write r#struct`), with a
+  cascade to the body's `}` (B-2026-11-21-5).
 - `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string
   hole names the import form and is fixed with its import, as it is outside
   a hole; it was refused as `undefined name 'std'` with no fix

@@ -439,7 +439,13 @@ impl super::Parser {
         }
         matches!(
             self.peek_token(),
-            Token::Let | Token::Defer | Token::ErrDefer | Token::Fn | Token::Const
+            Token::Let
+                | Token::Defer
+                | Token::ErrDefer
+                | Token::Fn
+                | Token::Const
+                | Token::Struct
+                | Token::Enum
         )
     }
 
@@ -762,6 +768,8 @@ impl super::Parser {
             Token::Pound => self.parse_attributed_statement(),
             // Rust's nested `fn` item (kata 1061).
             Token::Fn => self.hoist_nested_fn(),
+            Token::Struct => self.hoist_nested_type("struct"),
+            Token::Enum => self.hoist_nested_type("enum"),
             Token::Const => self.parse_block_const(),
             _ => self.parse_expression_statement(),
         }
@@ -937,6 +945,17 @@ impl super::Parser {
         if defer_to_expression_path {
             self.pos = saved;
             return self.parse_expression_statement();
+        }
+        // `#[derive(Clone)] struct P { … }` in a body: the type is hoisted
+        // with its attributes (B-2026-11-21-5).
+        let kw = match self.peek_token_ref() {
+            Token::Struct => Some("struct"),
+            Token::Enum => Some("enum"),
+            _ => None,
+        };
+        if let Some(kw) = kw {
+            self.pos = saved;
+            return self.hoist_nested_type(kw);
         }
 
         let overrides = self.scan_lint_level_attrs(&attributes);

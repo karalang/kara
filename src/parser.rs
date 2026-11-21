@@ -3625,11 +3625,40 @@ impl Parser {
              the top level: move it above the item it is in",
             whole,
         );
+        Some(self.hoisted_item_stmt(whole))
+    }
+
+    /// Rust's `struct` or `enum` declared inside a function body, at the
+    /// keyword: reported and offered the fix a nested `fn` is
+    /// ([`Self::hoist_nested_fn`]), since a type declared there names
+    /// nothing from the body around it either. Read as an expression, the
+    /// keyword was a misplaced identifier (`write r#struct`) with a cascade
+    /// to the body's `}` (B-2026-11-21-5). The cursor may be at the
+    /// item's attributes (`#[derive(Clone)] struct P`), which move with it;
+    /// `kw` is the keyword after them.
+    pub(crate) fn hoist_nested_type(&mut self, kw: &str) -> Option<Stmt> {
+        let start = self.current_span();
+        self.parse_item()?;
+        let whole = self.span_from(&start);
+        let article = if kw == "enum" { "an" } else { "a" };
+        self.error_at(
+            &format!(
+                "{article} `{kw}` cannot be declared inside a function body: Kāra has no nested \
+                 items. A type declared in a body names nothing from the body around it, so \
+                 it means the same at the top level: move it above the item it is in"
+            ),
+            whole,
+        );
+        Some(self.hoisted_item_stmt(whole))
+    }
+
+    /// The fix and the placeholder statement for a nested item at `whole`.
+    fn hoisted_item_stmt(&mut self, whole: Span) -> Stmt {
         if let Some(edits) = self.hoist_edits(whole) {
             self.fix_diffs
                 .insert(crate::resolver::SpanKey::from_span(&whole), edits);
         }
-        Some(Stmt {
+        Stmt {
             id: crate::ids::NodeId::DUMMY,
             span: whole,
             kind: StmtKind::Expr(Expr {
@@ -3637,7 +3666,7 @@ impl Parser {
                 span: whole,
                 kind: ExprKind::Tuple(Vec::new()),
             }),
-        })
+        }
     }
 
     /// The edits [`Self::hoist_nested_fn`] offers: the function's lines
