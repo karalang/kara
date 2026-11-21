@@ -2,6 +2,7 @@ source = "kara-katas/leetcode/1101-1200/1117-building-h2o/differential.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
+timeout = 180  # the differential runs 26-45 s on a release interpreter and about 60 s on a debug one (B-2026-11-21-53)
 tags = ["differential", "post-m1:par"]
 class = "e"
 expected_from = "oracle"

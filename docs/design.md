@@ -3705,6 +3705,7 @@ impl[with E] Router[with E] {
 - It can be used as a bound like any trait: `fn forward[T: CrossTask](tx: Sender[T], v: own T)`.
 - `ref T` is `CrossTask` when `T` is. Whether a view may enter a task is decided by the view rules, not by this bound: views enter `par` branches and `TaskGroup` tasks, never a channel ([§13 What may cross a task boundary](#what-may-cross-a-task-boundary)).
 - The standard library's task and channel APIs state it on their generic parameters (`TaskGroup.spawn`, `channel[T]`, `Sender.send`), and `par {}` and `par for` check what their branches capture. Because the bound appears in signatures, a generic function that sends or spawns a `T` must itself require `T: CrossTask`. The error is reported at that generic signature, not after monomorphization.
+- A `par for` item enters each iteration as a capture does, so its type must be `CrossTask` too: `par for x in xs.iter()` over `xs: ref Vec[T]` needs `T: CrossTask`. `Copy` does not imply it, because a raw pointer is `Copy` and task-local, so `T: Copy` alone is refused (B-2026-11-21-15).
 
 **Users cannot create auto-traits.** No trait other than `CrossTask` is implemented for a type because of what the type contains. Everything else is stated at the type's definition, where a reader looks first:
 - **a keyword on the type**: `shared struct` (counted, one task) and `sync struct` (shared across tasks) choose the sharing tier, and the compiler checks the keyword's rules ([§11](#11-ownership-and-sharing));
