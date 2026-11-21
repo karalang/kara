@@ -13,6 +13,8 @@
 //! garbage in about 1 run in 160 on several workers. And check let a `ref`
 //! parameter be appended to.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -116,9 +118,7 @@ fn mir_auto_par_twin_takes_a_mut_ref_param_compiled() {
     for threads in ["1", "4"] {
         let out = karac(&[("KARAC_THREADS", threads)], &["__mir-llvm-run"], &path);
         let err = text(&out.stderr);
-        if err.contains("Linker failed")
-            && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none()
-        {
+        if err.contains("Linker failed") && common::link_or_skip(Err(err.to_string())).is_none() {
             eprintln!("skipping: no runtime archive");
             return;
         }

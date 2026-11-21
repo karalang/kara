@@ -2,6 +2,8 @@
 //! `is_none_or` (Rust 1.82), so `prev.is_none_or(|p| v > p)` was refused
 //! with a bare "no method". It is now an `Option` method in the library.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 const SRC: &str = "fn rising(v: Slice[i32]) -> bool {
@@ -64,8 +66,7 @@ fn option_is_none_or_checks_clean() {
 #[test]
 fn option_is_none_or_is_lowered_by_llvm() {
     let (out, err) = run("__mir-llvm-run");
-    if err.contains("Linker failed") && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none()
-    {
+    if err.contains("Linker failed") && common::link_or_skip(Err(err.to_string())).is_none() {
         eprintln!("skipping: no runtime archive");
         return;
     }

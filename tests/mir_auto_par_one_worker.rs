@@ -10,6 +10,8 @@
 //! The method below takes an owned `self`, a borrow, an owned `Vec` and a
 //! destructured tuple.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -168,11 +170,9 @@ fn mir_auto_par_build_carries_the_in_order_program_for_one_worker() {
         "the carried program is not the in-order build"
     );
     if !ok {
-        assert!(
-            err.contains("Linker failed")
-                && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none(),
-            "does not build: {err}"
-        );
+        // Only a failed link skips: link_or_skip fails any other build failure,
+        // a stale archive and a run under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 (B-2026-11-21-10).
+        let _ = common::link_or_skip(Err(err.to_string()));
         eprintln!("skipping the runs: no runtime archive");
         return;
     }
@@ -215,11 +215,9 @@ fn mir_auto_par_build_with_debug_info_picks_a_program() {
         "no debug info, or no in-order program: {err}"
     );
     if !out.status.success() {
-        assert!(
-            err.contains("Linker failed")
-                && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none(),
-            "does not build: {err}"
-        );
+        // Only a failed link skips: link_or_skip fails any other build failure,
+        // a stale archive and a run under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 (B-2026-11-21-10).
+        let _ = common::link_or_skip(Err(err.to_string()));
         eprintln!("skipping the runs: no runtime archive");
         return;
     }

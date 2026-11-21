@@ -125,7 +125,11 @@ fn same_on_the_pool(name: &str, src: &str) -> String {
         let out = run(name, cmd);
         let _ = std::fs::remove_dir_all(&dir);
         let err = String::from_utf8_lossy(&out.stderr).to_string();
-        if !(out.status.code() == Some(3) && err.contains("Linker failed")) {
+        // A stale archive or KARAC_REQUIRE_RUNTIME_ARCHIVE=1 fails here (B-2026-11-21-10).
+        if !(out.status.code() == Some(3)
+            && err.contains("Linker failed")
+            && common::link_or_skip(Err(err.to_string())).is_none())
+        {
             assert!(out.status.success(), "{name} under ASan: {err}");
             assert_eq!(
                 String::from_utf8(out.stdout).unwrap(),

@@ -6,6 +6,8 @@
 //! `Buf[5]` are distinct types, an `impl[const N: i64] Buf[N]` serves each,
 //! and `N` is a value in its methods.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 /// `karac check` of `src` (success, stderr), and the MIR interpreter's
@@ -128,8 +130,7 @@ fn main() { let a: Buf[3] = Buf { a: [1; 3] }; let b: Buf[5] = Buf { a: [2; 5] }
         .expect("karac");
     let _ = std::fs::remove_dir_all(&dir);
     let err = String::from_utf8_lossy(&out.stderr);
-    if err.contains("Linker failed") && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none()
-    {
+    if err.contains("Linker failed") && common::link_or_skip(Err(err.to_string())).is_none() {
         eprintln!("skipping: no runtime archive");
         return;
     }

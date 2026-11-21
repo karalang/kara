@@ -91,10 +91,13 @@ fn under_asan(src: &str) -> Option<String> {
         .output()
         .expect("karac");
     let err = String::from_utf8_lossy(&out.stderr);
-    if err.contains("not found") || err.contains("fsanitize") {
-        eprintln!("skipping: no ASan toolchain or runtime archive: {err}");
-        return None;
-    }
+    // Only a failed link skips; a runtime error or a failed build is the
+    // program's own failure (B-2026-11-21-9).
+    common::link_or_skip(if out.status.success() {
+        Ok(())
+    } else {
+        Err(err.to_string())
+    })?;
     assert!(!err.contains("Sanitizer"), "{err}");
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }

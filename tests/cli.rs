@@ -4741,6 +4741,10 @@ fn test_providers_block_run_build_parity() {
         .current_dir(&tmp)
         .args(["build", "prov.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &build {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("prov");
     let build_out = if build.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -4892,6 +4896,10 @@ fn test_eprintln_reaches_stderr_on_every_backend() {
         .current_dir(&tmp)
         .args(["build", "estream.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("estream");
     let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -5010,6 +5018,10 @@ fn test_zero_argument_console_forms_match_across_backends() {
         .current_dir(&tmp)
         .args(["build", "zeroarg.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("zeroarg");
     let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -5104,6 +5116,8 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
         .args(["build", "dbgprog.kara"])
         .output()
         .expect("karac build spawn");
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&built);
     let berr = String::from_utf8_lossy(&built.stderr).into_owned()
         + &String::from_utf8_lossy(&built.stdout);
     let exe = tmp.join("dbgprog");
@@ -5383,6 +5397,10 @@ fn test_provider_early_return_run_build_parity() {
         .current_dir(&tmp)
         .args(["build", "provret.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &build {
+        let _ = common::build_or_skip(o);
+    }
     // A CODEGEN failure is this bug's exact pre-fix failure mode ("Terminator
     // found in the middle of a basic block" / the block form's refusal), so it
     // must FAIL the test, not soft-skip it — only link-stage trouble (missing
@@ -5464,6 +5482,10 @@ fn test_provider_closure_scoped_return_run_build_parity() {
         .current_dir(&tmp)
         .args(["build", "provclo.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &build {
+        let _ = common::build_or_skip(o);
+    }
     if let Ok(o) = &build {
         let stderr = String::from_utf8_lossy(&o.stderr);
         assert!(
@@ -5537,6 +5559,10 @@ fn test_user_drop_on_aggregate_field_run_build_parity() {
         .current_dir(&tmp)
         .args(["build", "agg.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &build {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("agg");
     let build_out = if build.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -6607,6 +6633,8 @@ fn test_no_autopar_env_preserves_output() {
         .env_remove("KARAC_RUNTIME")
         .output()
         .unwrap();
+    // Only a failed link may skip (B-2026-11-21-11).
+    let _ = common::build_or_skip(&build_default);
     let berr = String::from_utf8_lossy(&build_default.stderr);
     if berr.contains("requires the llvm feature") || !exe.exists() {
         eprintln!(
@@ -6629,6 +6657,8 @@ fn test_no_autopar_env_preserves_output() {
         .env_remove("KARAC_RUNTIME")
         .output()
         .unwrap();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&build_seq);
     assert!(
         exe.exists(),
         "sequential (KARAC_NO_AUTOPAR=1) build produced no binary:\n{}",
@@ -7132,6 +7162,8 @@ fn test_build_project_codegen_cross_module_collision_resolves_to_both_items() {
     );
 
     let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&out);
     assert!(
         out.status.success(),
         "build failed: stdout={} stderr={}",
@@ -24808,6 +24840,8 @@ fn test_build_debug_info_keeps_symbols_and_dwarf() {
         .args(["build", "prog.kara"])
         .output()
         .unwrap();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&out);
     if !exe.exists() {
         eprintln!(
             "skip: build produced no binary (llvm/runtime unavailable):\n{}",
@@ -25570,6 +25604,8 @@ fn build_renders_warnings_on_a_successful_build() {
         ])
         .output()
         .unwrap();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&build);
     let build_out = String::from_utf8_lossy(&build.stdout).to_string();
     let build_err = String::from_utf8_lossy(&build.stderr).to_string();
     // A build that failed for an unrelated reason (no LLVM feature, no linker)
@@ -25653,6 +25689,8 @@ fn build_json_carries_warnings_and_an_empty_list_when_clean() {
         ])
         .output()
         .unwrap();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&out);
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     if !stdout.contains("\"status\":\"ok\"") {
         eprintln!("skipping: build did not succeed ({stdout})");
@@ -25836,6 +25874,8 @@ fn project_build_renders_and_suppresses_typecheck_warnings() {
     .unwrap();
 
     let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&out);
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     if !stdout.contains("Built:") {
@@ -26113,6 +26153,10 @@ fn test_wildcard_and_nested_group_imports_run_build_parity() {
             cmd.env("KARAC_AUTO_PAR", "0")
         };
         let out = cmd.output().ok()?;
+        // Only a failed link may skip the AOT leg (B-2026-11-21-11).
+        if args.first() == Some(&"build") {
+            let _ = common::build_or_skip(&out);
+        }
         out.status
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -26261,6 +26305,10 @@ fn test_same_named_items_in_two_modules_run_on_every_surface() {
 
         let stdout_of = |args: &[&str]| -> Option<String> {
             let out = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+            // Only a failed link may skip the AOT leg (B-2026-11-21-11).
+            if args.first() == Some(&"build") {
+                let _ = common::build_or_skip(&out);
+            }
             out.status
                 .success()
                 .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -26321,6 +26369,10 @@ fn test_a_renamed_item_is_still_reachable_through_every_import_form() {
 
     let stdout_of = |args: &[&str]| -> Option<String> {
         let out = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        // Only a failed link may skip the AOT leg (B-2026-11-21-11).
+        if args.first() == Some(&"build") {
+            let _ = common::build_or_skip(&out);
+        }
         out.status
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -26375,7 +26427,10 @@ fn test_renamed_effect_resources_agree_under_auto_par() {
         } else {
             cmd.env("KARAC_AUTO_PAR", "0")
         };
-        let built = cmd.output().map(|o| o.status.success()).unwrap_or(false);
+        let built = cmd.output().unwrap();
+        // Only a failed link may skip the AOT leg (B-2026-11-21-11).
+        let _ = common::build_or_skip(&built);
+        let built = built.status.success();
         if !built || !exe.exists() {
             eprintln!("skip: AOT build produced no binary (no runtime archive?)");
             continue;
@@ -26575,6 +26630,10 @@ fn test_a_contested_member_reached_through_a_binding_chain() {
 
     let run = |args: &[&str]| -> Option<String> {
         let out = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        // Only a failed link may skip the AOT leg (B-2026-11-21-11).
+        if args.first() == Some(&"build") {
+            let _ = common::build_or_skip(&out);
+        }
         out.status
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -27085,6 +27144,8 @@ fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
         .current_dir(&dir)
         .output()
         .expect("karac build");
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&build);
     let exe = dir.join("hasher");
     if !build.status.success() || !exe.exists() {
         eprintln!(
@@ -27221,6 +27282,8 @@ fn a_user_written_hasher_fixes_the_order_across_processes_on_both_surfaces() {
         .current_dir(&dir)
         .output()
         .expect("karac build");
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&build);
     let exe = dir.join("userhasher");
     if !build.status.success() || !exe.exists() {
         eprintln!(
@@ -28139,6 +28202,10 @@ fn test_dbg_renders_identically_on_all_three_backends() {
         .current_dir(&tmp)
         .args(["build", "d.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("d");
     let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -28224,6 +28291,10 @@ fn test_dbg_is_identity_and_evaluates_its_argument_once() {
         .current_dir(&tmp)
         .args(["build", "i.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("i");
     let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -28285,6 +28356,10 @@ fn test_dbg_json_form_is_identical_across_backends() {
         .current_dir(&tmp)
         .args(["build", "j.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("j");
     let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -28359,6 +28434,10 @@ fn test_dbg_tags_par_branches_with_task_ids_on_every_backend() {
         .current_dir(&tmp)
         .args(["build", "p.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("p");
     let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         std::process::Command::new(&exe)
@@ -28414,12 +28493,10 @@ fn test_dbg_is_stripped_from_release_builds_without_changing_the_program() {
         let mut args = vec!["build"];
         args.extend_from_slice(extra);
         args.push("r.kara");
-        let ok = karac_bin()
-            .current_dir(&tmp)
-            .args(&args)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let built = karac_bin().current_dir(&tmp).args(&args).output().unwrap();
+        // Only a failed link may skip the AOT leg (B-2026-11-21-11).
+        let _ = common::build_or_skip(&built);
+        let ok = built.status.success();
         let exe = tmp.join(exe_name);
         if !ok || !exe.exists() {
             return None;
@@ -28584,6 +28661,10 @@ fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
         .current_dir(&tmp)
         .args(["build", "s.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("s");
     if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         let out = std::process::Command::new(&exe)
@@ -28657,6 +28738,10 @@ fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
         .current_dir(&tmp)
         .args(["build", "n.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("n");
     if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         let out = std::process::Command::new(&exe)
@@ -28734,6 +28819,10 @@ fn test_dbg_of_a_shared_enum_renders_the_same_on_all_three_backends() {
         .current_dir(&tmp)
         .args(["build", "e.kara"])
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("e");
     if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
         let out = std::process::Command::new(&exe)
@@ -28828,6 +28917,8 @@ fn test_dbg_of_a_self_referential_shared_enum_renders_on_all_three_backends() {
         .args(["build", "cyc.kara"])
         .output()
         .expect("karac build runs");
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&built);
     let berr = format!(
         "{}{}",
         String::from_utf8_lossy(&built.stdout),
@@ -28933,6 +29024,8 @@ fn test_dbg_of_a_would_be_headerless_chain_renders_on_all_three_backends() {
         .args(["build", "s.kara"])
         .output()
         .expect("karac build");
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    let _ = common::build_or_skip(&built);
     let build_err = String::from_utf8_lossy(&built.stderr).into_owned();
     // Checked BEFORE the skip below: a REFUSAL also fails the build, and the
     // soft-skip would swallow it as "no runtime archive" — green while
@@ -29461,6 +29554,10 @@ fn error_return_trace_is_deterministic(auto_par: &str) {
         .args(["build", "m.kara"])
         .env("KARAC_AUTO_PAR", auto_par)
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("m");
     let ok = built.map(|o| o.status.success()).unwrap_or(false) && exe.exists();
     if !ok {
@@ -29538,6 +29635,10 @@ fn main() -> Result[(), i64] {
         .args(["build", "m.kara"])
         .env("KARAC_NO_AUTOPAR", "1")
         .output();
+    // Only a failed link may skip the compiled leg (B-2026-11-21-11).
+    if let Ok(o) = &built {
+        let _ = common::build_or_skip(o);
+    }
     let exe = tmp.join("m");
     let ok = built.map(|o| o.status.success()).unwrap_or(false) && exe.exists();
     if !ok {
@@ -30410,7 +30511,10 @@ fn test_process_exit_keeps_prior_output_and_status_on_every_surface() {
             } else {
                 cmd.env("KARAC_AUTO_PAR", "0")
             };
-            let built = cmd.output().map(|o| o.status.success()).unwrap_or(false);
+            let built = cmd.output().unwrap();
+            // Only a failed link may skip the AOT leg (B-2026-11-21-11).
+            let _ = common::build_or_skip(&built);
+            let built = built.status.success();
             if !built || !exe.exists() {
                 eprintln!("skip: AOT build produced no binary (no runtime archive?)");
                 continue;

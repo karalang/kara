@@ -398,6 +398,31 @@ fn warn_or_fail_on_stale_runtime() {
     WARNED.call_once(|| eprintln!("!! {msg}"));
 }
 
+/// Does this stderr (or driver error) say the compiled lane failed AT THE
+/// LINK: no runtime archive, an opt-in archive not built, no linker or wasi
+/// sysroot, or the linker itself failing? `karac build` prefixes every link
+/// error with `error[link]:` and the sanitizer lanes with `error[mir]: asan:`
+/// / `tsan:`; the rest are the driver's own texts, for harnesses that call it
+/// in-process. Anything else, a refusal (`error[E…]`), a backend error, a
+/// karac panic, a runtime error or a sanitizer report, is not a link
+/// (B-2026-11-21-8 to -11).
+pub fn is_link_failure(stderr: &str) -> bool {
+    const LINK: &[&str] = &[
+        "error[link]:",
+        "error[mir]: asan: ",
+        "error[mir]: tsan: ",
+        "Linker failed",
+        "Linker (clang) failed",
+        "wasm-ld failed",
+        "KARAC_RUNTIME",
+        "runtime archive",
+        "needs a C linker",
+        "could not run the linker",
+        "wasi-libc not found",
+    ];
+    LINK.iter().any(|m| stderr.contains(m))
+}
+
 /// Every E2E harness links against `libkarac_runtime.a` and soft-skips
 /// (`.ok()?` → `None`) when linking fails, because a checkout without the
 /// archive built is a legitimate skip (CLAUDE.md's documented "skip with a
@@ -454,6 +479,18 @@ pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
              linker error:\n{e}"
         );
     }
+    // B-2026-11-21-8 / -11: only a LINK may skip. A caller hands this the
+    // stderr of whatever failed, a refused build, a backend error, a karac
+    // panic, or a compiled program's runtime error or sanitizer report, and
+    // all of those are the program's (or the compiler's) own failure. They
+    // used to read as "no runtime archive" and pass.
+    if !is_link_failure(&e) {
+        panic!(
+            "the compiled lane failed, and not at the link, so this is the \
+             program's or the compiler's own failure, not a missing runtime \
+             archive; only a failed link may skip.\n\nstderr:\n{e}"
+        );
+    }
     if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").as_deref() == Ok("1") {
         panic!(
             "link failed and KARAC_REQUIRE_RUNTIME_ARCHIVE=1 forbids the soft-skip. \
@@ -464,6 +501,17 @@ pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
         );
     }
     None
+}
+
+/// A `karac build`'s output: `Some` when it built, `None` to skip only when it
+/// failed at the link; any other build failure panics in `link_or_skip`
+/// (B-2026-11-21-11).
+pub fn build_or_skip(out: &std::process::Output) -> Option<()> {
+    link_or_skip(if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    })
 }
 
 /// Does this ownership kind actually stop a `karac build` / fail `karac check`?

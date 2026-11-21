@@ -5,6 +5,8 @@
 //! itself is a real task, with its own id.
 #![cfg(feature = "llvm")]
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -126,7 +128,7 @@ fn mir_auto_par_logs_in_statement_order_built() {
     let bin = path.with_file_name("main.out");
     let out = karac(&["build", "-o", bin.to_str().unwrap()], &path);
     let err = text(&out.stderr);
-    if !out.status.success() && (err.contains("Linker failed") || err.contains("not found")) {
+    if !out.status.success() && common::link_or_skip(Err(err.to_string())).is_none() {
         eprintln!("skipped: no runtime archive");
         return;
     }
@@ -224,7 +226,7 @@ fn mir_auto_par_logs_before_a_later_panic() {
     let bin = path.with_file_name("main.out");
     let out = karac(&["build", "-o", bin.to_str().unwrap()], &path);
     let err = text(&out.stderr);
-    if !out.status.success() && (err.contains("Linker failed") || err.contains("not found")) {
+    if !out.status.success() && common::link_or_skip(Err(err.to_string())).is_none() {
         eprintln!("skipped: no runtime archive");
         return;
     }

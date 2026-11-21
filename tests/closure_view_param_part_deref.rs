@@ -37,13 +37,9 @@ fn checked_and_run(name: &str, src: &str, cmd: &str) -> Option<String> {
     let out = Command::new(karac).arg(cmd).arg(&file).output().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let err = String::from_utf8_lossy(&out.stderr).to_string();
-    // Only a failed link may skip: a refusal, a runtime error or a
-    // sanitizer report is the program's own failure and fails the test.
-    let own_failure = err.contains("error[")
-        || err.contains("runtime error")
-        || err.contains("Sanitizer")
-        || err.contains("panicked");
-    if cmd != "__mir-run" && !own_failure {
+    // Only a failed link may skip: `link_or_skip` fails a refusal, a runtime
+    // error or a sanitizer report as the program's own (B-2026-11-21-8).
+    if cmd != "__mir-run" {
         common::link_or_skip(if out.status.success() {
             Ok(())
         } else {

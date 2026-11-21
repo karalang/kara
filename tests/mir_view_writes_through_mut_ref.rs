@@ -7,6 +7,8 @@
 //! pointer to the view. Each program runs on the interpreter, compiled and
 //! under ASan.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 fn run(sub: &str, tag: &str, src: &str) -> (bool, String, String) {
@@ -36,9 +38,7 @@ fn lanes(tag: &str, src: &str, want: &str) {
     }
     for sub in ["__mir-llvm-run", "__mir-llvm-asan"] {
         let (ok, out, err) = run(sub, tag, src);
-        if err.contains("Linker failed")
-            && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none()
-        {
+        if err.contains("Linker failed") && common::link_or_skip(Err(err.to_string())).is_none() {
             eprintln!("skipping {sub}: no runtime archive");
             continue;
         }

@@ -3,6 +3,8 @@
 //! associated constant `BITS` on `i32`". Every integer type now has it,
 //! an `i64` as every count is in Kāra (core-types.md, Bit counts).
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 const SRC: &str = "const WIDTH: i64 = u16.BITS;
@@ -54,8 +56,7 @@ fn integer_bits_const_checks_clean() {
 #[test]
 fn integer_bits_const_is_lowered_by_llvm() {
     let (out, err) = run("__mir-llvm-run");
-    if err.contains("Linker failed") && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none()
-    {
+    if err.contains("Linker failed") && common::link_or_skip(Err(err.to_string())).is_none() {
         eprintln!("skipping: no runtime archive");
         return;
     }

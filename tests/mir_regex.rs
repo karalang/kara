@@ -99,8 +99,14 @@ fn regex_surface_is_clean_under_asan() {
         .output()
         .expect("karac");
     let err = String::from_utf8_lossy(&out.stderr);
-    if err.contains("not found") || err.contains("fsanitize") {
-        eprintln!("skipping: no ASan toolchain or runtime archive: {err}");
+    // Only a failed link skips; a runtime error or a failed build is the
+    // program's own failure (B-2026-11-21-9).
+    let linked = common::link_or_skip(if out.status.success() {
+        Ok(())
+    } else {
+        Err(err.to_string())
+    });
+    if linked.is_none() {
         return;
     }
     assert!(!err.contains("Sanitizer"), "{err}");

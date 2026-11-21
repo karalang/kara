@@ -7,6 +7,8 @@
 //! stack-overflow note), as on the main thread.
 #![cfg(all(feature = "llvm", unix))]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -70,11 +72,9 @@ fn build(tag: &str, src: &str) -> Option<PathBuf> {
         .unwrap();
     let err = String::from_utf8_lossy(&built.stderr);
     if !built.status.success() {
-        assert!(
-            err.contains("Linker failed")
-                && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none(),
-            "does not build: {err}"
-        );
+        // Only a failed link skips: link_or_skip fails any other build failure,
+        // a stale archive and a run under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 (B-2026-11-21-10).
+        let _ = common::link_or_skip(Err(err.to_string()));
         eprintln!("skipping the run: no runtime archive");
         return None;
     }

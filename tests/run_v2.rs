@@ -3,6 +3,8 @@
 //! build without llvm) and on the MIR interpreter under `--interp`.
 //! `--legacy` is refused.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -240,8 +242,8 @@ fn run_v2_compiled_env_args_is_the_programs_argv() {
         .arg(&exe)
         .output()
         .unwrap();
-    if !built.status.success() {
-        // No runtime archive: nothing to run.
+    // Only a failed link may skip the built leg (B-2026-11-21-11).
+    if common::build_or_skip(&built).is_none() {
         eprintln!("skipped the built leg: {}", text(&built.stderr));
         return;
     }

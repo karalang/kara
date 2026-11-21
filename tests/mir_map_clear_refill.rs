@@ -4,6 +4,8 @@
 //! with deleted cells before each clear, still finds exactly what it
 //! holds, on the interpreter, compiled and under ASan.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 fn run(sub: &str, src: &str) -> (bool, String, String) {
@@ -82,9 +84,7 @@ fn map_set_cleared_and_refilled_at_many_sizes() {
     }
     for sub in ["__mir-llvm-run", "__mir-llvm-asan"] {
         let (ok, out, err) = run(sub, SRC);
-        if err.contains("Linker failed")
-            && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none()
-        {
+        if err.contains("Linker failed") && common::link_or_skip(Err(err.to_string())).is_none() {
             eprintln!("skipping {sub}: no runtime archive");
             continue;
         }

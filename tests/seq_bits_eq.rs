@@ -5,6 +5,8 @@
 //! `__bits_eq`: lengths, then one `memcmp` of the bytes. The answers are
 //! the element loop's on every backend.
 
+mod common;
+
 use std::process::{Command, Stdio};
 
 const SRC: &str = "fn main() {\n\
@@ -60,8 +62,7 @@ fn bitwise_sequence_equality_compiled() {
         return;
     }
     let (out, err) = run("__mir-llvm-run", "llvm");
-    if err.contains("Linker failed") && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none()
-    {
+    if err.contains("Linker failed") && common::link_or_skip(Err(err.to_string())).is_none() {
         eprintln!("skipping: no runtime archive");
         return;
     }

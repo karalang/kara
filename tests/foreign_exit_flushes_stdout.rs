@@ -4,6 +4,8 @@
 //! interpreter printed it. The runtime now writes the buffer from an
 //! `atexit` handler, on one worker and on the pool.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -53,11 +55,9 @@ fn foreign_exit_flushes_stdout_in_a_built_binary() {
         .unwrap();
     let err = String::from_utf8_lossy(&built.stderr);
     if !built.status.success() {
-        assert!(
-            err.contains("Linker failed")
-                && std::env::var_os("KARAC_REQUIRE_RUNTIME_ARCHIVE").is_none(),
-            "does not build: {err}"
-        );
+        // Only a failed link skips: link_or_skip fails any other build failure,
+        // a stale archive and a run under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 (B-2026-11-21-10).
+        let _ = common::link_or_skip(Err(err.to_string()));
         eprintln!("skipping the run: no runtime archive");
         return;
     }

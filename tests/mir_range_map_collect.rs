@@ -100,7 +100,11 @@ fn mir_range_map_collect_runs_the_closure_in_a_counting_loop() {
     if std::env::var_os("KARAC_SKIP_ASAN_TESTS").is_none() {
         let asan = karac().args(["__mir-llvm-asan", file]).output().unwrap();
         let err = String::from_utf8_lossy(&asan.stderr);
-        if !(asan.status.code() == Some(3) && err.contains("Linker failed")) {
+        // A stale archive or KARAC_REQUIRE_RUNTIME_ARCHIVE=1 fails here (B-2026-11-21-10).
+        if !(asan.status.code() == Some(3)
+            && err.contains("Linker failed")
+            && common::link_or_skip(Err(err.to_string())).is_none())
+        {
             assert!(asan.status.success(), "{err}");
             assert_eq!(String::from_utf8_lossy(&asan.stdout), WANT);
         }
