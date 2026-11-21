@@ -136,7 +136,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-55 | 2026-11-21 | typecheck+mir | medium | No way to key a Map or Set by shared-handle identity: `ref_eq` exists but nothing hashes identity, so a node-to-copy map, a visited set or a memo over shared nodes is O(n^2) or needs an id field; spec now gives `Identity[T]` (std.hash) | — |
 | B-2026-11-21-81 | 2026-11-21 | typecheck | low | `impl Trait for *mut T` and `impl Trait for (A, B)` are accepted, but their methods are never callable: every call is refused as "no method" | — |
 | B-2026-11-21-91 | 2026-11-21 | cli | medium | `karac check` of a program deriving `Serialize` takes ~0.9-1.1 s on a 5-line file (release), against ~0.07 s without the derive: the derive's comptime expansion runs twice, once in check's lower and again in the ownership/MIR check's own front end | — |
-| B-2026-11-21-92 | 2026-11-21 | mir | low | An `impl Trait` value is live only while its hidden type says so: its drop counted as a use of what it borrows only when the concrete type has a `Drop` body, so a callee that changed its hidden type to one with a `Drop` body would break callers that compiled before | — |
 
 ### Relocated
 
@@ -2113,6 +2112,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-71 | parser | low | `while let P = v and c { . | 125f1e1b95 |
 | B-2026-11-21-80 | typecheck | low | A method a raw pointer does not have (`p.expose_addr()`, `p.addr()`, `p.clone()`, a typo) gets no typecheck error: `karac check` prints only MIR's ro… | ed623291c6 |
 | B-2026-11-21-90 | cli | medium | kara-lsp hover, completion and definition took up to 1.2 s, 1.3 s and 2.4 s on a program deriving `Serialize`: each request re-ran the whole of `kara… | 972effff90 |
+| B-2026-11-21-92 | mir | low | An `impl Trait` value is live only while its hidden type says so: its drop counted as a use of what it borrows only when the concrete type has a `Dro… | a6384ce4fe |
 
 </details>
 
