@@ -1,0 +1,10 @@
+trait Shape {
+    fn area(self) -> f64;
+    fn describe(self) -> String { "a shape" }
+}
+struct C { r: f64 }
+impl Shape for C {
+    fn area(self) -> f64 { self.r }
+    fn descibe(self) -> String { "a circle" }
+}
+fn main() { println(C { r: 1.0 }.describe()); }

@@ -1,0 +1,6 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2];
+    println("before");
+    v[5] = 3;              // a sequence has no IndexSet
+    println("after");
+}

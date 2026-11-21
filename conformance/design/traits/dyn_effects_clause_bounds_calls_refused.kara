@@ -1,0 +1,8 @@
+trait Handler { fn handle(self) -> i64; }
+struct Loud {}
+impl Handler for Loud { fn handle(self) -> i64 { println("loud"); 1 } }
+struct Holder { h: dyn Handler with reads(Clock) }
+fn main() {
+    let x = Holder { h: Loud {} };
+    println(f"{x.h.handle()}");
+}

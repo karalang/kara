@@ -1,0 +1,3 @@
+trait Shape { fn area(self) -> i64; }
+trait Combine { fn with(self, other: impl Shape) -> i64; }
+fn main() {}

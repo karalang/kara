@@ -1,0 +1,4 @@
+struct P { x: i64 }
+impl PartialEq for P { fn eq(self, other: P) -> bool { self.x == other.x } }
+impl Eq for P { fn eq(self, other: P) -> bool { true } }
+fn main() { println(f"{P { x: 1 } == P { x: 2 }}"); }

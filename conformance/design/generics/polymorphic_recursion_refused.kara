@@ -1,0 +1,4 @@
+fn deep[T: Clone](x: T, n: i64) -> i64 {
+    if n == 0 { 0 } else { deep([x.clone()], n - 1) + 1 }
+}
+fn main() { println(f"{deep(1, 3)}"); }

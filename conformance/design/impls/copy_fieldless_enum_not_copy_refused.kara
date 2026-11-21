@@ -1,0 +1,8 @@
+enum Dir { Up, Down }
+fn take(d: own Dir) -> i64 { match d { Dir.Up => 1, Dir.Down => 2 } }
+fn main() {
+    let d = Dir.Up;
+    let a = take(d);
+    let b = take(d);       // d was moved: a fieldless enum is not Copy
+    println(a + b);
+}

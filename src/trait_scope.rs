@@ -24,16 +24,30 @@ pub type Hidden = HashMap<String, Vec<String>>;
 #[derive(Debug, Default, Clone)]
 pub struct HiddenTraits {
     regions: Vec<(usize, usize, Arc<Hidden>)>,
+    /// Computed from a program tree, whose files' imports it read; a lone
+    /// file's check reads its program's own record instead
+    /// ([`crate::ast::Program::unimported_gated_traits`]).
+    pub computed: bool,
 }
 
 impl HiddenTraits {
     /// One set for the whole source: a module checked on its own.
     pub fn whole(hidden: Hidden) -> HiddenTraits {
         if hidden.is_empty() {
-            return HiddenTraits::default();
+            return HiddenTraits::computed();
         }
         HiddenTraits {
             regions: vec![(0, usize::MAX, Arc::new(hidden))],
+            computed: true,
+        }
+    }
+
+    /// An empty set computed from a program tree: nothing is hidden, and a
+    /// lone file's record is not consulted.
+    pub fn computed() -> HiddenTraits {
+        HiddenTraits {
+            regions: Vec::new(),
+            computed: true,
         }
     }
 
@@ -115,7 +129,11 @@ pub fn hidden_traits(tree: &ProgramTree, id: ModuleId) -> Hidden {
     }
     let mut hidden = Hidden::new();
     for o in &tree.modules {
-        if o.is_synthetic || o.package.is_none() || o.package == m.package {
+        // A gated library module (`std.log`) is not the prelude: its traits
+        // are in scope only where imported, as a dependency's are
+        // (B-2026-11-20-115).
+        let gated = o.is_synthetic && crate::prelude::is_gated_stdlib_module(&o.path);
+        if !gated && (o.is_synthetic || o.package.is_none() || o.package == m.package) {
             continue;
         }
         for name in trait_names(&o.items) {

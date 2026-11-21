@@ -1,0 +1,3 @@
+trait Shape { fn area(self) -> i64; }
+fn f(x: Shape) -> i64 { x.area() }
+fn main() {}

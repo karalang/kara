@@ -1,0 +1,5 @@
+fn main() {
+    let p = (3, "h");
+    println(f"{p}");
+    println(p.to_string());
+}

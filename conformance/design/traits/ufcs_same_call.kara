@@ -1,0 +1,13 @@
+struct User { name: String }
+impl User {
+    fn validate(self) -> bool { self.name.len() > 2 }
+}
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+fn main() {
+    let user = User { name: "ann" };
+    println(f"{user.validate()} {User.validate(user)}");
+    let c = Sq { s: 3 };
+    println(f"{c.area()} {Shape.area(c)} {Sq.area(c)}");
+}

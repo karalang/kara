@@ -1,0 +1,7 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    let other: Vec[i64] = [0];
+    println("before");
+    v[0..2] = other.as_slice();
+    println(f"{v}");
+}

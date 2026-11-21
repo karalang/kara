@@ -1,0 +1,26 @@
+struct P { x: i64 }
+impl Display for P { fn to_string(self) -> String { f"P({self.x})" } }
+impl Add for P { type Output = P; fn add(own self, o: own P) -> P { P { x: self.x + o.x } } }
+impl PartialEq for P { fn eq(self, o: P) -> bool { self.x == o.x } }
+impl PartialOrd for P { fn partial_cmp(self, o: P) -> Option[Ordering] { self.x.partial_cmp(o.x) } }
+struct Grid { cells: Vec[i64] }
+impl Index[i64] for Grid { type Output = i64; fn index(self, i: i64) -> ref i64 { self.cells[i] } }
+struct Down { n: i64 }
+impl Iterator for Down {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { if self.n == 0 { None } else { self.n -= 1; Some(self.n) } }
+}
+struct Noisy {}
+impl Drop for Noisy { fn drop(mut ref self) { println("dropped"); } }
+fn parse(s: Str) -> Result[i64, ParseError] { let n = i64.parse(s)?; Ok(n * 2) }
+fn main() {
+    let a = P { x: 1 } + P { x: 2 };
+    println(f"{a} {a == P { x: 3 }} {P { x: 1 } < P { x: 2 }}");
+    let g = Grid { cells: [5, 6, 7] };
+    println(f"{g[1]}");
+    let mut v = Vec.new();
+    for i in (Down { n: 3 }) { v.push(i); }
+    println(f"{v}");
+    { let _n = Noisy {}; }
+    println(f"{parse("21")} {parse("x").is_err()}");
+}

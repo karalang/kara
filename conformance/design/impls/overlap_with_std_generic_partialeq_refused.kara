@@ -1,0 +1,4 @@
+impl[T: PartialEq] PartialEq for Vec[T] {
+    fn eq(self, other: Vec[T]) -> bool { true }
+}
+fn main() { let a: Vec[i64] = [1]; let b: Vec[i64] = [2]; println(f"{a == b}"); }

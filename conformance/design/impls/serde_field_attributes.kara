@@ -1,0 +1,24 @@
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Config {
+    #[serde(rename: "server_name")]
+    name: String,
+    #[serde(skip)]
+    internal_cache: Vec[i64],
+    #[serde(default: 8080)]
+    port: i64,
+    #[serde(default)]
+    retries: i64,
+    #[serde(skip_serializing)]
+    secret: String,
+    #[serde(skip_deserializing)]
+    computed: i64,
+}
+
+fn main() {
+    let c = Config { name: "srv", internal_cache: [1], port: 1, retries: 2, secret: "s", computed: 9 };
+    println(Json.serialize(c));
+    let d: Config = Json.deserialize("{\"server_name\":\"x\",\"secret\":\"t\",\"computed\":5}").unwrap();
+    println(d.fmt_debug());
+}

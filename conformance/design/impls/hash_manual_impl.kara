@@ -1,0 +1,14 @@
+// A manual Hash keeps the contract with its PartialEq: case-insensitive.
+struct Name { s: String }
+impl PartialEq for Name { fn eq(self, o: Name) -> bool { self.s.to_lowercase() == o.s.to_lowercase() } }
+impl Eq for Name { }
+impl Hash for Name {
+    fn hash[H: Hasher](self, h: mut ref H) { self.s.to_lowercase().hash(mut h); }
+}
+fn main() {
+    let mut s: Set[Name] = Set.new();
+    s.insert(Name { s: "Ada" });
+    s.insert(Name { s: "ADA" });
+    s.insert(Name { s: "Bob" });
+    println(s.len());
+}

@@ -1,0 +1,1 @@
+impl C for S requires impl B for S

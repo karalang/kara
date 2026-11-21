@@ -1,0 +1,5 @@
+struct P { n: i64 }
+fn main() {
+    let v: Vec[P] = [P { n: 1 }];
+    println(f"{v}");
+}

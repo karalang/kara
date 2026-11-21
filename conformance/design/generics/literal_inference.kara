@@ -1,0 +1,38 @@
+fn take_i32(n: i32) -> i32 { n }
+fn f(i: u64) -> u64 { let k = 2; i - k }
+fn id[T](x: own T) -> T { x }
+fn main() {
+    // Literal defaults to i64 / f64.
+    let a = 5;
+    let b = 2.5;
+    println(f"{a * 1000000000000} {b}");
+    // A later use fixes the literal's type.
+    let x = 7;
+    println(f"{take_i32(x)}");
+    // Beside u64 the literal takes u64.
+    println(f"{f(10)}");
+    // Beside a type that widens, the literal keeps its default.
+    let byte: u8 = 200;
+    let mut h = 2166136261;
+    h = (h ^ byte) * 16777619;
+    println(f"{h}");
+    let y: i32 = 5;
+    let mut s = 0;
+    s += y;
+    s = s + 3000000000;
+    println(f"{s}");
+    // Compound assignment to a fixed target fixes the operand.
+    let mut rods: Array[u8, 3] = [0; 3];
+    let bit = 4;
+    rods[1] |= bit;
+    let bit2 = 255;
+    rods[2] = bit2;
+    println(f"{rods[1]} {rods[2]}");
+    // A generic call's result carries T: the literal stays open until used.
+    let v = id(5);
+    println(f"{take_i32(v)}");
+    let m: u8 = id(200);
+    println(f"{m}");
+    let fl = id(3.14);
+    println(f"{fl}");
+}

@@ -1,0 +1,6 @@
+drop 7
+Some(7) true
+2
+drop 1
+drop 2
+end

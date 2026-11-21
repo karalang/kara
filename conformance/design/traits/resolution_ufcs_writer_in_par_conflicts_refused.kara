@@ -1,0 +1,11 @@
+effect resource Db;
+trait Reader { fn access(self, key: i64) -> i64 with reads(Db); }
+trait Writer { fn access(self, key: i64) -> i64 with writes(Db); }
+struct Connection {}
+impl Reader for Connection { fn access(self, key: i64) -> i64 with reads(Db) { key } }
+impl Writer for Connection { fn access(self, key: i64) -> i64 with writes(Db) { key + 1 } }
+fn main() {
+    let conn = Connection {};
+    let (a, b) = par { Reader.access(conn, 1), Writer.access(conn, 2) };
+    println(f"{a} {b}");
+}

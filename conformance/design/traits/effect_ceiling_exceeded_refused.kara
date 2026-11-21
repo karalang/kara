@@ -1,0 +1,11 @@
+trait Report {
+    fn report(self) with writes(Stdout);
+}
+struct R {}
+impl Report for R {
+    fn report(self) with writes(Stdout) writes(Stderr) {
+        println("out");
+        eprintln("err");
+    }
+}
+fn main() { R {}.report(); }

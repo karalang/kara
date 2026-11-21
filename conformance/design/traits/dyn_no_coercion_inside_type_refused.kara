@@ -1,0 +1,8 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s } }
+fn main() {
+    let v: Vec[Sq] = [Sq { s: 1 }];
+    let d: Vec[dyn Shape] = v;
+    println(f"{d.len()}");
+}

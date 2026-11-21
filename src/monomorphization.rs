@@ -301,145 +301,35 @@ impl Walker<'_> {
 
     fn walk_block(&mut self, block: &Block) {
         for stmt in &block.stmts {
-            self.walk_stmt(stmt);
+            crate::rc_elide::walk_stmt_children_pub(stmt, &mut |e| self.walk_expr(e));
         }
         if let Some(tail) = &block.final_expr {
             self.walk_expr(tail);
         }
     }
 
-    fn walk_stmt(&mut self, stmt: &Stmt) {
-        match &stmt.kind {
-            StmtKind::MultiAssign { .. } => unreachable!(
-                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
-            ),
-            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
-                self.walk_expr(value);
-            }
-            StmtKind::LetUninit { .. } => {}
-            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-                self.walk_block(body);
-            }
-            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
-                self.walk_expr(target);
-                self.walk_expr(value);
-            }
-            StmtKind::Expr(e) => self.walk_expr(e),
-        }
-    }
-
+    /// Record the call at `expr`, if it is one, then descend through every
+    /// child expression. The descent is the exhaustive child walk shared with
+    /// `rc_elide`, so a call inside an f-string hole, a struct literal, a
+    /// range or any other node is counted (B-2026-11-21-26: a hand-written
+    /// walk skipped those, and every call in `println(f"{g(1)}")` read 0).
     fn walk_expr(&mut self, expr: &Expr) {
         match &expr.kind {
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, .. } => {
                 if let Some(generic) = callee_generic_identity(callee) {
                     self.record_call(generic, &expr.span);
                 }
-                self.walk_expr(callee);
-                for arg in args {
-                    self.walk_expr(&arg.value);
-                }
             }
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall { .. } => {
                 let span_key = SpanKey::from_span(&expr.span);
                 if let Some(callee_path) = self.tc.method_callee_types.get(&span_key) {
                     let generic = strip_receiver_generic_args(callee_path);
                     self.record_call(generic, &expr.span);
                 }
-                self.walk_expr(object);
-                for arg in args {
-                    self.walk_expr(&arg.value);
-                }
-            }
-            ExprKind::Binary { left, right, .. } => {
-                self.walk_expr(left);
-                self.walk_expr(right);
-            }
-            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
-                self.walk_expr(operand);
-            }
-            ExprKind::NilCoalesce { left, right } => {
-                self.walk_expr(left);
-                self.walk_expr(right);
-            }
-            ExprKind::OptionalChain { object, args, .. } => {
-                self.walk_expr(object);
-                if let Some(args) = args {
-                    for arg in args {
-                        self.walk_expr(&arg.value);
-                    }
-                }
-            }
-            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-                self.walk_expr(object);
-            }
-            ExprKind::Index { object, index } => {
-                self.walk_expr(object);
-                self.walk_expr(index);
-            }
-            ExprKind::Block(b) => self.walk_block(b),
-            ExprKind::If {
-                condition,
-                then_block,
-                else_branch,
-            } => {
-                self.walk_expr(condition);
-                self.walk_block(then_block);
-                if let Some(eb) = else_branch {
-                    self.walk_expr(eb);
-                }
-            }
-            ExprKind::IfLet {
-                value,
-                then_block,
-                else_branch,
-                ..
-            } => {
-                self.walk_expr(value);
-                self.walk_block(then_block);
-                if let Some(eb) = else_branch {
-                    self.walk_expr(eb);
-                }
-            }
-            ExprKind::Match { scrutinee, arms } => {
-                self.walk_expr(scrutinee);
-                for arm in arms {
-                    if let Some(g) = &arm.guard {
-                        self.walk_expr(g);
-                    }
-                    self.walk_expr(&arm.body);
-                }
-            }
-            ExprKind::While {
-                condition, body, ..
-            } => {
-                self.walk_expr(condition);
-                self.walk_block(body);
-            }
-            ExprKind::WhileLet { value, body, .. } => {
-                self.walk_expr(value);
-                self.walk_block(body);
-            }
-            ExprKind::For { iterable, body, .. } => {
-                self.walk_expr(iterable);
-                self.walk_block(body);
-            }
-            ExprKind::Loop { body, .. } => self.walk_block(body),
-            ExprKind::LabeledBlock { body, .. } => self.walk_block(body),
-            ExprKind::Closure { body, .. } => self.walk_expr(body),
-            ExprKind::Return(Some(e)) => self.walk_expr(e),
-            ExprKind::Break { value: Some(v), .. } => self.walk_expr(v),
-            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
-                for it in items {
-                    self.walk_expr(it);
-                }
-            }
-            ExprKind::PrefixCollectionLiteral { items, .. } => {
-                for it in items {
-                    self.walk_expr(it);
-                }
             }
             _ => {}
         }
+        crate::rc_elide::walk_children_pub(&expr.kind, &mut |c| self.walk_expr(c));
     }
 }
 

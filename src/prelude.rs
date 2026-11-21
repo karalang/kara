@@ -538,6 +538,10 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "Reduce",
     "ElementwiseMap",
     "ElementwiseOrd",
+    // `Pod`, the bound of `mem.zeroed()` (design.md § Marker traits), in
+    // `runtime/stdlib/mem.kara`: written `impl Pod for S { }` as well as
+    // derived (B-2026-11-20-117).
+    "Pod",
 ];
 
 /// The variants written bare in an expression: `Option`'s and `Result`'s
@@ -2783,6 +2787,33 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
             _ => None,
         })
         .collect();
+    // Which gated traits the imports leave out: once spliced, the imports
+    // are gone, and an impl the splice brings along names its trait whether
+    // the program imported it or not (B-2026-11-20-115).
+    let gated_imports: Vec<&crate::ast::ImportDecl> = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Import(imp) if is_gated_stdlib_module(&imp.path) => Some(imp),
+            _ => None,
+        })
+        .collect();
+    if !gated_imports.is_empty() {
+        let mut left_out = Vec::new();
+        for (path, module) in GATED_STDLIB_PROGRAMS.iter() {
+            for it in &module.items {
+                let Item::TraitDef(t) = it else { continue };
+                let imported = gated_imports.iter().any(|imp| {
+                    imp.path == *path
+                        && (imp.is_wildcard || imp.items.iter().any(|ii| ii.name == t.name))
+                });
+                if !imported && !own_names.contains(&t.name) {
+                    left_out.push((t.name.clone(), path.clone()));
+                }
+            }
+        }
+        program.unimported_gated_traits = left_out;
+    }
     for item in &mut program.items {
         let Item::Import(imp) = item else { continue };
         if let Some((have, _)) = library_global_module(&imp.path) {

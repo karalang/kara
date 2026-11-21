@@ -1,0 +1,6 @@
+fn main() {
+    let a = "ab".to_string();
+    let b = "cd".to_string();
+    let c = a + b;
+    println(f"{c} {a} {b}");
+}

@@ -1,0 +1,9 @@
+trait Greet { fn hello(self) -> String; }
+struct P {}
+impl P { fn hello() -> String { "assoc" } }
+impl Greet for P { fn hello(self) -> String { "trait method" } }
+fn main() {
+    let p = P {};
+    println(p.hello());
+    println(P.hello());
+}

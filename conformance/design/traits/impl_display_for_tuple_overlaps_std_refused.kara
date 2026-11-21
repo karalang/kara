@@ -1,0 +1,8 @@
+struct H {}
+impl Display for H { fn to_string(self) -> String { "h" } }
+impl Display for (i64, H) { fn to_string(self) -> String { f"pair {self.0}" } }
+fn main() {
+    let p = (3, H {});
+    println(f"{p}");
+    println(p.to_string());
+}

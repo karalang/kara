@@ -1,0 +1,14 @@
+fn pure_one() -> i64 { 1 }
+fn loud_two() -> i64 { println("loud"); 2 }
+fn apply_loud(f: Fn() -> i64 with writes(Stdout)) -> i64 with writes(Stdout) { f() }
+fn apply_mut(f: own MutFn() -> i64) -> i64 { f() }
+fn apply_once(f: own OnceFn() -> i64) -> i64 { f() }
+fn main() {
+    // A function with fewer effects goes where one with more is expected.
+    println(f"{apply_loud(pure_one)} {apply_loud(loud_two)}");
+    // An Fn goes where a MutFn or OnceFn is expected; a MutFn where an OnceFn is.
+    let k = 5;
+    println(f"{apply_mut(|| k)} {apply_once(|| k + 1)}");
+    let mut n = 0;
+    println(f"{apply_once(|| { n += 1; n })}");
+}

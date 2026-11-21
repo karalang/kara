@@ -6715,6 +6715,36 @@ impl<'a> super::TypeChecker<'a> {
 
     /// [`Self::wrapper_unwrap_hint`] for two branches of one `if` or
     /// `match`, either of which may be the wrapped one.
+    /// The message for branches with no join (design.md § Branch type
+    /// joining, rule 4): `type mismatch in branches: expected <first>,
+    /// found <other>`, then a note listing every branch's type, then the
+    /// specific `hint` when one applies, or else the suggestion to annotate
+    /// the expected type.
+    pub(super) fn branch_mismatch_message(
+        expected: &Type,
+        found: &Type,
+        branches: &[&Type],
+        hint: &str,
+    ) -> String {
+        let listed: Vec<String> = branches
+            .iter()
+            .filter(|t| !matches!(t, Type::Never | Type::Error))
+            .map(|t| format!("'{}'", type_display(t)))
+            .collect();
+        let suggestion = if hint.is_empty() {
+            "; annotate the expected type (`let x: T = ...`), or make every branch that type"
+        } else {
+            hint
+        };
+        format!(
+            "type mismatch in branches: expected '{}', found '{}'; note: the branches' types are {}{}",
+            type_display(expected),
+            type_display(found),
+            listed.join(", "),
+            suggestion
+        )
+    }
+
     pub(super) fn branch_unwrap_hint(a: &Type, b: &Type) -> String {
         let hint = Self::wrapper_unwrap_hint(a, b);
         if hint.is_empty() {

@@ -17,9 +17,10 @@ use super::env::{
     EnumInfo, FunctionSig, ImplAssocTypeEntry, ImplInfo, RefinementPred, StructInfo, TraitInfo,
     UnionInfo,
 };
+use super::inference::substitute_type_params;
 use super::types::{
-    method_callee_type_name, type_display, type_is_fully_concrete, FloatSize, IntSize, Type,
-    UIntSize, VariantTypeInfo,
+    method_callee_type_name, type_display, type_is_fully_concrete, FloatSize, IntSize, SubstValue,
+    Type, UIntSize, VariantTypeInfo,
 };
 use super::{
     extract_derived_traits, extract_must_use_message, find_item_visibility, has_display_snake_case,
@@ -1186,6 +1187,10 @@ impl<'a> super::TypeChecker<'a> {
                 Item::StructDef(s) => self.env_add_struct(s),
                 Item::EnumDef(e) => self.env_add_enum(e),
                 Item::TraitDef(t) => self.env_add_trait(t),
+                // A library marker (`Pod`, `ScopeLocal`) is a marker in a
+                // program's impl too: its body must be empty
+                // (B-2026-11-20-117).
+                Item::MarkerTrait(t) => self.env_add_marker_trait(t),
                 Item::ImplBlock(i) => {
                     let n = self.env.impls.len();
                     self.registering_baked = true;
@@ -1205,7 +1210,6 @@ impl<'a> super::TypeChecker<'a> {
                 Item::DistinctType(d) => self.env_add_distinct_type(d),
                 Item::UnionDef(_)
                 | Item::TraitAlias(_)
-                | Item::MarkerTrait(_)
                 | Item::ConstDecl(_)
                 | Item::TypeAlias(_)
                 | Item::ExternFunction(_)
@@ -3033,9 +3037,53 @@ impl<'a> super::TypeChecker<'a> {
             // parameter's name; a bound asks it through the parameter's
             // bounds (`type_satisfies_bound`), never by that name.
             Type::TypeParam(name) if imp.trait_name.is_some() => (name.clone(), Vec::new()),
-            // Non-path target types (`impl Foo for (i32, i32)` etc.) are
-            // unsupported in v1; bail without registering. Matches the
-            // pre-Theme-4 behavior of the path-only short-circuit.
+            // A trait impl for a tuple is not registered, so it was accepted
+            // and never used: `f"{p}"` kept the library's text
+            // (B-2026-11-20-122). The library's own `Display`, `Clone`, ..
+            // for tuples makes such an impl an overlap (design.md
+            // § Coherence); any other trait is refused until tuple impls
+            // are registered.
+            Type::Tuple(_) if !self.registering_baked => {
+                let library_start = self.program.library_start.unwrap_or(usize::MAX);
+                if let (Some(t), true) = (
+                    imp.trait_name.as_ref().and_then(|p| p.segments.last()),
+                    imp.span.offset < library_start,
+                ) {
+                    let shown = type_display(&lowered_target);
+                    let builtin = matches!(
+                        t.as_str(),
+                        "Clone"
+                            | "Copy"
+                            | "Debug"
+                            | "Display"
+                            | "Hash"
+                            | "Eq"
+                            | "PartialEq"
+                            | "Ord"
+                            | "PartialOrd"
+                            | "Default"
+                    );
+                    let message = if builtin {
+                        format!(
+                            "conflicting impl: the standard library already implements `{t}` \
+                             for tuples whose elements implement it, so `impl {t} for {shown}` \
+                             overlaps the library's (design.md § Coherence); wrap the tuple \
+                             in a struct to give it its own `{t}`"
+                        )
+                    } else {
+                        format!(
+                            "`impl {t} for {shown}`: a trait impl for a tuple type is not \
+                             supported yet; wrap the tuple in a struct and implement `{t}` \
+                             for the struct"
+                        )
+                    };
+                    self.type_error(message, imp.span, TypeErrorKind::ConflictingImpl);
+                }
+                return;
+            }
+            // Other non-path target types are unsupported in v1; bail
+            // without registering. Matches the pre-Theme-4 behavior of the
+            // path-only short-circuit.
             _ => return,
         };
 
@@ -3437,7 +3485,26 @@ impl<'a> super::TypeChecker<'a> {
         // `Display`, ..) without an impl-table entry: `String`'s `Clone` is
         // the compiler's. A program impl of one of them for a library type
         // that already has it would replace the library's (B-2026-11-09-31).
-        if overlap.is_none() && self.overlap_from_program && impl_gp_names.is_empty() {
+        // A generic impl (`impl[T: Display] Display for Vec[T]`) overlaps
+        // the library's when its header unifies with it, whatever its bounds
+        // (design.md § Coherence): it is tested at one instance, every
+        // parameter `i64`, which every one of these traits has. It was
+        // accepted, and then replaced the library's impl (`Display`) or was
+        // ignored (`PartialEq`) (B-2026-11-20-125). A blanket impl over a
+        // bare parameter is left to its own check.
+        let probe_target =
+            (!impl_gp_names.is_empty() && !impl_gp_names.contains(&type_name)).then(|| {
+                let subs: HashMap<String, SubstValue> = impl_gp_names
+                    .iter()
+                    .map(|n| (n.clone(), SubstValue::Type(Type::Int(IntSize::I64))))
+                    .collect();
+                substitute_type_params(&lowered_target, &subs)
+            });
+        if overlap.is_none()
+            && self.overlap_from_program
+            && (impl_gp_names.is_empty() || probe_target.is_some())
+        {
+            let lowered_target = probe_target.as_ref().unwrap_or(&lowered_target);
             if let Some(t) = trait_name.as_deref() {
                 if matches!(
                     t,
@@ -3452,7 +3519,7 @@ impl<'a> super::TypeChecker<'a> {
                         | "PartialOrd"
                         | "Default"
                 ) && !self.program_declares_type(&type_name)
-                    && self.type_satisfies_bound(&lowered_target, t)
+                    && self.type_satisfies_bound(lowered_target, t)
                 {
                     self.type_error(
                         format!(
@@ -3460,7 +3527,7 @@ impl<'a> super::TypeChecker<'a> {
                              for `{}`; a type implements a trait once, so a program may \
                              implement a library trait for a library type only where the \
                              library does not (design.md § Coherence)",
-                            type_display(&lowered_target)
+                            type_display(lowered_target)
                         ),
                         imp.span,
                         TypeErrorKind::ConflictingImpl,
@@ -3469,6 +3536,14 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // Where the impl this one overlaps is written, for the message.
+        let other_at = overlap
+            .as_ref()
+            .and_then(|(_, i)| self.env.impls.get(*i))
+            .and_then(|other| other.target_span)
+            .filter(|s| s.offset < self.program.library_start.unwrap_or(usize::MAX))
+            .map(|s| format!(" at line {}", s.line))
+            .unwrap_or_default();
         match overlap.map(|(o, _)| o) {
             None => {}
             // A library source re-stating a baked impl where it does not
@@ -3557,11 +3632,13 @@ impl<'a> super::TypeChecker<'a> {
                 return;
             }
             Some(ImplOverlap::WholeImpl) => {
+                // Overlap is refused by the rules, not by a release's limits
+                // (review-thread ruling 2026-11-20 on the §9 conformance pass).
                 self.type_error(
                     format!(
-                        "conflicting impl: another `impl{} {}{}` already exists; 0.8 \
-                         does not support generic-vs-specialized impl overlap on the \
-                         same trait + target",
+                        "conflicting impl: overlapping impls are not allowed: `impl{} \
+                         {}{}` overlaps another impl{} for `{type_name}`{other_at} \
+                         (design.md § Coherence)",
                         trait_name
                             .as_deref()
                             .map(|t| format!(" {} for", t))
@@ -3577,6 +3654,10 @@ impl<'a> super::TypeChecker<'a> {
                                 .join(", ");
                             format!("[{}]", rendered)
                         },
+                        trait_name
+                            .as_deref()
+                            .map(|t| format!(" of `{t}`"))
+                            .unwrap_or_default(),
                     ),
                     imp.span,
                     TypeErrorKind::ConflictingImpl,

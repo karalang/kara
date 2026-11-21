@@ -1,0 +1,4 @@
+trait Maker { fn make[U: Default](self) -> i64; }
+struct A {}
+impl Maker for A { fn make[U: Default](self) -> i64 { 1 } }
+fn main() { println(f"{A {}.make()}"); }

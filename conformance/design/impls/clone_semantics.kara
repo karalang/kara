@@ -1,0 +1,30 @@
+#[derive(Clone)]
+struct Pair[T] { a: T, b: T }
+
+shared struct Config { mut name: String }
+
+#[derive(Clone)]
+struct Holder { items: Vec[String], cfg: Config }
+
+fn main() {
+    // Owned values clone deep.
+    let v: Vec[String] = ["x".to_string()];
+    let mut w = v.clone();
+    w[0].push_str("!");
+    w.push("y".to_string());
+    println(f"{v} {w}");
+    // Derived Clone on a generic type is bounded by T: Clone.
+    let p = Pair { a: "l".to_string(), b: "r".to_string() };
+    let q = p.clone();
+    println(f"{q.a}{q.b} {p.a}");
+    // A shared handle inside is copied: both reach the same Config.
+    let h = Holder { items: ["i".to_string()], cfg: Config { name: "one" } };
+    let h2 = h.clone();
+    h2.cfg.name = "two";
+    println(f"{h.cfg.name} {h2.items}");
+    // r.clone() on a ref clones the referent.
+    let s = "abc".to_string();
+    let r = ref s;
+    let t: String = r.clone();
+    println(t);
+}

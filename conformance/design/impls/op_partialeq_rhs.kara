@@ -1,0 +1,15 @@
+struct Meters { m: i64 }
+impl PartialEq for Meters { fn eq(self, other: Meters) -> bool { self.m == other.m } }
+impl PartialEq[i64] for Meters { fn eq(self, other: i64) -> bool { self.m == other } }
+
+fn main() {
+    let a = Meters { m: 5 };
+    println(f"{a == 5} {a != 5} {a == 6} {a == Meters { m: 5 }}");
+    // String == Str is an impl too.
+    let s: String = "abc".to_string();
+    let t: Str = "abc";
+    println(f"{s == t}");
+    // Comparing borrows both operands: both still usable.
+    let b = Meters { m: 5 };
+    println(f"{a == b} {a.m + b.m}");
+}

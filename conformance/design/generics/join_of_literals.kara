@@ -1,0 +1,21 @@
+fn take_i32(n: i32) -> i32 { n }
+fn main() {
+    let a: i32 = 2147483000;
+    let c = true;
+    // Inline as an operand: takes the other operand's type.
+    let s = a + if c { 1 } else { 0 };
+    println(f"{take_i32(s)}");
+    // Bound: stays open like a bare literal.
+    let x = if c { 1 } else { 0 };
+    println(f"{take_i32(x)}");
+    let y = match 3 { 1 => 10, 2 => 20, _ => 30 };
+    let z: u8 = y;
+    println(f"{z}");
+    let w = { let _t = 0; 250 };
+    let wz: u8 = w;
+    println(f"{wz}");
+    // A string literal beside a Str branch is a Str.
+    let owned = "argument";
+    let pick = if c { "literal" } else { owned.as_str() };
+    println(pick);
+}

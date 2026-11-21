@@ -1,0 +1,4 @@
+trait Reader { fn access(self) -> i64; }
+trait Writer { fn access(self) -> i64; }
+fn f[T: Reader + Writer](x: T) -> i64 { x.access() }
+fn main() {}

@@ -1,0 +1,7 @@
+trait Stamp { fn stamp(self) -> i64; }
+struct S {}
+impl Stamp for S { fn stamp(self) -> i64 { match env.var("KARA_CONF_NEVER_SET_X") { Ok(_) => 1, Err(_) => 2 } } }
+fn main() {
+    let d: dyn Stamp = S {};
+    println(f"{d.stamp()}");
+}

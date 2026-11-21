@@ -1,0 +1,9 @@
+trait Shape {
+    fn area(self) -> f64;
+}
+struct C { r: f64 }
+impl Shape for C {
+    type Unit = i64;
+    fn area(self) -> f64 { self.r }
+}
+fn main() { println(f"{C { r: 1.0 }.area()}"); }

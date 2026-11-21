@@ -1,0 +1,6 @@
+#[derive(Display)]
+struct P { n: i64 }
+fn main() {
+    let p = P { n: 1 };
+    dbg(p);
+}

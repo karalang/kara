@@ -1,0 +1,13 @@
+// derive(Hash) does not require PartialEq or Eq.
+#[derive(Hash)]
+struct Key { n: i64 }
+struct Rec { count: i64 }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: Slice[u8]) { self.count += bytes.len(); }
+    fn finish(self) -> u64 { self.count as u64 }
+}
+fn main() {
+    let mut h = Rec { count: 0 };
+    Key { n: 5 }.hash(mut h);
+    println(h.finish() > 0);
+}

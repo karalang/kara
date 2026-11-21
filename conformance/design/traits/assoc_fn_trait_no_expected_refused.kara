@@ -1,0 +1,7 @@
+trait Make { fn name() -> Self; }
+struct P { tag: String }
+impl Make for P { fn name() -> P { P { tag: "t" } } }
+fn main() {
+    let p = Make.name();
+    println(p.tag);
+}

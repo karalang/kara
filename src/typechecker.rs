@@ -5317,6 +5317,21 @@ impl<'a> TypeChecker<'a> {
         if self.trait_scopes.is_empty() {
             self.trait_scopes = self.cli_lint_overrides.hidden_traits.clone();
         }
+        // A lone file has no tree to ask: its imports were spliced away, and
+        // the splice recorded which gated traits they left out.
+        if !self.trait_scopes.computed && self.tree.is_none() {
+            let hidden: crate::trait_scope::Hidden = self
+                .program
+                .unimported_gated_traits
+                .iter()
+                .cloned()
+                .collect();
+            self.trait_scopes.push(
+                0,
+                self.program.library_start.unwrap_or(usize::MAX / 4),
+                hidden,
+            );
+        }
         self.build_type_env();
         self.validate_derive_copy();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, reject a
@@ -7625,6 +7640,22 @@ impl<'a> TypeChecker<'a> {
     pub(super) fn join_branch_types(&self, a: &Type, b: &Type) -> Option<Type> {
         if a == b {
             return Some(a.clone());
+        }
+        // An integer literal's variable beside a float literal's has no
+        // join: "a join that mixes integer and float literals is the
+        // existing mismatch" (design.md § Type inference). Two open
+        // variables are otherwise compatible, which joined them at the
+        // first and left the other branch a float in an integer slot
+        // (B-2026-11-20-110).
+        let literal_kind =
+            |t: &Type| match inference::resolve_type_var_top(t, &self.env.substitutions) {
+                Type::TypeVar(id) => inference::literal_var_kind(id),
+                _ => None,
+            };
+        if let (Some(x), Some(y)) = (literal_kind(a), literal_kind(b)) {
+            if x != y {
+                return None;
+            }
         }
         // On the MIR pipeline a branch giving a `ref` to a `Copy` value or
         // handle and one giving the value join at the value (core semantics

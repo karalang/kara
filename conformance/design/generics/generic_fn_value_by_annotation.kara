@@ -1,0 +1,6 @@
+fn first[T: Clone](v: Vec[T]) -> T { v[0].clone() }
+fn main() {
+    let f: Fn(Vec[i32]) -> i32 = first;
+    let g = |v: Vec[String]| first(v);
+    println(f"{f([7, 8])} {g(["a", "b"])}");
+}

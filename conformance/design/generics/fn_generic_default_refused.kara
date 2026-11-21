@@ -1,0 +1,2 @@
+fn make[T = i64](x: T) -> T { x }
+fn main() { println(f"{make(1)}"); }

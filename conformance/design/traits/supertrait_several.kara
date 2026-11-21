@@ -1,0 +1,8 @@
+trait A { fn a(self) -> i64; }
+trait B { fn b(self) -> i64; }
+trait C: A + B { fn c(self) -> i64 { self.a() + self.b() } }
+struct S {}
+impl A for S { fn a(self) -> i64 { 1 } }
+impl B for S { fn b(self) -> i64 { 2 } }
+impl C for S {}
+fn main() { println(f"{S {}.c()}"); }

@@ -1,0 +1,20 @@
+struct Plain { a: String, b: String }
+struct H { r: String, n: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"drop {self.r}"); } }
+fn show(h: H) {
+    // A pattern over a borrowed Drop value binds refs and moves nothing.
+    let H { r, n } = h;
+    println(f"{r} {n}");
+}
+fn main() {
+    let h = H { r: "x", n: 1 };
+    let q = h.n;                    // a Copy field is copied
+    println(q);
+    show(h);
+    let s = h.r.clone();            // a clone is fine
+    println(s);
+    // A type without Drop may have fields moved out.
+    let p = Plain { a: "pa", b: "pb" };
+    let a = p.a;
+    println(a);
+}

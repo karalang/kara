@@ -1,0 +1,4 @@
+struct NoDef { n: i64 }
+#[derive(Default)]
+struct Pair[T] { a: T }
+fn main() { let p: Pair[NoDef] = Pair.default(); println(p.a.n); }

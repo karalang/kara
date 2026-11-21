@@ -1,0 +1,5 @@
+fn zeros[const N: i64]() -> Array[i32, N] { [0; N] }
+fn main() {
+    let b = zeros();
+    println("x");
+}

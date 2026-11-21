@@ -1,0 +1,12 @@
+trait Shape {
+    fn area(self) -> i64;
+    fn scaled[F: Fn(i64) -> i64](self, f: F) -> i64 { f(self.area()) }
+}
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+fn plus_one[T: Shape](t: ref T) -> i64 { t.area() + 1 }
+fn main() {
+    let d: dyn Shape = Sq { s: 3 };
+    println(f"{d.scaled(|a| a * 10)}");
+    println(f"{plus_one(d)}");
+}

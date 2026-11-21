@@ -1,0 +1,18 @@
+// An impl method's modes may be the trait's or weaker (own > mut ref > borrowed).
+trait Sink {
+    fn take(own self, v: own String) -> i64;
+    fn poke(mut ref self, n: mut ref i64);
+}
+struct S { k: i64 }
+impl Sink for S {
+    fn take(self, v: String) -> i64 { self.k + v.len() }
+    fn poke(self, n: i64) { println(f"poke {self.k} {n}"); }
+}
+fn via[T: Sink](t: own T) -> i64 { t.take("abc".to_string()) }
+fn main() {
+    let s = S { k: 1 };
+    let n = 5;
+    s.poke(n);   // a call on a known type uses the impl's modes
+    println(f"{s.take("xy".to_string())}");
+    println(f"{via(S { k: 10 })}");
+}

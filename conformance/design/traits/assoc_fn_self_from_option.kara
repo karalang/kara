@@ -1,0 +1,9 @@
+trait Parse { fn parse_it(s: Str) -> Option[Self]; }
+struct P { n: i64 }
+impl Parse for P {
+    fn parse_it(s: Str) -> Option[P] { if s == "" { None } else { Some(P { n: s.len() }) } }
+}
+fn main() {
+    let o: Option[P] = Parse.parse_it("abc");
+    println(f"{o.unwrap().n}");
+}

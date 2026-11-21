@@ -1,2 +1,2 @@
-ERROR at line 7: if/else branches have incompatible types: 'i32' and 'i64'
-ERROR at line 8: match arms have incompatible types: 'u8' and 'i64'
+ERROR at line 7: type mismatch in branches: expected 'i32', found 'i64'; note: the branches' types are 'i32', 'i64'; annotate the expected type (`let x: T = ...`), or make every branch that type
+ERROR at line 8: type mismatch in branches: expected 'u8', found 'i64'; note: the branches' types are 'u8', 'i64'; annotate the expected type (`let x: T = ...`), or make every branch that type

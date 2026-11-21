@@ -1,0 +1,5 @@
+trait Tr { fn t(self) -> i64; }
+struct Wrap[T] { v: T }
+impl[T: Display] Tr for Wrap[T] { fn t(self) -> i64 { 1 } }
+impl[T: Clone] Tr for Wrap[T] { fn t(self) -> i64 { 2 } }
+fn main() { println(Wrap { v: 1 }.t()); }

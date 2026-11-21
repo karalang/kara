@@ -1,0 +1,6 @@
+// Inside a generic body an operator calls the impl its bound names: T: Add
+// is Add[T], so T + i32 has no impl even when T will be i64.
+fn add_small[T: Add[Output = T]](a: own T, b: i32) -> T { a + b }
+fn main() {
+    println(add_small(1, 2));
+}

@@ -1,0 +1,1 @@
+cannot move a non-`Copy` value out of a borrowed place

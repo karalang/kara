@@ -11346,7 +11346,7 @@ fn match_arms_with_different_generic_heads_still_rejected() {
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("match arms have incompatible types")),
+            .any(|e| e.message.contains("type mismatch in branches")),
         "Vec vs Map must stay rejected, got: {errors:?}"
     );
 }

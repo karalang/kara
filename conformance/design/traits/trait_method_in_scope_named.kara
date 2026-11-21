@@ -1,0 +1,6 @@
+import std.log;
+import std.log.{Record, Level, Backend};
+fn main() {
+    let mut b = log.json_backend(log.Stream.Stdout);
+    b.emit(Record { level: Level.Info, msg: "hi", fields: Vec.new(), trace_id: None, span_id: None, task_id: None });
+}

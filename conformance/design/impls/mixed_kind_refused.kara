@@ -1,0 +1,5 @@
+fn main() {
+    let a: i32 = 7;
+    let b: f64 = 1.0;
+    println(a + b);
+}

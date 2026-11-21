@@ -1,0 +1,4 @@
+trait Visitor {
+    fn visit(self, i32);
+}
+fn main() {}

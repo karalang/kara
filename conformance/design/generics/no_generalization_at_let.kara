@@ -1,0 +1,6 @@
+fn main() {
+    let id = |x| x;
+    let a: i64 = id(1);
+    let b: String = id("s");
+    println(f"{a} {b}");
+}

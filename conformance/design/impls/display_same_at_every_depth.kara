@@ -1,0 +1,19 @@
+struct E { n: i64 }
+impl Display for E { fn to_string(self) -> String { f"aye {self.n}" } }
+
+#[derive(Display)]
+struct Holder { e: E, k: i64 }
+
+fn main() {
+    let e = E { n: 7 };
+    println(f"{e}");
+    println(f"{[E { n: 7 }]}");
+    println(f"{Some(E { n: 7 })}");
+    let r: Result[E, String] = Ok(E { n: 7 });
+    println(f"{r}");
+    println(f"{(E { n: 7 }, 1)}");
+    println(f"{Holder { e: E { n: 7 }, k: 2 }}");
+    println(e);
+    // One value in several slots: the receiver is borrowed.
+    println(f"{e} {e}");
+}

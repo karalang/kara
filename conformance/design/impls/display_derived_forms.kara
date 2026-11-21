@@ -1,0 +1,22 @@
+#[derive(Display)]
+enum Direction { Up, Down, Idle }
+
+#[derive(Display)]
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Point,
+}
+
+#[derive(Display(snake_case))]
+enum Mode { FastPath, Up }
+
+#[derive(Display)]
+struct Point { x: i64, y: i64 }
+
+fn main() {
+    println(f"{Direction.Up}");
+    println(f"{Shape.Circle(2.5)} {Shape.Rect(3.0, 4.0)} {Shape.Point}");
+    println(f"{Mode.FastPath} {Mode.Up}");
+    println(f"{Point { x: 1, y: 2 }}");
+}

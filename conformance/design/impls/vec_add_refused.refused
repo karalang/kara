@@ -1,0 +1,3 @@
+does not implement trait Add
+there is deliberately no `impl Add for Vec[T]`
+`a.extend(b)`

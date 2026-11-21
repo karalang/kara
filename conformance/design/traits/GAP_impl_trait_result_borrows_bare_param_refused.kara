@@ -1,0 +1,10 @@
+struct Logger { name: String }
+fn count_logged(xs: own Vec[i64], log: Logger) -> impl Iterator[Item = i64] {
+    xs.into_iter()
+}
+fn main() {
+    let log = Logger { name: "l" };
+    let it = count_logged([1, 2], log);
+    drop(log);
+    println(f"{it.count()}");
+}

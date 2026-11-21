@@ -1,0 +1,7 @@
+trait Zero { fn zero() -> Self; }
+impl Zero for i64 { fn zero() -> i64 { 0 } }
+impl Zero for f64 { fn zero() -> f64 { 0.0 } }
+fn main() {
+    let z = Zero.zero();
+    println("done");
+}

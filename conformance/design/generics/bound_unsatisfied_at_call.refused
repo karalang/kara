@@ -1,0 +1,2 @@
+trait bound `T: Ord` is not satisfied
+`Opaque` does not implement `Ord`

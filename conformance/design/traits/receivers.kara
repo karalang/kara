@@ -1,0 +1,14 @@
+struct Counter { n: i64 }
+impl Counter {
+    fn get(self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n += 1; }
+    fn finish(own self) -> String { f"done at {self.n}" }
+    fn zero() -> Counter { Counter { n: 0 } }
+}
+fn main() {
+    let mut c = Counter.zero();
+    c.bump();
+    c.bump();
+    println(f"{c.get()}");
+    println(c.finish());
+}

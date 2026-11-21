@@ -1,0 +1,7 @@
+#[derive(PartialEq, Eq, PartialOrd, Ord, Arithmetic)]
+distinct type FloorNum = i64;
+fn main() {
+    let a = FloorNum(3);
+    let d = a + 1;
+    println(d.raw());
+}

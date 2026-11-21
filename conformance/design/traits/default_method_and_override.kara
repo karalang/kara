@@ -1,0 +1,24 @@
+trait Shape {
+    fn area(self) -> f64;                           // required
+    fn describe(self) -> String {                   // default
+        f"a shape with area {self.area()}"
+    }
+}
+
+struct Circle { radius: f64 }
+struct Sq { s: f64 }
+
+impl Shape for Circle {
+    fn area(self) -> f64 { 3.0 * self.radius * self.radius }
+}
+
+impl Shape for Sq {
+    fn area(self) -> f64 { self.s * self.s }
+    fn describe(self) -> String { "a square" }
+}
+
+fn main() {
+    println(Circle { radius: 1.0 }.describe());
+    println(Sq { s: 2.0 }.describe());
+    println(f"{Sq { s: 2.0 }.area()}");
+}

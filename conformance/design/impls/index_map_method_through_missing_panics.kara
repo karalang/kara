@@ -1,0 +1,8 @@
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    m["a"] = [1];
+    m["a"].push(2);        // present key: through IndexMut
+    println(f"{m["a"]}");
+    m["b"].push(1);        // missing key: IndexMut panics
+    println("after");
+}

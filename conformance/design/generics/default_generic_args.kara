@@ -1,0 +1,27 @@
+struct Money { cents: i64 }
+
+impl Add for Money {
+    type Output = Money;
+    fn add(own self, rhs: own Money) -> Money { Money { cents: self.cents + rhs.cents } }
+}
+
+fn total[T: Add](a: own T, b: own T) -> T.Output { a + b }
+
+trait Scale[By = i64] {
+    fn scale(self, by: By) -> i64;
+}
+impl Scale for Money {
+    fn scale(self, by: i64) -> i64 { self.cents * by }
+}
+struct Wrap[T, D = String] { t: T, d: D }
+
+fn main() {
+    let m: Map[String, i64] = Map.new();
+    println(f"{m.len()}");
+    let t = total(Money { cents: 150 }, Money { cents: 250 });
+    println(f"{t.cents}");
+    println(f"{total(2, 3)}");
+    println(f"{Money { cents: 7 }.scale(3)}");
+    let w: Wrap[i64] = Wrap { t: 1, d: "default" };
+    println(f"{w.t} {w.d}");
+}

@@ -1,0 +1,10 @@
+fn want(m: Map[i64, i64]) -> i64 { m.len() }
+fn want_v(v: Vec[i64]) -> i64 { v.len() }
+fn main() {
+    let nums: Vec[i64] = [3, 1, 3];
+    let mut m = Map.new();
+    for x in nums.iter() { m.insert(x, 1); }
+    let mut v = Vec.new();
+    for x in nums.iter() { v.push(x); }
+    println(f"{want(m)} {want_v(v)}");
+}

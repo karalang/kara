@@ -1,0 +1,3 @@
+#[derive(Serialize)]
+struct T { pairs: Vec[(i64, bool)] }
+fn main() { println(T { pairs: [] }.pairs.len()); }

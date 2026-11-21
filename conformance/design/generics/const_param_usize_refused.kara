@@ -1,0 +1,2 @@
+fn n[const N: usize](a: Array[i64, N]) -> i64 { 1 }
+fn main() { println("x"); }

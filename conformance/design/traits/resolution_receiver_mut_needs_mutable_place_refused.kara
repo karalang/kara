@@ -1,0 +1,7 @@
+struct C { n: i64 }
+impl C { fn bump(mut ref self) { self.n += 1; } }
+fn main() {
+    let c = C { n: 0 };
+    c.bump();
+    println(f"{c.n}");
+}

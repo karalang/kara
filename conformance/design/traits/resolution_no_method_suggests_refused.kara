@@ -1,0 +1,3 @@
+struct P { n: i64 }
+impl P { fn length(self) -> i64 { self.n } }
+fn main() { println(f"{P { n: 1 }.lenght()}"); }

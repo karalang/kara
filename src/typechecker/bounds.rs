@@ -799,7 +799,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "type '{}' is not permitted as a const generic parameter type; \
-                         allowed types are i8, i16, i32, i64, bool, char, and fieldless enums \
+                         allowed types are i8, i16, i32, i64, i128, bool, char, and fieldless enums \
                          (see design.md § Type Inference > Const generic parameters)",
                         type_display(&lowered)
                     ),
@@ -832,6 +832,44 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn validate_where_clause(&mut self, where_clause: &WhereClause, generic_scope: &[String]) {
+        // One equality per associated type (design.md § Associated types):
+        // a second, `where I.Item = i64, I.Item = String`, is refused here
+        // rather than at the first call it makes unsatisfiable
+        // (B-2026-11-20-118).
+        // The key carries the trait the bound named, so
+        // `T: Add[Output = T] + Mul[Output = i64]` fixes two different
+        // associated types that share a name.
+        let mut equated: Vec<(&str, Option<&str>, &str)> = Vec::new();
+        for constraint in &where_clause.constraints {
+            let WhereConstraint::AssocTypeEq {
+                type_name,
+                assoc_name,
+                span,
+                trait_name,
+                ..
+            } = constraint
+            else {
+                continue;
+            };
+            let key = (
+                type_name.as_str(),
+                trait_name.as_deref(),
+                assoc_name.as_str(),
+            );
+            if equated.contains(&key) {
+                self.type_error(
+                    format!(
+                        "a second equality constraint on `{type_name}.{assoc_name}`: a `where` \
+                         clause may hold one equality constraint per associated type \
+                         (design.md § Associated types); keep one"
+                    ),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            } else {
+                equated.push(key);
+            }
+        }
         for constraint in &where_clause.constraints {
             match constraint {
                 WhereConstraint::TypeBound {

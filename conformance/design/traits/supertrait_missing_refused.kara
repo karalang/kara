@@ -1,0 +1,5 @@
+trait Named { fn name(self) -> String; }
+trait Greeter: Named { fn greet(self) -> String; }
+struct P {}
+impl Greeter for P { fn greet(self) -> String { "hi" } }
+fn main() { println(P {}.greet()); }

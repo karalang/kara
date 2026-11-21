@@ -1,0 +1,3 @@
+trait Describe { fn describe(self) -> String; }
+impl[T: Display] Describe for T { fn describe(self) -> String { f"<{self}>" } }
+fn main() { println(f"{5.describe()} {"x".describe()}"); }

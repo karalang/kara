@@ -1,0 +1,5 @@
+trait Foo { fn foo(self) -> i64; }
+struct Bar { v: i64 }
+impl Foo for Bar { fn foo(self) -> i64 { 1 } }
+impl Foo for Bar { fn foo(self) -> i64 { 2 } }
+fn main() { println(f"{Bar { v: 1 }.foo()}"); }

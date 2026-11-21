@@ -1,0 +1,10 @@
+// design.md §9 Marker traits: `Pod` is a standard-library marker, used as a
+// bound (`fn f[T: Pod](x: T)`) and implemented with an empty impl.
+#[derive(Copy, Clone)]
+struct Px { r: u8, g: u8 }
+impl Pod for Px { }
+fn zero[T: Pod]() -> T { mem.zeroed() }
+fn main() {
+    let p: Px = zero();
+    println(f"{p.r} {p.g}");
+}

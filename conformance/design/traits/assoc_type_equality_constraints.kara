@@ -1,0 +1,16 @@
+fn sum_ints[I: Iterator](iter: own I) -> i64 where I.Item = i64 {
+    let mut it = iter;
+    let mut t = 0;
+    while let Some(x) = it.next() { t += x; }
+    t
+}
+fn count_ints[I: Iterator[Item = i64]](iter: own I) -> i64 {
+    let mut it = iter;
+    let mut c = 0;
+    while let Some(_) = it.next() { c += 1; }
+    c
+}
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    println(f"{sum_ints(v.clone().into_iter())} {count_ints(v.into_iter())}");
+}

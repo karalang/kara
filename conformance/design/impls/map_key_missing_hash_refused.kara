@@ -1,0 +1,7 @@
+#[derive(PartialEq, Eq)]
+struct Key { n: i64 }
+fn main() {
+    let mut m: Map[Key, i64] = Map.new();
+    m.insert(Key { n: 1 }, 1);
+    println(m.len());
+}

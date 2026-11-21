@@ -1,0 +1,12 @@
+effect resource Audit;
+pub fn record(x: i64) with writes(Audit) {}
+fn audited(xs: own Vec[i64]) -> impl Iterator[Item = i64] {
+    xs.into_iter().inspect(|x| record(*x))
+}
+// Calling audited without iterating has no writes(Audit): two such calls
+// in par do not conflict.
+fn make_two() -> i64 {
+    let (a, b) = par { audited([1, 2]), audited([3]) };
+    a.sum() + b.sum()
+}
+fn main() { println(f"{make_two()}"); }

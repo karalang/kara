@@ -1,0 +1,9 @@
+struct H { n: i64 }
+impl Drop for H { fn drop(mut ref self) { panic("drop failed"); } }
+fn main() {
+    {
+        let _h = H { n: 1 };
+        println("in scope");
+    }
+    println("after");
+}

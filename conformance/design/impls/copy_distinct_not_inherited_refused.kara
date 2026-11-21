@@ -1,0 +1,8 @@
+distinct type SessionToken = u64;
+fn take(t: own SessionToken) -> u64 { t.raw() }
+fn main() {
+    let t = SessionToken(7);
+    let a = take(t);
+    let b = take(t);       // not Copy although u64 is
+    println(a + b);
+}

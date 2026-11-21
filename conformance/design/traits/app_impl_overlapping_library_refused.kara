@@ -1,0 +1,4 @@
+impl Default for Vec[String] {
+    fn default() -> Vec[String] { ["x"] }
+}
+fn main() { println(f"{Vec[String].default().len()}"); }

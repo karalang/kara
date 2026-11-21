@@ -1,0 +1,8 @@
+struct Config { n: i64 }
+impl Default for Config {
+    fn default() -> Config { Config { n: 1 } }
+}
+fn main() {
+    let c: Config = default();
+    println(f"{c.n}");
+}

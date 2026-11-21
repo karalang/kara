@@ -7719,7 +7719,7 @@ fn a_string_literal_takes_the_str_type_of_its_context() {
              a.len()\n\
          }\n\
          fn main() { println(rest(\"x y\")); }\n",
-        "match arms have incompatible types",
+        "type mismatch in branches",
     );
 }
 

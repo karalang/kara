@@ -1,0 +1,18 @@
+trait Shape {
+    fn area(self) -> f64;
+}
+struct Circle { r: f64 }
+struct Square { side: f64 }
+impl Shape for Circle {
+    fn area(self) -> f64 { 3.0 * self.r * self.r }
+}
+impl Shape for Square {
+    fn area(self) -> f64 { self.side * self.side }
+}
+fn total_area(shapes: Vec[dyn Shape]) -> f64 {
+    shapes.iter().map(|s| s.area()).sum()
+}
+fn main() {
+    let shapes: Vec[dyn Shape] = [Circle { r: 1.0 }, Square { side: 2.0 }];
+    println(f"{total_area(shapes)}");
+}

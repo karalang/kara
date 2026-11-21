@@ -1,0 +1,3 @@
+#[derive(Ord, Eq, PartialOrd, PartialEq, Clone, Copy)]
+struct V { n: i64 }
+fn main() { let a = V { n: 1 }; let b = a; println(f"{a < b} {a == b}"); }

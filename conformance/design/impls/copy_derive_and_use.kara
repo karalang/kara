@@ -1,0 +1,22 @@
+#[derive(Copy, Clone)]
+struct Point { x: f64, y: f64 }
+
+#[derive(Copy, Clone)]
+distinct type Offset = i64;
+
+fn take(p: own Point) -> f64 { p.x + p.y }
+fn dup[T: Clone](x: T) -> T { x.clone() }
+
+fn main() {
+    let p = Point { x: 1.0, y: 2.0 };
+    let s = take(p);
+    println(f"{s} {p.x}");          // p was copied, still valid
+    let o = Offset(5);
+    let o2 = o;
+    println(f"{o.raw()} {o2.raw()}");
+    // T: Copy satisfies a T: Clone bound.
+    println(dup(p).y);
+    let n = 42;
+    let m = n;
+    println(f"{n} {m}");
+}

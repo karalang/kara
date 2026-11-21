@@ -1,0 +1,11 @@
+// The final application package is exempt from the orphan rule for trait
+// impls; its own trait for foreign types.
+struct Holder {}
+impl Display for Holder { fn to_string(self) -> String { "holder" } }
+trait Shout { fn shout(self) -> String; }
+impl Shout for Vec[i64] { fn shout(self) -> String { f"{self.len()}!" } }
+impl Shout for i64 { fn shout(self) -> String { f"{self}!" } }
+fn main() {
+    let v: Vec[i64] = [1, 2];
+    println(f"{v.shout()} {5.shout()} {Holder {}}");
+}

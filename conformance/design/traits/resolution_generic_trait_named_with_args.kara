@@ -1,0 +1,8 @@
+trait Conv[T] { fn conv(self) -> T; }
+impl Conv[String] for i64 { fn conv(self) -> String { f"s{self}" } }
+impl Conv[f64] for i64 { fn conv(self) -> f64 { self as f64 / 2.0 } }
+fn main() {
+    let n = 3;
+    println(Conv[String].conv(n));
+    println(f"{Conv[f64].conv(n)}");
+}

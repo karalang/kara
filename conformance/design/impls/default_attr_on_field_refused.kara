@@ -1,0 +1,5 @@
+struct P {
+    #[default]
+    n: i64,
+}
+fn main() { println(P { n: 1 }.n); }

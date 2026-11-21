@@ -1,0 +1,11 @@
+struct Opaque { v: i64 }
+struct SortedPair[T]
+where T: Ord
+{
+    first: T,
+    second: T,
+}
+fn main() {
+    let s = SortedPair { first: Opaque { v: 1 }, second: Opaque { v: 2 } };
+    println(f"{s.first.v}");
+}

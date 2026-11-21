@@ -32,6 +32,21 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   mutable borrow (`s.poke(mut n)` for `fn poke(self, n: i64)`) is E0219,
   as at a function's parameter, and `karac fix` deletes it
   (B-2026-11-20-124).
+- A join of an integer and a float literal (`if c { 1 } else { 2.5 }`) is
+  the branch mismatch design.md §8 names; it was accepted and then failed
+  on both backends with invalid MIR (B-2026-11-20-110).
+- A method of a gated standard trait (`std.log`'s `Backend.emit`) is found
+  only where the trait's name is imported, in a lone file as in a package
+  (B-2026-11-20-115).
+- A second equality on one associated type in a `where` clause
+  (`I.Item = i64, I.Item = String`) is refused (B-2026-11-20-118).
+- A generic impl that overlaps a standard one
+  (`impl[T: Display] Display for Vec[T]`) is refused as the concrete form
+  was; it replaced or was ignored beside the library's (B-2026-11-20-125).
+- `impl Display for (i64, H)` overlaps the library's tuple `Display` and is
+  refused; a tuple impl of any other trait is refused as not supported yet
+  (B-2026-11-21-30). Both were accepted and then ignored (B-2026-11-20-122).
+
 - `cycle` on `take`, `skip`, `enumerate`, `step_by`, `rev`, `zip` or
   `cloned` over a closure adaptor (`v.iter().map(f).take(3).cycle()`),
   with the diagnostic a bare `map(f).cycle()` gets. `karac check`
@@ -915,6 +930,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Vec[ref i64]` keeps its references (B-2026-11-08-19).
 
 ### Wrong behaviour fixed
+
+- A type parameter named only in another parameter's bound
+  (`fn count[T, S: Source[T]](s: S)`) is solved from the argument's impl;
+  every call was refused (B-2026-11-20-111).
+- A negative const argument (`Small[-3]` for `const S: i8`, `A[-5]` for an
+  `i128` parameter) is accepted and read with its sign (B-2026-11-20-113).
+- `Self` in a trait's default associated fn called on a primitive
+  (`i64.again()`) is the primitive (B-2026-11-20-114).
+- `Pod` can be named as a bound and implemented with an empty impl, which
+  is checked field by field (B-2026-11-20-117).
+- `.into()` as the argument to a bare parameter takes the parameter's
+  type as its target (B-2026-11-20-126).
 
 - `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure
   each element's reference. Compiled, they handed it the address of the slot
@@ -2299,6 +2326,22 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `fn` gets, and the same fix, which moves it above the item it is in; it
   read as the keyword misused as an identifier (`write r#struct`), with a
   cascade to the body's `}` (B-2026-11-21-5).
+- A branch mismatch reads "type mismatch in branches: expected X, found
+  Y" with a note listing every branch's type (B-2026-11-21-25).
+- The method-ambiguity error lists each candidate's effects
+  (B-2026-11-20-116).
+- The fix for `#[default]` without `derive(Default)` adds the derive
+  (B-2026-11-20-127); a `#[default]` variant with a payload names the
+  manual `impl Default` to write (B-2026-11-20-128).
+- `derive(Hash)` without `PartialEq` and `Eq` warns with a note naming the
+  implied derives (B-2026-11-21-27).
+- An overlapping impl says "overlapping impls are not allowed" and gives
+  the other impl's line, not "0.8 does not support" (B-2026-11-21-28).
+- E0400 names a trait method as `Connection.access`, without the internal
+  `#Writer` label (B-2026-11-21-29).
+- The const-parameter type refusal lists `i128`, and a failed const bound
+  names the predicate as written (B-2026-11-21-31).
+
 - `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string
   hole names the import form and is fixed with its import, as it is outside
   a hole; it was refused as `undefined name 'std'` with no fix
@@ -3189,6 +3232,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   again, as clang's `-mllvm` does (`KARAC_LLVM_ARGS=-align-all-functions=8`);
   the v2 backend had dropped it, so a build given it built the default
   (B-2026-11-21-17).
+- `karac query monomorphization` counts generic calls inside an f-string
+  hole, a struct literal or any other expression; it walked only some
+  node kinds and reported 0 for most programs (B-2026-11-21-26).
+
 - `karac migrate shared-to-par` writes code that checks: each use takes the
   field's `lock()` guard (`{ let n_guard = c.n.lock(); *n_guard.value += 1; }`)
   instead of the `lock self.n { }` blocks that did not parse, struct literals

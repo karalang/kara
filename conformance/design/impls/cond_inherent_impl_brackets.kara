@@ -1,0 +1,22 @@
+trait Scheduler { fn next(mut ref self, floor: i64) -> i64; }
+struct Up {}
+impl Scheduler for Up { fn next(mut ref self, floor: i64) -> i64 { floor + 1 } }
+
+struct Elevator[S] { floor: i64, scheduler: S, stops: Vec[i64] }
+
+impl[S: Scheduler] Elevator[S] {
+    pub fn new(floor: i64, scheduler: own S) -> Elevator[S] {
+        Elevator { floor, scheduler, stops: [] }
+    }
+    pub fn step(mut ref self) {
+        self.floor = self.scheduler.next(self.floor);
+        self.stops.push(self.floor);
+    }
+}
+
+fn main() {
+    let mut e = Elevator.new(2, Up {});
+    e.step();
+    e.step();
+    println(f"{e.floor} {e.stops}");
+}

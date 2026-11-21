@@ -1,0 +1,10 @@
+struct Celsius { c: i64 }
+struct Fahrenheit { f: i64 }
+impl From[Celsius] for Fahrenheit {
+    fn from(v: own Celsius) -> Fahrenheit { Fahrenheit { f: v.c * 9 / 5 + 32 } }
+}
+fn main() {
+    let a = Fahrenheit.from(Celsius { c: 100 });
+    let b: Fahrenheit = Celsius { c: 0 }.into();
+    println(f"{a.f} {b.f}");
+}

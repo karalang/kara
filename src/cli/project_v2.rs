@@ -794,7 +794,7 @@ pub(super) fn amalgamate(
         text.push('\n');
         line += 1;
     }
-    let mut hidden = crate::trait_scope::HiddenTraits::default();
+    let mut hidden = crate::trait_scope::HiddenTraits::computed();
     for (f, body) in files.iter().zip(bodies) {
         lines.push((line, shown(f.path), 1));
         bytes.push((text.len(), body.len(), shown(f.path)));

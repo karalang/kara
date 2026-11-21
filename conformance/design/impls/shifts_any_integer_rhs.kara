@@ -1,0 +1,11 @@
+fn main() {
+    let a: u8 = 1;
+    let s: i64 = 3;
+    let b: i64 = 256;
+    let k: u8 = 2;
+    let r1 = a << s;      // u8 << i64: Output is u8
+    let r2 = b >> k;      // i64 >> u8: Output is i64
+    let w: u8 = r1;
+    let z: i64 = r2;
+    println(f"{w} {z}");
+}

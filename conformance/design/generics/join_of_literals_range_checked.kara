@@ -1,0 +1,6 @@
+fn main() {
+    let c = true;
+    let x = if c { 1 } else { 300 };
+    let z: u8 = x;
+    println(f"{z}");
+}

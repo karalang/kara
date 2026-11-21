@@ -1,0 +1,7 @@
+trait Count { fn count() -> i64; }
+struct P {}
+impl Count for P { fn count() -> i64 { 3 } }
+fn main() {
+    let n: i64 = Count.count();
+    println(f"{n}");
+}

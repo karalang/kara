@@ -1,0 +1,2 @@
+fn f[T: Add + Mul](a: T, b: T) -> T.Output { a + b }
+fn main() {}

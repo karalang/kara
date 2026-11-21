@@ -1,0 +1,6 @@
+fn main() {
+    let total: i64 = 10;
+    let mut n: i32 = 5;
+    n += total;
+    println(n);
+}

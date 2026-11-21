@@ -1,0 +1,12 @@
+import std.json.{Json};
+#[derive(Serialize, Deserialize, Debug)]
+struct T { pair: (i64, bool) }
+fn main() {
+    println(Json.serialize(T { pair: (1, true) }));
+    let ok: T = Json.deserialize("{\"pair\":[2,false]}").unwrap();
+    println(ok.fmt_debug());
+    let long: Result[T, DeserializeError] = Json.deserialize("{\"pair\":[2,false,3]}");
+    println(long.is_err());
+    let short: Result[T, DeserializeError] = Json.deserialize("{\"pair\":[2]}");
+    println(short.is_err());
+}

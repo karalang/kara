@@ -1,0 +1,8 @@
+distinct type DisplayVec = Vec[i64];
+impl Display for DisplayVec {
+    fn to_string(self) -> String { "vec" }
+}
+fn main() {
+    let d = DisplayVec([1, 2, 3]);
+    println(f"{d}");
+}

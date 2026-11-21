@@ -1,0 +1,2 @@
+{"server_name":"srv","port":1,"retries":2,"computed":9}
+Config { name: "x", internal_cache: [], port: 8080, retries: 0, secret: "t", computed: 0 }

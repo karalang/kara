@@ -1,0 +1,4 @@
+marker trait M;
+struct P {}
+impl M for P;
+fn main() {}

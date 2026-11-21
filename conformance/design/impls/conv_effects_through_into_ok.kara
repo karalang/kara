@@ -1,0 +1,16 @@
+effect resource Log;
+pub struct ParseError { m: String }
+pub enum AppError { Parse(ParseError) }
+fn log_error(e: ParseError) with writes(Log) { }
+impl From[ParseError] for AppError {
+    fn from(e: own ParseError) -> AppError with writes(Log) {
+        log_error(e);
+        AppError.Parse(e)
+    }
+}
+pub fn handler(e: own ParseError) -> AppError with writes(Log) {
+    e.into()
+}
+fn main() {
+    match handler(ParseError { m: "x" }) { AppError.Parse(p) => println(p.m) }
+}

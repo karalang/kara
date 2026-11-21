@@ -1,0 +1,2 @@
+fn id[T](x: own T) -> T { x }
+fn main() { println(f"{id[i64](3)}"); }

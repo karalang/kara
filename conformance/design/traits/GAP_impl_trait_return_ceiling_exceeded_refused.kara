@@ -1,0 +1,2 @@
+fn nums() -> (impl Iterator[Item = i64] with reads(Clock)) { (0..3).map(|x| { println("x"); x }) }
+fn main() { let v: Vec[i64] = nums().collect(); println(f"{v}"); }

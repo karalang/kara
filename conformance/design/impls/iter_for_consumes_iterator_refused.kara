@@ -1,0 +1,7 @@
+fn main() {
+    let v: Vec[i64] = [1, 2];
+    let it = v.iter();
+    for x in it { println(x); }
+    let mut again = it;
+    println(f"{again.next()}");
+}

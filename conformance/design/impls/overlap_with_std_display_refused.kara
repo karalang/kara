@@ -1,0 +1,4 @@
+impl[T: Display] Display for Vec[T] {
+    fn to_string(self) -> String { "mine" }
+}
+fn main() { let v: Vec[i64] = [1]; println(f"{v}"); }

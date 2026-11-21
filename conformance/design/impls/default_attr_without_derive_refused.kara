@@ -1,0 +1,2 @@
+enum Status { #[default] Pending, Active }
+fn main() { let s = Status.Active; match s { Status.Pending => println("p"), Status.Active => println("a") } }

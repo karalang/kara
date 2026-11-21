@@ -1,0 +1,7 @@
+fn main() {
+    let c = true;
+    let a: Vec[i64] = [1];
+    let b: Vec[String] = ["x"];
+    let r = if c { a } else { b };
+    println(f"{r.len()}");
+}

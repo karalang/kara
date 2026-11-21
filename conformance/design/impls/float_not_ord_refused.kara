@@ -1,0 +1,9 @@
+fn biggest[T: Ord + Copy](xs: Slice[T]) -> T {
+    let mut m = xs[0];
+    for x in xs { if *x > m { m = *x; } }
+    m
+}
+fn main() {
+    let v: Vec[f64] = [1.0, 2.0];
+    println(biggest(v.as_slice()));
+}

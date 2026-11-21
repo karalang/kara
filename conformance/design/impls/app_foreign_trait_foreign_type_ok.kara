@@ -1,0 +1,11 @@
+// The application package may implement a foreign trait for a foreign type
+// when no other impl overlaps: there is no `impl Add for Vec[T]`.
+impl Add for Vec[i64] {
+    type Output = i64;
+    fn add(own self, rhs: own Vec[i64]) -> i64 { self.len() + rhs.len() }
+}
+fn main() {
+    let a: Vec[i64] = [1, 2];
+    let b: Vec[i64] = [3];
+    println(a + b);
+}

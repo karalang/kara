@@ -1,0 +1,8 @@
+trait Show { fn show(self) -> String; }
+struct W[T] { v: T }
+impl[T: Display] Show for W[T] { fn show(self) -> String { f"{self.v}" } }
+struct Opaque {}
+fn main() {
+    println(W { v: 3 }.show());
+    println(W { v: Opaque {} }.show());
+}

@@ -1,0 +1,1 @@
+an impl cannot have a `dyn` type as `Self`

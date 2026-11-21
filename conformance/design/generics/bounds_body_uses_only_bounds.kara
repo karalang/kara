@@ -1,0 +1,2 @@
+fn show[T: Ord](x: T) -> String { x.to_string() }
+fn main() { println(show(3)); }

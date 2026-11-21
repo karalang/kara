@@ -1,1 +1,1 @@
-ERROR at line 2: if/else branches have incompatible types: 'i64' and 'bool'
+ERROR at line 2: type mismatch in branches: expected 'i64', found 'bool'; note: the branches' types are 'i64', 'bool'; annotate the expected type (`let x: T = ...`), or make every branch that type

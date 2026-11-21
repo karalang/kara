@@ -1,0 +1,22 @@
+trait Item {
+    fn get(self) -> i64;
+    fn bump(mut ref self);
+    fn finish(own self) -> String;
+}
+struct Box2 { n: i64 }
+impl Item for Box2 {
+    fn get(self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n += 1; }
+    fn finish(own self) -> String { f"finished {self.n}" }
+}
+impl Drop for Box2 { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let mut d: dyn Item = Box2 { n: 1 };
+    d.bump();
+    println(f"{d.get()}");
+    println(d.finish());
+    println("--");
+    let mut e: dyn Item = Box2 { n: 10 };
+    e = Box2 { n: 20 };   // assigning the owned dyn drops the old value first
+    println(f"{e.get()}");
+}

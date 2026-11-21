@@ -1,0 +1,4 @@
+#[derive(Clone)]
+struct P { x: i64 }
+impl Copy for P { }
+fn main() { let p = P { x: 1 }; println(p.x); }

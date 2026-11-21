@@ -1,0 +1,11 @@
+fn main() {
+    let v: Vec[String] = ["a".to_string(), "b".to_string()];
+    for s in v { println(s); }
+    println(v.len());            // v was borrowed, not consumed
+    let mut it = v.iter();
+    for s in it.by_ref() { if *s == "a" { break; } }
+    println(f"{it.next()}");     // it is still usable after by_ref
+    let mut owned: Vec[String] = Vec.new();
+    for s in v.into_iter() { owned.push(s); }
+    println(f"{owned}");
+}

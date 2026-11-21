@@ -1,0 +1,32 @@
+struct Part { name: String }
+impl Drop for Part { fn drop(mut ref self) { println(f"drop field {self.name}"); } }
+
+struct Transaction { conn: Part, log: Part }
+impl Drop for Transaction {
+    fn drop(mut ref self) {
+        println(f"body sees {self.conn.name} and {self.log.name}");
+    }
+}
+
+enum Slot { Empty, Full(Part) }
+impl Drop for Slot {
+    fn drop(mut ref self) { println("enum body"); }
+}
+
+fn main() {
+    {
+        let _t = Transaction { conn: Part { name: "conn" }, log: Part { name: "log" } };
+    }
+    println("--");
+    {
+        let _s = Slot.Full(Part { name: "payload" });
+    }
+    println("--");
+    // Drop and defer pop from one LIFO order at scope end.
+    {
+        let _a = Part { name: "a" };
+        defer println("defer 1");
+        let _b = Part { name: "b" };
+        defer println("defer 2");
+    }
+}

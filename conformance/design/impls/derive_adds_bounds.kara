@@ -1,0 +1,15 @@
+#[derive(PartialEq, Eq, Hash)]
+struct Pair[T] { first: T, second: T }
+
+fn main() {
+    // Pair[f64] gets PartialEq (f64 is PartialEq) ...
+    let a = Pair { first: 1.5, second: 2.0 };
+    let b = Pair { first: 1.5, second: 2.0 };
+    println(f"{a == b}");
+    // ... and Pair[i64] is Eq + Hash, so it can key a Set.
+    let mut s: Set[Pair[i64]] = Set.new();
+    s.insert(Pair { first: 1, second: 2 });
+    s.insert(Pair { first: 1, second: 2 });
+    s.insert(Pair { first: 2, second: 1 });
+    println(f"{s.len()}");
+}

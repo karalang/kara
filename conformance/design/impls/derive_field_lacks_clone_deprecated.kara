@@ -1,0 +1,4 @@
+struct NoClone { n: i64 }
+#[derive(Clone)]
+struct H { inner: NoClone }
+fn main() { let h = H { inner: NoClone { n: 3 } }; let g = h.clone(); println(g.inner.n); }

@@ -1,0 +1,6 @@
+trait Show { fn show(self, n: i64) -> String; }
+struct S { k: i64 }
+impl Show for S {
+    fn show(self, n: i32) -> String { f"{self.k}{n}" }
+}
+fn main() { println(S { k: 1 }.show(2)); }

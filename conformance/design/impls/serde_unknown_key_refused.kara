@@ -1,0 +1,6 @@
+#[derive(Serialize)]
+struct T {
+    #[serde(renam: "x")]
+    a: i64,
+}
+fn main() { println("x"); }

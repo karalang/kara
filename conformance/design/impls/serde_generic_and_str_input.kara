@@ -1,0 +1,18 @@
+import std.json.{Json};
+#[derive(Serialize, Deserialize, Debug)]
+struct Wrap[T] { v: T }
+#[derive(Serialize, Deserialize, Debug)]
+enum Kind { #[serde(rename: "kind_a")] A, B(i64) }
+fn main() {
+    println(Json.serialize(Wrap { v: [1, 2] }));
+    let text = "{\"v\":1}\n{\"v\":2}";
+    let mut total = 0;
+    for line in text.lines() {
+        let w: Wrap[i64] = Json.deserialize(line).unwrap();
+        total += w.v;
+    }
+    println(total);
+    println(Json.serialize(Kind.A));
+    let k: Kind = Json.deserialize("\"kind_a\"").unwrap();
+    println(k.fmt_debug());
+}

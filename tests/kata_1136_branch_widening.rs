@@ -84,7 +84,7 @@ fn a_literal_that_does_not_fit_its_sibling_with_nothing_to_widen_to_is_refused()
     let (ok, err, _) = check_and_run("refused", src);
     assert!(!ok, "a u8 holding 65533 was accepted");
     assert!(
-        err.contains("if/else branches have incompatible types: 'u8' and 'i64'"),
+        err.contains("type mismatch in branches: expected 'u8', found 'i64'"),
         "{err}"
     );
     let src = "fn main() {
@@ -96,7 +96,7 @@ fn a_literal_that_does_not_fit_its_sibling_with_nothing_to_widen_to_is_refused()
     let (ok, err, _) = check_and_run("refused_match", src);
     assert!(!ok, "a u8 holding 70000 was accepted");
     assert!(
-        err.contains("match arms have incompatible types: 'u8' and 'i64'"),
+        err.contains("type mismatch in branches: expected 'u8', found 'i64'"),
         "{err}"
     );
     // One that fits still takes the sibling's type.

@@ -1,0 +1,6 @@
+trait Reader { fn access(self) -> i64; }
+struct C {}
+impl C { fn extra(self) -> i64 { 9 } }
+impl Reader for C { fn access(self) -> i64 { 1 } }
+fn f[T: Reader](x: T) -> i64 { x.extra() }
+fn main() { println(f"{f(C {})}"); }

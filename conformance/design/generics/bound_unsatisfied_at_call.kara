@@ -1,0 +1,7 @@
+struct Opaque { v: i64 }
+fn biggest[T: Ord + Clone](xs: Vec[T]) -> T { xs[0].clone() }
+fn main() {
+    let v = [Opaque { v: 1 }];
+    let b = biggest(v);
+    println(f"{b.v}");
+}

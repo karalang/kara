@@ -1,0 +1,4 @@
+#[derive(PartialEq)]
+struct P { n: i64 }
+impl PartialEq for P { fn eq(self, o: P) -> bool { true } }
+fn main() { println(f"{P { n: 1 } == P { n: 2 }}"); }

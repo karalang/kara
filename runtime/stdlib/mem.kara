@@ -32,6 +32,13 @@ pub fn replace[T](dest: mut ref T, value: own T) -> T { value }
 // `<Concrete>.default` (codegen, via the monomorph's type substitution).
 pub fn take[T: Default](dest: mut ref T) -> T { replace(dest, T.default()) }
 
+// Plain old data (design.md § Marker traits): a type whose all-zeros bit
+// pattern is a valid value. The primitives, tuples and arrays of `Pod`, and
+// a struct that derives it or writes `impl Pod for S { }`, are `Pod`; the
+// checker holds an explicit impl to the rule a derive is held to, every
+// field `Pod` (B-2026-11-20-117).
+pub marker trait Pod;
+
 // The all-zeros `T` (design.md §15 `mem.zeroed()`), in safe code: `Pod`
 // is the bound under which the zero bits are a valid `T`. `T` comes from
 // the expected type. The MIR builder makes the value (`mem_call`); the

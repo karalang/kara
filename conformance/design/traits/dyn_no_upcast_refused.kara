@@ -1,0 +1,10 @@
+trait Super { fn s(self) -> i64; }
+trait Sub: Super { fn t(self) -> i64; }
+struct A {}
+impl Super for A { fn s(self) -> i64 { 1 } }
+impl Sub for A { fn t(self) -> i64 { 2 } }
+fn main() {
+    let d: dyn Sub = A {};
+    let u: dyn Super = d;
+    println(f"{u.s()}");
+}

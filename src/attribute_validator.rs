@@ -781,7 +781,21 @@ fn check_item_default(item: &Item, errors: &mut Vec<ResolveError>) {
                             span: attr.span,
                             kind: ResolveErrorKind::DefaultAttributeWithoutDerive,
                             suggestion: None,
-                            replacement: None,
+                            // The fix adds the derive above the enum
+                            // (design.md § `Default` and `#[default]`,
+                            // B-2026-11-20-127), where its line starts with
+                            // it: a `pub enum`'s span starts past the `pub `.
+                            replacement: {
+                                let pub_len = if e.is_pub { "pub ".len() } else { 0 };
+                                (e.span.column == 1 + pub_len).then_some(pub_len)
+                            }
+                            .map(|pub_len| {
+                                Box::new(crate::resolver::TextEdit {
+                                    offset: e.span.offset - pub_len,
+                                    length: 0,
+                                    replacement: "#[derive(Default)]\n".to_string(),
+                                })
+                            }),
                             stub_hint: None,
                         });
                     }

@@ -1,0 +1,8 @@
+#[derive(Clone)]
+struct Pair[T] { a: T, b: T }
+struct NoClone { n: i64 }
+fn main() {
+    let p = Pair { a: NoClone { n: 1 }, b: NoClone { n: 2 } };
+    let q = p.clone();
+    println(q.a.n);
+}

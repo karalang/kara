@@ -1,0 +1,23 @@
+trait Describe { fn describe(self) -> String; }
+
+struct Wrap[T] { v: T }
+
+impl[T: Display] Describe for Wrap[T] {
+    fn describe(self) -> String { f"wrap of {self.v}" }
+}
+
+// Several bounds with `+`, and the same bounds in a `where` clause.
+trait Twice { fn twice(self) -> String; }
+impl[T: Display + Clone] Twice for Wrap[T] {
+    fn twice(self) -> String { let c = self.v.clone(); f"{c}{self.v}" }
+}
+struct Box2[T] { v: T }
+impl[T] Describe for Box2[T] where T: Display + PartialEq {
+    fn describe(self) -> String { f"box of {self.v}, self-equal {self.v == self.v}" }
+}
+
+fn main() {
+    println(Wrap { v: 3 }.describe());
+    println(Wrap { v: "hi" }.twice());
+    println(Box2 { v: 2.5 }.describe());
+}

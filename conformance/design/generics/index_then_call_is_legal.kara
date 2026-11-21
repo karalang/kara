@@ -1,0 +1,6 @@
+fn double(x: i64) -> i64 { x * 2 }
+fn inc(x: i64) -> i64 { x + 1 }
+fn main() {
+    let fs: Vec[Fn(i64) -> i64] = [double, inc];
+    println(f"{fs[0](5)} {fs[1](5)}");
+}

@@ -1,0 +1,8 @@
+fn main() {
+    let s: String = "Hello World".to_string();
+    println(f"{s.to_lowercase()} {s.starts_with("He")}");
+    let v: Vec[i64] = [3, 1, 2];
+    println(f"{v.contains(2)} {v.first()}");
+    let a: Array[i64, 3] = [5, 6, 7];
+    println(f"{a.contains(6)}");
+}

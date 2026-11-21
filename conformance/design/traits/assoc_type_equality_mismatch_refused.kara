@@ -1,0 +1,5 @@
+fn sum_ints[I: Iterator](iter: own I) -> i64 where I.Item = i64 { 0 }
+fn main() {
+    let v: Vec[String] = ["a"];
+    println(f"{sum_ints(v.into_iter())}");
+}

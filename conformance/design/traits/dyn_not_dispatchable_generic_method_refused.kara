@@ -1,0 +1,3 @@
+trait Visit { fn visit[T](self, t: T) -> i64; }
+fn f(x: dyn Visit) -> i64 { 0 }
+fn main() {}

@@ -1,0 +1,8 @@
+fn main() {
+    let counts: Vec[i64] = [10, 20];
+    println(f"{counts.get(1)} {counts.get(5)}");
+    let i = 5;
+    println("before");
+    let n = counts[i];
+    println(f"{n}");
+}

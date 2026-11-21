@@ -1,0 +1,6 @@
+A { n: 7, s: "hi" }
+B
+C(3)
+D { x: None }
+Pair { a: "q" }
+["x"]

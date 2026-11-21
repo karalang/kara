@@ -1,0 +1,13 @@
+trait Parseable {
+    type Output: Display;
+    fn parse(input: String) -> Result[Self.Output, String];
+}
+struct P {}
+impl Parseable for P {
+    type Output = i64;
+    fn parse(input: String) -> Result[i64, String] { Ok(input.len()) }
+}
+fn show[T: Parseable](s: String, _witness: T) -> String {
+    match T.parse(s) { Ok(v) => f"parsed {v}", Err(e) => e }
+}
+fn main() { println(show("abcd", P {})); }

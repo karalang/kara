@@ -1,0 +1,10 @@
+struct Wide[const W: i128] { v: i64 }
+struct Flag[const B: bool] { v: i64 }
+struct Letter[const C: char] { v: i64 }
+struct Small[const S: i8] { v: i64 }
+fn main() {
+    let w: Wide[5] = Wide { v: 1 };
+    let f: Flag[true] = Flag { v: 2 };
+    let l: Letter['k'] = Letter { v: 3 };
+    println(f"{w.v} {f.v} {l.v}");
+}

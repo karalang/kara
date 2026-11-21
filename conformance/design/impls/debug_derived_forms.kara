@@ -1,0 +1,16 @@
+#[derive(Debug)]
+struct A { n: i64, s: String }
+#[derive(Debug)]
+enum K { B, C(i64), D { x: Option[i64] } }
+#[derive(Debug)]
+struct Pair[T] { a: T }
+fn main() {
+    let a = A { n: 7, s: "hi" };
+    println(a.fmt_debug());
+    println(K.B.fmt_debug());
+    println(K.C(3).fmt_debug());
+    println(K.D { x: None }.fmt_debug());
+    println(Pair { a: "q" }.fmt_debug());
+    let v: Vec[String] = ["x".to_string()];
+    println(v.fmt_debug());
+}

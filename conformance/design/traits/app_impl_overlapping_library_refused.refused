@@ -1,0 +1,1 @@
+the standard library already implements `Default` for `Vec[String]`

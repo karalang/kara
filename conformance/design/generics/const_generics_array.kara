@@ -1,0 +1,21 @@
+fn first[T: Clone, const N: i64](arr: own Array[T, N]) -> T { arr[0].clone() }
+fn size[T, const N: i64](arr: ref Array[T, N]) -> i64 { N }
+fn rotated[T: Copy, const N: i64](arr: own Array[T, N]) -> Array[T, N] {
+    let mut out = arr;
+    let mut i = 0;
+    while i < N {
+        out[i] = arr[(i + 1) % N];
+        i += 1;
+    }
+    out
+}
+fn zeros[const N: i64]() -> Array[i32, N] { [0; N] }
+fn main() {
+    let buf: Array[u8, 256] = [0; 256];
+    println(f"{size(buf)} {first(buf)}");
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    let r = rotated(a);
+    println(f"{r[0]} {r[3]} {size(r)}");
+    let z: Array[i32, 8] = zeros();
+    println(f"{size(z)}");
+}

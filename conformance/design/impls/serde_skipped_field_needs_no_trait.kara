@@ -1,0 +1,10 @@
+import std.json.{Json};
+struct Handle { fd: i64 }
+// Skipped when serializing: needs no Serialize.
+#[derive(Serialize)]
+struct T {
+    #[serde(skip_serializing)]
+    h: Handle,
+    n: i64,
+}
+fn main() { println(Json.serialize(T { h: Handle { fd: 3 }, n: 1 })); }

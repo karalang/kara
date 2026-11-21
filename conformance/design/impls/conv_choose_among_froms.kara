@@ -1,0 +1,14 @@
+struct Id { n: i64 }
+impl From[i64] for Id { fn from(v: own i64) -> Id { Id { n: v } } }
+impl From[String] for Id { fn from(v: own String) -> Id { Id { n: v.len() } } }
+struct Other { s: String }
+impl From[i64] for Other { fn from(v: own i64) -> Other { Other { s: f"other {v}" } } }
+fn main() {
+    // T.from(x) picks by the type of x.
+    let a = Id.from(7);
+    let b = Id.from("four".to_string());
+    // x.into() picks by the expected type.
+    let c: Id = 3.into();
+    let d: Other = 3.into();
+    println(f"{a.n} {b.n} {c.n} {d.s}");
+}

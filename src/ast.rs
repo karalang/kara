@@ -853,6 +853,11 @@ pub struct Program {
     /// program was checked with it (`karac check`, B-2026-10-12-23): items
     /// at or past this byte offset are the library's, not the user's.
     pub library_start: Option<usize>,
+    /// The traits of the gated library modules (`std.log`'s `Backend`) that
+    /// the program's imports left out, each with its module's path: they
+    /// supply no method to its calls (design.md § Method resolution,
+    /// B-2026-11-20-115). Recorded where the imports are spliced away.
+    pub unimported_gated_traits: Vec<(String, Vec<String>)>,
     /// Joined `//!` doc-comment text at the top of the source file.
     /// Lines from a single run of `//!` are concatenated with `\n`.
     /// `None` when the file has no leading `//!` lines.

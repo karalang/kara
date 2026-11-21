@@ -1,0 +1,11 @@
+pub effect resource Db;
+pub trait Reader { fn read(self) -> i64 with reads(Db); }
+pub trait Writer: Reader { fn write(self) -> i64; }
+pub struct S {}
+impl Reader for S { fn read(self) -> i64 with reads(Db) { 1 } }
+// Writer.write declares no effects of its own; Reader's do not carry over,
+// so reading Db in it exceeds nothing only if it had a ceiling. Give it one:
+pub trait Logger: Reader { fn log(self) -> i64 with writes(Stdout); }
+impl Writer for S { fn write(self) -> i64 { 2 } }
+impl Logger for S { fn log(self) -> i64 with writes(Stdout) reads(Db) { self.read() } }
+fn main() { println(f"{S {}.log()}"); }

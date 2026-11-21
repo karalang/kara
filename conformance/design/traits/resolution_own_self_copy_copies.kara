@@ -1,0 +1,8 @@
+#[derive(Copy, Clone)]
+struct C { n: i64 }
+impl C { fn into_n(own self) -> i64 { self.n } }
+fn main() {
+    let c = C { n: 4 };
+    let n = c.into_n();
+    println(f"{n} {c.n}");
+}

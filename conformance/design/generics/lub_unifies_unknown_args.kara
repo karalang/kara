@@ -1,0 +1,7 @@
+fn main() {
+    let c = true;
+    let r = if c { Ok(5) } else { Err("bad") };
+    let s: Result[i64, String] = r;
+    let k = match 2 { 1 => None, _ => Some(3) };
+    println(f"{s} {k}");
+}

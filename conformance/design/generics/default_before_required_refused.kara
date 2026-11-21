@@ -1,0 +1,2 @@
+struct Bad[A = i64, B] { a: A, b: B }
+fn main() { println("x"); }

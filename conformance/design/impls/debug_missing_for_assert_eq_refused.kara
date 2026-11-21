@@ -1,0 +1,6 @@
+#[derive(PartialEq, Display)]
+struct P { n: i64 }
+fn main() {
+    assert_eq(P { n: 1 }, P { n: 1 });
+    println("ok");
+}

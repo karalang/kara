@@ -1,0 +1,4 @@
+fn count[T: Clone](xs: Vec[T], n: i64) -> i64 {
+    if n == 0 { xs.len() } else { count(xs.clone(), n - 1) }
+}
+fn main() { println(f"{count([1, 2], 3)} {count(["a"], 2)}"); }

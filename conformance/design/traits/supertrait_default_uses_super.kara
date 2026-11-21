@@ -1,0 +1,12 @@
+trait Named { fn name(self) -> String; }
+trait Greeter: Named {
+    fn greet(self) -> String { f"hello, {self.name()}" }
+}
+struct P {}
+impl Named for P { fn name(self) -> String { "pat" } }
+impl Greeter for P {}
+fn shout[T: Greeter](t: T) -> String { f"{t.greet()} / {t.name()}" }
+fn main() {
+    println(P {}.greet());
+    println(shout(P {}));
+}

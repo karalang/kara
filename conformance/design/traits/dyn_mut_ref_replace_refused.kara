@@ -1,0 +1,11 @@
+trait Item { fn get(self) -> i64; }
+struct A { n: i64 }
+impl Item for A { fn get(self) -> i64 { self.n } }
+fn replace(r: mut ref dyn Item) {
+    *r = A { n: 5 };
+}
+fn main() {
+    let mut d: dyn Item = A { n: 1 };
+    replace(mut d);
+    println(f"{d.get()}");
+}

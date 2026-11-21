@@ -1,0 +1,9 @@
+trait Reader { fn access(self) -> i64; }
+trait Writer { fn access(self) -> i64; }
+struct C {}
+impl Reader for C { fn access(self) -> i64 { 1 } }
+impl Writer for C { fn access(self) -> i64 { 2 } }
+fn main() {
+    let c = C {};
+    println(f"{Reader.access(c)} {Writer.access(c)}");
+}

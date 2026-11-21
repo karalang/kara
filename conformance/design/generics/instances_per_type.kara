@@ -1,0 +1,14 @@
+fn identity[T](x: own T) -> T { x }
+struct Pair[A, B] { a: A, b: B }
+impl[A: Display, B: Display] Pair[A, B] {
+    fn show(self) -> String { f"{self.a}/{self.b}" }
+}
+fn main() {
+    println(f"{identity(4)} {identity("s")} {identity(2.5)}");
+    let p = Pair { a: 1, b: "x" };
+    let q = Pair { a: "y", b: "z" };
+    println(f"{p.show()} {q.show()}");
+    let m: Map[String, Vec[i64]] = Map.new();
+    let s: Set[String] = Set.new();
+    println(f"{m.len()} {s.len()}");
+}

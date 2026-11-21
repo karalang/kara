@@ -1429,6 +1429,7 @@ impl<'a> super::TypeChecker<'a> {
         self.validate_derived_trait("Ord", |this, ty| this.type_supports_ord(ty));
         self.validate_derived_trait("PartialOrd", |this, ty| this.type_supports_partial_ord(ty));
         self.validate_derived_trait("Pod", |this, ty| this.env.type_supports_pod(ty));
+        self.validate_explicit_pod_impls();
         self.validate_derive_pod_on_enums();
         self.validate_derive_default();
         self.validate_derive_display_on_enums();
@@ -1937,11 +1938,15 @@ impl<'a> super::TypeChecker<'a> {
                         .then(|| format!("`{w}` needs `{}`", lacking.join("` and `")))
                 })
                 .collect();
+            // The note names what the derive implies, which 0.8.x adds
+            // (review-thread ruling 2026-11-20: `derive(Hash)` implies
+            // `PartialEq` and `Eq`, and warns rather than adding silently).
             let message = format!(
-                "implied derive on `{name}` is deprecated: {} (design.md §9 Derive: a derive \
-                 never adds another). 0.8.x still fills it in; it becomes an error in the next \
+                "implied derive on `{name}` is deprecated: {}; note: the derive implies `{}`, \
+                 which 0.8.x fills in (design.md §9 Derive). It becomes an error in the next \
                  minor release, and `karac fix` adds `{}` to the derive list",
                 why.join("; "),
+                missing.join("`, `"),
                 missing.join(", "),
             );
             let fix = super::FixIt {
@@ -2291,9 +2296,9 @@ impl<'a> super::TypeChecker<'a> {
                             format!(
                                 "error[E_DEFAULT_VARIANT_HAS_PAYLOAD]: #[default] on enum \
                                  variant '{}' requires a field-less variant; either declare \
-                                 the marked variant as '{}' (no fields) or write a manual \
-                                 'impl {} {{ fn default() -> {} {{ ... }} }}' that constructs \
-                                 the desired starting state",
+                                 the marked variant as '{}' (no fields) or drop the derive \
+                                 and write a manual 'impl Default for {} {{ fn default() -> {} \
+                                 {{ ... }} }}' that constructs the desired starting state",
                                 only.name, only.name, e.name, e.name
                             ),
                             only.span,
@@ -2677,6 +2682,70 @@ impl<'a> super::TypeChecker<'a> {
     /// program AST — those are compiler-provided built-ins (`F32`, `F64`,
     /// `Ordering`, `MemoryOrdering`) whose derived-trait bundles are
     /// hand-verified.
+    /// `impl Pod for S { }` written by the program is held to the rule
+    /// `#[derive(Pod)]` is: zeroing `S` is sound only when every field's zero
+    /// bits are a valid value (design.md § `mem.zeroed()`, B-2026-11-20-117).
+    fn validate_explicit_pod_impls(&mut self) {
+        let user_end = self.program.library_start.unwrap_or(usize::MAX);
+        let impls: Vec<(String, crate::token::Span)> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::ImplBlock(b)
+                    if b.span.offset < user_end
+                        && b.trait_name.as_ref().is_some_and(|t| {
+                            t.segments.last().map(String::as_str) == Some("Pod")
+                        }) =>
+                {
+                    match &b.target_type.kind {
+                        crate::ast::TypeKind::Path(p) if p.segments.len() == 1 => {
+                            Some((p.segments[0].clone(), b.span))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        for (name, span) in impls {
+            let fields: Vec<(String, Type)> = if let Some(info) = self.env.structs.get(&name) {
+                info.fields
+                    .iter()
+                    .map(|(n, t, _)| (n.clone(), t.clone()))
+                    .collect()
+            } else if self.env.enums.contains_key(&name) {
+                // The rule `#[derive(Pod)]` on an enum is refused by.
+                self.type_error(
+                    format!(
+                        "`impl Pod for {name}`: an enum is not `Pod`; `Pod` holds when the \
+                         all-zeros bits are a valid value, which design.md §15 grants the \
+                         integers, floats, `bool`, and tuples, arrays and structs of `Pod`"
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                continue;
+            } else {
+                continue;
+            };
+            for (field, ty) in fields {
+                if !self.env.type_supports_pod(&ty) {
+                    self.type_error(
+                        format!(
+                            "`impl Pod for {name}`: field '{field}' has non-Pod type '{}', \
+                             whose all-zeros bits are not a valid value (design.md § \
+                             `mem.zeroed()`)",
+                            type_display(&ty)
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+        }
+    }
+
     pub(super) fn validate_derived_trait(
         &mut self,
         trait_name: &str,
@@ -2949,10 +3018,12 @@ impl super::env::TypeEnv {
             Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Unit => true,
             Type::Tuple(parts) => parts.iter().all(|t| self.type_supports_pod(t)),
             Type::Array { element, .. } => self.type_supports_pod(element),
-            Type::Named { name, .. } => self
-                .structs
-                .get(name)
-                .is_some_and(|s| s.derived_traits.contains("Pod")),
+            Type::Named { name, args } => {
+                self.structs
+                    .get(name)
+                    .is_some_and(|s| s.derived_traits.contains("Pod"))
+                    || self.has_impl("Pod", name, args)
+            }
             Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => true,
             _ => false,
         }

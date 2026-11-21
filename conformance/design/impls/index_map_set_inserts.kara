@@ -1,0 +1,11 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m["a"] = 1;            // inserts
+    m["a"] = 2;            // replaces
+    m["a"] += 10;          // IndexMut on a present key
+    println(f"{m.len()} {m["a"]}");
+    let mut s: SortedMap[i64, String] = SortedMap.new();
+    s[2] = "two";
+    s[1] = "one";
+    println(f"{s}");
+}

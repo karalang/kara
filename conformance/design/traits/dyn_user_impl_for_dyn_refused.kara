@@ -1,0 +1,4 @@
+trait Shape { fn area(self) -> i64; }
+trait Named { fn name(self) -> String; }
+impl Named for dyn Shape { fn name(self) -> String { "dyn" } }
+fn main() {}

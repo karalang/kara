@@ -1,0 +1,4 @@
+impl Display for Vec[i64] {
+    fn to_string(self) -> String { "mine" }
+}
+fn main() { let v: Vec[i64] = [1]; println(f"{v}"); }

@@ -1,0 +1,35 @@
+#[derive(Default, Display)]
+struct Point { x: i64, y: i64 }
+
+#[derive(Default)]
+struct Pair[T] { a: T, b: T }
+
+#[derive(Default, Display, PartialEq)]
+enum Status {
+    #[default]
+    Pending,
+    Active,
+    Closed,
+}
+
+#[non_exhaustive]
+#[derive(Default, PartialEq, Display)]
+pub enum Mode { #[default] Idle, Busy }
+
+#[repr(u8)]
+#[derive(Default, PartialEq, Display)]
+enum Op { Load = 0x02, #[default] Reset = 0x01 }
+
+#[derive(Default)]
+struct Mixed { name: String, n: f64, flag: bool, v: Vec[i64], o: Option[i64] }
+
+fn main() {
+    println(Point.default());
+    let p: Pair[String] = Pair.default();
+    println(f"[{p.a}] [{p.b}]");
+    let q: Pair[i64] = Pair.default();
+    println(q.a + q.b);
+    println(f"{Status.default()} {Mode.default()} {Op.default()}");
+    let m = Mixed.default();
+    println(f"[{m.name}] {m.n} {m.flag} {m.v} {m.o}");
+}

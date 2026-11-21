@@ -1,0 +1,11 @@
+fn total[I: IntoIterator[Item = i64]](items: own I) -> i64 {
+    let mut t = 0;
+    for x in items.into_iter() { t += x; }
+    t
+}
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    println(total(v));
+    println(total(0..4));
+    println(total((1..4).map(|x| x * 10)));
+}

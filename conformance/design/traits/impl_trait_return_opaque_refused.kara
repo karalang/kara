@@ -1,0 +1,6 @@
+fn make_counter(start: i64) -> impl Iterator[Item = i64] { start.. }
+fn main() {
+    let it = make_counter(0);
+    let r: RangeFrom[i64] = it;
+    println("x");
+}

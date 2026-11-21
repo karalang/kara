@@ -10883,9 +10883,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .and_then(|a| self.tys().tcx().const_arg_value(a))
             {
                 let t = self.expr_ty(e)?;
+                // The length is the argument's 64-bit pattern, so a
+                // negative `i128` argument is sign-extended to the full
+                // width (B-2026-11-20-113); a narrower type reads its own
+                // low bits.
+                let bits = match self.tys().tcx().kind(t) {
+                    crate::ty::TyKind::Int(IntSize::I128) => n as i64 as i128 as u128,
+                    _ => n as u128,
+                };
                 let op = Operand::Const(Const {
                     ty: t,
-                    kind: ConstKind::Scalar(n as u128),
+                    kind: ConstKind::Scalar(bits),
                 });
                 self.assign(dest, Rvalue::Use(op));
                 return Ok(());
@@ -21644,6 +21652,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.method_call(mc, object, method, args, dest);
             }
         }
+        // `i64.one()` naming a program's impl for a primitive (`impl Unit
+        // for i64`), as a trait's default body spliced there writes
+        // `Self.one()`: the checker records the call as a builtin
+        // (B-2026-11-20-114).
+        if let (Callee::Builtin(_), ExprKind::Path { segments, .. }) = (&callee_kind, &callee.kind)
+        {
+            if let [tp, m] = segments.as_slice() {
+                let mut found = self.lcx.fns.iter().filter(|(_, i)| {
+                    i.f.name == *m
+                        && !i.f.stdlib_origin
+                        && i.f
+                            .generic_params
+                            .as_ref()
+                            .is_none_or(|g| g.params.is_empty())
+                        && i.impl_prim.is_some_and(|t| self.tys().display(t) == *tp)
+                });
+                if let (Some((&d, i)), None) = (found.next(), found.next()) {
+                    let f = i.f;
+                    return self.def_call(e, d, f, Vec::new(), None, args, dest);
+                }
+            }
+        }
         match callee_kind {
             Callee::Builtin(name) => self.builtin_call(e, &name, args, dest),
             Callee::Value => self.call_value(e, callee, args, dest),
@@ -25638,6 +25668,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let (_, base) = self.strip_ty_full(rt);
                 let key = format!("{}.try_extend", self.tys().display(base));
                 return self.builtin_method(e, &key, object, method, args, dest);
+            }
+            // `p.to_string()` on a tuple, which is `Display` when its
+            // elements are (design.md § Display): the text `f"{p}"` gives.
+            // It was refused as not lowered (B-2026-11-20-122).
+            if let ("to_string", []) = (method, args) {
+                if matches!(self.strip_ty(rt), HK::Tuple(_)) {
+                    let mut ops = Vec::new();
+                    self.print_operands(object, &mut ops)?;
+                    self.call_native("format", ops, dest);
+                    return Ok(());
+                }
             }
             return self.unsupported(
                 e.span,

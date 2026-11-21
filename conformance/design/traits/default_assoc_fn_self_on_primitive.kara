@@ -1,0 +1,15 @@
+trait Unit {
+    fn one() -> Self;
+    fn again() -> Self { Self.one() }
+    fn two() -> (Self, Self) { (Self.one(), Self.one()) }
+}
+impl Unit for i64 { fn one() -> i64 { 1 } }
+fn main() {
+    let a = i64.again();
+    println(f"{a + 1}");
+    let t: (i64, i64) = i64.two();
+    println(f"{t.0 + t.1}");
+    let (c, d) = i64.two();
+    println(f"{c} {d}");
+    println(f"{c + d}");
+}

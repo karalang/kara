@@ -1,0 +1,13 @@
+trait Item { fn get(self) -> i64; }
+struct A { n: i64 }
+impl Item for A { fn get(self) -> i64 { self.n } }
+impl Drop for A { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn pick(b: bool) -> Option[dyn Item] { if b { Some(A { n: 7 }) } else { None } }
+fn main() {
+    println(f"{pick(true).map(|d| d.get())} {pick(false).is_none()}");
+    {
+        let v: Vec[dyn Item] = [A { n: 1 }, A { n: 2 }];
+        println(f"{v.len()}");
+    }
+    println("end");
+}

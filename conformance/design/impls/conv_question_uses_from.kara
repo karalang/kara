@@ -1,0 +1,16 @@
+struct ParseErr { msg: String }
+enum AppError { Parse(String) }
+impl From[ParseErr] for AppError {
+    fn from(e: own ParseErr) -> AppError { AppError.Parse(e.msg) }
+}
+fn parse(s: Str) -> Result[i64, ParseErr] {
+    if s == "1" { Ok(1) } else { Err(ParseErr { msg: f"bad {s}" }) }
+}
+fn run(s: Str) -> Result[i64, AppError] {
+    let n = parse(s)?;
+    Ok(n + 1)
+}
+fn main() {
+    match run("1") { Ok(n) => println(n), Err(AppError.Parse(m)) => println(m) }
+    match run("x") { Ok(n) => println(n), Err(AppError.Parse(m)) => println(m) }
+}

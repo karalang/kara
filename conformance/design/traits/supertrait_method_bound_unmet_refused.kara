@@ -1,0 +1,12 @@
+trait Seq {
+    fn items(self) -> Vec[i64];
+    fn twice(self) -> Vec[i64] where Self: Clone {
+        let c = self.clone();
+        let mut v = self.items();
+        v.extend(c.items());
+        v
+    }
+}
+struct No { v: Vec[i64] }
+impl Seq for No { fn items(self) -> Vec[i64] { self.v.clone() } }
+fn main() { println(f"{No { v: [2] }.twice()}"); }

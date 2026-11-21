@@ -706,7 +706,17 @@ impl<'a> super::TypeChecker<'a> {
                 // type with inherent-beats-trait priority per design.md
                 // § Method Resolution Step 3. Multi-inherent / multi-trait
                 // ambiguity detection (Step 4) is deferred.
-                if let Some(sig) = self.env.find_method(type_name, &[], method).cloned() {
+                if let Some(mut sig) = self.env.find_method(type_name, &[], method).cloned() {
+                    // A trait's default body is written against `Self`, which
+                    // is the implementing type (design.md § Declarations and
+                    // impls); a struct receiver gets it substituted on its
+                    // own path, a primitive here (B-2026-11-20-114).
+                    if let Some(self_ty) = self.primitive_type(type_name) {
+                        for p in &mut sig.params {
+                            *p = Self::resolve_self_in_type(p.clone(), &self_ty);
+                        }
+                        sig.return_type = Self::resolve_self_in_type(sig.return_type, &self_ty);
+                    }
                     if args.len() != sig.params.len() {
                         self.type_error(
                             format!(
@@ -1195,8 +1205,12 @@ impl<'a> super::TypeChecker<'a> {
                             let return_display =
                                 type_display(&substitute_type_params(&sig.return_type, &subs));
                             format!(
-                                "    `{}.{}({})` -> {}",
-                                dispatcher, method, params_display, return_display,
+                                "    `{}.{}({})` -> {}{}",
+                                dispatcher,
+                                method,
+                                params_display,
+                                return_display,
+                                self.impl_method_effects_text(imp, method),
                             )
                         })
                         .collect();

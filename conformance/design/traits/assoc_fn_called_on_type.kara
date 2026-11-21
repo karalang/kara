@@ -1,0 +1,16 @@
+trait Make {
+    fn make() -> Self;
+}
+struct Config { n: i64 }
+impl Make for Config {
+    fn make() -> Config { Config { n: 7 } }
+}
+impl Default for Config {
+    fn default() -> Config { Config { n: 1 } }
+}
+fn build[T: Make]() -> T { T.make() }
+fn main() {
+    println(f"{Config.make().n} {Config.default().n}");
+    let c: Config = build();
+    println(f"{c.n}");
+}

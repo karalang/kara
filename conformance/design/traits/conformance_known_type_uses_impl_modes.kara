@@ -1,0 +1,7 @@
+trait Sink { fn take(own self) -> i64; }
+struct S { k: i64 }
+impl Sink for S { fn take(self) -> i64 { self.k } }
+fn main() {
+    let s = S { k: 1 };
+    println(f"{s.take() + s.take()}");
+}

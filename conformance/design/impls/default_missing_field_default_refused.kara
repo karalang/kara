@@ -1,0 +1,4 @@
+struct NoDef { n: i64 }
+#[derive(Default)]
+struct Point { name: NoDef }
+fn main() { let p = Point.default(); println(p.name.n); }

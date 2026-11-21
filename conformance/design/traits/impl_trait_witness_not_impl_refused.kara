@@ -1,0 +1,4 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+fn make() -> impl Shape { Sq { s: 2 } }
+fn main() {}

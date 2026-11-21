@@ -1,0 +1,10 @@
+trait Shape: Clone { fn area(self) -> i64; fn grow(mut ref self); }
+#[derive(Clone)]
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } fn grow(mut ref self) { self.s += 1; } }
+fn main() {
+    let mut a: dyn Shape = Sq { s: 2 };
+    let b = a.clone();
+    a.grow();
+    println(f"{a.area()} {b.area()}");
+}

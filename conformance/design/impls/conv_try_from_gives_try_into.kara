@@ -1,0 +1,12 @@
+struct Even { n: i64 }
+impl TryFrom[i64] for Even {
+    type Error = String;
+    fn try_from(v: own i64) -> Result[Even, String] {
+        if v % 2 == 0 { Ok(Even { n: v }) } else { Err(f"{v} is odd") }
+    }
+}
+fn main() {
+    match Even.try_from(4) { Ok(e) => println(f"even {e.n}"), Err(m) => println(m) }
+    let r: Result[Even, String] = 5.try_into();
+    match r { Ok(e) => println(f"even {e.n}"), Err(m) => println(m) }
+}

@@ -1,0 +1,4 @@
+marker trait Pod2;
+struct P {}
+fn needs_pod[T: Pod2](t: T) {}
+fn main() { needs_pod(P {}); }

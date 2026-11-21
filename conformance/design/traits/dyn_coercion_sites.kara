@@ -1,0 +1,13 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+struct Holder { sh: dyn Shape }
+fn take(sh: dyn Shape) -> i64 { sh.area() }
+fn view(sh: ref dyn Shape) -> i64 { sh.area() }
+fn make() -> dyn Shape { Sq { s: 4 } }
+fn main() {
+    let a: dyn Shape = Sq { s: 1 };
+    let h = Holder { sh: Sq { s: 2 } };
+    let s = Sq { s: 3 };
+    println(f"{a.area()} {h.sh.area()} {take(Sq { s: 5 })} {view(s)} {make().area()} {view(a)}");
+}

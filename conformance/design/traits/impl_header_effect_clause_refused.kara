@@ -1,0 +1,6 @@
+struct A { n: i64 }
+struct B { n: i64 }
+impl From[A] for B with writes(Stdout) {
+    fn from(a: own A) -> B { B { n: a.n } }
+}
+fn main() { let b: B = B.from(A { n: 1 }); println(f"{b.n}"); }

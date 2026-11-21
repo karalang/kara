@@ -1,0 +1,2 @@
+fn same[T: Eq](a: T, b: T) -> bool { a == b }
+fn main() { println(same(1.0, 1.0)); }

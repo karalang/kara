@@ -1,0 +1,8 @@
+#[derive(PartialEq, Eq, Hash)]
+struct Pair[T] { first: T, second: T }
+fn main() {
+    // f64 is not Eq or Hash, so Pair[f64] is not either.
+    let mut s: Set[Pair[f64]] = Set.new();
+    s.insert(Pair { first: 1.0, second: 2.0 });
+    println(f"{s.len()}");
+}

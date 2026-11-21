@@ -1,0 +1,16 @@
+pub effect resource Db;
+trait Reader { fn access(self, key: i64) -> i64 with reads(Db); }
+pub trait Writer { fn access(self, key: i64) -> i64 with writes(Db); }
+pub struct Connection {}
+impl Reader for Connection { fn access(self, key: i64) -> i64 with reads(Db) { key } }
+impl Writer for Connection { fn access(self, key: i64) -> i64 with writes(Db) { key + 1 } }
+// Two reads of Db do not conflict in par; the Reader call has reads(Db) only.
+fn both(conn: Connection) -> (i64, i64) {
+    par { Reader.access(conn, 1), Reader.access(conn, 2) }
+}
+pub fn write_it(conn: Connection) -> i64 with writes(Db) { Writer.access(conn, 5) }
+fn main() {
+    let c = Connection {};
+    let (a, b) = both(c);
+    println(f"{a} {b} {write_it(c)}");
+}

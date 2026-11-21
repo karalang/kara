@@ -1,0 +1,4 @@
+impl Vec[i64] {
+    fn total(self) -> i64 { 0 }
+}
+fn main() { let v: Vec[i64] = [1]; println(f"{v.total()}"); }

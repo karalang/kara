@@ -1,0 +1,10 @@
+struct CountUp { current: i64 }
+impl Iterator for CountUp {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { None }
+}
+impl Iterator for CountUp {
+    type Item = String;
+    fn next(mut ref self) -> Option[String] { None }
+}
+fn main() {}

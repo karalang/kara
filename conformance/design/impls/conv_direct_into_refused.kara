@@ -1,0 +1,6 @@
+struct A { n: i64 }
+struct B { n: i64 }
+impl Into[B] for A {
+    fn into(own self) -> B { B { n: self.n } }
+}
+fn main() { let b: B = A { n: 1 }.into(); println(b.n); }

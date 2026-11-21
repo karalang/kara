@@ -1,0 +1,3 @@
+trait Named { fn name() -> String; }
+fn who[T: Named]() -> String { T.name() }
+fn main() { println("x"); }

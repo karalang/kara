@@ -1,0 +1,16 @@
+effect resource Log;
+pub struct ParseError { m: String }
+pub enum AppError { Parse(ParseError) }
+fn log_error(e: ParseError) with writes(Log) { }
+impl From[ParseError] for AppError {
+    fn from(e: own ParseError) -> AppError with writes(Log) {
+        log_error(e);
+        AppError.Parse(e)
+    }
+}
+// The into() has writes(Log), through the blanket Into impl, so a public
+// function that does not declare it is refused.
+pub fn handler(e: own ParseError) -> AppError {
+    e.into()
+}
+fn main() { let _ = handler(ParseError { m: "x" }); }

@@ -1,0 +1,10 @@
+fn main() {
+    let a: i32 = 7;
+    let b: i64 = 10;
+    let c = a + b;        // i32 widens to i64
+    let d: i64 = c;
+    let x: f32 = 1.5;
+    let y: f64 = 2.25;
+    let e: f64 = x + y;
+    println(f"{d} {e}");
+}

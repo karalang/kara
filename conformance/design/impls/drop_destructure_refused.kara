@@ -1,0 +1,7 @@
+struct H { r: String, n: i64 }
+impl Drop for H { fn drop(mut ref self) { println("drop"); } }
+fn main() {
+    let h = H { r: "x", n: 1 };
+    let H { r, n } = h;
+    println(f"{r} {n}");
+}

@@ -1,0 +1,8 @@
+trait Size { fn size(self) -> String; }
+struct W[T] { v: T }
+impl[T: Ord] W[T] { fn size(self) -> String { "inherent (T: Ord)" } }
+impl[T] Size for W[T] { fn size(self) -> String { "trait" } }
+fn main() {
+    println(W { v: 1 }.size());
+    println(W { v: 1.5 }.size());
+}

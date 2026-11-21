@@ -1,0 +1,13 @@
+struct Celsius { c: i64 }
+struct Fahrenheit { f: i64 }
+impl From[Celsius] for Fahrenheit {
+    fn from(v: own Celsius) -> Fahrenheit { Fahrenheit { f: v.c * 9 / 5 + 32 } }
+}
+fn takes(f: own Fahrenheit) -> i64 { f.f }
+fn back() -> Fahrenheit { Celsius { c: 0 }.into() }
+fn main() {
+    // A call argument is checked against its parameter type, which is the
+    // expected type `into` picks the impl by; so is a declared return type.
+    println(takes(Celsius { c: 10 }.into()));
+    println(back().f);
+}

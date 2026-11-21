@@ -1,0 +1,15 @@
+import std.json.{Json};
+const MAX_PORT: i64 = 9000;
+#[derive(Deserialize, Debug)]
+struct T {
+    #[serde(default: i64.MAX)]
+    a: i64,
+    #[serde(default: MAX_PORT - 1)]
+    b: i64,
+    #[serde(default: "x")]
+    c: String,
+}
+fn main() {
+    let t: T = Json.deserialize("{}").unwrap();
+    println(t.fmt_debug());
+}

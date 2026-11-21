@@ -1,0 +1,14 @@
+fn biggest[T: Ord + Copy](xs: Slice[T]) -> T {
+    let mut m = xs[0];
+    for x in xs { if *x > m { m = *x; } }
+    m
+}
+fn main() {
+    // F64 is the total-order float: Eq, Ord and Hash.
+    let v: Vec[F64] = [F64.from(1.5), F64.from(3.0), F64.from(2.0)];
+    println(biggest(v.as_slice()));
+    let mut s: Set[F64] = Set.new();
+    s.insert(F64.from(1.0));
+    s.insert(F64.from(1.0));
+    println(s.len());
+}

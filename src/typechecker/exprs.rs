@@ -7439,6 +7439,15 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.solve_params_from_assoc_eqs(where_clause, formal_generic_params, &mut solutions);
+        // And one only another parameter's bound names (`T` of
+        // `S: Source[T]`), so the instance records it (B-2026-11-20-111).
+        if let Some(wc) = where_clause {
+            let params: Vec<String> = match formal_generic_params {
+                Some(p) => p.to_vec(),
+                None => name_to_id.keys().cloned().collect(),
+            };
+            self.solve_params_from_bounds(&wc.constraints, &params, &mut solutions);
+        }
         // A `const` parameter's value is recorded with the types, as the
         // length of a `()` array: `N` -> `Array[(), 3]`, or the caller's own
         // `Array[(), M]` when it passes its parameter through, so the
@@ -8826,6 +8835,103 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Solves, in `solutions`, each parameter that a solved parameter's
+    /// bound names bare (`S: Source[T]` with `S` solved and `T` not), from
+    /// the solved type's one impl of that trait.
+    fn solve_params_from_bounds(
+        &self,
+        constraints: &[WhereConstraint],
+        params: &[String],
+        solutions: &mut HashMap<String, Type>,
+    ) {
+        // A parameter the call's arguments do not reach has no variable,
+        // so it is not among `params`: a name the program does not declare
+        // as a type can be nothing else, since the declaration was checked.
+        let is_param = |n: &String| {
+            params.contains(n)
+                || constraints.iter().any(
+                    |c| matches!(c, WhereConstraint::TypeBound { type_name, .. } if type_name == n),
+                )
+                || (!self.is_known_type_name(n)
+                    && !self.env.type_aliases.contains_key(n)
+                    && !self.env.traits.contains_key(n))
+        };
+        for c in constraints {
+            let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = c
+            else {
+                continue;
+            };
+            let Some(concrete) = solutions.get(type_name).cloned() else {
+                continue;
+            };
+            for bound in bounds {
+                let (Some(trait_name), Some(arg_asts)) = (bound.path.last(), &bound.generic_args)
+                else {
+                    continue;
+                };
+                let open: Vec<Option<String>> = arg_asts
+                    .iter()
+                    .map(|a| match a {
+                        GenericArg::Type(TypeExpr {
+                            kind: TypeKind::Path(p),
+                            ..
+                        }) if p.generic_args.is_none()
+                            && p.segments.len() == 1
+                            && !solutions.contains_key(&p.segments[0])
+                            && is_param(&p.segments[0]) =>
+                        {
+                            Some(p.segments[0].clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if open.iter().all(Option::is_none) {
+                    continue;
+                }
+                let Some((ty_name, ty_args)) = impl_table_key(&concrete) else {
+                    continue;
+                };
+                let mut offered: Vec<Vec<Type>> = Vec::new();
+                for imp in &self.env.impls {
+                    if imp.target_type != ty_name
+                        || imp.trait_name.as_deref() != Some(trait_name.as_str())
+                        || !impl_args_match(&imp.target_args, &ty_args)
+                    {
+                        continue;
+                    }
+                    let mut bound_params = HashMap::new();
+                    super::env::bind_impl_params(
+                        &imp.target_generic_args,
+                        &ty_args,
+                        &mut bound_params,
+                    );
+                    let isubs: HashMap<String, SubstValue> = bound_params
+                        .into_iter()
+                        .map(|(k, v)| (k, SubstValue::Type(v)))
+                        .collect();
+                    offered.push(
+                        imp.trait_args
+                            .iter()
+                            .map(|t| substitute_type_params(t, &isubs))
+                            .collect(),
+                    );
+                }
+                let [args] = offered.as_slice() else {
+                    continue;
+                };
+                for (name, t) in open.iter().zip(args) {
+                    if let Some(name) = name {
+                        if type_is_fully_concrete(t) && !contains_type_param(t) {
+                            solutions.insert(name.clone(), t.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn discharge_deferred_call_bounds(&mut self) {
         for d in std::mem::take(&mut self.deferred_call_bounds) {
             let mut solutions: HashMap<String, Type> = HashMap::new();
@@ -9803,6 +9909,22 @@ impl<'a> super::TypeChecker<'a> {
         all_param_names: &[String],
         discharge_span: &Span,
     ) {
+        // A parameter named only in another parameter's bound
+        // (`fn count[T, S: Source[T]](s: S)`) is decided by that bound: the
+        // solved `S`'s one impl of `Source` names it (design.md § Generic
+        // parameters and arguments). It was left unsolved, and the bound
+        // then read as `Source[T]` against `Source[i64]` (B-2026-11-20-111).
+        let mut solved = solutions.clone();
+        self.solve_params_from_bounds(&where_clause.constraints, all_param_names, &mut solved);
+        let mut scope_names = all_param_names.to_vec();
+        scope_names.extend(
+            solved
+                .keys()
+                .filter(|k| !all_param_names.contains(k))
+                .cloned(),
+        );
+        let all_param_names = scope_names.as_slice();
+        let solutions = &solved;
         // Solved fn type-params as a substitution map, for resolving a
         // parameterized bound's own args (`C: Reduce[T]` where `T` is another
         // solved param) before comparing them (B-2026-07-02-42).
@@ -12390,9 +12512,13 @@ impl<'a> super::TypeChecker<'a> {
                     } else {
                         format!(" with {}", bindings_summary.join(", "))
                     };
+                    // The predicate is named as written, as design.md §
+                    // Const generic parameters quotes the message
+                    // (review-thread ruling 2026-11-20).
                     self.type_error(
                         format!(
-                            "const constraint violated: predicate is false{}",
+                            "const constraint violated: `{}` evaluated to false{}",
+                            crate::formatter::render_expr_one_line(expr),
                             bindings_str
                         ),
                         *discharge_span,
@@ -12500,6 +12626,14 @@ impl<'a> super::TypeChecker<'a> {
         if method != "into" || !args.is_empty() {
             return None;
         }
+        // A bare parameter borrows, and the argument is checked against its
+        // type all the same (design.md § Type inference): `takes(c.into())`
+        // with `fn takes(f: Fahrenheit)` converts into a `Fahrenheit` the
+        // call then lends (B-2026-11-20-126).
+        let expected = match expected {
+            Type::Ref(inner) => inner.as_ref(),
+            t => t,
+        };
         // Wrapping conversions — `From[T] for Option[T]` (wrap in `Some`) and
         // `From[T] for Result[T, E]` (wrap in `Ok`), design.md § Conversion
         // Traits. Unlike the numeric / user-type `From` impls there is no
@@ -18848,11 +18982,11 @@ impl<'a> super::TypeChecker<'a> {
                                     None => Self::branch_unwrap_hint(&then_ty, &else_ty),
                                 };
                                 self.type_error(
-                                    format!(
-                                        "if/else branches have incompatible types: '{}' and '{}'{}",
-                                        type_display(&then_ty),
-                                        type_display(&else_ty),
-                                        hint
+                                    Self::branch_mismatch_message(
+                                        &then_ty,
+                                        &else_ty,
+                                        &[&then_ty, &else_ty],
+                                        &hint,
                                     ),
                                     expr.span,
                                     TypeErrorKind::BranchTypeMismatch,
@@ -18969,11 +19103,11 @@ impl<'a> super::TypeChecker<'a> {
                                     ""
                                 };
                                 self.type_error(
-                                    format!(
-                                        "if let/else branches have incompatible types: '{}' and '{}'{}",
-                                        type_display(&then_ty),
-                                        type_display(&else_ty),
-                                        hint
+                                    Self::branch_mismatch_message(
+                                        &then_ty,
+                                        &else_ty,
+                                        &[&then_ty, &else_ty],
+                                        hint,
                                     ),
                                     expr.span,
                                     TypeErrorKind::BranchTypeMismatch,

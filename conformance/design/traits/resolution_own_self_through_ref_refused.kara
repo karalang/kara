@@ -1,0 +1,4 @@
+struct C { n: String }
+impl C { fn into_n(own self) -> String { self.n } }
+fn take(r: ref C) -> String { r.into_n() }
+fn main() { println(take(C { n: "x" })); }

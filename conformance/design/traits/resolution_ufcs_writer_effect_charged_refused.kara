@@ -1,0 +1,8 @@
+pub effect resource Db;
+trait Reader { fn access(self, key: i64) -> i64 with reads(Db); }
+pub trait Writer { fn access(self, key: i64) -> i64 with writes(Db); }
+pub struct Connection {}
+impl Reader for Connection { fn access(self, key: i64) -> i64 with reads(Db) { key } }
+impl Writer for Connection { fn access(self, key: i64) -> i64 with writes(Db) { key + 1 } }
+pub fn read_it(conn: Connection) -> i64 with reads(Db) { Writer.access(conn, 5) }
+fn main() { println(f"{read_it(Connection {})}"); }

@@ -1,0 +1,5 @@
+fn main() {
+    let mut v: Vec[String] = ["a".to_string(), "b".to_string()];
+    v[0] = v[1];
+    println(f"{v}");
+}

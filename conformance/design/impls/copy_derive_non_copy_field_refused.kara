@@ -1,0 +1,3 @@
+#[derive(Copy, Clone)]
+struct User { id: u64, name: String }
+fn main() { let u = User { id: 1, name: "a" }; println(u.id); }

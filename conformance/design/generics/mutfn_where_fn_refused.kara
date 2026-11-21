@@ -1,0 +1,5 @@
+fn apply(f: Fn() -> i64) -> i64 { f() }
+fn main() {
+    let mut n = 0;
+    println(f"{apply(|| { n += 1; n })}");
+}

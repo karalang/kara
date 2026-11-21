@@ -1,0 +1,5 @@
+fn shout[T](x: T) -> i64
+    with writes(Stdout)
+where T: Display
+{ println(f"{x}!"); 1 }
+fn main() { println(f"{shout(5)}"); }

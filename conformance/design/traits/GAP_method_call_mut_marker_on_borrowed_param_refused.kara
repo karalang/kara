@@ -1,0 +1,8 @@
+struct S { k: i64 }
+impl S { fn poke(self, n: i64) { println(f"poke {self.k} {n}"); } }
+fn main() {
+    let s = S { k: 1 };
+    let mut n = 5;
+    s.poke(mut n);
+    n += 1;
+}

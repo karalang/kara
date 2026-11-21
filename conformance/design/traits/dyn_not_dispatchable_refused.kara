@@ -1,0 +1,3 @@
+trait Cmp { fn same(self, other: Self) -> bool; }
+fn f(x: dyn Cmp) -> i64 { 0 }
+fn main() {}

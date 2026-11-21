@@ -1,0 +1,16 @@
+// A partial order: values with different units are incomparable.
+struct Q { v: i64, unit: String }
+impl PartialEq for Q { fn eq(self, o: Q) -> bool { self.unit == o.unit and self.v == o.v } }
+impl PartialOrd for Q {
+    fn partial_cmp(self, o: Q) -> Option[Ordering] {
+        if self.unit != o.unit { None } else { Some(self.v.cmp(o.v)) }
+    }
+}
+fn main() {
+    let a = Q { v: 1, unit: "m" };
+    let b = Q { v: 2, unit: "m" };
+    let c = Q { v: 2, unit: "s" };
+    println(f"{a < b} {a <= b} {a > b} {a >= b}");
+    // None makes every predicate false.
+    println(f"{a < c} {a <= c} {a > c} {a >= c} {a == c}");
+}

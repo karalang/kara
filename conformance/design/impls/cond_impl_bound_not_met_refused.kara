@@ -1,0 +1,9 @@
+trait Describe { fn describe(self) -> String; }
+struct Wrap[T] { v: T }
+impl[T: Display] Describe for Wrap[T] {
+    fn describe(self) -> String { f"wrap of {self.v}" }
+}
+struct Opaque { n: i64 }
+fn main() {
+    println(Wrap { v: Opaque { n: 1 } }.describe());
+}

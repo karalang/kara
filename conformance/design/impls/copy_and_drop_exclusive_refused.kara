@@ -1,0 +1,4 @@
+#[derive(Copy, Clone)]
+struct H { fd: i64 }
+impl Drop for H { fn drop(mut ref self) { println("close"); } }
+fn main() { let h = H { fd: 1 }; println(h.fd); }

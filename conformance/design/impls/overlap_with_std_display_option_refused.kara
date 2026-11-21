@@ -1,0 +1,4 @@
+impl Display for Option[i64] {
+    fn to_string(self) -> String { "mine" }
+}
+fn main() { let v: Option[i64] = Some(1); println(f"{v}"); }

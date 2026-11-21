@@ -1,0 +1,15 @@
+struct V { n: i64 }
+impl Add for V { type Output = V; fn add(own self, o: own V) -> V { V { n: self.n + o.n } } }
+impl Mul for V { type Output = i64; fn mul(own self, o: own V) -> i64 { self.n * o.n } }
+fn f[T: Add[Output = T] + Mul[Output = i64] + Copy](a: T, b: T) -> (T, i64) { (a + b, a * b) }
+fn g[T: Add[Output = A] + Mul[Output = M] + Copy, A, M](a: T, b: T) -> (A, M) { (a + b, a * b) }
+#[derive(Copy, Clone)]
+struct C { n: i64 }
+impl Add for C { type Output = C; fn add(own self, o: own C) -> C { C { n: self.n + o.n } } }
+impl Mul for C { type Output = i64; fn mul(own self, o: own C) -> i64 { self.n * o.n } }
+fn main() {
+    let (s, p) = f(C { n: 2 }, C { n: 3 });
+    println(f"{s.n} {p}");
+    let (s2, p2) = g(C { n: 4 }, C { n: 5 });
+    println(f"{s2.n} {p2}");
+}

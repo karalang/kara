@@ -1,0 +1,22 @@
+#[derive(PartialEq, Eq, Hash, Display)]
+struct Point { x: i64, y: i64 }
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Ver { major: i64, minor: i64 }
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    println(f"{a == Point { x: 1, y: 2 }} {a != Point { x: 1, y: 3 }} {a}");
+    let mut s: Set[Point] = Set.new();
+    s.insert(Point { x: 1, y: 2 });
+    s.insert(Point { x: 1, y: 2 });
+    println(s.len());
+    // Lexicographic in field order.
+    let v1 = Ver { major: 1, minor: 9 };
+    let v2 = Ver { major: 2, minor: 0 };
+    let v3 = Ver { major: 2, minor: 1 };
+    println(f"{v1 < v2} {v2 < v3} {v3 > v1} {v1.cmp(v1) == Ordering.Equal}");
+    let mut vs: Vec[Ver] = [Ver { major: 2, minor: 1 }, Ver { major: 1, minor: 9 }, Ver { major: 2, minor: 0 }];
+    vs.sort();
+    println(f"{vs[0].major}.{vs[0].minor} {vs[1].major}.{vs[1].minor} {vs[2].major}.{vs[2].minor}");
+}

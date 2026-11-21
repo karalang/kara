@@ -1,0 +1,4 @@
+marker trait Storeable: Clone;
+struct P { x: i64 }
+impl Storeable for P { }
+fn main() {}

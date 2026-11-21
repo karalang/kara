@@ -1,0 +1,7 @@
+struct A[const N: i128] { v: i64 }
+impl[const N: i128] A[N] { fn n(self) -> i128 { N } }
+fn main() {
+    let a: A[9223372036854775807] = A { v: 1 };
+    let b: A[-5] = A { v: 1 };
+    println(f"{a.n()} {b.n()}");
+}

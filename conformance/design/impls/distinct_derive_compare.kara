@@ -1,0 +1,22 @@
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+distinct type UserId = u64;
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Arithmetic)]
+distinct type FloorNum = i64;
+
+fn main() {
+    let u1 = UserId(3);
+    let u2 = UserId(7);
+    println(f"{u1 < u2} {u1 == u2} {u1 >= u2}");
+    let a = FloorNum(3);
+    let b = FloorNum(1);
+    let c = a + b;
+    let d = a - b;
+    let e = a * b;
+    let f = a / b;
+    let g = a % b;
+    let h = -a;
+    println(f"{c.raw()} {d.raw()} {e.raw()} {f.raw()} {g.raw()} {h.raw()}");
+    let up = FloorNum(a.raw() + 1);
+    println(f"{up.raw()} {up > a}");
+}

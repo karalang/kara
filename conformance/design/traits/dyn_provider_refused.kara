@@ -1,0 +1,11 @@
+trait Stamp { fn stamp(self) -> i64; }
+struct S {}
+impl Stamp for S { fn stamp(self) -> i64 { let _ = env.var("X"); 1 } }
+struct FakeEnv {}
+impl EnvProvider for FakeEnv { fn var(ref self, name: Str) -> Result[String, VarError] { Ok("v") } }
+fn main() {
+    with_provider[Env](FakeEnv {}, || {
+        let d: dyn Stamp = S {};
+        println(f"{d.stamp()}");
+    });
+}

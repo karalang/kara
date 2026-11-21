@@ -1,0 +1,24 @@
+struct Item { name: String }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+fn main() {
+    let mut v: Vec[String] = ["b".to_string(), "a".to_string()];
+    // Borrowing operators and methods need no copy.
+    println(f"{v[0] == v[1]} {v[1] < v[0]} {v[0].len()}");
+    let r = ref v[0];
+    println(r);
+    let c = v[1].clone();
+    v.swap(0, 1);
+    println(f"{v} {c}");
+    v[0].push_str("!");
+    println(f"{v}");
+    // A new value replaces the element: the old one drops in place.
+    let mut items: Vec[Item] = [Item { name: "old" }];
+    items[0] = Item { name: "new" };
+    println("replaced");
+    // mem.take / mem.replace on an index place.
+    let taken = mem.take(mut v[1]);
+    let old = mem.replace(mut v[0], "z".to_string());
+    println(f"{taken} {old} {v}");
+}

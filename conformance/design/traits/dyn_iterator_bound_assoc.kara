@@ -1,0 +1,11 @@
+fn total(it: own dyn Iterator[Item = i64]) -> i64 {
+    let mut it = it;
+    let mut t = 0;
+    while let Some(x) = it.next() { t += x; }
+    t
+}
+fn doubled(it: own dyn Iterator[Item = i64]) -> Vec[i64] { it.map(|x| x * 2).collect() }
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    println(f"{total(v.clone().into_iter())} {doubled(v.into_iter())}");
+}

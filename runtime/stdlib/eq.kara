@@ -6,13 +6,12 @@
 // its own; the supertrait edge is the entire signal.
 //
 // design.md describes Eq as a marker trait; it is declared here as an
-// ordinary empty trait rather than `marker trait Eq: PartialEq;` to
-// preserve compatibility with existing user code that writes
-// `impl Eq for Point { fn eq(...) -> bool { ... } }` to drive `==`
-// lowering. Promoting Eq to a true marker trait would reject those
-// method bodies; the marker-ness can be revisited in a follow-up CR
-// alongside the broader impl-table cleanup.
-//
+// ordinary empty trait rather than `marker trait Eq: PartialEq;`, and
+// behaves as one: `Eq` has no items, so a method in `impl Eq for P` is
+// refused as not a member of the trait (E0204), and `==` always lowers
+// through `PartialEq.eq`. The keyword would change only the code of
+// that refusal (E_MARKER_IMPL_HAS_METHOD).
+
 // The supertrait edge `Eq: PartialEq` IS new behavior compared to the
 // pre-5b hardcoded path (which registered `Eq` with an empty
 // `supertraits` list). User impls of `Eq` for a custom type now also

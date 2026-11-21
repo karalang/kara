@@ -2443,6 +2443,13 @@ impl Pipeline {
                 .map(crate::node_type_facts)
                 .unwrap_or_default(),
         ));
+        // A diagnostic names a trait impl's method as the program spells it,
+        // `Connection.access`, not by its internal `#Writer` label.
+        if let Some(e) = self.effects.as_mut() {
+            for err in &mut e.errors {
+                err.message = crate::binding_rename::display_fn_names(&err.message);
+            }
+        }
         // B-2026-10-19-41: core semantics §7.11 lets a `Drop` body panic (a
         // panic ends the process; there is no unwinding to panic during), so
         // the v2 commands drop the legacy rule that refused one.

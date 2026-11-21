@@ -1,0 +1,8 @@
+// A call resolves through the one trait that declares the method.
+trait Base { fn id(self) -> i64; }
+trait Ext: Base { fn ext(self) -> i64; }
+struct S {}
+impl Base for S { fn id(self) -> i64 { 10 } }
+impl Ext for S { fn ext(self) -> i64 { 20 } }
+fn f[T: Ext](t: T) -> i64 { t.id() + t.ext() + Base.id(t) }
+fn main() { println(f"{f(S {})}"); }

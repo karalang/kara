@@ -1,0 +1,21 @@
+#[derive(Copy, Clone)]
+struct Money { cents: i64 }
+impl Add for Money { type Output = Money; fn add(own self, r: own Money) -> Money { Money { cents: self.cents + r.cents } } }
+
+fn total[T: Add[Output = T] + Copy](xs: Slice[T], zero: T) -> T {
+    let mut acc = zero;
+    for x in xs { acc = acc + *x; }
+    acc
+}
+
+// `T: Add` means `T: Add[T]`.
+fn double[T: Add[Output = T] + Copy](x: T) -> T { x + x }
+
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    println(total(v.as_slice(), 0));
+    let m: Vec[Money] = [Money { cents: 5 }, Money { cents: 7 }];
+    println(total(m.as_slice(), Money { cents: 0 }).cents);
+    println(double(2.5));
+    println(double(Money { cents: 4 }).cents);
+}

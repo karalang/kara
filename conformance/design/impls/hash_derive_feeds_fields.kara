@@ -1,0 +1,35 @@
+struct Rec { bytes: Vec[u8] }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: Slice[u8]) { for b in bytes { self.bytes.push(*b); } }
+    fn finish(self) -> u64 { self.bytes.len() as u64 }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct P { a: u8, b: u8 }
+
+#[derive(PartialEq, Eq, Hash)]
+enum E { X, Y(u8, u8) }
+
+fn fed[T: Hash](v: T) -> Vec[u8] {
+    let mut h = Rec { bytes: [] };
+    v.hash(mut h);
+    h.bytes
+}
+
+fn main() {
+    // Equal values feed identical bytes; field order matters.
+    println(f"{fed(P { a: 1, b: 2 }) == fed(P { a: 1, b: 2 })}");
+    println(f"{fed(P { a: 1, b: 2 }) != fed(P { a: 2, b: 1 })}");
+    // Each field is fed in declaration order, as its own impl feeds it.
+    let mut whole: Vec[u8] = fed(1u8);
+    whole.extend(fed(2u8));
+    println(f"{fed(P { a: 1, b: 2 }) == whole}");
+    // An enum feeds its discriminant, then the variant's fields.
+    let x = fed(E.Y(1, 2));
+    println(f"{x != fed(E.X)} {x.len() > whole.len()} {x[x.len() - whole.len()..] == whole.as_slice()}");
+    // Default bodies feed through write.
+    let mut h = Rec { bytes: [] };
+    h.write_u8(7);
+    h.write_u32(1);
+    println(f"{h.bytes.len()} {h.bytes[0]}");
+}

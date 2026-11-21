@@ -1,0 +1,34 @@
+#[derive(Copy, Clone, Display)]
+struct V2 { x: i64, y: i64 }
+
+impl Add for V2 { type Output = V2; fn add(own self, rhs: own V2) -> V2 { V2 { x: self.x + rhs.x, y: self.y + rhs.y } } }
+impl Sub for V2 { type Output = V2; fn sub(own self, rhs: own V2) -> V2 { V2 { x: self.x - rhs.x, y: self.y - rhs.y } } }
+impl Mul[i64] for V2 { type Output = V2; fn mul(own self, k: own i64) -> V2 { V2 { x: self.x * k, y: self.y * k } } }
+impl Div[i64] for V2 { type Output = V2; fn div(own self, k: own i64) -> V2 { V2 { x: self.x / k, y: self.y / k } } }
+impl Rem[i64] for V2 { type Output = V2; fn rem(own self, k: own i64) -> V2 { V2 { x: self.x % k, y: self.y % k } } }
+impl Neg for V2 { type Output = V2; fn neg(own self) -> V2 { V2 { x: -self.x, y: -self.y } } }
+impl BitAnd for V2 { type Output = V2; fn bitand(own self, r: own V2) -> V2 { V2 { x: self.x & r.x, y: self.y & r.y } } }
+impl BitOr for V2 { type Output = V2; fn bitor(own self, r: own V2) -> V2 { V2 { x: self.x | r.x, y: self.y | r.y } } }
+impl BitXor for V2 { type Output = V2; fn bitxor(own self, r: own V2) -> V2 { V2 { x: self.x ^ r.x, y: self.y ^ r.y } } }
+impl Shl[i64] for V2 { type Output = V2; fn shl(own self, n: own i64) -> V2 { V2 { x: self.x << n, y: self.y << n } } }
+impl Shr[i64] for V2 { type Output = V2; fn shr(own self, n: own i64) -> V2 { V2 { x: self.x >> n, y: self.y >> n } } }
+impl Not for V2 { type Output = V2; fn not(own self) -> V2 { V2 { x: ~self.x, y: ~self.y } } }
+
+// The Output may be another type: Instant - Instant is a Duration.
+struct Stamp { t: i64 }
+struct Elapsed { d: i64 }
+impl Sub for Stamp { type Output = Elapsed; fn sub(own self, rhs: own Stamp) -> Elapsed { Elapsed { d: self.t - rhs.t } } }
+
+fn main() {
+    let a = V2 { x: 6, y: 12 };
+    let b = V2 { x: 1, y: 2 };
+    println(f"{a + b} {a - b} {a * 3} {a / 4} {a % 5} {-a}");
+    println(f"{a & b} {a | b} {a ^ b} {b << 2} {a >> 1} {~b}");
+    let s = Stamp { t: 10 } - Stamp { t: 4 };
+    println(f"{s.d}");
+    // Compound assignment uses the same impl.
+    let mut c = a;
+    c += b;
+    c -= V2 { x: 0, y: 1 };
+    println(f"{c}");
+}

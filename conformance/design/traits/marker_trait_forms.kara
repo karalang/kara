@@ -1,0 +1,19 @@
+marker trait Pod2;
+marker trait Tagged { }
+marker trait Sealed2[T];
+marker trait Storeable: Clone;
+#[derive(Clone)]
+struct P { x: i64 }
+struct W[T] { v: T }
+impl Pod2 for P { }
+impl Tagged for P {}
+impl Sealed2[i64] for P { }
+impl Storeable for P { }
+impl[T: Pod2] Pod2 for W[T] { }
+fn needs_pod[T: Pod2](t: T) -> String { "pod" }
+fn needs_store[T: Storeable](t: T) -> String { "store" }
+fn main() {
+    println(needs_pod(P { x: 1 }));
+    println(needs_pod(W { v: P { x: 1 } }));
+    println(needs_store(P { x: 1 }));
+}

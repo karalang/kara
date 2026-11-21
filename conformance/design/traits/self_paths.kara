@@ -1,0 +1,37 @@
+struct Solution {}
+impl Solution {
+    fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a } else { Self.gcd(b, a % b) } }
+    fn run() -> i64 { Self.gcd(12, 18) }
+}
+struct Stack[T] { items: Vec[T] }
+impl[T] Stack[T] {
+    fn new() -> Stack[T] { Stack { items: Vec.new() } }
+    fn with(v: own T) -> Stack[T] {
+        let mut s = Self.new();
+        s.items.push(v);
+        s
+    }
+}
+enum Tree { Leaf(i64), Node(i64, i64) }
+impl Tree {
+    fn leaf(x: i64) -> Tree { Self.Leaf(x) }
+    fn sum(self) -> i64 {
+        match self {
+            Self.Leaf(x) => x,
+            Self.Node(a, b) => a + b,
+        }
+    }
+}
+trait Unit {
+    fn one() -> Self;
+    fn two() -> (Self, Self) { (Self.one(), Self.one()) }
+}
+struct One { v: i64 }
+impl Unit for One { fn one() -> One { One { v: 1 } } }
+fn main() {
+    println(f"{Solution.run()}");
+    println(f"{Stack.with(5).items.len()}");
+    println(f"{Tree.leaf(4).sum()} {Tree.Node(2, 3).sum()}");
+    let (a, b) = One.two();
+    println(f"{a.v + b.v}");
+}

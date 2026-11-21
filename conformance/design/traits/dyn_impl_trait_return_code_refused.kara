@@ -1,0 +1,3 @@
+trait Src { fn items(self) -> impl Iterator[Item = i64]; }
+fn f(x: dyn Src) -> i64 { 0 }
+fn main() {}

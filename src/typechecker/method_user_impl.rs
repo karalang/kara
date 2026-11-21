@@ -1222,11 +1222,12 @@ impl<'a> super::TypeChecker<'a> {
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!(
-                        "    `{}.{}({})` -> {}",
+                        "    `{}.{}({})` -> {}{}",
                         dispatcher,
                         method,
                         params_display,
                         type_display(&sig.return_type),
+                        self.impl_method_effects_text(imp, method),
                     )
                 })
                 .collect();
@@ -2288,7 +2289,7 @@ impl<'a> super::TypeChecker<'a> {
                         };
                         msg.push_str(&format!(
                             ": it is a method of {list}, which {verb} not in scope here; \
-                             a dependency's trait supplies methods only where it is imported"
+                             a trait supplies methods only where its name is in scope (design.md § Method resolution)"
                         ));
                         self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                         return Type::Error;
@@ -2726,5 +2727,39 @@ fn holds_library_closure(ty: &Type) -> bool {
             CLOSURE_ADAPTORS.contains(&name.as_str()) || args.iter().any(holds_library_closure)
         }
         _ => false,
+    }
+}
+
+impl<'a> super::TypeChecker<'a> {
+    /// ` with <effects>` of the method `method` in the impl `imp` as written,
+    /// for an ambiguity diagnostic, which lists each candidate's effects
+    /// (design.md § Method resolution, B-2026-11-20-116); empty for an
+    /// impl method that declares none or one this cannot find.
+    pub(super) fn impl_method_effects_text(&self, imp: &ImplInfo, method: &str) -> String {
+        let found = self.program.items.iter().find_map(|item| {
+            let Item::ImplBlock(b) = item else {
+                return None;
+            };
+            let trait_last = b.trait_name.as_ref().and_then(|t| t.segments.last());
+            if trait_last != imp.trait_name.as_ref() {
+                return None;
+            }
+            let crate::ast::TypeKind::Path(p) = &b.target_type.kind else {
+                return None;
+            };
+            if p.segments.last() != Some(&imp.target_type) {
+                return None;
+            }
+            b.items.iter().find_map(|it| match it {
+                ImplItem::Method(f) if f.name == method => Some(f),
+                _ => None,
+            })
+        });
+        match found.and_then(|f| f.effects.as_ref()) {
+            Some(e) if !e.items.is_empty() => {
+                format!(" with {}", crate::formatter::render_effect_list(e))
+            }
+            _ => String::new(),
+        }
     }
 }

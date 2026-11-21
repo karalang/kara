@@ -1,0 +1,6 @@
+#[derive(Deserialize)]
+struct T {
+    #[serde(default: Vec.new())]
+    v: Vec[i64],
+}
+fn main() { println("x"); }

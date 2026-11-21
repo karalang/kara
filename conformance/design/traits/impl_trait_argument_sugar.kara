@@ -1,0 +1,16 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+struct Rect { w: i64, h: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+impl Shape for Rect { fn area(self) -> i64 { self.w * self.h } }
+fn pair(x: impl Shape, y: impl Shape) -> i64 { x.area() + y.area() }
+fn via_ref(x: ref impl Shape) -> i64 { x.area() }
+fn grow(x: mut ref impl Grow) { x.grow(); }
+trait Grow { fn grow(mut ref self); }
+impl Grow for Sq { fn grow(mut ref self) { self.s += 1; } }
+fn main() {
+    println(f"{pair(Sq { s: 2 }, Rect { w: 2, h: 3 })}");
+    let mut s = Sq { s: 3 };
+    grow(mut s);
+    println(f"{via_ref(s)}");
+}

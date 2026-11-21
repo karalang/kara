@@ -1231,6 +1231,18 @@ impl TyCtxt {
             Type::Never => TyKind::Never,
             Type::Error => TyKind::Error,
             Type::Tuple(elems) => TyKind::Tuple(lower_all(elems)?),
+            // A const argument rides as the length of a `()` array
+            // (`const_arg_type`), and a negative one (`Small[-1]` of
+            // `struct Small[const S: i8]`) as its two's-complement bits: no
+            // such array is ever built, and `const_arg_value` reads the
+            // value back (B-2026-11-20-113).
+            Type::Array {
+                element,
+                size: ConstArg::Literal(n),
+            } if **element == Type::Unit && *n < 0 => TyKind::Array {
+                elem: lower(element)?,
+                len: ArrayLen::Known(*n as u64),
+            },
             Type::Array { element, size } => TyKind::Array {
                 elem: lower(element)?,
                 len: length(size)?,

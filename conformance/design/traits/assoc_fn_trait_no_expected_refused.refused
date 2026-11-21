@@ -1,0 +1,2 @@
+`Make.name()` names no type
+let x: P = Make.name(..)

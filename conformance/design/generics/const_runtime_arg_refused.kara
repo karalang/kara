@@ -1,0 +1,5 @@
+fn main() {
+    let n = 3;
+    let a: Array[i64, n] = [0; 3];
+    println(f"{a[0]}");
+}

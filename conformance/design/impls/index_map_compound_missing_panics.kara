@@ -1,0 +1,6 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    println("before");
+    m["missing"] += 1;
+    println("after");
+}

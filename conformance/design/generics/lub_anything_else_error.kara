@@ -1,0 +1,4 @@
+fn main() {
+    let r = match 2 { 1 => 5, 2 => "two", _ => 7 };
+    println(f"{r}");
+}

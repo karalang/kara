@@ -1,0 +1,11 @@
+trait Parseable {
+    type Output: Display;
+    fn parse(input: String) -> Result[Self.Output, String];
+}
+struct Opaque {}
+struct P {}
+impl Parseable for P {
+    type Output = Opaque;
+    fn parse(input: String) -> Result[Opaque, String] { Ok(Opaque {}) }
+}
+fn main() {}

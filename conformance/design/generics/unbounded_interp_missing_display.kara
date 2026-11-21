@@ -1,0 +1,4 @@
+struct Secret { v: i64 }
+fn show[T](a: T) -> String { f"{a}" }
+fn pass[U](u: U) -> String { show(u) }
+fn main() { println(pass(Secret { v: 1 })); }

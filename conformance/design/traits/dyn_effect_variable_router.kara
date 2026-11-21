@@ -1,0 +1,20 @@
+trait Handler { fn handle(self, req: i64) -> i64; }
+struct Double {}
+impl Handler for Double { fn handle(self, req: i64) -> i64 { req * 2 } }
+struct Router[with E] {
+    routes: Vec[(String, dyn Handler with E)],
+}
+impl[with E] Router[with E] {
+    fn add(mut ref self, path: Str, h: escaping dyn Handler with E) { self.routes.push((path.to_string(), h)); }
+    fn dispatch(self, req: i64) -> i64 with E {
+        let mut t = 0;
+        for (_, h) in self.routes.iter() { t += h.handle(req); }
+        t
+    }
+}
+fn main() {
+    let mut r = Router { routes: Vec.new() };
+    r.add("/a", Double {});
+    r.add("/b", Double {});
+    println(f"{r.dispatch(5)}");
+}

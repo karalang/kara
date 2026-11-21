@@ -1,0 +1,6 @@
+fn pair[const N: i64](a: Array[i64, N], b: Array[i64, N]) -> i64 { N }
+fn main() {
+    let a: Array[i64, 2] = [1, 2];
+    let b: Array[i64, 3] = [1, 2, 3];
+    println(f"{pair(a, b)}");
+}

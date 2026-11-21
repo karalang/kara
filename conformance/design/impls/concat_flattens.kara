@@ -1,0 +1,11 @@
+fn main() {
+    let vv: Vec[Vec[i64]] = [[1, 2], [], [3]];
+    println(f"{vv.concat()}");
+    let ss: Vec[String] = ["ab".to_string(), "cd".to_string()];
+    println(ss.concat());
+    let strs: Vec[Str] = ["x", "y"];
+    println(strs.concat());
+    let arrs: Vec[Array[i64, 2]] = [[1, 2], [3, 4]];
+    println(f"{arrs.concat()}");
+    println(f"{vv.as_slice().concat()}");
+}

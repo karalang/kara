@@ -1,0 +1,1 @@
+a package may write `impl Type { .. }` only for its own types

@@ -1,0 +1,2 @@
+fn same[T: PartialEq](a: T, b: T) -> bool { a == b }
+fn main() { println(f"{same(1, 1)} {same("a", "b")}"); }

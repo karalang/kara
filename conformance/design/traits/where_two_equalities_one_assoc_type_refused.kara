@@ -1,0 +1,2 @@
+fn f[I: Iterator](iter: own I) -> i64 where I.Item = i64, I.Item = String { 0 }
+fn main() {}

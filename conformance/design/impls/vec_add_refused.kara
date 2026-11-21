@@ -1,0 +1,6 @@
+fn main() {
+    let a: Vec[i64] = [1];
+    let b: Vec[i64] = [2];
+    let c = a + b;
+    println(f"{c}");
+}

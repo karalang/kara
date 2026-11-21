@@ -1,0 +1,8 @@
+trait Item { fn get(self) -> i64; }
+struct A { n: i64 }
+impl Item for A { fn get(self) -> i64 { self.n } }
+fn main() {
+    let a: dyn Item = A { n: 1 };
+    let b: dyn Item = A { n: 1 };
+    println(f"{a == b}");
+}

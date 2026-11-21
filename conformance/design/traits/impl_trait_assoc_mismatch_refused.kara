@@ -1,0 +1,5 @@
+fn names() -> impl Iterator[Item = i64] {
+    let v: Vec[String] = ["a"];
+    v.into_iter()
+}
+fn main() {}

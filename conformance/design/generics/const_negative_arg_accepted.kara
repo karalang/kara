@@ -1,0 +1,7 @@
+struct Small[const S: i8] { v: i64 }
+struct Big[const N: i64] { v: i64 }
+fn main() {
+    let s: Small[-1] = Small { v: 4 };
+    let b: Big[-1] = Big { v: 5 };
+    println(f"{s.v} {b.v}");
+}

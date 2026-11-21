@@ -1,0 +1,13 @@
+fn main() {
+    let small: i32 = 7;
+    let wide = i64.from(small);
+    let w2: i64 = small.into();
+    println(f"{wide} {w2}");
+    let big: i64 = 3000000000;
+    println(f"{i32.try_from(big).is_err()} {i32.try_from(5).unwrap()}");
+    let s = String.from("abc");
+    println(s);
+    let o: Option[i64] = Option.from(4);
+    let r: Result[i64, String] = Result.from(9);
+    println(f"{o} {r}");
+}

@@ -1,0 +1,15 @@
+// A foreign trait for a foreign type (Hash for f64, which the library
+// leaves without one) is allowed in the application.
+struct Count { n: i64 }
+impl Hasher for Count {
+    fn write(mut ref self, bytes: Slice[u8]) { self.n += bytes.len(); }
+    fn finish(self) -> u64 { self.n as u64 }
+}
+impl Hash for f64 {
+    fn hash[H: Hasher](self, h: mut ref H) { h.write_i64(self as i64); h.write_u8(0); }
+}
+fn main() {
+    let mut c = Count { n: 0 };
+    2.5.hash(mut c);
+    println(f"{c.n}");
+}

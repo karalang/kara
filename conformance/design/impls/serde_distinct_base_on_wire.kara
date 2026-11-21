@@ -1,0 +1,13 @@
+import std.json.{Json};
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+distinct type UserId = i64;
+#[derive(Serialize, Deserialize, Debug)]
+struct Rec { id: UserId }
+fn main() {
+    println(Json.serialize(UserId(7)));
+    let u: UserId = Json.deserialize("7").unwrap();
+    println(u.raw());
+    println(Json.serialize(Rec { id: UserId(3) }));
+    let r: Rec = Json.deserialize("{\"id\":4}").unwrap();
+    println(r.id.raw());
+}

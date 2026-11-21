@@ -1,0 +1,10 @@
+#[derive(Arithmetic)]
+distinct type FloorNum = i64;
+#[derive(Arithmetic)]
+distinct type UserId = i64;
+fn main() {
+    let a = FloorNum(3);
+    let b = UserId(1);
+    let d = a + b;
+    println(d.raw());
+}

@@ -1,0 +1,8 @@
+trait Source[T] { fn get(self) -> T; }
+struct Ten {}
+impl Source[i64] for Ten { fn get(self) -> i64 { 10 } }
+fn twice[T: Display, S: Source[T]](s: S) -> String {
+    let v = s.get();
+    f"{v}{v}"
+}
+fn main() { println(twice(Ten {})); }

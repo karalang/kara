@@ -1,0 +1,3 @@
+#[derive(Default)]
+enum Status { #[default(1)] Pending, Active }
+fn main() { let _ = Status.default(); }

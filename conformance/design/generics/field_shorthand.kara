@@ -1,0 +1,9 @@
+struct User { name: String, email: String, hash: i64 }
+fn hash(p: Str) -> i64 { p.len() }
+fn main() {
+    let name = "ana";
+    let email = "a@x";
+    let password = "secret";
+    let u = User { name, email, hash: hash(password) };
+    println(f"{u.name} {u.email} {u.hash}");
+}

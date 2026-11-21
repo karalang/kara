@@ -1028,7 +1028,8 @@ fn shown_callee(key: &str) -> String {
     if let Some(r) = key.strip_prefix("__providers_bind::") {
         return format!("the provider bound for {r}");
     }
-    key.to_string()
+    // `Connection.access#Writer` is `Connection.access` as written.
+    crate::binding_rename::display_fn_names(key)
 }
 
 /// [`shown_callee`] without how the method was reached: the name a step

@@ -1,0 +1,13 @@
+trait Visitor {
+    fn visit(self, _: i32) -> i32;
+    fn scale(self, factor: i32) -> i32;
+}
+struct V {}
+impl Visitor for V {
+    fn visit(self, n: i32) -> i32 { n + 1 }
+    fn scale(self, k: i32) -> i32 { k * 2 }
+}
+fn main() {
+    let v = V {};
+    println(f"{v.visit(4)} {v.scale(5)}");
+}

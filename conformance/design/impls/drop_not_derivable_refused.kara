@@ -1,0 +1,3 @@
+#[derive(Drop)]
+struct H { fd: i64 }
+fn main() { let h = H { fd: 1 }; println(h.fd); }

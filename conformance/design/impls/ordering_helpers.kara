@@ -1,0 +1,12 @@
+fn show(o: Ordering) -> String { f"{o.is_lt()} {o.is_le()} {o.is_gt()} {o.is_ge()} {o.is_eq()}" }
+fn showp(o: Option[Ordering]) -> String { f"{o.is_lt()} {o.is_le()} {o.is_gt()} {o.is_ge()} {o.is_eq()}" }
+fn main() {
+    println(show(Ordering.Less));
+    println(show(Ordering.Equal));
+    println(show(Ordering.Greater));
+    println(showp(Some(Ordering.Less)));
+    println(showp(Some(Ordering.Equal)));
+    println(showp(None));
+    println(f"{Ordering.Less.reverse() == Ordering.Greater} {Ordering.Equal.then(Ordering.Less) == Ordering.Less} {Ordering.Greater.then(Ordering.Less) == Ordering.Greater}");
+    println(f"{Ordering.Equal.then_with(|| Ordering.Greater) == Ordering.Greater}");
+}

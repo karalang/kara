@@ -1,0 +1,7 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+struct Rect { w: i64, h: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+impl Shape for Rect { fn area(self) -> i64 { self.w * self.h } }
+fn make(b: bool) -> impl Shape { if b { Sq { s: 2 } } else { Rect { w: 1, h: 2 } } }
+fn main() { println(f"{make(true).area()}"); }

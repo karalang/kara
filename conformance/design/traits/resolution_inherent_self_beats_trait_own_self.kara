@@ -1,0 +1,9 @@
+trait Take { fn take(own self) -> String; }
+struct P { s: String }
+impl Take for P { fn take(own self) -> String { "trait own" } }
+impl P { fn take(self) -> String { "inherent borrowed" } }
+fn main() {
+    let p = P { s: "a" };
+    println(p.take());
+    println(p.take());
+}

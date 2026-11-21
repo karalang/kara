@@ -933,11 +933,11 @@ impl<'a> super::TypeChecker<'a> {
                             (None, None) => Self::branch_unwrap_hint(&result_ty, arm_ty),
                         };
                         self.type_error(
-                            format!(
-                                "match arms have incompatible types: '{}' and '{}'{}",
-                                type_display(&result_ty),
-                                type_display(arm_ty),
-                                hint
+                            Self::branch_mismatch_message(
+                                &result_ty,
+                                arm_ty,
+                                &arm_types.iter().collect::<Vec<_>>(),
+                                &hint,
                             ),
                             *span,
                             TypeErrorKind::BranchTypeMismatch,

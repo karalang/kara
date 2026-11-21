@@ -1,0 +1,11 @@
+fn make_counter(start: i64) -> impl Iterator[Item = i64] {
+    start..
+}
+fn evens() -> impl Iterator[Item = i64] { (0..10).filter(|x| x % 2 == 0) }
+fn main() {
+    let it = make_counter(5);
+    let first_three: Vec[i64] = it.take(3).collect();
+    println(f"{first_three}");
+    let mut e = evens();
+    println(f"{e.next()} {e.next()}");
+}

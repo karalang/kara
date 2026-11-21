@@ -1,0 +1,9 @@
+struct Config { n: i64 }
+impl Default for Config {
+    fn default() -> Config { Config { n: 1 } }
+}
+fn make[T: Default]() -> T { T.default() }
+fn main() {
+    let c = make[Config]();
+    println(f"{c.n}");
+}

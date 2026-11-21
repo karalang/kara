@@ -1,0 +1,4 @@
+struct Opaque { n: i64 }
+#[derive(Serialize)]
+struct H { inner: Opaque }
+fn main() { let h = H { inner: Opaque { n: 1 } }; println(h.inner.n); }

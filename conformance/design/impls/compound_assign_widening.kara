@@ -1,0 +1,15 @@
+fn bump(x: mut ref i64) { *x += 1; }
+fn main() {
+    let mut total: i64 = 10;
+    let n: i32 = 5;
+    total += n;            // legal: i32 widens to i64
+    println(total);
+    let mut y = 1;
+    bump(mut y);
+    println(y);
+    // A place in a compound assignment is evaluated once.
+    let mut v: Vec[i64] = [0, 0];
+    let mut calls = 0;
+    v[{ calls += 1; 1 }] += 7;
+    println(f"{v} {calls}");
+}

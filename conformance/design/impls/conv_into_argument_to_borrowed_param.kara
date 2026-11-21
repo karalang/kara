@@ -1,0 +1,11 @@
+struct Celsius { c: i64 }
+struct Fahrenheit { f: i64 }
+impl From[Celsius] for Fahrenheit {
+    fn from(v: own Celsius) -> Fahrenheit { Fahrenheit { f: v.c * 9 / 5 + 32 } }
+}
+// A bare parameter borrows, but its type is still Fahrenheit: the argument
+// is checked against it, so `into` has its expected type.
+fn takes(f: Fahrenheit) -> i64 { f.f }
+fn main() {
+    println(takes(Celsius { c: 10 }.into()));
+}

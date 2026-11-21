@@ -1,0 +1,5 @@
+struct Bag { n: i64 }
+fn main() {
+    let b = Bag { n: 1 };
+    for x in b { println(x); }
+}

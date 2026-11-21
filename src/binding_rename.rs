@@ -33,6 +33,31 @@ pub(crate) fn display_names(text: &str) -> String {
     out
 }
 
+/// `text` with the impl label written back out of every function name in
+/// it: `Connection.access#Writer` (the method of `impl Writer for
+/// Connection`) is `Connection.access`, as the program spells it. A
+/// diagnostic names functions the way the program does (review-thread
+/// ruling 2026-11-20, on E0400's "via call to 'Connection.access#Writer'").
+/// A `#` that follows no name (`#[derive]`, "item #2") stays.
+pub fn display_fn_names(text: &str) -> String {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    let mut prev: Option<char> = None;
+    while let Some((_, c)) = chars.next() {
+        if c == '#' && prev.is_some_and(is_ident) && chars.peek().is_some_and(|&(_, n)| is_ident(n))
+        {
+            while chars.peek().is_some_and(|&(_, n)| is_ident(n)) {
+                chars.next();
+            }
+            continue;
+        }
+        out.push(c);
+        prev = Some(c);
+    }
+    out
+}
+
 pub(crate) fn pattern_binds(p: &Pattern, name: &str) -> bool {
     p.binding_names().iter().any(|b| b == name)
 }
@@ -230,7 +255,23 @@ pub(crate) fn rename_uses_expr(e: &mut Expr, from: &str, to: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::display_names;
+    use super::{display_fn_names, display_names};
+
+    #[test]
+    fn display_fn_names_drops_impl_labels_only() {
+        assert_eq!(
+            display_fn_names("via call to 'Connection.access#Writer' at line 7"),
+            "via call to 'Connection.access' at line 7"
+        );
+        assert_eq!(
+            display_fn_names("Both.handle#1 calls x"),
+            "Both.handle calls x"
+        );
+        assert_eq!(
+            display_fn_names("add #[derive(Hash)] or item #2"),
+            "add #[derive(Hash)] or item #2"
+        );
+    }
 
     #[test]
     fn display_names_strips_only_the_numbered_param_shadow_suffix() {

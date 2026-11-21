@@ -1,0 +1,5 @@
+trait Item { fn finish(own self) -> String; }
+struct A { n: String }
+impl Item for A { fn finish(own self) -> String { self.n } }
+fn f(r: ref dyn Item) -> String { r.finish() }
+fn main() { println(f(A { n: "x" })); }

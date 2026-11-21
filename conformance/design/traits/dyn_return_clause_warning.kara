@@ -1,0 +1,5 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s } }
+fn make() -> dyn Shape with reads(Clock) { Sq { s: 2 } }
+fn main() { println(f"{make().area()}"); }

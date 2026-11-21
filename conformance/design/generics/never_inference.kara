@@ -1,0 +1,20 @@
+fn id[T](x: own T) -> T { x }
+fn pick[T](c: bool, x: own T, y: own T) -> T { if c { x } else { y } }
+fn want_i64(x: i64) -> i64 { x }
+fn main() {
+    let f = || panic("nope");
+    if false {
+        // y: Never, so it converts to i64 (it would not as ()).
+        let y = id(panic("never"));
+        let g: i64 = y;
+        // v: Option[Never], which goes where an Option[String] is expected.
+        let v = Some(todo());
+        let n: Option[String] = v;
+        // f: Fn() -> Never.
+        let k: String = f();
+        // LUB(Never, i64) = i64.
+        let a = pick(true, 42, panic());
+        want_i64(a);
+    }
+    println("done");
+}

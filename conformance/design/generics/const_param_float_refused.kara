@@ -1,0 +1,2 @@
+struct Tag[const F: f64] { v: i64 }
+fn main() { println("x"); }

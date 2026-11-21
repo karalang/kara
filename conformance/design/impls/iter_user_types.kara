@@ -1,0 +1,19 @@
+struct Countdown { n: i64 }
+impl Iterator for Countdown {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.n == 0 { None } else { self.n -= 1; Some(self.n + 1) }
+    }
+}
+struct Trio { a: i64, b: i64, c: i64 }
+impl Iterable for Trio {
+    type Item = i64;
+    fn iter(self) -> impl Iterator[Item = i64] { [self.a, self.b, self.c].into_iter() }
+}
+fn main() {
+    let c = Countdown { n: 3 };
+    for x in c { println(x); }
+    let t = Trio { a: 7, b: 8, c: 9 };
+    for x in t { println(x); }
+    println(t.a);
+}

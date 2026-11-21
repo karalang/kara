@@ -1,0 +1,26 @@
+struct CountUp { current: i64, limit: i64 }
+impl Iterator for CountUp {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.current >= self.limit { return None; }
+        self.current += 1;
+        Some(self.current - 1)
+    }
+}
+fn first[I: Iterator](iter: own I) -> Option[I.Item] {
+    let mut it = iter;
+    it.next()
+}
+fn total[I: Iterator](iter: own I) -> I.Item where I.Item: Add[Output = I.Item] + Default {
+    let mut acc = I.Item.default();
+    let mut it = iter;
+    while let Some(x) = it.next() { acc = acc + x; }
+    acc
+}
+fn main() {
+    println(f"{first(CountUp { current: 3, limit: 5 })}");
+    println(f"{total(CountUp { current: 0, limit: 5 })}");
+    let mut sum = 0;
+    for x in (CountUp { current: 1, limit: 4 }) { sum += x; }
+    println(f"{sum}");
+}

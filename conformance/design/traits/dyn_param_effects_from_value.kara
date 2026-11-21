@@ -1,0 +1,13 @@
+// A call through a non-escaping dyn parameter has, at each call site, the
+// effects of the value passed there: a quiet handler passed in two par
+// branches does not conflict.
+trait Handler { fn handle(self) -> i64; }
+struct Quiet { n: i64 }
+impl Handler for Quiet { fn handle(self) -> i64 { self.n } }
+fn run(h: ref dyn Handler) -> i64 { h.handle() }
+fn main() {
+    let a = Quiet { n: 1 };
+    let b = Quiet { n: 2 };
+    let (x, y) = par { run(a), run(b) };
+    println(f"{x + y}");
+}

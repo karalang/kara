@@ -1,0 +1,7 @@
+trait Source { fn items(self) -> impl Iterator[Item = i64]; }
+struct A { n: i64 }
+struct B {}
+impl Source for A { fn items(self) -> impl Iterator[Item = i64] { 0..self.n } }
+impl Source for B { fn items(self) -> impl Iterator[Item = i64] { [7, 8].into_iter() } }
+fn total[S: Source](s: S) -> i64 { s.items().sum() }
+fn main() { println(f"{total(A { n: 4 })} {total(B {})}"); }

@@ -1,0 +1,8 @@
+struct Handle { fd: i64 }
+#[derive(Deserialize)]
+struct T {
+    #[serde(skip)]
+    h: Handle,
+    n: i64,
+}
+fn main() { println("x"); }

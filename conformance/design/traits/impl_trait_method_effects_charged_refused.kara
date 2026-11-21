@@ -1,0 +1,10 @@
+pub effect resource Audit;
+pub fn record(x: i64) with writes(Audit) {}
+fn audited(xs: own Vec[i64]) -> impl Iterator[Item = i64] {
+    xs.into_iter().inspect(|x| record(*x))
+}
+pub fn total(xs: own Vec[i64]) -> i64 {
+    let it = audited(xs);
+    it.sum()
+}
+fn main() { println(f"{total([1])}"); }

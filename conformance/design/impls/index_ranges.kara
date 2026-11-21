@@ -1,0 +1,13 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4, 5];
+    let s: Slice[i64] = v[1..3];
+    println(f"{s} {s.len()}");
+    let a: Array[i64, 4] = [9, 8, 7, 6];
+    println(f"{a[2..4]}");
+    let other: Vec[i64] = [0, 0];
+    v[0..2] = other.as_slice();
+    println(f"{v}");
+    let h = "hello";
+    let t: Str = h[1..4];
+    println(t);
+}

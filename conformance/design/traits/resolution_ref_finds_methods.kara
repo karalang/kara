@@ -1,0 +1,12 @@
+struct C { n: i64 }
+impl C {
+    fn get(self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n += 1; }
+}
+fn read(r: ref C) -> i64 { r.get() }
+fn poke(r: mut ref C) { r.bump(); }
+fn main() {
+    let mut c = C { n: 1 };
+    poke(mut c);
+    println(f"{read(c)}");
+}

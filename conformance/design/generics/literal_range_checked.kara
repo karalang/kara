@@ -1,0 +1,4 @@
+fn main() {
+    let x: u8 = 300;
+    println(f"{x}");
+}

@@ -1,0 +1,9 @@
+struct It { n: i64 }
+impl Iterator for It {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { if self.n > 2 { None } else { self.n += 1; Some(self.n) } }
+}
+fn main() {
+    let v: Vec[i64] = It { n: 0 }.cycle().take(5).collect();
+    println(f"{v}");
+}

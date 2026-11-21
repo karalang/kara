@@ -1,0 +1,9 @@
+struct Id { n: i64 }
+impl From[i64] for Id { fn from(v: own i64) -> Id { Id { n: v } } }
+struct Other { n: i64 }
+impl From[i64] for Other { fn from(v: own i64) -> Other { Other { n: v } } }
+fn main() {
+    let x: i64 = 3;
+    let c = x.into();
+    println("?");
+}

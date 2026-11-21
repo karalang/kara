@@ -1,0 +1,7 @@
+fn main() {
+    let a = Vec[i64].new();
+    let mut b: Vec[String] = Vec.new();
+    b.push("x");
+    let m = Map[String, i64].new();
+    println(f"{a.len()} {b.len()} {m.len()}");
+}

@@ -122,5 +122,5 @@ fn a_tuple_of_a_ref_string_beside_a_string_is_still_refused() {
 ";
     let (checked, out) = run("string", src);
     assert!(!checked, "{out}");
-    assert!(out.contains("match arms have incompatible types"), "{out}");
+    assert!(out.contains("type mismatch in branches"), "{out}");
 }

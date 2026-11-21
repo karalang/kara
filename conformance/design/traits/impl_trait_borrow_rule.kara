@@ -1,0 +1,9 @@
+// A function with no non-Copy bare parameter returns a value that borrows nothing.
+fn make_counter(start: i64) -> impl Iterator[Item = i64] { start.. }
+fn main() {
+    let mut its = Vec.new();
+    for i in 0..3 { its.push(make_counter(i)); }
+    let mut firsts = Vec.new();
+    for it in its.into_iter() { let mut it = it; firsts.push(it.next().unwrap()); }
+    println(f"{firsts}");
+}

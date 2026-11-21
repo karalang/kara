@@ -1,0 +1,21 @@
+fn main() {
+    let mut v: Vec[i64] = [1];
+    v.extend(2..4);
+    v.extend([9, 8]);
+    v.extend([5].iter().map(|x| *x * 2));
+    println(f"{v}");
+    let mut s: SortedSet[i64] = SortedSet.new();
+    s.extend([3, 1, 3]);
+    println(f"{s}");
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    m.extend([("a".to_string(), 1), ("b".to_string(), 2), ("a".to_string(), 3)]);
+    println(f"{m}");
+    let mut t = "ab".to_string();
+    t.extend("cd".chars());
+    let parts: Vec[String] = ["e".to_string(), "f".to_string()];
+    t.extend(parts);
+    println(t);
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.extend(0..3);
+    println(q.len());
+}

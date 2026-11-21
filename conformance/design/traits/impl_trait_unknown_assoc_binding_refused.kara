@@ -1,0 +1,2 @@
+fn names() -> impl Iterator[Elem = i64] { 0.. }
+fn main() {}

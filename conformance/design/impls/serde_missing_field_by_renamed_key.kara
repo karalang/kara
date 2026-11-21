@@ -1,0 +1,9 @@
+import std.json.{Json};
+#[derive(Serialize, Deserialize)]
+struct U { #[serde(rename: "userName")] name: String, age: i64 }
+fn main() {
+    let r: Result[U, DeserializeError] = Json.deserialize("{\"age\":1}");
+    match r { Ok(_) => println("ok?"), Err(e) => println(f"{e}") }
+    let d: Result[U, DeserializeError] = Json.deserialize("{\"userName\":\"a\",\"age\":1,\"age\":2}");
+    match d { Ok(_) => println("ok?"), Err(e) => println(f"{e}".starts_with("duplicate field `age`")) }
+}

@@ -1,1 +1,1 @@
-ERROR at line 3: #[default] on enum variant 'Busy' requires a field-less variant; either declare the marked variant as 'Busy' (no fields) or write a manual 'impl Mode { fn default() -> Mode { ... } }' that constructs the desired starting state
+ERROR at line 3: #[default] on enum variant 'Busy' requires a field-less variant; either declare the marked variant as 'Busy' (no fields) or drop the derive and write a manual 'impl Default for Mode { fn default() -> Mode { ... } }' that constructs the desired starting state

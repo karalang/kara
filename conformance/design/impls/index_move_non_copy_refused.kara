@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[String] = ["a".to_string(), "b".to_string()];
+    let t = v[0];
+    println(t);
+}

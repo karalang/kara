@@ -1,0 +1,2 @@
+marker trait M { fn m(self); }
+fn main() {}

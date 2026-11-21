@@ -1,0 +1,5 @@
+fn show(c: bool, arg: String) {
+    let p = if c { "lit" } else { arg };
+    println(p);
+}
+fn main() { show(false, "x"); }

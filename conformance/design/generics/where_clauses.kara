@@ -1,0 +1,35 @@
+struct Pair[T] { a: T, b: T }
+
+impl[T] Display for Pair[T]
+where T: Display
+{
+    fn to_string(self) -> String { f"({self.a}, {self.b})" }
+}
+
+struct SortedPair[T]
+where T: Ord
+{
+    first: T,
+    second: T,
+}
+
+fn largest[T](xs: Vec[T]) -> T
+where T: Ord + Clone
+{
+    let mut best = xs[0].clone();
+    for x in xs.iter() { if *x > best { best = x.clone(); } }
+    best
+}
+
+fn describe[T: Ord, U](x: T, u: U) -> String
+where U: Display
+{ f"{u}" }
+
+fn main() {
+    let p = Pair { a: 1, b: 2 };
+    println(f"{p}");
+    let s = SortedPair { first: 1, second: 2 };
+    println(f"{s.first < s.second}");
+    println(f"{largest([3, 9, 4])}");
+    println(describe(1, "u"));
+}

@@ -1,0 +1,2 @@
+marker trait M { type Item; }
+fn main() {}

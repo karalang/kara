@@ -1,0 +1,9 @@
+trait Shape {
+    fn area(self) -> f64;
+    fn name(self) -> String { "shape" }
+}
+struct Circle { radius: f64 }
+impl Shape for Circle {
+    fn name(self) -> String { "circle" }
+}
+fn main() { println(Circle { radius: 1.0 }.name()); }

@@ -1,0 +1,11 @@
+body sees conn and log
+drop field log
+drop field conn
+--
+enum body
+drop field payload
+--
+defer 2
+drop field b
+defer 1
+drop field a

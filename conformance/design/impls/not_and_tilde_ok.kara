@@ -1,0 +1,5 @@
+fn main() {
+    let a: i64 = 5;
+    let u: u8 = 0b1010_0000;
+    println(f"{~a} {~u} {not true} {not false}");
+}

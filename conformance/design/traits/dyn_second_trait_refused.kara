@@ -1,0 +1,4 @@
+trait A { fn a(self) -> i64; }
+trait B { fn b(self) -> i64; }
+fn f(x: dyn A + B) -> i64 { x.a() }
+fn main() {}

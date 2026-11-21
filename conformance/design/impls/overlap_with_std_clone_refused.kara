@@ -1,0 +1,7 @@
+impl Clone for String {
+    fn clone(self) -> String { "cloned" }
+}
+fn main() {
+    let a = "x";
+    println(a.clone());
+}

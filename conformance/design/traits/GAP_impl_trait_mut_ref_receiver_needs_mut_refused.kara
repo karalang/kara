@@ -1,0 +1,5 @@
+fn evens() -> impl Iterator[Item = i64] { (0..10).filter(|x| x % 2 == 0) }
+fn main() {
+    let e = evens();
+    println(f"{e.next()}");
+}

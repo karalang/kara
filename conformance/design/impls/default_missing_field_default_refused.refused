@@ -1,0 +1,2 @@
+E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT
+field 'name' of type 'NoDef' does not implement 'Default'

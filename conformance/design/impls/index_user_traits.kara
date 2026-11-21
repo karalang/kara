@@ -1,0 +1,33 @@
+struct Grid { w: i64, cells: Vec[i64] }
+
+impl Index[(i64, i64)] for Grid {
+    type Output = i64;
+    fn index(ref self, at: (i64, i64)) -> ref i64 { let (r, c) = at; ref self.cells[r * self.w + c] }
+}
+impl IndexMut[(i64, i64)] for Grid {
+    type Output = i64;
+    fn index_mut(mut ref self, at: (i64, i64)) -> mut ref i64 { let (r, c) = at; mut ref self.cells[r * self.w + c] }
+}
+
+struct Ledger { keys: Vec[String], vals: Vec[i64], sets: i64 }
+impl IndexSet[String] for Ledger {
+    type Output = i64;
+    fn index_set(mut ref self, k: own String, v: own i64) {
+        self.sets += 1;
+        self.keys.push(k);
+        self.vals.push(v);
+    }
+}
+
+fn main() {
+    let mut g = Grid { w: 3, cells: Vec.filled(6, 0) };
+    // c[i, j] is c[(i, j)].
+    g[1, 2] = 5;          // no IndexSet: written through index_mut
+    g[(0, 1)] += 2;
+    println(f"{g[1, 2]} {g[0, 1]} {g.cells}");
+    let mut l = Ledger { keys: [], vals: [], sets: 0 };
+    // A plain `=` to the whole element uses IndexSet.
+    l["a".to_string()] = 1;
+    l["b".to_string()] = 2;
+    println(f"{l.sets} {l.keys} {l.vals}");
+}
