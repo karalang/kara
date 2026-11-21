@@ -12,7 +12,9 @@ compiled. Both must give the expected output.
 |---|---|---|
 | `encoding.py` | encoding.md | Python's `base64`, `urllib.parse`, and the page's own rules where Python is laxer (non-canonical Base64, whitespace in hex) |
 | `crypto.py` | crypto.md | FIPS 180-4, RFC 4231, `hashlib`, `hmac`; the streaming types against the one-shot functions for random splits |
-| `cases.py <dir>...` | log.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
+| `json_suite.py` | json.md | JSONTestSuite's `y_`/`n_`/`i_` files (`JSONTESTSUITE=<checkout>`); `stringify` against Python's parse laid out as serde_json 1.0.149 writes it; random `f64` bit patterns round-tripped |
+| `ct_timing.py` | crypto.md, secret.md | `constant_time_eq` and `Secret.ct_eq` timed on a first-byte vs last-byte difference, compiled only, with `==` as the control that shows the instrument sees an early exit |
+| `cases.py <dir>...` | log.md, secret.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
 
 A fixed case is `<name>.kara` with files beside it, each written from the page:
 
@@ -36,7 +38,9 @@ each producer's messages arrive in its own order.
 ```bash
 python3 conformance/encoding.py --seed 1      # random cases; any seed
 python3 conformance/crypto.py --seed 1
-python3 conformance/cases.py conformance/log conformance/pool conformance/encoding conformance/crypto \
+JSONTESTSUITE=../JSONTestSuite python3 conformance/json_suite.py --seed 1
+python3 conformance/ct_timing.py
+python3 conformance/cases.py conformance/log conformance/secret conformance/pool conformance/encoding conformance/crypto \
     conformance/concurrency conformance/random_env
 ```
 

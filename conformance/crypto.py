@@ -1,6 +1,7 @@
 """docs/library/crypto.md against Python's hashlib and hmac, and against the
 published vectors: FIPS 180-4's examples (the NIST "abc" and two-block
-messages) and RFC 4231's HMAC-SHA-2 test cases. The streaming types are
+messages, for every digest the page lists) and RFC 4231's HMAC-SHA-2 test
+cases. The streaming types are
 checked to give the one-shot digest for any split of the same bytes.
 
     python3 conformance/crypto.py [--seed N] [--cases N]
@@ -37,6 +38,31 @@ RFC4231 = [
 ]
 
 
+# The other FIPS 180-4 examples ("abc" and the two-block messages) for
+# SHA-1, SHA-384 and SHA-512, and RFC 4231 test case 2 for HMAC-SHA-384 and
+# -512: (function, key or None, data, digest), emitted verbatim so a digest
+# is held to the published value, not only to hashlib's.
+TWO_BLOCK_1024 = (b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopq"
+                  b"klmnopqrlmnopqrsmnopqrstnopqrstu")
+PUBLISHED = [
+    ("sha1", None, b"abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
+    ("sha1", None, b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+     "84983e441c3bd26ebaae4aa1f95129e5e54670f1"),
+    ("sha384", None, b"abc", "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed"
+                             "8086072ba1e7cc2358baeca134c825a7"),
+    ("sha384", None, TWO_BLOCK_1024, "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712"
+                                     "fcc7c71a557e2db966c3e9fa91746039"),
+    ("sha512", None, b"abc", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+                             "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"),
+    ("sha512", None, TWO_BLOCK_1024, "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018"
+                                     "501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909"),
+    ("hmac_sha384", b"Jefe", b"what do ya want for nothing?",
+     "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649"),
+    ("hmac_sha512", b"Jefe", b"what do ya want for nothing?",
+     "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554"
+     "9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737"),
+]
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
@@ -50,6 +76,9 @@ def main():
         assert hashlib.sha256(m).hexdigest() == d
     for k, m, d in RFC4231:
         assert hmac.new(k, m, hashlib.sha256).hexdigest() == d
+    for name, k, m, d in PUBLISHED:
+        h = getattr(hashlib, name.removeprefix("hmac_"))
+        assert (hmac.new(k, m, h) if k is not None else h(m)).hexdigest() == d, name
 
     datas = [m for m, _ in FIPS] + [m for _, m, _ in RFC4231]
     datas += [bytes(rng.randrange(256) for _ in range(rng.choice([0, 1, 55, 56, 63, 64, 65, 111, 112,
@@ -81,6 +110,9 @@ def main():
             emit(f"{name} k={k.hex()[:20]} d={d.hex()[:20]}",
                  f"hex_encode({name}({b(k)}.as_slice(), {b(d)}.as_slice()).as_slice())",
                  hmac.new(k, d, h).hexdigest())
+    for name, k, m, d in PUBLISHED:
+        args_ = f"{b(m)}.as_slice()" if k is None else f"{b(k)}.as_slice(), {b(m)}.as_slice()"
+        emit(f"published {name} {m[:12]!r}", f"hex_encode({name}({args_}).as_slice())", d)
     # The streaming types: random splits give the one-shot digest.
     for i, d in enumerate(datas[: args.cases // 2 + 8]):
         cuts = sorted(rng.randrange(len(d) + 1) for _ in range(rng.randrange(4)))

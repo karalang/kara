@@ -1,0 +1,18 @@
+import std.log;
+import std.log.{debug, info, warn, error};
+
+// log.md § Filtering: the level `init` names is the lowest kept, so at
+// `Error` the three lower levels are dropped; both backends write to the
+// stream they were given, and standard output keeps only the program's own.
+fn main() {
+    log.init(log.text_backend(log.Stream.Stderr), level: log.Level.Error);
+    debug("d");
+    info("i");
+    warn("w");
+    error("e", code: 7);
+    println("out");
+    log.init(log.json_backend(log.Stream.Stderr), level: log.Level.Debug);
+    debug("d", n: 1);
+    println(log.Level.Info < log.Level.Warn);
+    println(log.Level.Error > log.Level.Warn);
+}
