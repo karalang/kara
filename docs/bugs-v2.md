@@ -150,7 +150,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-133 | 2026-11-20 | cli | low | The Jupyter kernel's completion misses the session's own `let` bindings (`ro` after `let rows = ...` offers nothing), offers type and prelude names after a `.` (`rows.`, `Vec.`) instead of methods, and gives nothing for a magic name (`%sh`) | — |
 | B-2026-11-20-134 | 2026-11-20 | cli | low | The Jupyter kernel's `%ownership` (and the REPL's) lists a binding as `owned` after a later cell moved it away (`let w = ...; let z = w;` then `%ownership` shows `w: owned`) | — |
 | B-2026-11-20-135 | 2026-11-20 | cli | low | In the Jupyter kernel a `:`-command cell (`:type x`, `:save f.kara`, `:dep name = "1"`) runs as Kāra source and fails with an error citing the synthetic `<repl>:2:1 fn main() {}`, though deferred.md says `:dep` works in Jupyter through the kernel's meta-command channel | — |
-| B-2026-11-21-1 | 2026-11-21 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on the executor's queue, so each pop and each idle check scans all of them (hello server, 16 clients: about 83k req/s with 1,000 idle connections against about 122k busy) | — |
 
 ### Relocated
 
@@ -2036,6 +2035,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-129 | cli | low | `karac repl`'s `:type` printed "(could not infer type — typechecker did not record one)" for every expression while a `:provide` scope was open (`:ty… | cc614704be |
 | B-2026-11-20-130 | cli | medium | The Jupyter kernel (karac-kernel) spoke the protocol only in part: a cell's value went out as stdout text rather than an `execute_result`, the per-ce… | e5fb04c369 |
 | B-2026-11-20-131 | cli | low | The Jupyter kernel's `%effects` answered "(no items defined yet)" for a session of statement cells (it read the session's items alone, unlike `:effec… | e5fb04c369 |
+| B-2026-11-21-1 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on t… | cecef40ef6 |
 
 </details>
 
