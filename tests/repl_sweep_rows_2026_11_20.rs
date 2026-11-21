@@ -181,3 +181,74 @@ fn repl_sweep_help_lists_every_repl_flag() {
         assert!(help.contains(flag), "{flag} missing from:\n{help}");
     }
 }
+
+const FAKE_CLOCK: [&str; 2] = [
+    "struct FakeClock {}",
+    "impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }",
+];
+
+/// B-2026-11-20-104: `?` is legal in a cell under `:provide`, as in any
+/// other (deferred.md § Cell Scope), and `:save` writes the scope as a
+/// closure that returns `Ok(())` and passes its result on.
+#[test]
+fn repl_sweep_question_mark_under_provide_runs_and_saves() {
+    let mut s = Session::with_options(ReplOptions::default());
+    for c in FAKE_CLOCK {
+        assert!(s.evaluate_cell_captured(c).errors.is_empty());
+    }
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let r = s.evaluate_cell_captured("let n = i64.parse(\"7\")?;");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(Clock.now() + n);");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.stdout, "49\n");
+    s.dispatch_meta(":end-provide Clock");
+    let r = s.evaluate_cell_captured("println(\"outside\");");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let saved = s.render_exported_session();
+    assert!(saved.contains("        Ok(())\n    })?;\n"), "{saved}");
+    let dir = std::env::temp_dir().join(format!("karac-repl-prov-q-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("s.kara");
+    std::fs::write(&f, &saved).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["run", "--interp", f.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{saved}\n{}", text(&run.stderr));
+    assert_eq!(text(&run.stdout), "49\noutside\n");
+}
+
+/// A failing `?` under nested scopes reports the cell's frame and not the
+/// hidden `with_provider` line the scope passes its result on at.
+#[test]
+fn repl_sweep_question_mark_failure_under_provide_names_the_cell() {
+    let out = karac_repl(
+        &[],
+        &format!(
+            "{}\n{}\n:provide Clock = FakeClock {{}}\n:provide Clock = FakeClock {{}}\nlet bad = i64.parse(\"x\")?;\nprintln(Clock.now());\n",
+            FAKE_CLOCK[0], FAKE_CLOCK[1]
+        ),
+    );
+    let (stdout, stderr) = (text(&out.stdout), text(&out.stderr));
+    let all = format!("{stdout}{stderr}");
+    assert!(all.contains("cell 3:1:11  i64.parse(\"x\")?"), "{all}");
+    assert!(!all.contains("with_provider"), "{all}");
+    assert!(stdout.contains("42\n"), "{all}");
+}
+
+/// B-2026-11-20-129: `:type` finds the type of an expression under
+/// `:provide`, where it is checked inside the scope's closure.
+#[test]
+fn repl_sweep_type_under_provide() {
+    let mut s = Session::with_options(ReplOptions::default());
+    for c in FAKE_CLOCK {
+        assert!(s.evaluate_cell_captured(c).errors.is_empty());
+    }
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    assert!(s.evaluate_cell_captured("let n = 7;").errors.is_empty());
+    assert_eq!(s.type_of("n").unwrap(), "i64");
+    assert_eq!(s.type_of("[n]").unwrap(), "Vec[i64]");
+    assert_eq!(s.type_of("Clock.now()").unwrap(), "i64");
+}

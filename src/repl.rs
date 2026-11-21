@@ -478,6 +478,10 @@ fn render_export_nodes(nodes: &[ExportNode], indent: usize) -> String {
                 expr_src,
                 children,
             } => {
+                // A scope whose cells use `?` returns `Ok(())` and passes
+                // its result on, as the `main` around it returns
+                // `Result[(), AnyError]` (B-2026-11-20-104).
+                let fallible = nodes_use_question(children);
                 s.push_str(&pad);
                 s.push_str("with_provider[");
                 s.push_str(resource);
@@ -485,12 +489,27 @@ fn render_export_nodes(nodes: &[ExportNode], indent: usize) -> String {
                 s.push_str(expr_src);
                 s.push_str(", || {\n");
                 s.push_str(&render_export_nodes(children, indent + 1));
-                s.push_str(&pad);
-                s.push_str("});\n");
+                if fallible {
+                    s.push_str(&pad);
+                    s.push_str("    Ok(())\n");
+                    s.push_str(&pad);
+                    s.push_str("})?;\n");
+                } else {
+                    s.push_str(&pad);
+                    s.push_str("});\n");
+                }
             }
         }
     }
     s
+}
+
+/// Does any statement under `nodes` use `?`?
+fn nodes_use_question(nodes: &[ExportNode]) -> bool {
+    nodes.iter().any(|n| match n {
+        ExportNode::Statement(src) => uses_question(src),
+        ExportNode::Block { children, .. } => nodes_use_question(children),
+    })
 }
 
 /// Record of a persistent `let` binding that was pruned from the
@@ -1120,7 +1139,10 @@ impl Session {
         self.push_cell_start(&mut s, &mut ranges, true);
         let head = "let __karac_show = (\n";
         let body = format!("{head}{rest}\n);\n{snap_fn}(\"__karac_show\", __karac_show);");
-        let at = self.push_in_scopes(&mut s, &mut ranges, &body, true).start + head.len();
+        let at = self
+            .push_in_scopes(&mut s, &mut ranges, &body, true, false)
+            .start
+            + head.len();
         ranges.push((SHOW_CELL, at..at + rest.len()));
         s.push_str("}\n");
         let saved = std::mem::replace(&mut self.cell_byte_ranges, ranges);
@@ -2463,8 +2485,17 @@ impl Session {
         // `<repl>:L:C` in a header or trace, `line L:C` in a message's text.
         let at = regex::Regex::new(r"<repl>:(\d+):(\d+)|\bline (\d+):(\d+)").expect("valid regex");
         let gutter = regex::Regex::new(r"(?m)^( *)(\d+) \|").expect("valid regex");
+        // An error-return trace's frame at the `?` a provider scope's
+        // closure passes its result on with is the session's, not the
+        // user's: it showed the whole hidden `with_provider[..](.., || {
+        // ... })?` line (B-2026-11-20-104).
+        let scope_frame = regex::Regex::new(r"^\s+<repl>:\d+:\d+\s+(let _ = )?with_provider\[")
+            .expect("valid regex");
         let mut out = String::new();
         for block in text.split_inclusive('\n') {
+            if scope_frame.is_match(block) {
+                continue;
+            }
             out.push_str(&at.replace_all(block, |c: &regex::Captures| {
                 let (line, col) = match (c.get(1), c.get(2)) {
                     (Some(l), Some(col)) => (l.as_str(), col.as_str()),
@@ -2712,7 +2743,7 @@ impl Session {
         // by the caller before `build_synthetic_cell` runs).
         let cell_idx = self.cell_history.len();
         let (body_src, head) = shown.unwrap_or_else(|| (cell_src.to_string(), 0));
-        let mut body = self.push_in_scopes(&mut s, &mut ranges, &body_src, true);
+        let mut body = self.push_in_scopes(&mut s, &mut ranges, &body_src, true, fallible);
         body.start += head;
         if cell_idx > 0 {
             ranges.push((cell_idx, body));
@@ -2794,7 +2825,7 @@ impl Session {
                 }
             }
         }
-        self.push_in_scopes(&mut s, &mut ranges, "", true);
+        self.push_in_scopes(&mut s, &mut ranges, "", true, false);
         s.push_str("}\n");
         self.cell_byte_ranges = ranges;
         self.install_line_map(&s);
@@ -2992,7 +3023,11 @@ impl Session {
         let mut ranges = Vec::new();
         self.push_cell_start(&mut s, &mut ranges, true);
         let body = format!("let __t = {};", expr.trim());
-        self.push_in_scopes(&mut s, &mut ranges, &body, false);
+        let at = self.push_in_scopes(&mut s, &mut ranges, &body, false, false);
+        // The expression's own place: under `:provide` the `let` is in a
+        // `with_provider` closure, where a walk of `main`'s statements does
+        // not reach it (B-2026-11-20-129).
+        let expr_key = crate::resolver::SpanKey(at.start + "let __t = ".len(), expr.trim().len());
         s.push_str("}\n");
 
         // Checked as a cell is, the library in scope, so a session
@@ -3003,9 +3038,16 @@ impl Session {
                 .map(|e| type_place(e, at_line))
                 .collect::<Vec<_>>()
         })?;
-        lookup_let_rhs_type(&program, &typed, "__t").ok_or_else(|| {
-            vec!["(could not infer type — typechecker did not record one)".to_string()]
-        })
+        lookup_let_rhs_type(&program, &typed, "__t")
+            .or_else(|| {
+                typed
+                    .expr_types
+                    .get(&expr_key)
+                    .map(crate::typechecker::type_display)
+            })
+            .ok_or_else(|| {
+                vec!["(could not infer type — typechecker did not record one)".to_string()]
+            })
     }
 
     /// `:effects`: the effects of the session's own functions, their union
@@ -3530,7 +3572,7 @@ impl Session {
         synth.push_str(&self.keep_cell_fns());
         let mut ranges = Vec::new();
         self.push_cell_start(&mut synth, &mut ranges, true);
-        self.push_in_scopes(&mut synth, &mut ranges, &inner, false);
+        self.push_in_scopes(&mut synth, &mut ranges, &inner, false, false);
         synth.push_str("}\n");
 
         crate::cli::repl_v2::run_cell(&self.worker, &synth, self.built_take.get())
@@ -3551,17 +3593,34 @@ impl Session {
     /// just before `body`, so what the replay prints is dropped. Each
     /// replayed `let`'s place goes in `ranges`, with its cell; returns
     /// `body`'s place.
+    ///
+    /// A scope whose closure holds a `?` (in `body` or a `let` it
+    /// replays) returns `Ok(())`, and its result is passed on with `?`
+    /// when `outer_result` says the function around the scopes returns a
+    /// `Result`, and is let go (`let _ =`) otherwise, so `?` is legal in a
+    /// cell under `:provide` as in any other (B-2026-11-20-104).
     fn push_in_scopes(
         &self,
         s: &mut String,
         ranges: &mut Vec<(usize, Range<usize>)>,
         body: &str,
         marker: bool,
+        outer_result: bool,
     ) -> Range<usize> {
+        let fallible = self.scope_fallibility(body);
+        let body = if fallible.iter().any(|&f| f) {
+            terminated(body)
+        } else {
+            body.to_string()
+        };
+        let body = body.as_str();
         for (depth, frame) in self.provider_stack.iter().enumerate() {
+            let let_go = depth == 0 && fallible[0] && !outer_result;
             s.push_str(&format!(
-                "with_provider[{}]({}, || {{\n",
-                frame.resource, frame.expr_src
+                "{}with_provider[{}]({}, || {{\n",
+                if let_go { "let _ = " } else { "" },
+                frame.resource,
+                frame.expr_src
             ));
             for (i, prior_let) in self.persistent_lets.iter().enumerate() {
                 let in_frame = self
@@ -3593,9 +3652,40 @@ impl Session {
             s.push('\n');
         }
         let end = s.len();
-        for _ in &self.provider_stack {
-            s.push_str("});\n");
+        for depth in (0..self.provider_stack.len()).rev() {
+            if !fallible[depth] {
+                s.push_str("});\n");
+            } else if depth == 0 && !outer_result {
+                s.push_str("Ok(())\n});\n");
+            } else {
+                s.push_str("Ok(())\n})?;\n");
+            }
         }
         start..end
+    }
+
+    /// Per open provider scope, outermost first: does its closure hold a
+    /// `?`, in `body` or in a `let` it replays (a scope's own or a nested
+    /// one's)? A nested scope that does makes the scope around it hold one
+    /// too, the `?` on its result.
+    fn scope_fallibility(&self, body: &str) -> Vec<bool> {
+        let n = self.provider_stack.len();
+        let mut own = vec![false; n];
+        for (i, prior_let) in self.persistent_lets.iter().enumerate() {
+            let depth = self
+                .persistent_let_provider_scope
+                .get(i)
+                .map_or(0, |scope| scope.len());
+            if depth > 0 && depth <= n && uses_question(prior_let) {
+                own[depth - 1] = true;
+            }
+        }
+        let mut out = vec![false; n];
+        let mut inner = uses_question(body);
+        for d in (0..n).rev() {
+            inner = inner || own[d];
+            out[d] = inner;
+        }
+        out
     }
 }
