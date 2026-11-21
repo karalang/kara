@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 677 |
+| diagnostics | 678 |
 | false-positive | 343 |
 | missing-feature | 242 |
 | perf | 198 |
-| other | 142 |
+| other | 143 |
 | soundness | 117 |
 | miscompile | 102 |
 | crash | 64 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 839 |
 | mir-llvm | 319 |
 | mir | 301 |
-| cli | 265 |
+| cli | 267 |
 | parser | 148 |
 | ownership | 127 |
 | runtime | 105 |
@@ -2113,6 +2113,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-80 | typecheck | low | A method a raw pointer does not have (`p.expose_addr()`, `p.addr()`, `p.clone()`, a typo) gets no typecheck error: `karac check` prints only MIR's ro… | ed623291c6 |
 | B-2026-11-21-90 | cli | medium | kara-lsp hover, completion and definition took up to 1.2 s, 1.3 s and 2.4 s on a program deriving `Serialize`: each request re-ran the whole of `kara… | 972effff90 |
 | B-2026-11-21-92 | mir | low | An `impl Trait` value is live only while its hidden type says so: its drop counted as a use of what it borrows only when the concrete type has a `Dro… | a6384ce4fe |
+| B-2026-11-21-93 | cli | medium | In a package, `check`/`build --output=json(l)` apply the 20-error cascade cap to all module files together: two files with 22 type errors each report… | 60381ef965 |
+| B-2026-11-21-94 | cli | low | `karac test --output=jsonl` and `--output=json` are refused as unknown flags, though design.md §17's panic record says the runner carries the record… | 60381ef965 |
 
 </details>
 
