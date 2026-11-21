@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 336 |
 | missing-feature | 232 |
 | perf | 193 |
-| other | 126 |
+| other | 131 |
 | soundness | 114 |
 | miscompile | 102 |
 | crash | 64 |
@@ -86,7 +86,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 95 |
 | effect | 51 |
 | resolver | 50 |
-| other | 38 |
+| other | 43 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -151,6 +151,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-135 | 2026-11-20 | cli | low | In the Jupyter kernel a `:`-command cell (`:type x`, `:save f.kara`, `:dep name = "1"`) runs as Kāra source and fails with an error citing the synthetic `<repl>:2:1 fn main() {}`, though deferred.md says `:dep` works in Jupyter through the kernel's meta-command channel | — |
 | B-2026-11-21-5 | 2026-11-21 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword ... write `r#struct`" plus a cascade (Expected expression at the body's `}`, E0001 top-level statements beside `fn main`), where a nested `fn` gets one "no nested items ... move it above the item it is in" diagnostic with a hoisting fix | — |
 | B-2026-11-21-7 | 2026-11-21 | mir-llvm | low | A temporary String consumed only by a borrowing parameter is still allocated: `w.push_str("abcde".substring(k, k + 1))` materialises a one-character String per call and frees it after the borrow (kata 2255 shape: 104 ms, against 33 ms for the same words built with `w.push(c)`; Rust 29 ms) | — |
+| B-2026-11-21-8 | 2026-11-21 | other | high | Test infra: six more helpers feed a RUN lane's exit status to `common::link_or_skip`, the shape B-2026-11-21-6 fixed in two others, so a runtime error, refusal or sanitizer report on `__mir-llvm-run` / `__mir-llvm-asan` / `karac run` reads as a skipped link and the test passes | — |
+| B-2026-11-21-9 | 2026-11-21 | other | high | Test infra: four ASan helpers skip whenever stderr contains `not found` or `fsanitize`, with no exit-status or KARAC_REQUIRE_RUNTIME_ARCHIVE check, so a compiled program that fails with 'runtime error: key not found' (or prints an IoError 'file not found') under `__mir-llvm-asan` is skipped, in CI too | — |
+| B-2026-11-21-10 | 2026-11-21 | other | medium | Test infra: 21 helpers skip a compiled lane on `stderr.contains("Linker failed")` without the undefined-symbol panic `link_or_skip` has, so a STALE runtime archive or a missing keep-list entry (`Linker failed: ... undefined reference to karac_*`) is skipped instead of failing | — |
+| B-2026-11-21-11 | 2026-11-21 | other | medium | Test infra: 92 `karac build` call sites hand the BUILD's exit status to `common::link_or_skip` with no check that the failure is a link, and 33 more in tests/cli.rs (plus tests/run_v2.rs:245) skip the AOT leg whenever the build fails or leaves no binary, so any build-time failure, such as an E0516 'not lowered yet', a backend error or a karac panic, reads as 'no runtime archive' on a local gate run | — |
+| B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
 
 ### Relocated
 
