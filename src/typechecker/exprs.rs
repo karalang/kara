@@ -15557,7 +15557,7 @@ impl<'a> super::TypeChecker<'a> {
         const CALLED: usize = usize::MAX;
         // `last.iter().map(|j| pre[j]).sum()`: a pick through a `map`
         // yields what the closure's body does, so the body's reads are the
-        // value's (kata 2391's Rust arm, B-2026-11-21-22).
+        // value's (kata 2391's Rust arm, B-2026-11-21-43).
         fn mapped_tail(e: &Expr) -> Option<&Expr> {
             const PICK: &[&str] = &[
                 "sum",

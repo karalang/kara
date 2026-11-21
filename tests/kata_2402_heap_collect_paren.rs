@@ -2,7 +2,7 @@
 //! (0..n).map(..).collect();`. The value's span starts inside the range's
 //! parenthesis, so `karac fix` wrapped only `0..n).map(..).collect()` and
 //! left `(PriorityQueue.max_first_from(0..n).map(..).collect())`, which
-//! collects into a `PriorityQueue` from an unmapped range (B-2026-11-21-19).
+//! collects into a `PriorityQueue` from an unmapped range (B-2026-11-21-40).
 //! The wrap now widens back over the opening parentheses first.
 
 use std::path::Path;

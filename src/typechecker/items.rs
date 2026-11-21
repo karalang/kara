@@ -8917,7 +8917,7 @@ impl<'a> super::TypeChecker<'a> {
         // A `ref` to a `Copy` value is read as the value where one is
         // expected (core-semantics §5.10), so `best = r` with `r: ref
         // (i64, i64)` solves the open `(0, 0)` slot as a tuple, not as a
-        // reference (kata 2419, B-2026-11-21-23).
+        // reference (kata 2419, B-2026-11-21-44).
         let value_ty = match value_ty {
             Type::Ref(inner) | Type::MutRef(inner)
                 if !matches!(slot, Type::Ref(_) | Type::MutRef(_))
@@ -9094,7 +9094,7 @@ impl<'a> super::TypeChecker<'a> {
         // (`(a.collect(), b.collect())`, both `collect`'s `C`) opens each
         // element on its own: opened by name over the whole tuple, the two
         // `C`s became one variable, so the elements had to be one type
-        // (kata 2353, B-2026-11-21-24).
+        // (kata 2353, B-2026-11-21-45).
         if let (ExprKind::Tuple(elems), Type::Tuple(tys)) = (&value.kind, &inferred) {
             if elems.len() == tys.len() && tys.iter().any(super::types::contains_type_param) {
                 let opened = elems
@@ -14031,7 +14031,7 @@ impl<'a> super::TypeChecker<'a> {
                 // PriorityQueue.new()`) stayed open there and were reported
                 // unsolved though the slot fixes them, as a typed `let` does.
                 // Join the first walk's type to the slot when it fits
-                // (kata 2349, B-2026-11-21-18).
+                // (kata 2349, B-2026-11-21-39).
                 if matches!(
                     value.kind,
                     ExprKind::Call { .. } | ExprKind::MethodCall { .. }

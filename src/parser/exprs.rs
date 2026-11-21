@@ -4228,7 +4228,7 @@ impl super::Parser {
         };
         // A chain on a parenthesized receiver, `(0..n).map(..).collect()`,
         // starts its span inside the `(`: take the opening parens back in,
-        // or the wrap would open inside them (kata 2402, B-2026-11-21-19).
+        // or the wrap would open inside them (kata 2402, B-2026-11-21-40).
         let unclosed = |t: &str| {
             t.chars().filter(|&c| c == ')').count() > t.chars().filter(|&c| c == '(').count()
         };

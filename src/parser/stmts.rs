@@ -1132,7 +1132,7 @@ impl super::Parser {
         // value holding a bare numeral (`let mut dist = vec![-1; n]; ...
         // dist`) also takes its element type from the deleted return type:
         // without it the literal defaults to `i64` and every caller's
-        // `i32` comparison narrows (kata 2359, B-2026-11-21-20).
+        // `i32` comparison narrows (kata 2359, B-2026-11-21-41).
         fn bare_numeral(e: &Expr) -> bool {
             match &e.kind {
                 ExprKind::Integer(_, None) | ExprKind::Float(_, None) => true,
@@ -1160,7 +1160,7 @@ impl super::Parser {
             }) == Some(true)
         };
         // `days[..m - 1].iter().sum::<i32>() + d`: arithmetic over such a
-        // call takes its type from it too (kata 2409, B-2026-11-21-20).
+        // call takes its type from it too (kata 2409, B-2026-11-21-41).
         fn typed_by_use(e: &Expr) -> bool {
             match &e.kind {
                 ExprKind::MethodCall { method, .. } => {

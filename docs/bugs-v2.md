@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 658 |
-| false-positive | 336 |
-| missing-feature | 237 |
-| perf | 193 |
-| other | 139 |
+| diagnostics | 665 |
+| false-positive | 340 |
+| missing-feature | 238 |
+| perf | 195 |
+| other | 140 |
 | soundness | 116 |
 | miscompile | 102 |
 | crash | 64 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 814 |
+| typecheck | 822 |
 | mir-llvm | 317 |
 | mir | 295 |
-| cli | 260 |
-| parser | 144 |
+| cli | 263 |
+| parser | 146 |
 | ownership | 127 |
 | runtime | 104 |
-| interp | 95 |
+| interp | 97 |
 | effect | 52 |
 | resolver | 50 |
 | other | 47 |
@@ -135,6 +135,21 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-11 | 2026-11-21 | other | medium | Test infra: 92 `karac build` call sites hand the BUILD's exit status to `common::link_or_skip` with no check that the failure is a link, and 33 more in tests/cli.rs (plus tests/run_v2.rs:245) skip the AOT leg whenever the build fails or leaves no binary, so any build-time failure, such as an E0516 'not lowered yet', a backend error or a karac panic, reads as 'no runtime archive' on a local gate run | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
 | B-2026-11-21-30 | 2026-11-21 | typecheck | low | A trait impl for a tuple type (`impl Show for (i64, i64)`) is not supported; it was accepted and then never found (`no method 'show' on type '(i64, i64)'`), and is now refused as not supported yet | — |
+| B-2026-11-21-37 | 2026-11-21 | typecheck | medium | `#[derive(Default)]` on a struct with an `Array[T, N]` field is refused (E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT) though `T` has a default: Rust's `[T; N]: Default` has no Kāra counterpart, so LeetCode's Box trie (`children: [Option<Box<Trie>>; 26]`) cannot be carried | — |
+| B-2026-11-21-38 | 2026-11-21 | typecheck | low | `s.byte_at(i)` on a `String` is refused E0236 "no method 'byte_at'" with no hint and no fix: the byte at an index is `s.bytes()[i]` (a `u8`) and `char_at(i)` the `i`-th character, and neither is named | — |
+| B-2026-11-21-39 | 2026-11-21 | typecheck | medium | A generic constructor assigned to a typed place, `m[k] = PriorityQueue.new()` or `b = Bag.new()` after `let mut b: Bag[i64]`, is refused as an unsolved type parameter though the slot fixes it, as a typed `let` does | — |
+| B-2026-11-21-40 | 2026-11-21 | parser | medium | `karac fix` of Rust's `let h: BinaryHeap<T> = (0..n).map(f).collect();` writes `(PriorityQueue.max_first_from(0..n).map(f).collect())`: the wrap opens inside the range's parenthesis, so the queue is built from the bare range and the rest collects into it | — |
+| B-2026-11-21-41 | 2026-11-21 | parser | medium | `karac fix` deletes a closure's Rust `-> Vec<i32>` (or `-> i32`) but moves it to the binding only when the body's tail is `collect`/`sum`/`product`: a tail that is a local filled from a literal (`dist` after `let mut dist = vec![-1; n]`) or arithmetic over a `sum` (`days[..m].iter().sum::<i32>() + d`) loses the type, and the caller's `i32` narrows with no fix | — |
+| B-2026-11-21-42 | 2026-11-21 | typecheck | low | A fill of fills returned whole, `let mut res = Vec.filled(n, Vec.filled(n, 0)); ... res` from a `-> Vec[Vec[i32]]` function, is refused "expected Vec[Vec[i32]], found Vec[Vec[i64]]" with no fix, while the flat `Vec.filled(n, 0)` returned as `Vec[i32]` is fixed to `0i32` | — |
+| B-2026-11-21-43 | 2026-11-21 | typecheck | low | `ans + last.iter().map(|j| pre[j]).sum()` in an `i32` tail, with `pre` a `Vec.filled(n, 0)`, is refused as a narrowing with the generic "write as i32" and no fix: the literal hint does not see the fill read inside a `map` closure of a chain rooted at another collection | — |
+| B-2026-11-21-44 | 2026-11-21 | typecheck | medium | `best = r` with `r: ref (i64, i64)` from `runs.iter()` and `let mut best = (0, 0)` is refused "expected '(i64, i64)', found 'ref (i64, i64)'" with no fix, though a `ref` to a `Copy` value is read where the value is expected (core-semantics §5.10) and the same store of a `ref i64` passes | — |
+| B-2026-11-21-45 | 2026-11-21 | typecheck | medium | A tuple of two `collect`s, `let p = (a.map(f).collect(), b.map(g).collect())`, is refused as if both had one type ('(?T, ?T)'), and one `collect` in a tuple, `(x.collect(), 5)`, checks but stops at lowering (E0516, UnknownParam "C") | — |
+| B-2026-11-21-46 | 2026-11-21 | cli | low | `let (l, r) = segments.floor(x).unwrap();` over a `SortedMap[i64, i64]`, then `segments.remove(l)`, is refused three times E0516 "cannot mutably borrow `segments` while `r` still holds a borrow ... take a copy" with no machine fix, though both are `Copy` keys whose copy is the whole remedy | — |
+| B-2026-11-21-47 | 2026-11-21 | cli | low | One `karac fix` round applies two dependent edits, `g.get(a).cloned().unwrap_or(Vec.new())` and then `g[a] = list.clone()`, where the first makes the second a needless copy of a `Vec` that nothing flags after; and `frontier.iter().flat_map(|v| graph.get(v).unwrap_or(Vec.new()))` gets E0236 "`ref Vec[i64]` does not implement Iterator" with no hint or fix | — |
+| B-2026-11-21-48 | 2026-11-21 | cli | low | `karac fmt` rewrites a byte literal in a pattern as its number: `b'M' => 0` becomes `77u8 => 0`, `b'a'..=b'z'` becomes `97u8..=122u8` and `b'\n'` becomes `10u8`, while the same literals in expressions keep their spelling | — |
+| B-2026-11-21-49 | 2026-11-21 | typecheck | medium | An empty `[]` inside a tuple inside an array literal typed through `.to_vec()`, `let xs: Vec[(i64, Vec[i64])] = [(1, [1, 2]), (2, [])].to_vec();`, stops with the internal E0516 "a type that failed to check is not lowered yet" at the `[]`; without `.to_vec()` it checks | — |
+| B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
+| B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 
 ### Relocated
 

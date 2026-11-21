@@ -3719,7 +3719,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         // Kata 2343: `a.byte_at(p)`, after `char_at`, is the byte at an
         // index, which Kāra reads as `a.bytes()[p]`; the refusal named
-        // neither (B-2026-11-21-17).
+        // neither (B-2026-11-21-38).
         let stringy_text = *text == Type::Str
             || matches!(text, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
         if method == "byte_at"

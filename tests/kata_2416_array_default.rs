@@ -3,7 +3,7 @@
 //! writes the field `Array[Option[Trie], 26]`, and the derive was then
 //! refused: `Array[T, N]` had no `Default`, where Rust's `[T; N]` has one
 //! whenever `T` does. A derived `default()` now fills an array field with
-//! `N` defaults of its element (B-2026-11-21-16).
+//! `N` defaults of its element (B-2026-11-21-37).
 
 use std::process::{Command, Stdio};
 

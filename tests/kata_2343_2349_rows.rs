@@ -1,10 +1,10 @@
 //! Kata 2343's naive arm was first written `a.byte_at(p)`, after
 //! `char_at`; the refusal named neither the byte read `a.bytes()[p]` nor
-//! what `char_at` is, and offered no fix (B-2026-11-21-17). Kata 2349's
+//! what `char_at` is, and offered no fix (B-2026-11-21-38). Kata 2349's
 //! heap arm stores `self.heaps[number] = PriorityQueue.new()`: a generic
 //! constructor assigned, not let-bound, to a typed place was refused
 //! "cannot infer type parameter 'T'" though the place fixes it
-//! (B-2026-11-21-18).
+//! (B-2026-11-21-39).
 
 use std::process::{Command, Stdio};
 

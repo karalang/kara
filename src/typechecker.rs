@@ -10854,7 +10854,7 @@ impl<'a> TypeChecker<'a> {
         };
         // A fill of fills, `Vec.filled(n, Vec.filled(n, 0))` returned as a
         // `Vec[Vec[i32]]`, holds its literal two levels down (kata 2373,
-        // B-2026-11-21-21).
+        // B-2026-11-21-42).
         let mut elem = None;
         let mut depth = 0;
         let mut at = want;
