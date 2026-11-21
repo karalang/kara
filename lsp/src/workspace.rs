@@ -193,15 +193,14 @@ fn is_pub(text: &str, range: Range) -> bool {
     text[line_start..at].split_whitespace().any(|w| w == "pub")
 }
 
+/// `(definition file, definition range, (file, start, end) of every site)`.
+type Sites = (usize, Range, Vec<(usize, usize, usize)>);
+
 /// The sites of the item the name at `pos` of `path` names, across its
 /// package, when it is a `pub` item of a package module: `(file index,
 /// byte range)`, the declaration included. `None` sends the caller to the
 /// one-document query.
-fn sites(
-    snap: &Snapshot,
-    i: usize,
-    pos: Position,
-) -> Option<(usize, Range, Vec<(usize, usize, usize)>)> {
+fn sites(snap: &Snapshot, i: usize, pos: Position) -> Option<Sites> {
     // On the declaration itself the definition query answers nothing: the
     // name there is the declaration.
     let (def_file, def_range) = match snap.definition(i, pos) {
@@ -329,7 +328,7 @@ pub fn rename(
     let before = snap.errors();
     let mut changes = HashMap::new();
     for (j, mut edits) in per_file {
-        edits.sort_by(|x, y| y.0.cmp(&x.0));
+        edits.sort_by_key(|x| std::cmp::Reverse(x.0));
         edits.dedup_by(|x, y| x.0 == y.0 && x.1 == y.1);
         let f = &snap.files[j];
         let index = LineIndex::new(&f.text);
@@ -386,7 +385,7 @@ pub fn checked_single_file(
             )
         })
         .collect();
-    spans.sort_by(|x, y| y.0.cmp(&x.0));
+    spans.sort_by_key(|x| std::cmp::Reverse(x.0));
     let mut new = text.to_string();
     for (a, b, t) in spans {
         if a <= b && b <= new.len() {
