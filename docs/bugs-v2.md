@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 646 |
-| false-positive | 334 |
+| false-positive | 336 |
 | missing-feature | 232 |
 | perf | 192 |
 | other | 126 |
 | soundness | 114 |
-| miscompile | 100 |
+| miscompile | 101 |
 | crash | 64 |
 | run-vs-build | 61 |
 | codegen-gap | 41 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 803 |
+| typecheck | 805 |
 | mir-llvm | 315 |
-| mir | 294 |
+| mir | 295 |
 | cli | 250 |
 | parser | 143 |
 | ownership | 127 |
@@ -2035,6 +2035,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-129 | cli | low | `karac repl`'s `:type` printed "(could not infer type — typechecker did not record one)" for every expression while a `:provide` scope was open (`:ty… | cc614704be |
 | B-2026-11-20-130 | cli | medium | The Jupyter kernel (karac-kernel) spoke the protocol only in part: a cell's value went out as stdout text rather than an `execute_result`, the per-ce… | e5fb04c369 |
 | B-2026-11-20-131 | cli | low | The Jupyter kernel's `%effects` answered "(no items defined yet)" for a session of statement cells (it read the session's items alone, unlike `:effec… | e5fb04c369 |
+| B-2026-11-21-2 | typecheck | medium | A fixed `Array[T, N]` does not read like a `Slice`: `first`/`get`/`last` on a scalar array return an owned `Option[T]` (an `Option[ref i64]` slot ref… | 92aecda464 |
+| B-2026-11-21-3 | mir | high | A `Map[K, V, H]` / `Set[T, H]` with a user `BuildHasher` loses keys through the library's Kāra-source methods (`extend`, `retain`, `get_mut`, `from`,… | f81b6087e5 |
+| B-2026-11-21-4 | typecheck | medium | A list literal refuses an element that leaves a type slot open after an earlier element decided it: `[Err(1), Ok(5), Err(0)]` is 'expected Result[i64… | 1a5c923642 |
 | B-2026-11-21-1 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on t… | cecef40ef6 |
 
 </details>
