@@ -6,7 +6,9 @@
 > and returns their combined total. Define:
 >
 > - a `Source` trait with `load(ref self) -> i64`,
+> - a `Fixed` struct holding `n: i64` whose `load` returns `n`,
 > - two effect resources `UserDB` and `OrderDB`, both backed by `Source`,
+>   whose default providers are `Fixed { n: 3 }` and `Fixed { n: 4 }`,
 > - `fetch_users()` and `fetch_orders()` — each loads from its resource,
 > - `total()` — a `pub fn` returning the sum of the two, whose signature
 >   declares that it reads from *both* resources,
@@ -36,3 +38,8 @@ counts toward the machine-fix rate.
 
 This is the corpus's first example whose natural LLM mistake lands in the
 *machine-fixable* class rather than the LLM-reasoning class.
+
+The resources carry default providers so the program runs: a resource
+nothing provides is refused as `E_NO_PROVIDER` (core-semantics.md §14.6),
+which is a different lesson from the one this task teaches. `expected.txt`
+(`7`) is the oracle.

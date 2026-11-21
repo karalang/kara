@@ -134,8 +134,10 @@ block, the compiler rejects it with `E0408` (the historical code; today
 `E0418`, or `E_MODULE_LET` for the module-level counter, and the task
 was rewritten on 2026-11-20 so each branch returns its line), and the LLM lifts the
 counter into an `Atomic[i64]` (`sync struct`) — clean build, parallelism
-preserved. Both canned iterations and `solution.kara` are verified
-against the in-tree `karac` (iter 0 → `E0408` only; iter 1 → clean).
+preserved. Since the 2026-11-20 rewrite, iter 0 is a plain counter the
+branches bump through `mut ref`: `karac fix` repairs its Rust spellings,
+then `E0418` is the only diagnostic; iter 1 → clean, and its output matches
+`expected.txt`.
 Ships a Go comparator (`go_buggy.go`) alongside the Python one: both
 incumbents compile-and-ship the race (Go's caught only by the opt-in
 runtime `-race` detector). This is a Python/Go-beating case, **not** a

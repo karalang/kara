@@ -41,10 +41,14 @@ LLM's first attempt typically:
 2. **Iter 1**: LLM reads the diagnostic, adds the missing arm with a
    reasonable description string, build clean.
 
-The diagnostic carries no machine-applicable `replacement` field, so
-`karac fix` does not run on this example — the round trip is
-purely *descriptive*: the compiler tells the LLM *what is missing*,
-the LLM decides *what to fill in*.
+`E0205` now carries a `replacement` that inserts the missing arm as a
+`Cancelled => todo()` stub, and the canned first attempt's bare
+`Shipped` is `E0521` with `OrderStatus.Shipped` as its `replacement`, so
+`karac fix` takes the dry run to a clean build at iter 0. The stub only
+makes the match compile: the description string for `Cancelled` is still
+the author's to write, which is the iter-1 revision above. The
+compiler tells the LLM *what is missing*; the LLM decides *what to fill
+in*.
 
 ## Why this contrast matters
 

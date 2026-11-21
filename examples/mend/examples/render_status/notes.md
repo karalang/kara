@@ -34,9 +34,14 @@ leaving the real handler for the author (or the next LLM turn), which is
 the right division of labor: the compiler does the mechanical part it can
 prove, the human/LLM supplies the semantics.
 
-The exhaustiveness checker yields one missing variant at a time, so a
-match dropping several arms is completed one arm per `karac fix` pass —
-the Mend loop iterates to convergence.
+A match dropping several arms gets them all in one `replacement`
+(`patterns `Delivered`, `Cancelled` not covered` inserts a `todo()` arm for
+each), so one `karac fix` completes it.
+
+The canned first attempt also builds a variant bare, `status_code(Pending)`:
+that is `E0521` (only `Some`, `None`, `Ok` and `Err` are written bare), whose
+`replacement` is `Order.Pending`, so the same `karac fix` run takes both and
+the build is clean.
 
 ## Where it sits in the corpus
 

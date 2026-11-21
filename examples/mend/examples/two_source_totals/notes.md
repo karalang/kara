@@ -51,3 +51,11 @@ This example sits with `welcome_emails` on the machine-fixable side, and
 is the first whose mistake is a *syntax habit* rather than a typo — the
 kind that recurs on essentially every multi-effect signature an LLM
 writes.
+
+## Oracle
+
+`expected.txt` (`7`, the two default providers' 3 and 4). Until
+2026-11-20 the task declared the two resources with no provider, and its
+own solution was refused as `E_NO_PROVIDER` once a resource needed one
+(core-semantics.md §14.6); the prompt now names `Fixed { n: 3 }` and
+`Fixed { n: 4 }` as their defaults.

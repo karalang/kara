@@ -1,14 +1,13 @@
 # concurrent_emails — what Python and Go miss, what Kāra catches
 
-> **Rewritten 2026-11-20.** `task.md` and `solution.kara` now return each
-> welcome line and print the three lines after the `par` block, because
-> two branches that both print conflict (`E0418`, core-semantics.md
-> §11.2). The compiler now reports the shared-counter race as `E0418` too;
-> `E0408` and the module-level `let mut` it described are gone (a
-> module-level `let mut` is `E_MODULE_LET`). The transcripts below, the
-> `MemoryOrdering` argument in them, `canned_responses.json` and the
-> recorded harness runs predate the rewrite and describe the old task and
-> compiler. `expected.txt`, produced by `mirror.py`, is the oracle.
+> **Rewritten 2026-11-20.** `task.md`, `solution.kara` and
+> `canned_responses.json` return each welcome line and print the three
+> lines after the `par` block, because two branches that both print
+> conflict (`E0418`, core-semantics.md §11.2). The compiler reports the
+> shared-counter race as `E0418`; `E0408` is the historical code, and a
+> module-level `let mut` is refused earlier as `E_MODULE_LET`. The recorded
+> harness runs and `casts/concurrent_emails.cast` predate the rewrite.
+> `expected.txt`, produced by `mirror.py`, is the oracle.
 
 The task: send three welcomes **concurrently** while keeping a running
 count. The naive shape — a shared mutable counter incremented from
@@ -40,45 +39,57 @@ a runtime flag you have to remember to turn on, not a compile gate.
 
 ## Kāra (`solution.kara`) — verified on the in-tree `karac`
 
-The same shape is a **compile-time error**. The iter-0 attempt:
+The same shape is a **compile-time error**. The iter-0 attempt
+(`canned_responses.json`), a plain counter each branch bumps:
 
 ```
-let mut SENT_COUNT: i64 = 0;
-// ...
+fn send_welcome(user_id: i64, sent: mut ref i64) -> String {
+    sent = sent + 1;
+    f"welcome user {user_id}"
+}
+
 fn main() {
-    par {
-        send_welcome(1);   // each branch writes SENT_COUNT
-        send_welcome(2);
-        send_welcome(3);
-    }
+    let mut sent = 0;
+    let (first, second, third) = par {
+        send_welcome(1, mut ref sent),
+        send_welcome(2, mut ref sent),
+        send_welcome(3, mut ref sent),
+    };
+    // ...
 }
 ```
 
+The Rust spellings come back first, each with a `replacement`, and
+`karac fix` repairs them: `mut ref sent` at a call site is `mut sent`
+(`E0001`), and the store through the reference is `*sent = sent + 1`.
+What is left is the race:
+
 ```
 $ karac check concurrent_emails.kara --output=json
-{"diagnostics":[{"code":"E0408","phase":"effect","line":9,"column":5,
-  "message":"module-level let mut 'SENT_COUNT' cannot be written from
-    inside par { } — wrap in Atomic[T], Mutex[T], or use #[thread_local]
-    for per-task state (binding declared at line 1)"}]}
+{"diagnostics":[{"code":"E0418","phase":"effect","line":8,"column":34,
+  "message":"branches 1 and 2 of the `par` conflict: `mutable borrow of
+    sent` and `mutable borrow of sent` (core semantics §11.2: branches may
+    run at once, so none may write, move, mutably borrow or drop a place
+    another uses, or write a resource another uses)"}]}
 ```
 
-The effect checker knows each `par` branch's transitive effects include
-`writes(SENT_COUNT)`, and a plain shared binding written from a
-parallel region is rejected — the conflict is upgraded from the silent
-"serialize" it would be in sequential code to a hard error, because
-serializing inside a `par { }` is almost never what was meant.
+Each branch mutably borrows `sent`, and `par` branches may run at once,
+so the conflict is a hard error rather than the serialization it would
+be in sequential code. It carries no `replacement`: choosing a
+concurrency primitive is the author's call.
 
 The fix lifts the counter into a concurrency primitive and **keeps the
 parallelism**:
 
 ```
 sync struct Counter { count: Atomic[i64] }
-// counter.count.fetch_add(1, MemoryOrdering.Relaxed) inside each branch
+// counter.count.fetch_add(1) inside each branch
 ```
 
-`karac check` → clean. The compiler didn't push the programmer back to
-sequential code; it forced the counter to be race-free while the three
-sends still run concurrently.
+`karac check` → clean, and the output matches `expected.txt`. The
+compiler didn't push the programmer back to sequential code; it forced
+the counter to be race-free while the three sends still run
+concurrently.
 
 ## Where this sits relative to Rust — be precise
 
@@ -98,7 +109,7 @@ win there would be dishonest. Kāra's advantage over Rust is not
    never auto-parallelizes; the programmer wires every thread by hand.
 2. **No colored functions.** The concurrent path is written in
    blocking style; there is no `async`/`.await` split.
-3. **The structured fix-loop itself** — `E0408` arrives as JSON with
+3. **The structured fix-loop itself** — `E0418` arrives as JSON with
    span and message the agent consumes mechanically (this corpus).
 
 So the honest framing for the corpus: **concurrent_emails is the

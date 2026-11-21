@@ -15,12 +15,17 @@ machine-applicable fix, since moving the state into `main` is a restructuring
 the diagnostic can only describe. A plain module `let` for the alphabet is
 refused too, and that one does carry a `replacement` to `const`.
 
-## 2. Use-after-move on a `String` used as both key and value
+## 2. A `String` parameter used as both key and value
 
-`shorten` needs `code` as a `links` key, a `hits` key, an `order` element, and
-the return value. Three of the four need `.clone()`. This is the E0500 shape,
-and its fix is machine-applicable — `karac fix` inserted exactly these clones
-when the parent example (`examples/shortener/`) was written.
+`shorten` needs `url` as a `links` value and `code` as a `links` key, a `hits`
+key, an `order` element, and the return value. A bare parameter borrows
+(core-semantics.md §4.1), so storing `url` is `E0200` ("cannot give away
+parameter `url`") with `url: own String` as its `replacement`; `follow`'s `code`
+is the same. `code` itself is a local, and three of its four uses need
+`.clone()`: the E0500 shape, whose fix is machine-applicable. `karac fix`
+inserts exactly these clones, and a `.clone()` handed to a parameter that only
+borrows (`follow(mut reg, a.clone())`) is the `redundant_clone` warning, whose
+fix drops it.
 
 `follow` has the same shape at lower density: `code` is consumed by the second
 `hits.insert`, so the two lookups before it need clones.

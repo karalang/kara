@@ -14,18 +14,27 @@ actually made.
 
 ## 2. `&&` / `||`
 
-Rust habit. Kāra uses `and` / `or`. The diagnostic names the replacement but
-carries none (`B-2026-08-01-25`), and it is emitted 2–3× per occurrence, so this
-is also a live measurement of that entry: the count of diagnostics an author
-wades through here should drop sharply once it is fixed.
+Rust habit. Kāra uses `and` / `or`. The diagnostic is a parse error, so it
+masks everything behind it; it is reported once per occurrence and carries a
+`replacement`, which `karac fix` applies (`B-2026-08-01-25`, fixed). Only then
+does typecheck see §1.
 
-## 3. Use-after-move on the sort key
+## 3. Moving out of a bare parameter
 
-`sort_headers` needs `h.name` for the comparison key and again inside the
-element it pushes; `canonical_request` needs each header's lowered name twice —
-once for the `name:value` line and once for the signed-headers list. Both are
-E0500 with machine-applicable `.clone()` fixes, which is the `fixed-by-karac`
-path this corpus exists to count.
+A bare parameter borrows (core-semantics.md §4.1), and a bare `for` borrows the
+collection it walks (§4.6). `sort_headers(headers: Vec[Header])` walks
+`headers` and inserts each element into the `Vec` it returns, so the element
+cannot be moved out: `E0200`, `expected 'Header', found 'ref Header'`, with
+both halves of the fix as one `replacement`, `headers: own Vec[Header]` and
+`for h in headers.into_iter()`. `sort_params` is the same, and the bare
+`String` parameters that `canonical_request` stores in a struct literal each
+get `own` (`cannot give away parameter`). Every one is machine-applicable, the
+`fixed-by-karac` path this corpus exists to count; the callers that then hand
+on a parameter of their own get the same fix on the next pass.
+
+The sort keys need no copy: `lower(h.name)` and `uri_encode(p.key, false)`
+borrow, so a `.clone()` written there out of Rust habit is the
+`redundant_clone` warning, whose fix drops it.
 
 ## 4. Two sorts, two different keys
 

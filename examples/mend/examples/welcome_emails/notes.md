@@ -16,10 +16,14 @@
 ## Kāra (`solution.kara` — current scaffold)
 
 The current scaffold is the **simplest end of the loop**: a sequential
-program with two resolver-level typos, both auto-fixed by `karac fix`.
-It demonstrates the mechanism — JSON diagnostics with `replacement`
-spans → mechanical application → clean build — without yet engaging
-the effect system.
+program with two resolver-level typos (`E0100`, `did you mean`), both
+auto-fixed by `karac fix`. With the names resolved, the effect checker
+sees that `pub fn send_all` prints without declaring it: `E0400`, whose
+`replacement` adds `with writes(Stdout)` (a public function declares its
+effects; a private one's are inferred). One `karac fix` applies all
+three, layer by layer, and the build is clean. It demonstrates the
+mechanism — JSON diagnostics with `replacement` spans → mechanical
+application → clean build.
 
 ## The concurrency punchline — see `concurrent_emails`
 

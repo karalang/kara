@@ -41,7 +41,7 @@ impl GradeBook {
 
     fn histogram(ref self) -> Vec[i64] {
         let mut counts: Vec[i64] = Vec.filled(5, 0);
-        let mut i = 0i64;
+        let mut i = 0;
         while i < self.scores.len() {
             let b = self.bucket(self.scores[i]);
             counts[b] = counts[b] + 1;
@@ -52,8 +52,8 @@ impl GradeBook {
 
     // Indexed-receiver method call: `self.names[i].len()` (B-2026-07-09-1 path).
     fn total_name_chars(ref self) -> i64 {
-        let mut total = 0i64;
-        let mut i = 0i64;
+        let mut total = 0;
+        let mut i = 0;
         while i < self.names.len() {
             total = total + self.names[i].len();
             i = i + 1;
@@ -80,7 +80,7 @@ fn main() {
 
     let h = gb.histogram();
     let labels = ["A", "B", "C", "D", "F"];
-    let mut i = 0i64;
+    let mut i = 0;
     while i < 5 {
         println(f"{labels[i]}: {h[i]}");
         i = i + 1;

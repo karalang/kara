@@ -15,17 +15,21 @@
 
 ## Kāra (`solution.kara`)
 
-`Map.get(key)` returns `Option[V]`, not `V`. The unsafe idiom — return
-the lookup result directly as the function's tail — fails to compile:
+`Map.get(key)` returns `Option[ref V]`, a view of the stored value, not
+`V`. The unsafe idiom — return the lookup result directly as the
+function's tail — fails to compile:
 
 ```
-error[E0200]: expected 'String', found 'Option[String]'
+error[E0200]: expected 'String', found 'Option[ref String]' — `Option`
+  wraps the 'ref String'; unwrap it first (`.unwrap()`,
+  `.unwrap_or(<default>)`, or a `match`)
    --> solution.kara:2:5
 ```
 
 The compiler names both types in the error: *expected `String`*,
-*found `Option[String]`*. The LLM's revision is a `match` (or
-`unwrap_or`, or `?` propagation) at the lookup site.
+*found `Option[ref String]`*, and the ways to unwrap it. The LLM's
+revision is a `match` (or `unwrap_or`, or `?` propagation) at the
+lookup site.
 
 ## Demo loop on this task
 
@@ -34,13 +38,16 @@ The harness's live run shows the LLM's first attempt typically:
 1. **Iter 0**: writes `users.get(user_id)` as the function's tail
    expression. E0200 fires from the typecheck phase.
 2. **Iter 1**: LLM reads the diagnostic, wraps the lookup in a
-   `match` with `None => "Unknown"` (or equivalent). Build clean.
+   `match` with `None => "Unknown"` (or equivalent). `Some(name) =>
+   name` hands out the view, which cannot leave the map, so it is
+   `E0200` again (`found 'ref String'`) with a `.clone()`
+   `replacement`; `karac fix` applies it and the build is clean.
 
-The diagnostic carries no machine-applicable `replacement` field —
+The first diagnostic carries no machine-applicable `replacement` field —
 the fix is structural (insertion of a `match`/`unwrap_or` expression),
-not a byte-range substitution. The round trip is purely *descriptive*:
-the compiler tells the LLM the type mismatch, the LLM decides the
-handling strategy.
+not a byte-range substitution. That half of the round trip is
+*descriptive*: the compiler tells the LLM the type mismatch, the LLM
+decides the handling strategy.
 
 ## Why this contrast matters
 

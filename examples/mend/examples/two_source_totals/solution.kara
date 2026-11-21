@@ -1,8 +1,15 @@
 trait Source {
     fn load(ref self) -> i64;
 }
-effect resource UserDB: Source;
-effect resource OrderDB: Source;
+
+struct Fixed { n: i64 }
+
+impl Source for Fixed {
+    fn load(ref self) -> i64 { self.n }
+}
+
+effect resource UserDB: Source = Fixed { n: 3 };
+effect resource OrderDB: Source = Fixed { n: 4 };
 
 fn fetch_users() -> i64 { UserDB.load() }
 fn fetch_orders() -> i64 { OrderDB.load() }
