@@ -3700,7 +3700,7 @@ fn test_build_project_lists_discovered_modules() {
 // tests/memory_sanitizer.rs::asan_fs_read_lines_vec_string_elements_freed.
 
 #[test]
-#[ignore = "v2 gap after M3: the MIR interpreter exits 0, not 128 + SIGPIPE, on a broken pipe"]
+#[cfg(unix)]
 fn interp_broken_pipe_exits_quietly_like_a_native_binary() {
     // B-2026-08-19-2 — `karac run --interp prog | head` used to spill a Rust
     // panic report naming `karac::interpreter::builtin::write_stdout` and exit
@@ -3763,10 +3763,14 @@ fn interp_broken_pipe_exits_quietly_like_a_native_binary() {
         stderr.is_empty(),
         "a closed reader must be silent; stderr was:\n{stderr}"
     );
-    assert_eq!(
-        out.status.code(),
-        Some(141),
-        "expected 128 + SIGPIPE, the status a native binary exits with"
+    // The interpreter now dies by SIGPIPE itself, as the AOT binary does
+    // (B-2026-11-21-13), so the status is the signal; a shell reports either
+    // as 141. An exit of 141 is the same ending written out by hand.
+    use std::os::unix::process::ExitStatusExt;
+    assert!(
+        out.status.signal() == Some(13) || out.status.code() == Some(141),
+        "expected death by SIGPIPE (or 128 + SIGPIPE), the ending a native binary has; got {:?}",
+        out.status
     );
 }
 
@@ -4470,7 +4474,7 @@ fn test_rc_promoted_param_reached_through_a_let_rebind_frees_once() {
 /// `left: ""` and macOS a truncated prefix of the same run.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse"]
+#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn test_param_view_assign_to_a_carrier_struct_frees_once() {
     use std::process::Command;
 
@@ -4552,7 +4556,7 @@ fn test_param_view_assign_to_a_carrier_struct_frees_once() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses"]
+#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn test_eprintln_under_par_replays_in_source_order_run_and_build() {
     use std::process::Command;
 
@@ -4646,7 +4650,7 @@ fn test_eprintln_under_par_replays_in_source_order_run_and_build() {
 /// expected string below comes from, but `stdbuf` is not portable enough to
 /// assert on.) The per-stream AOT parity is covered by the test above.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses"]
+#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn test_par_console_capture_preserves_stdout_stderr_interleaving() {
     use std::fs::File;
     use std::process::{Command, Stdio};
@@ -4801,7 +4805,6 @@ fn test_providers_block_run_build_parity() {
 /// those arms render, which is how that claim was checked rather than assumed.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 renders some `eprintln` argument shapes differently"]
 fn test_eprintln_reaches_stderr_on_every_backend() {
     let tmp = scratch_project("eprintln-stderr-parity");
     // One `eprintln` per write arm `compile_print` can dispatch to. The Map
@@ -4929,7 +4932,9 @@ fn test_eprintln_reaches_stderr_on_every_backend() {
     // the rendering of each type.
     assert_eq!(
         a_err,
-        "E-lit\n7\n1.5\ntrue\nz\nstr\n[1, 2, 3]\n{k: 1}\nSet{9}\nSome(4)\nNone\n\
+        // A `Set` renders as `{a, b}`, with no type name (collections.md
+        // § Display; the legacy `Set{9}` was the stale part, B-2026-11-21-13).
+        "E-lit\n7\n1.5\ntrue\nz\nstr\n[1, 2, 3]\n{k: 1}\n{9}\nSome(4)\nNone\n\
          Ok(5)\n(1, two)\n$250\nred\n99\n-12\n200\n[9, 8]\nE-fstr-7-str\n\nE-last\n",
         "every eprintln argument shape must render on stderr"
     );
@@ -5174,8 +5179,7 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
 /// The shape here is a FUNCTION VALUE. The whole shared family now renders —
 /// structs (B-2026-08-24-2), enums (-6), self-referential enums (-9) — so the
 /// remaining refusals are shapes that cannot be rendered in principle rather
-/// than ones merely not written yet. The interpreter prints the callee's name;
-/// a compiled function value is a bare code pointer with no name attached.
+/// than ones merely not written yet.
 ///
 /// This shape ALSO used to fail the wrong way. Before B-2026-08-24-9 it had no
 /// entry in `dbg_unsupported_shape` at all, so it fell through to
@@ -5186,12 +5190,14 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
 ///
 /// This is the rule the whole cluster exists to enforce. Every bug in it
 /// (B-2026-08-23-14, -16, B-2026-07-31-9) was a surface that LOOKED present and
-/// silently was not, so an unlowered shape has to say so — and `--interp` still
-/// renders it, which is what makes refusing the compiled build defensible
-/// rather than merely strict.
+/// silently was not, so an unlowered shape has to say so.
+///
+/// v2 refuses the program in check, on every lane: `dbg` takes a `Debug`
+/// argument and a function value has none, so the interpreter no longer
+/// renders `<fn add>` either (B-2026-11-21-13). The test pins that refusal:
+/// it fails before any code is emitted, names the type, and is a diagnostic.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 refusal does not name the construct yet"]
 fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
     let tmp = scratch_project("dbg-unrenderable-refuses");
     let src = "fn add(a: i64) -> i64 { a }\n\
@@ -5202,40 +5208,35 @@ fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
                }\n";
     write(&tmp.join("u.kara"), src);
 
-    let built = karac_bin()
-        .current_dir(&tmp)
-        .args(["build", "u.kara"])
-        .output()
-        .expect("karac build spawn");
-    let berr = String::from_utf8_lossy(&built.stderr).into_owned()
-        + &String::from_utf8_lossy(&built.stdout);
-    let run = karac_bin()
-        .current_dir(&tmp)
-        .args(["run", "--interp", "u.kara"])
-        .output()
-        .expect("karac run spawn");
-    let rout = String::from_utf8_lossy(&run.stdout).into_owned();
-    let rerr = String::from_utf8_lossy(&run.stderr).into_owned();
+    for args in [
+        &["build", "u.kara"][..],
+        &["run", "--interp", "u.kara"][..],
+        &["check", "u.kara"][..],
+    ] {
+        let out = karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .expect("karac spawn");
+        let text = String::from_utf8_lossy(&out.stderr).into_owned()
+            + &String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "`karac {args:?}`: a shape with no Debug renderer must refuse; output was:\n{text}"
+        );
+        assert!(
+            text.contains("error[E0232]")
+                && text.contains(
+                    "dbg() argument must implement Debug, but 'Fn(i64) -> i64' is a function value"
+                ),
+            "`karac {args:?}`: the refusal must NAME the offending type, got:\n{text}"
+        );
+        assert!(
+            !text.contains("panicked") && !text.contains("after"),
+            "`karac {args:?}`: a diagnostic before anything runs, got:\n{text}"
+        );
+    }
     let _ = std::fs::remove_dir_all(&tmp);
-
-    assert!(
-        !built.status.success(),
-        "a shape with no Debug renderer must refuse, not emit a placeholder or \
-         panic the compiler; output was:\n{berr}"
-    );
-    assert!(
-        berr.contains("cannot render a value of type `Fn(..)`"),
-        "the refusal must NAME the offending type, got:\n{berr}"
-    );
-    assert!(
-        !berr.contains("panicked"),
-        "and it must be a diagnostic, not a compiler panic, got:\n{berr}"
-    );
-    assert!(
-        run.status.success() && rout.trim() == "after" && rerr.contains("g = <fn add>"),
-        "the interpreter must still render it — that is what makes the compiled \
-         refusal defensible; stdout={rout:?} stderr={rerr:?}"
-    );
 }
 
 /// B-2026-08-23-9 — `errdefer` on a function-TAIL error exit, across all three
@@ -6836,7 +6837,7 @@ fn test_build_project_codegen_two_files_runs() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse"]
+#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn test_build_generic_struct_reconstruct_heap_field_no_double_free_at_o0() {
     // B-2026-07-18-32 — a generic fn that RECONSTRUCTS a struct out of another
     // owned generic-struct param's heap fields (`Pair { a: p.b, b: p.a }`),
@@ -6974,7 +6975,7 @@ fn test_build_fn_align_lever_is_behaviour_neutral() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not forward `--llvm-args` to the backend yet"]
+#[ignore = "v2 gap after M3: the v2 build does not forward `--llvm-args` to the backend yet (B-2026-11-21-17)"]
 fn test_build_llvm_args_lever_reaches_the_backend() {
     // B-2026-08-07-10 — `KARAC_LLVM_ARGS` forwards raw LLVM `cl::opt` flags,
     // the way clang's `-mllvm` does. It is what let this row test BLOCK
@@ -8236,7 +8237,7 @@ fn test_run_derive_generated_body_typechecked_under_codegen() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: LazyFrame under v2 `run`"]
+#[ignore = "v2 gap after M3: `DataFrame` and `LazyFrame` come with the post-v1 kara-data package (docs/library/data.md; deferred.md § Lazy DataFrame Query Planner)"]
 fn test_run_lazyframe_all_run_forms_agree() {
     // Phase-11 LazyDataFrame: with the codegen twin covering the full op
     // surface (slice 9), the JIT-default `karac run` compiles and runs
@@ -12179,7 +12180,7 @@ fn test_explain_concept_module_state_renders_page() {
 /// wording it teaches no longer matches what they saw in their terminal,
 /// and hand-pinned strings drift silently because nothing links them.
 #[test]
-#[ignore = "v2 gap after M3: the page quotes legacy diagnostics the v2 front end words differently"]
+#[ignore = "v2 gap after M3: the page quotes a legacy-only rejection the v2 front end does not emit (B-2026-11-21-19)"]
 fn test_operators_page_quotes_live_diagnostics() {
     let page = concept_page("operators");
 
@@ -12446,7 +12447,7 @@ fn test_operators_page_carries_no_superseded_wording() {
 }
 
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins"]
+#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins; module-level `let` returns with deferred.md § Module-Level Mutable State"]
 fn test_module_state_page_quotes_live_diagnostics() {
     let page = concept_page("module-state");
 
@@ -12506,7 +12507,7 @@ fn test_module_state_page_quotes_live_diagnostics() {
 /// The warning that sends a reader here must keep naming the concept,
 /// otherwise the page is unreachable from the diagnostic that needs it.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins"]
+#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins; module-level `let` returns with deferred.md § Module-Level Mutable State"]
 fn test_module_mut_binding_warning_menu_matches_the_page() {
     let emitted = legacy_source_output(
         "menu",
@@ -12550,7 +12551,7 @@ fn test_module_mut_binding_warning_menu_matches_the_page() {
 /// `#[thread_local]` is excluded because it is an attribute, not a type, and
 /// "context struct" because it is a design pattern.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins"]
+#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins; module-level `let` returns with deferred.md § Module-Level Mutable State"]
 fn every_type_the_module_mut_binding_warning_names_actually_runs() {
     let emitted = legacy_source_output(
         "menu-types",
@@ -12639,7 +12640,7 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
 /// silently breaking the one guarantee the primitive exists to provide.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET), so `--interp` never runs it"]
+#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET), so `--interp` never runs it; module-level `let` returns with deferred.md § Module-Level Mutable State"]
 fn test_lazy_lock_runs_its_initializer_once_on_every_backend() {
     let tmp = scratch_project("lazylock-once");
     // `INIT` marks each closure execution; three `get`s must produce one mark.
@@ -12889,7 +12890,7 @@ fn test_ref_scalar_closure_tail_coerces_and_runs() {
 /// CALL — each case pairs the `LazyLock` form with the direct-call control it
 /// should behave identically to.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins"]
+#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET) before the lint and page this pins; module-level `let` returns with deferred.md § Module-Level Mutable State"]
 fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
     let effectful = "resource Db;\n\
                      fn load() -> i64 with reads(Db) { return 5; }\n";
@@ -12993,7 +12994,7 @@ fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
 /// probes instead of only checking them.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET), so `--interp` never runs it"]
+#[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET), so `--interp` never runs it; module-level `let` returns with deferred.md § Module-Level Mutable State"]
 fn test_module_scope_atomic_lowers_on_every_backend() {
     let tmp = scratch_project("module-atomic");
     let src = r#"let COUNTER: Atomic[i64] = Atomic.new(0);
@@ -18744,7 +18745,7 @@ fn test_migrate_default_atomic_when_only_bare_assigns() {
 /// run path: import + effect-clause use + calling the fetch stub body,
 /// plus the warn-don't-abort half of the leniency decision.
 #[test]
-#[ignore = "v2 gap after M3: v2 `run` checks the gated std.web import for native"]
+#[ignore = "v2 gap after M3: v2 `run` refuses the native target gate (E0411) that the legacy run leniency downgraded to warnings (B-2026-11-21-20)"]
 fn std_web_single_file_run_executes_gated_imports() {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-std-web-{}-{}",
@@ -19142,11 +19143,12 @@ fn run_via_jit_opt_in_executes_and_matches_output() {
 /// so a direct call to such a fn ran its ramp, the caller dropped the owned
 /// args, and the body never ran: `7 2` for the first cell (AOT `1 7 2`), and
 /// through `tg.spawn` the `Drop` body was lost as well (`end`, AOT
-/// `h4 dR4 end`). `go = false` keeps the park unreached, so each cell finishes
-/// without a peer; `WebSocket.from_fd` is the raw-fd test constructor.
+/// `h4 dR4 end`). `go = false` keeps the `WebSocket.accept` (which suspends)
+/// unreached, so each cell finishes without a peer on a listener bound to an
+/// ephemeral port. Ported off the legacy `WebSocket.from_fd` and
+/// `ws.recv_text(mut buf)` to the v2 API (B-2026-11-21-13).
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: WebSocket and the network boundary come with the services track (M4a)"]
 fn run_via_jit_executes_network_boundary_fn_body() {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-run-jit-coro-{}-{}",
@@ -19160,38 +19162,36 @@ fn run_via_jit_executes_network_boundary_fn_body() {
     let cells: [(&str, &str, &[&str]); 2] = [
         (
             "direct",
-            "struct Conn { id: i64 }\n\
+            "import std.net.{TcpListener, WebSocket};\n\
+             struct Conn { id: i64 }\n\
              impl Drop for Conn { fn drop(mut ref self) { println(7); } }\n\
-             fn serve_one(ws: WebSocket, c: Conn, go: bool) {\n\
-             \x20   let mut buf: Array[u8, 16] = [0u8; 16];\n\
-             \x20   if go { let _x = ws.recv_text(mut buf); }\n\
+             fn serve_one(l: own TcpListener, c: own Conn, go: bool) {\n\
+             \x20   if go { let _x = WebSocket.accept(l); }\n\
              \x20   println(1);\n\
              }\n\
-             #[allow(unstable_api)]\n\
              fn main() {\n\
              \x20   let c = Conn { id: 0 };\n\
-             \x20   let ws = WebSocket.from_fd(-1);\n\
-             \x20   serve_one(ws, c, false);\n\
+             \x20   let l = TcpListener.bind(\"127.0.0.1:0\").unwrap();\n\
+             \x20   serve_one(l, c, false);\n\
              \x20   println(2);\n\
              }\n",
             &["1", "7", "2"],
         ),
         (
             "spawned",
-            "struct R { id: i64 }\n\
+            "import std.net.{TcpListener, WebSocket};\n\
+             struct R { id: i64 }\n\
              impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
-             fn handle(r: R, ws: WebSocket, go: bool) {\n\
-             \x20   let mut buf: Array[u8, 16] = [0u8; 16];\n\
-             \x20   if go { let _x = ws.recv_text(mut buf); }\n\
+             fn handle(r: own R, l: own TcpListener, go: bool) {\n\
+             \x20   if go { let _x = WebSocket.accept(l); }\n\
              \x20   println(f\"h{r.id}\");\n\
              }\n\
-             #[allow(unstable_api)]\n\
              fn main() {\n\
              \x20   {\n\
-             \x20       let mut tg: TaskGroup = TaskGroup.new();\n\
+             \x20       let tg: TaskGroup = TaskGroup.new();\n\
              \x20       let r = R { id: 4 };\n\
-             \x20       let ws = WebSocket.from_fd(-1);\n\
-             \x20       tg.spawn(|| handle(r, ws, false));\n\
+             \x20       let l = TcpListener.bind(\"127.0.0.1:0\").unwrap();\n\
+             \x20       tg.spawn(|| handle(r, l, false));\n\
              \x20   }\n\
              \x20   println(\"end\");\n\
              }\n",
@@ -20525,7 +20525,6 @@ fn target_flag_gpu_rejected() {
 /// linker and die on an undefined symbol. Fires before codegen/link, so
 /// only the llvm-fallback skip applies.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse, or the v2 wasm build checks for native"]
 fn wasm_wasi_build_aborts_on_target_gate_violation() {
     let tmp = wasm_test_dir("gate");
     let path = tmp.join("gated.kara");
@@ -21072,7 +21071,7 @@ fn main() {
 /// That is B-2026-08-30-42; when it is fixed, add the bf16 lines from
 /// `tests/codegen.rs`'s `test_e2e_generic_arithmetic_at_reduced_precision` here.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse, or the v2 wasm build checks for native"]
+#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_f16_generic_arithmetic_build_and_run_e2e() {
     let tmp = wasm_test_dir("f16generic");
     let path = tmp.join("f16generic.kara");
@@ -21192,7 +21191,7 @@ fn main() {
 /// gracefully when the wasm archive, a wasm linker, the wasi sysroot, or
 /// node are absent.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse, or the v2 wasm build checks for native"]
+#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_string_split_build_and_run_e2e() {
     let tmp = wasm_test_dir("split");
     let path = tmp.join("split_wasm.kara");
@@ -21282,7 +21281,7 @@ fn main() {
 /// the native pool's output would be racy. Same node:wasi embedder
 /// shape as `wasm_wasi_build_and_run_e2e`.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses"]
+#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn wasm_wasi_explicit_par_block_runs_sequentially() {
     let tmp = wasm_test_dir("par-seq");
     let path = tmp.join("par_seq.kara");
@@ -21357,7 +21356,7 @@ fn main() {
 /// 3. **`h.join()` transports the result** — the free-spawned task's
 ///    `40 + 2` crosses back through the handle's result buffer.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse, or the v2 wasm build checks for native"]
+#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_wasi_spawn_taskgroup_sequential_e2e() {
     let tmp = wasm_test_dir("spawn-seq");
     let path = tmp.join("spawn_seq.kara");
@@ -21440,7 +21439,7 @@ fn main() {
 /// Uses the wasm_wasi component path, so `wasm_build_skip_reason` already
 /// covers a missing wasm-tools / runtime archive / linker.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build does not strip debug info by default yet"]
+#[ignore = "v2 gap after M3: the v2 wasm build does not strip debug info by default yet (B-2026-11-21-18)"]
 fn wasm_build_strips_debug_info_by_default() {
     let tmp = wasm_test_dir("strip-default");
     let path = tmp.join("strip_hello.kara");
@@ -21633,7 +21632,7 @@ fn main() {
 /// `f16` rides along as the control: it is a legal wasm type, was never
 /// affected, and must not be rewritten by the bf16 ABI.
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse, or the v2 wasm build checks for native"]
+#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn wasm_bf16_signature_positions_build_and_match_native() {
     let tmp = wasm_test_dir("bf16abi");
     let path = tmp.join("bf16_abi.kara");
@@ -22076,7 +22075,6 @@ fn wasm_simd128_opt_out_scalarizes_module() {
 /// has no vector unit, every vector op classifies Scalar, and the
 /// build rejects with the targeted diagnostic.
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not enforce `#[require_simd]` yet"]
 fn wasm_require_simd_fires_on_simd128_opt_out() {
     let tmp = wasm_test_dir("simd_require");
     let path = tmp.join("reqsimd.kara");
@@ -27534,7 +27532,6 @@ fn main() {
 /// dropped — and nothing about which shape happens to be unlowerable.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 refusal does not name the construct yet"]
 fn test_unlowerable_defer_body_refuses_instead_of_vanishing() {
     let tmp = scratch_project("defer-body-fail-closed");
     write(
@@ -28247,7 +28244,6 @@ fn test_dbg_is_identity_and_evaluates_its_argument_once() {
 /// typechecker forwards the argument's `type_display` TEXT to codegen rather
 /// than letting the backend re-render a `TypeExpr` into a second spelling.
 #[test]
-#[ignore = "v2 gap after M3: v2 does not emit the structured `dbg` form yet"]
 fn test_dbg_json_form_is_identical_across_backends() {
     let tmp = scratch_project("dbg-json-parity");
     let src = "fn main() {\n\
@@ -28319,7 +28315,7 @@ fn test_dbg_json_form_is_identical_across_backends() {
 /// so this asserts the SET of lines, sorted — the tag is the property under
 /// test, not the interleaving.
 #[test]
-#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses"]
+#[ignore = "v2 gap after M3: v2 refuses the legacy `par` statement form this program uses; to be ported (B-2026-11-21-21)"]
 fn test_dbg_tags_par_branches_with_task_ids_on_every_backend() {
     let tmp = scratch_project("dbg-par-task-ids");
     let src = "fn left() -> i64 { dbg(11); 1 }\n\
@@ -29771,7 +29767,7 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
 /// rather than a deleted line nobody can find again.
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse"]
+#[ignore = "v2 gap after M3: the program is legacy dialect the v2 rules refuse; to be ported (B-2026-11-21-21)"]
 fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
     let tmp = scratch_project("mainerr-failclosed");
     write(

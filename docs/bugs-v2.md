@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 649 |
+| diagnostics | 650 |
 | false-positive | 336 |
-| missing-feature | 232 |
+| missing-feature | 234 |
 | perf | 193 |
-| other | 134 |
+| other | 136 |
 | soundness | 115 |
 | miscompile | 102 |
 | crash | 64 |
@@ -79,14 +79,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 808 |
 | mir-llvm | 317 |
 | mir | 295 |
-| cli | 250 |
+| cli | 254 |
 | parser | 144 |
 | ownership | 127 |
 | runtime | 102 |
 | interp | 95 |
 | effect | 51 |
 | resolver | 50 |
-| other | 46 |
+| other | 47 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -152,6 +152,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-13 | 2026-11-21 | other | medium | Test infra: tests/cli.rs has 4 reasoned #[ignore]s that now pass and 3 more whose reason is stale (they fail on the test's own legacy expectations, not on the gap named), so the suite hides 4 live regression gates and misstates 3 gaps | — |
 | B-2026-11-21-14 | 2026-11-21 | other | high | Test infra: 22 #[ignore]s in tests/http_server.rs blame a missing v2 HTTP server ('services track, M4a'), but the server exists; 19 fail only because the legacy spawn_kara_server helper reads BOUND_PORT from stdout without KARAC_ANNOUNCE_PORT, and 16 pass once the handshake is fixed | — |
 | B-2026-11-21-15 | 2026-11-21 | typecheck | high | A `par for` item that is a `shared` handle enters each iteration unchecked: `par for x in v.iter() { .. }` (and `par for x in v`, `v.into_iter()`) over a `Vec[S]` of one `shared struct S` passes `karac check`, and iterations copying or writing through `x` race on the non-atomic count and the `mut` fields: heap-use-after-free and double-free under ASan, data races under TSan | — |
+| B-2026-11-21-17 | 2026-11-21 | cli | low | `karac build --llvm-args=<flags>` does not reach the v2 backend: test_build_llvm_args_lever_reaches_the_backend builds with `--llvm-args=-align-all-functions=8` and finds `main` at 0x2bd0, not 256-byte aligned, so any measurement taken with the lever measures the default | — |
+| B-2026-11-21-18 | 2026-11-21 | cli | low | `karac build --target=wasm_*` does not strip debug info by default: the stripped and `KARAC_WASM_KEEP_DEBUG=1` builds of the same program are the same size (964526 B), where the legacy build ran `wasm-tools strip` and the DWARF sections were ~90% of an unstripped module | — |
+| B-2026-11-21-19 | 2026-11-21 | cli | low | `karac explain --concept=operators` quotes the rejection "operator traits are stdlib-only" for a user `impl Index`, which only the legacy pipeline emitted: v2 takes user operator impls (B-2026-10-14-37), and `impl Index for P { type Output = i64; }` is E0203 "missing method 'index'" instead | — |
+| B-2026-11-21-20 | 2026-11-21 | cli | low | Needs a ruling: `karac run` of a single file that uses a gated `std.web` import and calls a `writes(Display) reads(Storage)` fn from `main` is refused with E0411 (target `native` does not provide 'Display'), as `karac check` refuses it; the legacy run-leniency decision (2026-06-06) downgraded such effect findings to warnings under `run` and kept executing, and std_web_single_file_run_executes_gated_imports pins that | — |
+| B-2026-11-21-21 | 2026-11-21 | other | low | Test infra: 11 ignored fixtures in tests/cli.rs are written in the legacy dialect and need porting to v2 before they can gate anything: 4 use the legacy `par` statement form (E0520), and 7 use pre-D5 bare-parameter moves, a free `spawn`, `s.split(",")` as a `Vec`, or a borrow returned past its owner | — |
 
 ### Relocated
 
