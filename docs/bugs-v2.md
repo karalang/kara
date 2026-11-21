@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 340 |
 | missing-feature | 238 |
 | perf | 196 |
-| other | 141 |
+| other | 142 |
 | soundness | 116 |
 | miscompile | 102 |
 | crash | 64 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 263 |
 | parser | 146 |
 | ownership | 127 |
-| runtime | 104 |
+| runtime | 105 |
 | interp | 98 |
 | effect | 52 |
 | resolver | 50 |
@@ -2090,6 +2090,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-45 | typecheck | medium | A tuple of two `collect`s, `let p = (a.map(f).collect(), b.map(g).collect())`, is refused as if both had one type ('(?T, ?T)'), and one `collect` in… | 002770bf68 |
 | B-2026-11-21-52 | other | low | Corpus entry fixtures/codegen/generics/a_qualified_channel_pins_through_a_tuple_return expected `5` from `println(rx.recv())`, but `Receiver.recv` re… | 322c1d9075 |
 | B-2026-11-21-53 | interp | low | The 1116 and 1117 kata differentials run 26 s and 45 s on a release MIR interpreter and about 60 s on a debug one, so under the corpus runner's 60 s… | 322c1d9075 |
+| B-2026-11-21-54 | runtime | low | The HTTP/1.1 server refuses `HTTP/1.2` with 400 where RFC 9112 §2.3 serves a higher 1.x minor as 1.1, answers another major version (`HTTP/2.0`) 400… | 607c0006c1 |
 
 </details>
 
