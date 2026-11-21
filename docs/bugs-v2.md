@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 346 |
 | missing-feature | 242 |
 | perf | 198 |
-| other | 143 |
+| other | 144 |
 | soundness | 119 |
 | miscompile | 102 |
 | crash | 64 |
@@ -86,7 +86,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 98 |
 | effect | 52 |
 | resolver | 50 |
-| other | 48 |
+| other | 49 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -135,6 +135,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-2 | 2026-11-22 | ownership | high | A temporary pushed into a `Vec[ref String]` checks clean: `refs.push(words[0].clone())` stores a reference to a dropped temporary (ASan heap-buffer-overflow) | — |
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
 | B-2026-11-22-5 | 2026-11-22 | parser | low | Python- and Go-habit forms still without a Kāra form after the sweep's rows closed: Python `-> None`, `let a, b = 1, 2`, `s * n`, `s.split(sep)` naming, a negative slice bound `s[:-4]`; Go `package`/`import`, `&T{..}`, `err != nil` without `?`, exported capitals | — |
+| B-2026-11-22-20 | 2026-11-22 | other | medium | The docs' conformance sweeps confirmed a block the doc says is rejected whatever rejected it, ran no design.md program, knew no fence word for a fragment or a deliberate error, and ran only in CI's side jobs; a concept page said std.crypto did not exist | — |
 
 ### Relocated
 
