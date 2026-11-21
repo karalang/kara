@@ -788,6 +788,32 @@ pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -
     run_with(program, tys, entry, args, true, false, tasks_flag())
 }
 
+/// Set by a front end (the Jupyter kernel's `interrupt_request`) to stop
+/// the program running on the interpreter: the next call or loop back-edge
+/// it reaches, or the sleep it is in, ends it as a panic with the message
+/// [`INTERRUPTED`] would (B-2026-11-20-132). Read with a relaxed load,
+/// in the interpreter only: compiled code never polls it.
+static INTERRUPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The panic message of a run [`interrupt`] stopped.
+pub const INTERRUPTED: &str = "interrupted";
+
+/// Ask the running program to stop ([`INTERRUPT`]). It stays asked until
+/// [`clear_interrupt`], so code after a contained panic stops too.
+pub fn interrupt() {
+    INTERRUPT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Withdraw [`interrupt`]; a front end calls it before each run.
+pub fn clear_interrupt() {
+    INTERRUPT.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[inline(always)]
+fn interrupt_asked() -> bool {
+    INTERRUPT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// [`run`], without the trace: [`RunResult::events`] stays empty.
 pub fn run_untraced(
     program: &Program,
@@ -3110,10 +3136,9 @@ impl<'a> Interp<'a> {
                         true,
                     ));
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                std::thread::sleep(std::time::Duration::from_nanos(
+                self.pause(std::time::Duration::from_nanos(
                     (*until as i64 - monotonic_ns()).max(0) as u64,
-                ));
+                ))?;
                 Ok(Value::Unit)
             }
             ("sleep_ms" | "__sleep_ns", "") => {
@@ -3129,8 +3154,7 @@ impl<'a> Interp<'a> {
                 }
                 if let [Value::Int(n)] = args.as_slice() {
                     if *n > 0 {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        std::thread::sleep(pause_of(base, *n));
+                        self.pause(pause_of(base, *n))?;
                     }
                 }
                 Ok(Value::Unit)
@@ -14734,6 +14758,9 @@ impl<'a> Interp<'a> {
             None => self.decoded(body),
         };
         let mut bb = BasicBlock(0);
+        if interrupt_asked() {
+            self.poll_interrupt(body, bb)?;
+        }
         loop {
             let block = body.block(bb);
             let fast_block = &decoded.blocks[bb.index()];
@@ -14749,6 +14776,9 @@ impl<'a> Interp<'a> {
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
             if let Some(b) = self.fast_term(&fast_block.term, &block.terminator.kind) {
+                if b <= bb && interrupt_asked() {
+                    self.poll_interrupt(body, bb)?;
+                }
                 bb = b;
                 continue;
             }
@@ -14798,7 +14828,12 @@ impl<'a> Interp<'a> {
                 .map_err(|s| self.report_abort(s, body, block.terminator.source_info.span))
                 .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
             match next {
-                Some(b) => bb = b,
+                Some(b) => {
+                    if b <= bb && interrupt_asked() {
+                        self.poll_interrupt(body, bb)?;
+                    }
+                    bb = b
+                }
                 None => {
                     return self
                         .finish_frame(body, &decoded.droppable)
@@ -14812,6 +14847,9 @@ impl<'a> Interp<'a> {
     fn run_body_general(&mut self, body: &'a Body) -> R<Value> {
         let strict = body.phase >= MirPhase::DropsElaborated;
         let mut bb = BasicBlock(0);
+        if interrupt_asked() {
+            self.poll_interrupt(body, bb)?;
+        }
         loop {
             let block = body.block(bb);
             for (i, st) in block.statements.iter().enumerate() {
@@ -14829,7 +14867,12 @@ impl<'a> Interp<'a> {
                 .map_err(|s| self.report_abort(s, body, block.terminator.source_info.span))
                 .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
             match next {
-                Some(b) => bb = b,
+                Some(b) => {
+                    if b <= bb && interrupt_asked() {
+                        self.poll_interrupt(body, bb)?;
+                    }
+                    bb = b
+                }
                 None => {
                     let droppable = self.droppable_locals(body);
                     return self
@@ -14837,6 +14880,49 @@ impl<'a> Interp<'a> {
                         .map_err(|s| locate(s, body, format!("{bb}[term]")));
                 }
             }
+        }
+    }
+
+    /// [`INTERRUPT`] is set, at a call into `body` or a back-edge out of
+    /// its block `bb`: the run stops as a panic there does, unless a panic
+    /// is unwinding already (its teardown runs to the end; the code after
+    /// it stops at its next poll).
+    #[inline(never)]
+    fn poll_interrupt(&mut self, body: &Body, bb: BasicBlock) -> R<()> {
+        if self.panic_unwinding() {
+            return Ok(());
+        }
+        let span = body.block(bb).terminator.source_info.span;
+        let stop = self.interrupted();
+        Err(self.report_abort(stop, body, span))
+    }
+
+    /// The stop of an interrupted run: a panic with [`INTERRUPTED`].
+    fn interrupted(&mut self) -> Stop {
+        self.panic_message = Some(INTERRUPTED.to_string());
+        Stop::Abort(AbortReason::Panic)
+    }
+
+    /// A pause of `d` that [`interrupt`] cuts short, as a panic.
+    fn pause(&mut self, d: std::time::Duration) -> R<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let end = std::time::Instant::now() + d;
+            loop {
+                if interrupt_asked() && !self.panic_unwinding() {
+                    return Err(self.interrupted());
+                }
+                let left = end.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return Ok(());
+                }
+                std::thread::sleep(left.min(std::time::Duration::from_millis(20)));
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = d;
+            Ok(())
         }
     }
 
@@ -17771,11 +17857,32 @@ impl<'a> Interp<'a> {
                 }
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
-        std::thread::sleep(pause);
-        #[cfg(target_arch = "wasm32")]
-        let _ = pause;
-        Ok(())
+        // Every task waits: an interrupt here is reported where the root
+        // waits, as a panic there would be.
+        self.pause(pause)
+            .map_err(|stop| self.report_at_root_wait(stop))
+    }
+
+    /// `stop`, an abort out of the executor's own wait (no frame runs to
+    /// report it), reported at the root task's wait as [`Interp::report_abort`]
+    /// reports one at its place.
+    fn report_at_root_wait(&mut self, stop: Stop) -> Stop {
+        if let Stop::Abort(reason) = &stop {
+            if !self.abort_reported {
+                self.abort_reported = true;
+                self.drain_logs();
+                let msg = self.abort_message(reason);
+                let at = match self.root_wait_at {
+                    Some(span) => {
+                        let (file, line) = source_at(span.line);
+                        format!("\n  at {file}:{line}:{}", span.column)
+                    }
+                    None => String::new(),
+                };
+                self.write_out(true, &format!("runtime error: {msg}{at}\n"));
+            }
+        }
+        stop
     }
 
     /// `__ready(native, args..)`, which the coroutine transform puts before

@@ -161,14 +161,9 @@ pub struct Kernel<T: Transport + 'static> {
     /// lock.
     execution_count: AtomicU64,
     /// Set by `interrupt_request`; cleared at the start of every new
-    /// `execute_request`. The interpreter does not yet poll this
-    /// flag — interpreter-side cooperative cancellation is a slice
-    /// follow-up (the existing `par {}` cancellation token is
-    /// per-block, not per-process, so wiring it through to a
-    /// kernel-level interrupt requires a separate pass). The flag
-    /// is exposed via [`Kernel::interrupt_requested`] so that future
-    /// poll points can read it without going through the session
-    /// mutex.
+    /// `execute_request`. The interpreter polls its own flag
+    /// (`karac::mir::interp::interrupt`), set beside this one; this
+    /// one is what [`Kernel::interrupt_requested`] reports.
     interrupt_flag: std::sync::atomic::AtomicBool,
 }
 
@@ -206,10 +201,7 @@ impl<T: Transport + 'static> Kernel<T> {
     }
 
     /// Snapshot the interrupt flag set by the last
-    /// `interrupt_request`. Exposed for future interpreter-side
-    /// polling — slice 5 wires the request handler but the
-    /// interpreter does not yet poll, so today this is read-only
-    /// from the test surface.
+    /// `interrupt_request`.
     pub fn interrupt_requested(&self) -> bool {
         self.interrupt_flag.load(Ordering::Acquire)
     }
@@ -230,16 +222,23 @@ impl<T: Transport + 'static> Kernel<T> {
     /// timeout-bounded recv on shell then control so neither channel
     /// starves the other and shutdown is observed within
     /// `POLL_TIMEOUT` of `transport.close()`.
-    pub fn run(&self) {
-        while !self.transport.is_closed() {
-            // Shell channel: ordinary requests.
-            self.pump_once(Channel::Shell);
-            if self.transport.is_closed() {
-                break;
+    ///
+    /// The control channel has its own thread, so an `interrupt_request`
+    /// is read while a cell runs on the shell one (B-2026-11-20-132).
+    pub fn run(&self)
+    where
+        Self: Sync,
+    {
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                while !self.transport.is_closed() {
+                    self.pump_once(Channel::Control);
+                }
+            });
+            while !self.transport.is_closed() {
+                self.pump_once(Channel::Shell);
             }
-            // Control channel: high-priority requests.
-            self.pump_once(Channel::Control);
-        }
+        });
     }
 
     /// Drive one iteration on `channel` — recv with the standard
@@ -404,6 +403,7 @@ impl<T: Transport + 'static> Kernel<T> {
         // surface honest.
         self.interrupt_flag
             .store(false, std::sync::atomic::Ordering::Release);
+        karac::mir::interp::clear_interrupt();
 
         let code = request
             .content
@@ -607,18 +607,16 @@ impl<T: Transport + 'static> Kernel<T> {
         }
     }
 
-    /// `interrupt_request` (control channel) — flips the kernel's
-    /// interrupt flag and replies `{status: "ok"}`. Interpreter-side
-    /// polling against this flag is a follow-up: the existing
-    /// `par {}` cancellation token in `src/interpreter/exec.rs` is
-    /// per-block, not per-process, so wiring it through to a
-    /// kernel-level interrupt requires a separate pass through the
-    /// interpreter's main eval loops. Until that lands, the flag is
-    /// observable via [`Kernel::interrupt_requested`] so tests can
-    /// confirm the request was received.
+    /// `interrupt_request` (control channel, its own thread) — asks
+    /// the running cell to stop and replies `{status: "ok"}`. The cell
+    /// ends as a panic would, with ename `KeyboardInterrupt`, and the
+    /// session keeps the cells before it (B-2026-11-20-132).
     fn handle_interrupt_request(&self, channel: Channel, request: Message) {
         self.interrupt_flag
             .store(true, std::sync::atomic::Ordering::Release);
+        // The running cell stops at its next call, loop back-edge or
+        // sleep, as a panic (`karac::mir::interp::interrupt`).
+        karac::mir::interp::interrupt();
         let reply_content = json!({ "status": "ok" });
         let reply = self.build_reply(&request, "interrupt_reply", reply_content);
         if let Err(err) = self.transport.send(channel, reply.encode(&self.signer)) {
@@ -1214,7 +1212,13 @@ fn html_escape(s: &str) -> String {
 /// and panicked is a `RuntimeError`, not a `CompileError`
 /// (B-2026-11-20-130).
 fn error_name(first: &str) -> &'static str {
-    if is_runtime_failure(first) {
+    if first.starts_with(&format!(
+        "runtime error: {}",
+        karac::mir::interp::INTERRUPTED
+    )) {
+        // Jupyter's name for a cell the user interrupted.
+        "KeyboardInterrupt"
+    } else if is_runtime_failure(first) {
         "RuntimeError"
     } else {
         "CompileError"

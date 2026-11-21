@@ -74,10 +74,6 @@ pub(super) fn is_valid_resource_ident(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-pub(super) fn print_help() {
-    println!("{}", help_text());
-}
-
 /// What `:help` prints.
 pub(super) fn help_text() -> String {
     "Kāra REPL meta-commands:
