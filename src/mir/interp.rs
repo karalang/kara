@@ -809,6 +809,11 @@ pub fn clear_interrupt() {
     INTERRUPT.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether [`interrupt`] is set and not yet cleared.
+pub fn interrupt_pending() -> bool {
+    interrupt_asked()
+}
+
 #[inline(always)]
 fn interrupt_asked() -> bool {
     INTERRUPT.load(std::sync::atomic::Ordering::Relaxed)

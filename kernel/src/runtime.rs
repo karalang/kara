@@ -165,6 +165,9 @@ pub struct Kernel<T: Transport + 'static> {
     /// (`karac::mir::interp::interrupt`), set beside this one; this
     /// one is what [`Kernel::interrupt_requested`] reports.
     interrupt_flag: std::sync::atomic::AtomicBool,
+    /// While a cell runs: an interrupt reaches the interpreter only then,
+    /// so one sent to an idle kernel cannot stop the next cell.
+    running: std::sync::atomic::AtomicBool,
 }
 
 impl<T: Transport + 'static> Kernel<T> {
@@ -197,6 +200,7 @@ impl<T: Transport + 'static> Kernel<T> {
             session: Mutex::new(Session::with_options(opts)),
             execution_count: AtomicU64::new(0),
             interrupt_flag: std::sync::atomic::AtomicBool::new(false),
+            running: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -447,7 +451,10 @@ impl<T: Transport + 'static> Kernel<T> {
                 .unwrap()
                 .set_next_cell_number(execution_count as usize);
         }
+        self.running.store(true, Ordering::Release);
         let outcome = self.run_cell(&code);
+        self.running.store(false, Ordering::Release);
+        karac::mir::interp::clear_interrupt();
 
         if !silent {
             self.emit_cell_output(&request.header, &outcome, execution_count);
@@ -637,7 +644,9 @@ impl<T: Transport + 'static> Kernel<T> {
             .store(true, std::sync::atomic::Ordering::Release);
         // The running cell stops at its next call, loop back-edge or
         // sleep, as a panic (`karac::mir::interp::interrupt`).
-        karac::mir::interp::interrupt();
+        if self.running.load(Ordering::Acquire) {
+            karac::mir::interp::interrupt();
+        }
         let reply_content = json!({ "status": "ok" });
         let reply = self.build_reply(&request, "interrupt_reply", reply_content);
         if let Err(err) = self.transport.send(channel, reply.encode(&self.signer)) {
@@ -1765,8 +1774,8 @@ mod tests {
             streams.iter().any(|t| t.starts_with("session effects:")),
             "{streams:?}"
         );
-        for i in 1..4 {
-            assert_eq!(replies[i].content["status"], "ok", "{:?}", replies[i]);
+        for reply in &replies[1..4] {
+            assert_eq!(reply.content["status"], "ok", "{reply:?}");
         }
         let evalue = replies[4].content["evalue"].as_str().unwrap();
         assert_eq!(replies[4].content["ename"], "CommandError");
@@ -1835,6 +1844,39 @@ mod tests {
         assert_eq!(m, vec!["end-provide".to_string()]);
         let (m, _) = complete(":ty", 3);
         assert_eq!(m, vec!["type".to_string()]);
+    }
+
+    #[test]
+    fn kernel_interrupt_while_idle_does_not_stop_the_next_cell() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Control,
+            build_request(&signer, "interrupt_request", json!({}), vec![]),
+        );
+        kernel.pump_once(Channel::Control);
+        assert!(
+            !karac::mir::interp::interrupt_pending(),
+            "an interrupt with no cell running must not reach the interpreter"
+        );
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "println(1);", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        assert!(
+            iopub
+                .iter()
+                .any(|(k, m)| k == "stream" && m.content["text"] == "1\n"),
+            "{iopub:?}"
+        );
     }
 
     #[test]
