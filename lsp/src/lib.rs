@@ -42,6 +42,12 @@ type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
 /// pump until the client shuts the server down. Consumes the connection so it
 /// is dropped on return (closing the writer channel — see [`main_loop`]).
 pub fn serve(connection: Connection) -> LspResult {
+    serve_until_exit(connection).map(|_| ())
+}
+
+/// [`serve`], returning the process's exit code once the client sends
+/// `exit`: 0 after a `shutdown`, 1 without one (LSP 3.17, `exit`).
+pub fn serve_until_exit(connection: Connection) -> Result<i32, Box<dyn Error + Sync + Send>> {
     // Full-document sync (so every edit hands us the whole buffer to
     // re-analyze) drives the diagnostics loop; hover is served from the same
     // per-document text.
@@ -94,11 +100,13 @@ pub fn serve(connection: Connection) -> LspResult {
     main_loop(connection)
 }
 
-/// The message pump. Runs until the client sends `shutdown`, then returns —
-/// dropping `connection` (taken by value on purpose: holding it across the
-/// caller's `io_threads.join()` would deadlock the writer thread, which only
-/// exits once its `sender` is dropped).
-fn main_loop(connection: Connection) -> LspResult {
+/// The message pump. Runs until the client sends `exit`, then returns its
+/// exit code — dropping `connection` (taken by value on purpose: holding it
+/// across the caller's `io_threads.join()` would deadlock the writer thread,
+/// which only exits once its `sender` is dropped). After `shutdown` every
+/// request is answered `InvalidRequest` (B-2026-11-21-36): the server had
+/// stopped reading, so a request sent then was never answered.
+fn main_loop(connection: Connection) -> Result<i32, Box<dyn Error + Sync + Send>> {
     // Latest known text per open document, keyed by the URI's string form
     // (`Uri` itself carries an internal hash-cache cell, so it is a poor map
     // key — `clippy::mutable_key_type`). FULL sync means open/change carry the
@@ -109,17 +117,28 @@ fn main_loop(connection: Connection) -> LspResult {
     // re-checks that body (B-2026-11-09-33).
     let mut checkers: HashMap<String, karac::DocumentChecker> = HashMap::new();
 
+    let mut shut_down = false;
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
-                // `handle_shutdown` answers the shutdown request and returns
-                // true; the loop then ends and the connection drops.
-                if connection.handle_shutdown(&req)? {
-                    return Ok(());
-                }
-                let resp = handle_request(&docs, &checkers, req);
+                let resp = if shut_down {
+                    lsp_server::Response::new_err(
+                        req.id,
+                        INVALID_REQUEST,
+                        "the server is shutting down".to_string(),
+                    )
+                } else if req.method == "shutdown" {
+                    shut_down = true;
+                    lsp_server::Response::new_ok(req.id, ())
+                } else {
+                    handle_request(&docs, &checkers, req)
+                };
                 connection.sender.send(Message::Response(resp))?;
             }
+            Message::Notification(not) if not.method == "exit" => {
+                return Ok(if shut_down { 0 } else { 1 });
+            }
+            Message::Notification(_) if shut_down => {}
             Message::Notification(not) => {
                 handle_notification(&connection, &mut docs, &mut checkers, not)?;
             }
@@ -129,7 +148,8 @@ fn main_loop(connection: Connection) -> LspResult {
             }
         }
     }
-    Ok(())
+    // The client went away without `exit`.
+    Ok(1)
 }
 
 fn handle_notification(
@@ -204,6 +224,7 @@ pub fn apply_change(text: &mut String, change: lsp_types::TextDocumentContentCha
 
 // JSON-RPC error codes (LSP inherits these from JSON-RPC 2.0).
 const METHOD_NOT_FOUND: i32 = -32601;
+const INVALID_REQUEST: i32 = -32600;
 const INVALID_PARAMS: i32 = -32602;
 
 /// Answer a client→server request. Every request must get exactly one

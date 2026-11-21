@@ -12,8 +12,12 @@ use lsp_server::Connection;
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     eprintln!("kara-lsp: starting (stdio transport)");
     let (connection, io_threads) = Connection::stdio();
-    kara_lsp::serve(connection)?;
+    let code = kara_lsp::serve_until_exit(connection)?;
     io_threads.join()?;
-    eprintln!("kara-lsp: shut down cleanly");
-    Ok(())
+    if code == 0 {
+        eprintln!("kara-lsp: shut down cleanly");
+    } else {
+        eprintln!("kara-lsp: exit without shutdown");
+    }
+    std::process::exit(code)
 }
