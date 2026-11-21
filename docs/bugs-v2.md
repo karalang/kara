@@ -143,7 +143,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-126 | 2026-11-20 | typecheck | medium | `.into()` as the argument to a bare (borrowed) parameter gets no expected type: `takes(Celsius { c: 10 }.into())` with `fn takes(f: Fahrenheit)` is refused "nothing here fixes the target type" | — |
 | B-2026-11-20-127 | 2026-11-20 | typecheck | low | E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE has no machine fix: `karac fix` on `enum Status { #[default] Pending, Active }` reports no fixable diagnostics | — |
 | B-2026-11-20-128 | 2026-11-20 | typecheck | low | E_DEFAULT_VARIANT_HAS_PAYLOAD's help suggests an inherent `impl Status { fn default() -> Status }`, which does not implement `Default`, where design.md says it shows an `impl Default` skeleton | — |
-| B-2026-11-21-5 | 2026-11-21 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword ... write `r#struct`" plus a cascade (Expected expression at the body's `}`, E0001 top-level statements beside `fn main`), where a nested `fn` gets one "no nested items ... move it above the item it is in" diagnostic with a hoisting fix | — |
 | B-2026-11-21-7 | 2026-11-21 | mir-llvm | low | A temporary String consumed only by a borrowing parameter is still allocated: `w.push_str("abcde".substring(k, k + 1))` materialises a one-character String per call and frees it after the borrow (kata 2255 shape: 104 ms, against 33 ms for the same words built with `w.push(c)`; Rust 29 ms) | — |
 | B-2026-11-21-8 | 2026-11-21 | other | high | Test infra: six more helpers feed a RUN lane's exit status to `common::link_or_skip`, the shape B-2026-11-21-6 fixed in two others, so a runtime error, refusal or sanitizer report on `__mir-llvm-run` / `__mir-llvm-asan` / `karac run` reads as a skipped link and the test passes | — |
 | B-2026-11-21-9 | 2026-11-21 | other | high | Test infra: four ASan helpers skip whenever stderr contains `not found` or `fsanitize`, with no exit-status or KARAC_REQUIRE_RUNTIME_ARCHIVE check, so a compiled program that fails with 'runtime error: key not found' (or prints an IoError 'file not found') under `__mir-llvm-asan` is skipped, in CI too | — |
@@ -153,7 +152,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-13 | 2026-11-21 | other | medium | Test infra: tests/cli.rs has 4 reasoned #[ignore]s that now pass and 3 more whose reason is stale (they fail on the test's own legacy expectations, not on the gap named), so the suite hides 4 live regression gates and misstates 3 gaps | — |
 | B-2026-11-21-14 | 2026-11-21 | other | high | Test infra: 22 #[ignore]s in tests/http_server.rs blame a missing v2 HTTP server ('services track, M4a'), but the server exists; 19 fail only because the legacy spawn_kara_server helper reads BOUND_PORT from stdout without KARAC_ANNOUNCE_PORT, and 16 pass once the handshake is fixed | — |
 | B-2026-11-21-15 | 2026-11-21 | typecheck | high | A `par for` item that is a `shared` handle enters each iteration unchecked: `par for x in v.iter() { .. }` (and `par for x in v`, `v.into_iter()`) over a `Vec[S]` of one `shared struct S` passes `karac check`, and iterations copying or writing through `x` race on the non-atomic count and the `mut` fields: heap-use-after-free and double-free under ASan, data races under TSan | — |
-| B-2026-11-21-16 | 2026-11-21 | typecheck | low | `s + *t`, with `s` a `String` and `t` a `ref Str` (an item lent by `.iter()` over a `Vec[Str]`), is refused as "'+' on 'String' requires a 'String' right operand, found 'Str'" with no fix, where `s + t` and `s + ref t` carry the machine-applicable `.to_string()` | — |
 
 ### Relocated
 
@@ -2052,7 +2050,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-136 | typecheck | low | A bare `for` element of a bare parameter moved out (`for h in headers { out.insert(at, h) }`) is a bare `expected 'Header', found 'ref Header'` with… | 239b80ffca |
 | B-2026-11-20-137 | other | low | Two Mend tasks drifted with nothing to catch it: two_source_totals' own solution is refused (E_NO_PROVIDER) and concurrent_emails' canned run answers… | 259fde908d |
 | B-2026-11-21-1 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on t… | cecef40ef6 |
+| B-2026-11-21-5 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword .. | dafd0cdb06 |
 | B-2026-11-21-6 | mir-llvm | high | `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure the address of the slot holding each reference, not the reference: compiled,… | 6e5c5d0a95 |
+| B-2026-11-21-16 | typecheck | low | `s + *t`, with `s` a `String` and `t` a `ref Str` (an item lent by `.iter()` over a `Vec[Str]`), is refused as "'+' on 'String' requires a 'String' r… | 9b905182ea |
 
 </details>
 
