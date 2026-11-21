@@ -289,15 +289,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 self.record_expr_type(&arg.span, &i32_ty);
             } else if arg_ty != Type::Error && arg_ty != i32_ty {
-                self.type_error(
-                    format!(
-                        "powi expects an exponent of type `i32`, got `{}` (cast with `as i32`, \
-                         or use `pow` for a float exponent)",
-                        type_display(&arg_ty)
-                    ),
-                    arg.span,
-                    TypeErrorKind::TypeMismatch,
+                let message = format!(
+                    "powi expects an exponent of type `i32`, got `{}` (cast with `as i32`, \
+                     or use `pow` for a float exponent)",
+                    type_display(&arg_ty)
                 );
+                self.cast_argument_error(message, arg, &arg_ty, "i32");
                 return Some(Type::Error);
             }
             return Some(receiver_for_lookup.clone());
@@ -758,15 +755,12 @@ impl<'a> super::TypeChecker<'a> {
                         if matches!(&arg.kind, ExprKind::Integer(_, None)) {
                             self.record_expr_type(&arg.span, &u32_ty);
                         } else if arg_ty != Type::Error && arg_ty != u32_ty {
-                            self.type_error(
-                                format!(
-                                    "{method} expects an amount of type `u32`, got `{}` \
-                                     (cast with `as u32`)",
-                                    type_display(&arg_ty)
-                                ),
-                                arg.span,
-                                TypeErrorKind::TypeMismatch,
+                            let message = format!(
+                                "{method} expects an amount of type `u32`, got `{}` \
+                                 (cast with `as u32`)",
+                                type_display(&arg_ty)
                             );
+                            self.cast_argument_error(message, arg, &arg_ty, "u32");
                             return Some(Type::Error);
                         }
                     }
@@ -833,45 +827,7 @@ impl<'a> super::TypeChecker<'a> {
                     "pow expects an exponent of type `u32`, got `{}` (cast with `as u32`)",
                     type_display(&arg_ty)
                 );
-                // An integer exponent gets the cast the message names: after
-                // a name, a call or a literal (`k as u32`), and around
-                // anything looser (`(k - 1) as u32`) (kata 1067).
-                if matches!(arg_ty, Type::Int(_) | Type::UInt(_)) {
-                    let end = arg.span.offset + arg.span.length;
-                    if super::expr_ops::appended_cast_end_offset(arg) == Some(end) {
-                        self.type_error_with_fix_it(
-                            message,
-                            arg.span,
-                            TypeErrorKind::TypeMismatch,
-                            super::FixIt {
-                                span: Span {
-                                    offset: end,
-                                    length: 0,
-                                    ..arg.span
-                                },
-                                replacement: " as u32".to_string(),
-                            },
-                        );
-                    } else {
-                        let edits = vec![
-                            crate::resolver::TextEdit {
-                                offset: arg.span.offset,
-                                length: 0,
-                                replacement: "(".to_string(),
-                            },
-                            crate::resolver::TextEdit {
-                                offset: end,
-                                length: 0,
-                                replacement: ") as u32".to_string(),
-                            },
-                        ];
-                        self.error_fix_diffs
-                            .insert(crate::resolver::SpanKey::from_span(&arg.span), edits);
-                        self.type_error(message, arg.span, TypeErrorKind::TypeMismatch);
-                    }
-                } else {
-                    self.type_error(message, arg.span, TypeErrorKind::TypeMismatch);
-                }
+                self.cast_argument_error(message, arg, &arg_ty, "u32");
                 return Some(Type::Error);
             }
             self.record_expr_type(args_close_span, receiver_for_lookup);
@@ -1479,14 +1435,11 @@ impl<'a> super::TypeChecker<'a> {
             if matches!(&arg.kind, ExprKind::Integer(_, None)) {
                 self.record_expr_type(&arg.span, &u32_ty);
             } else if arg_ty != Type::Error && arg_ty != u32_ty {
-                self.type_error(
-                    format!(
-                        "{method} expects a radix of type `u32`, got `{}` (cast with `as u32`)",
-                        type_display(&arg_ty)
-                    ),
-                    arg.span,
-                    TypeErrorKind::TypeMismatch,
+                let message = format!(
+                    "{method} expects a radix of type `u32`, got `{}` (cast with `as u32`)",
+                    type_display(&arg_ty)
                 );
+                self.cast_argument_error(message, arg, &arg_ty, "u32");
                 return Some(Type::Error);
             }
             if method == "is_digit" {
@@ -1557,5 +1510,58 @@ impl<'a> super::TypeChecker<'a> {
                 replacement: format!("({length} - {amount}).max(0)"),
             }),
         );
+    }
+
+    /// An integer argument of the wrong width for a parameter whose type is
+    /// fixed (`pow`'s `u32` exponent, `powi`'s `i32`, a radix, the amount
+    /// of a `wrapping_shl` or a `checked_pow`, `char.from_digit`'s digit),
+    /// refused with `message`, which names the cast, and given that cast as
+    /// a machine-applicable fix: after a name, a call or a literal (`k as
+    /// u32`), around anything looser (`(k - 1) as u32`) (kata 1067;
+    /// B-2026-11-21-59 for the rest). A float argument is refused with no
+    /// fix, since its cast would truncate.
+    pub(super) fn cast_argument_error(
+        &mut self,
+        message: String,
+        arg: &Expr,
+        arg_ty: &Type,
+        target: &str,
+    ) {
+        if !matches!(arg_ty, Type::Int(_) | Type::UInt(_)) {
+            self.type_error(message, arg.span, TypeErrorKind::TypeMismatch);
+            return;
+        }
+        let end = arg.span.offset + arg.span.length;
+        if super::expr_ops::appended_cast_end_offset(arg) == Some(end) {
+            self.type_error_with_fix_it(
+                message,
+                arg.span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span: Span {
+                        offset: end,
+                        length: 0,
+                        ..arg.span
+                    },
+                    replacement: format!(" as {target}"),
+                },
+            );
+        } else {
+            let edits = vec![
+                crate::resolver::TextEdit {
+                    offset: arg.span.offset,
+                    length: 0,
+                    replacement: "(".to_string(),
+                },
+                crate::resolver::TextEdit {
+                    offset: end,
+                    length: 0,
+                    replacement: format!(") as {target}"),
+                },
+            ];
+            self.error_fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&arg.span), edits);
+            self.type_error(message, arg.span, TypeErrorKind::TypeMismatch);
+        }
     }
 }

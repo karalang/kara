@@ -585,15 +585,12 @@ impl<'a> super::TypeChecker<'a> {
                         if matches!(&arg.kind, ExprKind::Integer(_, None)) {
                             self.record_expr_type(&arg.span, &u32_ty);
                         } else if arg_ty != Type::Error && arg_ty != u32_ty {
-                            self.type_error(
-                                format!(
-                                    "char.from_digit expects a {what} of type `u32`, got `{}` \
-                                     (cast with `as u32`)",
-                                    type_display(&arg_ty)
-                                ),
-                                arg.span,
-                                TypeErrorKind::TypeMismatch,
+                            let message = format!(
+                                "char.from_digit expects a {what} of type `u32`, got `{}` \
+                                 (cast with `as u32`)",
+                                type_display(&arg_ty)
                             );
+                            self.cast_argument_error(message, arg, &arg_ty, "u32");
                             return Some(Type::Error);
                         }
                     }
