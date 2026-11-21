@@ -1099,7 +1099,9 @@ pub(super) fn ends_mid_expression(src: &str) -> bool {
         Some(at) if !last[..at].contains('"') => last[..at].trim_end(),
         _ => last,
     };
-    if last.ends_with("..") || last.ends_with("..=") {
+    // A range's `..`, and a block comment's `*/`, are not operators
+    // waiting for an operand.
+    if last.ends_with("..") || last.ends_with("..=") || last.ends_with("*/") {
         return false;
     }
     const OPS: [&str; 22] = [

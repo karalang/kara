@@ -111,7 +111,9 @@ fn repl_baseline_magics() {
     assert_eq!(text.trim_end(), "21");
     let (ok, text) = magic(&mut s, "%effects");
     assert!(ok);
-    assert!(text.contains("println: writes(Stdout)"), "{text}");
+    // The session's own effects, as `:effects` reports them; it listed
+    // the library's `println` (B-2026-11-20-131).
+    assert_eq!(text, "session effects: none", "{text}");
     let (ok, text) = magic(&mut s, "%explain TYPE_MISMATCH");
     assert!(ok, "{text}");
     let (ok, text) = magic(&mut s, "%explain a");

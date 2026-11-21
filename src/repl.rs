@@ -47,6 +47,12 @@ mod display;
 mod util;
 
 pub use display::DisplayBundle;
+
+/// Whether `src` stops mid-expression (a trailing binary operator, `and`,
+/// `or`, `not`), so a front end asks for another line rather than run it.
+pub fn ends_mid_expression(src: &str) -> bool {
+    util::ends_mid_expression(src)
+}
 use util::*;
 
 /// A top-level binding a v2 cell ended with, written as source
@@ -566,6 +572,12 @@ pub struct EvaluatedCell {
     /// `render_effect_decls` helper that drives `:save`'s declared-
     /// effects rendering keeps the format stable.
     pub effect_footer: String,
+    /// The value of the cell's bare final expression, when it shows one:
+    /// the text `stdout` ends with for it, and the same value as a
+    /// display bundle (`text/plain`, plus `text/html` for a table). The
+    /// Jupyter kernel sends the bundle as the cell's `execute_result`
+    /// rather than as printed output (B-2026-11-20-130).
+    pub value: Option<(String, display::DisplayBundle)>,
 }
 
 /// Internal result type for `run_with_wrapper_inner` — bundles captured
@@ -578,6 +590,8 @@ struct WrapperOutcome {
     stdout: Vec<String>,
     errors: Vec<String>,
     notes: Vec<String>,
+    /// [`EvaluatedCell::value`].
+    value: Option<(String, display::DisplayBundle)>,
 }
 
 impl WrapperOutcome {
@@ -586,6 +600,7 @@ impl WrapperOutcome {
             stdout: Vec::new(),
             errors,
             notes,
+            value: None,
         }
     }
 }
@@ -920,6 +935,7 @@ impl Session {
         };
         match cmd {
             "effects" => self.magic_effects(),
+            "save" => self.magic_save(rest),
             "ownership" => self.magic_ownership(),
             "explain" => self.magic_explain(rest),
             "set" => self.magic_set(rest),
@@ -935,47 +951,45 @@ impl Session {
                 Err(msg) => MagicOutput::error(msg),
             },
             "" => MagicOutput::error(
-                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R",
+                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R, %save <path.kara>",
             ),
             other => MagicOutput::error(format!(
-                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R"
+                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R, %save <path.kara>"
             )),
         }
     }
 
+    /// `%effects`: the session's effect set, as `:effects` prints it
+    /// ([`Session::effects_report`]): its functions' and its cells'. It read
+    /// the items alone, so a session of statement cells answered "(no items
+    /// defined yet)" (B-2026-11-20-131).
     fn magic_effects(&self) -> MagicOutput {
-        // Reuse `show_effects`'s logic but accumulate into a string
-        // instead of printing. The kernel will route this through
-        // `display_data` so a long list lands cleanly in the cell
-        // output area.
-        if self.items_source.trim().is_empty() {
-            return MagicOutput::ok("(no items defined yet)");
+        MagicOutput::ok(self.effects_report().trim_end())
+    }
+
+    /// `%save <path.kara>`: `:save` as a magic (deferred.md, "Session
+    /// export"), the session written as one program (B-2026-11-20-131).
+    fn magic_save(&self, path: &str) -> MagicOutput {
+        if path.is_empty() {
+            return MagicOutput::error("usage: %save <path.kara>");
         }
-        let parsed = crate::parse(&self.items_source);
-        if !parsed.errors.is_empty() {
-            return MagicOutput::error("(items_source has parse errors — fix them first)");
+        if self.cell_history.is_empty() {
+            return MagicOutput::ok("(no cells to save)");
         }
-        let effects = crate::effectcheck(&parsed.program);
-        let mut entries: Vec<(&String, &crate::effectchecker::EffectSet)> =
-            effects.inferred_effects.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
-        let mut out = String::new();
-        let mut printed = 0usize;
-        for (name, eff) in entries {
-            if eff.effects.is_empty() {
-                continue;
-            }
-            let rendered = render_effect_decls(eff);
-            if rendered.is_empty() {
-                continue;
-            }
-            out.push_str(&format!("{name}: {rendered}\n"));
-            printed += 1;
+        match std::fs::write(path, self.render_exported_session()) {
+            Ok(()) => MagicOutput::ok(format!("session saved to {path}")),
+            Err(e) => MagicOutput::error(format!("error: failed to write {path}: {e}")),
         }
-        if printed == 0 {
-            out.push_str("(no effects inferred so far)\n");
+    }
+
+    /// Number the next submitted cell `n`, so a front end that counts
+    /// its own inputs (Jupyter's `In[n]`, which magics advance too) names
+    /// the cell its errors cite as it does (B-2026-11-20-131). Numbers
+    /// only move forward: an `n` at or below one already used is ignored.
+    pub fn set_next_cell_number(&mut self, n: usize) {
+        if n > self.submitted + 1 {
+            self.submitted = n - 1;
         }
-        MagicOutput::ok(out.trim_end())
     }
 
     /// The session as one program, its items then its `let`s in a
@@ -1954,6 +1968,7 @@ impl Session {
                     errors: out.errors,
                     notes: out.notes,
                     effect_footer,
+                    value: out.value,
                 }
             }
             Err(out) => {
@@ -1966,6 +1981,7 @@ impl Session {
                     errors: out.errors,
                     notes: out.notes,
                     effect_footer: String::new(),
+                    value: None,
                 }
             }
         }
@@ -2296,8 +2312,20 @@ impl Session {
         match r {
             Ok(mut ran) => {
                 ran.stderr = self.relabel_v2(&synthetic, &ran.stderr);
+                let mut shown_value = None;
                 if let Some(value) = &ran.shown {
-                    ran.stdout.push_str(&shown_text(value.as_ref()));
+                    let text = shown_text(value.as_ref());
+                    if !text.is_empty() {
+                        let bundle = value
+                            .as_ref()
+                            .and_then(|(_, source)| display::render_source(source))
+                            .unwrap_or_else(|| {
+                                display::DisplayBundle::new()
+                                    .with("text/plain", text.trim_end().to_string())
+                            });
+                        shown_value = Some((text.clone(), bundle));
+                    }
+                    ran.stdout.push_str(&text);
                     // A final expression of type `()` (`println(x)`) is a
                     // statement that lacked its `;`: it is kept, and
                     // saved, with one.
@@ -2314,6 +2342,7 @@ impl Session {
                         stdout: lines(&ran.stdout),
                         errors: Vec::new(),
                         notes: Vec::new(),
+                        value: shown_value,
                     });
                 }
                 print!("{}", ran.stdout);

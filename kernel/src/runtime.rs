@@ -113,6 +113,10 @@ enum CellOutcome {
         /// suppresses the `stream(stdout)` form so the cell output
         /// pane doesn't render the text twice.
         display_bundle: Option<DisplayBundle>,
+        /// The value of the cell's bare final expression
+        /// (`EvaluatedCell::value`), sent as the cell's `execute_result`
+        /// rather than printed (B-2026-11-20-130).
+        result: Option<DisplayBundle>,
     },
     /// Run produced diagnostics or a magic-error reply. `evalue` is
     /// the first error line; `traceback` carries the full list.
@@ -272,6 +276,28 @@ impl<T: Transport + 'static> Kernel<T> {
             "complete_request" => self.handle_complete_request(channel, msg),
             "is_complete_request" => self.handle_is_complete_request(channel, msg),
             "interrupt_request" => self.handle_interrupt_request(channel, msg),
+            // Requests a front end sends on its own (hover help, widget
+            // discovery, history search) and then waits on: answered
+            // with an empty but well-formed reply, not dropped
+            // (B-2026-11-20-130).
+            "inspect_request" => self.reply_empty(
+                channel,
+                msg,
+                "inspect_reply",
+                json!({"status": "ok", "found": false, "data": {}, "metadata": {}}),
+            ),
+            "comm_info_request" => self.reply_empty(
+                channel,
+                msg,
+                "comm_info_reply",
+                json!({"status": "ok", "comms": {}}),
+            ),
+            "history_request" => self.reply_empty(
+                channel,
+                msg,
+                "history_reply",
+                json!({"status": "ok", "history": []}),
+            ),
             other => {
                 // Slice 5 closed the MVP request surface. Anything
                 // still landing here is forward-compat noise from
@@ -283,6 +309,23 @@ impl<T: Transport + 'static> Kernel<T> {
                 );
             }
         }
+    }
+
+    /// Reply to `request` with `content`, between the busy and idle
+    /// statuses every request gets.
+    fn reply_empty(
+        &self,
+        channel: Channel,
+        request: Message,
+        reply_type: &str,
+        content: JsonValue,
+    ) {
+        self.broadcast_status("busy", &request.header);
+        let reply = self.build_reply(&request, reply_type, content);
+        if let Err(err) = self.transport.send(channel, reply.encode(&self.signer)) {
+            eprintln!("karac-kernel: failed to send {reply_type}: {err}");
+        }
+        self.broadcast_status("idle", &request.header);
     }
 
     fn handle_kernel_info_request(&self, channel: Channel, request: Message) {
@@ -396,10 +439,18 @@ impl<T: Transport + 'static> Kernel<T> {
             );
         }
 
+        if !silent {
+            // The session numbers the cell as the notebook does, so an
+            // error's `cell N:` is the cell's `In[N]` (B-2026-11-20-131).
+            self.session
+                .lock()
+                .unwrap()
+                .set_next_cell_number(execution_count as usize);
+        }
         let outcome = self.run_cell(&code);
 
         if !silent {
-            self.emit_cell_output(&request.header, &outcome);
+            self.emit_cell_output(&request.header, &outcome, execution_count);
         }
 
         let reply_content = match &outcome {
@@ -602,6 +653,7 @@ impl<T: Transport + 'static> Kernel<T> {
                         stderr: String::new(),
                         effect_footer: String::new(),
                         display_bundle: Some(bundle),
+                        result: None,
                     }
                 } else {
                     CellOutcome::Ok {
@@ -609,6 +661,7 @@ impl<T: Transport + 'static> Kernel<T> {
                         stderr: String::new(),
                         effect_footer: String::new(),
                         display_bundle: None,
+                        result: None,
                     }
                 }
             } else {
@@ -640,18 +693,28 @@ impl<T: Transport + 'static> Kernel<T> {
                 buf
             };
             if evaluated.errors.is_empty() {
+                // The shown value ends the captured stdout; it goes out
+                // as the `execute_result` instead.
+                let mut stdout = evaluated.stdout;
+                let result = evaluated.value.map(|(text, bundle)| {
+                    if stdout.ends_with(&text) {
+                        stdout.truncate(stdout.len() - text.len());
+                    }
+                    bundle
+                });
                 CellOutcome::Ok {
-                    stdout: evaluated.stdout,
+                    stdout,
                     stderr,
                     effect_footer: evaluated.effect_footer,
                     display_bundle: None,
+                    result,
                 }
             } else {
                 let evalue = evaluated.errors.first().cloned().unwrap_or_default();
                 CellOutcome::Error {
                     stdout: evaluated.stdout,
                     stderr,
-                    ename: "CompileError".to_string(),
+                    ename: error_name(&evalue).to_string(),
                     evalue,
                     traceback: evaluated.errors,
                 }
@@ -659,21 +722,23 @@ impl<T: Transport + 'static> Kernel<T> {
         }
     }
 
-    fn emit_cell_output(&self, parent: &Header, outcome: &CellOutcome) {
-        let (stdout, stderr, effect_footer, display_bundle) = match outcome {
+    fn emit_cell_output(&self, parent: &Header, outcome: &CellOutcome, execution_count: u64) {
+        let (stdout, stderr, effect_footer, display_bundle, result) = match outcome {
             CellOutcome::Ok {
                 stdout,
                 stderr,
                 effect_footer,
                 display_bundle,
+                result,
             } => (
                 stdout.as_str(),
                 stderr.as_str(),
                 effect_footer.as_str(),
                 display_bundle.as_ref(),
+                result.as_ref(),
             ),
             CellOutcome::Error { stdout, stderr, .. } => {
-                (stdout.as_str(), stderr.as_str(), "", None)
+                (stdout.as_str(), stderr.as_str(), "", None, None)
             }
         };
         if !stdout.is_empty() {
@@ -701,29 +766,49 @@ impl<T: Transport + 'static> Kernel<T> {
             // `metadata` is an empty object on the v1 surface;
             // `transient` is reserved for future stable-id work
             // (out of scope today).
-            let mut data = JsonMap::new();
-            for (mime, body) in &bundle.mimes {
-                data.insert(mime.clone(), JsonValue::String(body.clone()));
-            }
             self.broadcast_iopub(
                 "display_data",
                 parent,
                 json!({
-                    "data": JsonValue::Object(data),
+                    "data": mime_map(bundle),
                     "metadata": {},
                     "transient": {},
                 }),
             );
         }
+        if let Some(bundle) = result {
+            // The cell's value (deferred.md, "Auto-display rule"): an
+            // `execute_result`, numbered as the cell's `Out[n]`, not text
+            // on stdout (B-2026-11-20-130).
+            self.broadcast_iopub(
+                "execute_result",
+                parent,
+                json!({
+                    "execution_count": execution_count,
+                    "data": mime_map(bundle),
+                    "metadata": {},
+                }),
+            );
+        }
         if !effect_footer.is_empty() {
-            // Trailing newline so the footer ends a line cleanly in
-            // the cell-output pane — the same convention the REPL's
-            // `:effects` meta-command applies on stdout.
-            let mut text = effect_footer.to_string();
-            if !text.ends_with('\n') {
-                text.push('\n');
-            }
-            self.broadcast_iopub("stream", parent, json!({ "name": "stdout", "text": text }));
+            // The cell's effects, as their own output beside the
+            // program's: on stdout they read as something the cell
+            // printed (B-2026-11-20-130).
+            self.broadcast_iopub(
+                "display_data",
+                parent,
+                json!({
+                    "data": {
+                        "text/plain": format!("effects: {effect_footer}"),
+                        "text/html": format!(
+                            "<small class=\"kara-effects\">effects: <code>{}</code></small>",
+                            html_escape(effect_footer)
+                        ),
+                    },
+                    "metadata": { "kara": { "kind": "effects" } },
+                    "transient": {},
+                }),
+            );
         }
     }
 
@@ -1062,9 +1147,45 @@ fn classify_completeness(code: &str) -> (CompletenessStatus, String) {
     if depth > 0 {
         let indent = "    ".repeat(depth as usize);
         (CompletenessStatus::Incomplete, indent)
+    } else if karac::repl::ends_mid_expression(code) {
+        // `let x = 1 +`: the REPL asks for another line here, and so
+        // does the notebook (B-2026-11-20-130).
+        (CompletenessStatus::Incomplete, String::new())
     } else {
         (CompletenessStatus::Complete, String::new())
     }
+}
+
+/// A display bundle as the `data` map of a Jupyter message.
+fn mime_map(bundle: &DisplayBundle) -> JsonValue {
+    let mut data = JsonMap::new();
+    for (mime, body) in &bundle.mimes {
+        data.insert(mime.clone(), JsonValue::String(body.clone()));
+    }
+    JsonValue::Object(data)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// The `ename` of a failed cell, from its first error: a cell that ran
+/// and panicked is a `RuntimeError`, not a `CompileError`
+/// (B-2026-11-20-130).
+fn error_name(first: &str) -> &'static str {
+    if is_runtime_failure(first) {
+        "RuntimeError"
+    } else {
+        "CompileError"
+    }
+}
+
+fn is_runtime_failure(first: &str) -> bool {
+    first.starts_with("runtime error:")
+        || first.starts_with("error[mir]: run:")
+        || first.starts_with("the cell exited with code")
 }
 
 /// Convert "days since 1970-01-01" to (year, month, day) in the
@@ -1396,8 +1517,8 @@ mod tests {
 
     #[test]
     fn execute_request_successful_cell_streams_only_stdout() {
-        // Successful cells route captured `println` output (and any
-        // non-empty effect footer) through `stream(stdout)` — never
+        // Successful cells route captured `println` output through
+        // `stream(stdout)` (the effect footer is its own `display_data`) — never
         // `stream(stderr)`. The stderr stream is reserved for
         // diagnostics + `perf[…]` notes.
         let transport = Arc::new(InMemoryTransport::new());
@@ -1430,6 +1551,160 @@ mod tests {
                 "successful cell must not route output through stderr"
             );
         }
+    }
+
+    /// Run each cell as an `execute_request`, returning every IOPub
+    /// frame and the shell replies.
+    fn run_cells(cells: &[&str]) -> (Vec<(String, Message)>, Vec<Message>) {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        let mut replies = Vec::new();
+        let mut iopub = Vec::new();
+        for code in cells {
+            transport.push_incoming(
+                Channel::Shell,
+                build_request(
+                    &signer,
+                    "execute_request",
+                    json!({"code": code, "silent": false}),
+                    vec![],
+                ),
+            );
+            run_one_pass(&kernel);
+            iopub.extend(drain_iopub_in_memory(&transport, &signer));
+            let sent = transport.drain_outgoing(Channel::Shell);
+            replies.push(Message::decode(sent.last().unwrap(), &signer).unwrap());
+        }
+        (iopub, replies)
+    }
+
+    #[test]
+    fn kernel_sweep_value_is_execute_result_not_stdout() {
+        let (iopub, _) = run_cells(&["let a = 20;", "a + 1"]);
+        let results: Vec<&Message> = iopub
+            .iter()
+            .filter(|(k, _)| k == "execute_result")
+            .map(|(_, m)| m)
+            .collect();
+        assert_eq!(results.len(), 1, "{iopub:?}");
+        assert_eq!(results[0].content["execution_count"], 2);
+        assert_eq!(results[0].content["data"]["text/plain"], "21");
+        assert!(
+            !iopub
+                .iter()
+                .any(|(k, m)| k == "stream"
+                    && m.content["text"].as_str().unwrap_or("").contains("21")),
+            "the value must not also print: {iopub:?}"
+        );
+    }
+
+    #[test]
+    fn kernel_sweep_effects_footer_is_not_stdout() {
+        let (iopub, _) = run_cells(&["println(\"hi\");"]);
+        let streams: Vec<&str> = iopub
+            .iter()
+            .filter(|(k, _)| k == "stream")
+            .map(|(_, m)| m.content["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(streams, vec!["hi\n"], "{iopub:?}");
+        let effects = iopub
+            .iter()
+            .find(|(k, m)| {
+                k == "display_data" && m.content["metadata"]["kara"]["kind"] == "effects"
+            })
+            .expect("an effects display_data");
+        let text = effects.1.content["data"]["text/plain"].as_str().unwrap();
+        assert!(
+            text.starts_with("effects: ") && text.contains("Stdout"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn kernel_sweep_panic_is_a_runtime_error() {
+        let (_, replies) = run_cells(&["panic(\"boom\")", "let x: i64 = \"s\";"]);
+        assert_eq!(
+            replies[0].content["ename"], "RuntimeError",
+            "{:?}",
+            replies[0]
+        );
+        assert_eq!(
+            replies[1].content["ename"], "CompileError",
+            "{:?}",
+            replies[1]
+        );
+    }
+
+    #[test]
+    fn kernel_sweep_error_cites_the_notebook_cell_number() {
+        // A magic takes an In[n] too; the error names In[3].
+        let (_, replies) = run_cells(&["let a = 1;", "%effects", "let b: i64 = \"s\";"]);
+        let evalue = replies[2].content["evalue"].as_str().unwrap();
+        assert!(evalue.contains("cell 3:1:14"), "{evalue}");
+    }
+
+    #[test]
+    fn kernel_sweep_effects_and_save_magics() {
+        let path =
+            std::env::temp_dir().join(format!("kara-kernel-save-{}.kara", std::process::id()));
+        let save = format!("%save {}", path.display());
+        let (iopub, replies) = run_cells(&["println(\"hi\");", "%effects", &save]);
+        assert_eq!(replies[1].content["status"], "ok");
+        assert_eq!(replies[2].content["status"], "ok", "{:?}", replies[2]);
+        let texts: Vec<&str> = iopub
+            .iter()
+            .filter(|(k, _)| k == "stream")
+            .map(|(_, m)| m.content["text"].as_str().unwrap())
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("session effects: writes(Stdout)")),
+            "{texts:?}"
+        );
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("println(\"hi\");"), "{saved}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn kernel_sweep_answers_inspect_comm_info_and_history() {
+        for (req, rep, key) in [
+            ("inspect_request", "inspect_reply", "found"),
+            ("comm_info_request", "comm_info_reply", "comms"),
+            ("history_request", "history_reply", "history"),
+        ] {
+            let transport = Arc::new(InMemoryTransport::new());
+            let signer = Signer::new("k");
+            let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+            transport.push_incoming(
+                Channel::Shell,
+                build_request(&signer, req, json!({"code": "x", "cursor_pos": 1}), vec![]),
+            );
+            run_one_pass(&kernel);
+            let sent = transport.drain_outgoing(Channel::Shell);
+            let reply = Message::decode(sent.last().expect(req), &signer).unwrap();
+            assert_eq!(reply.header.msg_type, rep);
+            assert_eq!(reply.content["status"], "ok");
+            assert!(reply.content.get(key).is_some(), "{reply:?}");
+        }
+    }
+
+    #[test]
+    fn kernel_sweep_trailing_operator_is_incomplete() {
+        assert_eq!(
+            classify_completeness("let x = 1 +").0,
+            CompletenessStatus::Incomplete
+        );
+        assert_eq!(
+            classify_completeness("let ok = a and").0,
+            CompletenessStatus::Incomplete
+        );
+        assert_eq!(
+            classify_completeness("let r = 0..").0,
+            CompletenessStatus::Complete
+        );
     }
 
     #[test]
