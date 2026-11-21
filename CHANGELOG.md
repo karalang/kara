@@ -2284,6 +2284,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `s + *t`, with `t` a `ref Str` such as an item lent by `.iter()`, gets the
+  machine-applicable fix `s + t.to_string()` that `s + t` and `s + ref t`
+  already had; it was refused with no fix (B-2026-11-21-16).
 - A `struct` or `enum` declared inside a function body, with or without
   attributes, gets the one "Kāra has no nested items" diagnostic a nested
   `fn` gets, and the same fix, which moves it above the item it is in; it

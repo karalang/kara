@@ -4468,8 +4468,10 @@ impl<'a> super::TypeChecker<'a> {
         {
             return None;
         }
+        // `s + *t` with `t` a `ref Str` (an item lent by `.iter()`) takes
+        // the same edits: `s + t.to_string()` (B-2026-11-21-16).
         let ExprKind::Unary {
-            op: UnaryOp::Ref,
+            op: UnaryOp::Ref | UnaryOp::Deref,
             operand,
         } = &right.kind
         else {
@@ -6091,11 +6093,16 @@ impl<'a> super::TypeChecker<'a> {
                         // becomes an owned copy.
                         self.error_fix_diffs
                             .insert(SpanKey::from_span(&left.span), edits);
+                        let rust = match &right.kind {
+                            ExprKind::Unary {
+                                op: UnaryOp::Deref, ..
+                            } => "so `s + *t` is `s + t.to_string()`",
+                            _ => "so Rust's `s + &t` is `s + t.to_string()`",
+                        };
                         self.type_error(
                             format!(
                                 "{message}: a `Str` is a view and `+` appends an owned \
-                                 `String`, so Rust's `s + &t` is `s + t.to_string()` \
-                                 (design.md § Operator traits)"
+                                 `String`, {rust} (design.md § Operator traits)"
                             ),
                             left.span,
                             TypeErrorKind::InvalidBinaryOp,

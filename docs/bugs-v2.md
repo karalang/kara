@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 648 |
+| diagnostics | 649 |
 | false-positive | 336 |
 | missing-feature | 232 |
 | perf | 193 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 807 |
+| typecheck | 808 |
 | mir-llvm | 317 |
 | mir | 295 |
 | cli | 250 |
@@ -153,6 +153,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-13 | 2026-11-21 | other | medium | Test infra: tests/cli.rs has 4 reasoned #[ignore]s that now pass and 3 more whose reason is stale (they fail on the test's own legacy expectations, not on the gap named), so the suite hides 4 live regression gates and misstates 3 gaps | — |
 | B-2026-11-21-14 | 2026-11-21 | other | high | Test infra: 22 #[ignore]s in tests/http_server.rs blame a missing v2 HTTP server ('services track, M4a'), but the server exists; 19 fail only because the legacy spawn_kara_server helper reads BOUND_PORT from stdout without KARAC_ANNOUNCE_PORT, and 16 pass once the handshake is fixed | — |
 | B-2026-11-21-15 | 2026-11-21 | typecheck | high | A `par for` item that is a `shared` handle enters each iteration unchecked: `par for x in v.iter() { .. }` (and `par for x in v`, `v.into_iter()`) over a `Vec[S]` of one `shared struct S` passes `karac check`, and iterations copying or writing through `x` race on the non-atomic count and the `mut` fields: heap-use-after-free and double-free under ASan, data races under TSan | — |
+| B-2026-11-21-16 | 2026-11-21 | typecheck | low | `s + *t`, with `s` a `String` and `t` a `ref Str` (an item lent by `.iter()` over a `Vec[Str]`), is refused as "'+' on 'String' requires a 'String' right operand, found 'Str'" with no fix, where `s + t` and `s + ref t` carry the machine-applicable `.to_string()` | — |
 
 ### Relocated
 
