@@ -6775,6 +6775,23 @@ impl<'a> super::TypeChecker<'a> {
                         t => super::inference::literal_takes(kind, &t),
                     }
                 };
+                // So is a tuple of literals written as the argument, a
+                // `fold` seed `(0, 0)` whose `.0` is returned as `i32`: each
+                // of its numbers stays open until a use fixes it, as the
+                // same tuple bound by a `let` does (B-2026-11-21-57).
+                let literal_tuple_arg = matches!(&arg.value.kind,
+                    ExprKind::Tuple(parts)
+                        if !parts.is_empty() && parts.iter().all(Self::is_number_literal_tree))
+                    && matches!(
+                        resolve_type_vars(
+                            &sub_params[idx],
+                            &self.env.substitutions,
+                            &id_to_name,
+                            &self.env.const_substitutions,
+                            &const_id_to_name,
+                        ),
+                        Type::TypeVar(_) | Type::TypeParam(_)
+                    );
                 // A constructor of a list of literals, for a parameter the
                 // call returns (`fold(SortedMap.from([(-1, 0)]), ..)`), keeps
                 // the list's numbers open, so the closure's return may fix
@@ -6819,7 +6836,8 @@ impl<'a> super::TypeChecker<'a> {
                     None if match formal_param_ty {
                         Type::TypeParam(p) => {
                             matches!(arg.value.kind, ExprKind::Identifier(_))
-                                || (literal_arg && Self::result_carries_param(return_type, p))
+                                || ((literal_arg || literal_tuple_arg)
+                                    && Self::result_carries_param(return_type, p))
                         }
                         _ => false,
                     } =>
@@ -6828,6 +6846,21 @@ impl<'a> super::TypeChecker<'a> {
                         if literal_arg {
                             if let Some((id, _)) = self.unbound_literal_var(&t) {
                                 self.held_open_literals.push(id);
+                            }
+                        }
+                        if literal_tuple_arg {
+                            let resolved = resolve_type_var_top(&t, &self.env.substitutions);
+                            let mut ids = Vec::new();
+                            type_var_ids(&resolved, &mut ids);
+                            for id in ids {
+                                if let Type::TypeVar(v) = resolve_type_var_top(
+                                    &Type::TypeVar(id),
+                                    &self.env.substitutions,
+                                ) {
+                                    if inference::literal_var_kind(v).is_some() {
+                                        self.held_open_literals.push(v);
+                                    }
+                                }
                             }
                         }
                         t

@@ -99,6 +99,7 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "clone",
     "count_ones",
     "count_zeros",
+    "div_ceil",
     "div_euclid",
     "isqrt",
     "leading_ones",
@@ -548,11 +549,17 @@ impl<'a> super::TypeChecker<'a> {
         // the interpreter checks the quotient against the receiver's width
         // and codegen corrects the signed remainder at that width. Same
         // strict same-type / literal-promotion arg rule as `wrapping_*`.
-        if matches!(method, "div_euclid" | "rem_euclid")
+        //
+        // `div_ceil` is the quotient rounded up, toward positive infinity,
+        // on every integer width (Rust's, stable on the unsigned types):
+        // the same argument rule and the same two traps, and no float form
+        // (B-2026-11-21-56).
+        if (matches!(method, "div_euclid" | "rem_euclid")
             && matches!(
                 receiver_for_lookup,
                 Type::Int(_) | Type::UInt(_) | Type::Float(_)
-            )
+            ))
+            || (method == "div_ceil" && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_)))
         {
             if args.len() != 1 {
                 self.type_error(

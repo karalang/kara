@@ -3913,7 +3913,7 @@ impl<'a> Interp<'a> {
                 | "checked_mul" | "saturating_add" | "saturating_sub" | "saturating_mul" | "clamp"
                 | "overflowing_add" | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes"
                 | "to_le_bytes" | "to_be_bytes" | "rotate_left" | "rotate_right" | "swap_bytes"
-                | "reverse_bits" | "next_power_of_two" | "isqrt",
+                | "reverse_bits" | "next_power_of_two" | "isqrt" | "div_ceil",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
             // B-2026-10-19-11: the families' div / rem / neg / shl / shr / pow.
             (t, m) if int_width(t).is_some() && is_overflow_family_op(m) => {
@@ -13106,10 +13106,20 @@ impl<'a> Interp<'a> {
         // A `u128` is held as its bits, past the reach of the `i128`
         // arithmetic below: its ordered and overflowing methods run on
         // `u128` itself (B-2026-10-19-22).
+        // `div_ceil` traps as `/` does: on a zero divisor, and on the
+        // signed `MIN.div_ceil(-1)`, whose quotient is past the width
+        // (B-2026-11-21-56).
+        if method == "div_ceil" && ints.get(1) == Some(&0) {
+            if self.trace {
+                self.events.push(Event::Abort(AbortReason::DivByZero));
+            }
+            return Err(Stop::Abort(AbortReason::DivByZero));
+        }
         if !signed && bits == 128 {
             let u: Vec<u128> = ints.iter().map(|&n| n as u128).collect();
             let int = |v: u128| Value::Int(v as i128);
             match (method, u.as_slice()) {
+                ("div_ceil", [a, b]) => return Ok(int(a.div_ceil(*b))),
                 ("abs_diff", [a, b]) => return Ok(int(a.abs_diff(*b))),
                 ("clamp", [a, l, h]) => {
                     return Ok(int(if a < l {
@@ -13211,6 +13221,27 @@ impl<'a> Interp<'a> {
             // pair can exceed in `i128` arithmetic: `i128.MIN.abs_diff(3)` is
             // `2^127 + 3`, held as its `u128` bits.
             ("abs_diff", [a, b]) => Ok(Value::Int(a.abs_diff(*b) as i128)),
+            // The truncated quotient, one more when a remainder is left and
+            // it has the divisor's sign (the exact quotient was positive).
+            ("div_ceil", [a, b]) => {
+                let q = a.checked_div(*b).map(|q| {
+                    let r = a % b;
+                    if r != 0 && (r > 0) == (*b > 0) {
+                        q + 1
+                    } else {
+                        q
+                    }
+                });
+                match q.filter(|q| (lo..=hi).contains(q)) {
+                    Some(q) => Ok(Value::Int(q)),
+                    None => {
+                        if self.trace {
+                            self.events.push(Event::Abort(AbortReason::Overflow));
+                        }
+                        Err(Stop::Abort(AbortReason::Overflow))
+                    }
+                }
+            }
             ("rotate_left" | "rotate_right", [a, _]) => {
                 let x = raw(*a);
                 let n = if method == "rotate_left" {

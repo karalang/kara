@@ -2057,6 +2057,64 @@ impl<'ctx> Cx<'ctx, '_> {
                 };
                 self.store_int_as(dest, v, it.signed())?;
             }
+            // The quotient rounded up: the truncated one, one more when a
+            // remainder is left with the divisor's sign. It traps as `/`
+            // does, on a zero divisor and on the signed `MIN.div_ceil(-1)`
+            // (B-2026-11-21-56).
+            ("div_ceil", [y]) => {
+                let t = self.operand_type(&args[0])?;
+                let Some(y) = self.int_peer(x, t, y)? else {
+                    return Ok(None);
+                };
+                let z = xt.const_zero();
+                let one = xt.const_int(1, false);
+                let nz = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, y, z, "")
+                    .map_err(e)?;
+                self.abort_unless(nz, "division by zero")?;
+                let v = if it.signed() {
+                    let b = &self.builder;
+                    let m1 = b
+                        .build_int_compare(IntPredicate::EQ, y, xt.const_all_ones(), "")
+                        .map_err(e)?;
+                    let min = b
+                        .build_left_shift(one, xt.const_int(u64::from(it.bits() - 1), false), "")
+                        .map_err(e)?;
+                    let at_min = b
+                        .build_int_compare(IntPredicate::EQ, x, min, "")
+                        .map_err(e)?;
+                    let over = b.build_and(at_min, m1, "").map_err(e)?;
+                    let fine = b.build_not(over, "").map_err(e)?;
+                    self.abort_unless(fine, "integer overflow")?;
+                    let b = &self.builder;
+                    // A divisor of 1 where the trap fired keeps the
+                    // division defined on that path.
+                    let safe = b
+                        .build_select(over, one, y, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let q = b.build_int_signed_div(x, safe, "").map_err(e)?;
+                    let r = b.build_int_signed_rem(x, safe, "").map_err(e)?;
+                    let left = b.build_int_compare(IntPredicate::NE, r, z, "").map_err(e)?;
+                    // Same sign: `r ^ y` is not negative.
+                    let xor = b.build_xor(r, safe, "").map_err(e)?;
+                    let same = b
+                        .build_int_compare(IntPredicate::SGE, xor, z, "")
+                        .map_err(e)?;
+                    let up = b.build_and(left, same, "").map_err(e)?;
+                    let up = b.build_int_z_extend(up, xt, "").map_err(e)?;
+                    b.build_int_add(q, up, "").map_err(e)?
+                } else {
+                    let b = &self.builder;
+                    let q = b.build_int_unsigned_div(x, y, "").map_err(e)?;
+                    let r = b.build_int_unsigned_rem(x, y, "").map_err(e)?;
+                    let left = b.build_int_compare(IntPredicate::NE, r, z, "").map_err(e)?;
+                    let up = b.build_int_z_extend(left, xt, "").map_err(e)?;
+                    b.build_int_add(q, up, "").map_err(e)?
+                };
+                self.store_int_as(dest, v, it.signed())?;
+            }
             ("bits_as_f64", []) => {
                 let w = self
                     .builder
