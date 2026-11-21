@@ -343,7 +343,7 @@ pub fn borrow_errors_with(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
     closure_sig: &ClosureSig<'_>,
 ) -> Vec<BorrowError> {
-    borrow_errors_in(body, tys, has_receiver, closure_sig, &|_| false)
+    borrow_errors_in(body, tys, has_receiver, closure_sig, &|_| false, &|_| false)
 }
 
 /// The functions whose result carries a view one of their parameters
@@ -352,16 +352,26 @@ pub fn borrow_errors_with(
 /// would.
 pub type ViewResults<'a> = dyn Fn(&str) -> bool + 'a;
 
+/// The functions whose declared result type is an `impl Trait`, by name.
+/// The caller cannot see into the hidden type, so a call's result counts
+/// as a value that may hold a reference, and it borrows what the
+/// signature rule says, whatever the concrete type (design.md § `impl
+/// Trait`, "What the result borrows"; B-2026-11-20-121).
+pub type OpaqueResults<'a> = dyn Fn(&str) -> bool + 'a;
+
 /// [`borrow_errors_with`], told which functions hand back a value holding
 /// a view of what their arguments view ([`view_results`]): a closure such
 /// a call returns, passed on to be stored where no borrow is kept, is
-/// refused as one made in the body is (B-2026-11-17-92).
+/// refused as one made in the body is (B-2026-11-17-92). A call of one of
+/// `opaque_results` hands back a value that keeps what its arguments lend
+/// it, whatever its hidden type holds ([`OpaqueResults`]).
 pub fn borrow_errors_in(
     body: &Body,
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
     closure_sig: &ClosureSig<'_>,
     view_results: &ViewResults<'_>,
+    opaque_results: &OpaqueResults<'_>,
 ) -> Vec<BorrowError> {
     let mut errs = read_only_errors(body, tys);
     errs.extend(view_into_shared_errors(body, tys));
@@ -387,6 +397,7 @@ pub fn borrow_errors_in(
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
         made_here: closures_made_here(body, view_results),
+        opaque: opaque_locals(body, tys, opaque_results),
     };
     let origins = origins_dataflow(&cx, entry);
     let scopes = scope_dataflow(body, &loans);
@@ -667,6 +678,7 @@ fn view_param_escape_errors(
         writes_slices: writes_slices(body, tys, body_loans),
         pred_captures: LoanSet::default(),
         made_here: closures_made_here(body, view_results),
+        opaque: Default::default(),
     };
     let mut entry = Origins::default();
     for (i, &p) in params.iter().enumerate() {
@@ -781,6 +793,7 @@ pub fn view_results<'b>(
             writes_slices: writes_slices(body, tys, &body_loans),
             pred_captures: LoanSet::default(),
             made_here: std::collections::HashSet::new(),
+            opaque: Default::default(),
         };
         let mut entry = Origins::default();
         for (i, &p) in params.iter().enumerate() {
@@ -837,6 +850,7 @@ pub(super) fn loan_liveness(
         writes_slices: writes_slices(body, tys, &loans),
         pred_captures: predicate_captures(body, tys, &loans),
         made_here: closures_made_here(body, &|_| false),
+        opaque: Default::default(),
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
@@ -1474,6 +1488,92 @@ struct Cx<'a> {
     /// The locals holding a closure this body makes: see
     /// [`closures_made_here`].
     made_here: std::collections::HashSet<Local>,
+    /// The locals holding, whole or in a part, an `impl Trait` result, with
+    /// the hidden types they hold: see [`opaque_locals`].
+    opaque: std::collections::HashMap<Local, Vec<Ty>>,
+}
+
+/// The locals that hold, whole or in a part, the result of a call of one
+/// of `opaque_results`, with each such result's hidden type. A place of
+/// one whose type is or contains a hidden type counts as able to hold a
+/// borrow, as the `impl Trait` it was declared as may (design.md § `impl
+/// Trait`, "What the result borrows"): `count_logged(xs, log)` returns a
+/// `VecIntoIter[i64]` that holds nothing, and still borrows `log`
+/// (B-2026-11-20-121). A value moved or copied out of one, an aggregate
+/// built from one and a call's result given one carry it on where their
+/// type has a place for the hidden type.
+fn opaque_locals(
+    body: &Body,
+    tys: &TyInterner,
+    opaque_results: &OpaqueResults<'_>,
+) -> std::collections::HashMap<Local, Vec<Ty>> {
+    let mut opaque: std::collections::HashMap<Local, Vec<Ty>> = Default::default();
+    for b in &body.blocks {
+        if let TerminatorKind::Call {
+            func:
+                Operand::Const(Const {
+                    kind: ConstKind::FnDef(callee),
+                    ..
+                }),
+            destination,
+            ..
+        } = &b.terminator.kind
+        {
+            if destination.projection.is_empty() && opaque_results(&callee.name) {
+                let t = body.locals[destination.local.index()].ty;
+                opaque.entry(destination.local).or_default().push(t);
+            }
+        }
+    }
+    if opaque.is_empty() {
+        return opaque;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut flow = |d: &Place, ops: &mut dyn Iterator<Item = &Operand>| {
+            if !d.projection.is_empty() {
+                return;
+            }
+            let dt = body.locals[d.local.index()].ty;
+            let from: Vec<Ty> = ops
+                .filter_map(|op| op.place())
+                .filter_map(|p| opaque.get(&p.local))
+                .flatten()
+                .copied()
+                .filter(|&h| dt == h || contains_ty(tys, dt, h))
+                .collect();
+            let have = opaque.entry(d.local).or_default();
+            for h in from {
+                if !have.contains(&h) {
+                    have.push(h);
+                    changed = true;
+                }
+            }
+            if have.is_empty() {
+                opaque.remove(&d.local);
+            }
+        };
+        for b in &body.blocks {
+            for s in &b.statements {
+                let StatementKind::Assign(d, rv) = &s.kind else {
+                    continue;
+                };
+                match rv {
+                    Rvalue::Use(op) | Rvalue::Cast(_, op, _) => flow(d, &mut std::iter::once(op)),
+                    Rvalue::Aggregate(_, ops) => flow(d, &mut ops.iter()),
+                    _ => {}
+                }
+            }
+            if let TerminatorKind::Call {
+                args, destination, ..
+            } = &b.terminator.kind
+            {
+                flow(destination, &mut args.iter());
+            }
+        }
+    }
+    opaque
 }
 
 /// The locals that hold, whole or in a part, a closure the body itself
@@ -1612,7 +1712,13 @@ impl Cx<'_> {
     /// Can a value of `place`'s type hold a borrow? Only those carry
     /// origins: `x = *r` with `x: i64` holds nothing of `r`.
     fn holds(&self, place: &Place) -> bool {
-        place_ty(self.body, self.tys, place).map_or(true, |pt| holds_borrow(self.tys, pt.ty))
+        place_ty(self.body, self.tys, place).map_or(true, |pt| {
+            holds_borrow(self.tys, pt.ty)
+                || self.opaque.get(&place.local).is_some_and(|hs| {
+                    hs.iter()
+                        .any(|&h| pt.ty == h || contains_ty(self.tys, pt.ty, h))
+                })
+        })
     }
 
     /// The origins of a value read from `place`: what its local holds,

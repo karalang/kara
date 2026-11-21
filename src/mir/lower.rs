@@ -227,6 +227,10 @@ pub struct Lowered {
     /// the environment holds, never the closure value that lent it
     /// (B-2026-10-24-9).
     pub closure_results: FxHashSet<String>,
+    /// The instances whose declared result type is an `impl Trait`: a
+    /// call's result borrows what the signature says, whatever its hidden
+    /// type holds ([`crate::mir::OpaqueResults`]; B-2026-11-20-121).
+    pub opaque_results: FxHashSet<String>,
     /// For a program that binds a resource (core semantics §14), the
     /// effects of the program as built, before provider specialisation
     /// replaced its calls on resources: what `par_check` reports from.
@@ -693,6 +697,7 @@ fn lower_program_inner<'a>(
     let mut views = FxHashSet::default();
     let mut view_args = FxHashMap::default();
     let mut closure_results = FxHashSet::default();
+    let mut opaque_results = FxHashSet::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
             let has_self = lcx.fns.get(&def).is_some_and(|i| i.f.self_param.is_some());
@@ -772,6 +777,13 @@ fn lower_program_inner<'a>(
                         .filter(|i| view_param(lcx.tys.tcx(), b.locals[i + 1].ty))
                         .fold(0, |m, i| m | 1 << i)
                 });
+            if lcx
+                .fns
+                .get(&def)
+                .is_some_and(|i| i.f.return_type.as_ref().is_some_and(mentions_impl_trait))
+            {
+                opaque_results.insert(name.clone());
+            }
             if has_self && borrows {
                 if view || mask & 1 != 0 {
                     views.insert(name.clone());
@@ -840,6 +852,7 @@ fn lower_program_inner<'a>(
         pointee_views,
         view_args,
         closure_results,
+        opaque_results,
         effects: None,
         auto_par_tasks: lcx.auto_par_done,
         auto_par_groups: lcx.auto_par_groups,
@@ -953,6 +966,21 @@ fn views_only_as_text(tcx: &crate::ty::TyCtxt, ty: crate::ty::Ty) -> bool {
         }
     }
     go(tcx, ty, &mut Vec::new())
+}
+
+/// Whether a written result type is, or holds, an `impl Trait`.
+fn mentions_impl_trait(t: &ast::TypeExpr) -> bool {
+    match &t.kind {
+        ast::TypeKind::ImplTrait { .. } => true,
+        ast::TypeKind::Ref(t) | ast::TypeKind::MutRef(t) => mentions_impl_trait(t),
+        ast::TypeKind::Path(p) => p.generic_args.as_ref().is_some_and(|g| {
+            g.iter()
+                .any(|a| matches!(a, ast::GenericArg::Type(t) if mentions_impl_trait(t)))
+        }),
+        ast::TypeKind::Tuple(ts) => ts.iter().any(mentions_impl_trait),
+        ast::TypeKind::Array { element, .. } => mentions_impl_trait(element),
+        _ => false,
+    }
 }
 
 fn writes_ref(t: &ast::TypeExpr) -> bool {
@@ -32891,6 +32919,7 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
         &closure_sig,
     );
     let view_results = |n: &str| views.contains(n);
+    let opaque_results = |n: &str| lowered.opaque_results.contains(n);
     let mut out: Vec<SourceBorrowError> = Vec::new();
     let mut push = |e: SourceBorrowError| {
         if !out
@@ -32919,6 +32948,7 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
             &has_receiver,
             &closure_sig,
             &view_results,
+            &opaque_results,
         ) {
             if !in_program(e.at) {
                 continue;
@@ -33761,6 +33791,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         Default::default()
     };
     let view_results = |n: &str| views.contains(n);
+    let opaque_results = &lowered.opaque_results;
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
@@ -33791,6 +33822,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
                 &has_receiver,
                 &closure_sig,
                 &view_results,
+                &|n: &str| opaque_results.contains(n),
             );
             if !errs.is_empty() {
                 let e: Vec<String> = errs.into_iter().map(|e| e.text).collect();

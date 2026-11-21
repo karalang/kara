@@ -46,6 +46,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `impl Display for (i64, H)` overlaps the library's tuple `Display` and is
   refused; a tuple impl of any other trait is refused as not supported yet
   (B-2026-11-21-30). Both were accepted and then ignored (B-2026-11-20-122).
+- A use of an `impl Trait` result after what its signature lends it is
+  moved or written: `let it = count_logged(xs, log); drop(log);
+  it.count()` is E0516, as design.md § `impl Trait` says. The result
+  borrowed only what its hidden type held, so a body returning a
+  `VecIntoIter` borrowed nothing (B-2026-11-20-121).
 
 - `cycle` on `take`, `skip`, `enumerate`, `step_by`, `rev`, `zip` or
   `cloned` over a closure adaptor (`v.iter().map(f).take(3).cycle()`),

@@ -51,7 +51,7 @@ pub mod validate;
 
 pub use borrowck::{
     borrow_errors, borrow_errors_in, borrow_errors_with, check_borrows, closure_signature,
-    view_results, BorrowError, ClosureSig, ResultBorrows,
+    view_results, BorrowError, ClosureSig, OpaqueResults, ResultBorrows,
 };
 pub use build::BodyBuilder;
 pub use elaborate::elaborate_drops;
