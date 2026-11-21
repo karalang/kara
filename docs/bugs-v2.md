@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 665 |
 | false-positive | 340 |
-| missing-feature | 238 |
+| missing-feature | 239 |
 | perf | 196 |
 | other | 142 |
 | soundness | 116 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 822 |
+| typecheck | 823 |
 | mir-llvm | 317 |
-| mir | 295 |
+| mir | 296 |
 | cli | 263 |
 | parser | 146 |
 | ownership | 127 |
@@ -141,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-49 | 2026-11-21 | typecheck | medium | An empty `[]` inside a tuple inside an array literal typed through `.to_vec()`, `let xs: Vec[(i64, Vec[i64])] = [(1, [1, 2]), (2, [])].to_vec();`, stops with the internal E0516 "a type that failed to check is not lowered yet" at the `[]`; without `.to_vec()` it checks | — |
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
+| B-2026-11-21-55 | 2026-11-21 | typecheck+mir | medium | No way to key a Map or Set by shared-handle identity: `ref_eq` exists but nothing hashes identity, so a node-to-copy map, a visited set or a memo over shared nodes is O(n^2) or needs an id field; spec now gives `Identity[T]` (std.hash) | — |
 
 ### Relocated
 
