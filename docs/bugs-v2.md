@@ -136,7 +136,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-21-55 | 2026-11-21 | typecheck+mir | medium | No way to key a Map or Set by shared-handle identity: `ref_eq` exists but nothing hashes identity, so a node-to-copy map, a visited set or a memo over shared nodes is O(n^2) or needs an id field; spec now gives `Identity[T]` (std.hash) | — |
 | B-2026-11-21-81 | 2026-11-21 | typecheck | low | `impl Trait for *mut T` and `impl Trait for (A, B)` are accepted, but their methods are never callable: every call is refused as "no method" | — |
-| B-2026-11-21-90 | 2026-11-21 | cli | medium | kara-lsp hover, completion and definition took up to 1.2 s, 1.3 s and 2.4 s on a program deriving `Serialize`: each request re-ran the whole of `karac check`, ownership and MIR checks included, and two requests on one revision checked it twice | — |
 | B-2026-11-21-91 | 2026-11-21 | cli | medium | `karac check` of a program deriving `Serialize` takes ~0.9-1.1 s on a 5-line file (release), against ~0.07 s without the derive: the derive's comptime expansion runs twice, once in check's lower and again in the ownership/MIR check's own front end | — |
 
 ### Relocated
@@ -2112,6 +2111,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-70 | typecheck | medium | (remainder of B-2026-11-18-59) `karac fix` keeps a `usize`'s floor at 0 only for a `saturating_sub`/`checked_sub` whose receiver is a written `usize`… | 125f1e1b95 |
 | B-2026-11-21-71 | parser | low | `while let P = v and c { . | 125f1e1b95 |
 | B-2026-11-21-80 | typecheck | low | A method a raw pointer does not have (`p.expose_addr()`, `p.addr()`, `p.clone()`, a typo) gets no typecheck error: `karac check` prints only MIR's ro… | ed623291c6 |
+| B-2026-11-21-90 | cli | medium | kara-lsp hover, completion and definition took up to 1.2 s, 1.3 s and 2.4 s on a program deriving `Serialize`: each request re-ran the whole of `kara… | 972effff90 |
 
 </details>
 
