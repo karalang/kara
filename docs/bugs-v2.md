@@ -135,11 +135,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-11 | 2026-11-21 | other | medium | Test infra: 92 `karac build` call sites hand the BUILD's exit status to `common::link_or_skip` with no check that the failure is a link, and 33 more in tests/cli.rs (plus tests/run_v2.rs:245) skip the AOT leg whenever the build fails or leaves no binary, so any build-time failure, such as an E0516 'not lowered yet', a backend error or a karac panic, reads as 'no runtime archive' on a local gate run | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
 | B-2026-11-21-30 | 2026-11-21 | typecheck | low | A trait impl for a tuple type (`impl Show for (i64, i64)`) is not supported; it was accepted and then never found (`no method 'show' on type '(i64, i64)'`), and is now refused as not supported yet | — |
-| B-2026-11-21-32 | 2026-11-21 | cli | medium | kara-lsp's incremental check reported errors `karac check` does not: a resolve error in one body stops check at resolve, but the focused (emptied-bodies) re-check went on to type errors in the changed body | — |
-| B-2026-11-21-33 | 2026-11-21 | cli | medium | kara-lsp offered only full-document sync: every keystroke resent the whole file, and a range edit (TextDocumentSyncKind.Incremental) was not supported | — |
-| B-2026-11-21-34 | 2026-11-21 | cli | medium | kara-lsp's references and rename stayed in one document: a `pub` item used from another module got no cross-file references, and a rename left the importing files referring to the old name (the package then failed check) | — |
-| B-2026-11-21-35 | 2026-11-21 | cli | low | `karac fix --help` said one pass and `--dry-run` previews everything, but karac fix runs up to 10 passes itself and `--dry-run` shows only the first | — |
-| B-2026-11-21-36 | 2026-11-21 | cli | low | kara-lsp broke the LSP shutdown/exit order: it stopped reading at `shutdown`, so a request after it went unanswered, and it exited 0 even when `exit` came without `shutdown` | — |
 
 ### Relocated
 
@@ -2073,6 +2068,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-28 | typecheck | low | The overlap error for a concrete impl beside a generic one says "0.8 does not support ...", which reads as temporary, and does not point at the other… | e758d6acb6 |
 | B-2026-11-21-29 | effect | low | E0400 names the internal symbol `Connection.access#Writer` ("via call to 'Connection.access#Writer'") for a UFCS trait-method call | e758d6acb6 |
 | B-2026-11-21-31 | typecheck | low | The const-parameter type refusal omits `i128` from its list of allowed types though `i128` is accepted, and a failed const bound says `predicate is f… | e758d6acb6 |
+| B-2026-11-21-32 | cli | medium | kara-lsp's incremental check reported errors `karac check` does not: a resolve error in one body stops check at resolve, but the focused (emptied-bod… | 8304dd87f3 |
+| B-2026-11-21-33 | cli | medium | kara-lsp offered only full-document sync: every keystroke resent the whole file, and a range edit (TextDocumentSyncKind.Incremental) was not supported | 8304dd87f3 |
+| B-2026-11-21-34 | cli | medium | kara-lsp's references and rename stayed in one document: a `pub` item used from another module got no cross-file references, and a rename left the im… | 8304dd87f3 |
+| B-2026-11-21-35 | cli | low | `karac fix --help` said one pass and `--dry-run` previews everything, but karac fix runs up to 10 passes itself and `--dry-run` shows only the first | 8304dd87f3 |
+| B-2026-11-21-36 | cli | low | kara-lsp broke the LSP shutdown/exit order: it stopped reading at `shutdown`, so a request after it went unanswered, and it exited 0 even when `exit`… | 306bf1f5b3 |
 
 </details>
 
