@@ -536,6 +536,16 @@ fn unroll_threshold() {
         args.push(
             std::ffi::CString::new(format!("-inlinehint-threshold={hint}")).unwrap_or_default(),
         );
+        // `KARAC_LLVM_ARGS` forwards raw LLVM `cl::opt` flags, as clang's
+        // `-mllvm` does, after the defaults above so that one of them can be
+        // overridden (`KARAC_LLVM_ARGS=-align-all-functions=8`). The legacy
+        // backend read it; the v2 one dropped it, so a measurement taken with
+        // it measured the default (B-2026-11-21-17).
+        if let Ok(extra) = std::env::var("KARAC_LLVM_ARGS") {
+            for flag in extra.split_whitespace() {
+                args.push(std::ffi::CString::new(flag).unwrap_or_default());
+            }
+        }
         let argv: Vec<*const std::ffi::c_char> = args.iter().map(|a| a.as_ptr()).collect();
         // SAFETY: NUL-terminated strings that outlive the call; LLVM
         // copies what it keeps.

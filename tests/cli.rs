@@ -6975,7 +6975,6 @@ fn test_build_fn_align_lever_is_behaviour_neutral() {
 
 #[cfg(feature = "llvm")]
 #[test]
-#[ignore = "v2 gap after M3: the v2 build does not forward `--llvm-args` to the backend yet (B-2026-11-21-17)"]
 fn test_build_llvm_args_lever_reaches_the_backend() {
     // B-2026-08-07-10 — `KARAC_LLVM_ARGS` forwards raw LLVM `cl::opt` flags,
     // the way clang's `-mllvm` does. It is what let this row test BLOCK
@@ -18734,19 +18733,15 @@ fn test_migrate_default_atomic_when_only_bare_assigns() {
 /// used to blind-bind in the resolver and ICE in the interpreter on
 /// first use ("variable 'fetch' not found").
 ///
-/// NOTE (target gate): this program calls `paint()` (writes(Display))
-/// from `main`, which `karac check`/`build` reject on native — the
-/// test runs via `karac run`, where the phase-10 run-leniency decision
-/// (2026-06-06) downgrades effect findings (E0411 included) to
-/// `warning[effect]` lines and keeps executing, mirroring the
-/// typecheck treatment on the lenient script path. `Pipeline::resolve`
-/// expands gated imports into the real baked items
-/// (`prelude::expand_gated_stdlib_imports`); this pins the full
-/// run path: import + effect-clause use + calling the fetch stub body,
-/// plus the warn-don't-abort half of the leniency decision.
+/// Target gate: this program calls `paint()` (writes(Display)) from
+/// `main`, which native does not provide. Check is the verdict, so `karac
+/// run` refuses it with the E0411 `karac check` reports, before anything
+/// runs (review ruling 2026-11-21, B-2026-11-21-20: run = check; the
+/// legacy pipeline's 2026-06-06 run leniency, which downgraded effect
+/// findings to warnings under `run`, is retired). The gated imports still
+/// resolve: the refusal names the resources, not an unknown name.
 #[test]
-#[ignore = "v2 gap after M3: v2 `run` refuses the native target gate (E0411) that the legacy run leniency downgraded to warnings (B-2026-11-21-20)"]
-fn std_web_single_file_run_executes_gated_imports() {
+fn std_web_single_file_run_refuses_the_native_target_gate_like_check() {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-std-web-{}-{}",
         std::process::id(),
@@ -18774,24 +18769,30 @@ fn main() {
 "#;
     std::fs::write(&path, src).unwrap();
 
-    let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        out.status.success(),
-        "std.web single-file run should succeed; stdout={stdout} stderr={stderr}",
-    );
-    assert!(
-        stdout.contains("stub: std.web.net.fetch: not available in 0.8"),
-        "fetch stub body should execute and surface its message: {stdout}",
-    );
-    assert!(
-        stderr.contains("warning[E0411]") && stderr.contains("does not provide resource 'Display'"),
-        "the E0411 target-gate finding should surface as a warning under run: {stderr}",
-    );
+    for verb in ["run", "check"] {
+        let out = karac_bin()
+            .args([verb, path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let all = format!("{stdout}{stderr}");
+        assert!(
+            !out.status.success(),
+            "`karac {verb}` must refuse the native target gate; stdout={stdout} stderr={stderr}",
+        );
+        for resource in ["Display", "Storage"] {
+            assert!(
+                all.contains("error[E0411]")
+                    && all.contains(&format!("does not provide resource '{resource}'")),
+                "`karac {verb}` names the missing resource {resource}: {all}",
+            );
+        }
+        assert!(
+            !all.contains("stub:") && !all.contains("panicked") && !all.contains("not found"),
+            "`karac {verb}` refuses before anything runs, with no unknown name: {all}",
+        );
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

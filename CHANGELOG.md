@@ -20,6 +20,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `karac run` of a single file that imports `std.web` is refused with the
+  same E0411 target-gate errors `karac check` reports (the native target
+  provides no `Display` or `Storage` resource); it used to run on stubs.
+  Ruling: run = check (B-2026-11-21-20).
 - A `mut ref self` method called on a `let` binding of a return-position
   `impl Trait` value (`let e = evens(); e.next()`) is E0510, as on the
   concrete type and on `dyn Trait`; the fix is `let mut e`, which no longer
@@ -3170,6 +3174,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `KARAC_LLVM_ARGS` forwards raw LLVM `cl::opt` flags to the backend
+  again, as clang's `-mllvm` does (`KARAC_LLVM_ARGS=-align-all-functions=8`);
+  the v2 backend had dropped it, so a build given it built the default
+  (B-2026-11-21-17).
 - `karac migrate shared-to-par` writes code that checks: each use takes the
   field's `lock()` guard (`{ let n_guard = c.n.lock(); *n_guard.value += 1; }`)
   instead of the `lock self.n { }` blocks that did not parse, struct literals
