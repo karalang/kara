@@ -33277,7 +33277,13 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
     // `Trait.method(x, ..)` is the method call `x.method(..)` from here on
     // (B-2026-10-28-17).
     crate::lowering::rewrite_ufcs(&mut program, &tc.ufcs_calls);
-    let own = crate::ownershipcheck(&program, &tc);
+    // Under the core rules, as check's Pipeline runs the pass: the closure
+    // captures and frozen hints lowered here are the ones check verified
+    // (B-2026-11-20-107).
+    let own = {
+        let _core = crate::ownership::CoreRulesGuard::new(true);
+        crate::ownershipcheck(&program, &tc)
+    };
     phase_time("ownershipcheck", &mut t);
     let frozen = FrozenHints {
         aliases: own.frozen_alias_bindings.clone(),
@@ -33332,7 +33338,10 @@ pub fn lower_program_with_roots(
     let mut res = crate::node_res::node_res(r, &defs, 0, None);
     crate::node_res::add_variant_patterns(&mut res, &defs, 0, &tc.variant_patterns);
     let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
-    let captures = crate::ownershipcheck(program, tc).closure_captures;
+    let captures = {
+        let _core = crate::ownership::CoreRulesGuard::new(true);
+        crate::ownershipcheck(program, tc).closure_captures
+    };
     let mut lowered = lower_program_inner(
         program,
         src,

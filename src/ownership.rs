@@ -1457,8 +1457,11 @@ thread_local! {
 
 /// While alive, the copy predicates below follow the v2 core's rules
 /// (`docs/core-semantics.md` §6.1) instead of legacy's: a `Result` holding a
-/// handle is move-only. Only the strict commands (`check`, `fix`) set it, so
-/// `build` and `run` keep legacy's copy semantics.
+/// handle is move-only. Every entry that verifies or lowers a program sets
+/// it: check's and fix's Pipelines, the build's MIR frontend (so the closure
+/// captures it lowers are the ones check verified, B-2026-11-20-107) and the
+/// REPL's ownership magics. Left unset, the pass answers with legacy's copy
+/// rules, which only tests of the legacy surface still ask for.
 pub(crate) struct CoreRulesGuard(bool);
 
 impl CoreRulesGuard {
