@@ -3913,7 +3913,8 @@ impl<'a> Interp<'a> {
                 | "checked_mul" | "saturating_add" | "saturating_sub" | "saturating_mul" | "clamp"
                 | "overflowing_add" | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes"
                 | "to_le_bytes" | "to_be_bytes" | "rotate_left" | "rotate_right" | "swap_bytes"
-                | "reverse_bits" | "next_power_of_two" | "isqrt" | "div_ceil",
+                | "reverse_bits" | "next_power_of_two" | "isqrt" | "div_ceil" | "ilog2" | "ilog10"
+                | "ilog" | "checked_ilog2" | "checked_ilog10" | "checked_ilog",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
             // B-2026-10-19-11: the families' div / rem / neg / shl / shr / pow.
             (t, m) if int_width(t).is_some() && is_overflow_family_op(m) => {
@@ -13183,6 +13184,45 @@ impl<'a> Interp<'a> {
                     x.reverse_bits()
                 } >> (128 - bits);
                 Ok(Value::Int(at_width(r as i128, bits, signed)))
+            }
+            // The floor of the logarithm, an `i64` count; a value not
+            // positive or a base below 2 panics, as Rust's `ilog` does, and
+            // the `checked_` forms give `None` there (B-2026-11-21-58). The
+            // bits of a `u128` past `i128::MAX` read through `raw`.
+            (
+                "ilog2" | "ilog10" | "ilog" | "checked_ilog2" | "checked_ilog10" | "checked_ilog",
+                [a, rest @ ..],
+            ) => {
+                let positive = raw(*a) != 0 && (!signed || *a > 0);
+                let base = match (method, rest) {
+                    ("ilog2" | "checked_ilog2", []) => Some(2u128),
+                    ("ilog10" | "checked_ilog10", []) => Some(10),
+                    (_, [b]) => (!signed || *b > 0).then(|| raw(*b)).filter(|b| *b >= 2),
+                    _ => return err(format!("{name} of {} arguments", args.len())),
+                };
+                let log = base
+                    .filter(|_| positive)
+                    .map(|b| Value::Int(i128::from(raw(*a).ilog(b))));
+                if method.starts_with("checked_") {
+                    return self.option(ret, log);
+                }
+                match log {
+                    Some(v) => Ok(v),
+                    None => {
+                        self.panic_message = Some(
+                            if base.is_none() {
+                                "base of integer logarithm must be at least 2"
+                            } else {
+                                "argument of integer logarithm must be positive"
+                            }
+                            .to_string(),
+                        );
+                        if self.trace {
+                            self.events.push(Event::Abort(AbortReason::Panic));
+                        }
+                        Err(Stop::Abort(AbortReason::Panic))
+                    }
+                }
             }
             // The floor of the square root; a negative signed value panics,
             // as Rust's `isqrt` (B-2026-11-20-44).

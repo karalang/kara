@@ -1709,6 +1709,121 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok((av, ov))
     }
 
+    /// The floor of the logarithm of `args[0]` to base 2, 10 or `args[1]`,
+    /// at every width, stored as an `i64`, or as an `Option[i64]` for the
+    /// `checked_` forms. A base below 2, then a value not positive, aborts
+    /// as Rust's panics do, or gives `None`. `ilog2` is the width less one
+    /// less the leading zeros; the others divide by the base until the
+    /// quotient is below it. Both are then known positive, so unsigned
+    /// division serves either sign; where they are not, the loop runs on
+    /// 1 and 2, so it ends, and its count is thrown away (B-2026-11-21-58).
+    fn int_ilog(
+        &mut self,
+        it: IntTy,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let Some(a) = args.first() else {
+            return Ok(None);
+        };
+        let x = self.operand_scalar(a)?.into_int_value();
+        let xt = x.get_type();
+        let base = match (method, &args[1..]) {
+            ("ilog" | "checked_ilog", [y]) => {
+                let xty = self.operand_type(a)?;
+                let Some(y) = self.int_peer(x, xty, y)? else {
+                    return Ok(None);
+                };
+                Some(y)
+            }
+            ("ilog2" | "ilog10" | "checked_ilog2" | "checked_ilog10", []) => None,
+            _ => return Ok(None),
+        };
+        let checked = method.starts_with("checked_");
+        let (gt, ne) = if it.signed() {
+            (IntPredicate::SGT, IntPredicate::SGT)
+        } else {
+            (IntPredicate::UGT, IntPredicate::NE)
+        };
+        let one = xt.const_int(1, false);
+        let positive = self
+            .builder
+            .build_int_compare(ne, x, xt.const_zero(), "")
+            .map_err(e)?;
+        let base_ok = match base {
+            Some(y) => Some(self.builder.build_int_compare(gt, y, one, "").map_err(e)?),
+            None => None,
+        };
+        if !checked {
+            if let Some(ok) = base_ok {
+                self.abort_unless(ok, "base of integer logarithm must be at least 2")?;
+            }
+            self.abort_unless(positive, "argument of integer logarithm must be positive")?;
+        }
+        let valid = match base_ok {
+            Some(ok) => self.builder.build_and(positive, ok, "").map_err(e)?,
+            None => positive,
+        };
+        let i64t = self.llcx.i64_type();
+        let b = &self.builder;
+        let xs = b
+            .build_select(valid, x, one, "")
+            .map_err(e)?
+            .into_int_value();
+        let n = if matches!(method, "ilog2" | "checked_ilog2") {
+            let f = self.llcx.bool_type().const_zero();
+            let lz = self.int_intrinsic("ctlz", &[xs.into(), f.into()], xt)?;
+            let b = &self.builder;
+            let lz = b.build_int_cast_sign_flag(lz, i64t, false, "").map_err(e)?;
+            let top = i64t.const_int(u64::from(it.bits() - 1), false);
+            b.build_int_sub(top, lz, "").map_err(e)?
+        } else {
+            let by = base.unwrap_or_else(|| xt.const_int(10, false));
+            let by = b
+                .build_select(valid, by, xt.const_int(2, false), "")
+                .map_err(e)?
+                .into_int_value();
+            let pre = self.builder.get_insert_block().ok_or("no block")?;
+            let f = self.cur_fn()?;
+            let head = self.llcx.append_basic_block(f, "ilog.head");
+            let body = self.llcx.append_basic_block(f, "ilog.body");
+            let done = self.llcx.append_basic_block(f, "ilog.done");
+            let b = &self.builder;
+            b.build_unconditional_branch(head).map_err(e)?;
+            b.position_at_end(head);
+            let q = b.build_phi(xt, "ilog.q").map_err(e)?;
+            let n = b.build_phi(i64t, "ilog.n").map_err(e)?;
+            let qv = q.as_basic_value().into_int_value();
+            let nv = n.as_basic_value().into_int_value();
+            let more = b
+                .build_int_compare(IntPredicate::UGE, qv, by, "")
+                .map_err(e)?;
+            b.build_conditional_branch(more, body, done).map_err(e)?;
+            b.position_at_end(body);
+            let q2 = b.build_int_unsigned_div(qv, by, "").map_err(e)?;
+            let n2 = b
+                .build_int_add(nv, i64t.const_int(1, false), "")
+                .map_err(e)?;
+            b.build_unconditional_branch(head).map_err(e)?;
+            q.add_incoming(&[(&xs, pre), (&q2, body)]);
+            n.add_incoming(&[(&i64t.const_zero(), pre), (&n2, body)]);
+            b.position_at_end(done);
+            nv
+        };
+        if checked {
+            let b = &self.builder;
+            let v = b
+                .build_select(valid, n, i64t.const_all_ones(), "")
+                .map_err(e)?
+                .into_int_value();
+            self.store_opt_int(dest, v)?;
+        } else {
+            self.store_int_as(dest, n, false)?;
+        }
+        Ok(Some(()))
+    }
+
     fn int_op(&mut self, it: IntTy, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
         if self.int_overflow_op(it, method, args, dest)?.is_some() {
             return Ok(Some(()));
@@ -1734,6 +1849,12 @@ impl<'ctx> Cx<'ctx, '_> {
             let v = b.build_select(gt, d1, d2, "").map_err(e)?.into_int_value();
             self.store_int_as(dest, v, false)?;
             return Ok(Some(()));
+        }
+        if matches!(
+            method,
+            "ilog2" | "ilog10" | "ilog" | "checked_ilog2" | "checked_ilog10" | "checked_ilog"
+        ) {
+            return self.int_ilog(it, method, args, dest);
         }
         // At every width, 128 bits included (B-2026-10-15-74).
         if let ("rotate_left" | "rotate_right" | "partial_cmp", [_, y]) = (method, args) {

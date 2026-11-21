@@ -88,6 +88,9 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "bits_as_f64",
     "checked_add",
     "checked_div",
+    "checked_ilog",
+    "checked_ilog10",
+    "checked_ilog2",
     "checked_mul",
     "checked_neg",
     "checked_pow",
@@ -101,6 +104,9 @@ pub(crate) const INT_METHODS: &[&str] = &[
     "count_zeros",
     "div_ceil",
     "div_euclid",
+    "ilog",
+    "ilog10",
+    "ilog2",
     "isqrt",
     "leading_ones",
     "leading_zeros",
@@ -1141,6 +1147,59 @@ impl<'a> super::TypeChecker<'a> {
             }
             self.record_expr_type(args_close_span, receiver_for_lookup);
             return Some(receiver_for_lookup.clone());
+        }
+        // `ilog2()` / `ilog10()` / `ilog(base)` on integer scalars -> `i64`,
+        // the floor of the logarithm: the count of times the value divides
+        // by the base, so an `i64` as every count is in Kāra (Rust's are
+        // `u32`, as its bit counts are). A value not positive, or a base
+        // below 2, panics as in Rust; the `checked_` forms give an
+        // `Option[i64]`, `None` there instead (kata 1295, B-2026-11-21-58).
+        // The base is the receiver's type, by the same argument rule as
+        // `checked_add`'s. The receiver is stashed at `args_close_span`
+        // for the interpreter's width, as the bit counts'.
+        if matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+            && matches!(
+                method,
+                "ilog2" | "ilog10" | "ilog" | "checked_ilog2" | "checked_ilog10" | "checked_ilog"
+            )
+        {
+            let wants = usize::from(matches!(method, "ilog" | "checked_ilog"));
+            if args.len() != wants {
+                self.type_error(
+                    format!("{method} expects {wants} argument(s), got {}", args.len()),
+                    *span,
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Some(Type::Error);
+            }
+            if let Some(arg) = args.first() {
+                let arg = &arg.value;
+                let arg_ty = self.infer_expr(arg);
+                if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+                    self.record_promoted_literal(arg, receiver_for_lookup);
+                } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
+                    self.type_error(
+                        format!(
+                            "{method} expects a base of type `{}`, got `{}`",
+                            type_display(receiver_for_lookup),
+                            type_display(&arg_ty)
+                        ),
+                        arg.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Some(Type::Error);
+                }
+            }
+            self.record_expr_type(args_close_span, receiver_for_lookup);
+            let count = Type::Int(IntSize::I64);
+            return Some(if method.starts_with("checked_") {
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![count],
+                }
+            } else {
+                count
+            });
         }
         // `abs_diff(self, other) -> unsigned sibling` (Rust `iN/uN::abs_diff`):
         // the absolute difference of two same-type integers ALWAYS fits the

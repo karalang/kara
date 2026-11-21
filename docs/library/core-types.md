@@ -121,6 +121,8 @@ Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).
 
 **Integer square root.** As Rust's: `x.isqrt()` is the floor of the square root of `x`, of `x`'s type (`10.isqrt() == 3`), on every integer type up to 64 bits; a negative signed value panics. A 128-bit `isqrt` is refused for now. (B-2026-11-20-44.)
 
+**Integer logarithms.** As Rust's, on every integer type: `x.ilog2()`, `x.ilog10()` and `x.ilog(base)` are the floor of the logarithm, the number of times `x` divides by the base before the quotient falls below it (`1000.ilog10() == 3`, `999.ilog10() == 2`), so `x.ilog10() + 1` is the count of `x`'s decimal digits. Each returns `i64`, as every count does (the bit counts above), not Rust's `u32`. The base is `x`'s type. A value not positive panics (`argument of integer logarithm must be positive`), and so does a base below 2 (`base of integer logarithm must be at least 2`); `checked_ilog2()`, `checked_ilog10()` and `checked_ilog(base)` give an `Option[i64]`, `None` in those cases instead. (B-2026-11-21-58.)
+
 What the plain operators do on overflow, and the other numeric rules, are in [design.md §5](../design.md#numeric-semantics).
 
 **Char digits.** As Rust's: `c.to_digit(radix) -> Option[u32]` is the digit `c` stands for below the radix, `c.is_digit(radix) -> bool` whether it stands for one, and `char.from_digit(num: u32, radix: u32) -> Option[char]` the inverse, `0`..`9` then `a`..`z` for a `num` below the radix and `None` from the radix up. A radix outside 2..=36 panics in all three.
