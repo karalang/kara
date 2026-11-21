@@ -6121,6 +6121,11 @@ impl<'a> super::TypeChecker<'a> {
             // A trait impl for a tuple, registered under `Tuple`
             // (B-2026-11-21-30); an inherent one is refused there.
             TypeKind::Tuple(_) if imp.trait_name.is_some() => "Tuple".to_string(),
+            // A trait impl for a raw pointer, registered under `*mut` /
+            // `*const` (B-2026-11-21-81); an inherent one is refused there.
+            TypeKind::Pointer { is_mut, .. } if imp.trait_name.is_some() => {
+                if *is_mut { "*mut" } else { "*const" }.to_string()
+            }
             _ => return,
         };
         // Slice 1b: `env_add_impl` already emitted
@@ -6240,6 +6245,8 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Shared(_) => lowered.clone(),
                 // A concrete tuple is its own type (B-2026-11-21-30).
                 Type::Tuple(elems) if elems.iter().all(type_is_fully_concrete) => lowered.clone(),
+                // So is a raw pointer to a concrete type (B-2026-11-21-81).
+                Type::Pointer { inner, .. } if type_is_fully_concrete(inner) => lowered.clone(),
                 // On the MIR pipeline, a generic target that NESTS its
                 // params (`impl[T] Option[Option[T]]`) keeps its args. Erased
                 // to `Option`, `self` gives a `match` binding no type at all,

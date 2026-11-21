@@ -4981,6 +4981,8 @@ fn impl_target_name(target_type: &TypeExpr) -> Option<String> {
         // A tuple impl's methods, keyed as the typechecker records their
         // calls: `(i64, i64).bump` (B-2026-11-21-30).
         TypeKind::Tuple(_) => Some(crate::formatter::render_type_expr(target_type)),
+        // A raw pointer's, `*mut i64.show` (B-2026-11-21-81).
+        TypeKind::Pointer { .. } => Some(crate::formatter::render_type_expr(target_type)),
         _ => None,
     }
 }

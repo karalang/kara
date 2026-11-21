@@ -11098,6 +11098,14 @@ impl<'a> super::TypeChecker<'a> {
                 } else if imp.target_type == "Tuple" {
                     // A tuple impl names its tuple (B-2026-11-21-30).
                     type_display(&Type::Tuple(imp.target_args.clone()))
+                } else if let ("*mut" | "*const", [inner]) =
+                    (imp.target_type.as_str(), imp.target_args.as_slice())
+                {
+                    // A raw-pointer impl names its pointer (B-2026-11-21-81).
+                    type_display(&Type::Pointer {
+                        inner: Box::new(inner.clone()),
+                        is_mut: imp.target_type == "*mut",
+                    })
                 } else {
                     let args = imp
                         .target_args

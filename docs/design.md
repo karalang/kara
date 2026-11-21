@@ -3374,6 +3374,7 @@ help: annotate the pointer type explicitly:
 - **The fix-it** annotates the binding's type. The diagnostic underlines the receiver, not the method name.
 - **Order.** The check runs before the `unsafe` requirement ([§15](#15-unsafe-ffi-and-layout-control)), so it is reported inside an `unsafe` block too.
 - **No lookup through the pointer.** Raw pointers are not dereferenced by method lookup. A method of `T` needs `(*p).method()`. The pointer's own methods are inherent methods of the pointer type.
+- **Trait impls for a pointer type.** A program's trait may be implemented for a pointer to a concrete type, `impl Show for *mut Node`; `*mut T` and `*const T` are distinct types, so each needs its own impl, and its methods answer calls, `Trait.m(p)`, bounds and `dyn` as any impl's do. The pointer's own methods come first. A pointee that is a type parameter (`impl[T] Show for *mut T`) and an inherent impl on a pointer type are refused ([deferred.md](deferred.md#generic-trait-impls-for-tuple-types); review-thread ruling 2026-11-21, B-2026-11-21-81).
 
 #### No specialization
 

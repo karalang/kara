@@ -1,0 +1,19 @@
+trait Show {
+    fn show(self) -> String;
+    fn twice(self) -> String { f"{self.show()}{self.show()}" }
+}
+impl Show for *mut i64 { fn show(self) -> String { if self.is_null() { "null" } else { /* Safety: p points at x. */ unsafe { f"*{self.read()}" } } } }
+impl Show for *const i64 { fn show(self) -> String { unsafe { f"c{self.read()}" } } }
+fn g[T: Show](x: T) -> String { x.show() }
+fn main() {
+    let mut x: i64 = 5;
+    let p: *mut i64 = ptr.mut(x);
+    let c: *const i64 = ptr.const(x);
+    println(p.show());
+    println(c.show());
+    println(p.twice());
+    println(Show.show(p));
+    println(g(c));
+    let d: dyn Show = p;
+    println(d.show());
+}

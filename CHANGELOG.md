@@ -58,6 +58,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   refused; it was accepted and then ignored (B-2026-11-20-122). An impl over
   type parameters (`impl[A, B] Show for (A, B)`) is refused as not supported
   yet, and an inherent `impl (i64, i64)` as not allowed (B-2026-11-21-30).
+- `impl[T] Show for *mut T` is refused as not supported yet, and an inherent
+  `impl *mut i64` as not allowed; both were accepted and dead
+  (B-2026-11-21-81).
 - A use of an `impl Trait` result after what its signature lends it is
   moved or written: `let it = count_logged(xs, log); drop(log);
   it.count()` is E0516, as design.md § `impl Trait` says. The result
@@ -514,6 +517,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   i64)`) answers method calls, default methods, `Show.show(p)`, `T: Show`
   bounds and `dyn Show`, with its receiver mode and effects checked; it was
   accepted and then never found (B-2026-11-21-30).
+
+- A program's trait impl for a raw pointer to a concrete type (`impl Show for
+  *mut i64`, and `*const i64` apart) answers the same surfaces; it was
+  accepted and then never callable. A pointer's own methods (`read`,
+  `is_null`, ..) now work through a borrow of the pointer: a `ref *mut T`
+  parameter, or `self` in such an impl (B-2026-11-21-81).
 
 - `Mutex[T].try_lock()`: the guard when no task holds the mutex, `None`
   when one does, without waiting, as Rust's `Mutex::try_lock`, Go's

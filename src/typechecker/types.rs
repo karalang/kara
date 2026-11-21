@@ -711,6 +711,13 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
         // under `Slice` with its element: `impl Show for (i64, i64)` answers
         // for that tuple only (B-2026-11-21-30).
         Type::Tuple(elems) => Some(("Tuple".to_string(), elems.clone())),
+        // A raw pointer keys under `*mut` / `*const` with its pointee:
+        // `impl Show for *mut i64` answers for that pointer only
+        // (B-2026-11-21-81).
+        Type::Pointer { inner, is_mut } => Some((
+            if *is_mut { "*mut" } else { "*const" }.to_string(),
+            vec![(**inner).clone()],
+        )),
         Type::Ref(inner) | Type::MutRef(inner) => impl_table_key(inner),
         _ => None,
     }

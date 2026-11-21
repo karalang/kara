@@ -374,6 +374,47 @@ impl<'a> super::TypeChecker<'a> {
         // `karac check` printed only MIR's root-less E0516 "a type that failed
         // to check is not lowered yet". Name the surface instead, and the
         // `ptr` functions an address-shaped name was probably reaching for.
+        //
+        // A program's impl of a trait for this pointer type (`impl Show for
+        // *mut i64`) answers its methods first, as a tuple's does above
+        // (B-2026-11-21-81), keyed `*mut i64.show` for the effect checker
+        // and the ownership pass; MIR finds the method by the receiver's type.
+        if let Type::Pointer { .. } = receiver_for_lookup {
+            if let Some((key, key_args)) = super::types::impl_table_key(receiver_for_lookup) {
+                let owners: Vec<Option<Span>> = self
+                    .env
+                    .impls
+                    .iter()
+                    .filter(|i| i.target_type == key && i.target_args == key_args)
+                    .filter(|i| {
+                        i.trait_name
+                            .as_ref()
+                            .is_some_and(|t| self.find_trait_method(t, method).is_some())
+                    })
+                    .map(|i| i.target_span)
+                    .collect();
+                if let [at] = owners.as_slice() {
+                    let shown = at.and_then(|at| {
+                        self.program.items.iter().find_map(|it| match it {
+                            Item::ImplBlock(b)
+                                if matches!(b.target_type.kind, TypeKind::Pointer { .. })
+                                    && b.target_type.span == at =>
+                            {
+                                Some(crate::formatter::render_type_expr(&b.target_type))
+                            }
+                            _ => None,
+                        })
+                    });
+                    if let Some(shown) = shown {
+                        self.method_callee_types.insert(
+                            crate::resolver::SpanKey::from_span(span),
+                            format!("{shown}.{method}"),
+                        );
+                    }
+                    return None;
+                }
+            }
+        }
         if let Type::Pointer { .. } = receiver_for_lookup {
             for arg in args {
                 self.infer_expr(&arg.value);

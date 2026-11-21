@@ -3109,6 +3109,50 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 ("Tuple".to_string(), elems.clone())
             }
+            // A trait impl for a raw pointer to a concrete type (`impl Show
+            // for *mut i64`), keyed `*mut` / `*const` with the pointee, as
+            // `impl_table_key` keys a pointer receiver (B-2026-11-21-81, on
+            // the tuple pattern of B-2026-11-21-30). A raw pointer has no
+            // inherent impl beyond its own methods, and a pointee that is a
+            // type parameter (`impl[T] Show for *mut T`) is refused until a
+            // generic pointer impl can be instanced.
+            Type::Pointer { inner, is_mut } if !self.registering_baked => {
+                let library_start = self.program.library_start.unwrap_or(usize::MAX);
+                let user = imp.span.offset < library_start;
+                let shown = type_display(&lowered_target);
+                let Some(t) = imp.trait_name.as_ref().and_then(|p| p.segments.last()) else {
+                    if user {
+                        self.type_error(
+                            format!(
+                                "`impl {shown}`: a raw pointer type has no inherent impl \
+                                 beyond its own methods; declare a trait and implement it \
+                                 for the pointer, or wrap the pointer in a struct"
+                            ),
+                            imp.span,
+                            TypeErrorKind::ConflictingImpl,
+                        );
+                    }
+                    return;
+                };
+                if !type_is_fully_concrete(inner) {
+                    if user {
+                        self.type_error(
+                            format!(
+                                "`impl {t} for {shown}`: a trait impl for a raw pointer whose \
+                                 pointee is a type parameter is not supported yet; implement \
+                                 `{t}` for each concrete pointer type, or wrap the pointer in \
+                                 a generic struct (deferred.md § Generic trait impls for \
+                                 tuple types)"
+                            ),
+                            imp.span,
+                            TypeErrorKind::ConflictingImpl,
+                        );
+                    }
+                    return;
+                }
+                let key = if *is_mut { "*mut" } else { "*const" };
+                (key.to_string(), vec![(**inner).clone()])
+            }
             // Other non-path target types are unsupported in v1; bail
             // without registering. Matches the pre-Theme-4 behavior of the
             // path-only short-circuit.

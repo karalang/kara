@@ -7329,6 +7329,8 @@ Language extensions and library additions that have a design but no track. Each 
 
 **Why deferred:** a concrete tuple impl is keyed by its exact element types, as an `Array[i64, 3]` impl is. A generic one needs the impl table to match a tuple receiver by unification against the impl's parameters, solving `A` and `B` per call, and MIR to instance the impl's methods per tuple as it does for a blanket impl. No program in the corpus or the katas needs it yet; a struct wrapper (`struct Pair[A, B] { a: A, b: B }`) covers the case today.
 
+**Raw pointers (2026-11-21, B-2026-11-21-81, review-thread ruling):** the same holds for a raw pointer. A trait impl for a pointer to a concrete type (`impl Show for *mut i64`, `impl Show for *const Node`) works on every surface, keyed by its mutability and pointee; one whose pointee is a type parameter, `impl[T: Show] Show for *mut T`, is refused with the same "not supported yet" and waits on the same unification. An inherent impl on a pointer type is refused: a pointer's own methods are the fixed set in design.md § Raw pointers.
+
 ### References to References (`mut ref (ref T)`)
 
 **Decision (2026-11-20, review thread, B-2026-11-20-6):** v1 has no reference to a reference. A borrow of a borrow is the borrow: `ref p` with `p: ref T` is a §5.9 reborrow of type `ref T`, and `mut ref p` is a mutable reborrow through a shared reference, refused (E0517). The same collapse applies through generic substitution, so `mut ref T` at `T = ref String` is `ref String`. A generic that writes through `mut ref T` therefore cannot be instantiated at a shared-reference `T`; the checker refuses the call with a diagnostic that names the collapse and suggests an owned `T` or reassigning the reference local directly.

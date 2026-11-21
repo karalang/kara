@@ -674,7 +674,7 @@ impl<'a> super::TypeChecker<'a> {
             // the historical fall-through that comment describes. That silence
             // is why the row's declaration-side symptom looked like a missing
             // feature rather than a hole: nothing complained anywhere.
-            Type::Str | Type::Slice { .. } | Type::Tuple(_) => {
+            Type::Str | Type::Slice { .. } | Type::Tuple(_) | Type::Pointer { .. } => {
                 match super::types::impl_table_key(receiver_for_lookup) {
                     Some(key) => key,
                     None => {

@@ -50,6 +50,13 @@ impl<'a> super::TypeChecker<'a> {
         // `let p1 = p.offset(1)` intermediate to `Error` and breaking every
         // downstream `p1.read()` — B-fixed here). `unsafe { }` is enforced
         // separately by `unsafe_lint`; the pointee side-table feeds codegen.
+        // Through a borrow of the pointer too: a `ref *mut T` parameter, or
+        // `self` in an impl for a pointer type (B-2026-11-21-81). MIR reads
+        // the pointer through the reference (`raw_ptr_method`).
+        let obj_ty = match obj_ty {
+            Type::Ref(t) | Type::MutRef(t) if matches!(**t, Type::Pointer { .. }) => &**t,
+            t => t,
+        };
         if let Type::Pointer { inner, is_mut } = obj_ty {
             let is_mut = *is_mut;
             let inner_ty = (**inner).clone();

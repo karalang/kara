@@ -24158,11 +24158,62 @@ impl<'l, 'a> Bx<'l, 'a> {
         dest: Place,
     ) -> R<bool> {
         let tcx = self.tys().tcx();
-        let raw = |t: Option<&Ty>| t.is_some_and(|&t| matches!(tcx.kind(t), HK::RawPtr { .. }));
+        let raw = |t: Option<&Ty>| {
+            t.is_some_and(|&t| match tcx.kind(t) {
+                HK::RawPtr { .. } => true,
+                // A borrowed pointer, read through below (B-2026-11-21-81).
+                HK::Ref(i) | HK::MutRef(i) => matches!(tcx.kind(i), HK::RawPtr { .. }),
+                _ => false,
+            })
+        };
         if !raw(self.lcx.node_types.get(&object.id)) {
             return Ok(false);
         }
         let ot = self.expr_ty(object)?;
+        // A receiver that names a borrow of the pointer: the `self` of an
+        // impl for `*mut T` (a bare `self` borrows, D5) or a `ref *mut T`
+        // parameter. The checker types it as the pointer, the local holds a
+        // reference to it, so the pointer is read through that reference
+        // (B-2026-11-21-81).
+        let through_ref = if matches!(object.kind, ExprKind::SelfValue | ExprKind::Identifier(_)) {
+            let mut p = self.expr_place(object, false)?;
+            let mut derefs = 0;
+            while matches!(
+                self.tys().tcx().kind(self.place_type(&p)),
+                HK::Ref(_) | HK::MutRef(_)
+            ) {
+                p = p.project(ProjElem::Deref);
+                derefs += 1;
+            }
+            (derefs > 0).then_some(p)
+        } else {
+            None
+        };
+        if let Some(pp) = through_ref {
+            match (method, args) {
+                ("read" | "read_unaligned" | "read_volatile", []) => {
+                    self.assign(
+                        dest,
+                        Rvalue::Use(Operand::Copy(pp.project(ProjElem::Deref))),
+                    );
+                }
+                ("write" | "write_unaligned" | "write_volatile", [v]) => {
+                    self.expr_into(&v.value, pp.project(ProjElem::Deref))?;
+                    self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+                }
+                ("offset" | "add", [n]) => {
+                    let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+                    let n = self.operand_at(&n.value, i64_t)?;
+                    self.assign(dest, Rvalue::BinaryOp(BinOp::Offset, Operand::Copy(pp), n));
+                }
+                ("is_null", []) => {
+                    let pt = self.place_type(&pp);
+                    self.ptr_is_null(Operand::Copy(pp), pt, dest)
+                }
+                _ => return Ok(false),
+            }
+            return Ok(true);
+        }
         match (method, args) {
             ("read" | "read_unaligned" | "read_volatile", []) => {
                 // A bitwise copy whatever the pointee: `p.read()` hands out

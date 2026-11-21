@@ -62,7 +62,7 @@ impl<'a> super::TypeChecker<'a> {
         // never by a placeholder: a tuple's table key is the internal
         // `Tuple` its trait impls are filed under (B-2026-11-21-30).
         let ty_name = super::types::impl_table_key(obj_ty)
-            .filter(|_| !matches!(obj_ty, Type::Tuple(_)))
+            .filter(|_| !matches!(obj_ty, Type::Tuple(_) | Type::Pointer { .. }))
             .map(|(n, _)| n)
             .unwrap_or_else(|| super::types::type_display(obj_ty));
         self.type_error(
