@@ -115,6 +115,36 @@ pub fn callee_is_string_concat(callee: &Expr) -> bool {
 /// the right outcome: this pass makes the provable case work and changes
 /// nothing about the unprovable ones.
 fn substitute_impl_trait_returns(program: &mut Program, tc: &TypeCheckResult) {
+    // The ceilings first, while the clause is still written: the rewrite
+    // below replaces the node that holds it (B-2026-11-20-120).
+    let mut ceilings = Vec::new();
+    for item in &program.items {
+        let mut note = |f: &Function| {
+            if let Some(TypeExpr {
+                kind:
+                    TypeKind::ImplTrait {
+                        use_effects: Some(list),
+                        ..
+                    },
+                ..
+            }) = &f.return_type
+            {
+                ceilings.push((f.span.offset, list.clone()));
+            }
+        };
+        match item {
+            Item::Function(f) => note(f),
+            Item::ImplBlock(imp) => {
+                for it in &imp.items {
+                    if let ImplItem::Method(m) = it {
+                        note(m);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    program.impl_trait_ceilings.extend(ceilings);
     if tc.impl_trait_return_witnesses.is_empty() {
         return;
     }

@@ -245,24 +245,44 @@ fn rewrite(e: &Expr) -> Option<(Span, Span, String)> {
         return None;
     }
     let r = crate::formatter::render_expr(recv);
-    let at = if last {
-        format!("{r}[{r}.len() - 1]")
-    } else {
-        format!("{r}[0]")
+    // The element (or its field) stands in for each binding: the rewrite is
+    // rendered, never checked as it stands. It is built as the expression
+    // it is, not as a name spelling it, which the renderer escapes when it
+    // begins with a keyword: `r#self.owed[..]` for a receiver of
+    // `self.owed` (kata 1381, B-2026-11-21-65).
+    let node = |kind: ExprKind| Expr {
+        kind,
+        span: recv.span,
+        id: crate::ids::NodeId::DUMMY,
     };
-    // The element's text (or its field's) stands in for each binding: the
-    // rewrite is rendered, never checked as it stands.
+    let index = if last {
+        node(ExprKind::Binary {
+            op: crate::ast::BinOp::Sub,
+            left: Box::new(node(ExprKind::MethodCall {
+                object: Box::new(recv.clone()),
+                method: "len".to_string(),
+                turbofish: None,
+                args: Vec::new(),
+                args_close_span: recv.span,
+            })),
+            right: Box::new(node(ExprKind::Integer(1, None))),
+        })
+    } else {
+        node(ExprKind::Integer(0, None))
+    };
+    let element = node(ExprKind::Index {
+        object: Box::new(recv.clone()),
+        index: Box::new(index),
+    });
     let elems: Vec<(&str, Expr)> = bound
         .iter()
         .map(|(n, field)| {
-            let text = match field {
-                Some(i) => format!("{at}.{i}"),
-                None => at.clone(),
-            };
-            let e = Expr {
-                kind: ExprKind::Identifier(text),
-                span: recv.span,
-                id: crate::ids::NodeId::DUMMY,
+            let e = match field {
+                Some(i) => node(ExprKind::TupleIndex {
+                    object: Box::new(element.clone()),
+                    index: *i as u64,
+                }),
+                None => element.clone(),
             };
             (*n, e)
         })

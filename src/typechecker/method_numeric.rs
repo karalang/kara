@@ -669,6 +669,35 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let arg = &args[0].value;
                 let arg_ty = self.infer_expr(arg);
+                // Rust's two operands are one type, so `i.saturating_sub(k)`
+                // over an index `i` (an `i64` here) and a written `usize` `k`
+                // was a `usize` receiver in Rust, with its floor at 0. Once
+                // `k`'s `usize` becomes `i64` the floor is kept by the same
+                // fix as on a `usize` receiver (kata 1314's Rust arm, B-2026-11-21-70).
+                if matches!(receiver_for_lookup, Type::Int(IntSize::I64))
+                    && matches!(method, "checked_sub" | "saturating_sub")
+                {
+                    let mut a = self.resolved_now(&arg_ty);
+                    while let Type::Ref(inner) | Type::MutRef(inner) = a {
+                        a = *inner;
+                    }
+                    if a == Type::UInt(UIntSize::Usize) {
+                        if let Some(name) = self
+                            .program
+                            .unsigned_floor_names
+                            .get(&args_close_span.offset)
+                            .copied()
+                        {
+                            self.usize_floor_calls.push((
+                                method.to_string(),
+                                name,
+                                *args_close_span,
+                                *span,
+                            ));
+                        }
+                        self.note_pointer_int_mix(&a, receiver_for_lookup);
+                    }
+                }
                 // Suffix-free integer literal arg promotes to the receiver type
                 // (mirrors `wrapping_*`); otherwise it must match exactly.
                 if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {

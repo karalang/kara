@@ -2770,6 +2770,7 @@ impl<'a> EffectChecker<'a> {
         self.verify_extern_export_no_suspends();
         self.verify_pub_fn_no_synthetic_resource();
         self.verify_impl_trait_ceilings();
+        self.verify_impl_trait_return_ceilings();
         self.verify_drop_bodies_are_panics_free();
         self.verify_trait_default_bodies();
         // One every-effect finding per function and call (B-2026-11-14-33):

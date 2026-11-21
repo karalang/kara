@@ -176,6 +176,18 @@ impl super::Parser {
         if sigil.offset < pattern.span.offset || sigil.offset + sigil.length > sub.span.offset {
             return;
         }
+        // `while let Some(&j) = s.last() and c`: the scrutinee is `s.last()`,
+        // the leftmost operand of the (refused) let-chain, so the copy goes
+        // there and not around the whole `.. and c` (B-2026-11-21-71).
+        let mut value = value;
+        while let ExprKind::Binary {
+            op: BinOp::And,
+            left,
+            ..
+        } = &value.kind
+        {
+            value = left;
+        }
         let key = crate::resolver::SpanKey::from_span(sigil);
         let Some(delete) = self.fix_edits.remove(&key) else {
             return;

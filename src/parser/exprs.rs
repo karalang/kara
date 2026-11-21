@@ -1304,12 +1304,19 @@ impl super::Parser {
             // Span the full operator expression (lhs start → rhs end) so the
             // Binary node has a unique SpanKey distinct from its LHS. This
             // matters for the lowering pass and any side-table that keys on
-            // expression spans.
+            // expression spans. A parenthesized rhs keeps no node of its own,
+            // so its span stops inside the `)`; the expression's runs to the
+            // last token the rhs consumed, the `)` included, or an edit of
+            // the whole expression leaves the `)` behind (`m[k] = m.get(k)
+            // .unwrap_or(0) + (t - at)` hoisted, kata 1396, B-2026-11-21-69).
+            let rhs_end = rhs.span.offset + rhs.span.length;
+            let consumed = self.span_from(&lhs.span);
+            let consumed_end = consumed.offset + consumed.length;
             let span = Span {
                 line: lhs.span.line,
                 column: lhs.span.column,
                 offset: lhs.span.offset,
-                length: (rhs.span.offset + rhs.span.length).saturating_sub(lhs.span.offset),
+                length: rhs_end.max(consumed_end).saturating_sub(lhs.span.offset),
             };
             lhs = Expr {
                 id: crate::ids::NodeId::DUMMY,
@@ -2903,7 +2910,18 @@ impl super::Parser {
     /// a `bool` operand error and a pattern-against-`bool` mismatch with no
     /// word about the shape (B-2026-11-06-39). Say what it is, and with no
     /// `else` (where nesting keeps the meaning) offer the nested `if`.
-    fn refuse_let_chain(&mut self, value: &Expr, then_block: &Block, fixable: bool) {
+    ///
+    /// `while let P = v and c { .. }` (`is_while`) is the same shape and was
+    /// not refused at all (B-2026-11-21-71). Its nesting is a guard that leaves the
+    /// loop: `while let P = v { if not (c) { break; } .. }`, which stops
+    /// where the chain stops, on the first pass `c` is false.
+    fn refuse_let_chain(
+        &mut self,
+        value: &Expr,
+        then_block: &Block,
+        fixable: bool,
+        is_while: bool,
+    ) {
         let mut e = value;
         let (scrutinee, rest_start) = loop {
             match &e.kind {
@@ -2919,6 +2937,33 @@ impl super::Parser {
             }
         };
         let at = value.span;
+        if is_while {
+            self.error_at(
+                "`while let` cannot be joined with `and`: Kāra has no let-chains, so the \
+                 pattern is matched against the whole `.. and ..` condition; test the rest \
+                 first thing in the body instead: \
+                 `while let P = v { if not (cond) { break; } .. }`",
+                at,
+            );
+            let end = scrutinee.span.offset + scrutinee.span.length;
+            let value_end = value.span.offset + value.span.length;
+            self.fix_diffs.insert(
+                crate::resolver::SpanKey::from_span(&at),
+                vec![
+                    crate::resolver::TextEdit {
+                        offset: value_end,
+                        length: then_block.span.offset + 1 - value_end,
+                        replacement: ") { break; }".to_string(),
+                    },
+                    crate::resolver::TextEdit {
+                        offset: end,
+                        length: rest_start - end,
+                        replacement: " { if not (".to_string(),
+                    },
+                ],
+            );
+            return;
+        }
         self.error_at(
             "`if let` cannot be joined with `and`: Kāra has no let-chains, so the \
              pattern is matched against the whole `.. and ..` condition; nest the \
@@ -2970,7 +3015,7 @@ impl super::Parser {
                 PatternKind::Literal(_) | PatternKind::Binding(_) | PatternKind::Wildcard
             ) {
                 let has_else = self.check(&Token::Else);
-                self.refuse_let_chain(&value, &then_block, !has_else);
+                self.refuse_let_chain(&value, &then_block, !has_else, false);
             }
             let else_branch = if self.eat_else_or_elif() {
                 if self.check(&Token::If) {
@@ -3243,6 +3288,13 @@ impl super::Parser {
             self.clone_through_some_amp(a0, &pattern, &value);
             let body = self.parse_block()?;
             self.fix_pattern_muts(muts, body.span, true);
+            // As for `if let`: a literal or binding pattern can match a `bool`.
+            if !matches!(
+                pattern.kind,
+                PatternKind::Literal(_) | PatternKind::Binding(_) | PatternKind::Wildcard
+            ) {
+                self.refuse_let_chain(&value, &body, true, true);
+            }
             if label.is_some() {
                 self.loop_labels.pop();
             }

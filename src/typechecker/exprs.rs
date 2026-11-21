@@ -1431,18 +1431,13 @@ impl<'a> super::TypeChecker<'a> {
     /// borrowed view such as a `Slice` has in place of one (kata 1061:
     /// `s1.bytes().iter().zip(s2.bytes())`).
     pub(super) fn iteration_method(&self, ty: &Type) -> Option<&'static str> {
-        let name = match ty {
-            Type::Named { name, .. } => name.as_str(),
-            Type::Str => "String",
-            Type::Slice { .. } => "Slice",
-            _ => return None,
-        };
-        let has = |method: &str| {
-            self.env
-                .impls
-                .iter()
-                .any(|imp| imp.target_type == name && imp.methods.contains_key(method))
-        };
+        // A borrowed collection (`zip(prices)` with `prices: Vec[i32]` a
+        // bare parameter, kata 1357, B-2026-11-21-62) is iterated by its view,
+        // `.iter()`: `.into_iter()` would need the value it only borrows.
+        if let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            return self.collection_has_method(inner, "iter").then_some("iter");
+        }
+        let has = |method: &str| self.collection_has_method(ty, method);
         if has("into_iter") {
             Some("into_iter")
         } else if has("iter") {
@@ -1450,6 +1445,21 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             None
         }
+    }
+
+    /// Whether the collection type `ty` (as `iteration_method` names it)
+    /// has `method` among its library methods.
+    fn collection_has_method(&self, ty: &Type, method: &str) -> bool {
+        let name = match ty {
+            Type::Named { name, .. } => name.as_str(),
+            Type::Str => "String",
+            Type::Slice { .. } => "Slice",
+            _ => return false,
+        };
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.target_type == name && imp.methods.contains_key(method))
     }
 
     /// B-2026-10-18-35: `let v: Vec[String] = s.split(",").collect();` from
@@ -1532,6 +1542,10 @@ impl<'a> super::TypeChecker<'a> {
         };
         self.collect_widen_sites
             .insert(SpanKey::from_span(&expr.span), (after, body));
+        self.collect_receiver_texts.insert(
+            SpanKey::from_span(&expr.span),
+            crate::formatter::render_expr(object),
+        );
     }
 
     /// The integer a `collect` refused for items of `want` would gather:
@@ -1801,12 +1815,36 @@ impl<'a> super::TypeChecker<'a> {
         let (Type::Tuple(slots), Type::Tuple(actuals)) = (expected, actual) else {
             return false;
         };
-        let Some(elems) = self
-            .tuple_literal_elems
-            .get(&SpanKey::from_span(&span))
-            .cloned()
-        else {
-            return false;
+        // The tuple itself, or a binding made of one (`let key = (start,
+        // name);` and then `m.get(key)`): the remedy is the literal's.
+        let mut through: Option<String> = None;
+        let elems = match self.tuple_literal_elems.get(&SpanKey::from_span(&span)) {
+            Some(elems) => elems.clone(),
+            None => {
+                let Some(id) = self
+                    .resolve_result
+                    .resolutions
+                    .get(&SpanKey::from_span(&span))
+                else {
+                    return false;
+                };
+                let sym = self.resolve_result.symbol_table.get_symbol(*id);
+                if sym.span.offset == span.offset {
+                    return false;
+                }
+                let Some(literal) = self.tuple_let_sites.get(&sym.span.offset) else {
+                    return false;
+                };
+                let Some(elems) = self
+                    .tuple_literal_elems
+                    .get(&SpanKey::from_span(literal))
+                    .cloned()
+                else {
+                    return false;
+                };
+                through = Some(sym.name.clone());
+                elems
+            }
         };
         if elems.len() != slots.len() || elems.len() != actuals.len() {
             return false;
@@ -1847,6 +1885,10 @@ impl<'a> super::TypeChecker<'a> {
             format!("{last} {verb}")
         } else {
             format!("{} and {last} {verb}", named.join(", "))
+        };
+        let names = match &through {
+            Some(local) => format!("`{local}` is a tuple whose {names}"),
+            None => names,
         };
         let params: Vec<Option<(String, Span)>> = lent
             .iter()
@@ -9304,7 +9346,9 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         // Rust's `String: FromIterator<String>`: a `String`
                         // gathers `char`s, so text pieces are joined
-                        // (B-2026-11-10-34).
+                        // (B-2026-11-10-34). `String` pieces are joined in
+                        // place, `Vec[String].from_iter(..).join("")`, which
+                        // is a `String` as the `collect` was (B-2026-11-21-63).
                         if trait_name == "FromIterator"
                             && type_display(&concrete) == "String"
                             && matches!(render(&want).as_str(), "String" | "Str" | "StringSlice")
@@ -9313,6 +9357,27 @@ impl<'a> super::TypeChecker<'a> {
                                 "; collect the pieces into a `Vec[String]` and join them, \
                                  `pieces.join(\"\")`",
                             );
+                            let receiver = (render(&want) == "String")
+                                .then(|| {
+                                    self.collect_receiver_texts
+                                        .get(&SpanKey::from_span(&d.span))
+                                        .cloned()
+                                })
+                                .flatten();
+                            if let Some(receiver) = receiver {
+                                self.type_error_with_fix_it(
+                                    message,
+                                    d.span,
+                                    TypeErrorKind::TypeMismatch,
+                                    FixIt {
+                                        span: d.span,
+                                        replacement: format!(
+                                            "Vec[String].from_iter({receiver}).join(\"\")"
+                                        ),
+                                    },
+                                );
+                                continue;
+                            }
                         }
                         // B-2026-11-18-70: slices (`chunks` / `windows`)
                         // collected where the target holds `Vec`s are
@@ -14399,6 +14464,16 @@ impl<'a> super::TypeChecker<'a> {
                 self.literal_tuple_pushes.remove(name);
             }
         }
+        // `let pair = (1, -1)`: each position's unsuffixed literal, which
+        // `pair.0` and `let (s, t) = pair` read back (B-2026-11-18-92).
+        match Self::literal_tuple_row(value) {
+            Some(slots) => {
+                self.literal_tuple_lets.insert(name.to_string(), slots);
+            }
+            None => {
+                self.literal_tuple_lets.remove(name);
+            }
+        }
         // `let moves = [(p + a, false)]`, `p` reading a literal: each
         // position's first element that reads one (kata 1654).
         let sources = match &value.kind {
@@ -14465,6 +14540,47 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         slots.iter().any(Option::is_some).then_some(slots)
+    }
+
+    /// For a tuple literal, each position's unsuffixed integer literal
+    /// (negated or not), as [`Self::literal_tuple_slots`] gives for an array
+    /// of them (B-2026-11-18-92).
+    fn literal_tuple_row(value: &Expr) -> Option<Vec<Option<Expr>>> {
+        let ExprKind::Tuple(xs) = &value.kind else {
+            return None;
+        };
+        let slots: Vec<Option<Expr>> = xs
+            .iter()
+            .map(|x| {
+                let bare = matches!(x.kind, ExprKind::Integer(_, None))
+                    || matches!(&x.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
+                        if matches!(operand.kind, ExprKind::Integer(_, None)));
+                bare.then(|| x.clone())
+            })
+            .collect();
+        slots.iter().any(Option::is_some).then_some(slots)
+    }
+
+    /// The literal slots of the whole tuple `e` reads, with the binding
+    /// they were written under and whether `e` indexes a collection of
+    /// tuples: `pair` of `let pair = (1, -1)`, or `dirs[d]` of `let dirs =
+    /// [(0, 1), (1, 0)]` or of a collection tuples were pushed into
+    /// (B-2026-11-18-92).
+    fn literal_tuple_read_slots<'s>(
+        &'s self,
+        e: &'s Expr,
+    ) -> Option<(&'s str, &'s Vec<Option<Expr>>, bool)> {
+        match &e.kind {
+            ExprKind::Identifier(n) => self
+                .literal_tuple_lets
+                .get(n.as_str())
+                .map(|s| (n.as_str(), s, false)),
+            ExprKind::Index { index, .. } if !matches!(index.kind, ExprKind::Range { .. }) => {
+                let root = Self::collection_root_name(e)?;
+                self.literal_tuple_pushes.get(root).map(|s| (root, s, true))
+            }
+            _ => None,
+        }
     }
 
     /// The value a fill repeats: `v` of `[v; n]` or `Vec.filled(n, v)`.
@@ -15226,6 +15342,23 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 _ => None,
             };
+            // `let (s, t) = signs[k]` or `let (s, t) = pair`: each name
+            // reads its position's literal, as `for (s, t) in signs` does
+            // (B-2026-11-18-92).
+            let entry = entry.or_else(|| {
+                let (_, slots, _) = self.literal_tuple_read_slots(value)?;
+                if slots.len() != pats.len() {
+                    return None;
+                }
+                let lit = slots[i].as_ref()?;
+                let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?;
+                let at = Span {
+                    offset: lit.span.offset + lit.span.length,
+                    length: 0,
+                    ..lit.span
+                };
+                self.literal_entry(lit, ty, at, true, false, name)
+            });
             match entry {
                 Some(e) => {
                     self.literal_lets.insert(name.clone(), e);
@@ -15299,6 +15432,7 @@ impl<'a> super::TypeChecker<'a> {
             low: None,
             root: root.to_string(),
             depth: usize::from(element),
+            slot: None,
         })
     }
 
@@ -15332,7 +15466,13 @@ impl<'a> super::TypeChecker<'a> {
     fn literal_operator_copy(&self, value: &Expr, ty: &Type) -> Option<super::LiteralLet> {
         if !matches!(
             value.kind,
-            ExprKind::Binary { .. } | ExprKind::Unary { .. } | ExprKind::MethodCall { .. }
+            ExprKind::Binary { .. }
+                | ExprKind::Unary { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::If {
+                    else_branch: Some(_),
+                    ..
+                }
         ) {
             return None;
         }
@@ -15378,12 +15518,41 @@ impl<'a> super::TypeChecker<'a> {
                     leaves(object, out);
                     leaves(&args[0].value, out);
                 }
+                // `if d == 6 { num + 3 * place } else { num - 3 * place }`:
+                // the value is one of its two tails, so it is read through
+                // to both, when each branch is a bare tail (kata 1323's
+                // brute arm, B-2026-11-21-64). A branch with statements is a leaf,
+                // whose `i64` type then refuses the copy.
+                ExprKind::If {
+                    then_block,
+                    else_branch: Some(other),
+                    ..
+                } => {
+                    fn tail(b: &Block) -> Option<&Expr> {
+                        b.stmts
+                            .is_empty()
+                            .then_some(b.final_expr.as_deref())
+                            .flatten()
+                    }
+                    let other_tail = match &other.kind {
+                        ExprKind::Block(b) => tail(b),
+                        ExprKind::If { .. } => Some(other.as_ref()),
+                        _ => None,
+                    };
+                    match (tail(then_block), other_tail) {
+                        (Some(a), Some(b)) => {
+                            leaves(a, out);
+                            leaves(b, out);
+                        }
+                        _ => out.push(e),
+                    }
+                }
                 _ => out.push(e),
             }
         }
         let mut found = Vec::new();
         leaves(value, &mut found);
-        let mut entry: Option<&super::LiteralLet> = None;
+        let mut entry: Option<super::LiteralLet> = None;
         for leaf in found {
             match &leaf.kind {
                 ExprKind::Integer(_, None) => {}
@@ -15395,7 +15564,20 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     let e = self.literal_lets.get(n.as_str())?;
                     if entry.is_none() {
-                        entry = Some(e);
+                        entry = Some(e.clone());
+                    }
+                }
+                // `let nr = r + dirs[d].0` with `dirs` a list of literal
+                // pairs: `nr` is an `i64` only because that position's
+                // first literal took the default, so a narrowing refused
+                // at `nr` is fixed by that literal's suffix, as one
+                // refused at `r + dirs[d].0` in place is (kata 2326's Rust
+                // template, B-2026-11-18-92).
+                ExprKind::TupleIndex { object, index }
+                    if self.literal_tuple_slot_entry(object, *index).is_some() =>
+                {
+                    if entry.is_none() {
+                        entry = self.literal_tuple_slot_entry(object, *index);
                     }
                 }
                 _ => {
@@ -15423,7 +15605,26 @@ impl<'a> super::TypeChecker<'a> {
             (None, None) => true,
             (None, Some(_)) => false,
         };
-        same.then(|| entry.clone())
+        same.then_some(entry)
+    }
+
+    /// The literal a tuple position read reads, `dirs[d].0` of `let dirs =
+    /// [(0, 1), (1, 0)]` or `pair.0` of `let pair = (1, -1)`, as an entry
+    /// whose fix is that literal's suffix (B-2026-11-18-92).
+    fn literal_tuple_slot_entry(&self, object: &Expr, index: u64) -> Option<super::LiteralLet> {
+        let (name, slots, indexed) = self.literal_tuple_read_slots(object)?;
+        let lit = slots.get(usize::try_from(index).ok()?)?.as_ref()?;
+        let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?;
+        let at = Span {
+            offset: lit.span.offset + lit.span.length,
+            length: 0,
+            ..lit.span
+        };
+        self.literal_entry(lit, ty, at, true, false, name)
+            .map(|e| super::LiteralLet {
+                slot: Some((usize::try_from(index).unwrap_or(usize::MAX), indexed)),
+                ..e
+            })
     }
 
     /// The fix for a fill's binding read whole at `use_span` where a
@@ -15722,19 +15923,27 @@ impl<'a> super::TypeChecker<'a> {
                         |v| format!("that literal `{v}{t}`"),
                     )
                 };
-                let whose = match (entry.element, several) {
-                    (true, true) => format!(
-                        "the elements of `{name}` are 'i64' because the literals it is written with"
+                let whose = match entry.slot {
+                    Some((pos, true)) => format!(
+                        "position {pos} of the tuples in `{name}` is an 'i64' because the first literal written there"
                     ),
-                    (true, false) => format!(
-                        "the elements of `{name}` are 'i64' because the literal it is filled with"
-                    ),
-                    (false, true) => {
-                        format!("`{name}` is an 'i64' because the literals of the array it walks")
+                    Some((pos, false)) => {
+                        format!("`{name}.{pos}` is an 'i64' because the literal written there")
                     }
-                    (false, false) => {
-                        format!("`{name}` is an 'i64' because the literal it is bound to")
-                    }
+                    None => match (entry.element, several) {
+                        (true, true) => format!(
+                            "the elements of `{name}` are 'i64' because the literals it is written with"
+                        ),
+                        (true, false) => format!(
+                            "the elements of `{name}` are 'i64' because the literal it is filled with"
+                        ),
+                        (false, true) => format!(
+                            "`{name}` is an 'i64' because the literals of the array it walks"
+                        ),
+                        (false, false) => {
+                            format!("`{name}` is an 'i64' because the literal it is bound to")
+                        }
+                    },
                 };
                 (t.clone(), format!("{whose} took the default (design.md §8 Literals); write {lit}"))
             } else {
@@ -15749,6 +15958,81 @@ impl<'a> super::TypeChecker<'a> {
                     FixIt {
                         span: entry.at,
                         replacement,
+                    },
+                    why,
+                )
+            })
+        })
+        .or_else(|| self.literal_tuple_read_annotation(expr, source, target))
+    }
+
+    /// [`Self::literal_let_annotation`] for a tuple position read in place:
+    /// `dirs[d].0` of `let dirs = [(0, 1), (1, 0)]`, or `pair.0` of `let
+    /// pair = (1, -1)`. The tuple's literals are settled to `i64` when it is
+    /// built, so the fix is the suffix on the position's first literal,
+    /// which types that position (B-2026-11-18-92).
+    fn literal_tuple_read_annotation(
+        &self,
+        expr: &Expr,
+        source: &Type,
+        target: &Type,
+    ) -> Option<(String, FixIt, String)> {
+        // Each tuple position the value reads, through the operators and
+        // numeric methods that keep its type.
+        fn reads<'e>(e: &'e Expr, out: &mut Vec<(&'e Expr, usize)>) {
+            match &e.kind {
+                ExprKind::TupleIndex { object, index } => {
+                    out.push((object, usize::try_from(*index).unwrap_or(usize::MAX)))
+                }
+                ExprKind::Unary { operand, .. } => reads(operand, out),
+                ExprKind::Binary { left, right, .. } => {
+                    reads(left, out);
+                    reads(right, out);
+                }
+                ExprKind::Call { callee, args } if matches!(&callee.kind, ExprKind::Identifier(f) if f == "min" || f == "max") => {
+                    for a in args {
+                        reads(&a.value, out);
+                    }
+                }
+                ExprKind::MethodCall { object, .. } => reads(object, out),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        reads(expr, &mut found);
+        found.into_iter().find_map(|(object, pos)| {
+            let (name, slots, indexed) = self.literal_tuple_read_slots(object)?;
+            let lit = slots.get(pos)?.as_ref()?;
+            let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?;
+            let at = Span {
+                offset: lit.span.offset + lit.span.length,
+                length: 0,
+                ..lit.span
+            };
+            let entry = self.literal_entry(lit, ty, at, true, false, name)?;
+            if entry.var.is_some_and(|v| self.resolved_now(&Type::TypeVar(v)) != *source) {
+                return None;
+            }
+            let fits = match (entry.value, Self::int_literal_range(target)) {
+                (Some(v), Some((lo, hi))) => v >= lo && v <= hi,
+                _ => true,
+            };
+            let t = type_display(target);
+            let lit = entry.value.map_or_else(
+                || format!("that literal with the suffix `{t}`"),
+                |v| format!("that literal `{v}{t}`"),
+            );
+            let why = if indexed {
+                format!("position {pos} of the tuples in `{name}` is an 'i64' because the first literal written there took the default (design.md §8 Literals); write {lit}, which types that position of every tuple")
+            } else {
+                format!("`{name}.{pos}` is an 'i64' because the literal written there took the default (design.md §8 Literals); write {lit}")
+            };
+            fits.then(|| {
+                (
+                    name.to_string(),
+                    FixIt {
+                        span: at,
+                        replacement: t,
                     },
                     why,
                 )
@@ -18432,7 +18716,19 @@ impl<'a> super::TypeChecker<'a> {
                         // B-2026-10-15-111); `m[k] = v` may insert, which stores
                         // the key, so it keeps the owned `K`.
                         let view_lookup = !index_is_lhs && self.is_key_view(&k_ty, &key_ty);
-                        if key_ty != Type::Error && !view_lookup {
+                        // A plain store (`m[k] = v`) keeps the key, so a
+                        // borrowed one that cannot leave its place (`names[name]
+                        // = at` with `name` a bare parameter) is refused as
+                        // any give-away is, with its `own` or `.clone()`
+                        // (kata 1396); MIR's §3.7 check caught it, with no fix.
+                        let stores_key = self.index_set_target
+                            == Some(SpanKey::from_span(&expr.span))
+                            && matches!(idx_ty, Type::Ref(_) | Type::MutRef(_))
+                            && key_ty == k_ty
+                            && self.type_cannot_leave_a_borrowed_place(&k_ty);
+                        if stores_key {
+                            self.check_assignable(&k_ty, &idx_ty, index.span);
+                        } else if key_ty != Type::Error && !view_lookup {
                             self.check_assignable(&k_ty, &key_ty, index.span);
                         }
                         // `V` for BOTH a read (`x = m[k]`, panics if missing)

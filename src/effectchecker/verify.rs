@@ -942,6 +942,112 @@ impl<'a> super::EffectChecker<'a> {
         self.errors.extend(new_errors);
     }
 
+    /// design.md § `impl Trait`: a return-position `impl Trait` that
+    /// declares a ceiling (`-> (impl Iterator[Item = i64] with
+    /// reads(Clock))`) holds the hidden type's methods to it. What those
+    /// methods run beyond the library's own adaptors is the closures the
+    /// returned value carries, so each closure written in the function's
+    /// tail or in a `return` value must stay within the ceiling, as an impl
+    /// method stays within its trait method's (B-2026-11-20-120: a `map`
+    /// closure that printed was accepted under `with reads(Clock)`). The
+    /// ceilings were recorded by lowering, which erases the clause along
+    /// with the existential. `allocates(Heap)` and `panics` need no room in
+    /// a ceiling, as in a signature.
+    pub(crate) fn verify_impl_trait_return_ceilings(&mut self) {
+        if self.program.impl_trait_ceilings.is_empty() {
+            return;
+        }
+        let mut fns: Vec<(String, Block, EffectList)> = Vec::new();
+        for item in &self.program.items {
+            let mut note = |f: &Function, name: String| {
+                if let Some(list) = self.program.impl_trait_ceilings.get(&f.span.offset) {
+                    fns.push((name, f.body.clone(), list.clone()));
+                }
+            };
+            match item {
+                Item::Function(f) => note(f, f.name.clone()),
+                Item::ImplBlock(imp) => {
+                    let owner = match &imp.target_type.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    for it in &imp.items {
+                        if let ImplItem::Method(m) = it {
+                            note(m, format!("{owner}.{}", m.name));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let empty_bounds: rustc_hash::FxHashMap<String, Vec<TraitBound>> =
+            rustc_hash::FxHashMap::default();
+        let mut new_errors: Vec<EffectError> = Vec::new();
+        for (name, body, list) in &fns {
+            let DeclaredEffects::Explicit(set) = self.parse_effect_list(&Some(list.clone())) else {
+                continue;
+            };
+            let ceiling = set.effect_set();
+            let mut shown: Vec<String> = ceiling
+                .iter()
+                .filter(|e| !self.is_transparent_verb(&e.verb))
+                .map(|e| e.to_string())
+                .collect();
+            shown.sort();
+            let shown = if shown.is_empty() {
+                "pure (no effects)".to_string()
+            } else {
+                format!("[{}]", shown.join(", "))
+            };
+            let mut returned: Vec<&Expr> = body.final_expr.iter().map(|e| e.as_ref()).collect();
+            crate::provider_escape::walk_block_exprs(body, &mut |e| {
+                if let ExprKind::Return(Some(v)) = &e.kind {
+                    returned.push(v);
+                }
+            });
+            let mut closures: Vec<&Expr> = Vec::new();
+            for r in returned {
+                crate::provider_escape::walk_expr_exprs(r, &mut |e| {
+                    if let ExprKind::Closure { body, .. } = &e.kind {
+                        closures.push(body);
+                    }
+                });
+            }
+            let mut seen: std::collections::HashSet<(usize, String)> =
+                std::collections::HashSet::new();
+            for closure in closures {
+                let mut calls = Vec::new();
+                self.collect_calls_in_expr(closure, &mut calls, &empty_bounds);
+                for &(callee, at) in &calls {
+                    for effect in self.callee_effect_sets(callee).iter() {
+                        if self.is_transparent_verb(&effect.verb)
+                            || self.is_default_permitted_effect(effect)
+                            || declared_admits(&ceiling, effect)
+                            || !seen.insert((closure.span.offset, effect.to_string()))
+                        {
+                            continue;
+                        }
+                        new_errors.push(EffectError {
+                            message: format!(
+                                "the `impl Trait` that '{name}' returns has the ceiling {shown}, \
+                                 but a closure its value carries performs {effect} (via call \
+                                 to '{}'); the hidden type's methods run that closure, so widen \
+                                 the ceiling or take the effect out of the closure",
+                                self.interner.resolve(callee),
+                            ),
+                            span: at,
+                            kind: EffectErrorKind::ImplExceedsTraitCeiling,
+                            subtype_trace: None,
+                            replacement: None,
+                            undeclared: None,
+                        });
+                    }
+                }
+            }
+        }
+        self.errors.extend(new_errors);
+    }
+
     /// B-2026-08-30-29 — enforce design.md § Drop and Destructors, "Drop bodies
     /// must not panic": an `impl Drop for T`'s `fn drop` must be inferred
     /// `panics`-free, and the impl is rejected at the DEFINITION SITE if it is

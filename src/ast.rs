@@ -1069,6 +1069,13 @@ pub struct Program {
     /// (`.filter(|v| v >= 0)`, `.max(0)`) and renames the two `_signed`
     /// ones, which `i64` does not have (kata 1219's Rust arm).
     pub unsigned_floor_names: rustc_hash::FxHashMap<usize, Span>,
+    /// The `with` ceiling of each return-position `impl Trait` that writes
+    /// one (`-> (impl Iterator[Item = i64] with reads(Clock))`), keyed by
+    /// the offset of the function's span. Recorded by lowering before it
+    /// puts the witness in the existential's place, which erases the
+    /// clause; the effect checker then holds what the returned value runs
+    /// to it (design.md § `impl Trait`, B-2026-11-20-120).
+    pub impl_trait_ceilings: rustc_hash::FxHashMap<usize, crate::ast::EffectList>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and

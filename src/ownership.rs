@@ -1712,7 +1712,7 @@ fn once_closure_of(body: &Block, name: &str, before: &Span) -> Option<SpanKey> {
 /// Puts back the operators lowering made calls of (`i64.add(a, b)` is
 /// `a + b` again) on a primitive, so a fix rendered from the lowered AST reads
 /// as the author wrote it.
-struct Resugar;
+pub(crate) struct Resugar;
 
 impl crate::span_visitor::MutVisitor for Resugar {
     fn span(&mut self, _: &mut Span) {}

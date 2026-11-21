@@ -3278,6 +3278,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_closure_tail_lets = std::mem::take(&mut self.closure_tail_lets);
         let saved_literal_tuple_pushes = std::mem::take(&mut self.literal_tuple_pushes);
         let saved_literal_tuple_sources = std::mem::take(&mut self.literal_tuple_sources);
+        let saved_literal_tuple_lets = std::mem::take(&mut self.literal_tuple_lets);
         let saved_read_only_slice_lets = std::mem::take(&mut self.read_only_slice_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_closure_lets = std::mem::take(&mut self.current_fn_closure_lets);
@@ -3399,6 +3400,7 @@ impl<'a> super::TypeChecker<'a> {
         self.closure_tail_lets = saved_closure_tail_lets;
         self.literal_tuple_pushes = saved_literal_tuple_pushes;
         self.literal_tuple_sources = saved_literal_tuple_sources;
+        self.literal_tuple_lets = saved_literal_tuple_lets;
         self.read_only_slice_lets = saved_read_only_slice_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
@@ -13084,6 +13086,13 @@ impl<'a> super::TypeChecker<'a> {
                         pattern.span.offset + pattern.span.length,
                     );
                 }
+                if ty.is_none()
+                    && !*is_mut
+                    && matches!(value.kind, ExprKind::Tuple(_))
+                    && matches!(pattern.kind, PatternKind::Binding(_))
+                {
+                    self.tuple_let_sites.insert(pattern.span.offset, value.span);
+                }
                 // `let (end, tip) = (r[1] as usize, r[2] as i64);`: each
                 // cast the tuple binds by name is one such `let` (kata 2008).
                 if let (None, ExprKind::Tuple(parts), PatternKind::Tuple(names)) =
@@ -13261,6 +13270,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.literal_tuple_pushes.remove(name.as_str());
                         self.literal_tuple_sources.remove(name.as_str());
                         self.closure_tail_lets.remove(name.as_str());
+                        self.literal_tuple_lets.remove(name.as_str());
                     }
                 } else if let PatternKind::Tuple(pats) = &pattern.kind {
                     if ty.is_none() {

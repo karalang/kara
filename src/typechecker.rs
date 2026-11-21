@@ -1129,6 +1129,12 @@ pub(crate) struct LiteralLet {
     /// own literal and for a binding holding one element read out of a fill
     /// (`let k = g[i][j]`, kata 1139), which keeps `element` for the advice.
     pub(crate) depth: usize,
+    /// For a tuple position's literal read through a collection or a
+    /// tuple binding (`let nr = r + dirs[d].0`): the position, and whether
+    /// the read indexes a collection of tuples, so the advice names the
+    /// position rather than calling `dirs` itself an `i64`
+    /// (B-2026-11-18-92).
+    pub(crate) slot: Option<(usize, bool)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3274,6 +3280,9 @@ pub struct TypeChecker<'a> {
     /// the end of its receiver, and the body of the receiver's `map`
     /// closure when that is one expression (B-2026-11-14-12).
     pub(super) collect_widen_sites: FxHashMap<SpanKey, (Span, Option<(Span, String)>)>,
+    /// Each `collect()` call's receiver, rendered, for the fix that joins
+    /// text pieces a `String` does not gather (B-2026-11-21-63).
+    pub(super) collect_receiver_texts: FxHashMap<SpanKey, String>,
     /// The literal's type that makes a `collect`'s items the narrower
     /// integer its target holds, with why, by the call's span (kata 2055).
     pub(super) collect_literal_fixes: FxHashMap<SpanKey, (FixIt, String)>,
@@ -4022,6 +4031,10 @@ pub struct TypeChecker<'a> {
     pub(super) par_stmt_branches: FxHashMap<SpanKey, ParStmtBranches>,
     /// Each tuple literal's elements by its span (B-2026-11-09-96).
     pub(super) tuple_literal_elems: FxHashMap<SpanKey, Vec<TupleElem>>,
+    /// `let key = (start, name);` with no annotation: the binding's offset
+    /// and the tuple literal's span, so a later use of `key` refused for a
+    /// borrowed element is answered at the literal (kata 1396).
+    pub(super) tuple_let_sites: FxHashMap<usize, Span>,
     /// A `match`/`if let` over `v.last_mut()` or `v.first_mut()`, keyed by
     /// the receiver's span: the whole expression's span and its rewrite
     /// through an index, which the refusal of the method carries
@@ -4639,6 +4652,11 @@ pub struct TypeChecker<'a> {
     /// tuple position's first element that reads one, by the binding's
     /// name, for `for (q, dir) in moves` to read back (kata 1654).
     pub(super) literal_tuple_sources: FxHashMap<String, Vec<Option<LiteralLet>>>,
+    /// `let pair = (1, -1)` with no annotation: each position's unsuffixed
+    /// integer literal, by the binding's name, for `pair.0` and `let (s, t)
+    /// = pair` to read back as `dirs[d].0` reads [`Self::literal_tuple_pushes`]
+    /// (B-2026-11-18-92).
+    pub(super) literal_tuple_lets: FxHashMap<String, Vec<Option<Expr>>>,
     /// `let x = <view>` with no annotation whose value is a read-only
     /// `Slice[T]` written as a postfix expression other than a range
     /// subscript (`s.bytes()`), by name: the initializer's span, where
@@ -4882,6 +4900,7 @@ impl<'a> TypeChecker<'a> {
             collect_strings_fixes: FxHashMap::default(),
             collect_receiver_ends: FxHashMap::default(),
             collect_widen_sites: FxHashMap::default(),
+            collect_receiver_texts: FxHashMap::default(),
             collect_literal_fixes: FxHashMap::default(),
             into_iter_sites: FxHashMap::default(),
             into_iter_hinted: false,
@@ -5052,6 +5071,7 @@ impl<'a> TypeChecker<'a> {
             range_source_uses: FxHashMap::default(),
             par_stmt_branches: FxHashMap::default(),
             tuple_literal_elems: FxHashMap::default(),
+            tuple_let_sites: FxHashMap::default(),
             end_mut_rewrites: FxHashMap::default(),
             end_mut_let_rewrites: FxHashMap::default(),
             cursor_walk_rewrites: FxHashMap::default(),
@@ -5185,6 +5205,7 @@ impl<'a> TypeChecker<'a> {
             literal_pushes: FxHashMap::default(),
             literal_tuple_pushes: FxHashMap::default(),
             literal_tuple_sources: FxHashMap::default(),
+            literal_tuple_lets: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),
             read_only_slice_let_uses: FxHashMap::default(),
             timeout_duration_args: FxHashMap::default(),
@@ -8195,6 +8216,16 @@ impl<'a> TypeChecker<'a> {
         // `best: i64` and `a: i32` reads `a` as an `i64` (B-2026-11-17-90).
         if types::numeric_widens_into(&self.resolved_now(arg_ty), receiver) {
             return false;
+        }
+        // A `ref` to a narrower scalar reads as its value and then widens,
+        // as it does at a function's argument (`take_i64(x)` with
+        // `x: ref i32`) and at an operator (`mx + x`): `mx.max(f)` over
+        // `for (i, f) in flips.iter().enumerate()`, `mx` an `i64` whose
+        // literal kept the default (kata 1375's Rust arm, B-2026-11-21-66).
+        if let Type::Ref(inner) | Type::MutRef(inner) = self.resolved_now(arg_ty) {
+            if Self::scalar_reads_as_value(&inner) && types::numeric_widens_into(&inner, receiver) {
+                return false;
+            }
         }
         if self.library_methods_from_source {
             if let Type::Ref(inner) | Type::MutRef(inner) = arg_ty {

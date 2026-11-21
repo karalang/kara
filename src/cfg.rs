@@ -1076,8 +1076,15 @@ impl<'a> CfgBuilder<'a> {
 
     /// Records `p[k] = v` for [`Cfg::index_assigns`].
     fn record_index_assign(&mut self, target: &Expr, index: &Expr, value: &Expr) {
-        let place = crate::formatter::render_expr(target);
-        let v = crate::formatter::render_expr(value);
+        // From operators lowering made calls of back to operators, so
+        // `t - at` is not offered as `i32.sub(t, at)` (kata 1396).
+        let render = |e: &Expr| {
+            let mut e = e.clone();
+            crate::span_visitor::walk_expr_mut_with(&mut e, &mut crate::ownership::Resugar);
+            crate::formatter::render_expr(&e)
+        };
+        let place = render(target);
+        let v = render(value);
         let name = (0..)
             .map(|i| {
                 if i == 0 {

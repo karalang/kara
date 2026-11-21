@@ -17,6 +17,8 @@
 //!
 //! - `xs.binary_search(v).unwrap_or_else(|i| f(i))` is
 //!   `{ let i = xs.partition_point(|y| y <= v); if i > 0 and xs[i - 1] == v { i - 1 } else { f(i) } }`.
+//! - `xs.binary_search_by_key(k, f).unwrap()` and `.expect(m)` are the same
+//!   with `panic(..)` in place of `f(i)`.
 //! - `match xs.binary_search(v) { Ok(i) => a, Err(j) => b }` and
 //!   `if let Ok(i)`/`Err(i) = xs.binary_search(v) { .. } else { .. }` are
 //!   `{ let j = xs.partition_point(|y| y <= v); if j > 0 and xs[j - 1] == v { let i = j - 1; a } else { b } }`.
@@ -420,6 +422,25 @@ fn rewrite_unwrap_or_else(xs: &Expr, by: By, closure: &Expr) -> Option<Result<St
     )))
 }
 
+/// The rewrite of `xs.binary_search_by_key(k, f).unwrap()` or
+/// `.expect(m)` (kata 1357's search arm, B-2026-11-21-61): `Ok`'s index,
+/// the last equal element, and otherwise the panic Rust's `unwrap` or
+/// `expect` would raise. A plain `binary_search(v).unwrap()` checks as it
+/// stands, since Kāra's `Option` has `unwrap`, and never reaches here.
+fn rewrite_unwrap(xs: &Expr, by: By, message: Option<&Expr>) -> Option<Result<String, String>> {
+    if let Some(why) = not_mechanical(xs, by) {
+        return Some(Err(why.to_string()));
+    }
+    let (find, holds) = search(xs, by, "at", true);
+    let message = message.map_or_else(
+        || "\"the binary search found no match\"".to_string(),
+        crate::formatter::render_expr,
+    );
+    Some(Ok(format!(
+        "{{ let at = {find}; if {holds} {{ at - 1 }} else {{ panic({message}) }} }}"
+    )))
+}
+
 const SHAPE: &str = "Kāra's `binary_search` returns `Option[i64]`, the index of an element \
                      equal to the value or `None`, not Rust's `Result` of an index or the \
                      insertion point; the insertion point is `partition_point(|y| y < v)`, \
@@ -534,6 +555,8 @@ impl TypeChecker<'_> {
         };
         let rewrite = match (method, args) {
             ("unwrap_or_else", [f]) => rewrite_unwrap_or_else(xs, by, &f.value),
+            ("unwrap", []) => rewrite_unwrap(xs, by, None),
+            ("expect", [m]) => rewrite_unwrap(xs, by, Some(&m.value)),
             (
                 "unwrap_err" | "expect_err" | "map_err" | "err" | "ok" | "is_ok_and" | "is_err_and",
                 _,

@@ -1511,13 +1511,19 @@ impl Parser {
             // Span the full operator expression (lhs start → rhs end) so the
             // Binary node has a unique span distinct from its LHS. Read both
             // child spans by `ref` before moving the children into the node.
+            // A parenthesized rhs keeps no node of its own, so its span stops
+            // inside the `)`; the expression's runs to the last token the rhs
+            // consumed, the `)` included, as src/parser/exprs.rs's does.
             let lspan = expr_span(lhs);
             let rspan = expr_span(rhs);
+            let consumed = self.span_from(lspan);
+            let rhs_end = rspan.offset + rspan.length;
+            let consumed_end = consumed.offset + consumed.length;
             let sp = Span {
                 line: lspan.line,
                 column: lspan.column,
                 offset: lspan.offset,
-                length: (rspan.offset + rspan.length) - lspan.offset,
+                length: rhs_end.max(consumed_end) - lspan.offset,
             };
             lhs = Expr.Binary(BinaryExpr {
                 op: op,
