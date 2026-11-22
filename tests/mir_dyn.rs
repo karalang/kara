@@ -367,7 +367,7 @@ fn g(x: mut ref dyn Counter) { x.bump(); }
 "#;
     refused(
         &format!("{counter}fn main() {{ let mut s = T {{ n: 1 }}; g(s); }}\n"),
-        "call with fresh binding requires a `mut` marker",
+        "carries a `mut` marker (design.md § Call-site `mut` markers). Write `mut s`.",
     );
     runs(
         &format!("{counter}fn main() {{ let mut s = T {{ n: 1 }}; g(mut s); println(f\"{{s.get()}}\"); }}\n"),

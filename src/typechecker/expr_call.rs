@@ -3898,11 +3898,14 @@ impl<'a> super::TypeChecker<'a> {
                     type_display(param_ty)
                 )
             } else {
+                // Names the argument as written, as design.md's own example
+                // message does, rather than a placeholder.
                 format!(
-                    "parameter expects `{}`; call with fresh binding requires \
-                     a `mut` marker at this argument to permit the mutation. \
-                     Write `mut <expr>`.",
-                    type_display(param_ty)
+                    "parameter expects `{}`; an argument to a mutating parameter \
+                     carries a `mut` marker (design.md § Call-site `mut` markers). \
+                     Write `mut {}`.",
+                    type_display(param_ty),
+                    crate::formatter::render_expr_one_line(&arg.value)
                 )
             };
             // B-2026-08-17-30 — this diagnostic names its own repair in

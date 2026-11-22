@@ -174,6 +174,21 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             })
             .collect();
+        // An early alias's arguments may name a trait, `type Shapes =
+        // Vec[dyn Shape]`, so the traits are registered before it too; the
+        // pass below registers them again once those aliases exist.
+        if items
+            .iter()
+            .any(|it| matches!(it, Item::TypeAlias(t) if early.contains(t.name.as_str())))
+        {
+            for item in items {
+                match item {
+                    Item::TraitDef(t) => self.env_add_trait(t),
+                    Item::MarkerTrait(t) => self.env_add_marker_trait(t),
+                    _ => {}
+                }
+            }
+        }
         for item in items {
             if let Item::TypeAlias(t) = item {
                 if early.contains(t.name.as_str()) {
