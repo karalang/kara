@@ -2549,6 +2549,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   field as moved out (E0515, E_INDEX_MOVE_NON_COPY) for `v.push(words[0])` and
   every other such store. Their fix appended `.clone()`, which stored a
   reference to a temporary (B-2026-11-22-49).
+- `karac fix` now applies the edit these parse errors' help names, where it
+  had only the prose: `with _` is deleted (E0005); `#[track_caller(..)]`,
+  `#[gpu(..)]` and `#[cold(..)]` lose their arguments; `#[inline = "never"]`
+  becomes `#[inline(never)]`; `#[no_effect = "panics"]` becomes
+  `#[no_effect(panics)]`; `#[profile = "embedded"]` and
+  `#[profile("embedded")]` become `#[profile(embedded)]`; an attribute on an
+  associated type is deleted; a `\0`, `\x00` or `\u{0}` escape in a `c"..."`
+  literal is removed; and Rust's `mut b: T` on a required trait method or a
+  foreign function loses the `mut`. A local or parameter named by a keyword
+  that starts an expression (`let match = 3; println(match);`) is escaped at
+  each use as well as where it is bound, so the fixed program checks; the uses
+  used to read as the start of a `match` and report the `)` after it
+  (B-2026-11-21-73).
 - An `https://` fetch refused for its certificate says why in words, not by a
   Rust type: `it does not chain to a trusted root (...)` for a self-signed
   certificate, an unknown root or a missing intermediate (was `UnknownIssuer`),

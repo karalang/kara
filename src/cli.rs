@@ -1560,7 +1560,17 @@ impl Pipeline {
         // B-2026-10-19-50: Amendment 6 removes `with _`; what it said is now
         // what an unannotated function-typed parameter means (core §12).
         if let Some(src) = &self.source {
-            for span in with_underscore_spans(src) {
+            for (span, from) in with_underscore_spans(src) {
+                // The fix deletes the annotation and the space before it
+                // (B-2026-11-21-73).
+                self.parsed.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&span),
+                    crate::resolver::TextEdit {
+                        offset: from,
+                        length: span.offset + span.length - from,
+                        replacement: String::new(),
+                    },
+                );
                 self.parsed.errors.push(crate::parser::ParseError {
                     message: "the `with _` annotation is removed (core semantics §12): a \
                               function's effects are what its body does, and a function-typed \
@@ -4256,19 +4266,28 @@ fn uses_serde(src: &str) -> bool {
 
 /// The span at source `line:column` (both from 1) of `src`, over the name or
 /// path that starts there (`self.index`), else one character.
-/// Where `src` writes `with _`, each span covering both tokens.
-fn with_underscore_spans(src: &str) -> Vec<crate::token::Span> {
+/// Where `src` writes `with _`, each span covering both tokens, with the
+/// offset the annotation's deletion starts at: the end of the token before
+/// `with`, so `fn f() with _ {` becomes `fn f() {`.
+fn with_underscore_spans(src: &str) -> Vec<(crate::token::Span, usize)> {
     use crate::token::Token;
     let tokens = crate::tokenize(src);
-    tokens
-        .windows(2)
-        .filter(|w| {
-            matches!(&w[0].token, Token::Identifier { name, raw: false } if name == "with")
-                && matches!(w[1].token, Token::Underscore)
+    (0..tokens.len().saturating_sub(1))
+        .filter(|&i| {
+            matches!(&tokens[i].token, Token::Identifier { name, raw: false } if name == "with")
+                && matches!(tokens[i + 1].token, Token::Underscore)
         })
-        .map(|w| crate::token::Span {
-            length: w[1].span.offset + w[1].span.length - w[0].span.offset,
-            ..w[0].span
+        .map(|i| {
+            let (w, u) = (&tokens[i], &tokens[i + 1]);
+            let span = crate::token::Span {
+                length: u.span.offset + u.span.length - w.span.offset,
+                ..w.span
+            };
+            let from = match i.checked_sub(1) {
+                Some(p) => tokens[p].span.offset + tokens[p].span.length,
+                None => w.span.offset,
+            };
+            (span, from)
         })
         .collect()
 }

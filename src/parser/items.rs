@@ -924,6 +924,27 @@ impl super::Parser {
     /// value — the attribute is bare. Diagnostic is anchored at the
     /// attribute's own span so the user can navigate directly to the
     /// malformed `#[...]`.
+    /// The fix for an attribute written with arguments its form refuses:
+    /// rewrite the whole `#[...]` as `#[{written}]`, keyed by the attribute's
+    /// span, which the diagnostic is anchored at (B-2026-11-21-73).
+    fn rewrite_attr_fix(&mut self, attr: &Attribute, written: &str) {
+        let at = self
+            .tokens
+            .partition_point(|t| t.span.offset < attr.span.offset);
+        let inner = self
+            .tokens
+            .get(at + 1)
+            .is_some_and(|t| matches!(t.token, Token::Bang));
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&attr.span),
+            crate::resolver::TextEdit {
+                offset: attr.span.offset,
+                length: attr.span.length,
+                replacement: format!("#{}[{written}]", if inner { "!" } else { "" }),
+            },
+        );
+    }
+
     pub(crate) fn scan_track_caller_attr(&mut self, attributes: &[Attribute]) -> bool {
         let mut present = false;
         for attr in attributes {
@@ -942,6 +963,7 @@ impl super::Parser {
                         .to_string(),
                     span: attr.span,
                 });
+                self.rewrite_attr_fix(attr, "track_caller");
             }
         }
         present
@@ -979,6 +1001,7 @@ impl super::Parser {
                         .to_string(),
                     span: attr.span,
                 });
+                self.rewrite_attr_fix(attr, "gpu");
             }
         }
         present
@@ -1087,8 +1110,14 @@ impl super::Parser {
         for attr in attributes {
             if attr.is_bare("inline") {
                 // Resolve the inline-axis variant from the arg shape.
-                let hint = if attr.string_value.is_some() {
+                let hint = if let Some(value) = &attr.string_value {
                     self.push_malformed_inline(&attr.span);
+                    // `#[inline = "always"]` names one of the forms; any other
+                    // string leaves the choice of three to the author.
+                    if matches!(value.as_str(), "always" | "never") {
+                        let written = format!("inline({value})");
+                        self.rewrite_attr_fix(attr, &written);
+                    }
                     continue;
                 } else if attr.args.is_empty() {
                     InlineHint::Default
@@ -1105,6 +1134,14 @@ impl super::Parser {
                             if segments.len() == 1 && segments[0] == "never" =>
                         {
                             InlineHint::Never
+                        }
+                        Some(ExprKind::StringLit(value))
+                            if matches!(value.as_str(), "always" | "never") =>
+                        {
+                            self.push_malformed_inline(&attr.span);
+                            let written = format!("inline({value})");
+                            self.rewrite_attr_fix(attr, &written);
+                            continue;
                         }
                         _ => {
                             self.push_malformed_inline(&attr.span);
@@ -1146,6 +1183,7 @@ impl super::Parser {
                             .to_string(),
                         span: attr.span,
                     });
+                    self.rewrite_attr_fix(attr, "cold");
                     continue;
                 }
                 is_cold = true;
@@ -1231,6 +1269,18 @@ impl super::Parser {
                         .to_string(),
                     span: attr.span,
                 });
+                // The string's text is what goes in the parentheses, when it
+                // reads as a verb list; the fixed attribute is then checked
+                // as any other (B-2026-11-21-73).
+                let verbs = attr.string_value.as_deref().unwrap_or("").trim();
+                if !verbs.is_empty()
+                    && verbs
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || "_(), :".contains(c))
+                {
+                    let written = format!("no_effect({verbs})");
+                    self.rewrite_attr_fix(attr, &written);
+                }
                 continue;
             }
             // The parenthesised list was checked as it was parsed, and an
@@ -1280,6 +1330,10 @@ impl super::Parser {
                         .to_string(),
                     span: attr.span,
                 });
+                if let Some(names) = attr.string_value.as_deref().and_then(bare_names) {
+                    let written = format!("profile({names})");
+                    self.rewrite_attr_fix(attr, &written);
+                }
                 continue;
             }
             if attr.args.is_empty() {
@@ -1330,7 +1384,7 @@ impl super::Parser {
                 let name = match &value_expr.kind {
                     ExprKind::Identifier(s) => s.clone(),
                     ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
-                    ExprKind::StringLit(_) => {
+                    ExprKind::StringLit(text) => {
                         self.errors.push(super::ParseError {
                             kind: crate::parser::ParseErrorKind::Syntax,
                             message: "error[E_PROFILE_STRING_VALUE]: \
@@ -1340,6 +1394,17 @@ impl super::Parser {
                                 .to_string(),
                             span: arg.span,
                         });
+                        // The literal's text is the name (B-2026-11-21-73).
+                        if let Some(names) = bare_names(text) {
+                            self.fix_edits.insert(
+                                crate::resolver::SpanKey::from_span(&arg.span),
+                                crate::resolver::TextEdit {
+                                    offset: arg.span.offset,
+                                    length: arg.span.length,
+                                    replacement: names,
+                                },
+                            );
+                        }
                         continue;
                     }
                     _ => {
@@ -3937,4 +4002,18 @@ enum ImportLeaf {
     Wildcard {
         path: Vec<(String, Span)>,
     },
+}
+
+/// `text` as a list of bare names, `a, b`, when every comma-separated piece
+/// is an identifier: the attribute arguments a string held (`#[profile =
+/// "embedded"]`), written as the names the attribute takes.
+pub(super) fn bare_names(text: &str) -> Option<String> {
+    let names: Vec<&str> = text.split(',').map(str::trim).collect();
+    let ident = |n: &&str| {
+        n.chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_')
+            && n.chars().all(|c| c.is_alphanumeric() || c == '_')
+    };
+    names.iter().all(ident).then(|| names.join(", "))
 }

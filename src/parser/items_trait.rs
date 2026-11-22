@@ -234,6 +234,17 @@ impl super::Parser {
                             .to_string(),
                         span: item_attributes[0].span,
                     });
+                    // The fix deletes the attributes, through to `type`
+                    // (B-2026-11-21-73).
+                    let from = item_attributes[0].span.offset;
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&item_attributes[0].span),
+                        crate::resolver::TextEdit {
+                            offset: from,
+                            length: self.current_span().offset - from,
+                            replacement: String::new(),
+                        },
+                    );
                 }
                 let item = self.parse_assoc_type_decl()?;
                 items.push(TraitItem::AssocType(Box::new(item)));
@@ -479,6 +490,11 @@ impl super::Parser {
             self.fix_pattern_muts(muts, block.span, true);
             Some(block)
         } else {
+            // A required method has no body to rebind in, so each `mut`'s
+            // own edit is the whole fix (B-2026-11-21-73).
+            for (key, edit, _) in muts {
+                self.fix_edits.insert(key, edit);
+            }
             self.expect(&Token::Semicolon)?;
             None
         };

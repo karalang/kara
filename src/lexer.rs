@@ -932,38 +932,27 @@ impl<'a> Lexer<'a> {
                         bytes.push(b'"');
                     }
                     b'0' => {
-                        return self.literal_error(
-                            "error[E_INTERIOR_NUL_IN_C_STRING]: \
-                             interior NUL bytes are not permitted in C-string literals; \
-                             remove the `\\0` escape"
-                                .to_string(),
-                        );
+                        let escape = self.current - 1;
+                        self.advance();
+                        return self.interior_nul(escape, "\\0");
                     }
                     b'x' => {
+                        let escape = self.current - 1;
                         self.advance(); // consume `x`
                         match self.parse_hex_byte_escape() {
                             Ok(0) => {
-                                return self.literal_error(
-                                    "error[E_INTERIOR_NUL_IN_C_STRING]: \
-                                     interior NUL bytes are not permitted in C-string literals; \
-                                     remove the `\\x00` escape"
-                                        .to_string(),
-                                );
+                                return self.interior_nul(escape, "\\x00");
                             }
                             Ok(b) => bytes.push(b),
                             Err(msg) => return self.literal_error(msg),
                         }
                     }
                     b'u' => {
+                        let escape = self.current - 1;
                         self.advance();
                         match self.parse_unicode_escape() {
                             Ok('\0') => {
-                                return self.literal_error(
-                                    "error[E_INTERIOR_NUL_IN_C_STRING]: \
-                                     interior NUL bytes are not permitted in C-string literals; \
-                                     remove the `\\u{0}` escape"
-                                        .to_string(),
-                                );
+                                return self.interior_nul(escape, "\\u{0}");
                             }
                             Ok(c) => {
                                 let mut buf = [0u8; 4];
@@ -1053,6 +1042,27 @@ impl<'a> Lexer<'a> {
     /// A string literal's error, found at an escape inside it: the rest of
     /// the literal, through its closing quote, goes with it, so lexing goes
     /// on after the literal rather than from inside it (B-2026-10-24-27).
+    /// `E_INTERIOR_NUL_IN_C_STRING` for the NUL escape that starts at
+    /// `escape` and ends at the current position, written `shown`. The fix
+    /// is the literal without that escape (B-2026-11-21-73).
+    fn interior_nul(&mut self, escape: usize, shown: &str) -> SpannedToken {
+        let end = self.current;
+        let message = format!(
+            "error[E_INTERIOR_NUL_IN_C_STRING]: interior NUL bytes are not permitted in \
+             C-string literals; remove the `{shown}` escape"
+        );
+        let mut tok = self.literal_error(message.clone());
+        let text = self.source_str.get(self.start..self.current);
+        let (before, after) = (escape - self.start, end - self.start);
+        if let Some(fixed) = text
+            .filter(|t| t.ends_with('"'))
+            .and_then(|t| Some(format!("{}{}", t.get(..before)?, t.get(after..)?)))
+        {
+            tok.token = Token::ErrorWithFix { message, fixed };
+        }
+        tok
+    }
+
     fn literal_error(&mut self, msg: String) -> SpannedToken {
         while self.peek() != b'"' && !self.is_at_end() {
             match self.peek() {

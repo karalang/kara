@@ -3248,6 +3248,76 @@ impl Parser {
         if !follows_a_name {
             return false;
         }
+        self.escape_keyword(kw, expected);
+        true
+    }
+
+    /// B-2026-11-21-73: a use of a binding named by a keyword that begins an
+    /// expression (`match`, `if`, `while`, …), as in `let match = 3;
+    /// println(match);`. The expression parser takes `match` as the start
+    /// of a `match` expression and reports the `)` after it, a diagnostic
+    /// with no fix, so `karac fix` escaped the binding and stopped at its
+    /// uses. When the program binds the name (escaped here, or written
+    /// `r#match`) and the next token can only follow a name, the use is that
+    /// binding: report and fix it as [`Self::recover_keyword_as_ident`] does.
+    /// `return`, `break`, `continue` and `yield` stand alone before `;` or a
+    /// closer, so they are never read this way.
+    pub(crate) fn recover_keyword_binding_use(&mut self) -> bool {
+        let Some(kw) = self.peek_token_ref().keyword_spelling() else {
+            return false;
+        };
+        if matches!(self.peek_token_ref(), Token::RawIdentNotAllowed(_))
+            || !crate::token::is_raw_escapable(kw)
+            || matches!(kw, "return" | "break" | "continue" | "yield")
+        {
+            return false;
+        }
+        let ends = matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.token),
+            Some(
+                Token::Semicolon
+                    | Token::Comma
+                    | Token::RightParen
+                    | Token::RightBracket
+                    | Token::RightBrace
+                    | Token::Dot
+                    | Token::QuestionDot
+                    | Token::Question
+                    | Token::Equal
+                    | Token::PlusEqual
+                    | Token::MinusEqual
+                    | Token::StarEqual
+                    | Token::SlashEqual
+                    | Token::PercentEqual
+                    | Token::Plus
+                    | Token::Slash
+                    | Token::Percent
+                    | Token::EqualEqual
+                    | Token::BangEqual
+                    | Token::LessThan
+                    | Token::LessThanOrEqual
+                    | Token::GreaterThan
+                    | Token::GreaterThanOrEqual
+            )
+        );
+        if !ends {
+            return false;
+        }
+        let bound = self.escaped_bindings.contains(kw)
+            || self
+                .tokens
+                .iter()
+                .any(|t| matches!(&t.token, Token::Identifier { name, raw: true } if name == kw));
+        if !bound {
+            return false;
+        }
+        self.escape_keyword(kw, "expression");
+        true
+    }
+
+    /// Report the keyword at the cursor as a name, with `r#` as the fix, and
+    /// retype it as that identifier so parsing goes on as the fixed text would.
+    fn escape_keyword(&mut self, kw: &'static str, expected: &str) {
         self.error_unexpected_ident(expected);
         let span = self.current_span();
         self.fix_edits.insert(
@@ -3265,7 +3335,6 @@ impl Parser {
             name: kw.to_string(),
             raw: true,
         };
-        true
     }
 
     /// A structural marker written as a field's name, directly before the

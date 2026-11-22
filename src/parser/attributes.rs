@@ -172,7 +172,14 @@ impl super::Parser {
                     // E_NO_EFFECT_STRING_VALUE: its arguments are effect verbs,
                     // so the call form of a string would be refused in turn
                     // (B-2026-11-16-303).
-                    if !(path.len() == 1 && name == "no_effect") {
+                    // `#[profile = "embedded"]` and `#[inline = "never"]`
+                    // likewise have their own, whose fix writes the bare name
+                    // when the string holds one (B-2026-11-21-73).
+                    let own_fix = path.len() == 1
+                        && (name == "no_effect"
+                            || (name == "profile" && super::items::bare_names(&s).is_some())
+                            || (name == "inline" && matches!(s.as_str(), "always" | "never")));
+                    if !own_fix {
                         let err_span = Span {
                             offset: eq_span.offset,
                             length: lit_span.offset + lit_span.length - eq_span.offset,

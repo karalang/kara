@@ -218,12 +218,14 @@ impl super::Parser {
 
         self.fn_context_stack.push(FnContext::Extern);
         let mut params = Vec::new();
+        let m0 = self.pattern_muts.len();
         while !self.check(&Token::RightParen) && !self.is_at_end() {
             params.push(self.parse_param()?);
             if !self.eat(&Token::Comma) {
                 break;
             }
         }
+        self.fix_foreign_param_muts(m0);
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
 
@@ -303,12 +305,14 @@ impl super::Parser {
         self.expect(&Token::LeftParen)?;
         self.fn_context_stack.push(FnContext::Extern);
         let mut params = Vec::new();
+        let m0 = self.pattern_muts.len();
         while !self.check(&Token::RightParen) && !self.is_at_end() {
             params.push(self.parse_param()?);
             if !self.eat(&Token::Comma) {
                 break;
             }
         }
+        self.fix_foreign_param_muts(m0);
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
 
@@ -481,6 +485,18 @@ impl super::Parser {
                     self.advance();
                 }
             }
+        }
+    }
+}
+
+impl super::Parser {
+    /// Rust's `mut b: T` on a foreign function's parameter: there is no body
+    /// for the `mut` to mean anything in, so the fix deletes it and the
+    /// signature keeps its C type unchanged (B-2026-11-21-73).
+    fn fix_foreign_param_muts(&mut self, from: usize) {
+        for (key, mut edit, name) in self.take_pattern_muts(from) {
+            edit.replacement = format!("{name}:");
+            self.fix_edits.insert(key, edit);
         }
     }
 }

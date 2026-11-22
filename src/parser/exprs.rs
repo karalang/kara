@@ -1467,6 +1467,9 @@ impl super::Parser {
         self.mend_python_ternary();
         self.mend_python_dict();
         self.mend_go_value_forms();
+        if self.recover_keyword_binding_use() {
+            return self.parse_identifier_expr();
+        }
         let start = self.current_span();
 
         match self.peek_token_ref() {

@@ -1655,34 +1655,52 @@ fn test_c_string_literal_multibyte_codepoint_in_body() {
 
 #[test]
 fn test_c_string_literal_interior_nul_escape_zero_rejected() {
+    // The error carries the literal without the escape as its fix
+    // (B-2026-11-21-73).
     let tokens = tokens_only(r#"c"a\0b""#);
     match &tokens[0] {
-        Token::Error(msg) => {
-            assert!(msg.contains("E_INTERIOR_NUL_IN_C_STRING"), "got: {msg}");
+        Token::ErrorWithFix { message, fixed } => {
+            assert!(
+                message.contains("E_INTERIOR_NUL_IN_C_STRING"),
+                "got: {message}"
+            );
+            assert_eq!(fixed, r#"c"ab""#);
         }
-        other => panic!("expected Error token, got {other:?}"),
+        other => panic!("expected ErrorWithFix token, got {other:?}"),
     }
 }
 
 #[test]
 fn test_c_string_literal_interior_nul_hex_escape_rejected() {
+    // The error carries the literal without the escape as its fix
+    // (B-2026-11-21-73).
     let tokens = tokens_only(r#"c"a\x00b""#);
     match &tokens[0] {
-        Token::Error(msg) => {
-            assert!(msg.contains("E_INTERIOR_NUL_IN_C_STRING"), "got: {msg}");
+        Token::ErrorWithFix { message, fixed } => {
+            assert!(
+                message.contains("E_INTERIOR_NUL_IN_C_STRING"),
+                "got: {message}"
+            );
+            assert_eq!(fixed, r#"c"ab""#);
         }
-        other => panic!("expected Error token, got {other:?}"),
+        other => panic!("expected ErrorWithFix token, got {other:?}"),
     }
 }
 
 #[test]
 fn test_c_string_literal_interior_nul_unicode_escape_rejected() {
+    // The error carries the literal without the escape as its fix
+    // (B-2026-11-21-73).
     let tokens = tokens_only(r#"c"a\u{0}b""#);
     match &tokens[0] {
-        Token::Error(msg) => {
-            assert!(msg.contains("E_INTERIOR_NUL_IN_C_STRING"), "got: {msg}");
+        Token::ErrorWithFix { message, fixed } => {
+            assert!(
+                message.contains("E_INTERIOR_NUL_IN_C_STRING"),
+                "got: {message}"
+            );
+            assert_eq!(fixed, r#"c"ab""#);
         }
-        other => panic!("expected Error token, got {other:?}"),
+        other => panic!("expected ErrorWithFix token, got {other:?}"),
     }
 }
 
