@@ -136,8 +136,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-2 | 2026-11-22 | ownership | high | A temporary pushed into a `Vec[ref String]` checks clean: `refs.push(words[0].clone())` stores a reference to a dropped temporary (ASan heap-buffer-overflow) | — |
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
-| B-2026-11-22-37 | 2026-11-22 | typecheck | medium | A type alias whose generic arguments name `dyn Trait` (`type Shapes = Vec[dyn Shape]`, `type OptShape = Option[dyn Shape]`) is refused as "`Shape` is not a trait" (E0200), though the same type written in place checks and runs | — |
-| B-2026-11-22-38 | 2026-11-22 | typecheck | low | A missing call-site `mut` marker (E0218) said "call with fresh binding requires a `mut` marker at this argument to permit the mutation. Write `mut <expr>`." instead of naming the argument, as design.md §7's own example message does | — |
 
 ### Relocated
 
@@ -2152,6 +2150,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-33 | typecheck | low | §4 wording roll-up: E0221 called a default-visibility type 'private', module-cycle and walker messages said '<crate root>', a block `pub const` got a… | ccf46cf6e1 |
 | B-2026-11-22-34 | cli | medium | kara.toml accepted a `[package].name` no dependent can import (`"my app"`, `"fn"`), a non-list `authors`, `[build] targets = []`, and an unknown top-… | ccf46cf6e1 |
 | B-2026-11-22-35 | typecheck | medium | `#[target(gpu)]` / `#[target(wasm_browser)]` made `karac check` of a single file run gpu and wasm_browser passes: a hello world with one gpu-gated it… | ccf46cf6e1 |
+| B-2026-11-22-37 | typecheck | medium | A type alias whose generic arguments name `dyn Trait` (`type Shapes = Vec[dyn Shape]`, `type OptShape = Option[dyn Shape]`) is refused as "`Shape` is… | 4df624fefe |
+| B-2026-11-22-38 | typecheck | low | A missing call-site `mut` marker (E0218) said "call with fresh binding requires a `mut` marker at this argument to permit the mutation | 4df624fefe |
 
 </details>
 
