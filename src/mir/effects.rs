@@ -2072,7 +2072,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         }
         // A library hasher's digest of its bytes (B-2026-11-17-66).
         ("SipHash13BuildHasher" | "FxBuildHasher", "digest") => vec![],
-        ("ref_eq", "") => vec![],
+        ("ref_eq" | "identity_handle_address", "") => vec![],
         ("Vector", _) => vec![PANICS],
         ("compiler", "error") => vec![PANICS],
         // Leaving a critical section and returning a pooled connection

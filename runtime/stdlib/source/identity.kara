@@ -1,0 +1,69 @@
+// `Identity[T]`, the key that names a handle by identity (design.md
+// § Shared types "Identity keys", collections.md § Hashing, B-2026-11-21-55).
+//
+// The MIR pipeline appends this file to a program that names `Identity` or
+// calls `.identity()`. `T` is a `shared`, `sync` or `frozen` handle type, which
+// the checker holds at `Identity.of` and `.identity()`. The key keeps a
+// counted copy of the handle, so the object cannot be freed, and its address
+// reused, while the key lives. Two keys are equal exactly when their handles
+// name one object, and the hash is of that object's address.
+//
+// The three `identity_handle_*` functions are lowered at each call by the MIR
+// builder, so their bodies never run.
+
+/// A `Map` / `Set` key that compares and hashes a handle by identity.
+pub struct Identity[T] {
+    handle: T,
+}
+
+impl[T] Identity[T] {
+    /// The key of the object `h` names. It holds a counted copy of `h`.
+    pub fn of(h: ref T) -> Identity[T] {
+        Identity { handle: identity_handle_copy(h) }
+    }
+
+    /// A copy of the handle the key holds.
+    pub fn get(ref self) -> T {
+        identity_handle_copy(self.handle)
+    }
+}
+
+impl[T] PartialEq for Identity[T] {
+    fn eq(ref self, other: ref Identity[T]) -> bool {
+        identity_handle_eq(self.handle, other.handle)
+    }
+}
+
+impl[T] Eq for Identity[T] {}
+
+impl[T] Hash for Identity[T] {
+    fn hash[H: Hasher](ref self, hasher: mut ref H) {
+        hasher.write_u64(identity_handle_address(self.handle));
+    }
+}
+
+impl[T] Clone for Identity[T] {
+    fn clone(ref self) -> Identity[T] {
+        Identity { handle: identity_handle_copy(self.handle) }
+    }
+}
+
+/// `h.identity()`, which the MIR builder lowers to this call.
+fn identity_of_handle[T](h: ref T) -> Identity[T] {
+    Identity { handle: identity_handle_copy(h) }
+}
+
+/// A counted copy of the handle `h`.
+fn identity_handle_copy[T](h: ref T) -> T {
+    panic("identity_handle_copy is lowered at each call")
+}
+
+/// Whether `a` and `b` name one object.
+fn identity_handle_eq[T](a: ref T, b: ref T) -> bool {
+    panic("identity_handle_eq is lowered at each call")
+}
+
+/// The address of the object `h` names.
+fn identity_handle_address[T](h: ref T) -> u64 {
+    panic("identity_handle_address is lowered at each call")
+}

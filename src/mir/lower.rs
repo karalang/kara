@@ -22102,6 +22102,31 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.clone_into(p, t, dest);
                     return Ok(());
                 }
+                // `Identity[T]`'s three intrinsics (runtime/stdlib/source/
+                // identity.kara, B-2026-11-21-55): a counted copy of the
+                // handle, whether two handles name one object (`ref_eq`'s
+                // native), and the object's address.
+                if self.lcx.def_owner(d).is_none() {
+                    match (self.lcx.def_name(d).as_str(), args) {
+                        ("identity_handle_copy", [a]) => {
+                            let (p, t) = self.deref_place(&a.value, false)?;
+                            self.clone_into(p, t, dest);
+                            return Ok(());
+                        }
+                        ("identity_handle_eq", [a, b]) => {
+                            let ops =
+                                vec![self.lib_arg(&a.value, true)?, self.lib_arg(&b.value, true)?];
+                            self.call_native("ref_eq", ops, dest);
+                            return Ok(());
+                        }
+                        ("identity_handle_address", [a]) => {
+                            let ops = vec![self.lib_arg(&a.value, true)?];
+                            self.call_native("identity_handle_address", ops, dest);
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
                 // Labels need no lowering: the default-argument fill has
                 // already put a labeled call's arguments in declaration
                 // order, and the typechecker rejected any it could not.
@@ -25487,6 +25512,39 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if self.dyn_method_call(object, method, args, dest.clone())? {
             return Ok(());
+        }
+        // `h.identity()` on a `shared` or `sync` handle: the library's
+        // `Identity.of(h)` (std.hash, B-2026-11-21-55). The checker typed it
+        // only where the handle's type has no `identity` of its own.
+        if method == "identity"
+            && args.is_empty()
+            && !matches!(
+                self.lcx.calls.get(&e.id).map(|c| &c.callee),
+                Some(crate::typed_hir::Callee::Def(_))
+            )
+        {
+            let ot = self.expr_ty(object)?;
+            let (_, base) = self.strip_ty_full(ot);
+            if self.is_handle(base) {
+                if let Some(d) = self.lcx.defs.lookup(0, "identity_of_handle") {
+                    let inst_args = vec![base];
+                    let ops = vec![self.lib_arg(object, true)?];
+                    let name = self.lcx.instance(d, inst_args.clone());
+                    let func = self.fn_operand(&name, d, inst_args);
+                    let next = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::Call {
+                            func,
+                            args: ops,
+                            destination: dest,
+                            target: Some(next),
+                            unwind: UnwindAction::Abort,
+                        },
+                        next,
+                    );
+                    return Ok(());
+                }
+            }
         }
         // `xs.concat()` over `Vec`s (B-2026-11-11-51).
         if method == "concat"
@@ -31759,6 +31817,13 @@ pub fn run_source_streaming(src: &str) -> Result<interp::RunResult, String> {
 /// renamed ([`rename_clashing_library_items`]).
 const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
     (
+        // `std.hash`'s `Identity[T]` key (B-2026-11-21-55). A program's own
+        // `Identity` replaces it.
+        include_str!("../../runtime/stdlib/source/identity.kara"),
+        &["Identity", ".identity("],
+        &["Identity"],
+    ),
+    (
         include_str!("../../runtime/stdlib/protobuf.kara"),
         &["ProtoBuf", "ProtoReader", "Message", "proto_schema"],
         &[],
@@ -32657,6 +32722,10 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "DeserializeError",
     "iter_read_value",
     "iter_clone_value",
+    "identity_handle_copy",
+    "identity_handle_eq",
+    "identity_handle_address",
+    "identity_of_handle",
     "vec_extend_iter",
     "string_extend_iter",
     "vec_extend_into",

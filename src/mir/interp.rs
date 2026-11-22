@@ -2175,6 +2175,15 @@ impl<'a> Interp<'a> {
             let (a, b) = (self.handle_behind(a)?, self.handle_behind(b)?);
             return Ok(Value::Bool(a.is_some() && a == b));
         }
+        // `Identity[T]`'s hash: the address of the object a handle names
+        // (B-2026-11-21-55). The interpreter's address is the slot.
+        if name == "identity_handle_address" {
+            let [a] = args.as_slice() else {
+                return err(format!("{name} takes one handle"));
+            };
+            let id = self.handle_behind(a)?;
+            return Ok(Value::Int(id.map_or(0, |id| i128::from(id.0) + 1)));
+        }
         // A table's lookups and updates, the commonest natives after a
         // `Vec`'s, go straight to it: no arm before the table's own takes
         // these methods.

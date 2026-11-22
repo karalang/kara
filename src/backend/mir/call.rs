@@ -922,6 +922,18 @@ impl<'ctx> Cx<'ctx, '_> {
             self.store_bool(dest, same)?;
             return self.drop_moved(args);
         }
+        // `Identity[T]`'s hash: the address of the object a handle names
+        // (B-2026-11-21-55).
+        if name == "identity_handle_address" {
+            let [a] = args else {
+                return Err(format!("MIR to LLVM: `{name}` takes one handle"));
+            };
+            let i64t = self.llcx.i64_type();
+            let a = self.handle_arg(a)?;
+            let a = self.builder.build_ptr_to_int(a, i64t, "").map_err(e)?;
+            self.store_int_as(dest, a, false)?;
+            return self.drop_moved(args);
+        }
         if matches!(base, "Map" | "Set" | "SortedMap" | "SortedSet")
             && self.table_native(method, args, dest)?.is_some()
         {

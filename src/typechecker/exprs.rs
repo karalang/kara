@@ -13977,6 +13977,15 @@ impl<'a> super::TypeChecker<'a> {
         }
         let ty = self.infer_expr_unexplained(expr);
         self.note_collect_used_early(expr);
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if let [owner, method] = segments.as_slice() {
+                    if owner == "Identity" && method == "of" {
+                        self.refuse_identity_of_value(args, &ty);
+                    }
+                }
+            }
+        }
         ty
     }
 

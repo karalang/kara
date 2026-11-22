@@ -2058,6 +2058,46 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `Identity.of(x)` keys a handle by identity (design.md § Shared
+    /// types "Identity keys", B-2026-11-21-55): `x` must be a `shared` or
+    /// `sync` handle. A value has no identity to key by, so any other `T`
+    /// is refused here, where the key is made. A program's own `Identity`
+    /// replaces the library's, and keeps its own rules.
+    pub(super) fn refuse_identity_of_value(&mut self, args: &[CallArg], ty: &Type) {
+        let Type::Named { name, args: targs } = self.resolved_now(ty) else {
+            return;
+        };
+        let ([t], [arg]) = (targs.as_slice(), args) else {
+            return;
+        };
+        // The library's: one private field `handle` of its one parameter.
+        let library = self.env.structs.get("Identity").is_some_and(|s| {
+            matches!(s.fields.as_slice(), [(f, _, false)] if f == "handle")
+                && s.generic_params.len() == 1
+        });
+        if name != "Identity" || !library {
+            return;
+        }
+        let t = match t {
+            Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+            t => t.clone(),
+        };
+        if matches!(t, Type::Shared(_) | Type::Error | Type::TypeVar(_)) {
+            return;
+        }
+        self.type_error(
+            format!(
+                "`Identity[T]` keys a `shared` or `sync` handle by identity; `{}` is not a \
+                 handle, so it has no identity to key by. Key the table by the value itself \
+                 (`Map[{}, V]`), which compares with `==`",
+                type_display(&t),
+                type_display(&t)
+            ),
+            arg.value.span,
+            TypeErrorKind::TraitBoundNotSatisfied,
+        );
+    }
+
     pub(super) fn infer_method_call(
         &mut self,
         object: &Expr,
@@ -3581,6 +3621,24 @@ impl<'a> super::TypeChecker<'a> {
                     let name = name.clone();
                     return self.infer_ref_eq_method(&name, args, span);
                 }
+            }
+        }
+
+        // `h.identity()`: the `Identity[T]` key of a `shared` or `sync`
+        // handle (design.md § Shared types "Identity keys", std.hash,
+        // B-2026-11-21-55). A program's own `identity` wins, and a program
+        // with no `Identity` in scope has none.
+        if let ("identity", [], Type::Shared(name)) = (method, args, &obj_ty_for_named) {
+            if self
+                .env
+                .find_methods_with_args(name, &[], method)
+                .is_empty()
+                && self.env.structs.contains_key("Identity")
+            {
+                return Type::Named {
+                    name: "Identity".to_string(),
+                    args: vec![Type::Shared(name.clone())],
+                };
             }
         }
 
