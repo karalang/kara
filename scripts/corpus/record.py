@@ -70,8 +70,8 @@ DEFERRED = [
     ("dyn", re.compile(r"\bdyn ")),
     ("layout", re.compile(r"(?m)^\s*layout\b")),
     ("catch_panic", re.compile(r"\bcatch_panic\b")),
-    ("regex", re.compile(r"\bRegex\b")),
-    ("normalize", re.compile(r"\.normalize\(")),
+    # `Regex` and `String.normalize` are v1 (docs/library/regex.md,
+    # strings.md), so a program using them runs (B-2026-11-21-12).
 ]
 SYNTAX_TAGS = [
     ("drop", re.compile(r"\bimpl(\[[^\]]*\])?\s+Drop\s+for\b")),

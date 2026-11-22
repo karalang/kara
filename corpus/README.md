@@ -70,8 +70,8 @@ Tags come from the source and from `karac check --output=json`: `drop`,
 `shared`, `par`, `closure`, `ref-return`, `panic` (legacy exits 101),
 `uses-moved` (E0500 / N0503), `move-from-borrow` (the `borrow_projection_copy`
 and `for_element_drop_copy` lints), `deferred:<feature>` (GPU, tensors,
-dataframes, comptime, `dyn`, layout blocks, `catch_panic`, `Regex`,
-`normalize`), `bench` and `differential` for katas, `format-template` for
+dataframes, comptime, `dyn`, layout blocks, `catch_panic`; `Regex` and
+`normalize` are v1 and no longer deferred), `bench` and `differential` for katas, `format-template` for
 a raw string the test fills in at run time, with `format!` or by `push_str` onto
 a `String::from` head (recorded as `skip`), and `nondeterministic` for a
 program whose output changes between two legacy runs (a bound port, task
