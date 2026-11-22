@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 684 |
-| false-positive | 346 |
-| missing-feature | 243 |
+| diagnostics | 698 |
+| false-positive | 349 |
+| missing-feature | 244 |
 | perf | 198 |
-| other | 144 |
+| other | 145 |
 | soundness | 119 |
 | miscompile | 102 |
 | crash | 64 |
 | run-vs-build | 61 |
-| codegen-gap | 41 |
+| codegen-gap | 43 |
 | use-after-free | 12 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,17 +76,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 843 |
+| typecheck | 853 |
 | mir-llvm | 320 |
-| mir | 302 |
-| cli | 269 |
-| parser | 150 |
-| ownership | 128 |
+| mir | 309 |
+| cli | 270 |
+| parser | 151 |
+| ownership | 129 |
 | runtime | 107 |
 | interp | 98 |
 | effect | 53 |
+| other | 50 |
 | resolver | 50 |
-| other | 49 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -118,6 +118,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
+| B-2026-11-20-146 | 2026-11-20 | typecheck | low | No lint reports a binding that is never read: `for (i, step) in steps.iter().enumerate()` with `i` unused, or `let x = 5;` never read, checks clean with no warning, where Rust's `unused_variables` warns | — |
+| B-2026-11-20-151 | 2026-11-20 | mir | low | `words.iter().map(String.from)`, Rust's `.map(String::from)` as `karac fix` carries it, passes the type checker and is then refused "this path is not lowered yet" with no hint, where a closure `|w| w.to_string()` works | — |
 | B-2026-11-21-7 | 2026-11-21 | mir-llvm | low | A temporary String consumed only by a borrowing parameter is still allocated: `w.push_str("abcde".substring(k, k + 1))` materialises a one-character String per call and frees it after the borrow (kata 2255 shape: 104 ms, against 33 ms for the same words built with `w.push(c)`; Rust 29 ms) | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
 | B-2026-11-21-46 | 2026-11-21 | cli | low | `let (l, r) = segments.floor(x).unwrap();` over a `SortedMap[i64, i64]`, then `segments.remove(l)`, is refused three times E0516 "cannot mutably borrow `segments` while `r` still holds a borrow ... take a copy" with no machine fix, though both are `Copy` keys whose copy is the whole remedy | — |
@@ -2056,6 +2058,18 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-4 | typecheck | medium | A list literal refuses an element that leaves a type slot open after an earlier element decided it: `[Err(1), Ok(5), Err(0)]` is 'expected Result[i64… | 1a5c923642 |
 | B-2026-11-20-136 | typecheck | low | A bare `for` element of a bare parameter moved out (`for h in headers { out.insert(at, h) }`) is a bare `expected 'Header', found 'ref Header'` with… | 239b80ffca |
 | B-2026-11-20-137 | other | low | Two Mend tasks drifted with nothing to catch it: two_source_totals' own solution is refused (E_NO_PROVIDER) and concurrent_emails' canned run answers… | 259fde908d |
+| B-2026-11-20-138 | typecheck | low | `f([(0..n).map(g).collect()].to_vec())`, a bare `collect()` as the only element of an array literal turned `to_vec()` and passed to a `Vec[Vec[i64]]`… | 0d28296389 |
+| B-2026-11-20-139 | typecheck | low | `queue.insert((0, v))` into a `SortedSet[(i64, i64)]`, with `v` a `ref i64` from `for v in vec.iter()`, is refused with "expected '(i64, i64)', found… | 0d28296389 |
+| B-2026-11-20-140 | typecheck | low | `s.find(\|c\| c != 'a')`, Rust's `str::find` with a closure, is refused with "'find' expects a String or char needle", a message older than `find` taki… | 0d28296389 |
+| B-2026-11-20-141 | typecheck | low | `.to_vec()` on an iterator (`[..].into_iter().map(..).to_vec()`, which `karac fix` itself writes from Rust's array `.map(..).to_vec()`) is refused wi… | 0d28296389 |
+| B-2026-11-20-142 | parser | low | A private enum's variants written `AA` and `BB`, as Rust allows, are refused as Const-class with the rename `Aa` named but no fix, leaving the rename… | 0d28296389 |
+| B-2026-11-20-143 | typecheck | low | `Array[T]` written with no length is taken as a type of its own: a parameter `list: Array[(i64, i64)]` checks, and the call with a list literal is th… | 0d28296389 |
+| B-2026-11-20-144 | cli | low | `karac explain E_LINT_LEVEL_NO_ARGS` and `E_LINT_LEVEL_NON_IDENT_ARG` show `#[allow(unused_variables)]` as the way to write a lint level, and Kāra ha… | 0d28296389 |
+| B-2026-11-20-145 | other | low | docs/library/collections.md's `SortedMap` table lists no `get_mut` and no `entry`, which `SortedMap` takes as `Map` does | 0d28296389 |
+| B-2026-11-20-147 | typecheck | low | `now > m.get(k) ?? 0` (`??` binds loosest, so it is `(now > m.get(k)) ?? 0`) fails "cannot compare 'i64' and 'Option[ref i64]'" and then a `??` over… | 0d28296389 |
+| B-2026-11-20-148 | typecheck | low | `[first].to_vec()` with `first` a struct that has no `Clone` is refused with "add `#[derive(Copy, Clone)]` to it", and `karac fix` adds the derive, t… | 0d28296389 |
+| B-2026-11-20-149 | typecheck | low | `let p = i.pow(x)` with an `i64` exponent is refused with the `as u32` fix, and the call is then typed as an error, so the next use of `p` fails agai… | 0d28296389 |
+| B-2026-11-20-150 | ownership | low | `words.join(sep)` with `sep` an owned `String` takes `sep` for a move, so a later `joined.split(sep)` is refused "value 'sep' moved here, used again… | 0d28296389 |
 | B-2026-11-21-1 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on t… | cecef40ef6 |
 | B-2026-11-21-5 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword .. | dafd0cdb06 |
 | B-2026-11-21-6 | mir-llvm | high | `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure the address of the slot holding each reference, not the reference: compiled,… | 6e5c5d0a95 |
@@ -2121,6 +2135,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-92 | mir | low | An `impl Trait` value is live only while its hidden type says so: its drop counted as a use of what it borrows only when the concrete type has a `Dro… | a6384ce4fe |
 | B-2026-11-21-93 | cli | medium | In a package, `check`/`build --output=json(l)` apply the 20-error cascade cap to all module files together: two files with 22 type errors each report… | 60381ef965 |
 | B-2026-11-21-94 | cli | low | `karac test --output=jsonl` and `--output=json` are refused as unknown flags, though design.md §17's panic record says the runner carries the record… | 60381ef965 |
+| B-2026-11-21-201 | typecheck | medium | A literal's type left open by design.md §8 was settled to `i64` when a place holding it was read into a tuple (`(x, 0)`, `(dist[0], 0)`) or when arit… | 0d28296389 |
+| B-2026-11-21-202 | mir | low | A redundant `as i64` deleted by `karac fix` from inside parentheses of its own left them behind: `c * ((need - i) as i64) % MOD` became `c * ((need -… | 0d28296389 |
+| B-2026-11-21-203 | mir | low | `let b = step;` then `[b].to_vec()` used as an `Array` (E0200 on `b[0]` reads) named neither that `step` was bound to a list literal, which is a `Vec… | 0d28296389 |
+| B-2026-11-21-204 | mir | low | A closure with Rust's turbofish on its body's tail, `\|v: &Vec<i64>\| v.iter().map(..).collect::<Vec<i32>>()`, kept the turbofish through `karac fix`,… | 0d28296389 |
+| B-2026-11-21-205 | mir | low | `Vec.from([2, 6, 5, 8])`, Rust's `Vec::from` as `karac fix` carries it, is refused bare, "no associated function 'from' on type 'Vec'", with nothing… | 0d28296389 |
+| B-2026-11-21-206 | mir | low | `karac fix` deletes the redundant cast of Rust's `let n = n as i64;` (a length is already `i64`) and leaves `let n = n;`, and the tuple form `let (nr… | 0d28296389 |
+| B-2026-11-21-207 | mir | low | A method on a `collect()` with no target type, `(1..100).collect().iter()`, is refused "no method 'iter' on type parameter 'C'; add a trait bound dec… | 0d28296389 |
 | B-2026-11-22-4 | parser | medium | Go `range` mend refuses a program's own binding named `range`: `for d in range {` gets E0001 "`range` is Go's" (kata 2056 moves_solution, kata 1157 t… | f6e3b64e92 |
 | B-2026-11-22-5 | parser | low | Python- and Go-habit forms still without a Kāra form after the sweep's rows closed: Python `-> None`, `let a, b = 1, 2`, `s * n`, `s.split(sep)` nami… | 7a57de3dee |
 | B-2026-11-22-20 | other | medium | The docs' conformance sweeps confirmed a block the doc says is rejected whatever rejected it, ran no design.md program, knew no fence word for a frag… | 081509083e |
