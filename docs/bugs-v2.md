@@ -59,11 +59,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 678 |
-| false-positive | 343 |
+| false-positive | 344 |
 | missing-feature | 242 |
 | perf | 198 |
 | other | 143 |
-| soundness | 117 |
+| soundness | 118 |
 | miscompile | 102 |
 | crash | 64 |
 | run-vs-build | 61 |
@@ -78,11 +78,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 839 |
 | mir-llvm | 319 |
-| mir | 301 |
+| mir | 302 |
 | cli | 267 |
 | parser | 148 |
 | ownership | 127 |
-| runtime | 105 |
+| runtime | 106 |
 | interp | 98 |
 | effect | 52 |
 | resolver | 50 |
@@ -136,6 +136,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-55 | 2026-11-21 | typecheck+mir | medium | No way to key a Map or Set by shared-handle identity: `ref_eq` exists but nothing hashes identity, so a node-to-copy map, a visited set or a memo over shared nodes is O(n^2) or needs an id field; spec now gives `Identity[T]` (std.hash) | — |
 | B-2026-11-21-81 | 2026-11-21 | typecheck | low | `impl Trait for *mut T` and `impl Trait for (A, B)` are accepted, but their methods are never callable: every call is refused as "no method" | — |
 | B-2026-11-21-91 | 2026-11-21 | cli | medium | `karac check` of a program deriving `Serialize` takes ~0.9-1.1 s on a 5-line file (release), against ~0.07 s without the derive: the derive's comptime expansion runs twice, once in check's lower and again in the ownership/MIR check's own front end | — |
+| B-2026-11-21-95 | 2026-11-21 | runtime | medium | A task cancelled before it is first polled does not cancel the TaskGroup it makes on the way to its first wait: the nested group's task sleeps out its whole wait (core-semantics §11.9 "Cancelling a task cancels the ... TaskGroup scopes running inside it") | — |
+| B-2026-11-21-96 | 2026-11-21 | mir | medium | MIR interpreter reports a deadlock (exit 101) when a group's deadline passes before its task is first polled and that task joins a nested group; the compiled lanes finish (but late, B-2026-11-21-95) | — |
 
 ### Relocated
 
