@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 678 |
-| false-positive | 344 |
+| diagnostics | 679 |
+| false-positive | 346 |
 | missing-feature | 242 |
 | perf | 198 |
 | other | 143 |
-| soundness | 118 |
+| soundness | 119 |
 | miscompile | 102 |
 | crash | 64 |
 | run-vs-build | 61 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 839 |
+| typecheck | 840 |
 | mir-llvm | 320 |
 | mir | 302 |
 | cli | 267 |
-| parser | 148 |
-| ownership | 127 |
+| parser | 150 |
+| ownership | 128 |
 | runtime | 106 |
 | interp | 98 |
 | effect | 52 |
@@ -117,13 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-20-40 | 2026-11-20 | mir | low | A `PriorityQueue` of `ref i32`, `queue.push(x)` for `x` from `nums.iter()`, checks but does not lower: "replacing a reference element of a collection in place is not lowered yet" in `pq_sift_up[ref i32]` and `pq_sift_to_bottom[ref i32]` | — |
-| B-2026-11-20-73 | 2026-11-20 | parser | low | Python's operator and statement keywords get bare parse errors with no Kāra form: `x is None`, `is not None`, `in`/`not in` as operators, `elif`, `a if c else b`, `lambda x: ..`, `#` comments, `pass`, and `//` (read as a comment, so "Expected `)`, found the end of the file") | — |
-| B-2026-11-20-74 | 2026-11-20 | parser | low | Python's `try:/except`, `with open(..) as f`, `raise`, `class`, `-> None`, `list[T]`/`int` type hints and unparenthesized tuple unpacking (`let a, b = 1, 2`) get "expected `;`", "undefined name 'except'/'with'/'raise'" or E0104 with no Kāra form | — |
-| B-2026-11-20-75 | 2026-11-20 | parser | low | Python's slices `v[1:3]` / `s[:-4]`, list comprehensions `[x * x for x in v if ..]`, a dict literal `{"a": 1}` and `d.get(k, default)` get bare parse or type errors ("Expected `]`, found `:`"; "expected 'String', found 'i64'") with no Kāra form | — |
-| B-2026-11-20-76 | 2026-11-20 | typecheck | low | Python's builtins and str/dict methods mostly get "undefined name" / "no method" with no Kāra name: `str(n)`, `int(s)`, `sum(v)`, `max(v)`, `sorted`, `enumerate`, `zip`, `reversed`, `print(a, b)`, `sep.join(v)`, `strip`, `upper`, `split()`, `d.items()`, `[0] * 3`, `"ab" * 3` | — |
-| B-2026-11-20-77 | 2026-11-20 | parser | low | Go's declaration forms get bare parse errors with no Kāra form: `x := 4`, `var x i64 = 3`, parameters `a i64`, a result list without `->` (`fn f() (i64, i64)`), fields `x i64`, `type P struct {..}`, `const ( A = 1; B = 2 )`, `package main`, `import "fmt"` and the type `int` | — |
-| B-2026-11-20-78 | 2026-11-20 | parser | low | Go's control flow gets bare parse errors with no Kāra form: `for i := 0; i < n; i++`, `for cond {}`, `for {}`, `for i, x := range v`, `if v, ok := m[k]; ok`, `switch`/`case`/`default`, `select`, and `i++` / `i--` | — |
-| B-2026-11-20-79 | 2026-11-20 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}` literals, `go f(x)`, `<-rx`, `err != nil` without a binding, `errors.New`, `strconv`, `strings`, `sync`, `fmt.Println(a, b)`, the comma-ok `let (v, ok) = m[k]`, and `&T{..}` (mended into an E0283) | — |
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
 | B-2026-11-21-7 | 2026-11-21 | mir-llvm | low | A temporary String consumed only by a borrowing parameter is still allocated: `w.push_str("abcde".substring(k, k + 1))` materialises a one-character String per call and frees it after the borrow (kata 2255 shape: 104 ms, against 33 ms for the same words built with `w.push(c)`; Rust 29 ms) | — |
 | B-2026-11-21-12 | 2026-11-21 | other | low | Test infra: corpus entries skipped for a reason that is no longer live: 10 `deferred:regex` and 1 `deferred:normalize` entries (both are v1 now, docs/library/regex.md and strings.md) and 5 'legacy run timed out after 60s' katas and apps that finish in 2 s on v2 are `expect = "skip"`, so the corpus never runs them | — |
@@ -139,6 +132,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-95 | 2026-11-21 | runtime | medium | A task cancelled before it is first polled does not cancel the TaskGroup it makes on the way to its first wait: the nested group's task sleeps out its whole wait (core-semantics §11.9 "Cancelling a task cancels the ... TaskGroup scopes running inside it") | — |
 | B-2026-11-21-96 | 2026-11-21 | mir | medium | MIR interpreter reports a deadlock (exit 101) when a group's deadline passes before its task is first polled and that task joins a nested group; the compiled lanes finish (but late, B-2026-11-21-95) | — |
 | B-2026-11-22-1 | 2026-11-22 | mir-llvm | high | Cancelling the TaskGroup that runs `Server.serve` frees a connection's `WsConn` while that connection's task is still reading it: ASan reports a heap-use-after-free in `WsConn.set_read_timeout` from `Server.__next`, about 1 run in 20 on 4 workers, never on one | — |
+| B-2026-11-22-2 | 2026-11-22 | ownership | high | A temporary pushed into a `Vec[ref String]` checks clean: `refs.push(words[0].clone())` stores a reference to a dropped temporary (ASan heap-buffer-overflow) | — |
+| B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
+| B-2026-11-22-5 | 2026-11-22 | parser | low | Python- and Go-habit forms still without a Kāra form after the sweep's rows closed: Python `-> None`, `let a, b = 1, 2`, `s * n`, `s.split(sep)` naming, a negative slice bound `s[:-4]`; Go `package`/`import`, `&T{..}`, `err != nil` without `?`, exported capitals | — |
 
 ### Relocated
 
@@ -1995,6 +1991,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-70 | typecheck | medium | Python's `x ** 4` is mended to `x * 4`: it parses as `x * (*4)`, and E0209's fix ("a 'i64' is copied, so drop the `*`") is machine-applied, so the pr… | 454d578d34 |
 | B-2026-11-20-71 | typecheck | medium | A negative literal index (`v[-1]`, Python's last element) checks clean and panics at run time with "index out of bounds"; design.md prescribes `v.las… | 454d578d34 |
 | B-2026-11-20-72 | typecheck | low | Python's `v.append(4)` (one element) is told "there is no `Vec.append`: write `a.extend(b)`", then `extend` refuses the `i64`; the one-element form i… | 454d578d34 |
+| B-2026-11-20-73 | parser | low | Python's operator and statement keywords get bare parse errors with no Kāra form: `x is None`, `is not None`, `in`/`not in` as operators, `elif`, `a… | f6e3b64e92 |
+| B-2026-11-20-74 | parser | low | Python's `try:/except`, `with open(..) as f`, `raise`, `class`, `-> None`, `list[T]`/`int` type hints and unparenthesized tuple unpacking (`let a, b… | f6e3b64e92 |
+| B-2026-11-20-75 | parser | low | Python's slices `v[1:3]` / `s[:-4]`, list comprehensions `[x * x for x in v if ..]`, a dict literal `{"a": 1}` and `d.get(k, default)` get bare parse… | f6e3b64e92 |
+| B-2026-11-20-76 | typecheck | low | Python's builtins and str/dict methods mostly get "undefined name" / "no method" with no Kāra name: `str(n)`, `int(s)`, `sum(v)`, `max(v)`, `sorted`,… | f6e3b64e92 |
+| B-2026-11-20-77 | parser | low | Go's declaration forms get bare parse errors with no Kāra form: `x := 4`, `var x i64 = 3`, parameters `a i64`, a result list without `->` (`fn f() (i… | f6e3b64e92 |
+| B-2026-11-20-78 | parser | low | Go's control flow gets bare parse errors with no Kāra form: `for i := 0; i < n; i++`, `for cond {}`, `for {}`, `for i, x := range v`, `if v, ok := m[… | f6e3b64e92 |
+| B-2026-11-20-79 | typecheck | low | Go's builtins, packages and value forms mostly get no Kāra form: `make([]T, n)`, `make(map[K]V)`, `make(chan T)`, `append`, `[]i64{..}`/`map[K]V{..}`… | f6e3b64e92 |
 | B-2026-11-20-80 | resolver+cli | low | A std import mixing prelude names with another module's (`import std.collections.{PriorityQueue, Reverse};`, Rust's BinaryHeap and std::cmp::Reverse… | f9eea2da7c |
 | B-2026-11-20-81 | typecheck+cli | low | E0516 in a `let`-bound `match` on a borrow (`let now = match self.scores.get(id) { Some(old) => { self.f(old); . | 0965458f05 |
 | B-2026-11-20-82 | typecheck+cli | low | A `ref String` assigned into a `Str` slot gets only "expected 'Str', found 'ref String'", without the `.as_str()` hint and fix an owned `String` gets… | 3f61341c04 |
@@ -2118,6 +2121,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-92 | mir | low | An `impl Trait` value is live only while its hidden type says so: its drop counted as a use of what it borrows only when the concrete type has a `Dro… | a6384ce4fe |
 | B-2026-11-21-93 | cli | medium | In a package, `check`/`build --output=json(l)` apply the 20-error cascade cap to all module files together: two files with 22 type errors each report… | 60381ef965 |
 | B-2026-11-21-94 | cli | low | `karac test --output=jsonl` and `--output=json` are refused as unknown flags, though design.md §17's panic record says the runner carries the record… | 60381ef965 |
+| B-2026-11-22-4 | parser | medium | Go `range` mend refuses a program's own binding named `range`: `for d in range {` gets E0001 "`range` is Go's" (kata 2056 moves_solution, kata 1157 t… | f6e3b64e92 |
 
 </details>
 
