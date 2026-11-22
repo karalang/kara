@@ -53,7 +53,9 @@ BASELINE = ROOT / "docs" / "design-conformance-baseline.json"
 # the compiler to reject. Deliberately narrow: `// error[E0200]: …` and
 # `// compile error: …` are unambiguous, whereas a bare "error" in prose is not.
 ERROR_MARKER_RE = re.compile(
-    r"\b(?:compile error|compile-time error|error\[[A-Za-z0-9]+\]|ERROR)\b|^\s*error:"
+    # (`error[E0418]` takes no closing `\b`: the `]` is not a word character,
+    # so one there missed every `// error[E0418]: ...` annotation.)
+    r"\b(?:compile error|compile-time error|ERROR)\b|\berror\[[A-Za-z0-9]+\]|^\s*error:"
 )
 CARET_ERROR_RE = re.compile(r"^\s*//?\s*\^+\s*error", re.I)
 
@@ -171,7 +173,8 @@ def rejection_outcome(block, diags):
         if UNRESOLVED_RE.match(d.get("message", "")) or d.get("phase") == "parse":
             continue
         return "confirmed-rejection"
-    if diags and all(UNRESOLVED_RE.match(d.get("message", "")) for d in diags):
+    if (not block.uses and diags
+            and all(UNRESOLVED_RE.match(d.get("message", "")) for d in diags)):
         return "unresolved-rejection"
     return "REJECTED-ELSEWHERE"
 
@@ -273,6 +276,24 @@ class Block:
     def text(self):
         return "\n".join(self.code)
 
+    def _fence_list(self, key):
+        out = []
+        for part in re.split(r"[,\s]+", self.info):
+            if part.startswith(key + "="):
+                out += [c for c in part[len(key) + 1:].split("|") if c]
+        return out
+
+    @property
+    def names(self):
+        """```kara,name=point: other blocks may build on this one by that name."""
+        return self._fence_list("name")
+
+    @property
+    def uses(self):
+        """```kara,uses=point|log: the blocks (or docs/doc-context.kara
+        sections) this one is checked after (B-2026-11-22-21)."""
+        return self._fence_list("uses")
+
     @property
     def fence_codes(self):
         """The codes a ```kara,error=E0205 fence says the block is rejected
@@ -350,6 +371,98 @@ def parse_blocks(path):
     return blocks
 
 
+class Context:
+    """What a block's `uses=` names, resolved: module-level lines, and
+    statements that open `fn main` (a named block that is itself
+    statements)."""
+
+    def __init__(self, items=(), stmts=()):
+        self.items = list(items)
+        self.stmts = list(stmts)
+
+    def __bool__(self):
+        return bool(self.items or self.stmts)
+
+
+# Named blocks of the document being swept, and the sections of
+# docs/doc-context.kara: name -> Block. Set by `index_names`.
+NAMED = {}
+DOC_CONTEXT = ROOT / "docs" / "doc-context.kara"
+
+
+def doc_context_sections():
+    """docs/doc-context.kara's sections, `// context: NAME` to the next one:
+    declarations a doc's examples rely on and the doc does not show (the
+    `fetch_orders` an example calls), so the example is checked in full
+    rather than set aside as unresolved."""
+    out = {}
+    if not DOC_CONTEXT.exists():
+        return out
+    name, lines, start = None, [], 0
+    text = DOC_CONTEXT.read_text(encoding="utf-8").split("\n")
+    for n, line in enumerate(text, 1):
+        m = re.match(r"^//\s*context:\s*([\w-]+)(?:\s+uses=(\S+))?\s*$", line)
+        if m:
+            if name:
+                out[name] = (start, lines, uses)
+            name, lines, start = m.group(1), [], n + 1
+            uses = m.group(2).split("|") if m.group(2) else []
+            continue
+        if name:
+            lines.append(line)
+    if name:
+        out[name] = (start, lines, uses)
+    return {k: Block(st, f"doc-context.kara > {k}", ls,
+                     "uses=" + "|".join(us) if us else "")
+            for k, (st, ls, us) in out.items()}
+
+
+def index_names(blocks):
+    """Index `name=` blocks of `blocks` and docs/doc-context.kara's sections
+    for `context_of`. A doc's own block wins over a section of the same name."""
+    NAMED.clear()
+    NAMED.update(doc_context_sections())
+    for b in blocks:
+        for n in b.names:
+            NAMED[n] = b
+
+
+class MissingContext(Exception):
+    pass
+
+
+def context_of(block):
+    """The context `block.uses` names, dependencies first, each once."""
+    seen, order = set(), []
+
+    def visit(b, path):
+        for n in b.uses:
+            if n in path:
+                raise MissingContext(f"`uses={n}` is circular")
+            dep = NAMED.get(n)
+            if dep is None:
+                raise MissingContext(f"`uses={n}` names no `name={n}` block "
+                                     "and no docs/doc-context.kara section")
+            if id(dep) in seen:
+                continue
+            visit(dep, path | {n})
+            seen.add(id(dep))
+            order.append(dep)
+
+    visit(block, frozenset())
+    ctx = Context()
+    for dep in order:
+        # Split at column 0: an item there opens a declaration, anything else
+        # a statement, and indented lines continue whichever came last.
+        into = ctx.items if dep.item_shaped else ctx.stmts
+        for line in dep.code:
+            if line[:1].isalpha() or line.startswith("#["):
+                into = ctx.items if ITEM_START_RE.match(line) else ctx.stmts
+            into.append(line)
+        ctx.items.append("")
+    return ctx
+
+
 def rungs(block):
     """The framings this block is tried in, most likely first.
 
@@ -370,10 +483,18 @@ def rungs(block):
                 for l in block.code]
     aliases = "\n".join(f"type ConformanceProbe{i} = {t};"
                          for i, t in enumerate(stripped) if t) + "\n\nfn main() {}\n"
-    items = ("items", body, 0)
-    items_main = ("items+main", body + "\n\nfn main() {}\n", 0)
-    in_main = ("in-main", "fn main() {\n" + indented + "\n}\n", -1)
-    type_rung = ("type-aliases", aliases, 0)
+    ctx = context_of(block) if block.uses else Context()
+    head = "\n".join(ctx.items) + "\n" if ctx.items else ""
+    pre = head.count("\n")
+    opening = "".join(("    " + l if l.strip() else l) + "\n" for l in ctx.stmts)
+    # A block that is statements runs as a script (design.md § Script mode),
+    # so the statements a context opens with lead it there too.
+    script = "".join(l + "\n" for l in ctx.stmts)
+    items = ("items", head + script + body, -(pre + script.count("\n")))
+    items_main = ("items+main", head + body + "\n\nfn main() {}\n", -pre)
+    in_main = ("in-main", head + "fn main() {\n" + opening + indented + "\n}\n",
+               -(pre + 1 + opening.count("\n")))
+    type_rung = ("type-aliases", head + aliases, -pre)
     if block.item_shaped:
         return [items, items_main, in_main]
     return [in_main, items, items_main, type_rung]
@@ -597,6 +718,38 @@ def local_type_stubs(code):
             for m in (LOCAL_TYPE_RE.match(l) for l in code) if m]
 
 
+GENERIC_HEADER_RE = re.compile(r"^\s*(?:pub\s+)?(?:impl|struct|enum|trait)\b\s*(?:[A-Za-z_]\w*\s*)?\[")
+
+
+def header_generics(code):
+    """The generic parameters the block's own `impl[K: Hash, V] Entry[K, V]`,
+    `struct MutexGuard[T]` and `enum SendError[T]` headers declare, in order:
+    the `T` of a catalogue's signatures, bound in the same block."""
+    out = []
+    for line in code:
+        m = GENERIC_HEADER_RE.match(line)
+        if not m:
+            continue
+        depth, start, parts = 1, m.end(), []
+        for i in range(m.end(), len(line)):
+            c = line[i]
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    parts.append(line[start:i])
+                    break
+            elif c == "," and depth == 1:
+                parts.append(line[start:i])
+                start = i + 1
+        for part in parts:
+            name = re.match(r"\s*(?:with\s+)?([A-Z]\w*)\s*(?::|$)", part)
+            if name and not part.strip().startswith("with") and name.group(1) not in out:
+                out.append(name.group(1))
+    return out
+
+
 def evaluate_signatures(block, karac):
     """Check a signature catalogue. Returns (status, diagnostics) or None.
 
@@ -607,6 +760,11 @@ def evaluate_signatures(block, karac):
     items, calls = signature_probes(decls)
     if not items and not calls:
         return None
+    generics = header_generics(block.code)
+    if generics:
+        params = "[" + ", ".join(generics) + "]"
+        items = [re.sub(r"^trait (ConformanceProbe\d+) ", r"trait \1" + params + " ", t)
+                 for t in items]
     outside = []
     diags = []
     if items:
@@ -698,6 +856,10 @@ def evaluate(block, karac):
 
 
 def is_program(block):
+    # ```kara,norun (the book's word): a whole program that is checked and not
+    # run, such as a server that binds a port and accepts forever.
+    if re.search(r"\bnorun\b", block.info):
+        return False
     return any(re.match(r"^fn main\s*\(", l) for l in block.code)
 
 
@@ -754,7 +916,9 @@ def run_and_compare(block, karac, result, path):
     lines = path.read_text(encoding="utf-8").split("\n")
     end = block.line - 2 + len(block.code) + 1
     expected = documented_output(lines, end)
-    rc, stdout, stderr = mir_run(karac, block.text + "\n")
+    ctx = context_of(block) if block.uses else Context()
+    head = "\n".join(ctx.items) + "\n" if ctx.items else ""
+    rc, stdout, stderr = mir_run(karac, head + block.text + "\n")
     result["run"] = {"exit": rc, "stdout": stdout[-2000:], "stderr": stderr[-1000:]}
     if expected is not None:
         result["expected"] = expected
@@ -809,6 +973,7 @@ def main():
 
     blocks = parse_blocks(DESIGN)
     declared = collect_declared_names(blocks)
+    index_names(blocks)
     if args.only:
         blocks = [b for b in blocks if args.only in b.hash or args.only in b.text]
         if not blocks:
@@ -826,7 +991,13 @@ def main():
             results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
                             "outcome": outcome, "rung": None, "diagnostics": []})
             continue
-        status, rung, diags = evaluate(b, args.karac)
+        try:
+            status, rung, diags = evaluate(b, args.karac)
+        except MissingContext as e:
+            results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
+                            "outcome": "CONTEXT-MISSING", "rung": None,
+                            "diagnostics": [{"phase": "harness", "message": str(e)}]})
+            continue
         # An expect-error block that WAS rejected is confirmed, whatever phase
         # rejected it — the unresolved bucket below must not swallow it. (The
         # weak spot: we check that it was rejected, not that it was rejected for
@@ -837,7 +1008,8 @@ def main():
                             "outcome": outcome, "rung": rung,
                             "expects_error": True, "diagnostics": diags[:4]})
             continue
-        if (diags and all(UNRESOLVED_RE.match(d.get("message", "")) for d in diags)
+        if (diags and not b.uses
+                and all(UNRESOLVED_RE.match(d.get("message", "")) for d in diags)
                 and (status == "rejected" or rung == "signatures")):
             missing = sorted({UNRESOLVED_RE.match(d["message"]).group(2)
                               for d in diags})

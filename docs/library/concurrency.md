@@ -14,7 +14,7 @@ fn channel[T: CrossTask](cap: i64) -> (Sender[T], Receiver[T])
 
 The element type comes from how the ends are used, or from an annotation, since calls take no type arguments:
 
-```kara
+```kara,uses=c-job
 let (tx, rx): (Sender[Job], Receiver[Job]) = channel(64);
 ```
 
@@ -58,7 +58,7 @@ Sending returns a `Result` instead of panicking because a panic ends the whole p
 
 **`select`.** A `select` waits on several channel operations at once and runs the first one that can complete ([core-semantics.md §11.11](../core-semantics.md#11-concurrency-c9)):
 
-```kara
+```kara,uses=c-select-values
 select {
     msg = requests.recv()       => handle(msg),   // msg: Option[Job]
     r = results.send(done)      => log(r),        // r: Result[(), SendError[Report]]
@@ -100,7 +100,7 @@ Both errors tell a closed channel from a timeout, and `send_timeout` hands the v
 
 **Deferred.** Unbounded channels and fan-out or fan-in combinators come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
 
-```kara
+```kara,uses=c-handle-request
 import std.sync.{channel, Sender, Receiver, SendError};
 
 enum Request { GoTo(i64), Stop }
@@ -161,7 +161,7 @@ impl[T] TaskHandle[T] {
 
 An accept loop, one task per connection, at most 1000 at a time:
 
-```kara
+```kara,uses=c-handle-client
 import std.net.{TcpListener, NetError};
 import std.sync.{TaskGroup};
 
@@ -178,7 +178,7 @@ The closure moves `conn` into its task, because `handle_client` takes it `own`. 
 
 **Collecting every result.** Keep the handles and join them one by one. Every task runs to completion whatever the others return, so for tasks that return `Result` this collects every result and every error:
 
-```kara
+```kara,uses=c-fetch-page
 fn fetch_all(urls: Slice[String]) -> Vec[Result[Page, FetchError]] {
     let group = TaskGroup.new();
     let mut handles = Vec.new();

@@ -22,6 +22,7 @@
 //! | ```` ```kara ```` | Must pass the full **static** pipeline (parse → desugar → resolve → typecheck → effect → ownership), the same gate `karac check` / the LSP use. Not executed. |
 //! | ```` ```kara,run ```` | Must additionally **execute** cleanly on the interpreter — every phase clean *and* no runtime error (`run_playground(...).ok`). |
 //! | ```` ```kara,norun ```` | Static-only, and explicitly *never* executed even though it may have a `main` (e.g. it would block on I/O or loop forever). Same gate as plain `kara`; the annotation documents intent. |
+//! | ```` ```kara,uses=NAME ```` | Checked by `scripts/library-conformance.py`, after the block fenced `name=NAME` in the same chapter or the `// context: NAME` section of `docs/doc-context.kara`; skipped here, which reads one block at a time. `name=NAME` on a block changes nothing here. |
 //! | ```` ```kara,ignore ```` | Skipped entirely — an illustrative fragment that is not a standalone compilable unit (a bare signature, a `// ...`-elided body, a snippet that references names defined elsewhere in the chapter's prose). `kara,fragment` (or `kara,ignore,fragment`) says the same, in the word `scripts/design-conformance.py` and `scripts/library-conformance.py` also read. |
 //! | ```` ```kara,error=E0205 ```` | Must be **rejected**, with that code among its errors (`error=A\|B` for either): a chapter's deliberate counter-example. A block that compiles, or fails only with other codes, fails here (B-2026-11-22-20). |
 //!
@@ -100,6 +101,10 @@ fn classify(info: &str) -> Option<Class> {
     for ann in parts {
         match ann {
             "ignore" | "fragment" => return Some(Class::Ignore), // ignore wins outright
+            // `kara,uses=NAME`: the block is judged after the declarations it
+            // names, which scripts/library-conformance.py supplies and this
+            // harness does not (docs/design-conformance.md § Context).
+            a if a.starts_with("uses=") => return Some(Class::Ignore),
             a if a.starts_with("error=") => class = Class::CompileFail,
             "run" => class = Class::Run,
             "norun" => class = Class::NoRun,

@@ -45,7 +45,7 @@ v.sort();                       // natural ascending order
 For any other order, `sort_by` takes a comparator closure `|a, b| ...` that
 returns an ordering. Produce one by comparing two elements with `.cmp()`:
 
-```kara,ignore
+```kara,uses=b-v
 v.sort_by(|a, b| a.cmp(b));     // ascending — same as v.sort()
 v.sort_by(|a, b| b.cmp(a));     // descending — flip the operands
 ```
@@ -54,7 +54,7 @@ v.sort_by(|a, b| b.cmp(a));     // descending — flip the operands
 reverses the direction. The same shape sorts by a derived key — compare the keys
 instead of the whole elements:
 
-```kara,ignore
+```kara,uses=b-pairs
 // pairs: Vec[(i64, i64)] — order by the second component, descending
 pairs.sort_by(|a, b| b.1.cmp(a.1));
 ```
@@ -96,7 +96,7 @@ items.skip(n)                      // skip first n elements
 Iterator adapters are methods, so a pipeline reads in the order it runs. There
 is no `|>` operator; the method chain is the pipeline:
 
-```kara,ignore
+```kara,uses=b-lines
 let result: Vec[i64] = lines.iter()
     .map(|l| l.trim())
     .filter(|l| not l.is_empty())

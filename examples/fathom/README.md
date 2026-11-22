@@ -24,7 +24,7 @@ full fluid-sim flagship on it — see [`docs/dogfooding.md`](../../docs/dogfoodi
   every frame it drains the latest scroll and pointer move with a non-blocking
   `try_recv`, with no `await` and no event callbacks:
 
-  ```kara
+  ```kara,fragment
   let frames = animation_frames();
   let wheels = wheel();           // Channel[WheelEvent]   — scroll
   let moves  = pointer_moves();   // Channel[PointerEvent] — pan
@@ -45,7 +45,7 @@ full fluid-sim flagship on it — see [`docs/dogfooding.md`](../../docs/dogfoodi
 
 - Each frame's rows are split into bands and computed in parallel:
 
-  ```kara
+  ```kara,fragment
   let task: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, cx, cy, scale));
   ```
 
@@ -66,7 +66,7 @@ full fluid-sim flagship on it — see [`docs/dogfooding.md`](../../docs/dogfoodi
   escape test, and the per-lane count update each lower to a single WASM SIMD-128
   (`v128`) instruction — same source, no flag:
 
-  ```kara
+  ```kara,fragment
   let active = mag <= four;                     // f64x2.le → Vector[bool, 2] mask
   counts = counts + active.select(one, zero);   // v128.bitselect — +1 per inside lane
   ```

@@ -67,6 +67,10 @@ def markdown_files():
 
 
 def is_program(block):
+    # ```kara,norun (the book's word): a whole program that is checked and not
+    # run, such as a server that binds a port and accepts forever.
+    if re.search(r"\bnorun\b", block.info):
+        return False
     return any(re.match(r"^fn main\s*\(", l) for l in block.code)
 
 
@@ -151,7 +155,11 @@ def classify_block(b, karac, declared):
     if b.fragment or b.skipped or b.elided:
         return {"outcome": "fragment" if b.fragment else "skipped" if b.skipped
                 else "elided", "rung": None, "diagnostics": []}
-    status, rung, diags = dc.evaluate(b, karac)
+    try:
+        status, rung, diags = dc.evaluate(b, karac)
+    except dc.MissingContext as e:
+        return {"outcome": "CONTEXT-MISSING", "rung": None,
+                "diagnostics": [{"phase": "harness", "message": str(e)}]}
     if b.expects_error:
         if status != "rejected":
             return {"outcome": "MISSING-REJECTION", "rung": rung, "diagnostics": diags[:4]}
@@ -159,7 +167,8 @@ def classify_block(b, karac, declared):
         # (B-2026-11-22-20).
         outcome, rung, diags = dc.rejection_outcome_any_rung(b, karac)
         return {"outcome": outcome, "rung": rung, "diagnostics": diags[:4]}
-    if (diags and all(dc.UNRESOLVED_RE.match(d.get("message", "")) for d in diags)
+    if (diags and not b.uses
+            and all(dc.UNRESOLVED_RE.match(d.get("message", "")) for d in diags)
             and (status == "rejected" or rung == "signatures")):
         missing = sorted({dc.UNRESOLVED_RE.match(d["message"]).group(2)
                           for d in diags})
@@ -175,7 +184,9 @@ def classify_block(b, karac, declared):
         return {"outcome": "REJECTED", "rung": rung, "diagnostics": diags[:4]}
     out = {"outcome": "conforms", "rung": rung, "diagnostics": []}
     if is_program(b) and rung == "items":
-        rc, stdout, stderr = mir_run(karac, b.text + "\n")
+        ctx = dc.context_of(b) if b.uses else dc.Context()
+        head = "\n".join(ctx.items) + "\n" if ctx.items else ""
+        rc, stdout, stderr = mir_run(karac, head + b.text + "\n")
         out["run"] = {"exit": rc, "stdout": stdout[-2000:], "stderr": stderr[-1000:]}
         if b.expected is not None:
             out["expected"] = b.expected
@@ -206,7 +217,12 @@ def main():
         return not args.only or any(args.only in s for s in (key, where, text))
 
     results = []
+    indexed = None
     for b in blocks:
+        # `name=` is per document: index this block's file before judging it.
+        if b.file != indexed:
+            dc.index_names([x for x in blocks if x.file == b.file])
+            indexed = b.file
         where = f"{rel(b.file)}:{b.line}"
         if not selected(b.hash, where, b.text):
             continue

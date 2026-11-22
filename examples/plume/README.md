@@ -24,7 +24,7 @@ Worker-pool + framebuffer-blit spine, plus **live input** as the new ingredient.
 - The render loop is a plain blocking loop — frame clock **and** input, both as
   channels, no `await` anywhere:
 
-  ```kara
+  ```kara,fragment
   let frames = animation_frames();      // std.web.time
   let moves  = pointer_moves();         // std.web.events — Channel[PointerEvent]
   loop {
@@ -44,7 +44,7 @@ Worker-pool + framebuffer-blit spine, plus **live input** as the new ingredient.
 
 - Each frame's rows are split into bands and computed in parallel:
 
-  ```kara
+  ```kara,fragment
   let task: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, pu, pv, t));
   ```
 

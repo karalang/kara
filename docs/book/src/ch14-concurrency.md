@@ -6,7 +6,7 @@ Kāra's concurrency story is built on a simple idea: **if the compiler can prove
 
 Consider a function that fetches data from three independent sources:
 
-```kara,ignore
+```kara,uses=b-dashboard
 fn build_dashboard(user_id: u64) -> Dashboard
     with reads(UserDB) reads(OrderDB) reads(Analytics)
 {

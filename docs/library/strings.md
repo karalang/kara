@@ -30,7 +30,7 @@ let owned: String = w.to_string();         // an owned copy, to keep
 
 Splitters return lazy iterators of views, so splitting copies nothing until asked to:
 
-```kara
+```kara,uses=l-line
 let parts: Vec[Str] = line.split(",").collect();                         // views into line
 let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // owned copies
 ```
@@ -104,7 +104,7 @@ Each allocating method has a `try_*` twin ([collections.md](collections.md#falli
 
 `String` and `Str` equality (`==`) compares the raw UTF-8 bytes. Two strings that look the same but use different Unicode normalization forms (NFC and NFD, for example) are **not** equal. For a normalization-aware comparison, normalize both sides:
 
-```kara
+```kara,uses=l-ab-strings
 let same = a.normalize(NormalizationForm.Nfc) == b.normalize(NormalizationForm.Nfc);
 ```
 

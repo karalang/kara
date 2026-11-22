@@ -457,7 +457,7 @@ Each connection is served by a task of its own, in an isolating group ([core sem
 
 Since every connection's task calls the handler, the handler must be `CrossTask` ([core semantics §6.3](../core-semantics.md#6-sharing-c7)), and so must everything it captures: state that requests share is a `sync` type, never a `shared` one, even when only one worker runs the tasks. A store the requests change keeps its plain state behind a `Mutex`, and each request holds the lock while it reads or writes:
 
-```kara
+```kara,norun
 struct Counts { hits: Map[String, i64] }
 sync struct Store { state: Mutex[Counts] }
 
@@ -561,7 +561,7 @@ A `Command` describes a program to run. Building one touches nothing; `spawn` st
 
 `args` takes a `Slice[Str]`, such as `["-l", "-a"]`. To pass a `Vec[String]`, call `arg` for each element:
 
-```kara
+```kara,uses=l-words-vec
 let mut cmd = Command.new("echo");
 for w in words {
     cmd = cmd.arg(w);

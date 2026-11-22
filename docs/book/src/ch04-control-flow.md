@@ -4,13 +4,13 @@
 
 `if` is an expression — it produces a value:
 
-```kara,ignore
+```kara,uses=b-score
 let status = if score >= 90 { "excellent" } else { "keep going" };
 ```
 
 For side effects, use it as a statement:
 
-```kara,ignore
+```kara,uses=b-temperature
 if temperature > 100 {
     println("Warning: overheating!");
 } else if temperature > 80 {
@@ -63,7 +63,7 @@ for i in 0..=5 {
 
 An infinite loop. Use `break` to exit:
 
-```kara,ignore
+```kara,uses=b-try-connect
 let mut attempt = 0;
 let result = loop {
     attempt = attempt + 1;
@@ -117,7 +117,7 @@ Kāra has no pipe operator: `|>` is rejected with a note saying so. To read a
 chain of steps in the order they happen, name the intermediate values, or use
 method calls, which already read left to right:
 
-```kara,ignore
+```kara,uses=b-pipeline-values
 let parsed = transform(data);
 let checked = validate(parsed);
 let result = save(checked);

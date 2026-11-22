@@ -4,7 +4,7 @@
 
 A trait defines shared behavior — a set of methods that different types can implement:
 
-```kara
+```kara,name=b-area
 trait Area {
     fn area(self) -> f64;
 }
@@ -12,7 +12,7 @@ trait Area {
 
 Types implement traits with `impl`:
 
-```kara,ignore
+```kara,uses=b-area
 struct Circle {
     radius: f64,
 }

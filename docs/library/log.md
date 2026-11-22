@@ -10,7 +10,7 @@ The compiler's own parallelization (statement and loop auto-par) is invisible to
 
 `debug`, `info`, `warn` and `error` each take a message followed by zero or more `key: value` structured fields. The field values are borrowed, so logging a value does not move it.
 
-```kara
+```kara,uses=l-log-request
 import std.log.{debug, info, error};
 
 fn handle_request(req: Request) -> Result[Response, AuthError] {
@@ -66,7 +66,7 @@ Once traces exist, the same lines carry them:
 
 The backend is configured with `log.init`, normally once, at program start:
 
-```kara
+```kara,uses=l-serve
 import std.log;
 
 fn main() {

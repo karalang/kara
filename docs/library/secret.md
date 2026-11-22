@@ -20,7 +20,7 @@
 
 ## Access
 
-```kara
+```kara,uses=l-raw-token
 import std.secret.{Secret};
 
 let mut tok: Secret[String] = Secret.new(raw_token);

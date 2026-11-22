@@ -45,7 +45,7 @@ non-trivial enough to be a real editor (box blur, sharpen, Sobel edge detect),
 plus invert and grayscale — written as a pure per-row-band kernel so the browser
 entry can fan the bands across the worker pool with no change to the math:
 
-```kara
+```kara,fragment
 let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_band(y0, y1, filter_id));
 ```
 

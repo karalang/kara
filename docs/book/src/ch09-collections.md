@@ -53,7 +53,7 @@ When you already know how many elements you'll add, reserve the space up front
 with `Vec.with_capacity(n)`. It allocates once; the first `n` pushes land in the
 reserved slots without a single reallocation:
 
-```kara,ignore
+```kara,uses=b-compute
 let mut out = Vec.with_capacity(n + 1);   // one allocation, no grow chain
 let mut i = 0;
 while i < n {
@@ -158,7 +158,7 @@ fn min_max(items: Vec[i64]) -> (i64, i64) {
 Collections nest. The workhorse 2D structure is a `Vec[Vec[i64]]` — a vector of
 rows, each a vector of cells. Build one by pushing row literals:
 
-```kara
+```kara,name=b-grid
 let mut grid: Vec[Vec[i64]] = Vec.new();
 grid.push([1, 2, 3]);
 grid.push([4, 5, 6]);
@@ -170,7 +170,7 @@ println(grid[1][2]);       // 6 — row 1, column 2
 
 `grid[i][j]` reads a cell; the same place assigns to one:
 
-```kara,ignore
+```kara,uses=b-grid
 grid[0][1] = 20;           // mutate one cell in place
 ```
 
@@ -178,7 +178,7 @@ For a grid sized at runtime — the usual starting point for a dynamic-programmi
 table — fill it with zeros up front. `Vec.filled(n, value)` builds an `n`-element
 vector, and nesting it gives an `r × c` grid:
 
-```kara,ignore
+```kara,uses=b-rows-cols
 let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0i64));
 ```
 

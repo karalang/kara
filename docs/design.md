@@ -813,7 +813,7 @@ Each `karac build --target X` produces one artifact. Building a matrix of target
 
 A refused initializer is reported at the expression, and when what it calls has an effect, a note names the effect at the call: `const X: i64 = shout();` adds `the initializer of constant 'X' performs writes(Stdout) here, through shout` (review-thread ruling 2026-11-21, B-2026-11-22-32). A constant declared in a block is visible to the rest of the block only, so it takes no visibility keyword; `pub const` there is an error.
 
-```kara
+```kara,uses=d-point|d-config
 // allowed
 pub const MAX_RETRIES: i32 = 5;
 pub const TIMEOUT_MS: i64 = 60 * 1000;
@@ -843,7 +843,7 @@ The diagnostic for an effectful initializer points at the effectful expression, 
 
 **Run-time values: the `main`-and-context pattern.** Values that need run-time initialization (configuration, database pools, compiled regular expressions, lookup tables) are built in `main`, or a function it calls, and passed down in a context struct with methods:
 
-```kara
+```kara,uses=d-app-context
 pub struct AppContext {
     pub config: Config,
     pub db_pool: DbPool,
@@ -883,10 +883,12 @@ fn main() -> Result[(), AnyError]
 
 **Request-scoped state** (the logged-in user, a request id, a trace span) is a second, per-request context passed beside `self`:
 
-```kara
-fn handle_request(self, req: own Request) -> Result[Response, AnyError] {
-    let rctx = RequestContext.from(req);
-    self.process(rctx)
+```kara,uses=d-app-context|d-request-context
+impl AppContext {
+    fn handle_request(self, req: own Request) -> Result[Response, AnyError] {
+        let rctx = RequestContext.from(req);
+        self.process(rctx)
+    }
 }
 ```
 
@@ -1236,7 +1238,7 @@ An array is written as a list literal with an `Array` expected type, or with the
 
 **List literals.** `[a, b, c]` is a `Vec` by default and follows the expected type: with an `Array[T, N]`, `Set[T]` or `SortedSet[T]` annotation it builds that type (B-2026-11-19-10). The repeat form `[v; n]` always builds an `Array`, and `n` must be a constant. A `Copy` value is copied into each slot; any other value must be `Clone`, and the slots after the first hold clones of `v`. A `Vec` of `n` copies is `Vec.filled(n, v)`.
 
-```kara
+```kara,uses=d-n
 let v = [1, 2, 3];                    // Vec[i64]
 let a: Array[i64, 3] = [1, 2, 3];     // Array[i64, 3]: the expected type decides
 let s: Set[i64] = [1, 2, 3];          // Set[i64]
@@ -1264,7 +1266,7 @@ There is one way to write each collection: `[a, b]`, `[v; n]`, `[k: v]`, `[:]`, 
 
 A struct is a named record of fields:
 
-```kara
+```kara,uses=d-hash,name=d-user
 struct User {
     pub name: String,        // visible to users of the package
     pub email: String,
@@ -1293,7 +1295,7 @@ impl User {
 
 **Struct literals.** Every field is given a value, in any order. The values are evaluated in written order ([core-semantics.md §8.1](core-semantics.md#8-evaluation-order)) and move into the struct.
 
-```kara
+```kara,uses=d-pointf|d-user|d-user-loaders|d-pw
 let x = 1.0;
 let y = 2.0;
 let p = Point { x: x, y: y };
@@ -1311,7 +1313,7 @@ Derived behaviour (`#[derive(...)]`) is covered in [§9](#9-traits).
 
 An enum is a closed set of variants. A variant has no payload, a tuple payload, or named fields:
 
-```kara
+```kara,uses=d-describe
 enum Token {
     Eof,                                    // unit variant
     Integer(i64),                           // tuple variant
@@ -1327,7 +1329,7 @@ A variant is built with its qualified name. In a pattern, the enum name may be l
 
 **A payload may be any type, another enum included.**
 
-```kara
+```kara,uses=d-commands
 enum Command { Start, Stop, Restart { delay_ms: i64 } }
 enum Step { Do(Command), Wait(i64), Done }
 
@@ -1358,7 +1360,7 @@ error: enum `Expr` is recursive without indirection
 
 The idiomatic fix for tree-shaped data (query trees, expression trees, JSON values) is `shared enum`:
 
-```kara
+```kara,uses=d-value
 shared enum Expr {
     And(Expr, Expr),    // OK: each payload holds a counted handle to a child
     Or(Expr, Expr),
@@ -1468,7 +1470,7 @@ let s3 = sum(v[1..3]);    // a sub-range is a Slice[i64] too
 
 **Coercion at call boundaries.** A `Slice[T]` parameter accepts a `Vec[T]` or `Array[T, N]` place, borrowed, or a `Slice[T]`. The caller writes the collection and the compiler builds the slice header. This keeps signatures to one type instead of three, without a dereference chain users cannot name. The conversion happens only at call boundaries, a method receiver included: a `Vec[T]` or `Array[T, N]` receiver also finds `Slice[T]`'s methods ([§9 Method resolution](#method-resolution)). `let` and assignment do not convert. Where a slice must be named directly (inside a closure, in a `match` arm), call `.as_slice()`:
 
-```kara
+```kara,uses=d-v
 let window = v.as_slice();    // Slice[i64] as a first-class value
 ```
 
@@ -1492,7 +1494,7 @@ A `mut ref Vec[T]` or `mut ref Array[T, N]` passes as `mut Slice[T]` at call bou
 
 **`split_at_mut` splits one mutable borrow into two disjoint ones.**
 
-```kara
+```kara,fragment
 fn split_at_mut(mut ref self, mid: i64) -> (mut Slice[T], mut Slice[T])
 ```
 
@@ -1549,7 +1551,7 @@ help: 'f64' implements neither 'Eq' nor 'Hash' (NaN != NaN); use the total-order
 
 A distinct type is a zero-cost wrapper that keeps structurally identical but semantically different values apart:
 
-```kara
+```kara,uses=d-load-user
 distinct type UserId = i64;
 distinct type PostId = i64;
 distinct type Meters = f64;
@@ -1593,7 +1595,7 @@ For matching, a distinct type has its base type's values ([Pattern exhaustivenes
 
 `match` tests a value against patterns in order and runs the first arm that matches:
 
-```kara
+```kara,uses=d-vec2
 const PI: f64 = 3.14159;
 
 enum Shape {
@@ -1638,7 +1640,7 @@ In a field pattern, `field` alone is short for `field: field`: the field name is
 
 **Pattern guards.** An arm may add `if EXPR` between the pattern and `=>`. The guard runs only when the pattern matches; if it is false, matching continues with the next arm. A guarded arm does not count toward exhaustiveness, so an unguarded arm or a wildcard is still required. A guard's effects count toward the enclosing function's effects like any other subexpression, and its temporaries drop at the end of the guard ([core-semantics.md §7.4](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0)).
 
-```kara
+```kara,uses=d-score
 match score {
     Ok(n) if n >= 90 => "A",
     Ok(n) if n >= 70 => "B",
@@ -1651,7 +1653,7 @@ match score {
 
 An arm may list several patterns separated by `|`. It fires if any of them matches.
 
-```kara
+```kara,uses=d-event
 match event {
     MouseDown { x, y } | TouchStart { x, y } => handle_click(x, y),
     _ => {}
@@ -1687,7 +1689,7 @@ CONST_PAT_BOUND = LITERAL                  // integer or char literal
                 | QUALIFIED_PATH           // a module-level `const` of integer or char type
 ```
 
-```kara
+```kara,uses=d-c-code-n
 match c {
     'a'..='z' => "lowercase",
     'A'..='Z' => "uppercase",
@@ -1717,7 +1719,7 @@ match n {
 
 **Named bounds.** A bound may be a literal or a path to a module-level `const` of integer or `char` type. The path is resolved during type checking and the constant's value is used as the bound:
 
-```kara
+```kara,uses=d-age32
 const MIN_AGE: i32 = 18;
 const MAX_AGE: i32 = 65;
 
@@ -1734,7 +1736,7 @@ A named bound follows the same type, ordering, exhaustiveness and composition ru
 
 `name @ P` tests `P` and also binds the whole value at that position to `name`:
 
-```kara
+```kara,uses=d-at-values
 match val {
     x @ Some(_) => f"got: {x}",
     None => "nothing",
@@ -1829,7 +1831,7 @@ This is the full algorithm for finite constructor spaces. The rules below cover 
 
 **`bool`** has two constructors, `true` and `false`. A match with both arms is exhaustive without a wildcard:
 
-```kara
+```kara,uses=d-flag
 match flag {
     true  => "yes",
     false => "no",   // exhaustive: no wildcard needed
@@ -1878,7 +1880,7 @@ match flag {
 
 #### Worked example
 
-```kara
+```kara,uses=d-evt
 enum Event {
     MouseDown { x: i64, y: i64 },
     MouseUp   { x: i64, y: i64 },
@@ -1934,7 +1936,7 @@ The statements are `let`, `let…else`, assignment, `defer`, `errdefer` and expr
 
 **Immutable by default.** `let` declares an immutable binding. Reassigning it, calling a `mut ref self` method on it, or passing it as a `mut` argument ([§7](#7-functions-and-closures)) is a compile error. `let mut` opts in to mutability:
 
-```kara
+```kara,uses=d-kv
 let x = 5;
 x = 10;              // ERROR: x is immutable
 
@@ -1950,7 +1952,7 @@ seen.insert(k, v);   // OK
 
 **`let mut` with a destructuring pattern** makes every binding the pattern introduces mutable. There is no per-binding `mut` inside a pattern:
 
-```kara
+```kara,uses=d-p-result
 let mut (a, b) = (1, 2);                    // a and b are both mutable
 let mut Point { x, y } = p;                 // x and y are both mutable
 let mut Ok(v) = result else { return; };    // v is mutable
@@ -1965,7 +1967,7 @@ let mut a = a;         // shadow a as mutable; b stays immutable
 
 **Shadowing** (`let x = …` again) is always allowed, whatever the old binding's mutability. It introduces a new binding; it does not mutate the old one, and the old value stays alive until its scope ends ([core-semantics.md §7.3](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0)). Shadowing works across scopes too:
 
-```kara
+```kara,uses=d-condition
 let x = "42";
 let x = x.len();          // OK: shadows with a different type
 
@@ -2008,7 +2010,7 @@ y = 10;    // OK: reassignment, allowed by `mut`
 - **`loop`**: a body that assigns `x` on every path before every `break` makes `x` assigned after the loop, because the body runs at least once.
 - **Struct fields**: assigning fields one by one (`p.x = 1; p.y = 2;`) does not assign the struct as a whole; use a struct literal. The same holds for the slots of an [array](#arrays).
 
-```kara
+```kara,uses=d-condition
 let x: i64;
 if condition { x = 5; }
 print(x);              // ERROR: x is possibly uninitialized (condition may be false)
@@ -2061,7 +2063,7 @@ Call results and literals are not places; they may appear on the right of `=`, n
 MULTI_ASSIGN = PLACE_EXPR { "," PLACE_EXPR } "=" EXPR { "," EXPR } ";"
 ```
 
-```kara
+```kara,uses=d-swap
 a, b = b, a;                       // swap two locals
 v[i], v[j] = v[j], v[i];           // swap two slots of a Vec of a Copy type
 x, y, z = z, x, y;                 // rotate three locals
@@ -2075,7 +2077,7 @@ Assignment is a statement, not an expression: it has no value. It may also be th
 
 `if` is an expression. It produces a value and can appear wherever an expression can:
 
-```kara
+```kara,uses=d-ab
 let max = if a > b { a } else { b };
 ```
 
@@ -2083,7 +2085,7 @@ let max = if a > b { a } else { b };
 
 **`if` without `else` has type `()`.** Its block must then produce `()` too. A block that produces a value with no `else` branch is a type error, even in statement position, so a value is never silently discarded:
 
-```kara
+```kara,uses=d-cond-ab
 if cond { side_effect(); }           // OK: the block produces ()
 if cond { 5 }                        // TYPE ERROR: the block produces i64, and there is no else
 let x = if cond { 5 };               // TYPE ERROR: same reason
@@ -2098,7 +2100,7 @@ let y = if a > b { a } else { b };   // OK: both branches produce i64
 
 **`if let`** runs a block when a pattern matches, with the pattern's bindings in scope inside that block only:
 
-```kara
+```kara,uses=d-user-find-values
 if let Some(u) = user.find(id) {
     process(u);
 }
@@ -2112,7 +2114,7 @@ if let Some(u) = user.find(id) {
 
 It is the one-shot counterpart of `while let`, and saves a full `match` for a single pattern. `else if let` is valid, because any `if` may follow `else`:
 
-```kara
+```kara,uses=d-try-ab
 if let Some(a) = try_a() {
     observe(a);
 } else if let Some(b) = try_b() {
@@ -2124,7 +2126,7 @@ if let Some(a) = try_a() {
 
 Or-patterns work as in `match` ([Or-patterns](#or-patterns)):
 
-```kara
+```kara,uses=d-either-val
 if let Left(x) | Right(x) = val {
     observe(x);
 }
@@ -2132,11 +2134,14 @@ if let Left(x) | Right(x) = val {
 
 **`let…else`** destructures at the top of a scope and exits early when the pattern does not match:
 
-```kara
-let Ok(config) = load_config(path) else {
-    return Err(ConfigError.Missing);
-};
-// config is in scope here
+```kara,uses=d-load-config-result
+fn start(path: Str) -> Result[Config, ConfigError] {
+    let Ok(config) = load_config(path) else {
+        return Err(ConfigError.Missing);
+    };
+    // config is in scope here
+    Ok(config)
+}
 ```
 
 - The `else` block **must diverge**: `return`, `break`, `continue`, or a call to a diverging function (`panic()`, `unreachable()`). The type checker enforces this.
@@ -2176,7 +2181,7 @@ Each iteration is its own scope: what it creates drops at the end of the iterati
 
 Only the forms with a start can be iterated. `RangeTo`, `RangeToInclusive` and `RangeFull` appear mostly as slice indices (`items[..n]`, `items[..=n]`, `items[..]`) and as [range patterns](#range-patterns). Every sequence that can be indexed by a `Range` can be indexed by all six forms, with no extra surface. This is a guarantee about the built-in sequences, not a trait: there is no nameable `SliceIndex` in v1.
 
-```kara
+```kara,uses=d-items-n
 for i in 0..10 { print(i); }       // 0, 1, …, 9
 for i in 0..=10 { print(i); }      // 0, 1, …, 10
 let middle = items[2..5];
@@ -2188,7 +2193,7 @@ Prefer `..=` to `lo..(hi + 1)` when the end must be visited, and the half-open f
 
 **`loop` is an expression** when it exits with a value:
 
-```kara
+```kara,uses=d-try-something
 let result = loop {
     let attempt = try_something();
     if attempt.is_ok() {
@@ -2199,7 +2204,7 @@ let result = loop {
 
 **Labels.** Any loop may carry a label, written with a leading `'`, so that `break` and `continue` can target it from inside nested loops:
 
-```kara
+```kara,uses=d-matrix
 'outer: for row in matrix {
     for val in row {
         if *val == target {
@@ -2213,7 +2218,7 @@ let result = loop {
 
 **Labeled blocks.** Any block may carry a label, which makes it an early exit with a value:
 
-```kara
+```kara,uses=d-matrix
 let result = 'found: {
     for row in matrix {
         for cell in row {
@@ -2241,7 +2246,7 @@ A labeled block is an ordinary block with one extra ability: code inside it may 
 - **One or more `break value`**: the type is the least upper bound of the break values; values whose types do not unify are an error.
 - **A conditional `break`** still contributes its type. The loop may never reach it at run time, but its type is the break value's type: the compiler does not infer `Option` or `Never` because a `break` is guarded.
 
-```kara
+```kara,uses=d-ready
 // A conditional break: the type is i32, not Option[i32]
 let x = loop {
     if ready { break 5i32; }
@@ -2311,7 +2316,7 @@ A fixed table, rather than "the longest reasonable scope", lets a reader (human 
 - `b` must have the type of the value inside `a`, and so does the result. One exception: when `a` is an `Option[ref V]` and `V: Copy`, `b` may be a `V`, and the result is a `V`. So `counts.get(word) ?? 0` works. For other `V`, write `m.get(k).cloned() ?? d`.
 - `??` has the loosest precedence of all operators.
 
-```kara
+```kara,uses=d-config-port-value
 let port = config.port ?? 8080;     // config.port: Option[i64]
 ```
 
@@ -2337,7 +2342,7 @@ This section covers the surface of functions: how they are declared, how paramet
 
 A function declaration has this shape. Every part after the parameter list is optional.
 
-```kara
+```kara,fragment
 pub fn name[T: Bound](param: Type, other: own Other) -> Return
     with reads(Db)
     where T: Display
@@ -2355,7 +2360,7 @@ pub fn name[T: Bound](param: Type, other: own Other) -> Return
 - **Every parameter has a name or a pattern.** The type-only form `fn f(i32)` is a parse error. Write `_: i32` for a parameter the body does not use.
 - **Methods** are functions declared in an `impl` block. Their first parameter may be a receiver (`self`, `own self` or `mut ref self`); see [§9 Traits](#9-traits).
 
-```kara
+```kara,uses=d-save-user
 fn add(a: i64, b: i64) -> i64 { a + b }
 
 pub fn save(user: User) -> Result[(), DbError] with writes(UserDB) {
@@ -2425,7 +2430,7 @@ The mode of each binding in a `match`, `if let`, `while let`, `let` or `for` pat
 - A pattern over a type with a `Drop` body may bind the whole value but may not move a part out.
 - A **slice pattern** over a `Vec` or a `Slice` sees a view: its element bindings are `ref`, or `mut ref` against a mutable place, and nothing moves out. `..rest` binds a `Slice[T]`, or a `mut Slice[T]` when the binding is written `mut ref rest` against a mutable place. A pattern over an owned `Array[T, N]` destructures like a tuple and may move elements. The forms are in [§5 Slice and array patterns](#slice-and-array-patterns).
 
-```kara
+```kara,uses=d-foo
 fn f(val: own Foo) {
     match val {
         Foo { field, .. } => use_owned(field),   // moves `field` out of `val`
@@ -2511,7 +2516,7 @@ fn find[T: PartialEq](items: Slice[T], target: T; start: Option[i64] = None) -> 
 
 Any irrefutable pattern may stand in parameter position, followed by `:` and the type, in functions and closures alike:
 
-```kara
+```kara,uses=d-pointf|d-pairs
 fn add((a, b): (i64, i64)) -> i64 { a + b }
 
 fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point) -> f64 {
@@ -2528,7 +2533,7 @@ let sums = pairs.into_iter().map(|(a, b)| a + b);
 - **The type carries the parameter's mode**, as for any parameter. Bare `T` borrows, `own T` is owned, and `mut ref T` borrows mutably.
 - **Bindings follow the pattern rules** of [Binding modes in patterns](#binding-modes-in-patterns). Over an `own` parameter, a plain binding moves its part and `ref name` borrows it. Over a bare parameter of a non-`Copy` type, a binding of a non-`Copy` part is a `ref`, and a binding of a `Copy` part copies it. So a pattern that moves parts out of a parameter needs `own`.
 
-```kara
+```kara,uses=d-headers
 struct Request { headers: Headers, body: Vec[u8] }
 
 fn handle(Request { headers, body }: own Request) {
@@ -2556,7 +2561,7 @@ fn longest(a: own String, b: own String) -> String {
 
 **A function may return a reference** when copying would cost too much. `ref T` and `mut ref T` may be the return type or appear inside it (`Option[ref T]`, a tuple):
 
-```kara
+```kara,uses=d-inventory,name=d-ref-name
 fn name(user: User) -> ref String {
     ref user.name
 }
@@ -2602,7 +2607,7 @@ fn make_joiner(a: String, b: String) -> Joiner {
 
 Rules for views, all in [core-semantics.md §5](core-semantics.md#5-references-and-views-c5):
 - **Borrows root at named places.** A reference whose origin is a temporary must not outlive the statement that created it. There is no temporary lifetime extension. Bind the temporary to a variable first:
-  ```kara
+  ```kara,uses=d-ref-name|d-make-user
   let n = name(make_user());     // error: the result borrows a temporary
   let u = make_user();
   let n = name(u);               // OK: borrows `u`
@@ -2649,7 +2654,7 @@ A local bound this way is a reference, with the origins of [core-semantics.md §
 
 **`mut ref place` borrows a place for writing.** It is the mutable twin of `ref place`: `mut ref v[i]` and `mut ref s.field` produce a `mut ref` to that place. It moves nothing. The place must be writable: rooted at a `let mut` local, a `mut ref` parameter or a `mut ref self` receiver, and never reached through a shared `ref` ([core-semantics.md §5.9](core-semantics.md#5-references-and-views-c5)). While the borrow is live, the place is read and written only through it ([core-semantics.md §5.6](core-semantics.md#5-references-and-views-c5)). This is how one element is updated in several steps without indexing it at every write:
 
-```kara
+```kara,uses=d-pool-values
 let up = mut ref pool.members[idx];   // borrow the element
 up.refused += 1;                      // writes go through `up`
 up.down_for = 3;                      // `up` needs no `let mut`: `let mut` would only let it be rebound
@@ -2764,7 +2769,7 @@ A capture by move copies a `Copy` place; a closure that only reads a `Copy` vari
 
 **Disjoint capture: closures capture places, not whole bindings.** A closure that mentions `user.name` and `user.age` captures those two fields, each in its own mode. The rest of `user` stays usable outside the closure.
 
-```kara
+```kara,uses=d-event-archive
 struct User { name: String, age: i64, history: Vec[Event] }
 
 fn split_capture(user: own User) {
@@ -2806,7 +2811,7 @@ A closure **escapes** when it, or a value containing it, is returned, stored in 
 - **A value of a function type is move-only.** Only a closure literal that [core-semantics.md §1.1](core-semantics.md#1-values) makes `Copy` is copied. A stored `Fn(..)` is called through a `ref` (`(self.routes[i].handler)(req)`) or borrowed out (`fn handler(self, i: i64) -> ref Handler`). To give one handler many holders, wrap it in a `shared` type: `shared struct Handler { f: Fn(Request) -> Response }`; copying that handle counts.
 - **To store or return a parameter**, declare it `escaping`:
 
-```kara
+```kara,uses=d-bus
 fn make_counter() -> MutFn() -> i64 {
     let mut n = 0;
     || { n += 1; n }               // escapes by being returned: `n` is moved in
@@ -2917,7 +2922,7 @@ Two cases: a type variable whose only constraint is a `Never` value is `Never`, 
 
 When a variable has both a `Never` constraint and a concrete one, the concrete type wins by the least-upper-bound rule (`LUB(Never, T) = T`):
 
-```kara
+```kara,uses=d-cond-fn
 fn pick[T](x: own T, y: own T) -> T { if cond() { x } else { y } }
 
 let a = pick(42, panic());      // a: i64
@@ -3174,7 +3179,7 @@ impl Shape for Circle {
 
 An `impl` block without `for` is an **inherent impl**. It adds methods to the type itself:
 
-```kara
+```kara,uses=d-word-count
 impl WordCount {
     fn total_ratio(self) -> f64 {
         self.unique as f64 / self.total as f64
@@ -3576,7 +3581,7 @@ The binding is legal wherever a trait is named: a bound (`[I: Iterator[Item = T]
 
 **Effects.** Calling the function has the function's own effects. A method call on the returned value has the effects of the hidden type's method, computed on the monomorphized instance and charged to the caller, as for a call through a trait method with no clause ([Declarations and impls](#declarations-and-impls)). So a caller that drops the value without calling a method pays nothing for its methods:
 
-```kara
+```kara,uses=d-record
 effect resource Audit;
 
 fn audited(xs: own Vec[i64]) -> impl Iterator[Item = i64] {
@@ -3599,7 +3604,7 @@ The hidden type's methods must then stay within the ceiling, and a method call o
 
 **What the result borrows.** The caller cannot see into the hidden type, so it counts as a type that may hold a reference ([core-semantics.md §5.3](core-semantics.md#5-references-and-views-c5)). The signature rule decides what the result borrows, as for any view ([Returns, `ref` returns and views](#returns-ref-returns-and-views)): `self`, for a method with a `self` or `mut ref self` receiver, and otherwise every bare parameter of a non-`Copy` type, every `mut ref` parameter and every view parameter. A function with no such parameter, such as `make_counter` above, returns a value that borrows nothing. The value is live until its scope ends, as a value with a `Drop` body is, so what it borrows stays borrowed until then unless the value is moved or consumed first: the hidden type may gain a `Drop` body without the signature changing. A `Copy` value has no drop, so this does not apply to it.
 
-```kara
+```kara,uses=d-logger-write
 fn count_logged[T](xs: own Vec[T], log: Logger) -> impl Iterator[Item = T] {
     log.write("starting count");
     xs.into_iter()               // the result still borrows `log`: the signature says so
@@ -3795,7 +3800,7 @@ Every operator is a call to a trait method. There is no separate operator table 
 
 **Definitions:**
 
-```kara
+```kara,fragment
 // Arithmetic (binary): owned operands, a new value as the result.
 trait Add[Rhs = Self] { type Output; fn add(own self, rhs: own Rhs) -> Self.Output; }
 trait Sub[Rhs = Self] { type Output; fn sub(own self, rhs: own Rhs) -> Self.Output; }
@@ -3990,9 +3995,12 @@ help: to exchange two elements, use `swap`
 
 **Out of bounds panics.** `index` and `index_mut` return a reference, not a `Result`. An invalid index panics, which adds `panics` to the caller's effects. Where an index may be invalid, use `.get(idx)`, which returns `Option[ref Output]`:
 
-```kara
-let n = counts[i];             // counts: Vec[i64]; panics if i is out of bounds
-let item = items.get(i)?;      // Option[ref Item]; None if i is out of bounds
+```kara,uses=d-counts-items
+fn lookup(counts: Vec[i64], items: Vec[Item], i: i64) -> Option[i64] {
+    let n = counts[i];             // panics if i is out of bounds
+    let item = items.get(i)?;      // Option[ref Item]; None if i is out of bounds
+    Some(n + item.sku)
+}
 ```
 
 **Range indexing.** `c[a..b]` is a separate impl, `impl Index[Range[i64]]` with `type Output = Slice[T]`, provided by `Vec[T]`, `Array[T, N]` and `Slice[T]`. Mutable range indexing (`impl IndexMut[Range[i64]]`) also has `type Output = Slice[T]`. `c[a..b] = other` copies the elements of `other` into the range. It requires `T: Copy`, and a length mismatch panics. For other element types, use `clone_from_slice`. For strings, `s[a..b]` yields a `Str` ([library/strings.md](library/strings.md)).
@@ -4027,7 +4035,7 @@ So: **implement `From`, and `Into` comes for free.** A direct `impl Into` would 
 
 **Effects pass through the blanket impl.** Each use of `into` is a generic call, and its effects are those of the instance ([core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)). So `x.into()` has exactly the effects of the `impl From[T] for U` that inference selects at that call, and no others:
 
-```kara
+```kara,uses=d-app-error
 effect resource Log;
 
 impl From[ParseError] for AppError {
@@ -4137,19 +4145,19 @@ A derived `Clone` calls `.clone()` on each field and trusts each field's type. A
 
 A type that owns a resource that must be released deterministically (a file descriptor, a connection, a transaction, a buffer owned through FFI) implements `Drop`. The compiler calls `drop` when the value is destroyed, at the points [core-semantics.md §7](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0) fixes.
 
-```kara
+```kara,uses=d-read-config
 struct File { fd: i32 }
 
 impl Drop for File {
     fn drop(mut ref self) {
-        host.close(self.fd);
+        close_fd(self.fd);
     }
 }
 
 fn read_config() -> Result[Config, AnyError] {
     let f = File.open("config.toml")?;   // f owns the fd
     Ok(parse(f.bytes())?)
-    // f's scope ends here: drop runs, and host.close closes the fd
+    // f's scope ends here: drop runs, and close_fd closes the fd
 }
 ```
 
@@ -4159,7 +4167,7 @@ fn read_config() -> Result[Config, AnyError] {
 
 **`Drop` and `Copy` are exclusive.** A type with a `Drop` impl cannot be `Copy`, and a `Copy` type cannot implement `Drop`. A bitwise copy whose destructor runs on every copy either releases the resource twice or is not really a copy. The compiler rejects the combination at the impl or derive, naming both traits. This holds however `Copy` would arise.
 
-**A `Drop` body may panic.** The panic ends the process like any other, and `panics` is default-permitted ([core-semantics.md §7.11](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0), [§12 Default-permitted effects](#default-permitted-effects)). `drop` returns nothing, so cleanup that can fail handles the error in place, for example by matching on the result of `host.close` and logging an `Err`; it cannot propagate it.
+**A `Drop` body may panic.** The panic ends the process like any other, and `panics` is default-permitted ([core-semantics.md §7.11](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0), [§12 Default-permitted effects](#default-permitted-effects)). `drop` returns nothing, so cleanup that can fail handles the error in place, for example by matching on the result of `close_fd` and logging an `Err`; it cannot propagate it.
 
 **Effects.** A drop's effects are those of the type's drop glue, charged to the scope where the drop happens ([core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)).
 
@@ -4167,7 +4175,7 @@ fn read_config() -> Result[Config, AnyError] {
 
 **Order.** The type's own `drop` body runs first, with every field still alive. Then the fields drop, in reverse declaration order. For an enum, the active variant's payload drops after the body. See [core-semantics.md §7.8](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0).
 
-```kara
+```kara,uses=d-transaction
 struct Transaction {
     conn: Connection,       // dropped second (closes the connection)
     log: TransactionLog,    // dropped first (flushes pending writes)
@@ -4350,7 +4358,7 @@ A collection is borrowed; `for` never consumes it. The item is a `ref` into the 
 
 **Consuming iteration is explicit.** `for x in c.into_iter()` moves `c` and each item ([core-semantics.md §3.1](core-semantics.md#3-moves)). A source that can be read only once, such as a network stream or a channel receiver, implements `IntoIterator` but not `Iterable`, since it has nothing to lend. It is iterated with an explicit call:
 
-```kara
+```kara,uses=d-stream-values
 for event in stream.into_iter() { process(event); }   // consuming
 for item in my_vec { observe(item); }                 // borrowing: Vec is Iterable
 ```
@@ -4359,7 +4367,7 @@ A `for` over a type that is neither an `Iterator` nor `Iterable` is an error nam
 
 **Destructuring in `for`.** `for (key, value) in map` uses ordinary tuple destructuring. Because `for` borrows a collection, `key` and `value` are `ref K` and `ref V`. To consume the map and get owned pairs, use `.into_iter()`:
 
-```kara
+```kara,uses=d-map-owned
 // Borrowing: key is ref String, value is ref Value
 for (key, value) in map {
     println(f"{key}: {value}");
@@ -4463,7 +4471,9 @@ enum Status {
 
 `Serialize` and `Deserialize` generate format-independent traversal code at compile time. There are no macros and no runtime reflection: the derive walks the fields in declaration order, as the other derives do. The traits, the `Json` format and the derives are ordinary Kāra in `runtime/stdlib/source/serde.kara`, run by the MIR interpreter and by `karac build --mir`. A generic type's derived impl bounds each type parameter by the trait (`impl[T: Serialize] Serialize for Wrap[T]`).
 
-```kara
+```kara,uses=d-a-user
+import std.json.{Json};
+
 #[derive(Serialize, Deserialize)]
 struct User { name: String, age: i64, active: bool }
 
@@ -4573,7 +4583,7 @@ Errors are values. A recoverable failure is a `Result`, and a bug or an unrecove
 - **`?` on `Result` and `Option`.** In a function returning `Result[T, E]`, `expr?` returns early with the `Err`. In a function returning `Option[T]`, `expr?` returns early with `None`. Otherwise it yields the success value.
 - **Converting errors.** If `expr: Result[U, E1]` in a function returning `Result[T, E2]`, `expr?` converts the error with `From`:
 
-  ```kara
+  ```kara,fragment
   match expr {
       Ok(v) => v,
       Err(e) => return Err(E2.from(e)),
@@ -4649,7 +4659,7 @@ impl[T] Result[T, AnyError] {
 
 On `Ok` the value passes through. On `Err` the error becomes an `AnyError` (if it is not one already) and the message is added to its context list. Chaining `.context()` keeps the type `Result[T, AnyError]`, so context can be added at every level without nesting new types.
 
-```kara
+```kara,uses=d-process-user
 fn process_user(db: Db, id: u64) -> Result[Report, AnyError] {
     let user = db.find(id).context(f"while loading user {id}")?;
     let orders = db.orders_for(user.id).context(f"while fetching orders for user {id}")?;
@@ -4664,7 +4674,7 @@ Two statements give deterministic cleanup without wrapper types. Their place in 
 - **`defer expr`** runs `expr` when the enclosing scope ends: at its end, or through `return`, `break`, `continue` or `?`.
 - **`errdefer expr`** runs `expr` at its position in that order only if the function is returning the failure variant of its `Result` or `Option` return type, however that value is produced: a `?` that propagates, `return Err(...)`, `return None`, or a tail `Err(...)`. Otherwise it is skipped.
 
-```kara
+```kara,uses=d-connection
 fn open_connection(addr: String) -> Result[Connection, AnyError] {
     let conn = Connection.open(addr)?;
     errdefer conn.close();        // runs only if we return Err below
@@ -4675,7 +4685,7 @@ fn open_connection(addr: String) -> Result[Connection, AnyError] {
 
 `errdefer(e)` binds the error being returned, by `ref`, for use in the cleanup block:
 
-```kara
+```kara,uses=d-connection
 fn open_connection(addr: String) -> Result[Connection, AnyError] {
     let conn = Connection.open(addr)?;
     errdefer(e) {
@@ -4726,7 +4736,7 @@ Any other return type is a compile error that lists these three.
 
 **`ExitCode`** wraps an OS exit code: `ExitCode.SUCCESS`, `ExitCode.FAILURE`, `ExitCode.from(code: i32) -> ExitCode`. Returning it is a normal return, so `main`'s drops and `defer`s run. A program that wants both `?` and a custom code says so:
 
-```kara
+```kara,uses=d-run-exit-code
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode.SUCCESS,
@@ -4770,7 +4780,7 @@ print(f"hello, {name}");
 
 `?` works, because the implicit `main` returns a `Result`:
 
-```kara
+```kara,uses=d-parse-csv
 // file: analyze.kara
 let data = fs.read_to_string("input.csv")?;
 let rows = parse_csv(data);
@@ -4888,7 +4898,7 @@ let alias = root;          // `alias` and `root` name the same node
 
   The fix ends the borrow first:
 
-  ```kara
+  ```kara,uses=d-inbox
   fn requeue(inbox: Inbox) {
       let again: Vec[String] = inbox.items.clone();
       for x in again.into_iter() {
@@ -4899,7 +4909,7 @@ let alias = root;          // `alias` and `root` name the same node
 
 - **A conflict through another handle is a runtime check.** Two handles may name the same object, and the compiler cannot always tell. So each `mut` field whose type is neither `Copy` nor a handle aggregate carries a borrow flag, and a conflicting access through another handle panics:
 
-  ```kara
+  ```kara,uses=d-inbox
   fn copy_items(from: Inbox, to: Inbox) {
       for x in from.items {
           to.items.push(x.clone());      // panics if `from` and `to` are the same object
@@ -4980,7 +4990,7 @@ fn connect(a: own GraphNode, b: own GraphNode) {
 
 `sync struct` and `sync enum` are the cross-task form of `shared`. Their count is atomic, and no field is written `mut` ([core-semantics.md §6.3](core-semantics.md#6-sharing-c7)).
 
-```kara
+```kara,uses=d-counter-state
 // shared struct: one task, plain count, mut fields with borrow flags
 shared struct TreeNode {
     val: i64,
@@ -5071,7 +5081,7 @@ sync struct Session {
 
 `frozen` removes the raced count instead of making it atomic:
 
-```kara
+```kara,uses=d-build-node
 shared struct Node { val: i64, mut neighbors: Vec[Node] }
 
 fn sum(n: frozen Node, depth: i64) -> i64 {
@@ -5167,7 +5177,7 @@ A state cannot be forked: once `connect` consumes the `Connection[Disconnected]`
 
 `#[must_use]` on a type makes silently dropping a value of that type a warning. It completes typestate by making sure a value reaches a final state instead of being forgotten:
 
-```kara
+```kara,uses=d-typestate-connection
 #[must_use("connections must be explicitly disconnected")]
 struct Connection[State] {
     socket: Socket,
@@ -5208,7 +5218,7 @@ The mandate is enforced by a standard library lint, not by a compiler rule on us
 - **On a struct**, a struct literal outside the defining package is an error whose diagnostic names the package's constructor function, and a pattern there must end with `..` (`let Options { port, .. } = opts;`). Adding a field is then a minor change.
 - **Fix.** A `match` without the wildcard arm gets a machine-applicable fix that adds `_ => todo()`.
 
-```kara
+```kara,uses=d-fetch-error-value
 // In another package
 match err {
     FetchError.Timeout => retry(),
@@ -5413,7 +5423,7 @@ Two `par` branches that both call `record` conflict on `AuditLog`. Parameterized
 - **Default-permitted effects** (`allocates(Heap)` and `panics`) are inferred and shown, but never required in a declaration ([Default-permitted effects](#default-permitted-effects)).
 - **Effects that arrive through a non-escaping function parameter, or through a type parameter's trait method that has no `with` clause, are not declared.** They are computed on each call's instance and charged to the caller ([Trait methods and generic calls](#trait-methods-and-generic-calls), [core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)):
 
-  ```kara
+  ```kara,uses=d-row
   pub fn each[T](xs: Slice[T], f: Fn(T)) {
       for x in xs { f(x); }
   }
@@ -5653,7 +5663,7 @@ The reverse is an error: a `Fn(T) -> U with writes(Log)` cannot fill a slot decl
 - **A non-escaping parameter** (the default) has, at each call site, the effects of the argument passed there, charged to that caller. With no clause it accepts any function value. A clause, if written, is an upper bound the argument must fit.
 - **An escaping value** (an `escaping` parameter, a struct field, a collection element) has the effects its type declares. Storing a value whose effects exceed the clause is an error. With no clause, a call through it has every effect. To declare one with no effects, write the empty clause `with ()`: `handlers: Vec[Fn(Event) with ()]` accepts only a value whose effects are default-permitted (`allocates(Heap)`, `panics`), and a call through it has none, so two `par` branches calling stored pure callbacks do not conflict. `with ()` is written only on a function type, never on a `fn` declaration, where a missing clause already means inferred or none (Gowtham, 2026-11-03).
 
-```kara
+```kara,uses=d-order-event
 struct EventBus {
     handlers: Vec[Fn(Event) with writes(OrderDb)],
 }
@@ -5675,7 +5685,7 @@ impl EventBus {
 
 **Collections of function values.** When a collection literal holds function values with different effect sets, its element type takes their union; each element fits by subtyping:
 
-```kara
+```kara,uses=d-f1-f2
 // f1: reads(X); f2: reads(X) writes(Y)
 let fs = [f1, f2];   // Vec[Fn() with reads(X) writes(Y)]
 ```
@@ -5684,7 +5694,7 @@ let fs = [f1, f2];   // Vec[Fn() with reads(X) writes(Y)]
 
 **An effect variable names an effect set that the caller supplies.** It lets a stored callback carry its own effects, where a clause would fix them for every user. It is declared in a generic list with `with`, beside type parameters, and used wherever an effect clause may appear:
 
-```kara
+```kara,uses=d-order-db-record
 struct EventBus[with E] {
     handlers: Vec[Fn(Event) with E],
 }
@@ -5699,7 +5709,7 @@ impl[with E] EventBus[with E] {
     }
 }
 
-fn audit(db: OrderDb) {
+fn audit(db: own OrderDb) {
     let mut bus = EventBus { handlers: Vec.new() };
     bus.register(|e| db.record(e));      // E = {writes(OrderDb)}
     bus.emit(Event.Placed);              // charged writes(OrderDb) here
@@ -5796,7 +5806,7 @@ The compiler also parallelizes loops and statements on its own (automatic parall
 
 `par { e1, e2, ... }` evaluates its comma-separated branch expressions concurrently and joins them at the closing brace. Its value is the tuple of the branch values, in source order. A branch may be a block.
 
-```kara
+```kara,uses=d-dashboard
 fn load_dashboard(user_id: u64) -> Result[Dashboard, AppError] {
     let (profile, orders, notifs) = par {
         fetch_profile(user_id)?,
@@ -5820,23 +5830,23 @@ fn load_dashboard(user_id: u64) -> Result[Dashboard, AppError] {
 - `?` at any depth inside a branch, in a nested `if` or loop, still returns from the enclosing function;
 - applying `?` to the block itself is a type error, because the block is not a `Result`.
 
-```kara
-// ERROR: `transform` returns `Output`, so `?` has nowhere to return to
+```kara,uses=d-par-steps
+// `transform` returns `Output`, so `?` has nowhere to return to
 fn transform(data: Data) -> Output {
-    let (a, b) = par { risky(data)?, other() };
+    let (a, b) = par { risky(data)?, other() };     // ERROR
     combine(a, b)
 }
 
-// ERROR: the block has type `(i64, i64)`, which `?` cannot apply to
+// the block has type `(i64, i64)`, which `?` cannot apply to
 fn process() -> Result[(i64, i64), StepError] {
-    let pair = (par { step_a()?, step_b()? })?;
+    let pair = (par { step_a()?, step_b()? })?;     // ERROR
     Ok(pair)
 }
 ```
 
 **Borrows across branches** follow the ordinary rules. Several branches may read the same place; one branch may borrow it mutably if no other branch touches it; the borrow ends at the join.
 
-```kara
+```kara,uses=d-par-helpers
 // Two readers: both helpers borrow `data`.
 fn process_in_parallel(data: Vec[i64]) -> (i64, i64) {
     par { sum_first_half(data), sum_second_half(data) }
@@ -5853,14 +5863,13 @@ fn append_concurrently(log: own Vec[String]) -> Vec[String] {
 // A mutable borrow and a read of the same place: rejected.
 fn invalid_aliasing(log: own Vec[String]) {
     let mut log = log;
-    par { append_log(mut log), read_log_count(log) }
-    // error[E0418]: branch 1 mutably borrows `log`, and branch 2 reads it
+    par { append_log(mut log), read_log_count(log) };   // error[E0418]: branch 1 mutably borrows `log`, and branch 2 reads it
 }
 ```
 
 **Nesting.** A branch may contain its own `par` block. The inner block joins before the branch that contains it ends.
 
-```kara
+```kara,uses=d-par-nested
 fn nested() -> (i64, (i64, i64)) {
     par { step_a(), par { inner_x(), inner_y() } }
 }
@@ -5870,7 +5879,7 @@ fn nested() -> (i64, (i64, i64)) {
 
 `par for x in it { body }` runs one branch per element of `it`. Its value is the `Vec` of the bodies' values, in iteration order, whatever order the branches finish in.
 
-```kara
+```kara,uses=d-fetch-page
 fn fetch_all(urls: Slice[String]) -> Vec[Result[Page, FetchError]] {
     par(limit: 50) for url in urls { fetch(url) }
 }
@@ -5882,7 +5891,7 @@ fn fetch_all(urls: Slice[String]) -> Vec[Result[Page, FetchError]] {
 - **`break` and `continue`** may not cross out of the body. **`return` and `?`** end the iteration as an early exit, as they end a `par` branch: the function returns the earliest iteration's value ([core-semantics.md §11.7](core-semantics.md#11-concurrency-c9)).
 - **`?` in the body** pierces the loop as it pierces a `par` block. The value is then the `Vec` of success values, and the enclosing function returns the error of the earliest failing iteration in iteration order.
 
-```kara
+```kara,uses=d-parse-config
 fn load_all(paths: Slice[String]) -> Result[Vec[Config], ConfigError] {
     let configs = par for p in paths { parse_config(p)? };
     Ok(configs)
@@ -5891,7 +5900,7 @@ fn load_all(paths: Slice[String]) -> Result[Vec[Config], ConfigError] {
 
 A structure that every iteration only reads is passed as a [frozen handle](#frozen-handles):
 
-```kara
+```kara,uses=d-frozen-root-value
 let g = freeze root;
 let sums: Vec[i64] = par for depth in 1..5 { sum(g, depth) };
 ```
@@ -5912,7 +5921,10 @@ A `TaskGroup` runs a dynamic number of tasks. The API is in [library/concurrency
 
 A server that handles each connection in its own task, and passes a second group down so that handlers can start background work:
 
-```kara
+```kara,uses=d-server,norun
+import std.net.{TcpListener, TcpStream, NetError};
+import std.sync.{TaskGroup};
+
 fn main() -> Result[(), ServerError] {
     let listener = TcpListener.bind("0.0.0.0:8080")?;
     let background = TaskGroup.new();
@@ -6027,7 +6039,7 @@ What happens when a branch fails is [core-semantics.md §11.7](core-semantics.md
 
 **Every result, not only the first error.** A block whose branches produce `Result` values without `?` returns all of them, in source order. This is the form for validating several fields and reporting every invalid one:
 
-```kara
+```kara,uses=d-form
 fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError], Result[Age, FieldError]) {
     par { check_name(form), check_email(form), check_age(form) }
 }
@@ -6189,10 +6201,10 @@ The `unsafe` keyword appears in three positions:
 
 The rules below apply to the expression form. The other two positions have matching rules: an `unsafe fn` requires a `# Safety` doc-comment section, and an `unsafe extern { }` block requires the same section at the block level.
 
-```kara
-let p: *const T = ptr.const(value);     // construction is safe: no unsafe { } needed
+```kara,uses=d-ptr-value
+let p: *const i64 = ptr.const(value);   // construction is safe: no unsafe { } needed
 // Safety: `value` outlives this block and is not mutated concurrently;
-// offset 4 lies within the valid range of T's layout.
+// offset 4 lies within the allocation `value` belongs to.
 unsafe {
     let raw = p.offset(4);
     let val = *raw;
@@ -6400,7 +6412,7 @@ Casts between integer types, and between two raw pointer types, are unaffected. 
 
 `MaybeUninit[T]` is not yet implemented.
 
-```kara
+```kara,fragment
 // stdlib (sketch)
 struct MaybeUninit[T] { /* opaque storage, sized like T, aligned like T */ }
 
@@ -6424,7 +6436,7 @@ impl[T] MaybeUninit[T] {
 
 ```kara
 let buf: Array[u8, 4096] = mem.zeroed();    // ok: u8 is Pod, all zeros is valid
-let n: NonZero[u32] = mem.zeroed();         // error: NonZero[u32] is not Pod
+let s: String = mem.zeroed();               // error: String is not Pod
 ```
 
 Without the bound, `mem.zeroed()` would have the same hazard as `mem.uninitialized()`: a zeroed `Option[ref T]` is a null reference, which the type system says cannot exist.
@@ -6488,8 +6500,9 @@ C-like enums (no payload) expose their discriminant and variant list at runtime 
 
 **`.discriminant()`.** Every C-like enum gets a generated `fn discriminant(self) -> D`, where `D` is the repr type (`u8` for `#[repr(u8)]`, `i32` for `#[repr(i32)]` and for `#[repr(C)]`, a C `int`, and `u32` for a C-like enum without `#[repr]`). So `#[repr(C)] enum E { A = -1 }` gives `E.A.discriminant() == -1` (review-thread ruling 2026-11-16). The method is a read, has no effect, and is available wherever the enum is nameable. A method is used rather than an `as u8` cast because the cast would have to work on every enum-to-integer conversion, mixing the safe case (read the number you chose) with cases that need `unsafe`. A dedicated name keeps call sites self-documenting.
 
-```kara
+```kara,name=d-usb-class
 #[repr(u8)]
+#[derive(Display)]                 // `{c}` below prints the variant's name
 enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
 
 let c = UsbClass.Hid;
@@ -6500,7 +6513,7 @@ let byte: u8 = c.discriminant();   // 0x03
 
 **`TryFrom[D]` for integer-to-enum conversion.** Every C-like `#[repr(intN)]` enum gets a generated `impl TryFrom[intN] for Foo`, returning `Err(DiscriminantError.OutOfRange { value })` for a value that names no variant. A C-like enum without `#[repr]` gets no such impl, because its compiler-chosen discriminants are not stable. There is no `From[intN]`, because most integers are out of range; `TryFrom` is the honest signature.
 
-```kara
+```kara,uses=d-usb-class|d-wire
 let raw: u8 = read_from_wire();
 match UsbClass.try_from(raw) {
     Ok(class)  => dispatch(class),
@@ -6512,7 +6525,7 @@ match UsbClass.try_from(raw) {
 
 **`.values()`.** Every C-like enum gets a generated type-level function `fn values() -> Slice[Self]` returning every variant in declaration order: `UsbClass.values()` yields `[UsbClass.Audio, UsbClass.Hid, UsbClass.MassStorage]`. The slice is a view of static data, so it borrows nothing and may go anywhere ([core-semantics.md §5.3](core-semantics.md#5-references-and-views-c5)). It serves command-line listings, round-trip tests and tables. Payload enums do not have it: they have no finite set of values.
 
-```kara
+```kara,uses=d-usb-class
 for c in UsbClass.values() {
     println(f"{c.discriminant()}: {c}");
 }
@@ -6532,7 +6545,7 @@ Wire-protocol enums often give every opcode a fixed integer, whether or not it c
 
 **Surface.** Under `#[repr(intN)]` (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`) or `#[repr(C)]`, any variant (unit, tuple or struct-shaped) may carry `= INT_CONST`:
 
-```kara
+```kara,uses=d-bytes,name=d-op
 #[repr(u8)]
 enum Op {
     Reset                       = 0x01,
@@ -6553,7 +6566,7 @@ enum Op {
 
 **No runtime surface.** `.discriminant()`, the generated `TryFrom[intN]` and `.values()` stay unavailable on payload enums ([Enum discriminant runtime surface](#enum-discriminant-runtime-surface)). The explicit discriminant **declares the wire value**: the integer `N` stands for this variant in any external serialization. It does not fix where the discriminant byte lives in memory, and the compiler emits no reader or writer for it. Code that consumes the values writes a `tag` method:
 
-```kara
+```kara,uses=d-op
 impl Op {
     fn tag(self) -> u8 {
         match self {
@@ -6731,7 +6744,7 @@ search-paths = ["/opt/homebrew/opt/llvm@18/lib"] # -L/opt/homebrew/opt/llvm@18/l
 
 Many C APIs hand back a *handle*: a pointer to a struct whose layout the library does not publish. `FILE*`, `xmlNode*`, `sqlite3*`, `EGLDisplay` and `cairo_surface_t*` are examples. Kāra binds them with an opaque type declaration inside an `unsafe extern { }` block:
 
-```kara
+```kara,name=d-cfile
 unsafe extern "C" {
     #[kara_name("CFile")]
     type FILE;                   // C's `FILE`, named `CFile` in Kāra (CN-8)
@@ -6776,7 +6789,7 @@ unsafe extern "C" {
 
 **Cleanup.** Opaque types have no `Drop` and no destructor; the language never calls one on a `*mut Foo`. C-side cleanup goes through the C function (`fclose`). The idiom is a Kāra wrapper that owns the pointer and calls the C cleanup in its `Drop`:
 
-```kara
+```kara,uses=d-cfile
 distinct type SafeFile = *mut CFile;
 
 impl Drop for SafeFile {
@@ -6789,7 +6802,7 @@ impl Drop for SafeFile {
 
 fn open_file(path: CStr) -> Result[SafeFile, IoError] {
     let raw = fopen(path.as_ptr(), c"r".as_ptr());
-    if ptr.is_null(raw) { return Err(IoError.from_errno()); }
+    if ptr.is_null(raw) { return Err(IoError.Other("fopen failed")); }
     Ok(SafeFile(raw))
 }
 ```
@@ -6927,14 +6940,14 @@ User-defined resources have no target affinity. The target gate does not see a u
 
 A function compiles for target `T` when its full inferred effect set uses only resources `T` provides. This is the main mechanism for cross-target correctness. Shared code that uses only target-agnostic effects is portable with no annotations.
 
-```kara
+```kara,uses=d-page-cache
 // Target-agnostic: uses only `Network` and a user resource.
 // Compiles for native and wasm_wasi.
-pub fn fetch_and_parse(url: String) -> Result[Data, AnyError]
+pub fn fetch_and_parse(url: String, cache: PageCache) -> Result[Data, AnyError]
     with sends(Network) receives(Network) reads(Cache) blocks
 {
-    let raw = net.fetch(url)?;
-    let cached = cache.get(url)?;
+    let raw = fetch(url)?;            // sends(Network) receives(Network) blocks
+    let cached = cache.get(url)?;     // reads(Cache)
     merge(raw, cached)
 }
 ```
@@ -7150,7 +7163,7 @@ A panic aborts the process, and no `Drop`, `defer` or `errdefer` runs ([§10](#1
 
 A program defines at most one handler. The `#[panic_handler]` attribute alone enables it; there is no manifest setting.
 
-```kara
+```kara,uses=d-watchdog
 #[panic_handler]
 fn on_panic(info: PanicInfo) {
     Watchdog.feed_one_last_time();
@@ -7546,7 +7559,7 @@ Lints are warnings the user can suppress, escalate or expect. Every lint has a s
 
 **`#[expect]`** is the cleanup signal:
 
-```kara
+```kara,uses=d-old-api
 fn migrate_caller() {
     #[expect(deprecated)]
     old_api();                    // deprecated today: suppressed, expectation fulfilled

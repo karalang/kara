@@ -125,7 +125,7 @@ enum Result[T, E] {
 
 `Option` represents a value that might not exist. `Result` represents an operation that might fail. You'll use them constantly:
 
-```kara,ignore
+```kara,fragment
 fn find_user(id: u64) -> Option[User] {
     // returns Some(user) or None
 }
@@ -175,7 +175,7 @@ binding, `let mut p = Point { ... }`. The per-field `mut` is specific to
 The recursive `shared struct` + `Option` pair is the standard singly-linked
 list — each node owns the next, and `None` marks the end:
 
-```kara
+```kara,name=b-list-node
 shared struct ListNode {
     val: i64,
     mut next: Option[ListNode],
@@ -197,7 +197,7 @@ Walk it by unwrapping each node. `if let` peels off one `Some` and recurses on
 `.next`; `while let` does the same thing iteratively, rebinding the cursor until
 it hits `None`:
 
-```kara,ignore
+```kara,uses=b-list-node
 fn sum(node: Option[ListNode]) -> i64 {
     if let Some(n) = node {
         n.val + sum(n.next)

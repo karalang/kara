@@ -66,7 +66,7 @@ window without copying, reach for a `Str` via `s.slice(a, b)` instead
 `for c in s` and `s.chars()` both yield `char` — one Unicode scalar value at a
 time:
 
-```kara,ignore
+```kara,uses=b-s
 let mut vowels = 0;
 for c in s.chars() {
     if c == 'a' or c == 'e' or c == 'i' or c == 'o' or c == 'u' {
@@ -78,7 +78,7 @@ for c in s.chars() {
 For random access, snapshot the characters into a `Vec[char]` once, then index
 that:
 
-```kara,ignore
+```kara,uses=b-s
 let chars: Vec[char] = s.chars().collect();
 println(chars[0]);        // 'h'  — a char
 println(chars.len());     // 5
@@ -95,7 +95,7 @@ instead.
 string's underlying storage, with no per-call allocation. This is the workhorse
 for scanning ASCII input.
 
-```kara,ignore
+```kara,uses=b-s
 let bytes = s.bytes();
 let n = bytes.len();
 let b = bytes[0];         // u8
@@ -106,7 +106,7 @@ let b = bytes[0];         // u8
 A `b'x'` literal is a single ASCII byte — a `u8`, not a `char`. Compare and do
 arithmetic on bytes directly:
 
-```kara,ignore
+```kara,uses=b-bytes-i
 let b = bytes[i];
 if b >= b'0' and b <= b'9' {
     let digit = (b - b'0') as i64;   // '7' - '0' == 7

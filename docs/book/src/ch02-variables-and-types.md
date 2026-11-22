@@ -132,7 +132,7 @@ let y: i32 = x as i32;     // narrowing: needs `as`, keeps the low 32 bits
 
 `as` covers every numeric pair, with semantics worth knowing:
 
-```kara,ignore
+```kara,uses=b-total-count
 
 let big: i64 = 300;
 let trunc = big as u8;     // narrowing — wraps modulo 2^8 (300 -> 44)

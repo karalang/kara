@@ -167,7 +167,7 @@ The rule is conservative: when a result may borrow from several parameters, it b
 
 HTTP/1.1, TLS and WebSocket servers ship in the standard library, with blocking-style code and no function colouring:
 
-```kara
+```kara,norun
 #[allow(prelude_shadow)]
 struct Response { status: i64, body: String }
 

@@ -71,10 +71,45 @@ The info string after ```` ```kara ```` says what a block is, in the same words
 | ```` ```kara,error=E0205 ```` | must be rejected with that code (`error=A\|B` for either), wherever it is reported |
 | ```` ```kara,exit=101 ```` | a program that ends with that exit code on purpose (a runbook's panic); the text block after it is its **stderr**, every `<dir>/<name>.kara` read as `main.kara` |
 | ```` ```kara,ignore ```` | skipped (the book's word; `library-conformance.py` still reads a book block marked only `ignore`) |
+| ```` ```kara,norun ```` | a whole program checked and never run (the book's word): a server that binds a port and accepts forever |
+| ```` ```kara,name=point ```` | other blocks of the same document may build on this one by that name |
+| ```` ```kara,uses=point\|log ```` | judged in full after the blocks (or `docs/doc-context.kara` sections) it names, dependencies first: checked, run if it is a whole program, and held to the marked-line rule. A missing name is `CONTEXT-MISSING`, never `unresolved` |
 
 `tests/docs_conformance.rs` runs both sweeps with `--check` in the default
-`cargo test --all` leg (about two minutes on a debug build), and both baselines
-are empty, so a new finding fails the gate rather than joining a list.
+`cargo test --all` leg (about two minutes on a debug build, the two in parallel), and both baselines
+are empty but for one entry with a ledger row, so a new finding fails the gate
+rather than joining a list.
+
+## Context: `name=`, `uses=` and `docs/doc-context.kara`
+
+A doc reads in order and the sweep compiles one block at a time, so an example
+that calls a `fetch_orders` the prose takes as given, or a `Point` declared
+two blocks up, used to stop at `unresolved`: checked for names only. Since
+B-2026-11-22-21 such a block says what it needs. `uses=point` puts the block
+fenced `name=point` (same document) in front of it; failing that, the section
+`// context: point` of [`doc-context.kara`](doc-context.kara), which holds the
+declarations the docs rely on and do not show. A section may itself start
+`// context: NAME uses=other`. The resolved context is split at column 0:
+declarations go above the block, `let` statements open the `fn main` the block
+is wrapped in (or, for a script, lead it), so `uses=` serves an expression
+block as well as an item block. A diagnostic is still mapped to the line of the
+block it is on.
+
+A section is the smallest honest stand-in: it declares what the example takes
+as given and never what the example is showing. Of the 163 blocks that were
+`unresolved` (92 in design.md, 71 elsewhere), 140 are now checked in full and 5
+signature tables resolve every name (their `impl[T]` header's generics now
+bind the signatures under it). Reading them closely found a dozen doc bugs (a
+`Result[T, Error]` with the trait as a type, `host.close`, a book chapter
+teaching the call-site `mut` rule backwards, a README excerpt that no longer
+matched its program) and three compiler bugs (B-2026-11-22-22, -23, -24).
+
+The other 18 stay unverifiable, and say why rather than sit in a bucket:
+`fragment` for an excerpt of a program checked elsewhere (an example's
+`src/main.kara`) or one for a target 0.8 does not build (`wasm_browser`), for a
+signature table with comment bodies, and for a grammar template
+(`fn name[T: Bound](param: Type) -> Return`). `docs/library/data.md`'s three
+`unresolved` blocks are the `kara-data` package, which is not implemented.
 
 ## The wrapping ladder
 
@@ -197,16 +232,20 @@ Reasons fall into five kinds, and only two of them are defects:
 - *deferred feature* — documented in `deferred.md` as post-v1.
 
 `UNTRIAGED` means nobody has decided yet. **That count is the queue**, and the
-point of the file is for it to shrink. Since B-2026-11-22-20 the baseline is
-**empty**: its last nine entries were fragments, now marked as such, or doc
-bugs, now fixed.
+point of the file is for it to shrink. B-2026-11-22-20 emptied it: its last
+nine entries were fragments, now marked as such, or doc bugs, now fixed. It
+holds one entry since B-2026-11-22-21: § `par` blocks' aliasing example, which
+the compiler accepts while nothing calls it (B-2026-11-22-24).
 
 ## Known limits
 
-- Fragments are checked in isolation, so cross-block context (a `struct`
-  declared two blocks earlier) reads as `unresolved`. Assembling context
-  automatically was rejected: it would mask the `TreeMap` class of divergence,
-  which is the one worth catching.
+- A block without `uses=` is checked in isolation, so cross-block context (a
+  `struct` declared two blocks earlier) reads as `unresolved`. Assembling
+  context automatically was rejected, and tried again in B-2026-11-22-21 with
+  the same result: matching names across a document paired unrelated `Point`s
+  and pulled in elided definers, and it would mask the `TreeMap` class of
+  divergence, which is the one worth catching. `uses=` is explicit for that
+  reason.
 - **A signature rung proves a name resolves, not that it matches.**
   `Vec.filled(0, 0)` passing proves `filled` exists and takes two arguments; it
   does not prove the second is a `T` or that the return is `Vec[T]`. Checking

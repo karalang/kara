@@ -26,7 +26,7 @@ The component renders against an abstract resource, `Sink`, rather than
 talking to a concrete HTML buffer or DOM. It has no idea which target it is
 running on — and no `#[target(...)]` attribute:
 
-```kara
+```kara,name=b-render
 // The calls a component may make on `Sink` are the methods of its provider
 // trait (core-semantics.md §14.2); each target's provider implements it.
 trait Render {
@@ -52,7 +52,7 @@ or DOM mutations is somebody else's job — the provider's.
 A provider is just a type whose methods realize the resource. On the
 server, `Sink` becomes HTML:
 
-```kara,ignore
+```kara,uses=b-render
 struct StringSink {}
 impl Render for StringSink {
     fn heading(mut ref self, title: String) { print(f"<h1>{title}</h1>"); }
@@ -68,7 +68,7 @@ On the client, `Sink` becomes DOM mutation. The static heading is already
 present in the page the server rendered, so hydration leaves it alone —
 only the dynamic values cross to the host:
 
-```kara,ignore
+```kara,uses=b-render
 effect resource Dom;
 host fn dom_set_count(value: i64) with writes(Dom);
 host fn dom_set_parity(value: i64) with writes(Dom);
@@ -87,7 +87,7 @@ Each target binds its provider with `with_provider`, then calls the same
 component. The entry points are the one genuinely per-target part of the
 program, so they — and only they — carry `#[target(...)]`:
 
-```kara,ignore
+```kara,fragment
 // Server: render to HTML on stdout.
 #[target(native)]
 fn main() {

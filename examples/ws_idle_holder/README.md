@@ -34,31 +34,31 @@ sub-slices: rustls runtime FFI, `TlsListener` / `TlsStream` types,
 
 Single accept thread, fan-out per connection through `TaskGroup.spawn`:
 
-```kara
-fn handle_connection(ws: WebSocket) {
-    let mut buf: Array[u8, 4096] = [0u8; 4096];
+```kara,fragment
+// An excerpt of src/main.kara, which `karac check` covers as a package.
+fn handle_connection(ws: own WebSocket) {
+    let mut ws = ws;
     loop {
-        let r = ws.recv_text(mut buf);
-        match r {
-            Result.Ok(n) => {
-                if n == 0 { break; }              // clean EOF → handler returns → Drop reaps fd
-                match ws.send_text(buf[0..n]) {   // echo — only fires on a real inbound frame
-                    Result.Ok(_) => {}
-                    Result.Err(_) => { break; }
-                }
+        match ws.recv() {
+            Ok(WsMessage.Text(t)) => {
+                if ws.send_text(t).is_err() { break; }   // echo: only on a real inbound message
             }
-            Result.Err(_) => { break; }
+            Ok(WsMessage.Close(_)) => { break; }         // clean close: handler returns, Drop reaps the fd
+            Ok(_) => {}
+            Err(_) => { break; }
         }
     }
 }
 
 fn main() {
     // cert_pem / key_pem inlined as PEM literals (see "Cert handling" below)
-    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", cert_pem, key_pem);
-    let mut tg: TaskGroup = TaskGroup.new();
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", cert_pem, key_pem).unwrap();
+    let tg: TaskGroup = TaskGroup.new();
     loop {
-        let ws: WebSocket = WebSocket.accept_tls(listener);
-        tg.spawn(|| handle_connection(ws));
+        match WebSocket.accept_tls(listener) {
+            Result.Ok(ws) => { tg.spawn(|| handle_connection(ws)); }
+            Result.Err(_) => {}                       // a failed handshake must not end the accept loop
+        }
     }
 }
 ```

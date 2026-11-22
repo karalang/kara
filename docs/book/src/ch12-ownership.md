@@ -54,25 +54,25 @@ A `ref self` or `x: ref T` still parses as a redundant spelling of the bare form
 
 ## Call sites
 
-At call sites, mutation gets a marker when the argument is a fresh binding passed to a `mut ref T` or `mut Slice[T]` parameter:
+At call sites, every argument passed to a `mut ref T` or `mut Slice[T]` parameter gets a `mut` marker:
 
-```kara,ignore
+```kara,uses=b-sort-in-place
 let mut v = [3, 1, 4, 1, 5];
-sort_in_place(mut v);          // fresh binding → marker required
+sort_in_place(mut v);          // the marker shows the call mutates `v`
 ```
 
-Inside a function that already holds the binding as a `mut ref`, you don't repeat the marker — the mutation was announced at the callee's signature:
+That holds inside a function that already holds the binding as a `mut ref`, too: the marker is about what this call does, whatever the argument's root ([design.md § Call-site `mut` markers](../../design.md#call-site-mut-markers)):
 
-```kara,ignore
+```kara,uses=b-state
 fn helper(s: mut ref State) {
-    update(s.cache);           // field through a mut-ref root → no marker
-    reset(s.counter);          // same — forwarded
+    update(mut s.cache);       // a field through a mut-ref root: still marked
+    reset(mut s.counter);      // same
 }
 ```
 
 Method calls, field assignment, and index assignment never carry the marker:
 
-```kara,ignore
+```kara,uses=b-vsix
 v.push(x);                     // method call — silent
 s.field = 5;                   // field assignment — silent
 v[i] = x;                      // index assignment — silent
@@ -97,7 +97,7 @@ This prevents use-after-move bugs at compile time. No dangling pointers, no doub
 
 Sometimes the compiler can't prove a single-owner model works — the value is shared across data structures, or its lifetime can't be statically determined. In these cases, the compiler falls back to reference counting:
 
-```kara,ignore
+```kara,uses=b-node
 let node = Node { value: 42, children: Vec.new() };
 // If `node` ends up shared across a graph structure,
 // the compiler automatically wraps it in RC.

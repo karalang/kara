@@ -56,7 +56,7 @@ That's the full set: six resource verbs plus these two execution verbs, eight in
 
 For internal functions, the compiler figures out the effects automatically:
 
-```kara,ignore
+```kara,uses=b-files
 fn load_data(path: String) -> String {
     read_file(path)     // compiler infers: reads(FileSystem)
 }
@@ -73,8 +73,8 @@ You write normal code. The compiler tracks what it does. No annotation needed.
 
 At API boundaries, you declare your effects explicitly. This is a contract with your callers:
 
-```kara,ignore
-pub fn fetch_user(id: u64) -> Result[User, Error]
+```kara,uses=b-fetch-user
+pub fn fetch_user(id: u64) -> Result[User, AnyError]
     with reads(Database) sends(Network)
 {
     let cached = check_cache(id);
@@ -99,7 +99,7 @@ If your function claims `reads(Database)` but you accidentally added a line that
 
 Two function calls with non-conflicting effects can run in parallel:
 
-```kara,ignore
+```kara,uses=b-report
 fn generate_report(id: u64) -> Report
     with reads(UserDB) reads(OrderDB) reads(Analytics)
 {
@@ -120,8 +120,8 @@ The `with` clause is a machine-checked description of what a function does. It c
 
 Naming a common combination, as in `effect group io = reads(FileSystem) + writes(FileSystem);`, is planned but not in 0.8: the compiler refuses the declaration (`E_DEFERRED_EFFECT_GROUP`). For now, write the effects out in each `with` clause:
 
-```kara,ignore
-pub fn process(path: String) -> Result[Data, Error] with reads(FileSystem) writes(FileSystem) {
+```kara,fragment
+pub fn process(path: String) -> Result[Data, AnyError] with reads(FileSystem) writes(FileSystem) {
     // can read and write files
 }
 ```

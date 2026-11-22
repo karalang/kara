@@ -1,0 +1,768 @@
+// Declarations the documentation's examples rely on and do not show.
+//
+// A block fenced ```kara,uses=NAME is checked (and run, when it is a whole
+// program) after the section `// context: NAME` below, or after the block of
+// the same document fenced ```kara,name=NAME. Each section is the smallest
+// honest stand-in for what the prose takes as given: a `fetch_orders` an
+// example calls, the `Config` it reads. A section never declares what the
+// example itself is showing. docs/design-conformance.md says how the sweeps
+// read this file.
+
+// context: d-point
+struct Point { x: i64, y: i64 }
+
+// context: d-config
+struct Config { port: i64 }
+fn load_config(path: Str) -> Config with reads(FileSystem) { Config { port: 8080 } }
+
+// context: d-app-context
+pub effect resource UserDB;
+pub effect resource Cache;
+pub struct Config { pub database_url: String, pub max_connections: i64, pub timeout_ms: i64 }
+fn load_config(path: String) -> Result[Config, AnyError] with reads(FileSystem) reads(Env) {
+    Ok(Config { database_url: "db://local", max_connections: 4, timeout_ms: 100 })
+}
+pub struct DbPool { size: i64 }
+impl DbPool {
+    fn connect(url: own String, max: i64) -> Result[DbPool, AnyError] with sends(Network) receives(Network) blocks {
+        Ok(DbPool { size: max })
+    }
+}
+pub struct Logger { timeout_ms: i64 }
+impl Logger {
+    fn new(timeout_ms: i64) -> Logger { Logger { timeout_ms } }
+}
+pub struct Request { token: String }
+pub struct Response { body: String }
+impl Response {
+    fn ok(body: own String) -> Response { Response { body } }
+}
+pub struct User { pub id: i64 }
+impl AppContext {
+    fn authorize(self, token: String) -> Result[User, AnyError] with reads(UserDB) { Ok(User { id: 1 }) }
+    fn fetch_profile(self, id: i64) -> Result[String, AnyError] with writes(Cache) { Ok("profile") }
+}
+fn run_server(ctx: own AppContext, port: i64) -> Result[(), AnyError]
+    with reads(UserDB) writes(Cache) sends(Network) receives(Network) blocks
+{
+    Ok(())
+}
+
+// context: d-request-context
+pub struct AppContext { pub config: Config }
+struct RequestContext { token: String }
+impl RequestContext {
+    fn from(req: own Request) -> RequestContext { RequestContext { token: req.token } }
+}
+impl AppContext {
+    fn process(self, rctx: RequestContext) -> Result[Response, AnyError] { Ok(Response.ok("done")) }
+}
+
+// context: d-n
+let n = 16;
+
+// context: d-hash
+fn hash(s: String) -> String { s.clone() }
+
+// context: d-pointf
+struct Point { x: f64, y: f64 }
+
+// context: d-user-loaders
+fn load_name() -> String { "alice" }
+fn load_email() -> String { "alice@example.com" }
+fn other_name() -> String { "bob" }
+
+// context: d-pw
+let pw = "hunter2";
+
+// context: d-describe
+fn describe() -> String { "unexpected character" }
+
+// context: d-commands
+fn restart(delay_ms: i64) {}
+fn execute(cmd: Command) {}
+fn pause(ms: i64) {}
+
+// context: d-value
+shared enum Value { Int(i64), Text(String) }
+
+// context: d-v
+let v = [1, 2, 3];
+
+// context: d-load-user
+struct User { id: i64 }
+fn load_user(id: i64) -> User { User { id } }
+
+// context: d-vec2
+struct Vec2 { x: f64, y: f64 }
+fn triangle_area(a: Vec2, b: Vec2, c: Vec2) -> f64 {
+    ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)).abs() / 2.0
+}
+
+// context: d-score
+let score: Result[i64, String] = Ok(95);
+
+// context: d-input
+enum Input { MouseDown { x: i64, y: i64 }, TouchStart { x: i64, y: i64 }, KeyPress(char) }
+fn handle_click(x: i64, y: i64) {}
+
+// context: d-event uses=d-input
+let event = Input.TouchStart { x: 3, y: 4 };
+
+// context: d-c-code-n
+let c = 'q';
+let code = 404;
+let n = 7;
+
+// context: d-age32
+let age: i32 = 30;
+
+// context: d-at-bindings
+struct Response { status: i64, body: String }
+fn log_error(code: i64, body: String) {}
+fn ok() {}
+
+// context: d-at-values uses=d-at-bindings
+let val: Option[i64] = Some(3);
+let age = 15;
+let response = Response { status: 503, body: "unavailable" };
+
+// context: d-flag
+let flag = true;
+
+// context: d-event-handlers
+fn handle_mouse(x: i64, y: i64) {}
+fn handle_key(code: i64) {}
+fn tick() {}
+
+// context: d-evt uses=d-event-handlers
+let evt = Event.KeyDown { code: 13 };
+
+// context: d-kv
+let k = 1;
+let v = 1;
+
+// context: d-condition
+let condition = true;
+let cond_a = false;
+
+// context: d-p-result uses=d-point
+let p = Point { x: 1, y: 2 };
+let result: Result[i64, String] = Ok(3);
+
+// context: d-swap
+let mut a = 1;
+let mut b = 2;
+let mut v = [10, 20, 30];
+let i = 0;
+let j = 2;
+let mut x = 1;
+let mut y = 2;
+let mut z = 3;
+
+// context: d-ab
+let a = 3;
+let b = 4;
+
+// context: d-cond-ab uses=d-ab
+let cond = true;
+fn side_effect() {}
+
+// context: d-user-find
+struct User { id: i64 }
+struct Users { all: Vec[User] }
+impl Users {
+    fn find(self, id: i64) -> Option[User] { Some(User { id }) }
+}
+fn process(u: User) {}
+fn log(message: Str) {}
+
+// context: d-user-find-values uses=d-user-find
+let user = Users { all: Vec.new() };
+let id = 7;
+
+// context: d-try-ab
+fn try_a() -> Option[i64] { None }
+fn try_b() -> Option[i64] { Some(2) }
+fn observe(x: i64) {}
+fn fallback() {}
+
+// context: d-either uses=d-try-ab
+enum Either { Left(i64), Right(i64) }
+
+// context: d-either-val uses=d-either
+let val = Either.Right(5);
+
+// context: d-load-config-result
+struct Config { port: i64 }
+enum ConfigError { Missing }
+fn load_config(path: Str) -> Result[Config, ConfigError] { Ok(Config { port: 80 }) }
+
+// context: d-items-n
+let items = [1, 2, 3, 4, 5, 6];
+let n = 3;
+
+// context: d-try-something
+fn try_something() -> Result[i64, String] { Ok(1) }
+
+// context: d-matrix
+let matrix = [[1, 2], [3, 4]];
+let target = 3;
+
+// context: d-ready
+let ready = true;
+let cond_a = false;
+let cond_b = true;
+
+// context: d-config-port
+struct Config { port: Option[i64] }
+
+// context: d-config-port-value uses=d-config-port
+let config = Config { port: None };
+
+// context: d-save-user
+pub struct User { pub name: String }
+pub enum DbError { Conflict }
+pub effect resource UserDB;
+fn db_insert(user: User) -> Result[(), DbError] with writes(UserDB) { Ok(()) }
+
+// context: d-foo
+struct Foo { field: String, name: String, score: i64 }
+fn use_owned(s: own String) {}
+fn use_ref(s: String) {}
+fn log(s: String) {}
+fn rank(score: i64) {}
+
+// context: d-pairs
+let pairs = [(1, 2), (3, 4)];
+
+// context: d-headers
+struct Headers { count: i64 }
+fn log(headers: Headers) {}
+fn process(body: own Vec[u8]) {}
+
+// context: d-inventory
+struct User { name: String }
+struct Item { sku: i64 }
+struct Inventory { items: Vec[Item] }
+
+// context: d-make-user
+fn make_user() -> User { User { name: "ada" } }
+
+// context: d-pool
+struct Member { refused: i64, down_for: i64 }
+struct Pool { members: Vec[Member] }
+
+// context: d-pool-values uses=d-pool
+let mut pool = Pool { members: [Member { refused: 0, down_for: 0 }] };
+let idx = 0;
+
+// context: d-event-archive
+struct Event { id: i64 }
+fn archive(history: own Vec[Event]) {}
+
+// context: d-bus
+struct Event { id: i64 }
+struct Bus { handlers: Vec[MutFn(Event)] }
+
+// context: d-cond-fn
+fn cond() -> bool { true }
+
+// context: d-word-count
+struct WordCount { unique: i64, total: i64 }
+
+// context: d-record
+fn record(x: i64) with writes(Audit) {}
+
+// context: d-logger-write
+struct Logger { lines: i64 }
+impl Logger {
+    fn write(self, line: Str) {}
+}
+
+// context: d-counts-items
+struct Item { sku: i64 }
+let counts = [3, 1, 4];
+let items = [Item { sku: 1 }, Item { sku: 2 }];
+let i = 1;
+
+// context: d-app-error
+struct ParseError { at: i64 }
+enum AppError { Parse(ParseError) }
+fn log_error(e: ParseError) with writes(Log) {}
+
+// context: d-read-config
+host fn close_fd(fd: i32) -> i32 with writes(FileSystem);
+struct Config { port: i64 }
+impl File {
+    fn open(path: Str) -> Result[File, AnyError] { Ok(File { fd: 3 }) }
+    fn bytes(self) -> Vec[u8] { Vec.new() }
+}
+fn parse(bytes: own Vec[u8]) -> Result[Config, AnyError] { Ok(Config { port: 80 }) }
+
+// context: d-transaction
+struct Connection { open: bool }
+impl Connection {
+    fn rollback_if_open(mut ref self) { self.open = false; }
+}
+struct TransactionLog { pending: i64 }
+impl TransactionLog {
+    fn flush(mut ref self) { self.pending = 0; }
+}
+
+// context: d-stream
+struct Event { id: i64 }
+fn process(event: own Event) {}
+fn observe(item: i64) {}
+
+// context: d-stream-values uses=d-stream
+let stream = [Event { id: 1 }];
+let my_vec = [1, 2, 3];
+
+// context: d-map-owned
+let map: Map[String, i64] = Map.new();
+let mut owned_keys: Vec[String] = Vec.new();
+let mut owned_values: Vec[i64] = Vec.new();
+
+// context: d-a-user
+let user = User { name: "ada", age: 36, active: true };
+
+// context: d-process-user
+pub struct User { pub id: u64 }
+pub struct Order { pub total: i64 }
+pub struct Report { pub orders: i64 }
+pub struct DbError { pub code: i64 }
+impl Display for DbError {
+    fn to_string(self) -> String { "db error" }
+}
+impl Error for DbError {}
+pub struct Db { pub url: String }
+impl Db {
+    pub fn find(self, id: u64) -> Result[User, DbError] { Ok(User { id }) }
+    pub fn orders_for(self, id: u64) -> Result[Vec[Order], DbError] { Ok(Vec.new()) }
+}
+fn build_report(user: own User, orders: own Vec[Order]) -> Report { Report { orders: orders.len() } }
+
+// context: d-connection
+struct Connection { addr: String }
+impl Connection {
+    fn open(addr: String) -> Result[Connection, AnyError] { Ok(Connection { addr: addr.clone() }) }
+    fn close(self) {}
+}
+fn register_metrics(conn: Connection) -> Result[(), AnyError] { Ok(()) }
+fn log_error(e: AnyError) {}
+
+// context: d-run-exit-code
+struct AppError { code: i32 }
+impl Display for AppError {
+    fn to_string(self) -> String { f"failed with {self.code}" }
+}
+impl AppError {
+    fn exit_code(self) -> i32 { self.code }
+}
+fn run() -> Result[(), AppError] { Ok(()) }
+
+// context: d-parse-csv
+fn parse_csv(data: String) -> Vec[String] { data.lines().map(|l| l.to_string()).collect() }
+
+// context: d-inbox
+shared struct Inbox { mut items: Vec[String] }
+
+// context: d-counter-state
+struct CounterState { last: u64 }
+
+// context: d-build-node
+fn build() -> Node { Node { val: 1, neighbors: Vec.new() } }
+
+// context: d-typestate-connection
+struct Socket { fd: i32 }
+struct Disconnected {}
+struct Connected {}
+fn connect(conn: own Connection[Disconnected]) -> Result[Connection[Connected], NetError] {
+    Ok(Connection { socket: conn.socket })
+}
+
+// context: d-fetch-error
+enum FetchError { Timeout, NotFound, Refused }
+fn retry() {}
+fn skip() {}
+fn fail(err: FetchError) {}
+
+// context: d-fetch-error-value uses=d-fetch-error
+let err = FetchError.Refused;
+
+// context: d-row
+struct Row { name: String }
+
+// context: d-order-event
+effect resource OrderDb;
+struct Event { id: i64 }
+
+// context: d-f1-f2
+effect resource X;
+effect resource Y;
+fn f1() with reads(X) {}
+fn f2() with reads(X) writes(Y) {}
+
+// context: d-order-db-record
+effect resource OrderDbLog;
+enum Event { Placed, Shipped }
+struct OrderDb { url: String }
+impl OrderDb {
+    fn record(self, e: Event) with writes(OrderDbLog) {}
+}
+
+// context: d-dashboard
+struct AppError { message: String }
+struct Profile { name: String }
+struct Order { total: i64 }
+struct Notification { text: String }
+struct Dashboard { orders: i64 }
+fn fetch_profile(id: u64) -> Result[Profile, AppError] { Ok(Profile { name: "ada" }) }
+fn fetch_orders(id: u64) -> Result[Vec[Order], AppError] { Ok(Vec.new()) }
+fn fetch_notifs(id: u64) -> Result[Vec[Notification], AppError] { Ok(Vec.new()) }
+fn build_dashboard(p: own Profile, o: own Vec[Order], n: own Vec[Notification]) -> Dashboard {
+    Dashboard { orders: o.len() }
+}
+
+// context: d-par-steps
+struct Data { n: i64 }
+struct Output { n: i64 }
+struct StepError { at: i64 }
+fn risky(data: Data) -> Result[i64, StepError] { Ok(data.n) }
+fn other() -> i64 { 2 }
+fn combine(a: i64, b: i64) -> Output { Output { n: a + b } }
+fn step_a() -> Result[i64, StepError] { Ok(1) }
+fn step_b() -> Result[i64, StepError] { Ok(2) }
+
+// context: d-par-helpers
+fn sum_first_half(data: Vec[i64]) -> i64 { data[0..data.len() / 2].iter().sum() }
+fn sum_second_half(data: Vec[i64]) -> i64 { data[data.len() / 2..].iter().sum() }
+fn compute_metric() -> i64 { 42 }
+fn append_log(log: mut ref Vec[String]) { log.push("appended"); }
+fn read_log_count(log: Vec[String]) -> i64 { log.len() }
+
+// context: d-par-nested
+fn step_a() -> i64 { 1 }
+fn inner_x() -> i64 { 2 }
+fn inner_y() -> i64 { 3 }
+
+// context: d-fetch-page
+struct Page { body: String }
+struct FetchError { url: String }
+fn fetch(url: String) -> Result[Page, FetchError] { Ok(Page { body: url.clone() }) }
+
+// context: d-parse-config
+struct Config { port: i64 }
+struct ConfigError { path: String }
+fn parse_config(path: String) -> Result[Config, ConfigError] { Ok(Config { port: 80 }) }
+
+// context: d-frozen-root
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn sum(n: frozen Node, depth: i64) -> i64 { n.val * depth }
+
+// context: d-frozen-root-value uses=d-frozen-root
+let root = Node { val: 1, neighbors: Vec.new() };
+
+// context: d-server
+struct ServerError { message: String }
+impl Display for ServerError {
+    fn to_string(self) -> String { self.message.clone() }
+}
+impl From[NetError] for ServerError {
+    fn from(e: own NetError) -> ServerError { ServerError { message: e.to_string() } }
+}
+struct Receipt { id: i64 }
+struct Request { id: i64 }
+impl Request {
+    fn receipt(self) -> Receipt { Receipt { id: self.id } }
+}
+struct Response { status: i64 }
+fn read_request(conn: mut ref TcpStream) -> Result[Request, ServerError] { Ok(Request { id: 1 }) }
+fn send_receipt(receipt: own Receipt) {}
+fn handle(req: own Request) -> Response { Response { status: 200 } }
+fn write_response(conn: mut ref TcpStream, resp: own Response) -> Result[(), ServerError] { Ok(()) }
+
+// context: d-form
+struct Form { name: String, email: String, age: i64 }
+struct Name { v: String }
+struct Email { v: String }
+struct Age { v: i64 }
+struct FieldError { field: Str }
+fn check_name(form: Form) -> Result[Name, FieldError] { Ok(Name { v: form.name.clone() }) }
+fn check_email(form: Form) -> Result[Email, FieldError] { Ok(Email { v: form.email.clone() }) }
+fn check_age(form: Form) -> Result[Age, FieldError] { Ok(Age { v: form.age }) }
+
+// context: d-ptr-value
+let value = 7;
+
+// context: d-wire
+fn read_from_wire() -> u8 { 0x03 }
+fn dispatch(class: UsbClass) {}
+fn unknown_class_response() {}
+
+// context: d-bytes
+struct Bytes { data: Vec[u8] }
+
+// context: d-page-cache
+pub effect resource Cache;
+pub struct Data { pub text: String }
+pub struct PageCache { pub entries: Map[String, String] }
+impl PageCache {
+    pub fn get(self, url: String) -> Result[String, AnyError] with reads(Cache) { Ok("") }
+}
+fn fetch(url: String) -> Result[String, AnyError] with sends(Network) receives(Network) blocks { Ok(url.clone()) }
+fn merge(raw: own String, cached: own String) -> Result[Data, AnyError] { Ok(Data { text: raw + cached }) }
+
+// context: d-watchdog
+struct Watchdog {}
+impl Watchdog {
+    fn feed_one_last_time() {}
+}
+
+// context: d-old-api
+#[deprecated(note: "use new_api")]
+fn old_api() {}
+
+// context: c-job
+import std.sync.{channel, Sender, Receiver};
+struct Job { id: i64 }
+
+// context: c-select
+import std.sync.{channel, Sender, Receiver, SendError};
+import std.time.{Duration};
+struct Job { id: i64 }
+struct Report { lines: i64 }
+fn handle(msg: Option[Job]) {}
+fn log(r: Result[(), SendError[Report]]) {}
+fn tick() {}
+fn idle() {}
+
+// context: c-select-values uses=c-select
+let (job_tx, requests): (Sender[Job], Receiver[Job]) = channel(4);
+let (results, report_rx): (Sender[Report], Receiver[Report]) = channel(4);
+let done = Report { lines: 1 };
+
+// context: c-handle-request
+fn handle(req: Request) {}
+
+// context: c-handle-client
+fn handle_client(conn: own TcpStream) {}
+
+// context: c-fetch-page
+struct Page { body: String }
+struct FetchError { url: String }
+fn fetch(url: String) -> Result[Page, FetchError] { Ok(Page { body: url.clone() }) }
+
+// context: l-line
+let line = " 42 ";
+
+// context: l-words-vec
+import std.process.{Command};
+let words: Vec[String] = ["hello", "world"];
+
+// context: l-flags-line
+let line = "-v -q -- input.txt";
+
+// context: l-collect
+let it = [1i32, 2, 3].into_iter();
+let s = "123";
+
+// context: l-collect-results
+let s = "123";
+let words: Vec[Str] = ["1", "2"];
+
+// context: l-log-request
+pub struct Request { pub method: String, pub path: String }
+pub struct Response { pub status: i64 }
+impl Response {
+    pub fn internal_error() -> Response { Response { status: 500 } }
+}
+pub struct AuthError { pub reason: String }
+pub struct User { pub id: i64 }
+pub struct ProcessError { pub detail: String }
+impl ProcessError {
+    pub fn message(self) -> String { self.detail.clone() }
+}
+fn authenticate(req: Request) -> Result[User, AuthError] { Ok(User { id: 1 }) }
+fn process(req: Request) -> Result[Response, ProcessError] { Ok(Response { status: 200 }) }
+
+// context: l-serve
+fn serve() {}
+
+// context: l-raw-token
+let raw_token: String = "s3cr3t";
+
+// context: l-ab-strings
+let a = "caf\u{e9}";
+let b = "cafe\u{301}";
+
+// context: b-total-count
+let total = 17;
+let count = 4;
+
+// context: b-score
+let score = 92;
+
+// context: b-temperature
+let temperature = 85;
+
+// context: b-try-connect
+fn try_connect() -> bool { true }
+
+// context: b-pipeline
+struct Record { text: String }
+fn transform(data: String) -> Record { Record { text: data.clone() } }
+fn validate(r: own Record) -> Record { r }
+fn save(r: own Record) -> bool { true }
+
+// context: b-pipeline-values uses=b-pipeline
+let data = "raw";
+let line = "a,b,c";
+
+// context: b-user
+struct User { name: String, id: u64 }
+
+// context: b-parse-error
+struct ParseError { at: i64 }
+
+// context: b-get-point
+struct Point { x: i64, y: i64 }
+fn get_point() -> Point { Point { x: 1, y: 2 } }
+fn get_pair() -> (i64, String) { (1, "one") }
+
+// context: b-find-user uses=b-user
+fn find_user(id: u64) -> Option[User] { Some(User { name: "ada", id }) }
+
+// context: b-load-config
+struct Config { port: i64 }
+fn read_file(path: String) -> Result[String, IoError] { Ok("port = 80") }
+fn parse_toml(text: String) -> Result[Config, IoError] { Ok(Config { port: 80 }) }
+
+// context: b-user-address-value uses=b-user-address
+let user = User { address: Some(Address { city: Some(City { name: "Oslo" }) }) };
+
+// context: b-nickname
+struct User { nickname: Option[String] }
+fn parse_port(s: String) -> Option[i64] { None }
+
+// context: b-nickname-values uses=b-nickname
+let user = User { nickname: None };
+let input = "80";
+
+// context: b-some-option
+let some_option = Some(3);
+
+// context: b-process-file
+struct Data { size: i64 }
+struct File { fd: i64 }
+impl File {
+    fn close(self) {}
+}
+fn open(path: String) -> Result[File, IoError] { Ok(File { fd: 3 }) }
+fn parse(file: File) -> Result[Data, IoError] { Ok(Data { size: 0 }) }
+
+// context: b-compute
+let n = 4;
+fn compute(i: i64) -> i64 { i * i }
+
+// context: b-rows-cols
+let rows = 3;
+let cols = 4;
+
+// context: b-s
+let s = "hello";
+
+// context: b-bytes-i
+let bytes = "a7".bytes();
+let i = 1;
+
+// context: b-v
+let mut v = [3, 1, 2];
+
+// context: b-pairs
+let mut pairs = [(1, 9), (2, 4)];
+
+// context: b-lines
+let lines: Vec[String] = ["  a ", "", "bcd"];
+
+// context: b-files
+fn read_file(path: String) -> String with reads(FileSystem) { "" }
+fn write_file(path: Str, data: String) with writes(FileSystem) {}
+
+// context: b-fetch-user
+pub effect resource Database;
+pub struct User { pub id: u64 }
+fn check_cache(id: u64) -> Option[User] with reads(Database) { None }
+fn load_from_api(id: u64) -> Result[User, AnyError] with sends(Network) { Ok(User { id }) }
+
+// context: b-report
+effect resource UserDB;
+effect resource OrderDB;
+effect resource Analytics;
+struct User { id: u64 }
+struct Order { total: i64 }
+struct Stats { visits: i64 }
+struct Report { orders: i64 }
+fn fetch_user(id: u64) -> User with reads(UserDB) { User { id } }
+fn fetch_orders(id: u64) -> Vec[Order] with reads(OrderDB) { Vec.new() }
+fn fetch_analytics(id: u64) -> Stats with reads(Analytics) { Stats { visits: 0 } }
+fn build_report(user: own User, orders: own Vec[Order], stats: own Stats) -> Report {
+    Report { orders: orders.len() }
+}
+
+// context: b-dashboard
+effect resource UserDB;
+effect resource OrderDB;
+effect resource Analytics;
+struct Profile { id: u64 }
+struct Order { total: i64 }
+struct Stats { visits: i64 }
+struct Dashboard { orders: i64 }
+impl Dashboard {
+    fn new(profile: own Profile, orders: own Vec[Order], stats: own Stats) -> Dashboard {
+        Dashboard { orders: orders.len() }
+    }
+}
+fn fetch_profile(id: u64) -> Profile with reads(UserDB) { Profile { id } }
+fn fetch_orders(id: u64) -> Vec[Order] with reads(OrderDB) { Vec.new() }
+fn fetch_analytics(id: u64) -> Stats with reads(Analytics) { Stats { visits: 0 } }
+
+// context: b-sort-in-place
+fn sort_in_place(v: mut ref Vec[i64]) { v.sort(); }
+
+// context: b-state
+struct Cache { hits: i64 }
+struct State { cache: Cache, counter: i64 }
+fn update(cache: mut ref Cache) { cache.hits += 1; }
+fn reset(counter: mut ref i64) { *counter = 0; }
+
+// context: b-vsix
+struct S { field: i64 }
+let mut v = [1, 2, 3];
+let mut s = S { field: 0 };
+let i = 0;
+let x = 9;
+
+// context: b-node
+struct Node { value: i64, children: Vec[Node] }
+
+// context: b-assertions
+let condition = true;
+let left = 2;
+let right = 2;
+
+// context: b-sinks
+struct StringSink {}
+impl Render for StringSink {
+    fn heading(mut ref self, title: String) {}
+    fn count(mut ref self, n: i64) {}
+    fn parity(mut ref self, p: i64) {}
+}
+effect resource Dom;
+struct DomSink {}
+impl Render for DomSink {
+    fn heading(mut ref self, title: String) {}
+    fn count(mut ref self, n: i64) {}
+    fn parity(mut ref self, p: i64) {}
+}

@@ -63,7 +63,7 @@ It needs the iterator to be `Clone`, as in Rust. The views over a `Vec`, `Array`
 
 **Looping over part of an iterator.** `for x in it` consumes `it`. To stop part-way and keep the rest, loop over `it.by_ref()`, which borrows `it` mutably for the loop; afterwards `it` holds the items not yet taken:
 
-```kara
+```kara,uses=l-flags-line
 let mut words = line.split_whitespace();
 let mut flags: Vec[Str] = Vec.new();
 for w in words.by_ref() {
@@ -116,14 +116,14 @@ trait FromIterator[T] {
 
 `Vec`, `Map`, `Set`, `VecDeque`, `SortedMap`, `SortedSet` and `String` implement `FromIterator` for their natural element type (`(K, V)` for the maps, `char` for `String`). `collect` takes its target type from context, so it usually needs an annotation:
 
-```kara
+```kara,uses=l-collect
 let v: Vec[i32] = it.collect();
 let chars: Vec[char] = s.chars().collect();
 ```
 
 `Option[C]` and `Result[C, E]` implement `FromIterator` for `Option[T]` and `Result[T, E]` items when `C` implements it for `T`. Collecting gathers the values into `C` and gives `Some(c)` or `Ok(c)`, or stops at the first `None` or `Err(e)`, pulling no more items, and gives that:
 
-```kara
+```kara,uses=l-collect-results
 let digits: Option[Vec[u32]] = s.chars().map(|c| c.to_digit(10)).collect();
 let numbers: Result[Vec[i64], ParseError] = words.iter().map(|w| i64.parse(w)).collect();
 ```

@@ -7,8 +7,10 @@
 //! must check; a whole program must also run and print what the doc shows
 //! after it; a block the doc says is rejected must be rejected at the line
 //! it marks, or with the code its fence names (```kara,error=E0205); a
-//! block that is not a program says so (```kara,fragment). Both baselines
-//! are empty, so any finding fails here. `tests/book_snippets.rs` reads the
+//! block that is not a program says so (```kara,fragment); a block that
+//! builds on declarations it does not show names them (```kara,uses=point,
+//! from a `name=point` block or docs/doc-context.kara). The baselines hold
+//! only findings with a ledger row, so any new finding fails here. `tests/book_snippets.rs` reads the
 //! same fence words for the book in-process.
 
 use std::path::Path;

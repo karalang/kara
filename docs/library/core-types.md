@@ -158,7 +158,7 @@ For floats as `Map` keys or in `Ord` contexts, use the total-order types `F32` a
 
 Each integer and float type has `fn parse(s: Str) -> Result[Self, ParseError]`. It is called on the target type, since calls take no type arguments:
 
-```kara
+```kara,uses=l-line
 match i64.parse(line.trim()) {
     Ok(n) => println(f"You guessed {n}"),
     Err(e) => println(f"not a number: {e}"),

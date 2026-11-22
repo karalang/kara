@@ -114,7 +114,7 @@ full story.
 
 Functions can be attached to types using `impl` blocks:
 
-```kara
+```kara,name=b-circle
 struct Circle {
     radius: f64,
 }
@@ -140,8 +140,8 @@ impl Circle {
 
 Methods use **Universal Function Call Syntax (UFCS)**. These two calls are the same:
 
-```kara,ignore
+```kara,uses=b-circle
 let c = Circle.new(5.0);
-c.area()           // method syntax
-Circle.area(c)    // function syntax — same thing
+c.area();          // method syntax
+Circle.area(c);    // function syntax — same thing
 ```

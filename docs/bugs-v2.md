@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 706 |
-| false-positive | 350 |
+| diagnostics | 708 |
+| false-positive | 351 |
 | missing-feature | 245 |
 | perf | 198 |
-| other | 145 |
+| other | 146 |
 | soundness | 119 |
 | miscompile | 102 |
 | crash | 64 |
@@ -76,16 +76,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 857 |
+| typecheck | 859 |
 | mir-llvm | 320 |
-| mir | 309 |
+| mir | 310 |
 | cli | 276 |
 | parser | 152 |
 | ownership | 131 |
 | runtime | 107 |
 | interp | 98 |
-| effect | 53 |
-| other | 50 |
+| effect | 54 |
+| other | 51 |
 | resolver | 50 |
 | codegen | 22 |
 | autopar | 7 |
@@ -144,6 +144,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
+| B-2026-11-22-21 | 2026-11-22 | other | medium | 157 documentation blocks (87 in design.md, 70 in the library docs, book and examples) were checked only for the names they use: a block relying on a declaration it does not show stopped at `unresolved` | — |
+| B-2026-11-22-22 | 2026-11-22 | typecheck | medium | `.raw()` on a borrowed distinct type over a raw pointer gave `ref *mut T`, not the pointer: `ptr.is_null(self.raw())` in a `Drop` for `distinct type SafeFile = *mut CFile` was rejected | — |
+| B-2026-11-22-23 | 2026-11-22 | typecheck | low | A `break` whose value type disagrees with an earlier `break` of the same loop was reported at the `loop`, not at the `break` carrying the wrong type | — |
+| B-2026-11-22-24 | 2026-11-22 | mir+effect | medium | A `par` branch conflict (E0418) in a function nothing calls is not reported: `karac check` of a file with no `main`, or of a library's `pub fn`, accepts `par { append_log(mut log), read_log_count(log) }` | — |
 
 ### Relocated
 

@@ -16,8 +16,8 @@ fn parse_port(s: String) -> Result[u16, ParseError] {
 
 The `?` operator propagates errors to the caller:
 
-```kara,ignore
-fn load_config(path: String) -> Result[Config, Error] {
+```kara,uses=b-load-config
+fn load_config(path: String) -> Result[Config, AnyError] {
     let text = read_file(path)?;       // if Err, return it immediately
     let config = parse_toml(text)?;     // same here
     Ok(config)                          // success
@@ -45,7 +45,7 @@ There is no optional-chaining operator `?.`. Inside a function that returns an
 reads as `((user.address?).city?).name`, and the first `None` returns `None` from
 the function.
 
-```kara
+```kara,name=b-user-address
 struct City { name: String }
 struct Address { city: Option[City] }
 struct User { address: Option[Address] }
@@ -59,13 +59,13 @@ fn city_name(user: own User) -> Option[String] {
 expression. When you want the value right there, chain the `Option` methods and
 give a fallback:
 
-```kara,ignore
+```kara,uses=b-user-address-value
 let name = user.address.and_then(|a| a.city).map(|c| c.name) ?? "unknown";
 ```
 
 ### Default values with ??
 
-```kara,ignore
+```kara,uses=b-nickname-values
 let name = user.nickname ?? "anonymous";
 let port = parse_port(input) ?? 8080;
 ```
@@ -76,7 +76,7 @@ let port = parse_port(input) ?? 8080;
 
 `unwrap()` extracts the value from `Option` or `Result`, crashing if it's `None` or `Err`:
 
-```kara,ignore
+```kara,uses=b-some-option
 let value = some_option.unwrap();   // panics if None
 ```
 
@@ -88,8 +88,8 @@ This produces the `panics` effect. The compiler infers it and tracks it through 
 
 `defer` runs cleanup when a scope exits, regardless of how:
 
-```kara,ignore
-fn process_file(path: String) -> Result[Data, Error] {
+```kara,uses=b-process-file
+fn process_file(path: String) -> Result[Data, AnyError] {
     let file = open(path)?;
     defer file.close();          // always runs when scope exits
 
@@ -100,8 +100,8 @@ fn process_file(path: String) -> Result[Data, Error] {
 
 `errdefer` runs cleanup only on the error path:
 
-```kara,ignore
-fn open_connection(addr: String) -> Result[Connection, Error] {
+```kara,uses=d-connection
+fn open_connection(addr: String) -> Result[Connection, AnyError] {
     let conn = Connection.open(addr)?;
     errdefer conn.close();       // only if we return Err below
 
