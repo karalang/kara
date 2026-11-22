@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 699 |
+| diagnostics | 706 |
 | false-positive | 350 |
 | missing-feature | 245 |
 | perf | 198 |
@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 119 |
 | miscompile | 102 |
 | crash | 64 |
-| run-vs-build | 61 |
+| run-vs-build | 62 |
 | codegen-gap | 43 |
 | use-after-free | 12 |
 | leak | 5 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 855 |
+| typecheck | 857 |
 | mir-llvm | 320 |
 | mir | 309 |
-| cli | 271 |
-| parser | 151 |
-| ownership | 129 |
+| cli | 276 |
+| parser | 152 |
+| ownership | 131 |
 | runtime | 107 |
 | interp | 98 |
 | effect | 53 |
@@ -132,6 +132,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-91 | 2026-11-21 | cli | medium | `karac check` of a program deriving `Serialize` takes ~0.9-1.1 s on a 5-line file (release), against ~0.07 s without the derive: the derive's comptime expansion runs twice, once in check's lower and again in the ownership/MIR check's own front end | — |
 | B-2026-11-21-95 | 2026-11-21 | runtime | medium | A task cancelled before it is first polled does not cancel the TaskGroup it makes on the way to its first wait: the nested group's task sleeps out its whole wait (core-semantics §11.9 "Cancelling a task cancels the ... TaskGroup scopes running inside it") | — |
 | B-2026-11-21-96 | 2026-11-21 | mir | medium | MIR interpreter reports a deadlock (exit 101) when a group's deadline passes before its task is first polled and that task joins a nested group; the compiled lanes finish (but late, B-2026-11-21-95) | — |
+| B-2026-11-21-72 | 2026-11-21 | typecheck+ownership | medium | Twenty-four diagnostic codes whose help names one determined edit carried no machine-applicable fix, so `karac fix` left them for the author: W0302 and its denied E0302, W0296 and its denied E0296, W0293, E_INT_AS_BOOL, E_MAIN_SIGNATURE, E_STRUCT_LITERAL_SPREAD_UNSUPPORTED, E0258, E_ONCE_CELL_IN_PAR_TYPE, E_ONCE_CELL_AT_MODULE_SCOPE, E0276, W0303, E0303, E_UNION_REQUIRES_REPR, E_UNION_DROP_FORBIDDEN, E_UNION_DERIVE_FORBIDDEN, E_REFINEMENT_CAST_SOURCE_MISMATCH, E0108, E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE, E_MALFORMED_ATTRIBUTE_ARGS (resolver), E0504, E0512, E0400 on main's own clause | — |
+| B-2026-11-21-73 | 2026-11-21 | parser | low | Parser diagnostics whose help names one determined edit carry no fix: E0005 (delete `with _`), E_INTERIOR_NUL_IN_C_STRING (remove the `\0`), E_NO_EFFECT_STRING_VALUE (`#[no_effect = "V"]` to `#[no_effect(V)]`), E_PROFILE_STRING_VALUE (`#[profile("x")]` to `#[profile(x)]`), E_RESERVED_KEYWORD (`match` to `r#match`), parser-side E_MALFORMED_ATTRIBUTE_ARGS / E_GPU_ARGS_NOT_PERMITTED / E_TRACK_CALLER_ARGS_NOT_PERMITTED (drop the arguments), E_ATTR_ON_ASSOC_TYPE_DECL, E0002's Rust-style `mut b: T` parameter | — |
+| B-2026-11-21-74 | 2026-11-21 | typecheck+ownership | low | Diagnostics whose help names a determined edit still carry no fix, most because the edit spans several sites: E0113 (drop `as F`, rename uses), E0127 and W0298 (rename to the name given, with uses), E0204 (move the method to an inherent impl), E_DEFERRED_EFFECT_GROUP, E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET, E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG, E_SLICE_FROM_TEMPORARY_ESCAPES, E_EXTERN_REF_PARAM, L0001, and single variants of E0107, E0200, E0212, E0232, E0506, E0511, E0515, E0517, E0518, E0520, E_CODEGEN_HINT_INVALID_POSITION, E_DROP_SIGNATURE_INVALID, E_EXTERN_TYPE_NOT_FFI_SAFE, E_UNKNOWN_ATTRIBUTE, W0309, W0310; and E_TEST_OUTSIDE_TEST_FILE (move the test to a test file), E_TOOLCHAIN_INVALID_VERSION_TYPE (quote the toml scalar) | — |
+| B-2026-11-21-75 | 2026-11-21 | cli | medium | Project-mode `karac check --output=json` drops a typecheck error's fix and its named code: E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN / _LITERAL reach JSON as E0243 / E0241 with no replacement, while `karac fix` applies the same `, ..` edit | — |
+| B-2026-11-21-76 | 2026-11-21 | cli | low | Codes `karac explain` lists as RETIRED still fire: E_RC_BUDGET_EXCEEDED on conformance/fix-coverage/probes/agent_named/p/rcbudget/main.kara (beside E0500), and E0413 under `karac run` with `[profile] panic = "unwind"` | — |
+| B-2026-11-21-77 | 2026-11-21 | cli | medium | `karac check` in a project ignores the manifest's [profile]: with `panic = "unwind"`, check refuses a C-unwind export with E0415 (the abort-profile refusal) where `karac run` gives E0413 | — |
+| B-2026-11-21-78 | 2026-11-21 | cli | medium | A path dependency's `version` requirement is checked against the 0.0.0 sentinel, so `util = { path = "util", version = ">=1.0" }` fails E_DEPENDENCY_VERSION_CONFLICT though util/kara.toml says 1.5.0; the note also prints the package as `app/kara.toml` | — |
+| B-2026-11-21-79 | 2026-11-21 | cli | low | JSON drops the help and notes that the text renderer prints: E0223 (the 'extract the shared items into a lower-layer module' suggestion), E_OFFLINE_NO_VENDOR_DIR, E_TOOLCHAIN_VERSION_MISMATCH, and E_LOCKFILE_IO, which also says 'failed to read lockfile' when the failing step is the write | — |
 | B-2026-11-22-1 | 2026-11-22 | mir-llvm | high | Cancelling the TaskGroup that runs `Server.serve` frees a connection's `WsConn` while that connection's task is still reading it: ASan reports a heap-use-after-free in `WsConn.set_read_timeout` from `Server.__next`, about 1 run in 20 on 4 workers, never on one | — |
 | B-2026-11-22-2 | 2026-11-22 | ownership | high | A temporary pushed into a `Vec[ref String]` checks clean: `refs.push(words[0].clone())` stores a reference to a dropped temporary (ASan heap-buffer-overflow) | — |
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
