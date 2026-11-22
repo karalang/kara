@@ -142,8 +142,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
 | B-2026-11-22-24 | 2026-11-22 | mir+effect | medium | A `par` branch conflict (E0418) in a function nothing calls is not reported: `karac check` of a file with no `main`, or of a library's `pub fn`, accepts `par { append_log(mut log), read_log_count(log) }` | — |
 | B-2026-11-22-40 | 2026-11-22 | cli | low | `karac check` of a program with a comptime-backed derive still takes ~0.6 s on a 3-line file (release) against ~0.07 s without it: the library's bodies are type-checked three times (check's first pass, the comptime evaluation's retype, and the re-check after splicing) | — |
-| B-2026-11-22-45 | 2026-11-22 | mir | medium | An https:// fetch refused for a certificate failure names a Rust type, not the reason: `invalid peer certificate: UnknownIssuer`, `BadSignature`, `Other(OtherError(EndEntityUsedAsCa))`, a SHA-1 signature's OID bytes, `DnsName("other.test")` | — |
-| B-2026-11-22-46 | 2026-11-22 | mir | medium | KARAC_HTTP_EXTRA_CA naming an empty file, or one holding only a private key, is accepted in silence: no extra root is trusted and every fetch to the private CA's hosts fails as an unknown issuer | — |
 
 ### Relocated
 
@@ -2168,6 +2166,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-21 | other | medium | 157 documentation blocks (87 in design.md, 70 in the library docs, book and examples) were checked only for the names they use: a block relying on a… | 28032737f2 |
 | B-2026-11-22-22 | typecheck | medium | `.raw()` on a borrowed distinct type over a raw pointer gave `ref *mut T`, not the pointer: `ptr.is_null(self.raw())` in a `Drop` for `distinct type… | 24e4e000b4 |
 | B-2026-11-22-23 | typecheck | low | A `break` whose value type disagrees with an earlier `break` of the same loop was reported at the `loop`, not at the `break` carrying the wrong type | 24e4e000b4 |
+| B-2026-11-22-45 | mir | medium | An https:// fetch refused for a certificate failure names a Rust type, not the reason: `invalid peer certificate: UnknownIssuer`, `BadSignature`, `Ot… | dd8d028f22 |
+| B-2026-11-22-46 | mir | medium | KARAC_HTTP_EXTRA_CA naming an empty file, or one holding only a private key, is accepted in silence: no extra root is trusted and every fetch to the… | dd8d028f22 |
 
 </details>
 
