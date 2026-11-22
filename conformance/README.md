@@ -17,6 +17,7 @@ compiled. Both must give the expected output.
 | `channel_model.py` | concurrency.md | Random single-task channel scripts against a model of the page's rules, the model itself checked against Go's buffered channels (`go run`) on every script Go can express |
 | `precedence.py` | design.md §6 | Every pair of binary operators, alone, around each comparison and under the logical words, against a parser of the page's table, that parser checked against Python's `ast.parse` wherever the two grammars agree (all but `not`); a pair counts only where a tuple tells its two groupings apart |
 | `literals.py` | design.md §3 Numeric literals | Random integer literals in every base and float literals in every notation, with `_` grouping, against Python's `int(text, 0)` and `float(text)`; floats compared by bits, `f32` ones at single precision |
+| `tls_client.py` | io.md HTTP client, HTTPS | A local test PKI (expired, not-yet-valid, wrong-host, CN-only, wildcard and IP-SAN, self-signed, untrusted-root, incomplete, bad-signature, non-CA issuer, clientAuth-only, RSA-1024 and SHA-1 certificates) against `Client.get` through a CONNECT proxy: each verdict against Python `ssl`, each refusal's message in words; SNI and ALPN off the ClientHello, h2 and HTTP/1.1, TLS 1.1 refused, `close_notify` against truncation, `KARAC_HTTP_EXTRA_CA` errors |
 | `overflow.py` | design.md §5 Integer overflow, Division, remainder and shifts | Every integer type: the edges that must not trap, computed from the page's rules, and each trap the page lists exiting 101 with its message |
 | `cases.py <dir>...` | design.md §3 and §6 (`design/lexical`, `design/expressions`), log.md, secret.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
 
@@ -48,6 +49,7 @@ python3 conformance/channel_model.py --seed 1
 python3 conformance/precedence.py --seed 1
 python3 conformance/overflow.py
 python3 conformance/literals.py --seed 1
+python3 conformance/tls_client.py
 python3 conformance/cases.py conformance/log conformance/secret conformance/pool conformance/encoding conformance/crypto \
     conformance/concurrency conformance/random_env conformance/data \
     conformance/design/lexical conformance/design/expressions

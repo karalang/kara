@@ -109,6 +109,194 @@ fn with_http_client_runtime<R>(f: impl FnOnce(&tokio::runtime::Runtime) -> R) ->
     })
 }
 
+/// A failed handshake's error as a sentence. rustls prints several
+/// certificate failures by their Rust names (`UnknownIssuer`,
+/// `BadSignature`, `Other(OtherError(EndEntityUsedAsCa))`, a signature
+/// algorithm's OID bytes), which tell a program's user nothing; those are
+/// spelled out here, and the ones rustls already writes as a sentence
+/// (expiry, the name check, the key usage) keep its text
+/// (B-2026-11-22-45).
+fn tls_failure_text(e: &std::io::Error) -> String {
+    let Some(err) = e.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>()) else {
+        return e.to_string();
+    };
+    use rustls::CertificateError as C;
+    let cert = |why: &str| format!("invalid peer certificate: {why}");
+    match err {
+        rustls::Error::InvalidCertificate(ce) => match ce {
+            C::UnknownIssuer => cert(
+                "it does not chain to a trusted root (it is self-signed, its root is neither in \
+                 the built-in Mozilla bundle nor in KARAC_HTTP_EXTRA_CA, or the server did not \
+                 send its intermediate certificates)",
+            ),
+            C::BadSignature => cert(
+                "a signature does not verify (a certificate's against its issuer's key, or the \
+                 server's handshake signature against the certificate's key; an RSA key under \
+                 2048 bits fails this way)",
+            ),
+            C::UnsupportedSignatureAlgorithmContext { .. }
+            | C::UnsupportedSignatureAlgorithmForPublicKeyContext { .. } => cert(
+                "it is signed with an algorithm this client does not accept (SHA-1 and MD5 \
+                 signatures are refused)",
+            ),
+            C::ExpiredContext { time, not_after } => cert(&format!(
+                "it expired at {} (the time now is {})",
+                utc_text(not_after.as_secs()),
+                utc_text(time.as_secs())
+            )),
+            C::NotValidYetContext { time, not_before } => cert(&format!(
+                "it is not valid until {} (the time now is {})",
+                utc_text(not_before.as_secs()),
+                utc_text(time.as_secs())
+            )),
+            C::NotValidForNameContext {
+                expected,
+                presented,
+            } => {
+                // rustls writes each presented name as its Rust form
+                // (`DnsName("a.test")`, `IpAddress(10.0.0.1)`).
+                let names: Vec<String> = presented
+                    .iter()
+                    .map(|n| {
+                        let unwrap = |p: &str| {
+                            n.strip_prefix(p)
+                                .and_then(|r| r.strip_suffix(')'))
+                                .map(|r| r.trim_matches('"').to_string())
+                        };
+                        if let Some(d) = unwrap("DnsName(") {
+                            format!("DNS name {d}")
+                        } else if let Some(ip) = unwrap("IpAddress(") {
+                            format!("IP address {ip}")
+                        } else {
+                            n.clone()
+                        }
+                    })
+                    .collect();
+                let host = expected.to_str();
+                if names.is_empty() {
+                    cert(&format!(
+                        "it is not valid for \"{host}\": it names no host in its subjectAltName \
+                         (a name only in the subject's CN does not count)"
+                    ))
+                } else {
+                    cert(&format!(
+                        "it is not valid for \"{host}\"; its subjectAltName lists only {}",
+                        names.join(", ")
+                    ))
+                }
+            }
+            C::BadEncoding => cert("it is malformed"),
+            C::UnhandledCriticalExtension => {
+                cert("it has a critical extension this client does not understand")
+            }
+            C::Revoked => cert("it is revoked"),
+            C::Other(other) => {
+                let why = match other.to_string().as_str() {
+                    "EndEntityUsedAsCa" => {
+                        "a certificate that is not a CA issued another one in the chain".to_string()
+                    }
+                    "CaUsedAsEndEntity" => {
+                        "the server presented a CA certificate as its own".to_string()
+                    }
+                    "PathLenConstraintViolated" => {
+                        "the chain is longer than an issuer's path-length limit allows".to_string()
+                    }
+                    "NameConstraintViolation" => {
+                        "the host is outside a name constraint of an issuer".to_string()
+                    }
+                    "MaximumPathDepthExceeded" | "MaximumPathBuildCallsExceeded" => {
+                        "the chain is too long to verify".to_string()
+                    }
+                    "UnsupportedCertVersion" => "it is not an X.509 v3 certificate".to_string(),
+                    "InvalidCertValidity" => "its validity period is malformed".to_string(),
+                    name => format!("the chain does not verify ({name})"),
+                };
+                cert(&why)
+            }
+            _ => err.to_string(),
+        },
+        rustls::Error::AlertReceived(rustls::AlertDescription::ProtocolVersion)
+        | rustls::Error::PeerIncompatible(
+            rustls::PeerIncompatible::ServerDoesNotSupportTls12Or13,
+        ) => "the server speaks no TLS version this client accepts (TLS 1.2 or 1.3)".to_string(),
+        _ => err.to_string(),
+    }
+}
+
+/// `secs` since the Unix epoch as `YYYY-MM-DD HH:MM:SS UTC`.
+fn utc_text(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
+        rem / 3600,
+        rem / 60 % 60,
+        rem % 60
+    )
+}
+
+/// A failed body read's error as a sentence. A close-delimited body over TLS
+/// that ends without the server's `close_notify` may have been cut short by
+/// whoever closed the connection, so it is an error; hyper reports it as
+/// "error reading a body from connection", which does not say why.
+fn body_failure_text(e: &hyper::Error) -> String {
+    let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(s) = src {
+        if let Some(io) = s.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::UnexpectedEof
+                && io.to_string().contains("close_notify")
+            {
+                return "the connection closed without TLS close_notify, so the body may be \
+                        cut short"
+                    .to_string();
+            }
+        }
+        src = s.source();
+    }
+    e.to_string()
+}
+
+/// Adds the PEM certificates in the file `path` (`KARAC_HTTP_EXTRA_CA`)
+/// to `root_store`. A file that cannot be read, that holds a malformed
+/// block, or that holds no certificate at all is an error.
+fn add_extra_ca(root_store: &mut rustls::RootCertStore, path: &str) -> Result<(), String> {
+    let pem = std::fs::read(path)
+        .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: cannot read '{path}': {e}"))?;
+    let mut added = 0usize;
+    for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+        let cert = cert.map_err(|_| {
+            format!(
+                "KARAC_HTTP_EXTRA_CA: bad PEM in '{path}': a block is malformed (its body \
+                 is not valid base64, or it has no END line)"
+            )
+        })?;
+        root_store
+            .add(cert)
+            .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: rejected cert in '{path}': {e}"))?;
+        added += 1;
+    }
+    // A file with no certificate in it (an empty one, or a key written
+    // where the CA was meant to go) would otherwise trust nothing
+    // extra in silence, and every request to the private CA's hosts
+    // would fail as an unknown issuer instead (B-2026-11-22-46).
+    if added == 0 {
+        return Err(format!(
+            "KARAC_HTTP_EXTRA_CA: no certificate in '{path}' (it must hold one or more PEM `CERTIFICATE` blocks)"
+        ));
+    }
+    Ok(())
+}
+
 /// Shared rustls `ClientConfig`: bundled Mozilla roots
 /// (`webpki_roots::TLS_SERVER_ROOTS`, so stripped images need no system
 /// CA bundle) + optional `KARAC_HTTP_EXTRA_CA` PEM append, `ring`
@@ -122,15 +310,7 @@ pub(crate) fn http_client_tls_config() -> Result<std::sync::Arc<rustls::ClientCo
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
         };
         if let Ok(path) = std::env::var("KARAC_HTTP_EXTRA_CA") {
-            let pem = std::fs::read(&path)
-                .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: cannot read '{path}': {e}"))?;
-            for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
-                let cert =
-                    cert.map_err(|e| format!("KARAC_HTTP_EXTRA_CA: bad PEM in '{path}': {e}"))?;
-                root_store
-                    .add(cert)
-                    .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: rejected cert in '{path}': {e}"))?;
-            }
+            add_extra_ca(&mut root_store, &path)?;
         }
         let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
         let mut config = rustls::ClientConfig::builder_with_provider(provider)
@@ -330,7 +510,7 @@ async fn http_fetch_once(
         let tls = connector
             .connect(sni, tcp)
             .await
-            .map_err(|e| format!("{url}: TLS handshake failed: {e}"))?;
+            .map_err(|e| format!("{url}: TLS handshake failed: {}", tls_failure_text(&e)))?;
         let negotiated_h2 = tls.get_ref().1.alpn_protocol() == Some(b"h2".as_slice());
         if negotiated_h2 {
             http_exchange_h2(tls, method, &uri, url, body, headers).await
@@ -571,7 +751,12 @@ async fn http_collect_response(
         .into_body()
         .collect()
         .await
-        .map_err(|e| format!("{url}: reading response body failed: {e}"))?
+        .map_err(|e| {
+            format!(
+                "{url}: reading response body failed: {}",
+                body_failure_text(&e)
+            )
+        })?
         .to_bytes()
         .to_vec();
     Ok(HttpFetched {
@@ -581,4 +766,91 @@ async fn http_collect_response(
         url: url.to_string(),
         too_many_redirects: None,
     })
+}
+
+#[cfg(test)]
+mod tls_text_tests {
+    use super::*;
+
+    fn io(e: rustls::Error) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+    }
+
+    #[test]
+    fn tls_failure_text_spells_out_the_rust_names() {
+        let t = tls_failure_text(&io(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::UnknownIssuer,
+        )));
+        assert!(t.contains("does not chain to a trusted root"), "{t}");
+        let t = tls_failure_text(&io(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::BadSignature,
+        )));
+        assert!(t.contains("a signature does not verify"), "{t}");
+        let t = tls_failure_text(&io(rustls::Error::AlertReceived(
+            rustls::AlertDescription::ProtocolVersion,
+        )));
+        assert!(t.contains("TLS 1.2 or 1.3"), "{t}");
+        let t = tls_failure_text(&io(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::NotValidForNameContext {
+                expected: rustls::pki_types::ServerName::try_from("good.test").unwrap(),
+                presented: vec![
+                    "DnsName(\"other.test\")".into(),
+                    "IpAddress(10.0.0.1)".into(),
+                ],
+            },
+        )));
+        assert_eq!(
+            t,
+            "invalid peer certificate: it is not valid for \"good.test\"; its subjectAltName \
+             lists only DNS name other.test, IP address 10.0.0.1"
+        );
+        let t = tls_failure_text(&io(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::ExpiredContext {
+                time: rustls::pki_types::UnixTime::since_unix_epoch(
+                    std::time::Duration::from_secs(1_795_343_909),
+                ),
+                not_after: rustls::pki_types::UnixTime::since_unix_epoch(
+                    std::time::Duration::from_secs(1_795_257_503),
+                ),
+            },
+        )));
+        assert_eq!(
+            t,
+            "invalid peer certificate: it expired at 2026-11-21 10:38:23 UTC (the time now is \
+             2026-11-22 10:38:29 UTC)"
+        );
+    }
+
+    #[test]
+    fn utc_text_matches_the_civil_calendar() {
+        assert_eq!(utc_text(0), "1970-01-01 00:00:00 UTC");
+        assert_eq!(utc_text(951_782_400), "2000-02-29 00:00:00 UTC");
+        assert_eq!(utc_text(4_102_444_799), "2099-12-31 23:59:59 UTC");
+    }
+
+    #[test]
+    fn extra_ca_file_without_a_certificate_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("karac-extra-ca-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.pem");
+        std::fs::write(&empty, "").unwrap();
+        let key_only = dir.join("key.pem");
+        std::fs::write(
+            &key_only,
+            "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        for p in [&empty, &key_only] {
+            let mut store = rustls::RootCertStore::empty();
+            let e = add_extra_ca(&mut store, p.to_str().unwrap()).unwrap_err();
+            assert!(
+                e.starts_with("KARAC_HTTP_EXTRA_CA: no certificate in"),
+                "{e}"
+            );
+        }
+        let mut store = rustls::RootCertStore::empty();
+        let e = add_extra_ca(&mut store, dir.join("missing.pem").to_str().unwrap()).unwrap_err();
+        assert!(e.contains("cannot read"), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

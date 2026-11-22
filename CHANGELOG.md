@@ -2348,6 +2348,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- An `https://` fetch refused for its certificate says why in words, not by a
+  Rust type: `it does not chain to a trusted root (...)` for a self-signed
+  certificate, an unknown root or a missing intermediate (was `UnknownIssuer`),
+  `a signature does not verify (...)` (was `BadSignature`), `it is signed with
+  an algorithm this client does not accept` (was the OID bytes), a name
+  mismatch lists `DNS name other.test` (was `DnsName("other.test")`), expiry is
+  a UTC date (was UNIX seconds), a server older than TLS 1.2 says so, and a
+  close-delimited body cut off without `close_notify` says that (B-2026-11-22-45).
+- `KARAC_HTTP_EXTRA_CA` naming a file with no certificate in it (empty, or a
+  key in its place) makes every request an `Err` naming the variable; it used
+  to trust nothing extra in silence (B-2026-11-22-46).
 - A constant whose initializer calls something effectful gets a note naming
   the effect at the call (`performs writes(Stdout) here, through shout`)
   (B-2026-11-22-32).
