@@ -3754,6 +3754,14 @@ impl<'a> Lcx<'a> {
                 // no fields stands for it; the checker refuses a value of
                 // one (FF2).
                 (Vec::new(), vec![(name.clone(), Vec::new())], false, false)
+            } else if matches!(self.defs.table.get(def).kind, DefKind::Union) {
+                // The front end checks a `union`, but FFI unions are
+                // deferred (design.md §15), so no lane runs one
+                // (B-2026-11-22-56).
+                return Err(format!(
+                    "`{name}`, a `union` (FFI unions are deferred to the systems track: \
+                     docs/deferred.md § FFI unions),"
+                ));
             } else {
                 return Err(format!("no definition for type `{name}`"));
             };

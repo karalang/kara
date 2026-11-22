@@ -1112,6 +1112,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   were refused as not lowered. `refs.extend(words.iter())` on a `Vec[ref T]` or
   `VecDeque[ref T]` is accepted; it was refused as moving the items out
   (B-2026-11-20-40).
+- A `#[repr(C)]` struct aligned to 16 bytes (one with an `i128` or `u128`
+  field) passed to or returned from an `extern "C"` function by value: the
+  compiled program made its copy at 8-byte alignment, so C read a
+  misplaced stack copy or faulted storing its result (B-2026-11-22-53).
+- The interpreter passes an `extern "C"` call's seventh integer argument,
+  ninth float one and 16-byte-aligned struct on the stack, as compiled
+  code does; it refused them. An `i128` / `u128` argument or result crosses
+  whole; the interpreter passed its low 64 bits (B-2026-11-22-54).
+- `karac run` and `karac test` link the libraries `kara.toml`'s `[link]`
+  table names, as `karac build` does; a program that called into one
+  failed with `Symbols not found` (B-2026-11-22-55).
 - A type parameter named only in another parameter's bound
   (`fn count[T, S: Source[T]](s: S)`) is solved from the argument's impl;
   every call was refused (B-2026-11-20-111).
@@ -2549,6 +2560,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `KARAC_HTTP_EXTRA_CA` naming a file with no certificate in it (empty, or a
   key in its place) makes every request an `Err` naming the variable; it used
   to trust nothing extra in silence (B-2026-11-22-46).
+- A value of a `union` is refused naming the deferral (`` `U`, a `union` (FFI
+  unions are deferred to the systems track: docs/deferred.md § FFI unions), is
+  not lowered yet``); it read `no definition for type `U` is not lowered yet`
+  (B-2026-11-22-56).
 - A constant whose initializer calls something effectful gets a note naming
   the effect at the call (`performs writes(Stdout) here, through shout`)
   (B-2026-11-22-32).

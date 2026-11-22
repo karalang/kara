@@ -63,6 +63,12 @@ fn cmd_run_v2(
         std::env::set_var(crate::mir::interp::PANIC_RECORD_ENV, "1");
     }
     let manifest = run_manifest_preamble(filename, output, manifest_override, no_manifest);
+    // The `[link]` table: the interpreter `dlopen`s its libraries and the
+    // JIT runner is handed them, as `karac build` links them; a package that
+    // binds a C library otherwise ran only once built (B-2026-11-22-55).
+    if let Some(m) = manifest.as_ref() {
+        super::args::install_link_table(m);
+    }
     // `karac run` runs on this host, so a package whose `[build] targets`
     // leave `native` out is not run here (review-thread ruling 2026-11-16).
     if let Some(m) = manifest.as_ref() {

@@ -2638,6 +2638,15 @@ pub(crate) fn install_manifest_link(path: &str) {
     }
 }
 
+/// Installs the `[link]` table of the manifest `m` for this process: what
+/// [`install_manifest_link`] does for a command that has its manifest in
+/// hand (`karac run`, `karac test`; B-2026-11-22-55).
+pub(crate) fn install_link_table(m: &crate::manifest::Manifest) {
+    if !m.link_libs.is_empty() || !m.link_search_paths.is_empty() {
+        crate::target::set_native_link_config(m.link_libs.clone(), m.link_search_paths.clone());
+    }
+}
+
 /// Hands the installed `[link]` table to a `karac_jit_runner` about to run a
 /// compiled program, which opens the libraries before the JIT resolves the
 /// program's `extern "C"` calls (unit-separator joined, as

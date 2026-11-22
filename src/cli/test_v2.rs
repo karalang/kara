@@ -36,6 +36,7 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
         super::build_cmds::emit_manifest_warnings(&mf, OutputMode::Text);
     }
     let TestFront { mf, tree, tests } = test_front(filter.as_deref(), true);
+    super::args::install_link_table(&mf);
     // The runner's stream is JSONL, so it asks each case for the panic
     // record's kind, which a `test_fail` carries (design.md § Panic record,
     // B-2026-11-05-18).
@@ -616,6 +617,7 @@ pub(super) fn check_package_tests(
                     .sum::<usize>();
         }
     };
+    super::args::install_link_table(&mf);
     let amalgam = match combine(&tree, &tests) {
         Ok(a) => a,
         Err(e) => {

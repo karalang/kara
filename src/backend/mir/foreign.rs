@@ -75,9 +75,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 return Ok(Crossing::Scalar(t));
             }
             let abi = c_abi::Abi::host().ok_or_else(|| refuse(t))?;
-            let size = crate::mir::layout::layout(self.tys, t)
-                .ok_or_else(|| refuse(t))?
-                .size;
+            let lay = crate::mir::layout::layout(self.tys, t).ok_or_else(|| refuse(t))?;
+            let size = lay.size;
+            // A copy or result slot is aligned as C aligns the struct: a
+            // 16-byte-aligned one (an `i128` field) at 8 misplaces a `byval`
+            // copy and faults the callee's aligned store through `sret`
+            // (B-2026-11-22-53).
+            let align = lay.align.max(8) as u32;
             Ok(
                 match c_abi::classify(self.tys, abi, t, result, free).ok_or_else(|| refuse(t))? {
                     c_abi::Pass::Regs(pieces) => Crossing::Regs {
@@ -85,16 +89,16 @@ impl<'ctx> Cx<'ctx, '_> {
                         hfa: abi == c_abi::Abi::Aapcs64,
                         size,
                     },
-                    c_abi::Pass::Indirect => Crossing::Indirect(size),
-                    c_abi::Pass::Stack => Crossing::Stack(size),
-                    c_abi::Pass::Sret => Crossing::Sret(size),
+                    c_abi::Pass::Indirect => Crossing::Indirect(size, align),
+                    c_abi::Pass::Stack => Crossing::Stack(size, align),
+                    c_abi::Pass::Sret => Crossing::Sret(size, align),
                 },
             )
         };
         let (ints, floats) = c_abi::Abi::host().map_or((6, 8), |a| a.registers());
         let ret = crossing_of(sig.ret, true, (ints, floats))?;
         let mut used = (
-            usize::from(matches!(ret, Crossing::Sret(_)) && cfg!(target_arch = "x86_64")),
+            usize::from(matches!(ret, Crossing::Sret(..)) && cfg!(target_arch = "x86_64")),
             0,
         );
         let mut params = Vec::with_capacity(sig.params.len());
@@ -106,7 +110,7 @@ impl<'ctx> Cx<'ctx, '_> {
             )?;
             match &c {
                 Crossing::Scalar(s) if matches!(self.tys.kind(*s), TyKind::Float(_)) => used.1 += 1,
-                Crossing::Scalar(_) | Crossing::Indirect(_) => used.0 += 1,
+                Crossing::Scalar(_) | Crossing::Indirect(..) => used.0 += 1,
                 Crossing::Regs { pieces, .. } => {
                     for p in pieces {
                         if p.float {
@@ -166,9 +170,9 @@ impl<'ctx> Cx<'ctx, '_> {
         let mut params: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::new();
         // Per LLVM parameter, its extension or its `byval` / `sret` size.
         let mut attrs: Vec<ParamAttr> = Vec::new();
-        if let Crossing::Sret(n) = ret {
+        if let Crossing::Sret(n, align) = ret {
             params.push(self.ptr_ty().into());
-            attrs.push(ParamAttr::Sret(n));
+            attrs.push(ParamAttr::Sret(n, align));
         }
         for c in &plan {
             match c {
@@ -183,19 +187,19 @@ impl<'ctx> Cx<'ctx, '_> {
                         attrs.push(ParamAttr::None);
                     }
                 }
-                Crossing::Indirect(_) => {
+                Crossing::Indirect(..) => {
                     params.push(self.ptr_ty().into());
                     attrs.push(ParamAttr::None);
                 }
-                Crossing::Stack(n) => {
+                Crossing::Stack(n, align) => {
                     params.push(self.ptr_ty().into());
-                    attrs.push(ParamAttr::Byval(*n));
+                    attrs.push(ParamAttr::Byval(*n, *align));
                 }
-                Crossing::Sret(_) | Crossing::Void => {}
+                Crossing::Sret(..) | Crossing::Void => {}
             }
         }
         let (fty, rext) = match &ret {
-            Crossing::Void | Crossing::Sret(_) => {
+            Crossing::Void | Crossing::Sret(..) => {
                 (self.llcx.void_type().fn_type(&params, false), None)
             }
             Crossing::Scalar(t) => {
@@ -234,18 +238,27 @@ impl<'ctx> Cx<'ctx, '_> {
             match x {
                 ParamAttr::None => {}
                 ParamAttr::Ext(x) => f.add_attribute(at, attr(x)),
-                ParamAttr::Byval(n) => {
+                ParamAttr::Byval(n, align) => {
                     let k = Attribute::get_named_enum_kind_id("byval");
                     f.add_attribute(at, self.llcx.create_type_attribute(k, bytes(n)));
                     f.add_attribute(
                         at,
-                        self.llcx
-                            .create_enum_attribute(Attribute::get_named_enum_kind_id("align"), 8),
+                        self.llcx.create_enum_attribute(
+                            Attribute::get_named_enum_kind_id("align"),
+                            u64::from(align),
+                        ),
                     );
                 }
-                ParamAttr::Sret(n) => {
+                ParamAttr::Sret(n, align) => {
                     let k = Attribute::get_named_enum_kind_id("sret");
                     f.add_attribute(at, self.llcx.create_type_attribute(k, bytes(n)));
+                    f.add_attribute(
+                        at,
+                        self.llcx.create_enum_attribute(
+                            Attribute::get_named_enum_kind_id("align"),
+                            u64::from(align),
+                        ),
+                    );
                 }
             }
         }
@@ -282,8 +295,8 @@ impl<'ctx> Cx<'ctx, '_> {
         let (f, plan, ret) = self.foreign_fn(name, sig)?;
         let mut vals: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
         let sret = match ret {
-            Crossing::Sret(n) => {
-                let slot = self.entry_slot(n.max(1) as u32, "sret")?;
+            Crossing::Sret(n, align) => {
+                let slot = self.aligned_slot(n.max(1), align, "sret")?;
                 vals.push(slot.into());
                 Some(slot)
             }
@@ -310,7 +323,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 // Through a copy padded to whole words, so a piece never
                 // reads past the struct.
                 Crossing::Regs { pieces, hfa, size } => {
-                    let tmp = self.padded_copy(p, *size)?;
+                    let tmp = self.padded_copy(p, *size, 8)?;
                     let tys = self.piece_types(pieces, *hfa, false);
                     if tys.len() == pieces.len() {
                         for (piece, t) in pieces.iter().zip(tys) {
@@ -335,18 +348,18 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                 }
                 // A copy the callee may write, its address passed.
-                Crossing::Indirect(n) | Crossing::Stack(n) => {
-                    let tmp = self.padded_copy(p, *n)?;
+                Crossing::Indirect(n, align) | Crossing::Stack(n, align) => {
+                    let tmp = self.padded_copy(p, *n, *align)?;
                     vals.push(tmp.into());
                 }
-                Crossing::Sret(_) | Crossing::Void => {}
+                Crossing::Sret(..) | Crossing::Void => {}
             }
         }
         let r = self.builder.build_call(f, &vals, "").map_err(e)?;
         let d = self.place_ptr(dest)?;
         match ret {
             Crossing::Void => Ok(()),
-            Crossing::Sret(n) => {
+            Crossing::Sret(n, _) => {
                 let slot = sret.ok_or("an sret call without its slot")?;
                 self.builder
                     .build_memcpy(d, 1, slot, 1, self.i64(n))
@@ -394,10 +407,16 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
-    /// A word-padded stack copy of the `size` bytes at `p`.
-    fn padded_copy(&mut self, p: PointerValue<'ctx>, size: u64) -> R<PointerValue<'ctx>> {
+    /// A word-padded stack copy of the `size` bytes at `p`, aligned to
+    /// `align`.
+    fn padded_copy(
+        &mut self,
+        p: PointerValue<'ctx>,
+        size: u64,
+        align: u32,
+    ) -> R<PointerValue<'ctx>> {
         let words = size.div_ceil(8).max(1) * 8 + 8;
-        let tmp = self.entry_slot(words as u32, "carg")?;
+        let tmp = self.aligned_slot(words, align, "carg")?;
         self.builder
             .build_memset(tmp, 8, self.llcx.i8_type().const_zero(), self.i64(words))
             .map_err(e)?;
@@ -405,6 +424,18 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_memcpy(tmp, 1, p, 1, self.i64(size))
             .map_err(e)?;
         Ok(tmp)
+    }
+}
+
+impl<'ctx> Cx<'ctx, '_> {
+    /// A `size`-byte slot in the entry block, aligned to `align`.
+    fn aligned_slot(&self, size: u64, align: u32, name: &str) -> R<PointerValue<'ctx>> {
+        let slot = self.entry_slot(size as u32, name)?;
+        slot.as_instruction()
+            .ok_or("an alloca is not an instruction")?
+            .set_alignment(align)
+            .map_err(e)?;
+        Ok(slot)
     }
 }
 
@@ -421,18 +452,19 @@ enum Crossing {
         hfa: bool,
         size: u64,
     },
-    /// A pointer to a copy of the struct's `size` bytes.
-    Indirect(u64),
-    /// A `byval` copy on the stack.
-    Stack(u64),
-    /// The result, through a hidden pointer to a slot of this size.
-    Sret(u64),
+    /// A pointer to a copy of the struct's `size` bytes, at its alignment.
+    Indirect(u64, u32),
+    /// A `byval` copy on the stack, at the struct's alignment.
+    Stack(u64, u32),
+    /// The result, through a hidden pointer to a slot of this size and
+    /// alignment.
+    Sret(u64, u32),
 }
 
 /// An attribute of one LLVM parameter of a C declaration.
 enum ParamAttr {
     None,
     Ext(&'static str),
-    Byval(u64),
-    Sret(u64),
+    Byval(u64, u32),
+    Sret(u64, u32),
 }

@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 718 |
+| diagnostics | 719 |
 | false-positive | 357 |
 | missing-feature | 246 |
 | perf | 200 |
 | other | 148 |
 | soundness | 126 |
-| miscompile | 105 |
+| miscompile | 106 |
+| run-vs-build | 64 |
 | crash | 64 |
-| run-vs-build | 62 |
 | codegen-gap | 45 |
 | use-after-free | 13 |
 | leak | 5 |
@@ -77,13 +77,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 873 |
-| mir-llvm | 322 |
-| mir | 320 |
-| cli | 286 |
+| mir-llvm | 323 |
+| mir | 321 |
+| cli | 287 |
 | parser | 152 |
 | ownership | 133 |
 | runtime | 108 |
-| interp | 100 |
+| interp | 101 |
 | effect | 62 |
 | other | 52 |
 | resolver | 51 |
@@ -130,6 +130,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
 | B-2026-11-22-24 | 2026-11-22 | mir+effect | medium | A `par` branch conflict (E0418) in a function nothing calls is not reported: `karac check` of a file with no `main`, or of a library's `pub fn`, accepts `par { append_log(mut log), read_log_count(log) }` | — |
+| B-2026-11-22-53 | 2026-11-22 | mir-llvm | high | A 16-byte-aligned `#[repr(C)]` struct (an `i128` field) passed to or returned from an `extern "C"` function by value goes through an 8-aligned copy: the `byval` copy is misplaced and C's aligned store through `sret` segfaults | — |
+| B-2026-11-22-54 | 2026-11-22 | interp | medium | The interpreter's `extern "C"` calls refuse a seventh integer argument (`8 arguments (at most six cross to C yet)`), a ninth float one and a 16-byte-aligned struct on the stack, and pass an `i128` / `u128` argument or result as its low 64 bits, all of which `karac build` passes | — |
+| B-2026-11-22-55 | 2026-11-22 | cli | medium | `karac run` (JIT and `--interp`) and `karac test` ignore `kara.toml`'s `[link]` table: a package that calls a C library it names fails with `JIT session error: Symbols not found: [ ... ]`, while `karac build` and `karac __mir-run` link it | — |
+| B-2026-11-22-56 | 2026-11-22 | mir | low | A value of a `#[repr(C)] union` is refused as `no definition for type `U` is not lowered yet`, which names neither the union nor the deferral (FFI unions are deferred, design.md §15) | — |
 | B-2026-11-23-6 | 2026-11-23 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 library bodies to run 33 | — |
 | B-2026-11-23-11 | 2026-11-23 | mir | medium | A trait default body that declares `let x: T;` and assigns it later is refused once two impls of the generic trait inherit it: error[E0516] 'the capture of `x` is not lowered yet'; one impl alone builds and runs | — |
 | B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |

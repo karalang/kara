@@ -6671,7 +6671,7 @@ v1 has two ABI strings. `"C"` is the one programs use, and no panic crosses it: 
 
 `usize` and `isize` exist for FFI signatures; idiomatic Kāra uses `i64` for sizes ([§5](#5-types)).
 
-**What crosses.** A parameter or result of an `extern "C"` function is an integer, `bool` (C's `bool`), `char`, `f32`, `f64`, a raw pointer, a C-like `#[repr(C)]` or `#[repr(intN)]` enum (as its C integer, holding the declared discriminant), or a `#[repr(C)]` struct of these and of fixed arrays of them. A `#[repr(transparent)]` struct or a `distinct type` crosses as its one field. `char` crosses as `uint32_t`, C's `char32_t`: a Unicode scalar value, so a C function that hands back a value outside that range is a broken contract, and the interpreter reports it (review-thread ruling 2026-11-16).
+**What crosses.** A parameter or result of an `extern "C"` function is an integer, `bool` (C's `bool`), `char`, `f32`, `f64`, a raw pointer, a C-like `#[repr(C)]` or `#[repr(intN)]` enum (as its C integer, holding the declared discriminant), or a `#[repr(C)]` struct of these and of fixed arrays of them. A `#[repr(transparent)]` struct or a `distinct type` crosses as its one field. A struct crosses by value as the platform's C compiler passes it, in registers or in memory at its own alignment (a 16-byte-aligned one, with an `i128` field, included), and an `i128` or `u128` crosses as C's `__int128`, on every lane (B-2026-11-22-53, B-2026-11-22-54; `conformance/layout.py` checks both against the C compiler). `char` crosses as `uint32_t`, C's `char32_t`: a Unicode scalar value, so a C function that hands back a value outside that range is a broken contract, and the interpreter reports it (review-thread ruling 2026-11-16).
 
 #### `unsafe extern` blocks
 
@@ -6743,6 +6743,7 @@ search-paths = ["/opt/homebrew/opt/llvm@18/lib"] # -L/opt/homebrew/opt/llvm@18/l
 - `search-paths` are appended as `-L<path>`, before the `-l` flags.
 - Both follow the emitted object and the runtime archive on the link line, so the object's undefined foreign symbols resolve against these libraries.
 - An absent or empty `[link]` table leaves the link line unchanged.
+- `karac run` and `karac test` read the same table: the MIR interpreter opens each library with `dlopen` (the `search-paths` first, then the loader's own path), and the JIT runner opens them before it resolves the program's foreign calls (B-2026-11-22-55). A built binary finds a shared library at run time the way the loader does (`LD_LIBRARY_PATH`, the system paths); the build adds no `rpath`.
 - The table applies to native targets only; wasm builds link with `wasm-ld`, which ignores it.
 - The compiler does not check that a library exists when it reads the manifest. A missing library or path is an ordinary linker error at build time.
 

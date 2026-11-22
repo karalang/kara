@@ -344,9 +344,9 @@ pub unsafe fn call_shaped(
             floats.len()
         ));
     }
-    if !stack.is_empty() && (cfg!(not(target_arch = "x86_64")) || stack.len() > 16) {
+    if !stack.is_empty() && (cfg!(not(target_arch = "x86_64")) || stack.len() > 32) {
         return Err(format!(
-            "{} words of stack arguments (the interpreter passes up to 16, on x86-64)",
+            "{} words of stack arguments (the interpreter passes up to 32, on x86-64)",
             stack.len()
         ));
     }
@@ -403,7 +403,7 @@ pub unsafe fn call_shaped(
                 }
             };
         }
-        blob!(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16);
+        blob!(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32);
         // AArch64's `sret` pointer goes in x8, apart from the argument
         // registers.
         regs_call::<T>(f, i, x)

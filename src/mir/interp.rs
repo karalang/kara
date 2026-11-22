@@ -18955,18 +18955,61 @@ impl<'a> Interp<'a> {
         }
         // A `#[repr]` enum result is its C tag (B-2026-11-16-233).
         if let Some(it) = c_abi::c_enum_int(self.tys, sig.ret) {
-            let r = self.foreign_scalars(name, f, &params, it, &vals)?;
+            let r = self.foreign_any(name, f, &params, it, &vals)?;
             let Value::Int(n) = r else {
                 return err(format!("`{name}`: its result is no integer"));
             };
             return self.c_enum_variant(name, n as i64, sig.ret);
         }
         let (ret, wraps) = self.peel_scalar_ty(sig.ret);
+        let r = self.foreign_any(name, f, &params, ret, &vals)?;
+        Ok(Self::wrap_scalar(r, wraps))
+    }
+
+    /// [`Self::foreign_scalars`] when every argument fits its registers and
+    /// no struct or 128-bit integer crosses, else [`Self::foreign_general`].
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn foreign_any(
+        &mut self,
+        name: &str,
+        f: *const std::ffi::c_void,
+        params: &[Ty],
+        ret: Ty,
+        vals: &[Value],
+    ) -> R<Value> {
         let is_struct = |me: &Self, t: Ty| matches!(me.tys.kind(t), TyKind::Adt(_));
-        if !params.iter().any(|&t| is_struct(self, t)) && !is_struct(self, ret) {
-            let r = self.foreign_scalars(name, f, &params, ret, &vals)?;
-            return Ok(Self::wrap_scalar(r, wraps));
+        let wide = |me: &Self, t: Ty| matches!(me.tys.kind(t), TyKind::Int(i) if i.bits() == 128);
+        let floats = params
+            .iter()
+            .filter(|&&t| matches!(self.tys.kind(t), TyKind::Float(_)))
+            .count();
+        let simple = !params.iter().any(|&t| is_struct(self, t) || wide(self, t))
+            && !is_struct(self, ret)
+            && !wide(self, ret)
+            && params.len() - floats <= 6
+            && floats <= 8;
+        if simple {
+            self.foreign_scalars(name, f, params, ret, vals)
+        } else {
+            self.foreign_general(name, f, params, ret, vals)
         }
+    }
+
+    /// A call whose arguments include a struct by value, a 128-bit
+    /// integer, or more than the registers hold: each placed where the
+    /// platform's C ABI puts it (`c_abi`), the rest on the stack.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn foreign_general(
+        &mut self,
+        name: &str,
+        f: *const std::ffi::c_void,
+        params: &[Ty],
+        ret: Ty,
+        vals: &[Value],
+    ) -> R<Value> {
+        use super::c_abi;
+        let is_struct = |me: &Self, t: Ty| matches!(me.tys.kind(t), TyKind::Adt(_));
+        let wide = |me: &Self, t: Ty| matches!(me.tys.kind(t), TyKind::Int(i) if i.bits() == 128);
         let Some(abi) = c_abi::Abi::host() else {
             return err(format!(
                 "`{name}`: a struct crosses to C by value on the interpreter only on \
@@ -18995,7 +19038,33 @@ impl<'a> Interp<'a> {
         let mut copies: Vec<(Vec<u8>, Option<NativeCopy>)> = Vec::new();
         let mut kept: Vec<Vec<u8>> = Vec::new();
         let mut stack: Vec<u64> = Vec::new();
-        for (v, &t) in vals.iter().zip(&params) {
+        for (v, &t) in vals.iter().zip(params) {
+            // A 128-bit integer takes two integer registers, or, when two
+            // are not left, two words of the stack at a 16-byte boundary,
+            // the registers left over going to the arguments after it
+            // (System V; B-2026-11-22-54).
+            if wide(self, t) {
+                if abi != c_abi::Abi::SysV {
+                    return err(format!(
+                        "`{name}`: a 128-bit integer crosses to C on the interpreter only on \
+                         x86-64; compile it"
+                    ));
+                }
+                let Value::Int(i) = v else {
+                    return err(format!("`{name}`: the argument {v:?} cannot cross to C"));
+                };
+                let lo = *i as u64;
+                let hi = (*i >> 64) as u64;
+                if words.len() + 2 <= int_regs {
+                    words.extend([lo, hi]);
+                } else {
+                    if stack.len() % 2 == 1 {
+                        stack.push(0);
+                    }
+                    stack.extend([lo, hi]);
+                }
+                continue;
+            }
             if is_struct(self, t) {
                 let size = self.c_size(name, t)?;
                 let mut bytes = vec![0u8; size.div_ceil(8) * 8 + 8];
@@ -19023,10 +19092,14 @@ impl<'a> Interp<'a> {
                         kept.push(bytes);
                     }
                     // On the stack in whole eightbytes, after the arguments
-                    // before it that went there (x86-64 only).
-                    Some(c_abi::Pass::Stack)
-                        if super::layout::layout(self.tys, t).is_some_and(|l| l.align <= 8) =>
-                    {
+                    // before it that went there, a 16-byte-aligned one at a
+                    // 16-byte boundary (x86-64 only).
+                    Some(c_abi::Pass::Stack) => {
+                        if super::layout::layout(self.tys, t).is_some_and(|l| l.align > 8)
+                            && stack.len() % 2 == 1
+                        {
+                            stack.push(0);
+                        }
                         for k in 0..size.div_ceil(8) {
                             let mut w = [0u8; 8];
                             w.copy_from_slice(&bytes[k * 8..k * 8 + 8]);
@@ -19055,6 +19128,16 @@ impl<'a> Interp<'a> {
         let shape = match &ret_pass {
             None if matches!(self.tys.kind(ret), TyKind::Float(_)) => {
                 super::foreign::RetShape::Float
+            }
+            // `rax` and `rdx`.
+            None if wide(self, ret) => {
+                if abi != c_abi::Abi::SysV {
+                    return err(format!(
+                        "`{name}`: a 128-bit integer crosses from C on the interpreter only on \
+                         x86-64; compile it"
+                    ));
+                }
+                super::foreign::RetShape::Pair(false, false)
             }
             None => super::foreign::RetShape::Word,
             Some(c_abi::Pass::Sret) => super::foreign::RetShape::Memory(self.c_size(name, ret)?),
@@ -19089,6 +19172,17 @@ impl<'a> Interp<'a> {
             }
         }
         let v = match ret_pass {
+            None if wide(self, ret) => {
+                let lo = u64::from_ne_bytes(r[..8].try_into().unwrap_or([0; 8]));
+                let hi = u64::from_ne_bytes(r[8..16].try_into().unwrap_or([0; 8]));
+                let bits = (u128::from(hi) << 64) | u128::from(lo);
+                match self.tys.kind(ret) {
+                    TyKind::Int(it) if it.signed() => Value::Int(bits as i128),
+                    // A `u128` above `i128::MAX` is held as its bits, as
+                    // the interpreter holds every `u128`.
+                    _ => Value::Int(bits as i128),
+                }
+            }
             None => {
                 let w = u64::from_ne_bytes(r[..8].try_into().unwrap_or([0; 8]));
                 self.c_scalar_result(name, w, ret)?
@@ -19111,7 +19205,7 @@ impl<'a> Interp<'a> {
             }
             Some(_) => self.c_decode(name, &r, ret, 0)?,
         };
-        Ok(Self::wrap_scalar(v, wraps))
+        Ok(v)
     }
 
     /// The scalar-only call [`Self::foreign_call`] makes when no struct

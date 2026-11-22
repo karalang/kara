@@ -527,6 +527,7 @@ fn run_files_via_jit_subprocess_with(
         command.stdout(std::process::Stdio::null());
     }
     command.envs(env.iter().copied());
+    super::args::jit_link_env(&mut command);
     let child = command
         .args(files)
         .env("KARAC_PROGRAM_ARGS", program_argv.join("\u{1F}"))
