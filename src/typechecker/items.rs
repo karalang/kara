@@ -12254,6 +12254,108 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// v2 core §5.5: a collection whose elements are views keeps what is
+    /// stored in it past the statement, so a temporary stored there (an owned
+    /// call result lent to a `ref` element, or a view of one) is dropped at
+    /// the `;` while the collection still holds a reference to it: `refs.push(
+    /// words[0].clone())` into a `Vec[ref String]` (B-2026-11-22-2). The
+    /// library's storing methods are natives, so the MIR borrow check, which
+    /// sees what a user function's `own` parameter keeps, never saw these.
+    pub(super) fn core_reject_temp_into_view_elements(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        errors_before: usize,
+    ) {
+        if !self.cli_lint_overrides.strict_core || self.errors.len() > errors_before {
+            return;
+        }
+        let Some(recv) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
+            return;
+        };
+        let recv = self.resolved_now(&recv.clone());
+        let recv = match recv {
+            Type::Ref(t) | Type::MutRef(t) => *t,
+            t => t,
+        };
+        let Type::Named { name, args: targs } = &recv else {
+            return;
+        };
+        let slots: Vec<(usize, Type)> = match (name.as_str(), method, targs.as_slice(), args.len())
+        {
+            ("Vec" | "VecDeque", "push" | "push_back" | "push_front", [t], 1) => {
+                vec![(0, t.clone())]
+            }
+            ("Vec" | "VecDeque", "insert" | "resize", [t], 2) => vec![(1, t.clone())],
+            ("Vec" | "VecDeque", "fill", [t], 1) => vec![(0, t.clone())],
+            ("Set" | "SortedSet", "insert", [t], 1) => vec![(0, t.clone())],
+            ("Map" | "SortedMap", "insert", [k, v], 2) => vec![(0, k.clone()), (1, v.clone())],
+            _ => return,
+        };
+        for (i, elem) in slots {
+            let elem = self.resolved_now(&elem);
+            if !self.core_is_view(&elem) {
+                continue;
+            }
+            let value = &args[i].value;
+            let owned_call = matches!(
+                value.kind,
+                ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+            ) && self.core_node_is_view(value) == Some(false);
+            let temp = if owned_call {
+                Some(value.span)
+            } else {
+                self.core_view_temp_origin(value)
+            };
+            let Some(temp) = temp else {
+                continue;
+            };
+            // `x.clone()` of a place: store a view of `x` itself. Any other
+            // temporary has no place to view until it is bound.
+            let view_of = match &value.kind {
+                ExprKind::MethodCall {
+                    object,
+                    method: m,
+                    args: a,
+                    ..
+                } if m == "clone" && a.is_empty() && !self.core_expr_is_temp(object) => {
+                    let text = crate::formatter::render_expr(object);
+                    (!text.contains('\n')).then_some(text)
+                }
+                _ => None,
+            };
+            let first = match view_of {
+                Some(place) => format!("store a view of `{place}` instead (`let w = ref {place};` before the statement, then `{method}` `w`)"),
+                None => "bind the value to a variable that outlives the collection, and store a view of that".to_string(),
+            };
+            let what = if name.starts_with("Map") || name.starts_with("SortedMap") {
+                "entries"
+            } else {
+                "elements"
+            };
+            self.type_error(
+                format!(
+                    "a reference to a temporary outlives its statement (core-semantics.md \
+                     §5.5): the `{recv}` keeps this argument as one of its {what}, a \
+                     `{elem}`, but it borrows from a temporary that is dropped at the `;`, \
+                     and there is no temporary lifetime extension\n\
+                     help: {first}, or let the collection own its {what} (a `{owned}` \
+                     element)",
+                    recv = type_display(&recv),
+                    elem = type_display(&elem),
+                    owned = match &elem {
+                        Type::Ref(t) | Type::MutRef(t) => type_display(t),
+                        Type::Named { name, .. } if name == "StringSlice" => "String".to_string(),
+                        t => type_display(t),
+                    },
+                ),
+                temp,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+    }
+
     pub(super) fn core_expr_is_temp(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Call { .. }

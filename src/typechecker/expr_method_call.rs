@@ -2138,6 +2138,7 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(method, "min_by_key" | "max_by_key") && args.len() == 1 {
             self.check_key_borrows_item(object, method, &args[0].value);
         }
+        self.core_reject_temp_into_view_elements(object, method, args, errors_before);
         if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
             self.explain_rust_scan(args, errors_before);
         }
