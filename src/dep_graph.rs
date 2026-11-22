@@ -1180,6 +1180,7 @@ mod tests {
             test_resources: BTreeMap::new(),
             test_timeout_seconds: None,
             kara_version: None,
+            version: None,
             import: None,
             dependency_aliases: BTreeMap::new(),
             dev_dependency_aliases: BTreeMap::new(),

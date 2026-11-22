@@ -350,6 +350,10 @@ fn render_effect(verb: &EffectVerbKind, resource: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct Manifest {
     pub name: String,
+    /// `[package].version`, a semver version; `None` when the key is
+    /// absent. A dependent's `version` requirement on a path dependency is
+    /// read against it (B-2026-11-21-78).
+    pub version: Option<semver::Version>,
     pub edition: String,
     /// Target execution environment. Controls which effects are legal at
     /// `extern` declaration sites and which stdlib layers are available.
@@ -1002,8 +1006,10 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     // `[package].version` is a semver version, as design.md § 4 writes it
     // (review-thread ruling 2026-11-16): a dependent's requirement is read
     // against it, so `"one"` or `"1.0"` is refused here, not passed over.
-    match package.get("version") {
-        Some(toml::Value::String(v)) if semver::Version::parse(v).is_ok() => {}
+    let version = match package.get("version") {
+        Some(toml::Value::String(v)) if semver::Version::parse(v).is_ok() => {
+            semver::Version::parse(v).ok()
+        }
         Some(toml::Value::String(_)) => {
             return Err(ManifestError::InvalidFieldType {
                 path: path.to_path_buf(),
@@ -1018,8 +1024,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
                 expected: "a string holding a semver version, such as \"0.1.0\"",
             });
         }
-        None => {}
-    }
+        None => None,
+    };
 
     // `authors` is a list of strings, as `karac init` writes it; a bare
     // string or a number is a typo to report, not a value to drop
@@ -1162,6 +1168,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
 
     Ok(Manifest {
         name,
+        version,
         edition,
         profile,
         test_resources,

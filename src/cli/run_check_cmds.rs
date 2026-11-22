@@ -1490,6 +1490,13 @@ fn cmd_check_package_member(
             super::build_cmds::print_cycles_text(&pc.cycles, &pc.tree);
             super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
             super::build_cmds::print_type_errors_text(&pc.type_errors);
+            // The package's late phases (type-checked as one source under its
+            // profile, then effects and ownership) are counted below, so they
+            // are shown too: a member check printed "2 error(s) found." over
+            // nothing (B-2026-11-21-77).
+            if let Some(f) = &pc.late_failure {
+                super::build_cmds::print_late_failure_text(f);
+            }
             let shown = pc.error_count();
             if shown == 0 && elsewhere == 0 {
                 println!("All checks passed.");
@@ -1634,10 +1641,15 @@ pub(super) fn cmd_check(
     if !enforce_toolchain_pin(&file_dir, output) {
         process::exit(1);
     }
+    // The manifest's profile governs the check as it governs the build
+    // (`[profile] panic_on_alloc_failure`, `[package].profile`): a single
+    // file inside a package is checked under it (B-2026-11-21-77).
+    let mut profile_manifest: Option<manifest::Manifest> = None;
     if let Some(root) = manifest::discover_project_root(&file_dir) {
         if let Ok(mf) = manifest::load_from_root(&root) {
             super::build_cmds::emit_manifest_warnings(&mf, output);
             let mf = manifest::merge_target_overlay(&mf, Some(&default_resolution_target(&mf)));
+            profile_manifest = Some(mf.clone());
             let has_deps = !mf.dependencies.is_empty()
                 || !mf.dev_dependencies.is_empty()
                 || mf.kara_version.is_some();
@@ -1747,10 +1759,12 @@ pub(super) fn cmd_check(
 
     match output {
         OutputMode::Jsonl => {
-            let mut pipeline = Pipeline::new(filename, &source)
-                .with_lint_overrides(lint_overrides)
-                .strict_core()
-                .with_library();
+            let mut pipeline = super::run_v2::v2_pipeline(
+                filename,
+                &source,
+                profile_manifest.as_ref(),
+                lint_overrides,
+            );
             run_pipeline_jsonl(&mut pipeline);
             if pipeline.total_errors() > 0 {
                 process::exit(1);
@@ -1758,10 +1772,12 @@ pub(super) fn cmd_check(
             std::mem::forget(pipeline);
         }
         _ => {
-            let mut pipeline = Pipeline::new(filename, &source)
-                .with_lint_overrides(lint_overrides)
-                .strict_core()
-                .with_library();
+            let mut pipeline = super::run_v2::v2_pipeline(
+                filename,
+                &source,
+                profile_manifest.as_ref(),
+                lint_overrides,
+            );
             pipeline.run_all_checks();
 
             // Slice D: concurrency report fires after `run_all_checks` and
@@ -2256,6 +2272,23 @@ pub(super) fn strip_diag_id(entry: &str) -> String {
 /// per-target between `target_start`/`target_complete` markers and
 /// leaves dedup to the consumer, mirroring the profiles driver.
 /// Bounded by construction: the target set is closed at four.
+/// The manifest a single file is checked under: the package's, found from
+/// the file's directory up, with the default target's overlay merged, as
+/// `karac check <file>` reads it. `None` outside a package.
+fn check_profile_manifest(filename: &str) -> Option<manifest::Manifest> {
+    let dir = std::path::Path::new(filename)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let root = manifest::discover_project_root(&dir)?;
+    let mf = manifest::load_from_root(&root).ok()?;
+    Some(manifest::merge_target_overlay(
+        &mf,
+        Some(&default_resolution_target(&mf)),
+    ))
+}
+
 pub(super) fn cmd_check_targets(
     filename: &str,
     source: &str,
@@ -2264,6 +2297,9 @@ pub(super) fn cmd_check_targets(
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     let mut any_failed = false;
+    // Each target's pass runs under the manifest's profile, as the single
+    // pass does (B-2026-11-21-77).
+    let profile_manifest = check_profile_manifest(filename);
 
     if let OutputMode::Jsonl = output {
         for target in targets {
@@ -2273,10 +2309,12 @@ pub(super) fn cmd_check_targets(
                 "target_start",
                 &format!("\"target\":{}", json_string(target)),
             );
-            let mut pipeline = Pipeline::new(filename, source)
-                .with_lint_overrides(lint_overrides.clone())
-                .strict_core()
-                .with_library();
+            let mut pipeline = super::run_v2::v2_pipeline(
+                filename,
+                source,
+                profile_manifest.as_ref(),
+                lint_overrides.clone(),
+            );
             run_pipeline_jsonl(&mut pipeline);
             let total = pipeline.total_errors();
             if total > 0 {
@@ -2318,10 +2356,12 @@ pub(super) fn cmd_check_targets(
     for target in targets {
         crate::target::set_active_target(target)
             .expect("target names validated at parse/manifest load");
-        let mut pipeline = Pipeline::new(filename, source)
-            .with_lint_overrides(lint_overrides.clone())
-            .strict_core()
-            .with_library();
+        let mut pipeline = super::run_v2::v2_pipeline(
+            filename,
+            source,
+            profile_manifest.as_ref(),
+            lint_overrides.clone(),
+        );
         pipeline.run_all_checks();
         let total = pipeline.total_errors();
         if total > 0 {

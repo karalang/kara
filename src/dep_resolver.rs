@@ -25,11 +25,9 @@ use crate::manifest::{DependencySpec, GitRef};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// Sentinel version assigned to path-deps. Real `[package].version` strings
-/// in `kara.toml` aren't structurally captured by the manifest parser
-/// today (they're a soft passthrough field — see manifest.rs's "version
-/// and authors parse silently" rule), so every path-dep gets the same
-/// placeholder. Plain `0.0.0` (no pre-release suffix) so it matches the
+/// Sentinel version assigned to a path-dep whose `kara.toml` declares no
+/// `[package].version` (one that declares it resolves at that version,
+/// B-2026-11-21-78), and to the root. Plain `0.0.0` (no pre-release suffix) so it matches the
 /// `*` wildcard — Cargo-style semver excludes pre-releases unless a
 /// constraint explicitly opts in, which would surprise users who write
 /// `version = "*"` on a path dep. When registry-fetch ships, each package
@@ -157,11 +155,12 @@ pub enum ResolverError {
     UnsatisfiableGraph { report: String },
 }
 
-/// One link in a version-conflict constraint chain: the parent manifest's
-/// directory + the constraint it declared on the offending dep.
+/// One link in a version-conflict constraint chain: the parent package's
+/// name + the constraint it declared on the offending dep. It was rendered
+/// as `<name>/kara.toml`, a path no file has (B-2026-11-21-78).
 #[derive(Debug, Clone)]
 pub struct ConstraintLink {
-    pub parent_dir: PathBuf,
+    pub parent: String,
     pub req: semver::VersionReq,
 }
 
@@ -209,8 +208,8 @@ impl std::fmt::Display for ResolverError {
                 for link in chain {
                     write!(
                         f,
-                        " `{}/kara.toml` requires `{}`;",
-                        link.parent_dir.display(),
+                        " package `{}` requires `{}`;",
+                        link.parent,
                         link.req,
                     )?;
                 }
@@ -379,11 +378,18 @@ pub fn resolve_with_pins(
                         })
                     })?;
                     let resolved_name = child_manifest.name.clone();
+                    // The path package's own `[package].version` is the
+                    // candidate a requirement is read against; the sentinel
+                    // stands in only when it declares none (B-2026-11-21-78).
+                    let candidate = child_manifest
+                        .version
+                        .clone()
+                        .unwrap_or_else(|| sentinel.clone());
                     upsert_path(
                         &mut packages,
                         resolved_name,
                         target_dir,
-                        sentinel.clone(),
+                        candidate,
                         DeclarationEdge {
                             parent: parent_name.clone(),
                             req: version.clone(),
@@ -554,7 +560,7 @@ fn first_version_conflict(
             let Some(req) = &edge.req else { continue };
             if !req.matches(&resolved.version) {
                 violating.push(ConstraintLink {
-                    parent_dir: PathBuf::from(&edge.parent),
+                    parent: edge.parent.clone(),
                     req: req.clone(),
                 });
             }
@@ -829,6 +835,7 @@ mod tests {
             test_resources: BTreeMap::new(),
             test_timeout_seconds: None,
             kara_version: None,
+            version: None,
             import: None,
             dependency_aliases: BTreeMap::new(),
             dev_dependency_aliases: BTreeMap::new(),
@@ -1380,6 +1387,51 @@ mod tests {
         .expect("graph");
         let err = resolve(&graph, &test_version()).unwrap_err();
         assert_eq!(err.code(), "E_GIT_DEP_UNSUPPORTED");
+    }
+
+    /// A path dependency is read at its own `[package].version`
+    /// (B-2026-11-21-78): `>=1.0` on a package declaring 1.5.0 resolves,
+    /// `>=2.0` conflicts with the candidate 1.5.0.
+    #[test]
+    fn path_dep_requirement_reads_the_declared_version() {
+        for (req, ok) in [(">=1.0", true), (">=2.0", false)] {
+            let mut root = empty_manifest("root");
+            root.dependencies.insert(
+                "a".into(),
+                DependencySpec::Path {
+                    path: PathBuf::from("a"),
+                    version: Some(VersionReq::parse(req).unwrap()),
+                },
+            );
+            let mut a = empty_manifest("a_pkg");
+            a.version = Some(semver::Version::parse("1.5.0").unwrap());
+            let graph = build_dep_graph(
+                &PathBuf::from("/root"),
+                root,
+                &MemLoader {
+                    manifests: BTreeMap::from([(PathBuf::from("/root/a"), a)]),
+                },
+            )
+            .expect("graph");
+            match resolve(&graph, &test_version()) {
+                Ok(res) => {
+                    assert!(ok, "{req} resolved");
+                    assert_eq!(res.packages["a_pkg"].version.to_string(), "1.5.0");
+                }
+                Err(err) => {
+                    assert!(!ok, "{req}: {err}");
+                    match *err {
+                        ResolverError::VersionConflict {
+                            candidate, chain, ..
+                        } => {
+                            assert_eq!(candidate.to_string(), "1.5.0");
+                            assert_eq!(chain[0].parent, "root");
+                        }
+                        other => panic!("expected VersionConflict, got {other:?}"),
+                    }
+                }
+            }
+        }
     }
 
     #[test]

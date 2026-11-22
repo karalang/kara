@@ -975,6 +975,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `karac check` in a package runs under the manifest's `[package].profile`
+  and `[profile]` table, as `karac build` and `karac run` do: it was checked
+  under the default profile, so a profile-gated error (`v.push(1)` under
+  `panic_on_alloc_failure = false`, E0264) passed check and failed the
+  build. A member file's check prints the errors of the whole-package
+  passes; it printed their count alone (B-2026-11-21-77).
+- A path dependency is read at the `version` its own `kara.toml` declares, so
+  `util = { path = "util", version = ">=1.0" }` resolves against a `util` at
+  1.5.0; every path dependency was the candidate `0.0.0` and the requirement
+  failed with E_DEPENDENCY_VERSION_CONFLICT. The conflict's note names the
+  requiring package, `package `app` requires ...`, where it printed
+  `app/kara.toml`, a path no file has (B-2026-11-21-78).
 - `v[i] = r` on a `Vec[ref T]`, `VecDeque[ref T]` or `mut Slice[ref T]`
   replaces the reference, and a `PriorityQueue[ref T]` builds and runs: both
   were refused as not lowered. `refs.extend(words.iter())` on a `Vec[ref T]` or

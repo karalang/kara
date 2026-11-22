@@ -231,6 +231,7 @@ pub(super) fn run_multi_file_late_phases(
     package_name: &str,
     core_places: bool,
     lib: Option<&PackageLibrary>,
+    manifest: Option<&manifest::Manifest>,
 ) -> Result<Pipeline, MultiFileLateFailure> {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -344,8 +345,12 @@ pub(super) fn run_multi_file_late_phases(
         provider_escape: None,
         simd_errors: None,
         comptime_errors: None,
-        profile: crate::manifest::CompileProfile::Default,
-        profile_config: crate::manifest::ProfileConfig::default(),
+        // The package's profile, as the build runs these passes under it
+        // (B-2026-11-21-77).
+        profile: manifest.map_or(crate::manifest::CompileProfile::Default, |m| m.profile),
+        profile_config: manifest.map_or_else(crate::manifest::ProfileConfig::default, |m| {
+            m.profile_config.clone()
+        }),
         lint_overrides: crate::lints::CliLintOverrides {
             core_places,
             ..Default::default()
@@ -1042,10 +1047,12 @@ pub(super) fn print_late_failure_text(f: &MultiFileLateFailure) {
         eprintln!("error[{}]: {}", f.phase, f.message);
     }
     for d in &f.diags {
+        // Named from where the command runs, as every other package
+        // diagnostic is.
         let file = d
             .file
             .as_deref()
-            .map(|f| format!("{f}:"))
+            .map(|f| format!("{}:", super::project_v2::shown(std::path::Path::new(f))))
             .unwrap_or_default();
         eprintln!(
             "{}[{}]: {file}{}:{}: {}",
@@ -2172,14 +2179,18 @@ fn package_check_of_walk(
         && resolve_errors.is_empty()
         && diags.errors.is_empty()
     {
-        let package_name = crate::manifest::load_from_cwd(root)
-            .map(|(_, m)| m.name)
-            .unwrap_or_else(|_| "package".to_string());
+        let mf = crate::manifest::load_from_cwd(root)
+            .ok()
+            .map(|(_, m)| manifest::merge_target_overlay(&m, Some(&default_resolution_target(&m))));
+        let package_name = mf
+            .as_ref()
+            .map_or_else(|| "package".to_string(), |m| m.name.clone());
         run_multi_file_late_phases(
             &tree,
             &package_name,
             lint_overrides.core_places,
             lib.as_ref(),
+            mf.as_ref(),
         )
         .err()
     } else {

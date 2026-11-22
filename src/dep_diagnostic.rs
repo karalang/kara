@@ -100,8 +100,8 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
                 .iter()
                 .map(|link| {
                     format!(
-                        "`{}/kara.toml` requires `{} = \"{}\"`",
-                        link.parent_dir.display(),
+                        "package `{}` requires `{} = \"{}\"`",
+                        link.parent,
                         package,
                         link.req,
                     )
@@ -380,11 +380,11 @@ mod tests {
             candidate: Version::parse("0.0.0").unwrap(),
             chain: vec![
                 ConstraintLink {
-                    parent_dir: PathBuf::from("/proj/a"),
+                    parent: "a".into(),
                     req: VersionReq::parse(">=1.0").unwrap(),
                 },
                 ConstraintLink {
-                    parent_dir: PathBuf::from("/proj/b"),
+                    parent: "b".into(),
                     req: VersionReq::parse(">=2.0").unwrap(),
                 },
             ],
@@ -392,9 +392,9 @@ mod tests {
         let diag = render_resolver_error(&err);
         assert_eq!(diag.code, "E_DEPENDENCY_VERSION_CONFLICT");
         assert_eq!(diag.notes.len(), 2, "one note per violating parent");
-        assert!(diag.notes[0].contains("/proj/a"));
+        assert!(diag.notes[0].contains("package `a` requires"));
         assert!(diag.notes[0].contains(">=1.0"));
-        assert!(diag.notes[1].contains("/proj/b"));
+        assert!(diag.notes[1].contains("package `b` requires"));
         assert!(diag.notes[1].contains(">=2.0"));
         assert!(diag.help.is_some());
     }
@@ -406,19 +406,20 @@ mod tests {
             candidate: Version::parse("0.0.0").unwrap(),
             chain: vec![
                 ConstraintLink {
-                    parent_dir: PathBuf::from("A"),
+                    parent: "A".into(),
                     req: VersionReq::parse(">=1.0").unwrap(),
                 },
                 ConstraintLink {
-                    parent_dir: PathBuf::from("B"),
+                    parent: "B".into(),
                     req: VersionReq::parse(">=2.0").unwrap(),
                 },
             ],
         };
         let rendered = render_resolver_error(&err).render();
         // Both constraint chains should appear in the final rendered string.
-        assert!(rendered.contains("A/kara.toml"), "{rendered}");
-        assert!(rendered.contains("B/kara.toml"), "{rendered}");
+        assert!(rendered.contains("package `A` requires"), "{rendered}");
+        assert!(rendered.contains("package `B` requires"), "{rendered}");
+        assert!(!rendered.contains("kara.toml"), "{rendered}");
         assert!(rendered.contains(">=1.0"));
         assert!(rendered.contains(">=2.0"));
     }
