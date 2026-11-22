@@ -745,6 +745,7 @@ impl super::Parser {
         self.expect(&Token::RightParen)?;
         let close = self.tokens[self.pos.saturating_sub(1)].span;
         self.mend_go_result_without_arrow(close);
+        self.mend_python_none_result();
 
         let return_type = if self.eat(&Token::Arrow) {
             Some(self.parse_return_type()?)

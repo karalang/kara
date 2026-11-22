@@ -256,7 +256,8 @@ impl TypeChecker<'_> {
                 let message = format!(
                     "`{name}` compares two values, `{name}(a, b)` or `a.{name}(b)`; the \
                      {} item of a collection is `xs.iter().{name}()`, an `Option` that is \
-                     `None` when the collection is empty (library/iterators.md)",
+                     `None` when the collection is empty, so `.unwrap()` panics there as \
+                     Python's `{name}([])` raises (library/iterators.md)",
                     if name == "max" { "largest" } else { "smallest" }
                 );
                 let arg = &args[0].value;
@@ -272,12 +273,53 @@ impl TypeChecker<'_> {
                     TypeErrorKind::WrongNumberOfArgs,
                     FixIt {
                         span: *span,
-                        replacement: format!("{text}.iter().{name}()"),
+                        replacement: format!("{text}.iter().{name}().unwrap()"),
                     },
                 );
                 Some(Type::Error)
             }
             _ => None,
         }
+    }
+
+    /// Python's `s.split()` (on whitespace) is Kāra's `s.split_whitespace()`:
+    /// Kāra's own `split` takes a separator. `None` when `object` is not text.
+    pub(super) fn python_split_without_separator(
+        &mut self,
+        object: &Expr,
+        args_close_span: &Span,
+    ) -> Option<Type> {
+        if let ExprKind::Identifier(n) = &object.kind {
+            self.local_scope.lookup(n)?;
+        }
+        let recv = self.infer_expr(object);
+        if !matches!(
+            self.habit_receiver_name(&recv).as_deref(),
+            Some("String" | "Str" | "StringSlice")
+        ) {
+            return None;
+        }
+        let message = "Kāra's `split` takes a separator, `s.split(\",\")`; Python's \
+                       `s.split()` splits on whitespace, Kāra's `s.split_whitespace()` \
+                       (library/strings.md)"
+            .to_string();
+        let span = object.span;
+        match args_close_span.offset.checked_sub(1 + "split".len()) {
+            Some(offset) if offset > object.span.offset => self.type_error_with_fix_it(
+                message,
+                span,
+                TypeErrorKind::WrongNumberOfArgs,
+                FixIt {
+                    span: Span {
+                        offset,
+                        length: "split".len(),
+                        ..*args_close_span
+                    },
+                    replacement: "split_whitespace".to_string(),
+                },
+            ),
+            _ => self.type_error(message, span, TypeErrorKind::WrongNumberOfArgs),
+        }
+        Some(Type::Error)
     }
 }

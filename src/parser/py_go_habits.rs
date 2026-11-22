@@ -164,7 +164,7 @@ impl Parser {
         if self.ident_at(1) == Some("__interp__") {
             return;
         }
-        if self.mend_go_statement_forms() {
+        if self.mend_go_statement_forms() || self.mend_python_tuple_let() {
             return;
         }
         let p = self.pos;
@@ -2035,6 +2035,7 @@ impl Parser {
     /// Go's item forms (B-2026-11-20-77): `type P struct { .. }` and a
     /// `const ( A = 1; B = 2 )` block.
     pub(super) fn mend_go_item_forms(&mut self) {
+        while self.mend_go_file_header() {}
         let p = self.pos;
         if matches!(self.tok_at(p), Some(Token::Type))
             && self.ident_at(p + 1).is_some()
@@ -2228,5 +2229,178 @@ impl Parser {
             self.tokens.splice(i + 2..i + 2, toks);
             i += 2 + n;
         }
+    }
+
+    /// Python's `-> None` result: a Kāra function that returns nothing
+    /// writes no result type (B-2026-11-22-5). The `->` and `None` go.
+    pub(super) fn mend_python_none_result(&mut self) {
+        let p = self.pos;
+        if !matches!(self.tok_at(p), Some(Token::Arrow))
+            || self.ident_at(p + 1) != Some("None")
+            || !(matches!(
+                self.tok_at(p + 2),
+                Some(Token::LeftBrace | Token::Semicolon)
+            ) || matches!(self.ident_at(p + 2), Some("with" | "where")))
+            || p == 0
+        {
+            return;
+        }
+        // A program's own type named `None` is left alone.
+        let declared = (1..self.tokens.len()).any(|i| {
+            self.ident_at(i) == Some("None")
+                && matches!(
+                    self.tok_at(i - 1),
+                    Some(Token::Struct | Token::Enum | Token::Type)
+                )
+        });
+        if declared {
+            return;
+        }
+        let before = self.span_at(p - 1);
+        let none = self.span_at(p + 1);
+        let from = before.offset + before.length;
+        let at = self.span_at(p);
+        self.habit(
+            "`-> None` is Python's: a Kāra function that returns nothing writes no result \
+             type, `fn f() { .. }` (its result is `()`)",
+            at,
+            vec![Self::edit(from, none.offset + none.length - from, "")],
+        );
+        self.tokens.drain(p..=p + 1);
+    }
+
+    /// Python's `let a, b = 1, 2` (a tuple unpacked without parentheses):
+    /// Kāra's `let (a, b) = (1, 2)` (B-2026-11-22-5). `true` when mended.
+    fn mend_python_tuple_let(&mut self) -> bool {
+        let p = self.pos;
+        if !matches!(self.tok_at(p), Some(Token::Let)) {
+            return false;
+        }
+        let first = p + 1;
+        let mut at = first;
+        let mut names = 1;
+        while self.ident_at(at).is_some() && matches!(self.tok_at(at + 1), Some(Token::Comma)) {
+            at += 2;
+            names += 1;
+        }
+        if names < 2
+            || self.ident_at(at).is_none()
+            || !matches!(self.tok_at(at + 1), Some(Token::Equal))
+        {
+            return false;
+        }
+        let eq = at + 1;
+        // The value runs to the statement's end; commas at depth 0 make it
+        // a tuple.
+        let mut depth = 0i32;
+        let mut end = eq + 1;
+        let mut commas = false;
+        loop {
+            match self.tok_at(end) {
+                Some(Token::LeftParen | Token::LeftBracket | Token::LeftBrace) => depth += 1,
+                Some(Token::RightParen | Token::RightBracket) => depth -= 1,
+                Some(Token::RightBrace) if depth > 0 => depth -= 1,
+                Some(Token::Comma) if depth == 0 => commas = true,
+                Some(Token::Semicolon | Token::RightBrace | Token::EOF) | None => break,
+                _ => {}
+            }
+            if depth < 0 {
+                return false;
+            }
+            end += 1;
+        }
+        if end == eq + 1 {
+            return false;
+        }
+        let (Some(pat), Some(value)) = (self.tokens_text(first, eq), self.tokens_text(eq + 1, end))
+        else {
+            return false;
+        };
+        let value = if commas { format!("({value})") } else { value };
+        let at_span = self.span_at(first);
+        self.rewrite(
+            "Kāra unpacks a tuple inside parentheses: `let (a, b) = (1, 2)`; Python's \
+             `a, b = 1, 2` writes it without",
+            at_span,
+            first,
+            end - 1,
+            &format!("({pat}) = {value}"),
+        );
+        true
+    }
+
+    /// Go's `package main` and `import "fmt"` at the top of a file
+    /// (B-2026-11-22-5): Kāra has no package clause, and its printing needs
+    /// no import. `import "fmt"` is deleted only when every `fmt.` call in the
+    /// file has its own edit (`fmt.Println(x)` / `fmt.Print(x)`).
+    pub(super) fn mend_go_file_header(&mut self) -> bool {
+        let p = self.pos;
+        let line_end = |me: &Self, last: usize| -> usize {
+            // Through the line's end, so the line goes whole.
+            match me.tok_at(last + 1) {
+                Some(Token::EOF) | None => {
+                    let s = me.span_at(last);
+                    s.offset + s.length
+                }
+                _ => me.span_at(last + 1).offset,
+            }
+        };
+        if self.ident_at(p) == Some("package")
+            && self.ident_at(p + 1).is_some()
+            && self.span_at(p + 1).line == self.span_at(p).line
+            && !matches!(
+                self.tok_at(p + 2),
+                Some(Token::Equal | Token::LeftParen | Token::Dot)
+            )
+        {
+            let at = self.span_at(p);
+            let end = line_end(self, p + 1);
+            self.habit(
+                "`package` is Go's: a Kāra file is its own module and needs no package clause",
+                at,
+                vec![Self::edit(at.offset, end - at.offset, "")],
+            );
+            self.tokens.drain(p..=p + 1);
+            return true;
+        }
+        if matches!(self.tok_at(p), Some(Token::Import))
+            && matches!(self.tok_at(p + 1), Some(Token::StringLiteral(_)))
+        {
+            let Some(Token::StringLiteral(pkg)) = self.tok_at(p + 1).cloned() else {
+                return false;
+            };
+            let at = self.span_at(p);
+            let mut last = p + 1;
+            if matches!(self.tok_at(last + 1), Some(Token::Semicolon)) {
+                last += 1;
+            }
+            // Every `fmt.X(..)` is one the parser mends, so the import is unused.
+            let all_mended = pkg == "fmt"
+                && (0..self.tokens.len()).all(|i| {
+                    if self.ident_at(i) != Some("fmt") || i <= last {
+                        return true;
+                    }
+                    matches!(self.tok_at(i + 1), Some(Token::Dot))
+                        && matches!(self.ident_at(i + 2), Some("Println" | "Print"))
+                        && matches!(self.tok_at(i + 3), Some(Token::LeftParen))
+                        && self.matching_close(i + 3).is_some_and(|c| {
+                            c > i + 4
+                                && !(i + 4..c).any(|j| matches!(self.tok_at(j), Some(Token::Comma)))
+                        })
+                });
+            let note = format!(
+                "`import \"{pkg}\"` is Go's: Kāra imports a module by its path, `import \
+                 std.io;`, and printing (`println`) needs no import"
+            );
+            if all_mended {
+                let end = line_end(self, last);
+                self.habit(&note, at, vec![Self::edit(at.offset, end - at.offset, "")]);
+            } else {
+                self.error_at(&note, at);
+            }
+            self.tokens.drain(p..=last);
+            return true;
+        }
+        false
     }
 }

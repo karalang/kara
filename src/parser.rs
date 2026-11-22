@@ -4601,6 +4601,16 @@ impl Parser {
             ),
             None => format!("rename it to {expected_desc}"),
         };
+        // Go's exported `func Add`: the capital is Go's visibility, which
+        // Kāra writes `pub` (B-2026-11-22-5).
+        let advice = if context == "fn" && actual == IdentClass::Type {
+            format!(
+                "{advice} (Go exports a name by its capital letter; Kāra makes a function \
+                 public with `pub fn`, and its name stays snake_case)"
+            )
+        } else {
+            advice
+        };
         self.errors.push(ParseError {
             kind: ParseErrorKind::Syntax,
             message: format!(

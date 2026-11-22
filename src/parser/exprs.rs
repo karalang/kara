@@ -1636,6 +1636,22 @@ impl super::Parser {
             // (B-2026-11-03-27). An argument's `&` is caught before this, in
             // the argument list, since an argument takes no borrow sigil.
             Token::Amp => {
+                // Go's `p := &T{..}` / `let p = &T{..}`: the `=` of a `let`.
+                let let_init = self.pos > 0
+                    && matches!(self.tokens[self.pos - 1].token, Token::Equal)
+                    && (0..self.pos - 1)
+                        .rev()
+                        .map(|i| &self.tokens[i].token)
+                        .find(|t| {
+                            matches!(
+                                t,
+                                Token::Let
+                                    | Token::Semicolon
+                                    | Token::LeftBrace
+                                    | Token::RightBrace
+                            )
+                        })
+                        .is_some_and(|t| matches!(t, Token::Let));
                 self.advance();
                 let is_mut = self.eat(&Token::Mut);
                 let sigil = Span {
@@ -1690,7 +1706,17 @@ impl super::Parser {
                                 | ExprKind::StringLit(_)
                                 | ExprKind::InterpolatedStringLit(_)
                         ));
-                let (message, kara) = if is_mut {
+                // B-2026-11-22-5: Go's `&T{..}` bound by a `let` is the
+                // struct value itself, which the binding owns.
+                let struct_value =
+                    !is_mut && let_init && matches!(&operand.kind, ExprKind::StructLiteral { .. });
+                let (message, kara) = if struct_value {
+                    (
+                        "`&T { .. }` is Go's pointer to a new struct: a Kāra `let` binds the \
+                         struct value itself, `let p = T { .. }`, and passes it by borrow",
+                        "",
+                    )
+                } else if is_mut {
                     (
                         "`&mut` is Rust syntax -- a borrow that writes is `mut ref place`",
                         "mut ref ",
@@ -1775,7 +1801,7 @@ impl super::Parser {
                         replacement: kara.to_string(),
                     },
                 );
-                if view || literal || list || temporary {
+                if view || literal || list || temporary || struct_value {
                     return Some(operand);
                 }
                 Some(Expr {

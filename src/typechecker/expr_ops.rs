@@ -4631,6 +4631,14 @@ impl<'a> super::TypeChecker<'a> {
             type_display(ty),
             trait_name
         );
+        // Python's `"ab" * 3` (B-2026-11-22-5): Kāra's text has no repeat.
+        let int_right = super::types::is_integer(right_ty);
+        if matches!(op, BinOp::Mul) && is_string_concat_operand(ty) && int_right {
+            return format!(
+                "{base}: `s * n` is Python's string repetition, which Kāra's text does not \
+                 have; build it with a loop, `for _ in 0..n {{ out.push_str(s); }}`"
+            );
+        }
         match ty {
             Type::Named { name, .. } if name == "Vec" || name == "VecDeque" => format!(
                 "{base}; there is deliberately no `impl {trait_name} for {name}[T]` — \

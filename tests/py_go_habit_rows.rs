@@ -412,7 +412,8 @@ fn python_print_of_two_values_and_max_of_a_list_b_2026_11_20_76() {
     );
     let m = mend("fn main() { let v = [4, 9, 2]; println(max(v)); }\n");
     assert!(m.first.contains("an `Option`"), "{}", m.first);
-    assert!(m.text.contains("v.iter().max()"), "{}", m.text);
+    assert!(m.text.contains("v.iter().max().unwrap()"), "{}", m.text);
+    assert_eq!(m.out, "9\n", "{}", m.text);
     // Two values keep the library's `max`.
     let src = "fn main() { println(max(4, 2)); }\n";
     let m = mend(src);
@@ -517,4 +518,54 @@ fn a_binding_named_range_is_iterated_as_written_b_2026_11_22_4() {
         "for x in v",
         "1\n2\n",
     );
+}
+
+#[test]
+fn python_none_result_tuple_let_and_bare_split_are_mended_b_2026_11_22_5() {
+    mended(
+        "fn f() -> None { println(1); }\nfn main() { f(); }\n",
+        "fn f() { println(1); }",
+        "1\n",
+    );
+    mended(
+        "fn main() { let a, b = 1, 2; println(a + b); }\n",
+        "let (a, b) = (1, 2);",
+        "3\n",
+    );
+    mended(
+        "fn main() { let s = \"a b c\"; let parts = s.split(); println(parts.len()); }\n",
+        "s.split_whitespace()",
+        "3\n",
+    );
+    let m = mend("fn main() { let s = \"ab\" * 3; println(s); }\n");
+    assert!(!m.clean);
+    assert!(m.first.contains("string repetition"), "{}", m.first);
+}
+
+#[test]
+fn go_package_import_pointer_literal_and_capitals_b_2026_11_22_5() {
+    mended(
+        "package main\nfn main() { println(\"p\"); }\n",
+        "fn main()",
+        "p\n",
+    );
+    mended(
+        "import \"fmt\"\nfn main() { fmt.Println(\"i\"); }\n",
+        "fn main() { println(\"i\"); }",
+        "i\n",
+    );
+    // A `fmt` call with no edit keeps the import, told.
+    let m = mend("import \"fmt\"\nfn main() { fmt.Printf(\"%d\", 1); }\n");
+    assert!(!m.clean);
+    assert!(m.text.contains("import \"fmt\""), "{}", m.text);
+    mended(
+        "struct P { x: i64 }\nfn main() { let p = &P { x: 1 }; println(p.x); }\n",
+        "let p = P { x: 1 };",
+        "1\n",
+    );
+    // An exported capital is told, never renamed.
+    let src = "pub fn Add(a: i64, b: i64) -> i64 { a + b }\nfn main() { println(Add(1, 2)); }\n";
+    let m = mend(src);
+    assert!(m.first.contains("`pub fn`"), "{}", m.first);
+    assert_eq!(m.text, src);
 }

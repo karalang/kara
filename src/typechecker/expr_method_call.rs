@@ -2041,6 +2041,17 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
         args_close_span: &Span,
     ) -> Type {
+        if method == "split"
+            && args.is_empty()
+            && matches!(
+                object.kind,
+                ExprKind::Identifier(_) | ExprKind::StringLit(_)
+            )
+        {
+            if let Some(t) = self.python_split_without_separator(object, args_close_span) {
+                return t;
+            }
+        }
         if method == super::py_go_habits::PYTHON_IN || method == super::py_go_habits::PYTHON_NOT_IN
         {
             let negated = method == super::py_go_habits::PYTHON_NOT_IN;
@@ -3771,10 +3782,12 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         }
         .filter(|_| {
+            // Kāra's own `split` takes a separator: one with none is Python's.
             py_stringy
-                && ["String", "StringSlice"]
-                    .iter()
-                    .all(|ty| self.env.find_methods_with_args(ty, &[], method).is_empty())
+                && (method == "split"
+                    || ["String", "StringSlice"]
+                        .iter()
+                        .all(|ty| self.env.find_methods_with_args(ty, &[], method).is_empty()))
         })
         // `strip(chars)` strips those characters, which `trim()` does not.
         .filter(|_| !matches!(method, "strip" | "lstrip" | "rstrip") || args.is_empty());
