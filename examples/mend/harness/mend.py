@@ -220,13 +220,28 @@ def run_loop(
     # The conversation transcript — fed to the LLM each iteration in
     # live mode, kept here for log fidelity in dry-run.
     messages: list[dict] = [{"role": "user", "content": task_md}]
+    envelope: dict | None = None
 
     for i in range(max_iterations):
         iter_dir = out_dir / f"iter_{i:03d}"
         iter_dir.mkdir()
 
         # 1. Get LLM response.
-        if dry_run:
+        if dry_run and i >= len(canned) and envelope is not None and has_machine_applicable_fixes(envelope):
+            # One `karac fix` pass per iteration (`KARAC_FIX_PASSES=1`) can
+            # leave fixes a later pass applies, as a fix that makes the next
+            # one visible does. A live model would resubmit the fixed source
+            # unchanged; the dry run does so too rather than read the
+            # remaining machine-applicable fixes as non-convergence.
+            response_text = work_kara.read_text()
+            (iter_dir / "response.note.txt").write_text(
+                "resubmitted the fixed source: the last check still had machine-applicable fixes"
+            )
+            print(
+                f"[mend] iter {i}: resubmitting the fixed source "
+                f"(one `karac fix` pass per iteration)."
+            )
+        elif dry_run:
             if i >= len(canned):
                 print(
                     f"[mend] dry-run exhausted canned responses at iter {i}; "

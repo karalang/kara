@@ -3362,6 +3362,7 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
         let errors_before_body = self.errors.len();
+        let cursor_mark = self.d5_cursor_steps.len();
         let literal_mark = self.body_literal_vars.len();
         let bounds_mark = self.deferred_call_bounds.len();
         if f.body.final_expr.is_some() {
@@ -3423,6 +3424,7 @@ impl<'a> super::TypeChecker<'a> {
         self.offer_for_into_iter_fixes(f);
         self.offer_let_ref_fixes(f);
         self.offer_ref_list_annotations(f, errors_before_body);
+        self.settle_d5_cursor_steps(cursor_mark, errors_before_body);
         self.iter_lets = saved_iter_lets;
         self.explain_str_lit_lets();
         self.str_lit_lets = saved_str_lit_lets;
@@ -14379,36 +14381,36 @@ impl<'a> super::TypeChecker<'a> {
              fit it",
             e.message
         );
+        // The cursor borrows what it steps to: `.as_ref()` says that for an
+        // `Option` field and `ref` for a plain one. That also answers the
+        // move out of the borrowed place reported at the same site.
+        let place = super::core_ref_write::place_text(value);
+        let borrow_fix = match (&place, option_slot) {
+            (Some(p), true) => Some((
+                format!("`{p}.as_ref()`"),
+                FixIt {
+                    span: Span {
+                        offset: value.span.offset + value.span.length,
+                        length: 0,
+                        ..value.span
+                    },
+                    replacement: ".as_ref()".to_string(),
+                },
+            )),
+            (Some(p), false) => Some((
+                format!("`ref {p}`"),
+                FixIt {
+                    span: Span {
+                        length: 0,
+                        ..value.span
+                    },
+                    replacement: "ref ".to_string(),
+                },
+            )),
+            (None, _) => None,
+        };
         if api_break {
-            // A library's `pub fn` keeps its signature: the cursor borrows
-            // what it steps to, which `.as_ref()` says for an `Option` field
-            // and `ref` for a plain one. That also answers the move out of
-            // the borrowed place reported at the same site.
-            let place = super::core_ref_write::place_text(value);
-            let borrow_fix = match (&place, option_slot) {
-                (Some(p), true) => Some((
-                    format!("`{p}.as_ref()`"),
-                    FixIt {
-                        span: Span {
-                            offset: value.span.offset + value.span.length,
-                            length: 0,
-                            ..value.span
-                        },
-                        replacement: ".as_ref()".to_string(),
-                    },
-                )),
-                (Some(p), false) => Some((
-                    format!("`ref {p}`"),
-                    FixIt {
-                        span: Span {
-                            length: 0,
-                            ..value.span
-                        },
-                        replacement: "ref ".to_string(),
-                    },
-                )),
-                (None, _) => None,
-            };
+            // A library's `pub fn` keeps its signature.
             let note = Self::d5_own_api_note(&param, &shown);
             match borrow_fix {
                 Some((shown_fix, fix)) => {
@@ -14417,23 +14419,70 @@ impl<'a> super::TypeChecker<'a> {
                          `{param}` borrowed{note}"
                     );
                     e.fix_it = Some(fix);
-                    // The move was reported when the assignment's value was
-                    // first inferred, before `errors_before`.
-                    let at = value.span;
-                    self.errors.retain(|moved| {
-                        moved.span != at
-                            || moved.lint_name.as_deref() != Some("borrow_projection_copy")
-                    });
+                    self.drop_cursor_step_move(value.span);
                 }
                 None => e.message = lead + &note,
             }
             return;
         }
+        // Anywhere else the step takes the parameter's `own`, unless the body
+        // turns out to only read through the cursor: `settle_d5_cursor_steps`
+        // decides once the body is checked.
         e.message = format!("{lead}. Take `{param}` by value with `{param}: own {shown}`");
         e.fix_it = Some(FixIt {
             span: at,
             replacement: "own ".to_string(),
         });
+        if let Some(borrow) = borrow_fix {
+            self.d5_cursor_steps.push(super::D5CursorStep {
+                at: value.span,
+                lead,
+                param,
+                borrow,
+            });
+        }
+    }
+
+    /// The move out of the borrowed place at `at`, which the cursor's borrow
+    /// answers too. It was reported when the assignment's value was first
+    /// inferred.
+    fn drop_cursor_step_move(&mut self, at: Span) {
+        self.errors.retain(|moved| {
+            moved.span != at || moved.lint_name.as_deref() != Some("borrow_projection_copy")
+        });
+    }
+
+    /// The cursor steps recorded since `mark`, once the body is checked: a
+    /// body that reported nothing else only reads through its cursor, so
+    /// each step borrows what it reaches (`node.next.as_ref()`), which keeps
+    /// the parameter borrowed and every caller as it is; one with any other
+    /// error keeps the parameter's `own` (B-2026-11-20-85).
+    fn settle_d5_cursor_steps(&mut self, mark: usize, errors_before: usize) {
+        if self.d5_cursor_steps.len() <= mark {
+            return;
+        }
+        let steps: Vec<super::D5CursorStep> = self.d5_cursor_steps.drain(mark..).collect();
+        let at_step = |e: &super::TypeError| steps.iter().any(|s| s.at == e.span);
+        if self.errors.len() < errors_before
+            || self.errors[errors_before..].iter().any(|e| !at_step(e))
+        {
+            return;
+        }
+        for step in &steps {
+            let (shown_fix, fix) = &step.borrow;
+            for e in self.errors[errors_before..].iter_mut().filter(|e| {
+                e.span == step.at
+                    && e.kind == TypeErrorKind::TypeMismatch
+                    && e.message.starts_with(&step.lead)
+            }) {
+                e.message = format!(
+                    "{}. Borrow what it steps to with {shown_fix}, which keeps `{}` borrowed",
+                    step.lead, step.param
+                );
+                e.fix_it = Some(fix.clone());
+            }
+            self.drop_cursor_step_move(step.at);
+        }
     }
 
     fn reject_owned_value_into_ref_local(&mut self, target: &Expr, value: &Expr, rhs_ty: &Type) {

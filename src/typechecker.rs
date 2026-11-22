@@ -3123,6 +3123,20 @@ pub(crate) enum ScrutineePart {
 /// loop's scope depth (B-2026-11-20-136).
 pub(super) type ForParamElement = (String, Span, Span, usize);
 
+/// A list cursor's step over a bare parameter (`cur = node.next` with `cur`
+/// bound out of `head`), reported with `own` on the parameter until the
+/// body is checked: a body that only reads through the cursor takes
+/// `borrow` instead, which keeps the signature (B-2026-11-20-85).
+pub(super) struct D5CursorStep {
+    /// The stepped-to value, where both refusals are reported.
+    pub(super) at: Span,
+    /// The mismatch's message up to its remedy.
+    pub(super) lead: String,
+    pub(super) param: String,
+    /// The borrow as the message shows it, and its edit.
+    pub(super) borrow: (String, FixIt),
+}
+
 pub struct TypeChecker<'a> {
     pub(super) program: &'a Program,
     pub(super) resolve_result: &'a ResolveResult,
@@ -3761,6 +3775,9 @@ pub struct TypeChecker<'a> {
     /// written to make it owned. Feeds the give-away diagnostic in
     /// `check_expr`.
     pub(super) current_fn_d5_params: FxHashMap<String, Span>,
+    /// The cursor steps of the function being checked, settled once its
+    /// body is ([`D5CursorStep`]).
+    pub(super) d5_cursor_steps: Vec<D5CursorStep>,
     /// The names in `current_fn_d5_params` that are a closure literal's
     /// parameters, so the give-away diagnostic spells the fix `|x: own T|`.
     pub(super) closure_d5_params: FxHashSet<String>,
@@ -5000,6 +5017,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_mut_self: false,
             current_fn_is_pub: false,
             current_fn_d5_params: FxHashMap::default(),
+            d5_cursor_steps: Vec::new(),
             closure_d5_params: FxHashSet::default(),
             closure_d5_spellings: FxHashMap::default(),
             frozen_param_use_spans: FxHashSet::default(),

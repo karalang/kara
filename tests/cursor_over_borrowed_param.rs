@@ -2,9 +2,11 @@
 //! Some(node) = cur { cur = node.next; }`, over a bare parameter: the
 //! parameter borrows (core-semantics.md §4.1), so `cur` holds borrows, and
 //! both the move out of `node` and the store into `cur` are refused. Each
-//! refusal names the parameter and takes its `own` as the fix, where
-//! `karac fix` used to derive `Clone` and copy the rest of the list per
-//! step (kata 1265's solution arm, B-2026-11-20-85).
+//! refusal names the parameter. A body that only reads through the cursor
+//! borrows what it steps to, `node.next.as_ref()`, which keeps the signature
+//! and every caller as they are; one that consumes what it reaches takes the
+//! parameter's `own`. `karac fix` used to derive `Clone` and copy the rest of
+//! the list per step (kata 1265's solution arm, B-2026-11-20-85).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -48,23 +50,26 @@ fn scratch(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("karac-cursor-param-{name}-{}", std::process::id()))
 }
 
+/// The cursor only reads, so it borrows what it steps to, and `main`, which
+/// uses `list` again after the call, needs no `.clone()`.
 #[test]
-fn a_list_cursor_over_a_bare_parameter_takes_the_parameters_own() {
-    let src = "struct ListNode {\n    val: i64,\n    next: Option[ListNode],\n}\n\nfn total(head: ListNode) -> i64 {\n    let mut sum = 0;\n    let mut cur = Some(head);\n    while let Some(node) = cur {\n        sum += node.val;\n        cur = node.next;\n    }\n    sum\n}\n\nfn main() {\n    let list = ListNode { val: 1, next: Some(ListNode { val: 2, next: None }) };\n    println(total(list));\n}";
+fn a_read_only_list_cursor_over_a_bare_parameter_borrows_with_as_ref() {
+    let src = "struct ListNode {\n    val: i64,\n    next: Option[ListNode],\n}\n\nfn total(head: ListNode) -> i64 {\n    let mut sum = 0;\n    let mut cur = Some(head);\n    while let Some(node) = cur {\n        sum += node.val;\n        cur = node.next;\n    }\n    sum\n}\n\nfn twice(list: ListNode) -> i64 {\n    total(list) + total(list)\n}\n\nfn main() {\n    let list = ListNode { val: 1, next: Some(ListNode { val: 2, next: None }) };\n    println(total(list));\n    println(twice(list));\n    println(list.val);\n}";
     let (first, text, clean, out) = mend(&scratch("struct"), src);
     assert!(
         first.contains("`cur` is bound out of parameter `head`"),
         "{first}"
     );
     assert!(
-        first.contains("`node` is bound out of parameter `head`"),
+        first.contains("Borrow what it steps to with `node.next.as_ref()`"),
         "{first}"
     );
-    assert!(text.contains("fn total(head: own ListNode)"), "{text}");
+    assert!(text.contains("fn total(head: ListNode)"), "{text}");
+    assert!(text.contains("cur = node.next.as_ref();"), "{text}");
     assert!(!text.contains("derive(Clone)"), "{text}");
     assert!(!text.contains(".clone()"), "{text}");
     assert!(clean, "{text}");
-    assert_eq!(out, "3\n");
+    assert_eq!(out, "3\n6\n1\n");
 }
 
 #[test]
@@ -80,19 +85,21 @@ fn a_dyn_list_cursor_over_a_bare_parameter_takes_the_parameters_own() {
     assert_eq!(out, "3\n");
 }
 
-/// The `own` the fix writes moves the caller's argument, so every caller that
-/// uses its argument again gets its own fix, `.clone()` there, and one
-/// `karac fix` loop still reaches a clean check: `twice` calls `total` twice
-/// and takes `own` in turn, and `main` reuses `list` after both calls.
+/// A body that consumes what its cursor reaches (it relinks each node, as a
+/// list reversal does) takes the parameter's `own`, which moves the caller's
+/// argument, so every caller that uses its argument again gets its own fix,
+/// `.clone()` there, and one `karac fix` loop still reaches a clean check:
+/// `twice` calls `total` twice and takes `own` in turn, and `main` reuses
+/// `list` after both calls.
 #[test]
 fn the_parameters_own_reaches_two_callers_that_reuse_their_argument() {
-    let src = "struct ListNode {\n    val: i64,\n    next: Option[ListNode],\n}\n\nfn total(head: ListNode) -> i64 {\n    let mut sum = 0;\n    let mut cur = Some(head);\n    while let Some(node) = cur {\n        sum += node.val;\n        cur = node.next;\n    }\n    sum\n}\n\nfn twice(list: ListNode) -> i64 {\n    total(list) + total(list)\n}\n\nfn main() {\n    let list = ListNode { val: 1, next: Some(ListNode { val: 2, next: None }) };\n    println(total(list));\n    println(twice(list));\n    println(list.val);\n}";
+    let src = "struct ListNode {\n    val: i64,\n    next: Option[ListNode],\n}\n\nfn total(head: ListNode) -> i64 {\n    let mut prev = None;\n    let mut cur = Some(head);\n    while let Some(n) = cur {\n        let mut node = n;\n        cur = node.next;\n        node.next = prev;\n        prev = Some(node);\n    }\n    match prev {\n        Some(last) => last.val,\n        None => 0,\n    }\n}\n\nfn twice(list: ListNode) -> i64 {\n    total(list) + total(list)\n}\n\nfn main() {\n    let list = ListNode { val: 1, next: Some(ListNode { val: 2, next: None }) };\n    println(total(list));\n    println(twice(list));\n    println(list.val);\n}";
     let (_, text, clean, out) = mend(&scratch("two-callers"), src);
     assert!(text.contains("fn total(head: own ListNode)"), "{text}");
     assert!(text.contains("fn twice(list: own ListNode)"), "{text}");
     assert!(text.contains("total(list.clone()) + total(list)"), "{text}");
     assert!(clean, "{text}");
-    assert_eq!(out, "3\n6\n1\n");
+    assert_eq!(out, "2\n4\n1\n");
 }
 
 /// A library's `pub fn` keeps its signature, since `own` would break every
@@ -113,13 +120,13 @@ fn a_library_pub_fn_cursor_borrows_with_as_ref_and_keeps_its_signature() {
     assert!(clean, "{text}");
 }
 
-/// An application's `pub fn` is called only from inside it, so it takes
-/// `own` like a private function.
+/// An application's `pub fn` is called only from inside it, so a body that
+/// consumes its cursor takes `own` like a private function.
 #[test]
-fn an_application_pub_fn_cursor_takes_the_parameters_own() {
-    let src = "pub struct ListNode {\n    val: i64,\n    next: Option[ListNode],\n}\n\npub fn total(head: ListNode) -> i64 {\n    let mut sum = 0;\n    let mut cur = Some(head);\n    while let Some(node) = cur {\n        sum += node.val;\n        cur = node.next;\n    }\n    sum\n}\n\nfn main() {\n    let list = ListNode { val: 1, next: Some(ListNode { val: 2, next: None }) };\n    println(total(list));\n}";
+fn an_application_pub_fn_consuming_cursor_takes_the_parameters_own() {
+    let src = "pub struct ListNode {\n    val: i64,\n    next: Option[ListNode],\n}\n\npub fn total(head: ListNode) -> i64 {\n    let mut prev = None;\n    let mut cur = Some(head);\n    while let Some(n) = cur {\n        let mut node = n;\n        cur = node.next;\n        node.next = prev;\n        prev = Some(node);\n    }\n    match prev {\n        Some(last) => last.val,\n        None => 0,\n    }\n}\n\nfn main() {\n    let list = ListNode { val: 1, next: Some(ListNode { val: 2, next: None }) };\n    println(total(list));\n}";
     let (_, text, clean, out) = mend(&scratch("application-pub"), src);
     assert!(text.contains("pub fn total(head: own ListNode)"), "{text}");
     assert!(clean, "{text}");
-    assert_eq!(out, "3\n");
+    assert_eq!(out, "2\n");
 }

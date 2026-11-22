@@ -133,6 +133,13 @@ iteration a run converges at mean what they meant in earlier runs. Set
 `MEND_FIX_PASSES=10` to measure the fixpoint instead, and say so beside any
 rate quoted from such a run: it is not comparable with the pinned history.
 
+A dry run whose canned responses run out while the last check still has
+machine-applicable fixes resubmits the fixed source, as a live model would,
+so the next iteration's `karac fix` pass applies them: needing a second
+iteration there is the one-pass pin at work, not non-convergence
+(`canonical_request` converges at iteration 4 this way, `welcome_emails` at
+iteration 1).
+
 ### Curated demo vs. uncurated measurement
 
 **The dry-run (canned) numbers are a demonstration, not a measurement.**

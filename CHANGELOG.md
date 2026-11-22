@@ -2409,13 +2409,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - Rust's list cursor over a bare parameter, `let mut cur = Some(head);
   while let Some(node) = cur { cur = node.next; }`, is refused with the
   parameter named: `cur` and `node` are bound out of `head`, which
-  borrows, and the fix `karac fix` applies is `head: own ..`, which moves
-  each node. It used to derive `Clone` and copy the rest of the list per
-  step, and the store into `cur` stayed refused with a bare mismatch
-  (B-2026-11-20-85). On a library's `pub fn`, where `own` would break
-  every caller outside the package, the fix keeps the signature and the
-  cursor borrows instead, `cur = node.next.as_ref()`, with `own` only a
-  note; an application's `pub fn` takes `own` like a private one.
+  borrows. A body that only reads through the cursor is fixed with
+  `cur = node.next.as_ref()`, which keeps `head` borrowed and every caller
+  as it is; one that consumes what it reaches (relinking each node, as a
+  reversal does) takes `head: own ..`, which moves each node, and each
+  caller that reuses its argument gets its `.clone()`. A library's
+  `pub fn` keeps its signature either way, with `own` only a note. It
+  used to derive `Clone` and copy the rest of the list per step, and the
+  store into `cur` stayed refused with a bare mismatch (B-2026-11-20-85).
 - A bare `for` element of a bare parameter moved out, `for h in headers {
   out.push(h) }` over `headers: Vec[Header]`, names both borrows and is
   fixed by both, `headers: own Vec[Header]` and `headers.into_iter()`,
