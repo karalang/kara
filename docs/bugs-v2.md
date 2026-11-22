@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 684 |
 | false-positive | 346 |
-| missing-feature | 242 |
+| missing-feature | 243 |
 | perf | 198 |
 | other | 144 |
 | soundness | 119 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 842 |
+| typecheck | 843 |
 | mir-llvm | 320 |
 | mir | 302 |
 | cli | 269 |
 | parser | 150 |
 | ownership | 128 |
-| runtime | 106 |
+| runtime | 107 |
 | interp | 98 |
 | effect | 53 |
 | resolver | 50 |
@@ -133,7 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-1 | 2026-11-22 | mir-llvm | high | Cancelling the TaskGroup that runs `Server.serve` frees a connection's `WsConn` while that connection's task is still reading it: ASan reports a heap-use-after-free in `WsConn.set_read_timeout` from `Server.__next`, about 1 run in 20 on 4 workers, never on one | — |
 | B-2026-11-22-2 | 2026-11-22 | ownership | high | A temporary pushed into a `Vec[ref String]` checks clean: `refs.push(words[0].clone())` stores a reference to a dropped temporary (ASan heap-buffer-overflow) | — |
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
-| B-2026-11-22-5 | 2026-11-22 | parser | low | Python- and Go-habit forms still without a Kāra form after the sweep's rows closed: Python `-> None`, `let a, b = 1, 2`, `s * n`, `s.split(sep)` naming, a negative slice bound `s[:-4]`; Go `package`/`import`, `&T{..}`, `err != nil` without `?`, exported capitals | — |
+| B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 
 ### Relocated
 
@@ -2122,6 +2122,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-93 | cli | medium | In a package, `check`/`build --output=json(l)` apply the 20-error cascade cap to all module files together: two files with 22 type errors each report… | 60381ef965 |
 | B-2026-11-21-94 | cli | low | `karac test --output=jsonl` and `--output=json` are refused as unknown flags, though design.md §17's panic record says the runner carries the record… | 60381ef965 |
 | B-2026-11-22-4 | parser | medium | Go `range` mend refuses a program's own binding named `range`: `for d in range {` gets E0001 "`range` is Go's" (kata 2056 moves_solution, kata 1157 t… | f6e3b64e92 |
+| B-2026-11-22-5 | parser | low | Python- and Go-habit forms still without a Kāra form after the sweep's rows closed: Python `-> None`, `let a, b = 1, 2`, `s * n`, `s.split(sep)` nami… | 7a57de3dee |
 | B-2026-11-22-20 | other | medium | The docs' conformance sweeps confirmed a block the doc says is rejected whatever rejected it, ran no design.md program, knew no fence word for a frag… | 081509083e |
 | B-2026-11-22-31 | cli | medium | `karac check` on a multi-file package checked the host alone when `[build].targets` named one other target (`targets = ["wasm_wasi"]`), and a lone `s… | ccf46cf6e1 |
 | B-2026-11-22-32 | effect | low | A constant whose initializer calls an effectful function was refused only as 'function call requires run-time evaluation': the diagnostic never named… | ccf46cf6e1 |
