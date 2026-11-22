@@ -2215,14 +2215,13 @@ impl Pipeline {
         }
         // The MIR checks lower the program as type-checked, before this pass
         // rewrites its operators, so check keeps that copy for them
-        // (B-2026-10-19-21). A derive re-checks the program here, so its MIR
-        // checks start again from the text.
-        if self.strict_core
+        // (B-2026-10-19-21). A program with comptime work is re-checked once
+        // its derives are spliced, below, and keeps the copy from there.
+        let keep_mir_copy = self.strict_core
             && self.library_len.is_some()
             && std::env::var("KARAC_CHECK_SHARED_FRONT").as_deref() != Ok("0")
-            && std::env::var("KARAC_CHECK_MIR").as_deref() != Ok("0")
-            && !crate::comptime::has_comptime_work(&self.parsed.program)
-        {
+            && std::env::var("KARAC_CHECK_MIR").as_deref() != Ok("0");
+        if keep_mir_copy && !crate::comptime::has_comptime_work(&self.parsed.program) {
             // A UFCS call is the receiver form there too, as the build
             // frontend reads it (B-2026-11-04-8).
             let mut program = self.parsed.program.clone();
@@ -2287,9 +2286,19 @@ impl Pipeline {
             self.comptime_errors
                 .get_or_insert_with(Vec::new)
                 .extend(fold_errors);
+            // The spliced items get ids of their own, as the MIR front end
+            // gives them, so the MIR checks can lower this program rather
+            // than expand the derives a second time (B-2026-11-21-91).
+            if on_mir {
+                crate::node_ids::assign_node_ids(&mut self.parsed.program);
+            }
             // Re-run name resolution + typecheck over the spliced program so
-            // generated items resolve and their side-tables populate.
-            let resolved = crate::resolve(&self.parsed.program);
+            // generated items resolve and their side-tables populate. Under
+            // the strict check a user operator impl is admitted here too, as
+            // the first pass and the MIR front end admit it.
+            let resolved = crate::resolver::Resolver::new(&self.parsed.program)
+                .with_user_operator_impls(self.strict_core)
+                .resolve();
             // With the same lint levels and profile as the first pass: a plain
             // `typecheck` here dropped every CLI `-D`/`-A` flag (and the strict
             // core's `borrow_projection_copy` deny) for any program with a
@@ -2316,6 +2325,13 @@ impl Pipeline {
                 )
             };
             self.resolved = Some(resolved);
+            // The MIR checks lower the expanded program as type-checked, as
+            // above for a program without comptime work (B-2026-11-21-91).
+            if keep_mir_copy && on_mir && self.comptime_errors.as_ref().is_none_or(Vec::is_empty) {
+                let mut program = self.parsed.program.clone();
+                crate::lowering::rewrite_ufcs(&mut program, &retyped.ufcs_calls);
+                self.mir_program = Some(program);
+            }
             crate::lower(&mut self.parsed.program, &retyped);
             self.typed = Some(retyped);
             self.report_missing_library_imports();
