@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 679 |
+| diagnostics | 684 |
 | false-positive | 346 |
 | missing-feature | 242 |
 | perf | 198 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 840 |
+| typecheck | 842 |
 | mir-llvm | 320 |
 | mir | 302 |
-| cli | 267 |
+| cli | 269 |
 | parser | 150 |
 | ownership | 128 |
 | runtime | 106 |
 | interp | 98 |
-| effect | 52 |
+| effect | 53 |
 | resolver | 50 |
 | other | 49 |
 | codegen | 22 |
@@ -2123,6 +2123,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-94 | cli | low | `karac test --output=jsonl` and `--output=json` are refused as unknown flags, though design.md §17's panic record says the runner carries the record… | 60381ef965 |
 | B-2026-11-22-4 | parser | medium | Go `range` mend refuses a program's own binding named `range`: `for d in range {` gets E0001 "`range` is Go's" (kata 2056 moves_solution, kata 1157 t… | f6e3b64e92 |
 | B-2026-11-22-20 | other | medium | The docs' conformance sweeps confirmed a block the doc says is rejected whatever rejected it, ran no design.md program, knew no fence word for a frag… | 081509083e |
+| B-2026-11-22-31 | cli | medium | `karac check` on a multi-file package checked the host alone when `[build].targets` named one other target (`targets = ["wasm_wasi"]`), and a lone `s… | ccf46cf6e1 |
+| B-2026-11-22-32 | effect | low | A constant whose initializer calls an effectful function was refused only as 'function call requires run-time evaluation': the diagnostic never named… | ccf46cf6e1 |
+| B-2026-11-22-33 | typecheck | low | §4 wording roll-up: E0221 called a default-visibility type 'private', module-cycle and walker messages said '<crate root>', a block `pub const` got a… | ccf46cf6e1 |
+| B-2026-11-22-34 | cli | medium | kara.toml accepted a `[package].name` no dependent can import (`"my app"`, `"fn"`), a non-list `authors`, `[build] targets = []`, and an unknown top-… | ccf46cf6e1 |
+| B-2026-11-22-35 | typecheck | medium | `#[target(gpu)]` / `#[target(wasm_browser)]` made `karac check` of a single file run gpu and wasm_browser passes: a hello world with one gpu-gated it… | ccf46cf6e1 |
 
 </details>
 
