@@ -144,9 +144,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
-| B-2026-11-22-21 | 2026-11-22 | other | medium | 157 documentation blocks (87 in design.md, 70 in the library docs, book and examples) were checked only for the names they use: a block relying on a declaration it does not show stopped at `unresolved` | — |
-| B-2026-11-22-22 | 2026-11-22 | typecheck | medium | `.raw()` on a borrowed distinct type over a raw pointer gave `ref *mut T`, not the pointer: `ptr.is_null(self.raw())` in a `Drop` for `distinct type SafeFile = *mut CFile` was rejected | — |
-| B-2026-11-22-23 | 2026-11-22 | typecheck | low | A `break` whose value type disagrees with an earlier `break` of the same loop was reported at the `loop`, not at the `break` carrying the wrong type | — |
 | B-2026-11-22-24 | 2026-11-22 | mir+effect | medium | A `par` branch conflict (E0418) in a function nothing calls is not reported: `karac check` of a file with no `main`, or of a library's `pub fn`, accepts `par { append_log(mut log), read_log_count(log) }` | — |
 
 ### Relocated
@@ -2165,6 +2162,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-35 | typecheck | medium | `#[target(gpu)]` / `#[target(wasm_browser)]` made `karac check` of a single file run gpu and wasm_browser passes: a hello world with one gpu-gated it… | ccf46cf6e1 |
 | B-2026-11-22-37 | typecheck | medium | A type alias whose generic arguments name `dyn Trait` (`type Shapes = Vec[dyn Shape]`, `type OptShape = Option[dyn Shape]`) is refused as "`Shape` is… | 4df624fefe |
 | B-2026-11-22-38 | typecheck | low | A missing call-site `mut` marker (E0218) said "call with fresh binding requires a `mut` marker at this argument to permit the mutation | 4df624fefe |
+| B-2026-11-22-21 | other | medium | 157 documentation blocks (87 in design.md, 70 in the library docs, book and examples) were checked only for the names they use: a block relying on a… | 28032737f2 |
+| B-2026-11-22-22 | typecheck | medium | `.raw()` on a borrowed distinct type over a raw pointer gave `ref *mut T`, not the pointer: `ptr.is_null(self.raw())` in a `Drop` for `distinct type… | 24e4e000b4 |
+| B-2026-11-22-23 | typecheck | low | A `break` whose value type disagrees with an earlier `break` of the same loop was reported at the `loop`, not at the `break` carrying the wrong type | 24e4e000b4 |
 
 </details>
 
