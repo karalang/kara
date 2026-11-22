@@ -68,7 +68,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | crash | 64 |
 | run-vs-build | 61 |
 | codegen-gap | 41 |
-| use-after-free | 11 |
+| use-after-free | 12 |
 | leak | 5 |
 | double-free | 2 |
 
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 839 |
-| mir-llvm | 319 |
+| mir-llvm | 320 |
 | mir | 302 |
 | cli | 267 |
 | parser | 148 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -138,6 +138,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-91 | 2026-11-21 | cli | medium | `karac check` of a program deriving `Serialize` takes ~0.9-1.1 s on a 5-line file (release), against ~0.07 s without the derive: the derive's comptime expansion runs twice, once in check's lower and again in the ownership/MIR check's own front end | — |
 | B-2026-11-21-95 | 2026-11-21 | runtime | medium | A task cancelled before it is first polled does not cancel the TaskGroup it makes on the way to its first wait: the nested group's task sleeps out its whole wait (core-semantics §11.9 "Cancelling a task cancels the ... TaskGroup scopes running inside it") | — |
 | B-2026-11-21-96 | 2026-11-21 | mir | medium | MIR interpreter reports a deadlock (exit 101) when a group's deadline passes before its task is first polled and that task joins a nested group; the compiled lanes finish (but late, B-2026-11-21-95) | — |
+| B-2026-11-22-1 | 2026-11-22 | mir-llvm | high | Cancelling the TaskGroup that runs `Server.serve` frees a connection's `WsConn` while that connection's task is still reading it: ASan reports a heap-use-after-free in `WsConn.set_read_timeout` from `Server.__next`, about 1 run in 20 on 4 workers, never on one | — |
 
 ### Relocated
 
