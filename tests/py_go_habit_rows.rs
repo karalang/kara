@@ -505,7 +505,7 @@ fn a_programs_own_make_is_left_alone_b_2026_11_20_79() {
 }
 
 #[test]
-fn a_binding_named_range_is_iterated_as_written_b_2026_11_22_1() {
+fn a_binding_named_range_is_iterated_as_written_b_2026_11_22_4() {
     let src = "fn main() {\n    let range = [1, 2, 3];\n    let mut s = 0;\n    for d in range {\n        s += d;\n    }\n    println(s);\n}\n";
     let m = mend(src);
     assert!(m.clean, "{}", m.first);

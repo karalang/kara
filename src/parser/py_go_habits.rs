@@ -944,7 +944,7 @@ impl Parser {
         // `for x in range v`: the `range` goes.
         // Only in Go's shape, a collection named after the word, and only
         // where the program binds no `range` of its own: `for d in range {`
-        // iterates a binding named `range` (B-2026-11-22-1).
+        // iterates a binding named `range` (B-2026-11-22-4).
         if self.ident_at(p + 1).is_some()
             && matches!(self.tok_at(p + 2), Some(Token::In))
             && self.ident_at(p + 3) == Some("range")
