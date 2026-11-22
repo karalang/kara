@@ -251,14 +251,15 @@ fn a_guessed_priority_queue_constructor_is_fixed() {
 /// A `for` element copied out of `nums.iter()` and pushed into a queue of
 /// `ref i32` lends the reference into `nums`, not a borrow of the loop's
 /// copy, so the loop variable is not "written while borrowed" (kata 1675's
-/// mutant M1, B-2026-11-20-35). Check only: the queue's sift of a reference
-/// element does not lower yet (PREDICTS B-2026-11-20-40).
+/// mutant M1, B-2026-11-20-35), and the queue's sift of a reference
+/// element runs (B-2026-11-20-40).
 #[test]
 fn a_copied_for_element_pushed_as_a_reference_checks() {
     let src = "fn largest(nums: Vec[i32]) -> i32 {\n    let mut queue = PriorityQueue.max_first();\n    for x in nums.iter() {\n        let start = x;\n        queue.push(start);\n    }\n    *queue.pop().unwrap()\n}\nfn main() {\n    println(largest([3, 8, 5]));\n}\n";
     let f = program("for_ref_elem", src);
     let (ok, out, err) = karac(&["check"], &f);
     assert!(ok, "{out}{err}");
+    runs("for_ref_elem_run", src, "8\n");
 }
 
 /// A row of a fill of fills walked by `iter().max()`, `*dp[0][n -
