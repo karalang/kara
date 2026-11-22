@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 698 |
-| false-positive | 349 |
+| diagnostics | 699 |
+| false-positive | 350 |
 | missing-feature | 244 |
 | perf | 198 |
 | other | 145 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 853 |
+| typecheck | 855 |
 | mir-llvm | 320 |
 | mir | 309 |
 | cli | 270 |
@@ -136,6 +136,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-2 | 2026-11-22 | ownership | high | A temporary pushed into a `Vec[ref String]` checks clean: `refs.push(words[0].clone())` stores a reference to a dropped temporary (ASan heap-buffer-overflow) | — |
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
+| B-2026-11-22-37 | 2026-11-22 | typecheck | medium | A type alias whose generic arguments name `dyn Trait` (`type Shapes = Vec[dyn Shape]`, `type OptShape = Option[dyn Shape]`) is refused as "`Shape` is not a trait" (E0200), though the same type written in place checks and runs | — |
+| B-2026-11-22-38 | 2026-11-22 | typecheck | low | A missing call-site `mut` marker (E0218) said "call with fresh binding requires a `mut` marker at this argument to permit the mutation. Write `mut <expr>`." instead of naming the argument, as design.md §7's own example message does | — |
 
 ### Relocated
 
