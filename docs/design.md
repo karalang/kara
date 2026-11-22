@@ -284,7 +284,7 @@ The logical operators are the words `and`, `or` and `not`. The symbols `&&`, `||
 
 #### Reserved for future use
 
-These words are reserved, so that a later feature can use them without breaking code. All but `pure` have no meaning yet. Using one as an identifier is `error[E_RESERVED_KEYWORD]` (`E0003`), and the fix is `r#name`, except for `priv`, which is also a structural marker (below) and cannot be escaped.
+These words are reserved, so that a later feature can use them without breaking code. All but `pure` have no meaning yet. Using one as an identifier is `error[E_RESERVED_KEYWORD]`, and the fix is `r#name`, except for `priv`, which is also a structural marker (below) and cannot be escaped.
 
 | Keyword | Why reserved |
 |---|---|
@@ -336,7 +336,7 @@ import std.collections.r#async_map;         // a raw module-path segment
 | `super`, `crate` | Kāra does not use them, but if added they would carry path-resolution meaning the escape could not strip. |
 | `pub`, `priv`, `private`, `mut`, `ref` | Visibility and parameter-mode markers. Escaping them would only produce a confusing diagnostic. |
 
-Escaping one of these is `error[E_RAW_IDENT_NOT_ALLOWED]` (`E0004`). It is a different code from `E0003` because that error's fix, `r#name`, cannot help here.
+Escaping one of these is `error[E_RAW_IDENT_NOT_ALLOWED]`. It is a different code from `E_RESERVED_KEYWORD` because that error's fix, `r#name`, cannot help here.
 
 **No conflict with raw strings.** The characters after `r` decide: `r#` followed by an identifier-start character is a raw identifier, while `r"`, `r#"`, `r##"` and so on start a raw string ([String literals](#string-literals)).
 
