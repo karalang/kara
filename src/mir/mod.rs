@@ -15,6 +15,7 @@ pub mod char_strs;
 pub mod concat;
 pub mod coroutine;
 pub mod counters;
+pub mod cut_views;
 pub mod effects;
 pub mod elaborate;
 pub mod flags;

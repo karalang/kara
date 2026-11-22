@@ -2096,6 +2096,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- A `substring` or `s[a..b]` whose `String` is only lent and dropped, such as
+  `w.push_str("abcde".substring(k, k + 1))`, views the bytes of its text
+  rather than copying them, when that text is a constant, a shared reference
+  argument, or a local nothing changes while the cut is live: the row's
+  500,500-word loop went from 93 to 38 ms and 3.35M to 601k allocations
+  (B-2026-11-21-7). `KARAC_MIR_CUT_VIEW=0` copies every cut.
+
 - A recursive call whose argument a branch decides (`visit(-1)` where a
   child index is -1) is split at that branch and folds once inlined, and a
   `ref` parameter whose bytes a shared borrow freezes (a `Vec` header) is

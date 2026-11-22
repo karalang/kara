@@ -401,6 +401,10 @@ pub struct Cx<'ctx, 'p> {
     /// `to_string()` fills only to be lent, the frame's 4-byte buffer its
     /// UTF-8 bytes go in ([`crate::mir::char_strs`], B-2026-11-10-25).
     char_bufs: Vec<Option<PointerValue<'ctx>>>,
+    /// The locals of the body being lowered that a cut of a text fills
+    /// only to be lent: a view of the text with no capacity, not a copy
+    /// ([`crate::mir::cut_views`], B-2026-11-21-7).
+    cut_views: Vec<bool>,
     /// The locals of the body being lowered that hold a checked result no
     /// one tests ([`crate::mir::range_bounds::untested_checks`]).
     untested: Vec<bool>,
@@ -462,6 +466,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             upper_proven: false,
             lengths: Vec::new(),
             char_bufs: Vec::new(),
+            cut_views: Vec::new(),
             untested: Vec::new(),
             unsigned_div: Vec::new(),
             hot_swap_calls: Vec::new(),
@@ -1820,6 +1825,15 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 self.char_bufs.push(buf);
             }
         }
+        // `KARAC_MIR_CUT_VIEW=0` copies every cut. A coroutine's locals can
+        // outlive a suspension, during which its text may change.
+        self.cut_views = if std::env::var("KARAC_MIR_CUT_VIEW").as_deref() != Ok("0")
+            && !crate::mir::coroutine::is_resume(&body.instance.name)
+        {
+            crate::mir::cut_views::borrowed_cuts(body, self.tys)
+        } else {
+            Vec::new()
+        };
         self.assume_ref_params(body)?;
         self.flag_slots()?;
         // `KARAC_MIR_MONOTONE=0` leaves loop counters' directions unstated.

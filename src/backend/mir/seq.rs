@@ -1294,6 +1294,15 @@ impl<'ctx> Cx<'ctx, '_> {
                     .i32_type()
                     .const_int(u64::from(method == "index_range"), false);
                 let d = self.place_ptr(dest)?;
+                // A `String` that is only lent views the text: no capacity,
+                // so its drop frees nothing (B-2026-11-21-7).
+                if dest.projection.is_empty()
+                    && self.cut_views.get(dest.local.index()) == Some(&true)
+                {
+                    self.str_view_inline(d, p, n, lo, hi, u64::from(method == "index_range"))?;
+                    self.store(self.offset(d, 16)?, self.i64(0).into())?;
+                    return Ok(Some(()));
+                }
                 if method == "index_range" && self.str_cut(dty) == "str_view" {
                     self.str_view_inline(d, p, n, lo, hi, 1)?;
                     return Ok(Some(()));
@@ -1806,12 +1815,14 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(phi.as_basic_value().into_int_value())
     }
 
-    /// `s[lo..hi]` (`mode` 1) or `s.slice(lo, hi)` (`mode` 2) as a view
+    /// `s.substring(lo, hi)` (`mode` 0), `s[lo..hi]` (`mode` 1) or
+    /// `s.slice(lo, hi)` (`mode` 2) as a view
     /// `{ptr, len}` at `d`. A range inside the text whose ends both fall on
     /// char boundaries is cut inline, the end of a `slice` first clamped
     /// as the runtime clamps it; any other range goes to
     /// `karac_mir_str_view`, which for `s[lo..hi]` sets the panic message
-    /// and aborts (B-2026-10-18-34), and for a `slice` is empty or lossy.
+    /// and aborts (B-2026-10-18-34), for a `substring` saturates its ends
+    /// or panics, and for a `slice` is empty or lossy.
     fn str_view_inline(
         &mut self,
         d: PointerValue<'ctx>,
@@ -1920,7 +1931,11 @@ impl<'ctx> Cx<'ctx, '_> {
             ],
             8,
         )?;
-        if mode == 1 {
+        if mode == 0 {
+            // A `substring`'s ends saturate, and one inside a char panics.
+            self.abort_on(r, "index out of bounds")?;
+            self.builder.build_unconditional_branch(join).map_err(e)?;
+        } else if mode == 1 {
             // The tests above are the runtime's own for `s[lo..hi]`, so a
             // range they refuse is one it refuses too: the path ends in
             // the panic, and the view the loop after reads has only the
