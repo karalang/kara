@@ -8399,6 +8399,14 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// [`Self::scalar_reads_as_value`], or a number literal's type that
+    /// nothing has fixed yet: an item of `[1, 2, 3].iter()` read where a
+    /// `fold` seed `(0, 0)` or `0` is held open is a number either way
+    /// (B-2026-11-22-3).
+    pub(super) fn number_reads_as_value(&self, t: &Type) -> bool {
+        Self::scalar_reads_as_value(t) || self.unbound_literal_var(t).is_some()
+    }
+
     pub(super) fn scalar_reads_as_value(t: &Type) -> bool {
         matches!(
             t,
@@ -10144,10 +10152,29 @@ impl<'a> TypeChecker<'a> {
         // nest. Gated to scalars so heap borrows keep their explicit-borrow
         // typing discipline.
         if let Type::Ref(inner) | Type::MutRef(inner) = found {
-            if Self::scalar_reads_as_value(inner)
+            if self.number_reads_as_value(inner)
                 && self.is_subtype_with_projections(expected, inner)
             {
                 return true;
+            }
+            // Both still open number literals of one kind (a held `fold`
+            // seed slot and an item of `[1, 2, 3].iter()`): the slot takes
+            // the item's number, as `let mut s = 0; s = *x;` does
+            // (B-2026-11-22-3).
+            if let (Some((_, want)), Some((_, have))) = (
+                self.unbound_literal_var(expected),
+                self.unbound_literal_var(inner),
+            ) {
+                if want == have
+                    && inference::unify_types(
+                        expected,
+                        inner,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    )
+                {
+                    return true;
+                }
             }
         }
         // On the MIR pipeline, core semantics §5.10 and §6.1 in full: a

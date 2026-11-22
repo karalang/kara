@@ -5309,7 +5309,7 @@ impl<'a> super::TypeChecker<'a> {
                         Type::TypeParam(p) => !self.enclosing_bounds.contains_key(p),
                         _ => false,
                     } && Self::tail_is_written_ref(body);
-                    if Self::scalar_reads_as_value(&inner)
+                    if self.number_reads_as_value(&inner)
                         && !open
                         && !matches!(want, Type::Ref(_) | Type::MutRef(_))
                         && self.is_subtype_with_projections(&want, &inner)
@@ -5322,7 +5322,7 @@ impl<'a> super::TypeChecker<'a> {
                 // `(i64, i64)` slot, so a `fold` accumulator built that way
                 // is that type too (kata 2021).
                 if let Type::Tuple(_) = &body_ty {
-                    let peeled = Self::peel_scalar_refs_in_tuple(&body_ty);
+                    let peeled = self.peel_number_refs_in_tuple(&body_ty);
                     // The slot as the tail's check solved it: a variable in
                     // `expected_ret` the tail's parts pinned is that type.
                     // A slot the tail solved with `ref` parts keeps them.
@@ -9915,6 +9915,22 @@ impl<'a> super::TypeChecker<'a> {
 
     /// `t` with each `ref` to a scalar that reads as a value, at the top or
     /// as a part of a tuple (nested), replaced by the scalar.
+    /// [`Self::peel_scalar_refs_in_tuple`], also through a `ref` to a
+    /// number literal's open type (B-2026-11-22-3).
+    pub(super) fn peel_number_refs_in_tuple(&self, t: &Type) -> Type {
+        match t {
+            Type::Ref(inner) | Type::MutRef(inner) if self.number_reads_as_value(inner) => {
+                (**inner).clone()
+            }
+            Type::Tuple(ts) => Type::Tuple(
+                ts.iter()
+                    .map(|t| self.peel_number_refs_in_tuple(t))
+                    .collect(),
+            ),
+            _ => t.clone(),
+        }
+    }
+
     pub(super) fn peel_scalar_refs_in_tuple(t: &Type) -> Type {
         match t {
             Type::Ref(inner) | Type::MutRef(inner) if Self::scalar_reads_as_value(inner) => {
