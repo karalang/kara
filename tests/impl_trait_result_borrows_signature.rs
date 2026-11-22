@@ -121,3 +121,36 @@ fn impl_trait_result_consumed_before_the_move_is_accepted() {
     let (code, out, err) = karac(&format!("{LOGGER}{main}"), "__mir-run");
     assert_eq!((code, out.as_str()), (Some(0), "3\n"), "{err}");
 }
+
+const COPY_HIDDEN: &str = "fn evens(log: Logger) -> impl Iterator[Item = i64] { 0..3 }
+trait Pt: Copy { fn x(self) -> i64; }
+#[derive(Copy, Clone)]
+struct P { v: i64 }
+impl Pt for P { fn x(self) -> i64 { self.v } }
+fn pick(log: Logger) -> impl Pt { P { v: 4 } }
+";
+
+#[test]
+fn impl_trait_result_with_a_copy_hidden_type_is_still_live_to_scope_end() {
+    // `Range[i64]` is `Copy` and has no drop, but the bound `Iterator` is
+    // not `Copy`, so the caller may not count on that (B-2026-11-21-92).
+    refused(
+        &format!("{COPY_HIDDEN}fn main() {{ let log = Logger {{ lines: Vec.new() }}; let mut it = evens(log); println(it.next()); drop(log); }}\n"),
+        "cannot move `log` while `it` still holds a borrow of it",
+    );
+}
+
+#[test]
+fn impl_trait_result_with_a_copy_bound_is_not_live_after_its_last_use() {
+    let main = "fn main() {
+    let log = Logger { lines: Vec.new() };
+    let it = evens(log);
+    println(it.count());
+    let p = pick(log);
+    println(p.x());
+    drop(log);
+}
+";
+    let (code, out, err) = karac(&format!("{LOGGER}{COPY_HIDDEN}{main}"), "__mir-run");
+    assert_eq!((code, out.as_str()), (Some(0), "3\n4\n"), "{err}");
+}

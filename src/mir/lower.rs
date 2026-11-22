@@ -230,7 +230,8 @@ pub struct Lowered {
     /// The instances whose declared result type is an `impl Trait`: a
     /// call's result borrows what the signature says, whatever its hidden
     /// type holds ([`crate::mir::OpaqueResults`]; B-2026-11-20-121).
-    pub opaque_results: FxHashSet<String>,
+    /// The value is whether the bound itself is `Copy` (B-2026-11-21-92).
+    pub opaque_results: FxHashMap<String, bool>,
     /// For a program that binds a resource (core semantics §14), the
     /// effects of the program as built, before provider specialisation
     /// replaced its calls on resources: what `par_check` reports from.
@@ -697,7 +698,7 @@ fn lower_program_inner<'a>(
     let mut views = FxHashSet::default();
     let mut view_args = FxHashMap::default();
     let mut closure_results = FxHashSet::default();
-    let mut opaque_results = FxHashSet::default();
+    let mut opaque_results = FxHashMap::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
             let has_self = lcx.fns.get(&def).is_some_and(|i| i.f.self_param.is_some());
@@ -777,12 +778,14 @@ fn lower_program_inner<'a>(
                         .filter(|i| view_param(lcx.tys.tcx(), b.locals[i + 1].ty))
                         .fold(0, |m, i| m | 1 << i)
                 });
-            if lcx
+            if let Some(t) = lcx
                 .fns
                 .get(&def)
-                .is_some_and(|i| i.f.return_type.as_ref().is_some_and(mentions_impl_trait))
+                .and_then(|i| i.f.return_type.as_ref())
+                .filter(|t| mentions_impl_trait(t))
             {
-                opaque_results.insert(name.clone());
+                let copy = impl_traits_are_copy(t, &lcx.trait_defs);
+                opaque_results.insert(name.clone(), copy);
             }
             if has_self && borrows {
                 if view || mask & 1 != 0 {
@@ -980,6 +983,50 @@ fn mentions_impl_trait(t: &ast::TypeExpr) -> bool {
         ast::TypeKind::Tuple(ts) => ts.iter().any(mentions_impl_trait),
         ast::TypeKind::Array { element, .. } => mentions_impl_trait(element),
         _ => false,
+    }
+}
+
+/// Whether every `impl Trait` in a written result type has a `Copy` bound:
+/// the trait is `Copy` or has it among its supertraits, transitively.
+fn impl_traits_are_copy(t: &ast::TypeExpr, traits: &FxHashMap<String, &ast::TraitDef>) -> bool {
+    fn copy_trait(
+        name: &str,
+        traits: &FxHashMap<String, &ast::TraitDef>,
+        seen: &mut Vec<String>,
+    ) -> bool {
+        if name == "Copy" {
+            return true;
+        }
+        if seen.iter().any(|s| s == name) {
+            return false;
+        }
+        seen.push(name.to_string());
+        traits.get(name).is_some_and(|td| {
+            td.supertraits
+                .iter()
+                .filter_map(|b| b.path.last())
+                .any(|n| copy_trait(n, traits, seen))
+        })
+    }
+    match &t.kind {
+        ast::TypeKind::ImplTrait { trait_path, .. } => trait_path
+            .segments
+            .last()
+            .is_some_and(|n| copy_trait(n, traits, &mut Vec::new())),
+        ast::TypeKind::Ref(t) | ast::TypeKind::MutRef(t) => impl_traits_are_copy(t, traits),
+        ast::TypeKind::Path(p) => p.generic_args.as_ref().is_none_or(|g| {
+            g.iter().all(|a| match a {
+                ast::GenericArg::Type(t) => {
+                    !mentions_impl_trait(t) || impl_traits_are_copy(t, traits)
+                }
+                _ => true,
+            })
+        }),
+        ast::TypeKind::Tuple(ts) => ts
+            .iter()
+            .all(|t| !mentions_impl_trait(t) || impl_traits_are_copy(t, traits)),
+        ast::TypeKind::Array { element, .. } => impl_traits_are_copy(element, traits),
+        _ => true,
     }
 }
 
@@ -32970,7 +33017,7 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
         &closure_sig,
     );
     let view_results = |n: &str| views.contains(n);
-    let opaque_results = |n: &str| lowered.opaque_results.contains(n);
+    let opaque_results = |n: &str| lowered.opaque_results.get(n).copied();
     let mut out: Vec<SourceBorrowError> = Vec::new();
     let mut push = |e: SourceBorrowError| {
         if !out
@@ -33879,7 +33926,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
                 &has_receiver,
                 &closure_sig,
                 &view_results,
-                &|n: &str| opaque_results.contains(n),
+                &|n: &str| opaque_results.get(n).copied(),
             );
             if !errs.is_empty() {
                 let e: Vec<String> = errs.into_iter().map(|e| e.text).collect();

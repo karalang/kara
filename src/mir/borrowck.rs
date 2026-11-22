@@ -343,7 +343,7 @@ pub fn borrow_errors_with(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
     closure_sig: &ClosureSig<'_>,
 ) -> Vec<BorrowError> {
-    borrow_errors_in(body, tys, has_receiver, closure_sig, &|_| false, &|_| false)
+    borrow_errors_in(body, tys, has_receiver, closure_sig, &|_| false, &|_| None)
 }
 
 /// The functions whose result carries a view one of their parameters
@@ -356,8 +356,12 @@ pub type ViewResults<'a> = dyn Fn(&str) -> bool + 'a;
 /// The caller cannot see into the hidden type, so a call's result counts
 /// as a value that may hold a reference, and it borrows what the
 /// signature rule says, whatever the concrete type (design.md § `impl
-/// Trait`, "What the result borrows"; B-2026-11-20-121).
-pub type OpaqueResults<'a> = dyn Fn(&str) -> bool + 'a;
+/// Trait`, "What the result borrows"; B-2026-11-20-121). `Some(true)`
+/// when the bound itself is `Copy` (the trait is, or has it as a
+/// supertrait): only such a value may be copied and has no drop; any other
+/// is live until it is consumed or its scope ends, whatever the hidden
+/// type (B-2026-11-21-92).
+pub type OpaqueResults<'a> = dyn Fn(&str) -> Option<bool> + 'a;
 
 /// [`borrow_errors_with`], told which functions hand back a value holding
 /// a view of what their arguments view ([`view_results`]): a closure such
@@ -405,12 +409,16 @@ pub fn borrow_errors_in(
         loans.iter().enumerate().map(|(li, l)| (l.at, li)).collect();
     // An `impl Trait` value's drop is a use of what it borrows: the hidden
     // type may change to one with a `Drop` body without the signature
-    // changing, so the caller counts on one (B-2026-11-21-92). A `Copy`
-    // hidden type has no drop to count.
-    let drop_uses = |p: &Place| {
-        drop_reads_borrows(body, tys, p) || cx.opaque.contains_key(&p.local) && cx.holds(p)
-    };
-    let live_out = liveness_with(body, &drop_uses);
+    // changing, so the caller counts on one (B-2026-11-21-92), unless the
+    // bound itself is `Copy`.
+    let drop_uses =
+        |p: &Place| drop_reads_borrows(body, tys, p) || cx.opaque_lives(p.local) && cx.holds(p);
+    // Its storage's end is a use too where it may still hold its value: a
+    // hidden type that is `Copy` behind a bound that is not has no drop,
+    // and must not be read as having none.
+    let ends = storage_end_uses(body, &cx);
+    let end_use = |bi: usize, si: usize| ends.get(&(bi, si)).copied();
+    let live_out = liveness_with(body, &drop_uses, &end_use);
     let view = body.arg_count > 0
         && matches!(
             has_receiver(&body.instance),
@@ -437,7 +445,8 @@ pub fn borrow_errors_in(
         transfer_live(&mut live, &u, &d);
         live_before[n] = live.clone();
         for si in (0..n).rev() {
-            let (u, d) = statement_use_def(&block.statements[si].kind);
+            let (mut u, d) = statement_use_def(&block.statements[si].kind);
+            u.extend(end_use(bi, si));
             transfer_live(&mut live, &u, &d);
             live_before[si] = live.clone();
         }
@@ -860,7 +869,7 @@ pub(super) fn loan_liveness(
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
-    let live_out = liveness_with(body, &drop_uses);
+    let live_out = liveness_with(body, &drop_uses, &|_, _| None);
     let mut out = Vec::with_capacity(body.blocks.len());
     for (bi, block) in body.blocks.iter().enumerate() {
         let n = block.statements.len();
@@ -1496,7 +1505,7 @@ struct Cx<'a> {
     made_here: std::collections::HashSet<Local>,
     /// The locals holding, whole or in a part, an `impl Trait` result, with
     /// the hidden types they hold: see [`opaque_locals`].
-    opaque: std::collections::HashMap<Local, Vec<Ty>>,
+    opaque: std::collections::HashMap<Local, Vec<(Ty, bool)>>,
 }
 
 /// The locals that hold, whole or in a part, the result of a call of one
@@ -1512,8 +1521,8 @@ fn opaque_locals(
     body: &Body,
     tys: &TyInterner,
     opaque_results: &OpaqueResults<'_>,
-) -> std::collections::HashMap<Local, Vec<Ty>> {
-    let mut opaque: std::collections::HashMap<Local, Vec<Ty>> = Default::default();
+) -> std::collections::HashMap<Local, Vec<(Ty, bool)>> {
+    let mut opaque: std::collections::HashMap<Local, Vec<(Ty, bool)>> = Default::default();
     for b in &body.blocks {
         if let TerminatorKind::Call {
             func:
@@ -1525,9 +1534,10 @@ fn opaque_locals(
             ..
         } = &b.terminator.kind
         {
-            if destination.projection.is_empty() && opaque_results(&callee.name) {
+            let copy = opaque_results(&callee.name).filter(|_| destination.projection.is_empty());
+            if let Some(copy) = copy {
                 let t = body.locals[destination.local.index()].ty;
-                opaque.entry(destination.local).or_default().push(t);
+                opaque.entry(destination.local).or_default().push((t, copy));
             }
         }
     }
@@ -1542,12 +1552,12 @@ fn opaque_locals(
                 return;
             }
             let dt = body.locals[d.local.index()].ty;
-            let from: Vec<Ty> = ops
+            let from: Vec<(Ty, bool)> = ops
                 .filter_map(|op| op.place())
                 .filter_map(|p| opaque.get(&p.local))
                 .flatten()
                 .copied()
-                .filter(|&h| dt == h || contains_ty(tys, dt, h))
+                .filter(|&(h, _)| dt == h || contains_ty(tys, dt, h))
                 .collect();
             let have = opaque.entry(d.local).or_default();
             for h in from {
@@ -1714,7 +1724,111 @@ fn writes_slices(body: &Body, tys: &TyInterner, loans: &[Loan]) -> bool {
     })
 }
 
+/// The `StorageDead` statements, by `(block, statement)`, that end a local
+/// of [`Cx::opaque_lives`] where it may still hold its value: one assigned
+/// on some path to the statement and not since given away whole by value
+/// (`copy` or `move` of the whole local, a move at the source level since
+/// its type is not `Copy` there). Such a statement uses the local.
+fn storage_end_uses(body: &Body, cx: &Cx<'_>) -> std::collections::HashMap<(usize, usize), Local> {
+    let mut ends = std::collections::HashMap::new();
+    let tracked: Vec<Local> = cx
+        .opaque
+        .keys()
+        .copied()
+        .filter(|&l| cx.opaque_lives(l))
+        .collect();
+    if tracked.is_empty() {
+        return ends;
+    }
+    type Held = std::collections::BTreeSet<Local>;
+    let whole = |op: &Operand| match op {
+        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => Some(p.local),
+        _ => None,
+    };
+    let step = |held: &mut Held, s: &StatementKind| {
+        if let StatementKind::Assign(d, rv) = s {
+            let given: Vec<Local> = match rv {
+                Rvalue::Use(op) | Rvalue::Cast(_, op, _) => whole(op).into_iter().collect(),
+                Rvalue::Aggregate(_, ops) => ops.iter().filter_map(whole).collect(),
+                _ => Vec::new(),
+            };
+            for l in given {
+                held.remove(&l);
+            }
+            if d.projection.is_empty() && tracked.contains(&d.local) {
+                held.insert(d.local);
+            }
+        }
+    };
+    let n = body.blocks.len();
+    let mut entry: Vec<Option<Held>> = vec![None; n];
+    if n > 0 {
+        entry[0] = Some(Held::new());
+    }
+    let mut work: Vec<usize> = vec![0];
+    while let Some(bi) = work.pop() {
+        let Some(mut held) = entry[bi].clone() else {
+            continue;
+        };
+        let block = &body.blocks[bi];
+        for s in &block.statements {
+            step(&mut held, &s.kind);
+        }
+        if let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &block.terminator.kind
+        {
+            for l in std::iter::once(func).chain(args).filter_map(whole) {
+                held.remove(&l);
+            }
+            if destination.projection.is_empty() && tracked.contains(&destination.local) {
+                held.insert(destination.local);
+            }
+        }
+        for t in block.terminator.kind.successors() {
+            let ti = t.index();
+            let merged = match &entry[ti] {
+                Some(e) => {
+                    let u: Held = e.union(&held).copied().collect();
+                    (u.len() != e.len()).then_some(u)
+                }
+                None => Some(held.clone()),
+            };
+            if let Some(m) = merged {
+                entry[ti] = Some(m);
+                work.push(ti);
+            }
+        }
+    }
+    for (bi, block) in body.blocks.iter().enumerate() {
+        let Some(mut held) = entry[bi].clone() else {
+            continue;
+        };
+        for (si, s) in block.statements.iter().enumerate() {
+            if let StatementKind::StorageDead(l) = &s.kind {
+                if held.contains(l) {
+                    ends.insert((bi, si), *l);
+                }
+            }
+            step(&mut held, &s.kind);
+        }
+    }
+    ends
+}
+
 impl Cx<'_> {
+    /// Whether local `l` holds an `impl Trait` value whose bound is not
+    /// `Copy`: it is live until it is consumed or its scope ends, as a value
+    /// with a `Drop` body is (design.md § `impl Trait`; B-2026-11-21-92).
+    fn opaque_lives(&self, l: Local) -> bool {
+        self.opaque
+            .get(&l)
+            .is_some_and(|hs| hs.iter().any(|&(_, copy)| !copy))
+    }
+
     /// Can a value of `place`'s type hold a borrow? Only those carry
     /// origins: `x = *r` with `x: i64` holds nothing of `r`.
     fn holds(&self, place: &Place) -> bool {
@@ -1722,7 +1836,7 @@ impl Cx<'_> {
             holds_borrow(self.tys, pt.ty)
                 || self.opaque.get(&place.local).is_some_and(|hs| {
                     hs.iter()
-                        .any(|&h| pt.ty == h || contains_ty(self.tys, pt.ty, h))
+                        .any(|&(h, _)| pt.ty == h || contains_ty(self.tys, pt.ty, h))
                 })
         })
     }
@@ -2996,7 +3110,7 @@ fn transfer_live(live: &mut Vec<Local>, uses: &[Local], defs: &[Local]) {
 
 /// The locals live at the end of each block.
 pub(super) fn liveness(body: &Body) -> Vec<Vec<Local>> {
-    liveness_with(body, &|_| true)
+    liveness_with(body, &|_| true, &|_, _| None)
 }
 
 /// The blocks of `body` in postorder from the entry, then the ones it
@@ -3043,18 +3157,27 @@ fn postorder(body: &Body) -> Vec<usize> {
 /// fixpoint costs a few words a block: searching lists made a large body
 /// (mini_inflect's `new_tab` as an auto-par coroutine, 26,420 blocks over
 /// 1,700 locals) take most of a minute (B-2026-10-28-6).
-fn liveness_with(body: &Body, drop_uses: &dyn Fn(&Place) -> bool) -> Vec<Vec<Local>> {
+/// `end_use(block, statement)` names a local that statement uses besides
+/// its own operands ([`storage_end_uses`]).
+fn liveness_with(
+    body: &Body,
+    drop_uses: &dyn Fn(&Place) -> bool,
+    end_use: &dyn Fn(usize, usize) -> Option<Local>,
+) -> Vec<Vec<Local>> {
     let n = body.blocks.len();
     // Each block's uses and defs, from its end back to its start.
     let mut nl = body.locals.len();
     let steps: Vec<Vec<(Vec<Local>, Vec<Local>)>> = body
         .blocks
         .iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(bi, block)| {
             let mut s = Vec::with_capacity(block.statements.len() + 1);
             s.push(terminator_use_def_with(&block.terminator.kind, drop_uses));
-            for st in block.statements.iter().rev() {
-                s.push(statement_use_def(&st.kind));
+            for (si, st) in block.statements.iter().enumerate().rev() {
+                let (mut u, d) = statement_use_def(&st.kind);
+                u.extend(end_use(bi, si));
+                s.push((u, d));
             }
             for (u, d) in &s {
                 for l in u.iter().chain(d) {
