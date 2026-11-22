@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 708 |
 | false-positive | 351 |
 | missing-feature | 245 |
-| perf | 198 |
+| perf | 199 |
 | other | 146 |
 | soundness | 119 |
 | miscompile | 102 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 859 |
 | mir-llvm | 320 |
 | mir | 310 |
-| cli | 276 |
+| cli | 277 |
 | parser | 152 |
 | ownership | 131 |
 | runtime | 107 |
@@ -129,7 +129,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-21-55 | 2026-11-21 | typecheck+mir | medium | No way to key a Map or Set by shared-handle identity: `ref_eq` exists but nothing hashes identity, so a node-to-copy map, a visited set or a memo over shared nodes is O(n^2) or needs an id field; spec now gives `Identity[T]` (std.hash) | — |
-| B-2026-11-21-91 | 2026-11-21 | cli | medium | `karac check` of a program deriving `Serialize` takes ~0.9-1.1 s on a 5-line file (release), against ~0.07 s without the derive: the derive's comptime expansion runs twice, once in check's lower and again in the ownership/MIR check's own front end | — |
 | B-2026-11-21-73 | 2026-11-21 | parser | low | Parser diagnostics whose help names one determined edit carry no fix: E0005 (delete `with _`), E_INTERIOR_NUL_IN_C_STRING (remove the `\0`), E_NO_EFFECT_STRING_VALUE (`#[no_effect = "V"]` to `#[no_effect(V)]`), E_PROFILE_STRING_VALUE (`#[profile("x")]` to `#[profile(x)]`), E_RESERVED_KEYWORD (`match` to `r#match`), parser-side E_MALFORMED_ATTRIBUTE_ARGS / E_GPU_ARGS_NOT_PERMITTED / E_TRACK_CALLER_ARGS_NOT_PERMITTED (drop the arguments), E_ATTR_ON_ASSOC_TYPE_DECL, E0002's Rust-style `mut b: T` parameter | — |
 | B-2026-11-21-74 | 2026-11-21 | typecheck+ownership | low | Diagnostics whose help names a determined edit still carry no fix, most because the edit spans several sites: E0113 (drop `as F`, rename uses), E0127 and W0298 (rename to the name given, with uses), E0204 (move the method to an inherent impl), E_DEFERRED_EFFECT_GROUP, E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET, E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG, E_SLICE_FROM_TEMPORARY_ESCAPES, E_EXTERN_REF_PARAM, L0001, and single variants of E0107, E0200, E0212, E0232, E0506, E0511, E0515, E0517, E0518, E0520, E_CODEGEN_HINT_INVALID_POSITION, E_DROP_SIGNATURE_INVALID, E_EXTERN_TYPE_NOT_FFI_SAFE, E_UNKNOWN_ATTRIBUTE, W0309, W0310; and E_TEST_OUTSIDE_TEST_FILE (move the test to a test file), E_TOOLCHAIN_INVALID_VERSION_TYPE (quote the toml scalar) | — |
 | B-2026-11-21-75 | 2026-11-21 | cli | medium | Project-mode `karac check --output=json` drops a typecheck error's fix and its named code: E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN / _LITERAL reach JSON as E0243 / E0241 with no replacement, while `karac fix` applies the same `, ..` edit | — |
@@ -142,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
 | B-2026-11-22-24 | 2026-11-22 | mir+effect | medium | A `par` branch conflict (E0418) in a function nothing calls is not reported: `karac check` of a file with no `main`, or of a library's `pub fn`, accepts `par { append_log(mut log), read_log_count(log) }` | — |
+| B-2026-11-22-40 | 2026-11-22 | cli | low | `karac check` of a program with a comptime-backed derive still takes ~0.6 s on a 3-line file (release) against ~0.07 s without it: the library's bodies are type-checked three times (check's first pass, the comptime evaluation's retype, and the re-check after splicing) | — |
 
 ### Relocated
 
@@ -2138,6 +2138,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-80 | typecheck | low | A method a raw pointer does not have (`p.expose_addr()`, `p.addr()`, `p.clone()`, a typo) gets no typecheck error: `karac check` prints only MIR's ro… | ed623291c6 |
 | B-2026-11-21-81 | typecheck | low | `impl Trait for *mut T` and `impl Trait for (A, B)` are accepted, but their methods are never callable: every call is refused as "no method" | 6548463d8c |
 | B-2026-11-21-90 | cli | medium | kara-lsp hover, completion and definition took up to 1.2 s, 1.3 s and 2.4 s on a program deriving `Serialize`: each request re-ran the whole of `kara… | 972effff90 |
+| B-2026-11-21-91 | cli | medium | `karac check` of a program deriving `Serialize` takes ~0.9-1.1 s on a 5-line file (release), against ~0.07 s without the derive: the derive's comptim… | 51fea0ca78 |
 | B-2026-11-21-92 | mir | low | An `impl Trait` value's liveness followed its hidden type: its drop counted as a use of what it borrows only when the concrete type had a `Drop` body… | d404185c8d |
 | B-2026-11-21-93 | cli | medium | In a package, `check`/`build --output=json(l)` apply the 20-error cascade cap to all module files together: two files with 22 type errors each report… | 60381ef965 |
 | B-2026-11-21-94 | cli | low | `karac test --output=jsonl` and `--output=json` are refused as unknown flags, though design.md §17's panic record says the runner carries the record… | 60381ef965 |
