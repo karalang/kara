@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 699 |
 | false-positive | 350 |
-| missing-feature | 244 |
+| missing-feature | 245 |
 | perf | 198 |
 | other | 145 |
 | soundness | 119 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 855 |
 | mir-llvm | 320 |
 | mir | 309 |
-| cli | 270 |
+| cli | 271 |
 | parser | 151 |
 | ownership | 129 |
 | runtime | 107 |
@@ -136,6 +136,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-2 | 2026-11-22 | ownership | high | A temporary pushed into a `Vec[ref String]` checks clean: `refs.push(words[0].clone())` stores a reference to a dropped temporary (ASan heap-buffer-overflow) | — |
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
+| B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
 
 ### Relocated
 
