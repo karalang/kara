@@ -2775,7 +2775,6 @@ impl<'a> EffectChecker<'a> {
         self.check_const_initializer_effects();
         self.verify_declarations();
         self.verify_written_declarations();
-        self.verify_extern_export_panics();
         self.verify_extern_cunwind_requires_unwind_profile();
         self.verify_extern_export_no_suspends();
         self.verify_pub_fn_no_synthetic_resource();

@@ -1402,6 +1402,10 @@ pub(crate) struct PendingBindingRename {
     /// Byte length of the current name, used to confirm a recorded
     /// reference span covers the bare identifier and nothing else.
     pub(crate) name_len: usize,
+    /// A local binding's rename (E0127, B-2026-11-21-74), withheld when
+    /// any symbol already has the new name: the new name could then capture
+    /// a use site, or a use of the other symbol.
+    pub(crate) local: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -1833,6 +1837,18 @@ impl<'a> Resolver<'a> {
     fn attach_module_binding_renames(&mut self) {
         let pending = std::mem::take(&mut self.pending_binding_renames);
         for p in pending {
+            // The library appended to the program has its own locals and
+            // parameters, which no use site here can reach; a library item
+            // or builtin of that name could be shadowed, so it counts.
+            let library_start = self.program.library_start;
+            if p.local
+                && (self.library_declares(&p.new_name)
+                    || self.table.symbols.iter().any(|s| {
+                        s.name == p.new_name && library_start.is_none_or(|st| s.span.offset < st)
+                    }))
+            {
+                continue;
+            }
             // The declaration's name is edited unconditionally, so drop it
             // from both sides — emitting it twice would leave `cmd_fix`'s
             // overlap dedup to silently discard one copy.

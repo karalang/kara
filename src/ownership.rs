@@ -946,13 +946,11 @@ pub enum OwnershipErrorKind {
     /// the consume site, the closure creation site, and the captured
     /// path's borrow mode (`ref` / `mut ref`).
     ClosureCaptureBorrowConflict,
-    /// Phase-7 line 43 — the module-level `#![rc_budget(max: N)]`
-    /// attribute declared a ceiling of `N` RC-promoted bindings, but
-    /// ownership analysis produced more. The diagnostic carries the
-    /// budget value + observed count; the suggestion lists every
-    /// contributing `<function>.<binding>` so the author can pick which
-    /// to restructure first. Fires once per module, at the attribute's
-    /// span.
+    /// RETIRED (B-2026-11-21-76): the module-level `#![rc_budget(max: N)]`
+    /// counted inserted reference counts, and the compiler inserts none
+    /// (core-semantics.md §6.4), so nothing emits it; where a count would
+    /// have been, the program has the move error E0500. The attribute is
+    /// still accepted (design.md § Lint levels).
     RcBudgetExceeded {
         budget: usize,
         observed: usize,
@@ -2990,7 +2988,6 @@ impl<'a> OwnershipChecker<'a> {
         // `arc_values` flavor is settled; a no-op in the default mode.
         self.emit_rc_fallback_fallible_profile_errors();
         self.enforce_no_rc_attrs();
-        self.enforce_rc_budget();
         self.check_concurrent_shared_struct();
         self.classify_par_capture_modes();
         self.compute_elision();

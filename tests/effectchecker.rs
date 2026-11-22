@@ -10,11 +10,10 @@ use karac::{
 };
 use std::collections::HashSet;
 
-/// A `ProfileConfig` that selects `panic = "unwind"` — the only setting under
-/// which `extern "C-unwind"` sites are permitted (the abort-only default
-/// rejects them with E0415, phase-8 slice 5). Used by the C-unwind
-/// effect-inference / `with panics` tests, whose subject only exists under
-/// unwind.
+/// A `ProfileConfig` that selects `panic = "unwind"`, which a manifest can
+/// still spell. A panic aborts in every build (core-semantics.md §10), so it
+/// changes nothing here: every `extern "C-unwind"` site is E0415 under it
+/// too (B-2026-11-21-76).
 fn unwind_config() -> ProfileConfig {
     ProfileConfig {
         panic: Some(PanicStrategy::Unwind),
@@ -22,38 +21,24 @@ fn unwind_config() -> ProfileConfig {
     }
 }
 
-/// Like [`effectcheck_ok`] but under an explicit `panic = "unwind"` profile.
-fn effectcheck_ok_unwind(source: &str) -> EffectCheckResult {
+/// The effect check of a program whose only errors are E0415 on its
+/// `extern "C-unwind"` sites, for the effects inferred for them anyway.
+fn effectcheck_c_unwind(source: &str) -> EffectCheckResult {
     let parsed = parse(source);
-    assert!(
-        parsed.errors.is_empty(),
-        "Parse errors: {}",
-        parsed
-            .errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    let result = effectcheck_with_profile_config(&parsed.program, unwind_config());
-    let real_errors: Vec<_> = result
+    assert!(parsed.errors.is_empty(), "Parse errors present");
+    let result = effectcheck_with_profile_config(&parsed.program, ProfileConfig::default());
+    let others: Vec<_> = result
         .errors
         .iter()
         .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
+        .filter(|e| e.kind != EffectErrorKind::ExternCUnwindRequiresUnwindProfile)
+        .map(|e| e.to_string())
         .collect();
-    assert!(
-        real_errors.is_empty(),
-        "Effect errors: {}",
-        real_errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    assert!(others.is_empty(), "Effect errors: {}", others.join(", "));
     result
 }
 
-/// Like [`effectcheck_errors`] but under an explicit `panic = "unwind"` profile.
+/// [`effectcheck_errors`] under an explicit `panic = "unwind"` profile.
 fn effectcheck_errors_unwind(source: &str) -> Vec<EffectError> {
     let parsed = parse(source);
     assert!(parsed.errors.is_empty(), "Parse errors present");
@@ -346,11 +331,9 @@ fn test_extern_c_gets_blocks_by_default() {
 
 #[test]
 fn test_extern_c_unwind_gets_blocks_and_panics() {
-    // extern "C-unwind" functions default to {blocks, panics}. Under an
-    // explicit `panic = "unwind"` profile — the abort-only default rejects the
-    // ABI outright (E0415, slice 5), so the effect-inference subject only
-    // exists under unwind.
-    let result = effectcheck_ok_unwind("unsafe extern \"C-unwind\" { fn risky(); }");
+    // extern "C-unwind" functions default to {blocks, panics}, inferred
+    // even though every build refuses the ABI (E0415).
+    let result = effectcheck_c_unwind("unsafe extern \"C-unwind\" { fn risky(); }");
     let inferred = result.inferred_effects.get("risky").unwrap();
     assert!(
         inferred
@@ -434,7 +417,7 @@ fn test_extern_with_clause_is_exactly_its_effects() {
         has(&r, "slow_io", EffectVerbKind::Blocks),
         "no clause: every effect"
     );
-    let r = effectcheck_ok_unwind("unsafe extern \"C-unwind\" { fn throwing() with panics; }");
+    let r = effectcheck_c_unwind("unsafe extern \"C-unwind\" { fn throwing() with panics; }");
     assert!(has(&r, "throwing", EffectVerbKind::Panics));
     assert!(
         !has(&r, "throwing", EffectVerbKind::Blocks),
@@ -9769,39 +9752,39 @@ fn main() {
 }
 
 // ── FFI export panic semantics (design.md § Panic Semantics at the FFI
-//    Boundary, case 2: E_EXTERN_C_UNWIND_REQUIRES_PANICS / E0413) ──────
+//    Boundary). E0413, "a C-unwind export that may panic declares
+//    `panics`", is retired: a panic aborts in every build, so every
+//    C-unwind export is E0415 instead, under any `[profile] panic`
+//    (B-2026-11-21-76). These pinned E0413 under `panic = "unwind"`. ──────
 
 #[test]
-fn extern_c_unwind_panicking_body_requires_panics_declaration() {
-    // The "must declare `panics`" refinement only applies where C-unwind is
-    // permitted — under `panic = "unwind"`. (Abort rejects the ABI outright
-    // with E0415, slice 5, and skips this refinement.)
+fn extern_c_unwind_panicking_body_is_e0415_not_e0413_under_an_unwind_profile() {
     let errors = effectcheck_errors_unwind(
         "extern \"C-unwind\" fn f() -> i32 { unreachable() } \
          fn main() { let _ = f(); }",
     );
+    let kinds: Vec<_> = errors.iter().map(|e| &e.kind).collect();
     assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == EffectErrorKind::ExternCUnwindRequiresPanics),
-        "expected ExternCUnwindRequiresPanics, got: {:?}",
-        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+        kinds.contains(&&EffectErrorKind::ExternCUnwindRequiresUnwindProfile),
+        "{kinds:?}"
+    );
+    assert!(
+        !kinds.contains(&&EffectErrorKind::ExternCUnwindRequiresPanics),
+        "{kinds:?}"
     );
 }
 
 #[test]
-fn extern_c_unwind_with_panics_declaration_ok() {
-    effectcheck_ok_unwind(
+fn extern_c_unwind_with_panics_declaration_is_still_e0415() {
+    effectcheck_c_unwind(
         "extern \"C-unwind\" fn f() -> i32 with panics { unreachable() } \
          fn main() { let _ = f(); }",
     );
 }
 
 #[test]
-fn extern_c_unwind_non_panicking_body_ok() {
-    // No panic in the body → the C-unwind panics-refinement does not bite
-    // (under unwind, where the ABI is permitted at all).
-    effectcheck_ok_unwind(
+fn extern_c_unwind_non_panicking_body_is_still_e0415() {
+    effectcheck_c_unwind(
         "extern \"C-unwind\" fn f(x: i32) -> i32 { x + 1 } \
          fn main() { let _ = f(1); }",
     );
@@ -9868,17 +9851,17 @@ fn extern_c_unwind_export_rejected_under_abort_default() {
     );
 }
 
+/// This pinned the ABI as permitted under `panic = "unwind"`; no build
+/// unwinds (core-semantics.md §10), so it is E0415 there too
+/// (B-2026-11-21-76).
 #[test]
-fn extern_c_unwind_permitted_under_unwind_profile() {
-    // Under an explicit `panic = "unwind"`, the E0415 gate does not fire — the
-    // ABI is honorable there (the slice-9 unwind codegen is what actually lands
-    // the backing; this test pins the effect-checker gate's strategy-awareness).
+fn extern_c_unwind_rejected_under_an_unwind_profile_too() {
     let errors = effectcheck_errors_unwind("unsafe extern \"C-unwind\" { fn risky(); }");
     assert!(
-        !errors
+        errors
             .iter()
             .any(|e| e.kind == EffectErrorKind::ExternCUnwindRequiresUnwindProfile),
-        "E0415 must not fire under panic = \"unwind\", got: {:?}",
+        "{:?}",
         errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
     );
 }

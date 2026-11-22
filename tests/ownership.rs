@@ -7111,39 +7111,14 @@ fn rc_budget_under_passes() {
     );
 }
 
+/// The budget counted inserted reference counts, and the compiler inserts
+/// none (core-semantics.md §6.4), so a budget is never exceeded and
+/// E_RC_BUDGET_EXCEEDED is retired, as `karac explain` says
+/// (B-2026-11-21-76). This pinned the error before.
 #[test]
-fn rc_budget_exceeded_emits_error_with_contributing_list() {
-    // 3 RC bindings under a `max: 1` budget — error fires once,
-    // names every contributing `<function>.<binding>` in source-
-    // sorted order so authors can pick which to restructure first.
+fn rc_budget_is_never_exceeded_since_no_reference_count_is_inserted() {
     let src = rc_budget_source("#![rc_budget(max: 1)]\n", 3);
-    let errors = ownership_errors(&src);
-    let budget_errors: Vec<_> = errors
-        .iter()
-        .filter(|e| matches!(e.kind, OwnershipErrorKind::RcBudgetExceeded { .. }))
-        .collect();
-    assert_eq!(
-        budget_errors.len(),
-        1,
-        "expected exactly one RcBudgetExceeded error; got {:?}",
-        errors
-            .iter()
-            .map(|e| (&e.kind, &e.message))
-            .collect::<Vec<_>>(),
-    );
-    let err = budget_errors[0];
-    let OwnershipErrorKind::RcBudgetExceeded { budget, observed } = err.kind else {
-        unreachable!()
-    };
-    assert_eq!(budget, 1, "budget value should be threaded through");
-    assert_eq!(observed, 3, "observed count should match the fixture");
-    let suggestion = err.suggestion.as_deref().unwrap_or("");
-    for fn_name in ["f0", "f1", "f2"] {
-        assert!(
-            suggestion.contains(&format!("{fn_name}.o")),
-            "suggestion should list `{fn_name}.o` so author can pick which to restructure; got `{suggestion}`",
-        );
-    }
+    ownership_ok(&src);
 }
 
 #[test]
@@ -7157,21 +7132,9 @@ fn rc_budget_absent_attr_does_not_enforce() {
 }
 
 #[test]
-fn rc_budget_max_zero_rejects_any_rc() {
-    // `#![rc_budget(max: 0)]` with even one RC binding — error.
+fn rc_budget_max_zero_is_not_an_error_either() {
     let src = rc_budget_source("#![rc_budget(max: 0)]\n", 1);
-    let errors = ownership_errors(&src);
-    assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            OwnershipErrorKind::RcBudgetExceeded {
-                budget: 0,
-                observed: 1
-            }
-        )),
-        "expected RcBudgetExceeded {{ budget: 0, observed: 1 }}; got {:?}",
-        errors.iter().map(|e| &e.kind).collect::<Vec<_>>(),
-    );
+    ownership_ok(&src);
 }
 
 #[test]

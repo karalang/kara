@@ -621,15 +621,31 @@ pub(super) fn complete_typed(
     errors: &mut [TypeError],
     diffs: &mut rustc_hash::FxHashMap<SpanKey, Vec<TextEdit>>,
 ) {
+    complete_typed_at(source, 0, errors, diffs);
+}
+
+/// [`complete_typed`] over one module of a package, whose spans sit `base`
+/// bytes past its file's start (`Module::span_base`): the edits are offsets
+/// into `source`, the module's own file, which is what a reader of the
+/// JSON applies them to, and the keys stay the diagnostics' spans.
+pub(super) fn complete_typed_at(
+    source: &str,
+    base: usize,
+    errors: &mut [TypeError],
+    diffs: &mut rustc_hash::FxHashMap<SpanKey, Vec<TextEdit>>,
+) {
     let src = source.as_bytes();
     for e in errors.iter_mut() {
         if e.fix_it.is_some()
-            || e.span.offset + e.span.length > src.len()
+            || e.span.offset < base
+            || e.span.offset - base + e.span.length > src.len()
             || diffs.contains_key(&SpanKey::from_span(&e.span))
         {
             continue;
         }
-        let Some(mut edits) = typed_fix(src, e) else {
+        let mut local = e.clone();
+        local.span.offset -= base;
+        let Some(mut edits) = typed_fix(src, &local) else {
             continue;
         };
         if edits.len() == 1 {
@@ -652,19 +668,56 @@ pub(super) fn complete_typed(
 /// `impl CrossTask for P` (removed), `#[default]` without the enum's
 /// `derive(Default)`, an attribute given arguments it does not take.
 pub(super) fn complete_resolved(source: &str, r: &mut crate::resolver::ResolveResult) {
+    complete_resolved_at(source, 0, &mut r.errors, &mut r.error_fix_diffs);
+}
+
+/// [`complete_resolved`] over one module of a package; `base` as in
+/// [`complete_typed_at`].
+pub(super) fn complete_resolved_at(
+    source: &str,
+    base: usize,
+    errors: &mut [crate::resolver::ResolveError],
+    diffs: &mut rustc_hash::FxHashMap<SpanKey, Vec<TextEdit>>,
+) {
     let src = source.as_bytes();
+    // A binding's rename (E0127) is the resolver's, from spans alone: every
+    // edit must cover the old name in the text, or none is kept
+    // (B-2026-11-21-74).
+    for e in errors.iter_mut() {
+        if e.kind != crate::resolver::ResolveErrorKind::BindingNameClass {
+            continue;
+        }
+        let Some(old) = between(&e.message, "`", "` is ") else {
+            continue;
+        };
+        // The edits are offsets into `source` already (only the spans sit
+        // `base` past it).
+        let covers = |t: &TextEdit| src.get(t.offset..t.offset + t.length) == Some(old.as_bytes());
+        let key = SpanKey::from_span(&e.span);
+        if e.replacement.as_deref().is_some_and(|t| !covers(t)) {
+            e.replacement = None;
+        }
+        if diffs.get(&key).is_some_and(|v| !v.iter().all(covers)) {
+            diffs.remove(&key);
+        }
+    }
     let mut fixes = Vec::new();
-    for e in &r.errors {
+    for e in errors.iter() {
         if e.replacement.is_some()
-            || e.span.offset + e.span.length > src.len()
-            || r.error_fix_diffs.contains_key(&SpanKey::from_span(&e.span))
+            || e.span.offset < base
+            || e.span.offset - base + e.span.length > src.len()
+            || diffs.contains_key(&SpanKey::from_span(&e.span))
         {
             continue;
         }
+        let local = Span {
+            offset: e.span.offset - base,
+            ..e.span
+        };
         let m = e.message.as_str();
         let edits = if let Some(target) = between(m, "a manual `impl Copy for ", "` is not allowed")
         {
-            remove_impl_block(src, e.span).and_then(|mut del| {
+            remove_impl_block(src, local).and_then(|mut del| {
                 let target = target.split('[').next().unwrap_or(target);
                 let add = add_derive(src, "struct", target, &["Copy", "Clone"])
                     .or_else(|| add_derive(src, "enum", target, &["Copy", "Clone"]))?;
@@ -672,7 +725,7 @@ pub(super) fn complete_resolved(source: &str, r: &mut crate::resolver::ResolveRe
                 Some(del)
             })
         } else if m.contains("` is not allowed: `CrossTask` is computed by the compiler") {
-            remove_impl_block(src, e.span)
+            remove_impl_block(src, local)
         } else if let Some(name) = between(
             m,
             "requires the enclosing enum `",
@@ -680,7 +733,7 @@ pub(super) fn complete_resolved(source: &str, r: &mut crate::resolver::ResolveRe
         ) {
             add_derive(src, "enum", name, &["Default"])
         } else if m.contains("accepts no arguments — write it as a bare") {
-            bare_attribute(src, e.span)
+            bare_attribute(src, local)
         } else {
             None
         };
@@ -691,15 +744,14 @@ pub(super) fn complete_resolved(source: &str, r: &mut crate::resolver::ResolveRe
     for (span, mut edits) in fixes {
         if edits.len() == 1 {
             let t = edits.remove(0);
-            if let Some(e) = r
-                .errors
+            if let Some(e) = errors
                 .iter_mut()
                 .find(|e| e.span == span && e.replacement.is_none())
             {
                 e.replacement = Some(Box::new(t));
             }
         } else {
-            r.error_fix_diffs.insert(SpanKey::from_span(&span), edits);
+            diffs.insert(SpanKey::from_span(&span), edits);
         }
     }
 }

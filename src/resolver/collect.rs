@@ -1169,6 +1169,7 @@ impl<'a> super::Resolver<'a> {
                             name_span: b.name_span,
                             diag_span: b.span,
                             name_len: b.name.len(),
+                            local: false,
                         });
                 }
             }

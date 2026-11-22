@@ -85,6 +85,7 @@ pub fn compute_path_dep_hash(manifest_path: &Path) -> Result<String, LockfileErr
     let bytes = std::fs::read(manifest_path).map_err(|e| LockfileError::Io {
         path: manifest_path.to_path_buf(),
         error: e.to_string(),
+        op: "read",
     })?;
     Ok(compute_content_hash(&bytes))
 }
@@ -143,6 +144,9 @@ pub enum LockfileError {
     Io {
         path: PathBuf,
         error: String,
+        /// The step that failed: `"read"` (a path dependency's manifest,
+        /// hashed for the lockfile) or `"write"` (the lockfile itself).
+        op: &'static str,
     },
     Parse {
         path: PathBuf,
@@ -179,9 +183,17 @@ impl LockfileError {
 impl std::fmt::Display for LockfileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io { path, error } => {
-                write!(f, "failed to read lockfile {}: {}", path.display(), error)
+            // The read is of a path dependency's manifest, hashed for the
+            // lockfile; the write is of the lockfile (B-2026-11-21-79).
+            Self::Io { path, error, op } if *op == "write" => {
+                write!(f, "failed to write lockfile {}: {}", path.display(), error)
             }
+            Self::Io { path, error, .. } => write!(
+                f,
+                "failed to read {} to hash it for the lockfile: {}",
+                path.display(),
+                error
+            ),
             Self::Parse { path, message } => {
                 write!(
                     f,
@@ -1286,6 +1298,7 @@ dependencies = []
                 LockfileError::Io {
                     path: PathBuf::new(),
                     error: String::new(),
+                    op: "read",
                 },
                 "E_LOCKFILE_IO",
             ),
@@ -1429,6 +1442,7 @@ dependencies = []
             Err(LockfileError::Io {
                 path: PathBuf::new(),
                 error: "stub failure".to_string(),
+                op: "read",
             })
         }
 

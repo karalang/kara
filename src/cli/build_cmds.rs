@@ -834,6 +834,16 @@ pub(super) fn resolve_modules(
         for edits in result.error_fix_diffs.values_mut() {
             edits.iter_mut().for_each(to_file);
         }
+        // The fixes the help names, as a lone file's check carries them
+        // (B-2026-11-21-75).
+        if let Ok(text) = std::fs::read_to_string(&m.file) {
+            super::source_fixes::complete_resolved_at(
+                &text,
+                m.span_base,
+                &mut result.errors,
+                &mut result.error_fix_diffs,
+            );
+        }
         // A merged test companion's spans sit past its sibling's
         // (`Module::test_span_base`): its errors name its own file, and
         // their edits are offsets into it.
@@ -939,6 +949,43 @@ pub(super) fn fix_diff_json_tail(
     err: &crate::resolver::ResolveError,
     fix_diffs: &FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 ) -> String {
+    match fix_diffs
+        .get(&crate::resolver::SpanKey::from_span(&err.span))
+        .filter(|v| !v.is_empty())
+    {
+        Some(edits) => {
+            let items: Vec<String> = edits
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                        e.offset,
+                        e.length,
+                        json_string(&e.replacement),
+                    )
+                })
+                .collect();
+            format!(",\"fix_diff\":[{}]", items.join(","))
+        }
+        None => String::new(),
+    }
+}
+
+/// A typecheck diagnostic's fix as the `,"replacement":{..}` or
+/// `,"fix_diff":[..]` tail a lone file's record carries (B-2026-11-21-75);
+/// empty when it has none.
+pub(super) fn typed_fix_json_tail(
+    err: &crate::typechecker::TypeError,
+    fix_diffs: &FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+) -> String {
+    if let Some(f) = &err.fix_it {
+        return format!(
+            ",\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
+            f.span.offset,
+            f.span.length,
+            json_string(&f.replacement),
+        );
+    }
     match fix_diffs
         .get(&crate::resolver::SpanKey::from_span(&err.span))
         .filter(|v| !v.is_empty())
@@ -1096,6 +1143,9 @@ pub(super) fn stub_hints_tail(file: &str, err: &crate::resolver::ResolveError) -
 pub(super) struct ModuleTypeErrors {
     file: PathBuf,
     errors: Vec<crate::typechecker::TypeError>,
+    /// Multi-edit fixes keyed by the owning diagnostic's span, each edit an
+    /// offset into `file`, as [`ModuleResolveErrors::fix_diffs`] are.
+    fix_diffs: FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Run the typechecker per module with the full `ProgramTree` attached so
@@ -1143,6 +1193,35 @@ pub(super) fn typecheck_modules(
         let in_lib = |e: &crate::typechecker::TypeError| PackageLibrary::holds(lib, e.span.offset);
         result.errors.retain(|e| !in_lib(e));
         result.warnings.retain(|e| !in_lib(e));
+        // A fix's edit is an offset into the module's FILE, as a resolve
+        // error's is (`resolve_modules`); the help's fixes are added from
+        // the file's text, as a lone file's check adds them
+        // (B-2026-11-21-75).
+        let base = m.span_base;
+        for e in result.errors.iter_mut().chain(result.warnings.iter_mut()) {
+            if let Some(f) = e.fix_it.as_mut() {
+                f.span.offset = f.span.offset.saturating_sub(base);
+            }
+        }
+        for edits in result.error_fix_diffs.values_mut() {
+            for e in edits.iter_mut() {
+                e.offset = e.offset.saturating_sub(base);
+            }
+        }
+        if let Ok(text) = std::fs::read_to_string(&m.file) {
+            super::source_fixes::complete_typed_at(
+                &text,
+                base,
+                &mut result.errors,
+                &mut result.error_fix_diffs,
+            );
+            super::source_fixes::complete_typed_at(
+                &text,
+                base,
+                &mut result.warnings,
+                &mut result.error_fix_diffs,
+            );
+        }
         // B-2026-08-18-19 — the warnings used to be DROPPED here: `result`
         // carries them and only `.errors` was read, so a project build was
         // structurally incapable of reporting `deprecated` no matter what the
@@ -1151,12 +1230,14 @@ pub(super) fn typecheck_modules(
             warn_out.push(ModuleTypeErrors {
                 file: m.file.clone(),
                 errors: result.warnings,
+                fix_diffs: result.error_fix_diffs.clone(),
             });
         }
         if !result.errors.is_empty() {
             out.push(ModuleTypeErrors {
                 file: m.file.clone(),
                 errors: result.errors,
+                fix_diffs: result.error_fix_diffs,
             });
         }
     }
@@ -1447,21 +1528,39 @@ pub(super) fn type_warnings_json(per_module: &[ModuleTypeErrors]) -> Vec<String>
     for te in per_module {
         let file = super::project_v2::shown(&te.file);
         for warn in &te.errors {
+            // The code a lone file's record carries: a symbolic code the
+            // message opens with, else the lint's own `W` number, else the
+            // kind's, with the one it displaced as `parent_code`
+            // (B-2026-11-21-75).
+            let kind_code = super::diag_json::type_warning_code(&warn.kind);
+            let (code, symbol_parent, message) = super::specific_code(kind_code, &warn.message);
+            let own = super::diag_json::lint_code(warn.lint_name.as_deref(), "warning")
+                .filter(|_| symbol_parent.is_none());
+            let parent = symbol_parent.or(own.map(|_| code));
             let mut record = format!(
-                "{{\"severity\":\"warning\",\"phase\":\"typecheck\",\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}",
+                "{{\"severity\":\"warning\",\"phase\":\"typecheck\",\"code\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}",
+                json_string(own.unwrap_or(code)),
                 json_string(super::explain::concept_for(
                     "typecheck",
-                    type_error_code(&warn.kind),
+                    kind_code,
                     warn.class.map(|c| c.as_str()),
                     warn.lint_name.as_deref(),
                 )),
                 json_string(&file),
                 warn.span.line,
                 warn.span.column,
-                json_string(&warn.message),
+                json_string(message),
             );
+            if let Some(parent) = parent {
+                record.push_str(&format!(",\"parent_code\":{}", json_string(parent)));
+            }
             if let Some(lint) = warn.lint_name.as_deref() {
                 record.push_str(&format!(",\"lint_name\":{}", json_string(lint)));
+            }
+            // A lone file's warning carries a multi-edit fix only for a
+            // style lint; its single edit always.
+            if warn.fix_it.is_some() || warn.kind == crate::typechecker::TypeErrorKind::StyleLint {
+                record.push_str(&typed_fix_json_tail(warn, &te.fix_diffs));
             }
             record.push('}');
             out.push(record);
@@ -1475,28 +1574,34 @@ pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
     for te in per_module {
         let file = super::project_v2::shown(&te.file);
         for err in &te.errors {
-            let code = type_error_code(&err.kind);
+            let kind_code = type_error_code(&err.kind);
+            // The spec's symbolic code a message opens with
+            // (`error[E_X]: ...`) is the record's code, with the kind's in
+            // `parent_code`, as a lone file's feed has it (B-2026-11-21-75).
+            let (code, symbol_parent, message) = super::specific_code(kind_code, &err.message);
             // A lint escalated by `-D` is its own `E03nn`, with the code it
             // shared as `parent_code` — the single-file feed's shape
             // (B-2026-11-16-299).
-            let own = super::diag_json::lint_code(err.lint_name.as_deref(), "error");
+            let own = super::diag_json::lint_code(err.lint_name.as_deref(), "error")
+                .filter(|_| symbol_parent.is_none());
+            let parent = symbol_parent.or(own.map(|_| code));
             let mut record = format!(
                 "{{\"severity\":\"error\",\"phase\":\"typecheck\",\"code\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{},\"class\":{}",
                 json_string(own.unwrap_or(code)),
                 json_string(super::explain::concept_for(
                     "typecheck",
-                    code,
+                    kind_code,
                     err.class.map(|c| c.as_str()),
                     err.lint_name.as_deref(),
                 )),
                 json_string(&file),
                 err.span.line,
                 err.span.column,
-                json_string(&err.message),
+                json_string(message),
                 json_string(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
             );
-            if own.is_some() {
-                record.push_str(&format!(",\"parent_code\":{}", json_string(code)));
+            if let Some(parent) = parent {
+                record.push_str(&format!(",\"parent_code\":{}", json_string(parent)));
             }
             if let Some(lint) = err.lint_name.as_deref() {
                 record.push_str(&format!(",\"lint_name\":{}", json_string(lint)));
@@ -1507,6 +1612,7 @@ pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
             if let Some(got) = &err.got {
                 record.push_str(&format!(",\"got\":{}", json_string(got)));
             }
+            record.push_str(&typed_fix_json_tail(err, &te.fix_diffs));
             record.push('}');
             out.push(record);
         }
@@ -2117,9 +2223,7 @@ pub(super) fn print_cycles_text(cycles: &[Cycle], tree: &ProgramTree) {
             };
             eprintln!("    {label}  {}", super::project_v2::shown(&m.file));
         }
-        eprintln!(
-            "  suggestion: extract the shared items into a lower-layer module that both ends of the cycle can depend on."
-        );
+        eprintln!("  suggestion: {CYCLE_SUGGESTION}");
     }
 }
 
@@ -2139,6 +2243,10 @@ pub(super) fn parse_errors_json(parse_errors: &[ModuleParseErrors]) -> Vec<Strin
     }
     out
 }
+
+/// What an import cycle is fixed by, in the text render and the JSON alike.
+const CYCLE_SUGGESTION: &str =
+    "extract the shared items into a lower-layer module that both ends of the cycle can depend on.";
 
 pub(super) fn cycles_json(cycles: &[Cycle], tree: &ProgramTree) -> Vec<String> {
     cycles
@@ -2174,11 +2282,14 @@ pub(super) fn cycles_json(cycles: &[Cycle], tree: &ProgramTree) -> Vec<String> {
                     )
                 })
                 .unwrap_or_default();
+            // The suggestion the text render prints, as a lone file's
+            // record carries one (B-2026-11-21-79).
             format!(
-                "{{\"severity\":\"error\",\"phase\":\"module_graph\",\"concept\":\"modules/imports\",\"code\":\"E0223\"{at},\"message\":{},\"cycle_paths\":[{}],\"cycle_files\":[{}]}}",
+                "{{\"severity\":\"error\",\"phase\":\"module_graph\",\"concept\":\"modules/imports\",\"code\":\"E0223\"{at},\"message\":{},\"cycle_paths\":[{}],\"cycle_files\":[{}],\"hints\":[{{\"description\":{}}}]}}",
                 json_string(&c.format(tree)),
                 paths_json.join(","),
                 files.join(","),
+                json_string(CYCLE_SUGGESTION),
             )
         })
         .collect()
@@ -2219,9 +2330,10 @@ pub(super) fn cycles_jsonl(cycles: &[Cycle], tree: &ProgramTree) -> Vec<String> 
                 .collect();
             let paths_json: Vec<String> = paths.iter().map(|s| json_string(s)).collect();
             format!(
-                "{{\"type\":\"module_cycle\",\"code\":\"E0223\",\"message\":{},\"cycle_paths\":[{}]}}",
+                "{{\"type\":\"module_cycle\",\"code\":\"E0223\",\"message\":{},\"cycle_paths\":[{}],\"hints\":[{{\"description\":{}}}]}}",
                 json_string(&c.format(tree)),
                 paths_json.join(","),
+                json_string(CYCLE_SUGGESTION),
             )
         })
         .collect()
@@ -2898,6 +3010,18 @@ pub(super) fn emit_toolchain_load_error(
     }
 }
 
+/// The `,"notes":[..],"help":".."` tail a package-level diagnostic's JSON
+/// record carries, the lines its text render prints as `= note:` and
+/// `= help:` (B-2026-11-21-79).
+fn notes_help_tail(notes: &[&str], help: &str) -> String {
+    let notes: Vec<String> = notes.iter().map(|n| json_string(n)).collect();
+    format!(
+        ",\"notes\":[{}],\"help\":{}",
+        notes.join(","),
+        json_string(help)
+    )
+}
+
 /// Render a `karac_toolchain::ToolchainMismatch` diagnostic into the
 /// active output mode. The note documents the v1 limitation: karac
 /// today reads the pin but does not auto-switch — operators install
@@ -2908,30 +3032,38 @@ pub(super) fn emit_toolchain_mismatch(
 ) {
     let code = mismatch.code();
     let primary = mismatch.message();
+    let note = format!(
+        "install a matching toolchain via `karaup install {}` (karaup is not in 0.8)",
+        mismatch.required
+    );
+    let help =
+        "or relax the `version` constraint in `karac-toolchain.toml` to admit the active toolchain";
     match output {
         OutputMode::Text => {
             eprintln!("error[{code}]: {primary}");
-            eprintln!("   = note: install a matching toolchain via `karaup install {}` (karaup is not in 0.8)", mismatch.required);
-            eprintln!("   = help: or relax the `version` constraint in `karac-toolchain.toml` to admit the active toolchain");
+            eprintln!("   = note: {note}");
+            eprintln!("   = help: {help}");
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{},\"required\":{},\"active\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{},\"required\":{},\"active\":{}{}}}]}}",
                 json_string(code),
                 json_string(&primary),
                 json_string(&mismatch.required.to_string()),
                 json_string(&mismatch.active.to_string()),
+                notes_help_tail(&[&note], help),
             );
         }
         OutputMode::Jsonl => {
             emit_jsonl_event(
                 "toolchain_pin_error",
                 &format!(
-                    "\"code\":{},\"message\":{},\"required\":{},\"active\":{}",
+                    "\"code\":{},\"message\":{},\"required\":{},\"active\":{}{}",
                     json_string(code),
                     json_string(&primary),
                     json_string(&mismatch.required.to_string()),
                     json_string(&mismatch.active.to_string()),
+                    notes_help_tail(&[&note], help),
                 ),
             );
         }
@@ -2948,26 +3080,30 @@ pub(super) fn emit_offline_no_vendor_dir(vendor_dir: &std::path::Path, output: O
         "offline build requires a vendor directory at `{}` but none was found",
         vendor_dir.display()
     );
+    let note = "--offline resolves every transitive path-dep against `./vendor/<name>/`";
+    let help = "run `karac vendor` to populate the vendor directory, then re-run with `--offline`";
     match output {
         OutputMode::Text => {
             eprintln!("error[{code}]: {primary}");
-            eprintln!("   = note: --offline resolves every transitive path-dep against `./vendor/<name>/`");
-            eprintln!("   = help: run `karac vendor` to populate the vendor directory, then re-run with `--offline`");
+            eprintln!("   = note: {note}");
+            eprintln!("   = help: {help}");
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"dep_resolution\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"dep_resolution\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}{}}}]}}",
                 json_string(code),
                 json_string(&primary),
+                notes_help_tail(&[note], help),
             );
         }
         OutputMode::Jsonl => {
             emit_jsonl_event(
                 "dep_resolution_error",
                 &format!(
-                    "\"code\":{},\"message\":{}",
+                    "\"code\":{},\"message\":{}{}",
                     json_string(code),
                     json_string(&primary),
+                    notes_help_tail(&[note], help),
                 ),
             );
         }
@@ -3080,6 +3216,7 @@ pub(super) fn persist_lockfile(
         let err = crate::lockfile::LockfileError::Io {
             path: lockfile_path,
             error: io.to_string(),
+            op: "write",
         };
         emit_lockfile_warning(&err, output);
     }
@@ -3112,9 +3249,10 @@ fn emit_lockfile_diag(
         }
         OutputMode::Json => {
             let doc = format!(
-                "{{\"status\":\"ok\",\"diagnostics\":[{{\"severity\":\"warning\",\"phase\":\"lockfile\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"ok\",\"diagnostics\":[{{\"severity\":\"warning\",\"phase\":\"lockfile\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}{}}}]}}",
                 json_string(code),
                 json_string(&primary),
+                notes_help_tail(&[note], help),
             );
             // A read warning comes before the command's own document, which
             // `check --output=json` keeps as the only one on stdout.
@@ -3128,9 +3266,10 @@ fn emit_lockfile_diag(
             emit_jsonl_event(
                 "lockfile_warning",
                 &format!(
-                    "\"code\":{},\"message\":{}",
+                    "\"code\":{},\"message\":{}{}",
                     json_string(code),
                     json_string(&primary),
+                    notes_help_tail(&[note], help),
                 ),
             );
         }

@@ -2445,6 +2445,29 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   prefix that its body contradicts is dropped (E0504); and `frozen` on a
   sync struct's receiver is dropped (E0512). Each carried only its help text
   (B-2026-11-21-72).
+- A package's `karac check --output=json` carries what a lone file's does: a
+  typecheck record's fix (`replacement` or `fix_diff`, as offsets into its
+  own module's file, past the root module too), the fixes `karac fix` makes
+  from the help, and the symbolic code a message opens with
+  (E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN, not E0243, with E0243 as
+  `parent_code`); a warning record has its `code` at all. It carried none of
+  them (B-2026-11-21-75).
+- The JSON of an import cycle (E0223) carries the suggestion its text
+  prints, as a hint, and E_TOOLCHAIN_VERSION_MISMATCH,
+  E_OFFLINE_NO_VENDOR_DIR and E_LOCKFILE_IO carry their note and help. A
+  lockfile that cannot be written says `failed to write lockfile`, not
+  `failed to read lockfile`, and a path dependency's manifest that cannot be
+  read for its hash is named as that (B-2026-11-21-79).
+- E_RC_BUDGET_EXCEEDED and E0413, which `karac explain` lists as retired, no
+  longer fire: the compiler inserts no reference counts, so a
+  `#![rc_budget(..)]` is never exceeded and the program's move error stands
+  alone, and a panic aborts in every build, so an `extern "C-unwind"` site
+  is E0415 under any `[profile] panic`, in `check` and `run` alike
+  (B-2026-11-21-76).
+- E0127, a binding written outside snake_case (`let Total = 3`), carries the
+  rename its help names, of the binding and every use, f-strings included;
+  the fix is withheld when a use cannot be placed exactly or the new name is
+  already bound or a builtin's (B-2026-11-21-74).
 
 - `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string
   hole names the import form and is fixed with its import, as it is outside

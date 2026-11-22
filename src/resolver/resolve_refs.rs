@@ -344,7 +344,11 @@ impl<'a> super::Resolver<'a> {
     /// binding only when it names no unit variant, which is known here
     /// (B-2026-11-06-18). A Const-class name that names a `const` gets its
     /// own wording: a pattern never compares against a constant.
-    fn check_binding_name_class(&mut self, name: &str, span: Span) {
+    ///
+    /// Returns the error's index and the suggested name when the binding
+    /// can be renamed to it: the caller defines the binding, then queues
+    /// the rename of it and its uses ([`Self::queue_binding_rename`]).
+    fn check_binding_name_class(&mut self, name: &str, span: Span) -> Option<(usize, String)> {
         use crate::lexer::IdentClass;
         let actual = crate::lexer::classify_ident(name);
         // A reserved name (`Fn`) is refused by `define` as reserved: one
@@ -355,7 +359,7 @@ impl<'a> super::Resolver<'a> {
                 .iter()
                 .any(|(r, _)| *r == name)
         {
-            return;
+            return None;
         }
         let actual_desc = if actual == IdentClass::Type {
             "Type-class"
@@ -386,10 +390,49 @@ impl<'a> super::Resolver<'a> {
             ),
             span,
             kind: ResolveErrorKind::BindingNameClass,
-            suggestion: suggestion.map(|s| format!("rename to `{s}`")),
+            suggestion: suggestion.as_ref().map(|s| format!("rename to `{s}`")),
             replacement: None,
             stub_hint: None,
         });
+        // A name that is a constant's may be meant as a comparison, which
+        // the note offers; no rename is the fix there.
+        suggestion
+            .filter(|_| !names_const)
+            .map(|s| (self.errors.len() - 1, s))
+    }
+
+    /// Queue the E0127 rename of the binding `defined`, written as `name`
+    /// at the end of `span`, to the name its diagnostic suggests:
+    /// `attach_module_binding_renames` adds the uses, or withholds the
+    /// whole rename when one cannot be placed (B-2026-11-21-74).
+    fn queue_binding_rename(
+        &mut self,
+        pending: Option<(usize, String)>,
+        defined: &Result<SymbolId, ResolveError>,
+        name: &str,
+        span: Span,
+    ) {
+        let (Some((error_index, new_name)), Ok(id)) = (pending, defined) else {
+            return;
+        };
+        if span.length < name.len() {
+            return;
+        }
+        let name_span = Span {
+            offset: span.offset + span.length - name.len(),
+            length: name.len(),
+            ..span
+        };
+        self.pending_binding_renames
+            .push(crate::resolver::PendingBindingRename {
+                error_index: Some(error_index),
+                symbol: *id,
+                new_name,
+                name_span,
+                diag_span: span,
+                name_len: name.len(),
+                local: true,
+            });
     }
 
     pub(crate) fn resolve_pattern(&mut self, pattern: &Pattern) {
@@ -416,15 +459,20 @@ impl<'a> super::Resolver<'a> {
                         // knows (a library enum's `NotFound`); it reports a
                         // Type-class binding there. A Const-class name is
                         // never a variant.
-                        if crate::lexer::classify_ident(name) != crate::lexer::IdentClass::Type {
-                            self.check_binding_name_class(name, pattern.span);
-                        }
+                        let rename = if crate::lexer::classify_ident(name)
+                            != crate::lexer::IdentClass::Type
+                        {
+                            self.check_binding_name_class(name, pattern.span)
+                        } else {
+                            None
+                        };
                         let defined = self.table.define(
                             name.clone(),
                             SymbolKind::Variable { is_mut: false },
                             pattern.span,
                             false,
                         );
+                        self.queue_binding_rename(rename, &defined, name, pattern.span);
                         self.record_binding_node(&defined, pattern.id);
                     }
                 }
@@ -602,9 +650,11 @@ impl<'a> super::Resolver<'a> {
         allow_shadow: bool,
         bound: &mut std::collections::HashSet<String>,
     ) {
-        if !self.defining_fn_params {
-            self.check_binding_name_class(name, span);
-        }
+        let rename = if self.defining_fn_params {
+            None
+        } else {
+            self.check_binding_name_class(name, span)
+        };
         if !bound.insert(name.to_string()) {
             self.errors.push(ResolveError {
                 message: format!("'{}' is bound more than once in the same pattern", name),
@@ -631,6 +681,7 @@ impl<'a> super::Resolver<'a> {
                 false,
             )
         };
+        self.queue_binding_rename(rename, &result, name, span);
         if let Some(node) = node {
             self.record_binding_node(&result, node);
         }
