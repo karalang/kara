@@ -112,15 +112,17 @@ impl<'a> super::EffectChecker<'a> {
     /// Give the first missing-declaration error of each function in
     /// `self.errors[from..]` the edit that declares everything its errors
     /// report (B-2026-11-05-29). One edit per function, so `karac fix`
-    /// never inserts twice at the same place; `main`, whose fix is to
-    /// drop its `pub`, gets none.
+    /// never inserts twice at the same place. A `main` with no clause,
+    /// whose fix is to drop its `pub`, gets none, and one with a clause
+    /// gets the clause extended like any other function (B-2026-11-21-72).
     fn attach_with_clause_fixes(&mut self, from: usize) {
         let mut by_function: Vec<(String, usize, Vec<Effect>)> = Vec::new();
         for (i, err) in self.errors.iter().enumerate().skip(from) {
             let Some(u) = err.undeclared.as_deref() else {
                 continue;
             };
-            if err.replacement.is_some() || u.function == "main" {
+            if err.replacement.is_some() || (u.function == "main" && !self.has_with_clause("main"))
+            {
                 continue;
             }
             match by_function.iter_mut().find(|(f, ..)| *f == u.function) {
@@ -140,6 +142,16 @@ impl<'a> super::EffectChecker<'a> {
             let edit = self.with_clause_edit(sym, &clause_text(&effects));
             self.errors[first].replacement = edit;
         }
+    }
+
+    /// Whether `function` declares a `with` clause in its signature.
+    fn has_with_clause(&self, function: &str) -> bool {
+        let Some(sym) = self.interner.get(function) else {
+            return false;
+        };
+        self.function_bodies
+            .get(&sym)
+            .is_some_and(|f| f.effects.is_some())
     }
 
     pub(crate) fn verify_declarations(&mut self) {

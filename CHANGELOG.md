@@ -2386,6 +2386,31 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `#Writer` label (B-2026-11-21-29).
 - The const-parameter type refusal lists `i128`, and a failed const bound
   names the predicate as written (B-2026-11-21-31).
+- Twenty-four diagnostic codes whose help names one determined edit now
+  carry it, so `karac fix` makes it: an irrefutable `if let` becomes a
+  block, a `while let` a `loop` and a `let .. else` loses its `else` (W0302,
+  E0302 when denied); a doc comment on a statement becomes `//` (W0296,
+  E0296 when denied); a bound an alias cannot check is removed (W0293); `n
+  as bool` becomes `n != 0` (E_INT_AS_BOOL); `pub fn main` loses its `pub`
+  (E_MAIN_SIGNATURE), and a `main` with a `with` clause has it extended by
+  the effect it is missing (E0400); a struct literal's `..base` with nothing
+  left to copy is dropped (E_STRUCT_LITERAL_SPREAD_UNSUPPORTED); a sync
+  type's `mut ref self` receiver becomes bare (E0258); a `OnceCell` field of
+  a sync struct becomes `OnceLock` (E_ONCE_CELL_IN_PAR_TYPE), as a
+  module-level one does (E_ONCE_CELL_AT_MODULE_SCOPE); `n ?? 0` on an
+  unwrapped `n` loses its fallback (E0276); an `errdefer` that never runs
+  becomes a `defer` (W0303, E0303); a union gets `#[repr(C)]`
+  (E_UNION_REQUIRES_REPR) and loses a `Drop` impl (E_UNION_DROP_FORBIDDEN)
+  and a `#[derive(..)]` (E_UNION_DERIVE_FORBIDDEN); `x as R` from a type
+  other than the refinement's base becomes `(x as Base) as R`
+  (E_REFINEMENT_CAST_SOURCE_MISMATCH); a hand-written `impl Copy` becomes
+  `#[derive(Copy, Clone)]` and a hand-written `impl CrossTask` is removed
+  (E0108); a `#[default]` variant gets its enum's `#[derive(Default)]`
+  (E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE), and `#[default(..)]` becomes
+  `#[default]` (E_MALFORMED_ATTRIBUTE_ARGS); a closure's `mut ref` or `ref`
+  prefix that its body contradicts is dropped (E0504); and `frozen` on a
+  sync struct's receiver is dropped (E0512). Each carried only its help text
+  (B-2026-11-21-72).
 
 - `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string
   hole names the import form and is fixed with its import, as it is outside

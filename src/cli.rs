@@ -47,6 +47,7 @@ mod query_cmd;
 pub(crate) mod repl_v2;
 mod run_check_cmds;
 mod run_v2;
+mod source_fixes;
 mod test_cmd;
 mod test_v2;
 
@@ -1558,6 +1559,14 @@ impl Pipeline {
 
     fn resolve(&mut self) {
         self.resolve_phase();
+        // Help that names one determined edit carries it as a fix
+        // (B-2026-11-21-72); against the user's text, not the library's.
+        if let (Some(source), Some(r)) = (
+            self.user_source.as_deref().or(self.source.as_deref()),
+            self.resolved.as_mut(),
+        ) {
+            source_fixes::complete_resolved(source, r);
+        }
         self.unrename_messages();
     }
 
@@ -1712,6 +1721,13 @@ impl Pipeline {
 
     fn typecheck(&mut self) {
         self.typecheck_phase();
+        if let (Some(source), Some(t)) = (
+            self.user_source.as_deref().or(self.source.as_deref()),
+            self.typed.as_mut(),
+        ) {
+            source_fixes::complete_typed(source, &mut t.errors, &mut t.error_fix_diffs);
+            source_fixes::complete_typed(source, &mut t.warnings, &mut t.error_fix_diffs);
+        }
         self.unrename_messages();
     }
 
@@ -2537,6 +2553,12 @@ impl Pipeline {
 
     fn ownershipcheck(&mut self) {
         self.ownershipcheck_phase();
+        if let (Some(source), Some(o)) = (
+            self.user_source.as_deref().or(self.source.as_deref()),
+            self.ownership.as_mut(),
+        ) {
+            source_fixes::complete_ownership(source, o);
+        }
         self.unrename_messages();
     }
 
