@@ -103,6 +103,11 @@ impl<'a> super::TypeChecker<'a> {
             Type::Tuple(types) => types.iter().all(|t| self.is_copy_type_during_check(t)),
             Type::Array { element, .. } => self.is_copy_type_during_check(element),
             Type::Slice { mutable, .. } => !mutable,
+            // A raw pointer is `Copy` (design.md §15), as `is_type_copy`
+            // already says: `.raw()` of a borrowed `distinct type SafeFile =
+            // *mut CFile` copies the pointer rather than borrowing it
+            // (B-2026-11-22-22).
+            Type::Pointer { .. } => true,
             // B-2026-10-14-10 — v2 core §1.1: a `ref T` is `Copy`, so
             // `let a = v[0];` over a `Vec[ref Node]` copies the reference.
             // Strict commands only, like `StringSlice` below.

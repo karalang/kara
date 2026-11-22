@@ -451,9 +451,13 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    fn check_break_values_agree(&mut self, values: &[Type], span: Span) {
+    /// Every `break` out of one loop or labeled block carries one type. A
+    /// disagreement is reported at the `break` whose type differs from the
+    /// first one's (`spans[i]` is `values[i]`'s `break`), and at the loop
+    /// only when no such span was recorded (B-2026-11-22-23).
+    fn check_break_values_agree(&mut self, values: &[Type], spans: &[Span], span: Span) {
         let mut first: Option<&Type> = None;
-        for v in values {
+        for (i, v) in values.iter().enumerate() {
             if *v == Type::Never || *v == Type::Error {
                 continue;
             }
@@ -469,7 +473,7 @@ impl<'a> super::TypeChecker<'a> {
                                 type_display(f),
                                 type_display(v)
                             ),
-                            span,
+                            spans.get(i).copied().unwrap_or(span),
                             TypeErrorKind::TypeMismatch,
                         );
                         return;
@@ -19985,9 +19989,12 @@ impl<'a> super::TypeChecker<'a> {
                 self.break_value_types
                     .push(BreakFrame::for_loop(label.clone()));
                 self.infer_block(body);
-                let frame = self.break_value_types.pop();
-                let values = frame.map(|f| f.values).unwrap_or_default();
-                self.check_break_values_agree(&values, expr.span);
+                let (values, spans) = self
+                    .break_value_types
+                    .pop()
+                    .map(|f| (f.values, f.value_spans))
+                    .unwrap_or_default();
+                self.check_break_values_agree(&values, &spans, expr.span);
                 lub_block_type(Type::Never, &values)
             }
 
@@ -19999,12 +20006,12 @@ impl<'a> super::TypeChecker<'a> {
                 self.break_value_types
                     .push(BreakFrame::for_labeled_block(label.clone()));
                 let tail_ty = self.infer_block(body);
-                let frame = self
+                let (frame, spans) = self
                     .break_value_types
                     .pop()
-                    .map(|f| f.values)
+                    .map(|f| (f.values, f.value_spans))
                     .unwrap_or_default();
-                self.check_break_values_agree(&frame, expr.span);
+                self.check_break_values_agree(&frame, &spans, expr.span);
                 lub_block_type(tail_ty, &frame)
             }
 
@@ -20374,6 +20381,7 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(frame) = target {
                     if frame.accepts_value {
                         frame.values.push(val_ty);
+                        frame.value_spans.push(expr.span);
                     } else if val_ty != Type::Unit && val_ty != Type::Error {
                         // design.md § `break expr`: `while` / `while let` /
                         // `for` always have type `()`, so a value here has

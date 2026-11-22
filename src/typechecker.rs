@@ -553,6 +553,9 @@ pub(super) struct BreakFrame {
     pub(super) accepts_value: bool,
     /// Value types of the `break`s that resolved to this frame.
     pub(super) values: Vec<Type>,
+    /// The span of each of those `break`s, so a type that disagrees is
+    /// reported at the `break` carrying it rather than at the loop.
+    pub(super) value_spans: Vec<Span>,
     /// A `par for` body: `break` and `continue` may not cross out of it,
     /// nor target the `par for` itself (design.md § `par for`); `return`
     /// is an iteration's early exit (core semantics §11.7).
@@ -571,6 +574,7 @@ impl BreakFrame {
             unlabeled_target: true,
             accepts_value: true,
             values: Vec::new(),
+            value_spans: Vec::new(),
             par_barrier: false,
             par_block: false,
         }
@@ -585,6 +589,7 @@ impl BreakFrame {
             unlabeled_target: true,
             accepts_value: false,
             values: Vec::new(),
+            value_spans: Vec::new(),
             par_barrier: false,
             par_block: false,
         }
@@ -597,6 +602,7 @@ impl BreakFrame {
             unlabeled_target: false,
             accepts_value: false,
             values: Vec::new(),
+            value_spans: Vec::new(),
             par_barrier: false,
             par_block: true,
         }
@@ -609,6 +615,7 @@ impl BreakFrame {
             unlabeled_target: false,
             accepts_value: true,
             values: Vec::new(),
+            value_spans: Vec::new(),
             par_barrier: false,
             par_block: false,
         }
