@@ -2210,7 +2210,7 @@ impl<'a> Interp<'a> {
                     other => err(format!("{name} of {other:?}")),
                 }
             }
-            ("Vec", "index" | "index_mut") => match args.as_slice() {
+            ("Vec", "index" | "index_mut" | "index_slot") => match args.as_slice() {
                 [v, i] => self.vec_index(name, v, i),
                 _ => err(format!("{name} takes a reference and an index")),
             },
@@ -9926,7 +9926,7 @@ impl<'a> Interp<'a> {
                 let x = self.slot(&base.child(lo + *i as u64))?;
                 self.clone_value(&x, ret)
             }
-            ("index" | "index_mut" | "get_unchecked", [Value::Int(i)]) => {
+            ("index" | "index_mut" | "index_slot" | "get_unchecked", [Value::Int(i)]) => {
                 if *i < 0 || *i >= len as i128 {
                     if self.trace {
                         self.events.push(Event::Abort(AbortReason::BoundsCheck));
@@ -9934,6 +9934,21 @@ impl<'a> Interp<'a> {
                     return Err(Stop::Abort(AbortReason::BoundsCheck));
                 }
                 Ok(Value::Ref(base.child(lo + *i as u64)))
+            }
+            // `xs[i] = r` over a reference element: the old one out, the
+            // new one in (B-2026-11-20-40).
+            ("__replace", [Value::Int(i), x]) => {
+                if *i < 0 || *i >= len as i128 {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                let x = x.clone();
+                Ok(std::mem::replace(
+                    self.slot_mut(&base.child(lo + *i as u64))?,
+                    x,
+                ))
             }
             _ => err(format!("call of unknown function {name}")),
         }
@@ -11106,7 +11121,7 @@ impl<'a> Interp<'a> {
                 });
                 self.option_of_place(ret, at)
             }
-            ("entry_at" | "index" | "index_mut", [Value::Int(i)]) => {
+            ("entry_at" | "index" | "index_mut" | "index_slot", [Value::Int(i)]) => {
                 let i = if *i < 0 {
                     self.bounds(id, *i, false)?
                 } else {
@@ -11116,6 +11131,20 @@ impl<'a> Interp<'a> {
                     root: Root::Heap(id),
                     path: Path::from_slice(&[i as u64]),
                 }))
+            }
+            // `d[i] = r` over a reference element (B-2026-11-20-40).
+            ("__replace", [Value::Int(i), x]) => {
+                let i = if *i < 0 {
+                    self.bounds(id, *i, false)?
+                } else {
+                    self.bounds(id, *i + off as i128, false)?
+                };
+                let x = x.clone();
+                let at = Addr {
+                    root: Root::Heap(id),
+                    path: Path::from_slice(&[i as u64]),
+                };
+                Ok(std::mem::replace(self.slot_mut(&at)?, x))
             }
             ("clone", []) => {
                 let t = self.deref_ty(arg_tys.first().copied(), &name)?;
@@ -15309,6 +15338,16 @@ impl<'a> Interp<'a> {
     /// level into an enum or aggregate (`Option[ref T]`, a map entry's
     /// `(ref K, ref V)`). A borrow of a borrow is the borrow: `index`,
     /// `get` or `first` of a `Vec[ref T]` is the element, a `ref T`.
+    /// What the native `name` gave, with a borrow of a borrow made the
+    /// borrow. `index_slot`'s is kept: the slot of a reference element,
+    /// which a raw pointer reads and writes (B-2026-11-20-40).
+    pub(super) fn native_result(&mut self, name: &str, v: Value) -> Value {
+        if name.ends_with(".index_slot") {
+            return v;
+        }
+        self.collapse_ref_of_ref(v)
+    }
+
     pub(super) fn collapse_ref_of_ref(&mut self, v: Value) -> Value {
         let through = |me: &mut Self, v: Value| match &v {
             Value::Ref(a) => match me.slot(a) {
@@ -16793,7 +16832,7 @@ impl<'a> Interp<'a> {
                             .map_err(|e| Stop::Error(format!("call destination: {e}")))?
                             .ty;
                         let v = self.native(name, vals, &arg_tys, ret_ty)?;
-                        let v = self.collapse_ref_of_ref(v);
+                        let v = self.native_result(name, v);
                         self.inline_str(v, ret_ty)?
                     }
                 };

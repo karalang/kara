@@ -2342,6 +2342,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store_ref_as(d, at, el, dty)?;
             }
+            // The slot of a reference element (B-2026-11-20-40).
+            ("index_slot", [i]) => {
+                let i = self.int_arg(i)?;
+                let at = self.checked_elem(p, n, i, size)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, at.into())?;
+            }
+            // `xs[i] = r` over a reference element: the old one moved out
+            // to `dest`, the new one in (B-2026-11-20-40).
+            ("__replace", [i, x]) => {
+                let i = self.int_arg(i)?;
+                let at = self.checked_elem(p, n, i, size)?;
+                let d = self.place_ptr(dest)?;
+                self.copy(d, at, el)?;
+                self.store_operand(at, x)?;
+            }
             ("get", [i]) => {
                 let i = self.int_arg(i)?;
                 self.some_elem(dest, p, n, i, size, el)?;

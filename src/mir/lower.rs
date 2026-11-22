@@ -7842,6 +7842,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let targs = self.tys().tcx().list(args);
                 return self.index_set(target, object, index, value, base, &targs);
             }
+            // A shared reference element is replaced by the native too:
+            // no place names its slot (B-2026-11-20-40).
+            if let Some(el) = self.ref_elem(object, index)? {
+                if matches!(self.tys().tcx().kind(el), HK::Ref(_)) {
+                    return self.ref_index_set(object, index, value, el);
+                }
+            }
             // A `Vec[dyn T]`'s element is replaced by the native, not
             // through `index_mut`'s view (B-2026-11-08-84).
             if let HK::Intrinsic {
@@ -7965,8 +7972,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             self.read_now.insert(index.id);
         }
-        let key = self.owned_operand(index, kt)?;
-        let mut val = self.owned_operand(value, vt)?;
+        // An owned key or value stored into a reference slot (`m[1] =
+        // w.clone()` on a `Map[i64, ref String]`) is lent, as `insert`
+        // lends it; moved in, the value itself sat in the reference's slot
+        // (B-2026-11-22-2's index form).
+        let key = self.slot_operand(index, kt)?;
+        let mut val = self.slot_operand(value, vt)?;
         val = if self.downgrades(&val, vt) {
             self.downgrade(val, vt)
         } else {
@@ -9132,7 +9143,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         // An element that is a reference is what the native gives (a
         // borrow of a borrow is the borrow): the place is `out` itself.
         // Through a shared one nothing can be written, so a mutable place
-        // of it could only replace the element, which needs the slot.
+        // of it could only replace the element, which needs the slot:
+        // an assignment is `ref_index_set` and `ptr.mut(xs[i])` is
+        // `ref_elem_slot`, and no type names a reference to the slot.
         if self.is_reference(elem) {
             if mutable && matches!(self.tys().tcx().kind(elem), HK::Ref(_)) {
                 return self.unsupported(
@@ -9143,6 +9156,116 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(Place::local(out));
         }
         Ok(Place::local(out).project(ProjElem::Deref))
+    }
+
+    /// The element type of `object[index]` when `object` is a `Vec`,
+    /// `VecDeque` or slice of references indexed by position.
+    fn ref_elem(&mut self, object: &'a Expr, index: &'a Expr) -> R<Option<Ty>> {
+        if self.slices(object, index) {
+            return Ok(None);
+        }
+        let ot = self.expr_ty(object)?;
+        let (k, _) = self.strip_ty_full(ot);
+        let tcx = self.tys().tcx();
+        let elem = match k {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec | IntrinsicKind::VecDeque,
+                args,
+            } => tcx.list(args)[0],
+            HK::Slice { elem, .. } => elem,
+            _ => return Ok(None),
+        };
+        Ok(matches!(tcx.kind(elem), HK::Ref(_) | HK::MutRef(_)).then_some(elem))
+    }
+
+    /// `ptr.mut(xs[i])` / `ptr.const(xs[i])` on a collection of references:
+    /// a raw pointer to the slot, from the native `index_slot`. `index` and
+    /// `index_mut` give the element itself there (a borrow of a borrow is
+    /// the borrow), so a pointer made from their result named what the
+    /// element borrows; the library heap's sift reads and writes the slots
+    /// (B-2026-11-20-40).
+    fn ref_elem_slot(
+        &mut self,
+        object: &'a Expr,
+        index: &'a Expr,
+        elem: Ty,
+        mutable: bool,
+    ) -> R<Operand> {
+        let idx = self.index_operand(object, index)?;
+        let (base, bt) = self.deref_place(object, mutable)?;
+        let (usize_t, rt, pt) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.intern(HK::UInt(UIntSize::U64)),
+                tcx.reference(bt, mutable),
+                tcx.intern(HK::RawPtr {
+                    mutable,
+                    pointee: elem,
+                }),
+            )
+        };
+        let idx = self.cast_index(idx, usize_t);
+        let borrow = if mutable {
+            BorrowKind::Mut
+        } else {
+            BorrowKind::Shared
+        };
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(borrow, base));
+        let out = self.temp(pt);
+        let ty_name = self.tys().display(bt);
+        self.call_native(
+            &format!("{ty_name}.index_slot"),
+            vec![Operand::Move(Place::local(r)), idx],
+            Place::local(out),
+        );
+        Ok(Operand::Move(Place::local(out)))
+    }
+
+    /// `xs[i] = r` on a collection of shared references: `__replace(&mut
+    /// xs, i, r)`, which stores the reference in the slot and hands back
+    /// the one it held, with nothing to drop. An owned value is lent, as
+    /// `push` lends it: a place is borrowed, and a temporary is one the
+    /// borrow check refuses to drop while the collection holds it (§5.3,
+    /// §5.5). As a call it is also what tells the borrow check that the
+    /// collection now holds the value's borrow (B-2026-11-20-40).
+    fn ref_index_set(
+        &mut self,
+        object: &'a Expr,
+        index: &'a Expr,
+        value: &'a Expr,
+        elem: Ty,
+    ) -> R<()> {
+        // Left to right: the index, the value, then the collection's
+        // borrow (§5.6).
+        let idx = match self.index_operand(object, index)? {
+            // Read now: the value may assign the variable.
+            Operand::Copy(p) => {
+                let t = self.place_type(&p);
+                let l = self.temp(t);
+                self.assign(l, Rvalue::Use(Operand::Copy(p)));
+                Operand::Copy(Place::local(l))
+            }
+            op => op,
+        };
+        let val = self.slot_operand(value, elem)?;
+        let val = self.settle(val);
+        let (base, bt) = self.deref_place(object, true)?;
+        let (usize_t, rt) = {
+            let tcx = self.tys().tcx();
+            (tcx.intern(HK::UInt(UIntSize::U64)), tcx.reference(bt, true))
+        };
+        let idx = self.cast_index(idx, usize_t);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, base));
+        let old = self.temp(elem);
+        let ty_name = self.tys().display(bt);
+        self.call_native(
+            &format!("{ty_name}.__replace"),
+            vec![Operand::Move(Place::local(r)), idx, val],
+            Place::local(old),
+        );
+        Ok(())
     }
 
     /// `base[idx]` on a user type: the place `*base.index(idx)`, or
@@ -9843,6 +9966,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let op = self.use_place(p, inner);
         Ok(self.read_at_position(e, op, inner))
+    }
+
+    /// `e` stored into a collection's slot of type `slot`: lent when the
+    /// slot is a shared reference and `e` is not one, otherwise taken as an
+    /// owned value.
+    fn slot_operand(&mut self, e: &'a Expr, slot: Ty) -> R<Operand> {
+        let et = self.expr_ty(e)?;
+        let tcx = self.tys().tcx();
+        if matches!(tcx.kind(slot), HK::Ref(_))
+            && !matches!(tcx.kind(et), HK::Ref(_) | HK::MutRef(_))
+        {
+            // A literal is a reference to static data (§5.3).
+            return match self.literal_ref(e, Some(slot))? {
+                Some(op) => Ok(op),
+                None => self.operand_at(e, slot),
+            };
+        }
+        self.owned_operand(e, slot)
     }
 
     /// `e` as an operand for a slot of type `want`. A tuple literal is
@@ -25214,6 +25355,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         // `ptr.mut(x)` / `ptr.const(x)`: a raw pointer to the place `x`.
         if let (ExprKind::Identifier(m), "mut" | "const", [a]) = (&object.kind, method, args) {
             if m == "ptr" && !matches!(self.lcx.res.get(&object.id), Some(Res::Local(_))) {
+                // A reference element's slot (B-2026-11-20-40), where the
+                // pointer is typed as one to the element: the library's
+                // `*mut T` at `T = ref i32`.
+                if let ExprKind::Index { object: xs, index } = &a.value.kind {
+                    let pt = self.expr_ty(e)?;
+                    let to = match self.tys().tcx().kind(pt) {
+                        HK::RawPtr { pointee, .. } => Some(pointee),
+                        _ => None,
+                    };
+                    if let Some(el) = self.ref_elem(xs, index)?.filter(|&el| to == Some(el)) {
+                        let p = self.ref_elem_slot(xs, index, el, method == "mut")?;
+                        self.assign(dest, Rvalue::Use(p));
+                        return Ok(());
+                    }
+                }
                 let p = self.expr_place(&a.value, method == "mut")?;
                 return self.raw_ptr_to(e, p, method == "mut", dest);
             }
@@ -30408,6 +30564,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                         // literal the checker left at its default `i64`
                         // is a constant of that type, a narrower number
                         // widened, as `insert`'s is (B-2026-11-08-69).
+                        // An owned value for a reference slot is lent, as
+                        // `insert` lends it (§5.3): moved in, the value
+                        // itself sat in the reference's slot
+                        // (B-2026-11-22-2's remainder).
+                        let lent = val_t.filter(|&vt| {
+                            method == "or_insert" && matches!(self.tys().tcx().kind(vt), HK::Ref(_))
+                        });
+                        if let Some(vt) = lent {
+                            rest.push(self.slot_operand(&a.value, vt)?);
+                            continue;
+                        }
                         let op = self.expr_operand(&a.value)?;
                         rest.push(match val_t {
                             Some(vt) => self.widen(op, vt),
@@ -30495,8 +30662,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                             .builtin_mut_self
                             .contains(&(head, method.to_string()))
                     };
+                    // `Option.replace` and `Option.take` write their
+                    // receiver: lent shared, a reference `replace` stored was
+                    // not one the `Option` was seen to hold, so a temporary
+                    // lent to an `Option[ref T]` dangled unrefused
+                    // (B-2026-11-22-2's remainder), and either ran while a
+                    // borrow of the old value was live.
+                    let option_write = matches!(method, "replace" | "take")
+                        && self
+                            .tys()
+                            .tcx()
+                            .adt_of(base)
+                            .is_some_and(|(a, _)| a.name == "Option");
                     let mutates = !interior
                         && (declared_mut
+                            || option_write
                             || crate::ast::is_mutating_collection_method(method)
                             || matches!(
                                 method,
@@ -30759,13 +30939,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                             continue;
                         }
                     }
-                    // An owned place stored into a `ref` slot (`v.push(t)`
+                    // An owned value stored into a `ref` slot (`v.push(t)`
                     // on a `Vec[ref Node]`) is lent, not moved (§5.3;
-                    // B-2026-10-14-13).
-                    if stores
-                        && self.is_place(&a.value)
-                        && !matches!(self.tys().tcx().kind(at), HK::Ref(_) | HK::MutRef(_))
-                    {
+                    // B-2026-10-14-13). One that is not a place
+                    // (`v.push(t.clone())`) is lent from the statement's
+                    // temporary, which the borrow check then refuses to drop
+                    // while the container holds the reference (§5.5); moved
+                    // in, the value itself sat in the reference's slot
+                    // (B-2026-11-22-2).
+                    if stores && !matches!(self.tys().tcx().kind(at), HK::Ref(_) | HK::MutRef(_)) {
                         let slot = self
                             .lib_param_tys(base, method)
                             .and_then(|s| s.get(rest.len()).copied())
@@ -33761,7 +33943,13 @@ fn lower_typed_parts(
     // in the program, as `karac check` does, rather than leave it to the
     // validator's MIR-level report (B-2026-10-14-32).
     let mut moves: Vec<(Span, bool)> = Vec::new();
+    // `KARAC_MIR_DUMP=lowered` prints every body before that report, which
+    // ends the build ahead of the `built` dump.
+    let dump = std::env::var("KARAC_MIR_DUMP").as_deref() == Ok("lowered");
     for body in lowered.program.bodies.values() {
+        if dump {
+            eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
+        }
         for (span, shared) in crate::mir::validate::forbidden_moves(body, &lowered.tys) {
             if span.line > 0 && span.offset < user_len && !moves.iter().any(|m| m.0 == span) {
                 moves.push((span, shared));

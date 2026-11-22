@@ -499,10 +499,23 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 };
                 if let Some(src) = src_elem {
-                    if method == "extend" {
+                    // A collection of references takes the references a
+                    // source lends, and none of the values an owned source
+                    // would hand over (below).
+                    let to_refs = matches!(
+                        resolve_type_var_top(&elem, &self.env.substitutions),
+                        Type::Ref(_)
+                    );
+                    if method == "extend" && !to_refs {
                         // Items a `.iter()` lends would move out of their
                         // collection, as for `collect`.
                         self.check_core_collect_lent(&args[0].value, "extend");
+                    }
+                    if to_refs
+                        && self.cli_lint_overrides.strict_core
+                        && self.reject_owned_items_into_refs(obj_ty, &arg_ty, &src, &args[0].value)
+                    {
+                        return Some(Type::Unit);
                     }
                     unify_types(
                         &elem,
@@ -1399,6 +1412,63 @@ impl<'a> super::TypeChecker<'a> {
         self.errors.truncate(mark.0);
         self.warnings.truncate(mark.1);
         chars.then(|| type_display(&bare))
+    }
+
+    /// v2 core §5.5: `extend` / `extend_from_slice` on a `Vec[ref T]` or
+    /// `VecDeque[ref T]` given a source that owns its items (a `Vec[T]`, an
+    /// array, an iterator of `T`). The call consumes the source, so each
+    /// item is dropped while the collection holds a reference to it:
+    /// `refs.extend([w.clone()])` checked clean and read freed memory, and
+    /// so did `refs.extend(["x", "y"])` (B-2026-11-22-2's `extend` form).
+    /// A slice, a borrowed collection or an iterator of references lends
+    /// its items and is accepted. Returns whether it reported.
+    fn reject_owned_items_into_refs(
+        &mut self,
+        recv: &Type,
+        source: &Type,
+        item: &Type,
+        arg: &Expr,
+    ) -> bool {
+        let item = resolve_type_var_top(item, &self.env.substitutions);
+        let lends = match source {
+            Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. } => true,
+            Type::Named { name, .. } => name == "Slice",
+            _ => false,
+        } || matches!(
+            item,
+            Type::Ref(_) | Type::MutRef(_) | Type::Error | Type::TypeVar(_)
+        );
+        if lends {
+            return false;
+        }
+        let recv = match recv {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        // A named collection can lend its items in place of handing them
+        // over; any other source has no place to lend from until it is
+        // bound.
+        let first = if Self::is_place_expression(arg) {
+            let text = crate::formatter::render_expr_one_line(arg);
+            format!("extend by the references `{text}` lends (`{text}.iter()`), for a `{text}` that outlives the collection")
+        } else {
+            "bind the source to a variable that outlives the collection, and extend by the references it lends (`.iter()`)".to_string()
+        };
+        self.type_error(
+            format!(
+                "a reference to a value outlives the value (core-semantics.md §5.5): \
+                 the `{recv}` keeps a reference to each item, but this source owns its \
+                 `{item}` items and is consumed by the call, so they are dropped while \
+                 the collection still refers to them\n\
+                 help: {first}, or let the collection own its elements (a `{item}` \
+                 element)",
+                recv = type_display(recv),
+                item = type_display(&item),
+            ),
+            arg.span,
+            TypeErrorKind::TypeMismatch,
+        );
+        true
     }
 
     fn extend_item_type(&mut self, src: &Type) -> Option<Type> {

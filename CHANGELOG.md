@@ -20,6 +20,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A value that is dropped while a collection of references still refers
+  to it is refused in four more places: `m[k] = w.clone()` on a
+  `Map[K, ref V]`, `m.entry(k).or_insert(w.clone())` and
+  `o.replace(w.clone())` on an `Option[ref T]` (E0516: bind the value to a
+  variable that outlives the collection), and `refs.extend(words)` or
+  `refs.extend([w.clone()])` on a `Vec[ref T]` or `VecDeque[ref T]`, which
+  consumes the source its items live in (extend by `words.iter()`). Each
+  checked clean and read freed memory (B-2026-11-22-2's remaining forms).
+- `o.take()` and `o.replace(v)` on an `Option` are refused while a borrow of
+  its value is live (E0516), as any other write to `o` is; they ran, and
+  the borrow then read the value that had been taken out.
 - `karac check` of a package checks every target it declares, and every
   target `--targets` names, never the host alone: a package with
   `[build] targets = ["wasm_wasi"]` whose main uses `std.net` now fails check
@@ -964,6 +975,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `v[i] = r` on a `Vec[ref T]`, `VecDeque[ref T]` or `mut Slice[ref T]`
+  replaces the reference, and a `PriorityQueue[ref T]` builds and runs: both
+  were refused as not lowered. `refs.extend(words.iter())` on a `Vec[ref T]` or
+  `VecDeque[ref T]` is accepted; it was refused as moving the items out
+  (B-2026-11-20-40).
 - A type parameter named only in another parameter's bound
   (`fn count[T, S: Source[T]](s: S)`) is solved from the argument's impl;
   every call was refused (B-2026-11-20-111).

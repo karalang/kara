@@ -258,6 +258,31 @@ impl<'ctx> Cx<'ctx, '_> {
                 let rty = self.place_type(dest)?;
                 self.store_ref_as(d, at, el, rty)?;
             }
+            // The slot of a reference element (B-2026-11-20-40).
+            ("index_slot", [i]) => {
+                let i = self.int_arg(i)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, i, len, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let at = self.slot(q, i, size)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, at.into())?;
+            }
+            // `d[i] = r` over a reference element (B-2026-11-20-40).
+            ("__replace", [i, x]) => {
+                let i = self.int_arg(i)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, i, len, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let at = self.slot(q, i, size)?;
+                let d = self.place_ptr(dest)?;
+                self.copy(d, at, el)?;
+                self.store_operand(at, x)?;
+            }
             // Every element moved out into a `Vec`, front to back, the
             // deque left empty (`suspending_drop`'s glue).
             ("drain_entries", []) => {

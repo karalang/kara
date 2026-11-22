@@ -2071,7 +2071,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.builder.position_at_end(done);
                 Ok(())
             }
-            ("Vec", "index" | "index_mut") => {
+            ("Vec", "index" | "index_mut" | "index_slot") => {
                 let v = self.ref_arg(&args[0])?;
                 let el = self.vec_elem(name, &args[0])?;
                 let size = self.layout(el)?.size;
@@ -2086,6 +2086,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.elem_ptr(buf, i, size)?;
                 let d = self.place_ptr(dest)?;
                 let rty = self.place_type(dest)?;
+                // The slot of a reference element, which a store replaces
+                // (B-2026-11-20-40).
+                if method == "index_slot" {
+                    return self.store(d, at.into());
+                }
                 self.store_ref_as(d, at, el, rty)
             }
             // `xs[i] = v` into a `Vec[dyn T]`: the old element moved out

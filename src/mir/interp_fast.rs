@@ -1580,7 +1580,7 @@ impl<'a> Interp<'a> {
             arg_tys.push(t);
         }
         let v = self.native(name, vals, &arg_tys, ret_ty)?;
-        let v = self.collapse_ref_of_ref(v);
+        let v = self.native_result(name, v);
         let ret = self.inline_str(v, ret_ty)?;
         self.finish_call(body, destination, target, ret, name)
     }
