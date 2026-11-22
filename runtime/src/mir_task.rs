@@ -1760,6 +1760,11 @@ fn tear_down(mut t: Task) {
             task_done(&t);
             return;
         }
+        // A group the run made is cancelled too: a task cancelled before
+        // its first poll makes its groups on the way to its first wait, and
+        // their tasks ran on to their end, a sleeping one for its whole
+        // sleep (B-2026-11-21-95).
+        cancel_owned(t.id);
         if t.torn {
             break;
         }

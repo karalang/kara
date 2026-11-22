@@ -1004,13 +1004,56 @@ fn is_task_group(tys: &TyInterner, ty: Ty) -> bool {
     matches!(tys.kind(ty), TyKind::Adt(a) if tys.adt(a).library_name() == Some("TaskGroup"))
 }
 
+/// The `TaskGroup`s a value of type `ty` holds by value, as field paths
+/// from the value: the value itself for a group, and each group a struct's
+/// fields hold, an `IsolatingGroup`'s among them (B-2026-11-22-1).
+fn group_paths(tys: &TyInterner, ty: Ty) -> Vec<Vec<ProjElem>> {
+    fn go(
+        tys: &TyInterner,
+        ty: Ty,
+        at: &mut Vec<ProjElem>,
+        out: &mut Vec<Vec<ProjElem>>,
+        depth: u32,
+    ) {
+        if is_task_group(tys, ty) {
+            out.push(at.clone());
+            return;
+        }
+        let TyKind::Adt(a) = tys.kind(ty) else {
+            return;
+        };
+        let adt = tys.adt(a);
+        if adt.is_enum || depth > 8 {
+            return;
+        }
+        let Some(var) = adt.variants.first() else {
+            return;
+        };
+        for f in 0..var.fields.len() as u32 {
+            if let Some(ft) = tys.field_ty(ty, None, f) {
+                at.push(ProjElem::Field(FieldIdx(f), ft));
+                go(tys, ft, at, out, depth + 1);
+                at.pop();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    go(tys, ty, &mut Vec::new(), &mut out, 0);
+    out
+}
+
 /// Puts a call to [`GROUP_END`] before each drop of a `TaskGroup` in
-/// `body`, so dropping a group waits for its tasks:
+/// `body`, and of a struct that holds one, so dropping a group waits for
+/// its tasks:
 ///
 /// ```text
 /// drop(g) -> next      becomes      r = &g; _ = TaskGroup.end(move r) -> d
 ///                                   d: drop(g) -> next
 /// ```
+///
+/// An `IsolatingGroup` dropped on a cancel exit freed the frame its
+/// running tasks borrowed (B-2026-11-22-1): it waits on its group as one
+/// call per group it holds, in field order.
 fn insert_group_ends(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
     for i in 0..body.blocks.len() {
         let t = &body.blocks[i].terminator;
@@ -1018,9 +1061,31 @@ fn insert_group_ends(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
             continue;
         };
         let pt = super::place_ty::place_ty(body, tys, place)?.ty;
-        if !is_task_group(tys, pt) {
-            continue;
+        let (place, unwind) = (place.clone(), *unwind);
+        let mut at = i;
+        for path in group_paths(tys, pt) {
+            let mut g = place.clone();
+            g.projection.extend(path);
+            at = insert_group_end(body, tys, at, &place, g, unwind);
         }
+    }
+    Ok(())
+}
+
+/// Turns block `i`, which drops `place`, into a wait on the group at `g`
+/// (`place` or a field of it) that goes on to a new block with the drop;
+/// answers that block.
+fn insert_group_end(
+    body: &mut Body,
+    tys: &TyInterner,
+    i: usize,
+    place: &Place,
+    g: Place,
+    unwind: UnwindAction,
+) -> usize {
+    let pt = super::place_ty::place_ty(body, tys, &g).map_or(tys.unit(), |p| p.ty);
+    {
+        let t = &body.blocks[i].terminator;
         // A drop at a scope's end has no place of its own; the wait for
         // the group's tasks is then at the group's binding, which a
         // deadlock names (B-2026-11-19-31).
@@ -1035,7 +1100,6 @@ fn insert_group_ends(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
                 si.span = d.source_info.span;
             }
         }
-        let (place, unwind) = (place.clone(), *unwind);
         let mut new_local = |ty: Ty| {
             body.locals.push(LocalDecl {
                 ty,
@@ -1069,15 +1133,15 @@ fn insert_group_ends(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
             },
         );
         body.blocks[i].statements.push(Statement {
-            kind: StatementKind::Assign(Place::local(r), Rvalue::Ref(BorrowKind::Shared, place)),
+            kind: StatementKind::Assign(Place::local(r), Rvalue::Ref(BorrowKind::Shared, g)),
             source_info: si,
         });
         body.blocks.push(BasicBlockData {
             statements: vec![],
             terminator: drop,
         });
+        d.index()
     }
-    Ok(())
 }
 
 /// The callee a `Call` names directly, if it names one.

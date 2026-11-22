@@ -9353,12 +9353,7 @@ impl<'a> Interp<'a> {
     /// queue, still cancelled. The executor drops it from its queue
     /// (`torn`).
     fn tear_down(&mut self, t: usize) -> R<()> {
-        let made: Vec<usize> = (1..=self.groups.len())
-            .filter(|&i| self.groups[i - 1].owner == t)
-            .collect();
-        for g in made {
-            self.cancel_group(g)?;
-        }
+        self.cancel_made_by(t)?;
         self.tasks[t].cancelled = true;
         self.torn.push(t);
         let (cur, wait) = (self.cur_task, self.wait.take());
@@ -9367,7 +9362,17 @@ impl<'a> Interp<'a> {
         let mut returned = Ok(false);
         for _ in 0..2 {
             returned = self.resume_task(t);
-            if !matches!(returned, Ok(false)) || self.tasks[t].torn {
+            if !matches!(returned, Ok(false)) {
+                break;
+            }
+            // A group the run made is cancelled too: a task cancelled
+            // before its first poll makes its groups on the way to its
+            // first wait (B-2026-11-21-95, -96).
+            if let Err(e) = self.cancel_made_by(t) {
+                returned = Err(e);
+                break;
+            }
+            if self.tasks[t].torn {
                 break;
             }
         }
@@ -9377,6 +9382,17 @@ impl<'a> Interp<'a> {
         self.wait = wait;
         if !returned? {
             self.requeue.push((t, left));
+        }
+        Ok(())
+    }
+
+    /// Cancels each group task `t` made, the oldest first.
+    fn cancel_made_by(&mut self, t: usize) -> R<()> {
+        let made: Vec<usize> = (1..=self.groups.len())
+            .filter(|&i| self.groups[i - 1].owner == t)
+            .collect();
+        for g in made {
+            self.cancel_group(g)?;
         }
         Ok(())
     }
@@ -17763,6 +17779,18 @@ impl<'a> Interp<'a> {
                     None => queue.push_back(t),
                 }
             }
+            // A task spawned by one a deadline tore down, which ran it
+            // nested: queued here, or no poll ever queued it and the run
+            // ended in a false deadlock (B-2026-11-21-96). One that the
+            // teardown already ended is not resumed again.
+            for s in std::mem::take(&mut self.spawned) {
+                let placed = queue.contains(&s)
+                    || parked.iter().any(|(t, _)| *t == s)
+                    || self.requeue.iter().any(|(t, _)| *t == s);
+                if !self.task_done(s) && !placed {
+                    queue.push_back(s);
+                }
+            }
             let Some(t) = queue.pop_front() else {
                 if parked.is_empty() {
                     break;
@@ -17796,8 +17824,16 @@ impl<'a> Interp<'a> {
             let polled = self.call(&resume, vec![Value::Ref(at.clone())]);
             self.tasks[t].spans = std::mem::replace(&mut self.active_spans, outer);
             let polled = polled?;
-            // Tasks it spawned run after it, in spawn order.
-            queue.extend(std::mem::take(&mut self.spawned));
+            // Tasks it spawned run after it, in spawn order, but for one a
+            // teardown it ran already ended.
+            for s in std::mem::take(&mut self.spawned) {
+                let placed = queue.contains(&s)
+                    || parked.iter().any(|(t, _)| *t == s)
+                    || self.requeue.iter().any(|(t, _)| *t == s);
+                if !self.task_done(s) && !placed {
+                    queue.push_back(s);
+                }
+            }
             match polled {
                 Value::Variant(0, mut fs) if fs.len() == 1 => {
                     if t == root_task {
@@ -17848,6 +17884,18 @@ impl<'a> Interp<'a> {
                 match w {
                     Some(w) => parked.push((t, w)),
                     None => queue.push_back(t),
+                }
+            }
+            // A task spawned by one a deadline tore down, which ran it
+            // nested: queued here, or no poll ever queued it and the run
+            // ended in a false deadlock (B-2026-11-21-96). One that the
+            // teardown already ended is not resumed again.
+            for s in std::mem::take(&mut self.spawned) {
+                let placed = queue.contains(&s)
+                    || parked.iter().any(|(t, _)| *t == s)
+                    || self.requeue.iter().any(|(t, _)| *t == s);
+                if !self.task_done(s) && !placed {
+                    queue.push_back(s);
                 }
             }
         }
