@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 719 |
-| false-positive | 358 |
+| false-positive | 359 |
 | missing-feature | 246 |
 | perf | 200 |
 | other | 148 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 873 |
+| typecheck | 874 |
 | mir-llvm | 323 |
 | mir | 321 |
 | cli | 287 |
@@ -136,6 +136,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
 | B-2026-11-23-20 | 2026-11-23 | typecheck | low | A provider-using closure returned inside `Ok(..)` from a `with_provider` body draws MIR's internal E0516 'a type that failed to check is not lowered yet' first, before the real E0600 escape diagnostic; every other escape shape (bare, Some, tuple, struct field, Vec push, lazy iterator) gets E0600 alone | — |
 | B-2026-11-23-65 | 2026-11-23 | ownership | medium | `v.binary_search(s)` with an owned `String` `s` moved it, so asking a second sorted list with the same `s` was refused as a use after move | — |
+| B-2026-11-23-66 | 2026-11-23 | typecheck | low | `["a", "b"].to_vec()` in a tuple slot typed `(Vec[Str], ..)` took `Vec[String]` and was refused, where a `let` of the `Vec` alone takes the slot's `Str` | — |
 
 ### Relocated
 

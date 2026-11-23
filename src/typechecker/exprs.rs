@@ -4390,6 +4390,10 @@ impl<'a> super::TypeChecker<'a> {
                         || Self::literal_needs_array_slot(e, slot)
                         || (matches!(e.kind, ExprKind::StringLit(_)) && is_str_view(slot))
                         || tuple_literal_has_str_slot(e, slot)
+                        // `(["a"].to_vec(), 1)` into `(Vec[Str], i64)`: the
+                        // slot names the views the literals are, as at a
+                        // `let` (`str_elements_to_vec`; kata 2515).
+                        || (is_literal_to_vec(e) && mentions_str_view(slot))
                         || (library
                             && !matches!(slot, Type::Ref(_) | Type::MutRef(_))
                             && matches!(
@@ -22003,6 +22007,15 @@ pub(super) fn is_dyn_slot(t: &Type) -> bool {
 /// A tuple type with a `dyn` slot among its elements.
 pub(super) fn tuple_has_dyn_slot(t: &Type) -> bool {
     matches!(t, Type::Tuple(slots) if slots.iter().any(|s| is_dyn_slot(s) || tuple_has_dyn_slot(s)))
+}
+
+/// `[..].to_vec()` on a non-empty array literal, the call
+/// `str_elements_to_vec` reads its element type into.
+fn is_literal_to_vec(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::MethodCall { object, method, args, .. }
+        if method == "to_vec"
+            && args.is_empty()
+            && matches!(&object.kind, ExprKind::ArrayLiteral(items) if !items.is_empty()))
 }
 
 /// Whether `ty` holds a `Str` anywhere: itself, a tuple element, or a type
