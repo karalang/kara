@@ -1,0 +1,36 @@
+// collections.md: `dedup` drops consecutive equal elements and `contains`
+// finds an equal one, `where T: PartialEq`, so "equal" is the element's own
+// `eq`; a tuple or an `Option` compares its parts by theirs (design.md
+// § Operator traits, `==`). `P` counts digits mod 10 as equal.
+struct P { v: i64 }
+
+impl PartialEq for P {
+    fn eq(self, o: P) -> bool {
+        self.v % 10 == o.v % 10
+    }
+}
+
+fn main() {
+    let mut a: Vec[P] = [P { v: 1 }, P { v: 11 }, P { v: 2 }, P { v: 22 }, P { v: 3 }];
+    a.dedup();
+    println(a.len());
+
+    let mut b: Vec[(P, i64)] = [(P { v: 1 }, 0), (P { v: 11 }, 0), (P { v: 2 }, 0)];
+    b.dedup();
+    println(b.len());
+
+    let mut c: Vec[Option[P]] = [Some(P { v: 4 }), Some(P { v: 14 }), None, None];
+    c.dedup();
+    println(c.len());
+
+    let d: Vec[P] = [P { v: 3 }, P { v: 4 }];
+    println(d.as_slice().contains(P { v: 13 }));
+    println(d.as_slice().contains(P { v: 15 }));
+
+    let e = [P { v: 5 }, P { v: 6 }];
+    println(e.contains(P { v: 16 }));
+
+    let f: Vec[(P, i64)] = [(P { v: 7 }, 1)];
+    println(f.contains((P { v: 17 }, 1)));
+    println(f.as_slice().contains((P { v: 17 }, 2)));
+}

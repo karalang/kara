@@ -3616,6 +3616,27 @@ impl<'a> Interp<'a> {
                     keys.windows(2).all(|w| !cmp_key(&w[0], &w[1]).is_gt()),
                 ))
             }
+            // A slice's or an array's search by the elements' own `eq`, as
+            // a `Vec`'s is (B-2026-11-23-18).
+            ("Slice" | "Array", "contains")
+                if self
+                    .vec_elem_ty(arg_tys, name)
+                    .is_ok_and(|el| self.user_eq(el).is_some()) =>
+            {
+                let el = self.vec_elem_ty(arg_tys, name)?;
+                let eq = self.user_eq(el).unwrap_or_default();
+                let [recv, needle] = args.as_slice() else {
+                    return err(format!("{name} takes one value"));
+                };
+                let (base, lo, len) = self.view_of(recv)?;
+                for i in 0..len {
+                    let x = self.slot(&base.child(lo + i))?;
+                    if self.call_eq(&eq, &x, needle)? {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
             (_, "as_slice_mut") => self.view_method(name, "as_mut_slice", args, ret),
             // `==` of two runs of bitwise elements (B-2026-11-13-33).
             ("Vec", "__bits_eq") => self.view_method(name, method, args, ret),
@@ -4623,17 +4644,32 @@ impl<'a> Interp<'a> {
             }
             ("dedup", []) => {
                 // A run of equal elements keeps its first; the rest drop in
-                // order.
+                // order. Equal by the elements' own `eq` where the program
+                // wrote one, as the compiled `dedup` is (B-2026-11-23-18).
+                let user_eq = self.user_eq(e);
                 let elems = std::mem::take(self.vec_elems(id)?);
                 let mut kept: Vec<Value> = Vec::with_capacity(elems.len());
                 let mut last: Option<Value> = None;
                 for x in elems {
-                    let k = self.key_form(&x)?;
-                    if last.as_ref() == Some(&k) {
+                    let dup = match (&user_eq, kept.last()) {
+                        (Some(eq), Some(prev)) => {
+                            let prev = prev.clone();
+                            self.call_eq(eq, &prev, &x)?
+                        }
+                        (Some(_), None) => false,
+                        (None, _) => {
+                            let k = self.key_form(&x)?;
+                            let dup = last.as_ref() == Some(&k);
+                            if !dup {
+                                last = Some(k);
+                            }
+                            dup
+                        }
+                    };
+                    if dup {
                         self.drop_value(x, e)?;
                     } else {
                         kept.push(x);
-                        last = Some(k);
                     }
                 }
                 *self.vec_elems(id)? = kept;

@@ -1,0 +1,9 @@
+source = "B-2026-11-23-18"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "traits"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "collections.md: `dedup` drops consecutive equal elements and `contains` finds an equal one, both `where T: PartialEq`, so equality is the element's `eq`; a tuple and an `Option` compare their parts by theirs (design.md § Operator traits). With `P` equal mod 10: [1, 11, 2, 22, 3] dedups to 3; [(1,0), (11,0), (2,0)] to 2; [Some(4), Some(14), None, None] to 2; a slice of [3, 4] contains 13 and not 15; an array of [5, 6] contains 16; [(7,1)] contains (17,1) and its slice not (17,2). Before the fix the interpreter's dedup compared structurally (5), both backends' dedup over tuples and Options did (3, 3), and both backends' slice `contains` did (false)."

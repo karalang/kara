@@ -1049,6 +1049,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `dedup` and a slice's `contains` compare elements by the program's own
+  `eq`. The interpreter's `Vec.dedup` compared structurally, so with an `eq`
+  that treats 1 and 11 as equal `karac run --interp` kept 3 of
+  `[1, 11, 2, 2]` where the built binary kept 2. On both backends a
+  slice's `contains` ignored the `eq`, and a `dedup` over tuples or
+  `Option`s whose parts have a hand-written `eq`, or a slice's search for
+  one, compared the parts structurally (B-2026-11-23-18).
 - In a trait default body that two impls inherit, a method call that leaves
   out a defaulted argument takes its own callee's default. Every copy of the
   body took the default of the method the last impl's copy calls: with

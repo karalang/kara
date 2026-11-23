@@ -13808,17 +13808,24 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Queue the user `PartialEq.eq` of a collection's element or key
-    /// type, which the interpreter compares keys and searches by.
+    /// type, which both backends compare keys and search by: a slice's or
+    /// an array's elements too, and for an element with a hand-written
+    /// `eq` on a part (`(P, i64)`, `Option[P]`) the `T.eq#key` body that
+    /// compares it as `==` does (B-2026-11-23-18).
     fn queue_key_eq(&mut self, collection: Ty) {
         let (_, base) = self.strip_ty_full(collection);
-        let elem = match self.tys().tcx().kind(base) {
-            HK::Intrinsic { args, .. } => self.tys().tcx().list(args).first().copied(),
+        let tcx = self.tys().tcx();
+        let elem = match tcx.kind(base) {
+            HK::Intrinsic { args, .. } => tcx.list(args).first().copied(),
+            HK::Slice { elem, .. } | HK::Array { elem, .. } => Some(elem),
             _ => None,
         };
         if let Some(e) = elem {
             let (_, e) = self.strip_ty_full(e);
             if let Some((d, args)) = self.user_impl_method(e, "PartialEq", "eq") {
                 self.lcx.instance(d, args);
+            } else {
+                self.lcx.note_key_eq(e);
             }
         }
     }
