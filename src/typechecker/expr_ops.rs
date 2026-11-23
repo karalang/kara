@@ -3689,6 +3689,7 @@ impl<'a> super::TypeChecker<'a> {
     /// (B-2026-10-29-46).
     fn record_user_operator(&mut self, tr: &str, method: &str, name: &str, at: usize, span: &Span) {
         let key = SpanKey::from_span(span);
+        self.record_operator_callee(span, format!("{name}.{method}"));
         self.user_operator_calls
             .insert(key, format!("{name}.{method}"));
         let same: Vec<usize> = self
@@ -3815,10 +3816,17 @@ impl<'a> super::TypeChecker<'a> {
             };
             let key = at(self, key);
             self.check_assignable(&key, idx_ty, index.span);
+            self.record_operator_callee(span, format!("{name}.index_set"));
             return Some(at(self, value));
         }
         let read = lookup("Index", "index");
         let written = lookup("IndexMut", "index_mut");
+        // The method `[]` runs here, for the effect pass.
+        let runs = match (write, &written, &read) {
+            (true, Some(_), _) | (false, Some(_), None) => Some("index_mut"),
+            (false, _, Some(_)) => Some("index"),
+            _ => None,
+        };
         let (sig, subs, imp) = match (write, written, read) {
             (true, Some(sig), _) | (false, _, Some(sig)) | (false, Some(sig), None) => sig,
             (true, None, Some(_)) => {
@@ -3848,6 +3856,9 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => return None,
         };
+        if let Some(method) = runs {
+            self.record_operator_callee(span, format!("{name}.{method}"));
+        }
         let at = |this: &Self, t: &Type| {
             super::inference::substitute_type_params(
                 &this.subst_operator_self_in(t, &recv, &name, Some(imp)),
@@ -6168,6 +6179,15 @@ impl<'a> super::TypeChecker<'a> {
                     let (l, r) = (cmp_left.clone(), cmp_right.clone());
                     self.lint_compare_casts(left, right, &l, &r);
                 }
+                // `a == b` and `a != b` on a program type run its `eq`
+                // (design.md § Operator traits), which the effect pass
+                // charges (B-2026-11-23-10).
+                if let Type::Named { name, .. } | Type::Shared(name) = cmp_left {
+                    if self.env.structs.contains_key(name) || self.env.enums.contains_key(name) {
+                        let callee = format!("{name}.eq");
+                        self.record_operator_callee(span, callee);
+                    }
+                }
                 // `meters == 3` under `impl PartialEq[i64] for Meters`
                 // (B-2026-11-06-25).
                 if let Type::Named { name, .. } | Type::Shared(name) = cmp_left {
@@ -8090,6 +8110,7 @@ impl<'a> super::TypeChecker<'a> {
                     // The conversion is a real call for effects (design.md
                     // §10, Results and propagation): `?` is an operator on
                     // a program impl, charged as one (B-2026-11-04-18).
+                    self.record_operator_callee(span, format!("{target_name}.from"));
                     self.user_operator_calls
                         .insert(SpanKey::from_span(span), format!("{target_name}.from"));
                     return inner_args[0].clone();

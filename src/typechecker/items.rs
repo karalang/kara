@@ -14364,7 +14364,11 @@ impl<'a> super::TypeChecker<'a> {
                 // accepted, including a `mut ref` operand on either side.
                 let binop = Self::compound_op_binop(op);
                 let saved_target = self.compound_assign_target.replace(target.id);
+                let saved_op = self
+                    .current_op_node
+                    .replace((stmt.id, SpanKey::from_span(&stmt.span)));
                 let result = self.infer_binary(&binop, target, value, &stmt.span);
+                self.current_op_node = saved_op;
                 self.compound_assign_target = saved_target;
                 // B-2026-10-14-30 — `a += b` on a user type is `a = a + b`, so
                 // the impl's result must be the type of `a` (design.md

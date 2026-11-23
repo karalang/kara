@@ -767,6 +767,7 @@ pub fn node_type_facts(
     use crate::typechecker::Type;
     let mut facts = effectchecker::NodeTypeFacts {
         ufcs_calls: typed.ufcs_calls.clone(),
+        operator_calls: typed.node_operator_calls.clone(),
         ..Default::default()
     };
     if !typed.default_copy_spans.is_empty() {

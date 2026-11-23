@@ -14051,8 +14051,19 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        let saved_op = self.current_op_node;
+        if matches!(
+            expr.kind,
+            ExprKind::Binary { .. }
+                | ExprKind::Unary { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Question(_)
+        ) {
+            self.current_op_node = Some((expr.id, SpanKey::from_span(&expr.span)));
+        }
         let open = self.open_literal_expr == Some(expr.id) && !expr.id.is_dummy();
         let mut ty = self.infer_expr_inner(expr);
+        self.current_op_node = saved_op;
         // A literal's variable stays open only where a later use can fix it
         // (`infer_expr_open`); anywhere else the number's type is decided
         // now, as it was before literals were variables (B-2026-11-07-3).

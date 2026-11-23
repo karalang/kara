@@ -1306,6 +1306,9 @@ pub struct NodeTypeFacts {
     /// holds only the last copy's entry there.
     pub default_copy_spans: FxHashSet<SpanKey>,
     pub copy_method_callees: FxHashMap<crate::ids::NodeId, String>,
+    /// The `Type.method` each operator on a program type runs, by the
+    /// operator's node (`TypeCheckResult::node_operator_calls`).
+    pub operator_calls: FxHashMap<crate::ids::NodeId, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1519,6 +1522,8 @@ pub struct EffectChecker<'a> {
     /// See [`NodeTypeFacts::default_copy_spans`].
     pub(crate) default_copy_spans: FxHashSet<SpanKey>,
     pub(crate) copy_method_callees: FxHashMap<crate::ids::NodeId, Symbol>,
+    /// See [`NodeTypeFacts::operator_calls`].
+    pub(crate) operator_calls: FxHashMap<crate::ids::NodeId, Symbol>,
     /// Each operator expression the typechecker dispatched to a program impl
     /// (`TypeCheckResult.user_operator_calls`), by span, with its `Type.method`
     /// key. The lowering rewrites an operator only when its operands share a
@@ -1820,6 +1825,7 @@ impl<'a> EffectChecker<'a> {
             method_callee_types: FxHashMap::default(),
             default_copy_spans: FxHashSet::default(),
             copy_method_callees: FxHashMap::default(),
+            operator_calls: FxHashMap::default(),
             user_operator_calls: FxHashMap::default(),
             dyn_coercions: FxHashMap::default(),
             dyn_clauses: FxHashMap::default(),
@@ -1933,6 +1939,11 @@ impl<'a> EffectChecker<'a> {
         self.default_copy_spans = facts.default_copy_spans;
         self.copy_method_callees = facts
             .copy_method_callees
+            .into_iter()
+            .map(|(node, callee)| (node, self.interner.intern(&callee)))
+            .collect();
+        self.operator_calls = facts
+            .operator_calls
             .into_iter()
             .map(|(node, callee)| (node, self.interner.intern(&callee)))
             .collect();

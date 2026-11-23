@@ -20,6 +20,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- An operator is charged the program impl it runs. `==` / `!=`, a compound
+  assignment (`+=`, `-=`, `*=`), unary `-` and `~`, indexing `c[k]` and
+  `assert_eq` on a type whose impl has effects reported none of them:
+  with an `impl PartialEq` whose `eq` writes Stderr, `a == b` was found to
+  write nothing, so `#[no_effect(writes(Stderr))]` on its function passed
+  and a `pub fn` whose body is `a == b` owed no clause, while `a.eq(b)`
+  and `a + b` were charged. Indexing is charged `index` for a read and
+  `index_mut` for a write, and an operator on a value of a type parameter
+  is charged at each call that instantiates it, as the method spelling is
+  (B-2026-11-23-10).
 - When two impls inherit one trait default method, each impl's copy of its
   body is charged its own callees. Every copy was charged the last impl's:
   with `impl Walk for Loud`, whose `step` writes Stderr, written above

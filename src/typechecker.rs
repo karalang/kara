@@ -2828,6 +2828,14 @@ pub struct TypeCheckResult {
     /// by the call's `NodeId`. The node twin of `method_callee_types`, which
     /// is keyed by a span the call SHARES with its receiver.
     pub node_method_callees: FxHashMap<crate::ids::NodeId, String>,
+    /// The `Type.method` an operator runs on a program type, by the node of
+    /// the operator: a binary or unary expression, `c[k]` (its `index`,
+    /// `index_mut` or `index_set`), a `?` that converts its error (`from`),
+    /// a compound assignment's statement, and an `assert_eq` call. `==` and
+    /// `!=` are here with their `eq`, which [`Self::user_operator_calls`]
+    /// does not hold. Keyed by node, so each copy of a trait default body
+    /// has its own entry (B-2026-11-23-10).
+    pub node_operator_calls: FxHashMap<crate::ids::NodeId, String>,
     /// v2 typed HIR: where the target of the impl a method call resolved to
     /// is written, keyed by the call's `NodeId`, for a type with two impls
     /// of the method (design.md §10's two `Result.context`s).
@@ -4403,6 +4411,11 @@ pub struct TypeChecker<'a> {
     /// The call expression `infer_expr` is inside, with its span, so
     /// `record_call_type_subs` can key a frame by node as well as by span.
     pub(super) current_call_node: Option<(crate::ids::NodeId, SpanKey)>,
+    /// Working half of `TypeCheckResult::node_operator_calls`.
+    pub(super) node_operator_calls: FxHashMap<crate::ids::NodeId, String>,
+    /// The operator expression (or compound assignment) being checked, with
+    /// its span, as `current_call_node` is for a call.
+    pub(super) current_op_node: Option<(crate::ids::NodeId, SpanKey)>,
     /// B-2026-08-08-14 — see the public copies on `TypeCheckResult`.
     pub(super) float_coerced_arg_sites: FxHashMap<SpanKey, types::FloatSize>,
     pub(super) cast_source_unsigned: FxHashSet<SpanKey>,
@@ -5215,6 +5228,8 @@ impl<'a> TypeChecker<'a> {
             node_call_callees: FxHashMap::default(),
             variant_patterns: FxHashMap::default(),
             current_call_node: None,
+            node_operator_calls: FxHashMap::default(),
+            current_op_node: None,
             float_coerced_arg_sites: FxHashMap::default(),
             cast_source_unsigned: FxHashSet::default(),
             weak_elem_store_sites: FxHashSet::default(),
@@ -5872,6 +5887,7 @@ impl<'a> TypeChecker<'a> {
             ),
             node_call_subs,
             node_method_callees: std::mem::take(&mut self.node_method_callees),
+            node_operator_calls: std::mem::take(&mut self.node_operator_calls),
             node_method_impls: std::mem::take(&mut self.node_method_impls),
             node_call_callees: std::mem::take(&mut self.node_call_callees),
             variant_patterns: std::mem::take(&mut self.variant_patterns),
@@ -11448,6 +11464,20 @@ impl<'a> TypeChecker<'a> {
             }
         }
         self.method_callee_types.insert(key, callee);
+    }
+
+    /// Record the `Type.method` the operator at `span` runs, under the node
+    /// of the operator being checked (an `assert_eq` call's node for its
+    /// comparison).
+    pub(super) fn record_operator_callee(&mut self, span: &Span, callee: String) {
+        let key = SpanKey::from_span(span);
+        let node = [self.current_op_node, self.current_call_node]
+            .into_iter()
+            .flatten()
+            .find(|(node, k)| *k == key && !node.is_dummy());
+        if let Some((node, _)) = node {
+            self.node_operator_calls.insert(node, callee);
+        }
     }
 
     /// Record the impl-parameter bindings of a method call on a named

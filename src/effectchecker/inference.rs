@@ -971,10 +971,15 @@ impl<'a> super::EffectChecker<'a> {
                 calls.extend(block_calls);
             }
             StmtKind::Assign { target, value } => {
+                self.charge_index_writes(target, calls);
                 self.collect_calls_in_expr(target, calls, bounds);
                 self.collect_calls_in_expr(value, calls, bounds);
             }
             StmtKind::CompoundAssign { target, op, value } => {
+                // `a += b` on a program type is `a = a + b`: its `add`.
+                self.charge_operator(stmt.id, stmt.span, calls);
+                self.charge_param_operator(target, compound_methods(op), stmt.span, calls, bounds);
+                self.charge_index_writes(target, calls);
                 self.collect_calls_in_expr(target, calls, bounds);
                 self.collect_calls_in_expr(value, calls, bounds);
                 // `x += 1` on an integer is the checked `+` (B-2026-11-04-29).
@@ -1179,6 +1184,101 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Charge the program impl the operator at `node` runs (design.md
+    /// § Operator traits: every operator is a call to a trait method): a
+    /// binary or unary operator, `c[k]`, a `?` that converts its error, a
+    /// compound assignment (`node` its statement) or an `assert_eq` call.
+    /// The typechecker keys the impl by the operator's node; one it keyed
+    /// only by span is read there, except where copies of a trait default
+    /// body share the span and the entry may be another copy's
+    /// (B-2026-11-23-10).
+    fn charge_operator(
+        &self,
+        node: crate::ids::NodeId,
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        let key = self.operator_calls.get(&node).copied().or_else(|| {
+            let at = SpanKey::from_span(&span);
+            match self.default_copy_spans.contains(&at) {
+                true => None,
+                false => self.user_operator_calls.get(&at).copied(),
+            }
+        });
+        if let Some(key) = key {
+            calls.push((key, span));
+            if self.method_bodies.contains_key(&key) {
+                self.charge_bound_calls_at(key, node, span, calls);
+            }
+        }
+    }
+
+    /// A place that may be written through: an assignment's target, `mut
+    /// ref place`, a `mut` argument, a method call's receiver. Each `c[k]`
+    /// on the way to it on a program type runs `index_mut` where the type
+    /// has one (design.md § `Index` and `IndexMut`); the typechecker names
+    /// `index` there unless the `[]` is itself the assignment's target.
+    fn charge_index_writes(&self, place: &Expr, calls: &mut Vec<(Symbol, Span)>) {
+        let mut at = place;
+        loop {
+            match &at.kind {
+                ExprKind::Index { object, .. } => {
+                    if let Some(key) = self.operator_calls.get(&at.id) {
+                        let name = self.interner.resolve(*key);
+                        if let Some((ty, "index")) = name.rsplit_once('.') {
+                            let written = self.interner.get(&format!("{ty}.index_mut"));
+                            if let Some(written) =
+                                written.filter(|w| self.method_bodies.contains_key(w))
+                            {
+                                calls.push((written, at.span));
+                            }
+                        }
+                    }
+                    at = object;
+                }
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    at = object;
+                }
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } => at = operand,
+                _ => return,
+            }
+        }
+    }
+
+    /// An operator on a value of a type parameter calls its bound's method
+    /// (`a == b` with `T: PartialEq` is `a.eq(b)`), and is charged as that
+    /// call is: the bound's written clause, else the instance's method at
+    /// each call that instantiates the parameter, else every impl of the
+    /// name.
+    fn charge_param_operator(
+        &self,
+        operand: &Expr,
+        methods: &[&str],
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+        bounds: &FxHashMap<String, Vec<TraitBound>>,
+    ) {
+        if !self.typeparam_nodes.contains_key(&operand.id) {
+            return;
+        }
+        for name in methods {
+            let Some(method) = self.interner.get(name) else {
+                continue;
+            };
+            let ceilings = self.bound_ceiling_charges(operand, method, bounds);
+            if !ceilings.is_empty() {
+                calls.extend(ceilings.into_iter().map(|key| (key, span)));
+            } else if !self.defer_bound_method_call(operand, method, bounds) {
+                if let Some(keys) = self.method_name_index.get(&method) {
+                    calls.extend(keys.iter().map(|&key| (key, span)));
+                }
+            }
+        }
+    }
+
     /// At a call of `callee` (call node `node`), charge the calls `callee`
     /// makes through bounds (`bound_calls`) to the instances this call binds
     /// its parameters to. A parameter bound to one of the CALLER's own type
@@ -1345,6 +1445,10 @@ impl<'a> super::EffectChecker<'a> {
                 if let Some((resource, extent)) = super::with_provider_extent(callee, args) {
                     self.provider_regions.borrow_mut().push((extent, resource));
                 }
+                // `assert_eq(a, b)` compares with the operands' `eq`.
+                if self.operator_calls.contains_key(&expr.id) {
+                    self.charge_operator(expr.id, expr.span, calls);
+                }
                 // Trait-assoc-fn redirect: when the callee dispatches through
                 // a typeparam-bound trait, push the resolved `Trait.method`
                 // key(s) so the trait's declared ceiling propagates to the
@@ -1422,6 +1526,9 @@ impl<'a> super::EffectChecker<'a> {
                     self.collect_calls_in_expr(callee, calls, bounds);
                 }
                 for arg in args {
+                    if arg.mut_marker {
+                        self.charge_index_writes(&arg.value, calls);
+                    }
                     self.collect_calls_in_expr(&arg.value, calls, bounds);
                 }
                 // When calling a `with _` function (or a private function that
@@ -1797,6 +1904,12 @@ impl<'a> super::EffectChecker<'a> {
                         }
                     }
                 }
+                // The receiver may be taken `mut ref`, and a `mut` argument
+                // is.
+                self.charge_index_writes(object, calls);
+                for arg in args.iter().filter(|a| a.mut_marker) {
+                    self.charge_index_writes(&arg.value, calls);
+                }
                 self.collect_calls_in_expr(object, calls, bounds);
                 for arg in args {
                     self.collect_calls_in_expr(&arg.value, calls, bounds);
@@ -1804,17 +1917,10 @@ impl<'a> super::EffectChecker<'a> {
             }
             ExprKind::Binary { left, op, right } => {
                 // An operator on a program impl the lowering did not rewrite
-                // (its operands differ in type) calls that impl
-                // (B-2026-10-29-51).
-                if let Some(&key) = self
-                    .user_operator_calls
-                    .get(&SpanKey::from_span(&expr.span))
-                {
-                    calls.push((key, expr.span));
-                    if self.method_bodies.contains_key(&key) {
-                        self.charge_bound_calls_at(key, expr.id, expr.span, calls);
-                    }
-                }
+                // (its operands differ in type, or it is `==` on a type with
+                // no `Eq`) calls that impl (B-2026-10-29-51).
+                self.charge_operator(expr.id, expr.span, calls);
+                self.charge_param_operator(left, binary_methods(op), expr.span, calls, bounds);
                 self.collect_calls_in_expr(left, calls, bounds);
                 self.collect_calls_in_expr(right, calls, bounds);
                 if matches!(op, BinOp::Div | BinOp::Mod) {
@@ -1834,6 +1940,16 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(right, calls, bounds);
             }
             ExprKind::Unary { operand, op } => {
+                self.charge_operator(expr.id, expr.span, calls);
+                let method: &[&str] = match op {
+                    UnaryOp::Neg => &["neg"],
+                    UnaryOp::BitNot => &["not"],
+                    _ => &[],
+                };
+                self.charge_param_operator(operand, method, expr.span, calls, bounds);
+                if matches!(op, UnaryOp::MutRef) {
+                    self.charge_index_writes(operand, calls);
+                }
                 self.collect_calls_in_expr(operand, calls, bounds);
                 if matches!(op, UnaryOp::Neg) && self.int_nodes.contains(&operand.id) {
                     calls.push((self.syms.builtin_int_overflow, expr.span));
@@ -1956,15 +2072,7 @@ impl<'a> super::EffectChecker<'a> {
                 // A `?` whose error converts through a program `From` impl
                 // calls its `from`, whose effects are the enclosing
                 // function's (design.md §10, B-2026-11-04-18).
-                if let Some(&key) = self
-                    .user_operator_calls
-                    .get(&SpanKey::from_span(&expr.span))
-                {
-                    calls.push((key, expr.span));
-                    if self.method_bodies.contains_key(&key) {
-                        self.charge_bound_calls_at(key, expr.id, expr.span, calls);
-                    }
-                }
+                self.charge_operator(expr.id, expr.span, calls);
                 self.collect_calls_in_expr(inner, calls, bounds);
             }
             ExprKind::Break {
@@ -1990,6 +2098,16 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(object, calls, bounds);
             }
             ExprKind::Index { object, index } => {
+                // `c[k]` on a program type runs its `index`, `index_mut`
+                // or `index_set`.
+                self.charge_operator(expr.id, expr.span, calls);
+                self.charge_param_operator(
+                    object,
+                    &["index", "index_mut", "index_set"],
+                    expr.span,
+                    calls,
+                    bounds,
+                );
                 self.collect_calls_in_expr(object, calls, bounds);
                 self.collect_calls_in_expr(index, calls, bounds);
                 // Indexing with [] calls Index::index which has panics effect
@@ -2157,5 +2275,45 @@ impl<'a> super::EffectChecker<'a> {
             | ExprKind::OffsetOf { .. }
             | ExprKind::Error => {}
         }
+    }
+}
+
+/// The trait methods a binary operator may call on a value of a type
+/// parameter (design.md § Operator traits, § Comparison Traits).
+fn binary_methods(op: &BinOp) -> &'static [&'static str] {
+    match op {
+        BinOp::Add => &["add"],
+        BinOp::Sub => &["sub"],
+        BinOp::Mul => &["mul"],
+        BinOp::Div => &["div"],
+        BinOp::Mod => &["rem"],
+        BinOp::BitAnd => &["bitand"],
+        BinOp::BitOr => &["bitor"],
+        BinOp::BitXor => &["bitxor"],
+        BinOp::Shl => &["shl"],
+        BinOp::Shr => &["shr"],
+        BinOp::Eq => &["eq"],
+        BinOp::NotEq => &["eq", "ne"],
+        BinOp::Lt => &["partial_cmp", "cmp", "lt"],
+        BinOp::LtEq => &["partial_cmp", "cmp", "le"],
+        BinOp::Gt => &["partial_cmp", "cmp", "gt"],
+        BinOp::GtEq => &["partial_cmp", "cmp", "ge"],
+        BinOp::And | BinOp::Or | BinOp::Range | BinOp::RangeInclusive => &[],
+    }
+}
+
+/// The same for a compound assignment: `a += b` is `a = a + b`.
+fn compound_methods(op: &CompoundOp) -> &'static [&'static str] {
+    match op {
+        CompoundOp::Add => &["add"],
+        CompoundOp::Sub => &["sub"],
+        CompoundOp::Mul => &["mul"],
+        CompoundOp::Div => &["div"],
+        CompoundOp::Mod => &["rem"],
+        CompoundOp::BitAnd => &["bitand"],
+        CompoundOp::BitOr => &["bitor"],
+        CompoundOp::BitXor => &["bitxor"],
+        CompoundOp::Shl => &["shl"],
+        CompoundOp::Shr => &["shr"],
     }
 }
