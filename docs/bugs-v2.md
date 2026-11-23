@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 712 |
+| diagnostics | 713 |
 | false-positive | 356 |
 | missing-feature | 245 |
 | perf | 200 |
-| other | 147 |
+| other | 148 |
 | soundness | 123 |
 | miscompile | 104 |
 | crash | 64 |
@@ -79,14 +79,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 867 |
 | mir-llvm | 321 |
 | mir | 319 |
-| cli | 281 |
+| cli | 282 |
 | parser | 152 |
 | ownership | 133 |
 | runtime | 107 |
 | interp | 98 |
 | effect | 59 |
-| other | 51 |
-| resolver | 50 |
+| other | 52 |
+| resolver | 51 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -144,6 +144,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-10 | 2026-11-23 | effect | high | UNDER-REPORT: a program's operator impl reached through `==` / `!=`, a compound assignment (`+=`, `-=`, `*=`), unary `-` or indexing `a[i]` is not charged its effects: `a == b` with an `impl PartialEq` whose `eq` writes Stderr reports no `writes(Stderr)`, while `a.eq(b)`, `a + b` and `a < b` are charged | — |
 | B-2026-11-23-11 | 2026-11-23 | mir | medium | A trait default body that declares `let x: T;` and assigns it later is refused once two impls of the generic trait inherit it: error[E0516] 'the capture of `x` is not lowered yet'; one impl alone builds and runs | — |
 | B-2026-11-23-12 | 2026-11-23 | typecheck+ownership | medium | `m.entry(k)` with an owned key on a `Map[ref String, V]` is read as a move by `karac check`: E0500 at the next use of a local `k`, E0515 (help: `.clone()`) for `m.entry(words[i])`; the MIR pipeline lends the key and runs both | — |
+| B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
+| B-2026-11-23-13 | 2026-11-23 | other | low | Test infra: two tests in one binary share a temp directory and one's cleanup deletes the other's source. tests/core_lent_into_ref_slots.rs fails intermittently (one full default leg of the two run here) with 'cannot read .../karac-lent-ref-slots-set-check-<pid>/main.kara' | — |
 
 ### Relocated
 

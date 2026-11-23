@@ -12,11 +12,18 @@
 mod common;
 
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Every call gets a directory of its own. Two tests here pass the same
+/// names, and the name and the process id alone gave both one directory,
+/// where one test's cleanup deleted the other's source (B-2026-11-23-13).
+static CALL: AtomicUsize = AtomicUsize::new(0);
 
 fn karac(name: &str, src: &str, cmd: &str) -> std::process::Output {
     let dir = std::env::temp_dir().join(format!(
-        "karac-lent-ref-slots-{name}-{cmd}-{}",
-        std::process::id()
+        "karac-lent-ref-slots-{name}-{cmd}-{}-{}",
+        std::process::id(),
+        CALL.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

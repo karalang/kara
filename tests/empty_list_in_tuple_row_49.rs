@@ -9,11 +9,17 @@
 mod common;
 
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Every call gets a directory of its own, whatever names two tests pass
+/// (B-2026-11-23-13).
+static CALL: AtomicUsize = AtomicUsize::new(0);
 
 fn karac(name: &str, src: &str, cmd: &str) -> std::process::Output {
     let dir = std::env::temp_dir().join(format!(
-        "karac-empty-list-in-tuple-{name}-{cmd}-{}",
-        std::process::id()
+        "karac-empty-list-in-tuple-{name}-{cmd}-{}-{}",
+        std::process::id(),
+        CALL.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -120,8 +126,9 @@ fn an_empty_list_no_slot_or_sibling_types_is_reported_and_mended() {
     );
 
     let dir = std::env::temp_dir().join(format!(
-        "karac-empty-list-in-tuple-fix-{}",
-        std::process::id()
+        "karac-empty-list-in-tuple-fix-{}-{}",
+        std::process::id(),
+        CALL.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

@@ -7,6 +7,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Every call gets a directory of its own, whatever names two tests pass
+/// (B-2026-11-23-13).
+static CALL: AtomicUsize = AtomicUsize::new(0);
 
 fn karac(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_karac"))
@@ -28,8 +33,9 @@ fn text(out: &Output) -> String {
 /// A package with one clean source file and `pin` as its toolchain pin.
 fn package(name: &str, pin: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "karac-toolchain-pin-fix-{name}-{}",
-        std::process::id()
+        "karac-toolchain-pin-fix-{name}-{}-{}",
+        std::process::id(),
+        CALL.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
