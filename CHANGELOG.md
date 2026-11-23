@@ -20,6 +20,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- When two impls inherit one trait default method, each impl's copy of its
+  body is charged its own callees. Every copy was charged the last impl's:
+  with `impl Walk for Loud`, whose `step` writes Stderr, written above
+  `impl Walk for Quiet`, a function running the default on a `Loud` was
+  found to write nothing, so `#[no_effect(writes(Stderr))]` on it passed,
+  a `pub fn` calling it owed no clause, and `program_effects` left
+  `writes(Stderr)` out. Such a function is now refused, as it always was
+  with the two impls in the other order (B-2026-11-23-7).
 - A value that is dropped while a collection of references still refers
   to it is refused in four more places: `m[k] = w.clone()` on a
   `Map[K, ref V]`, `m.entry(k).or_insert(w.clone())` and

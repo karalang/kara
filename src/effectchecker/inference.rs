@@ -1068,6 +1068,21 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Whether a method call on `self` in a default body of the trait `own`
+    /// may run `key`: a method of a type that implements `own`, or a default
+    /// of `own` or of one of its supertraits (B-2026-11-23-5).
+    fn self_call_can_reach(&self, own: &str, key: Symbol) -> bool {
+        let text = self.interner.resolve(key);
+        let Some((owner, _)) = text.rsplit_once('.') else {
+            return true;
+        };
+        if self.trait_names.contains(owner) {
+            self.trait_impls.is_or_extends(own, owner)
+        } else {
+            self.trait_impls.gives(owner, own)
+        }
+    }
+
     /// Whether `trait_name` declares a method `method_name`, with or without a
     /// receiver.
     fn trait_declares_method(&self, trait_name: &str, method_name: &str) -> bool {
@@ -1476,7 +1491,7 @@ impl<'a> super::EffectChecker<'a> {
                 }
                 let through_dyn = through_dyn_param || clause_key.is_some();
                 let precise = self
-                    .resolve_method_callee_key(&expr.span)
+                    .resolve_method_callee_key(expr)
                     .filter(|_| !through_dyn);
                 // A buffer over a connection has the connection's effects,
                 // not a file's (B-2026-11-10-14).
@@ -1537,7 +1552,7 @@ impl<'a> super::EffectChecker<'a> {
                 let lazy_get_key = self.interner.get("LazyLock.get");
                 if method == "get"
                     && lazy_get_key.is_some()
-                    && self.resolve_method_callee_key(&expr.span) == lazy_get_key
+                    && self.resolve_method_callee_key(expr) == lazy_get_key
                 {
                     if let ExprKind::Identifier(recv) = &object.kind {
                         if let Some(sym) = self.interner.get(recv.as_str()) {
@@ -1601,9 +1616,22 @@ impl<'a> super::EffectChecker<'a> {
                     calls.push((key, expr.span));
                 }
                 if !deferred {
+                    // A call on `self` in a trait default body: the method
+                    // of the trait's implementors, or the default of the
+                    // trait or of one of its supertraits.
+                    let own_trait = precise
+                        .is_none()
+                        .then(|| self.typeparam_nodes.get(&object.id))
+                        .flatten()
+                        .filter(|param| param.as_str() == "Self")
+                        .and_then(|_| self.trait_impls.default_body_of(expr.id));
                     if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {
                         for &key in keys {
-                            if self.fallback_can_reach(precise, key) {
+                            let reached = match own_trait {
+                                Some(own) => self.self_call_can_reach(own, key),
+                                None => self.fallback_can_reach(precise, key),
+                            };
+                            if reached {
                                 calls.push((key, expr.span));
                             }
                         }
@@ -1612,7 +1640,7 @@ impl<'a> super::EffectChecker<'a> {
                 // The arguments passed to the callee's non-escaping `dyn`
                 // parameters: the resolved method's, else those of every
                 // method of the name.
-                match self.resolve_method_callee_key(&expr.span) {
+                match self.resolve_method_callee_key(expr) {
                     Some(key) => self.charge_dyn_args(&[key], args, 0, calls),
                     None => {
                         if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m))
@@ -1756,7 +1784,7 @@ impl<'a> super::EffectChecker<'a> {
                 // method like `Runner.run_each(write_log)` would infer no
                 // effects through `write_log` even though `run_each` calls
                 // it with `with E`.
-                if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
+                if let Some(callee_key) = self.resolve_method_callee_key(expr) {
                     if self.is_polymorphic_callee(callee_key)
                         || self.calls_polymorphic.contains(&callee_key)
                     {

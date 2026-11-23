@@ -769,6 +769,10 @@ pub fn node_type_facts(
         ufcs_calls: typed.ufcs_calls.clone(),
         ..Default::default()
     };
+    if !typed.default_copy_spans.is_empty() {
+        facts.default_copy_spans = typed.default_copy_spans.clone();
+        facts.copy_method_callees = typed.node_method_callees.clone();
+    }
     let mut drops = DropReach::new(typed);
     // A pattern binding that takes its part by value has its type here,
     // not in `node_types` (B-2026-11-17-100).

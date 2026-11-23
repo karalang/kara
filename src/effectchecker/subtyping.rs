@@ -1070,7 +1070,7 @@ impl<'a> super::EffectChecker<'a> {
                 self.callee_return_type(name).map(peel_borrow)
             }
             ExprKind::MethodCall { .. } => {
-                let key = self.resolve_method_callee_key(&expr.span)?;
+                let key = self.resolve_method_callee_key(expr)?;
                 self.callee_return_type(key).map(peel_borrow)
             }
             _ => None,
@@ -1213,7 +1213,7 @@ impl<'a> super::EffectChecker<'a> {
                 // subtyping check. Without this, an effectful closure could
                 // satisfy a method's pure `Fn()` slot whenever the enclosing
                 // caller declared the effects.
-                if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
+                if let Some(callee_key) = self.resolve_method_callee_key(expr) {
                     // A position naming a variable the callee's `impl`
                     // declares is solved per receiver value instead.
                     let in_own_impl = matches!(

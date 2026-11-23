@@ -91,7 +91,7 @@ impl<'a> super::EffectChecker<'a> {
                 // pass. The callee's `params` are the explicit (non-self)
                 // parameters, so `args` indices align 1:1 with the indices
                 // recorded in `fn_effect_var_positions`.
-                if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
+                if let Some(callee_key) = self.resolve_method_callee_key(expr) {
                     self.check_call_with_e_unification(callee_key, args);
                 }
                 self.check_with_e_in_expr(object);

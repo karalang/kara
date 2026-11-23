@@ -577,6 +577,11 @@ pub(crate) struct TraitImpls {
     /// Types with an impl of a trait the program does not define under the
     /// impl's name for it (an import's alias). Any trait may be theirs.
     open_types: FxHashSet<String>,
+    /// Each trait's supertraits, as written.
+    supertraits: FxHashMap<String, Vec<String>>,
+    /// Every method call written in a trait's default method body, by the
+    /// call's node, with the trait.
+    default_body_calls: FxHashMap<crate::ids::NodeId, String>,
 }
 
 impl TraitImpls {
@@ -591,6 +596,22 @@ impl TraitImpls {
             .collect();
         let mut out = Self::default();
         for item in &program.items {
+            if let Item::TraitDef(t) = item {
+                let supers = t.supertraits.iter().filter_map(|b| b.path.last().cloned());
+                out.supertraits
+                    .entry(t.name.clone())
+                    .or_default()
+                    .extend(supers);
+                for ti in &t.items {
+                    let TraitItem::Method(m) = ti else { continue };
+                    let Some(body) = &m.body else { continue };
+                    crate::span_visitor::for_each_expr_in_block(body, &mut |e| {
+                        if matches!(e.kind, ExprKind::MethodCall { .. }) {
+                            out.default_body_calls.insert(e.id, t.name.clone());
+                        }
+                    });
+                }
+            }
             let Item::ImplBlock(imp) = item else {
                 continue;
             };
@@ -629,6 +650,31 @@ impl TraitImpls {
             }
         }
         out
+    }
+
+    /// The trait whose default method body the method call `call` is
+    /// written in.
+    pub(crate) fn default_body_of(&self, call: crate::ids::NodeId) -> Option<&str> {
+        self.default_body_calls.get(&call).map(String::as_str)
+    }
+
+    /// Whether `other` is `trait_name` or one of its supertraits, at any
+    /// depth.
+    pub(crate) fn is_or_extends(&self, trait_name: &str, other: &str) -> bool {
+        let mut seen: FxHashSet<&str> = FxHashSet::default();
+        let mut stack = vec![trait_name];
+        while let Some(t) = stack.pop() {
+            if t == other {
+                return true;
+            }
+            if !seen.insert(t) {
+                continue;
+            }
+            if let Some(supers) = self.supertraits.get(t) {
+                stack.extend(supers.iter().map(String::as_str));
+            }
+        }
+        false
     }
 
     /// Whether the type keyed `ty` may have `trait_name`'s default methods.
@@ -1245,6 +1291,12 @@ pub struct NodeTypeFacts {
     /// The typechecker's `Trait.m(x)` calls, by span, with the name as
     /// written (`TypeCheckResult::ufcs_calls`).
     pub ufcs_calls: FxHashMap<SpanKey, String>,
+    /// The spans copies of one trait default body share, in a program where
+    /// two impls take one default (`TypeCheckResult::default_copy_spans`),
+    /// and each method call's callee by its own node. A span-keyed table
+    /// holds only the last copy's entry there.
+    pub default_copy_spans: FxHashSet<SpanKey>,
+    pub copy_method_callees: FxHashMap<crate::ids::NodeId, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1455,6 +1507,9 @@ pub struct EffectChecker<'a> {
     /// callee precisely instead of falling back to per-method-name heuristics.
     /// Empty when constructed via the unparameterised `new` family.
     pub(crate) method_callee_types: FxHashMap<SpanKey, Symbol>,
+    /// See [`NodeTypeFacts::default_copy_spans`].
+    pub(crate) default_copy_spans: FxHashSet<SpanKey>,
+    pub(crate) copy_method_callees: FxHashMap<crate::ids::NodeId, Symbol>,
     /// Each operator expression the typechecker dispatched to a program impl
     /// (`TypeCheckResult.user_operator_calls`), by span, with its `Type.method`
     /// key. The lowering rewrites an operator only when its operands share a
@@ -1754,6 +1809,8 @@ impl<'a> EffectChecker<'a> {
             fn_effect_var_positions: FxHashMap::default(),
             impl_effect_var_positions: FxHashMap::default(),
             method_callee_types: FxHashMap::default(),
+            default_copy_spans: FxHashSet::default(),
+            copy_method_callees: FxHashMap::default(),
             user_operator_calls: FxHashMap::default(),
             dyn_coercions: FxHashMap::default(),
             dyn_clauses: FxHashMap::default(),
@@ -1864,6 +1921,12 @@ impl<'a> EffectChecker<'a> {
         self.flag_objects = facts.flag_objects;
         self.fn_field_objects = facts.fn_field_objects;
         self.ufcs_traits = facts.ufcs_calls;
+        self.default_copy_spans = facts.default_copy_spans;
+        self.copy_method_callees = facts
+            .copy_method_callees
+            .into_iter()
+            .map(|(node, callee)| (node, self.interner.intern(&callee)))
+            .collect();
         self
     }
 
@@ -1887,15 +1950,25 @@ impl<'a> EffectChecker<'a> {
         self
     }
 
-    /// Resolve the callee key for a `MethodCall` expression's span. Returns
+    /// Resolve the callee key for a `MethodCall` expression. Returns
     /// `None` when the typechecker did not populate an entry (e.g. tests that
     /// skip typecheck, builtin/intrinsic dispatch handled outside `infer_method_call`).
     /// A `Trait.m(x)` call of a method the type has from more than one
     /// source is the named trait's impl (design.md §9 Effects of an
     /// ambiguous call, B-2026-11-19-14).
-    fn resolve_method_callee_key(&self, span: &Span) -> Option<Symbol> {
-        let at = SpanKey::from_span(span);
-        let key = self.method_callee_types.get(&at).copied()?;
+    ///
+    /// In a trait default body two impls inherit, each impl's copy of the
+    /// call has its own callee (`self.step()` is `Loud.step` in one and
+    /// `Quiet.step` in the other) and the span table holds the last impl's:
+    /// the call's own node is read there, and a call with no entry of its
+    /// own is unresolved (B-2026-11-23-7).
+    fn resolve_method_callee_key(&self, call: &Expr) -> Option<Symbol> {
+        let at = SpanKey::from_span(&call.span);
+        let key = if self.default_copy_spans.contains(&at) {
+            self.copy_method_callees.get(&call.id).copied()?
+        } else {
+            self.method_callee_types.get(&at).copied()?
+        };
         if let Some(tr) = self.ufcs_traits.get(&at) {
             let text = self.interner.resolve(key).to_string();
             if let Some((ty, method)) = text.rsplit_once('.') {

@@ -660,7 +660,7 @@ impl Walk<'_, '_> {
                 args,
                 ..
             } => {
-                let key = self.checker.resolve_method_callee_key(&e.span);
+                let key = self.checker.resolve_method_callee_key(e);
                 let user = key.and_then(|k| {
                     let f = self.checker.method_bodies.get(&k)?;
                     Some((
