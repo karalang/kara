@@ -5345,7 +5345,8 @@ impl<'a> super::TypeChecker<'a> {
                 let parses_before = self.untargeted_parses.len();
                 let errors_before = self.errors.len();
                 let mut body_ty = self.check_expr(body, &ret_now);
-                let lent_tail = self.explain_lent_closure_tail(body, expected_ret, errors_before);
+                let lent_tail =
+                    self.explain_lent_closure_tail(params, body, expected_ret, errors_before);
                 for id in opened_values {
                     self.open_closure_values.remove(&id);
                 }
@@ -6549,6 +6550,7 @@ impl<'a> super::TypeChecker<'a> {
     /// and never gets here.
     fn explain_lent_closure_tail(
         &mut self,
+        params: &[ClosureParam],
         body: &Expr,
         expected_ret: &Type,
         errors_before: usize,
@@ -6559,6 +6561,17 @@ impl<'a> super::TypeChecker<'a> {
         let mut tail = body;
         while let ExprKind::Block(b) = &tail.kind {
             tail = b.final_expr.as_deref()?;
+        }
+        // The item itself: a parameter the closure hands back. A captured
+        // name or a method's borrowed result is not an item it was lent.
+        let ExprKind::Identifier(name) = &tail.kind else {
+            return None;
+        };
+        if !params
+            .iter()
+            .any(|p| p.pattern.binding_names().iter().any(|n| n == name))
+        {
+            return None;
         }
         let last = self.errors.last()?;
         if !matches!(last.kind, TypeErrorKind::TypeMismatch)
