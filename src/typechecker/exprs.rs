@@ -5262,7 +5262,9 @@ impl<'a> super::TypeChecker<'a> {
                     Vec::new()
                 };
                 let parses_before = self.untargeted_parses.len();
+                let errors_before = self.errors.len();
                 let mut body_ty = self.check_expr(body, &ret_now);
+                let lent_tail = self.explain_lent_closure_tail(body, expected_ret, errors_before);
                 for id in opened_values {
                     self.open_closure_values.remove(&id);
                 }
@@ -5313,13 +5315,27 @@ impl<'a> super::TypeChecker<'a> {
                         Type::TypeParam(p) => !self.enclosing_bounds.contains_key(p),
                         _ => false,
                     } && Self::tail_is_written_ref(body);
-                    if self.number_reads_as_value(&inner)
+                    // Any `Copy` value reads so, not only a number: the
+                    // tail's check takes `child: ref Option[i64]` for
+                    // `filter_map`'s `Option[U]` as a fn's tail and a `let`
+                    // do, and the closure's type kept the borrow, so
+                    // `v.iter().filter_map(|child| child)` was refused as a
+                    // whole after its body was accepted (B-2026-11-18-94).
+                    if (self.number_reads_as_value(&inner)
+                        || self.is_copy_type_during_check(&inner))
                         && !open
                         && !matches!(want, Type::Ref(_) | Type::MutRef(_))
                         && self.is_subtype_with_projections(&want, &inner)
                     {
                         body_ty = inner;
                     }
+                }
+                // A lent item the tail hands back where the slot takes the
+                // value was reported at the tail, with its edit; the closure
+                // is typed as it is with the edit, so the call is not
+                // refused again as a whole.
+                if let Some(value) = lent_tail {
+                    body_ty = value;
                 }
                 // The same peel for a tuple's parts: the tuple literal's own
                 // check accepted `(a + 1, x)` with `x: ref i64` for an
@@ -6443,6 +6459,98 @@ impl<'a> super::TypeChecker<'a> {
     /// in `where_clause` is evaluated against the resolved const-args;
     /// `Bool(false)` triggers a `"const constraint violated"`
     /// diagnostic at `discharge_span`.
+    /// A closure whose tail hands back the item it was lent where the slot
+    /// takes the value (`v.iter().filter_map(|child| child)` over
+    /// `Option[String]`s, Rust's spelling, which Rust refuses too): the one
+    /// mismatch the tail's check reported says so, with `.clone()` as its
+    /// edit where the item is `Clone`. Gives the value the closure returns
+    /// with the edit (B-2026-11-18-94). A `Copy` item is read as its value
+    /// and never gets here.
+    fn explain_lent_closure_tail(
+        &mut self,
+        body: &Expr,
+        expected_ret: &Type,
+        errors_before: usize,
+    ) -> Option<Type> {
+        if self.errors.len() != errors_before + 1 {
+            return None;
+        }
+        let mut tail = body;
+        while let ExprKind::Block(b) = &tail.kind {
+            tail = b.final_expr.as_deref()?;
+        }
+        let last = self.errors.last()?;
+        if !matches!(last.kind, TypeErrorKind::TypeMismatch)
+            || last.span.offset != tail.span.offset
+            || last.span.length != tail.span.length
+        {
+            return None;
+        }
+        let found = self
+            .expr_types
+            .get(&SpanKey::from_span(&tail.span))
+            .cloned()?;
+        let found = self.resolved_now(&found);
+        let Type::Ref(inner) = &found else {
+            return None;
+        };
+        let inner = (**inner).clone();
+        let want = self.resolved_now(expected_ret);
+        if matches!(want, Type::Ref(_) | Type::MutRef(_)) {
+            return None;
+        }
+        let mut subs = self.env.substitutions.clone();
+        let mut const_subs = self.env.const_substitutions.clone();
+        if !unify_types(&want, &inner, &mut subs, &mut const_subs) {
+            return None;
+        }
+        // `.clone()` binds tighter than an operator, so only a tail it can
+        // be written after takes the edit.
+        let postfix = matches!(
+            tail.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::TupleIndex { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::Call { .. }
+        );
+        let clone = postfix && self.type_supports_clone(&inner);
+        // The mismatch as it was reported, which writes a slot the callee
+        // leaves open as `_`.
+        let message = format!(
+            "{}: the closure hands back the item it was lent, and the slot takes the \
+             value\nhelp: {}iterate by value (`into_iter()` in place of `iter()`) when the \
+             collection is not used afterwards",
+            last.message,
+            if clone {
+                "copy it out with `.clone()`, or "
+            } else {
+                ""
+            },
+        );
+        let span = tail.span;
+        self.errors.pop();
+        if clone {
+            self.type_error_with_fix_it(
+                message,
+                span,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: Span {
+                        offset: span.offset + span.length,
+                        length: 0,
+                        ..span
+                    },
+                    replacement: ".clone()".to_string(),
+                },
+            );
+        } else {
+            self.type_error(message, span, TypeErrorKind::TypeMismatch);
+        }
+        Some(inner)
+    }
+
     /// Whether a closure body's value is a written `ref` / `mut ref`
     /// (`|| ref v`, `|| { ..; ref v }`), not a reference some call returns.
     fn tail_is_written_ref(body: &Expr) -> bool {

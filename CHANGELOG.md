@@ -1054,6 +1054,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   trait had a default `find` that writes Stderr. A call the type checker
   resolves to a concrete type's method reaches a trait's default only when
   the type has an impl of that trait (B-2026-11-23-5).
+- A closure that hands back a `Copy` item `iter()` lent it returns the
+  value: `[a, b, c].iter().filter_map(|child| child)` over `Option[i64]`s
+  checks and runs, as `|x| x` over `i64`s and a fn's tail already did. The
+  closure's body was accepted and the call then refused as a whole
+  (`expected 'Fn(ref Option[i64]) -> Option[_]'`) (B-2026-11-18-94).
 - A `#[derive(Serialize)]` on any type no longer changes the effects check
   reports for the rest of the file. With a derive present, the passes after
   the type check read the library's bodies, which they read for no other
@@ -2533,6 +2538,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   key as moved (E0500 at its next use, or E0515 with a `.clone()` fix for
   `m.entry(words[i])`), and `m.entry(w.clone())` is refused there as a
   reference to a temporary (B-2026-11-23-12).
+- The same closure over items that are not `Copy`
+  (`v.iter().filter_map(|child| child)` over `Option[String]`s, Rust's
+  spelling) gets one error at its tail that names the borrow, with
+  `.clone()` as its fix where the item is `Clone` and `into_iter()` named
+  as the other way out. It was two bare type mismatches with no help
+  (B-2026-11-18-94).
 - Rust's `let (x, y, z);`, assigned in each branch afterwards, is told at
   once that a destructuring `let` needs a value, with the form to write
   (`let (x, y, z) = if .. { .. } else { .. };`). It was told to add a type
