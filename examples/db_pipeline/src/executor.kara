@@ -15,17 +15,12 @@
 //
 // GAP-S: Parallel reads on the same resource.
 //   `reads(Db) + reads(Db) = safe` by the conflict table, so two independent
-//   SELECT plans should be parallelizable inside a `par {}` block.
-//   `execute_all` demonstrates this: two FullScan plans on different tables
-//   have non-conflicting effects and can run concurrently.
-//   HOWEVER: if either plan involves a write (Insert/Delete), the par {} block
-//   would be rejected because `writes(Db) + writes(Db) = conflict`.
-//   This means `execute_all` can only safely accept read-only plans in a single
-//   par {} block, with write plans serialized outside it.  The current
-//   signature does not enforce this — a caller passing mixed read/write plans
-//   gets a compile error at the `par {}` site, not a helpful error at the
-//   call site.  A `ReadPlan` / `WritePlan` split at the type level would make
-//   the constraint visible in the API.
+//   SELECT plans run concurrently inside a `par {}` block: `execute_pair` runs
+//   two plans through `execute_read`, which only reads. A `par` whose branches
+//   call `execute` is refused, because `execute` declares `writes(Db)`
+//   whatever the plan is. `execute_read` refuses Insert and Delete with an
+//   error at run time; a `ReadPlan` / `WritePlan` split at the type level
+//   would make the constraint visible in the API.
 
 import query.{Row, DbError, Value};
 import db.Db;
@@ -59,20 +54,46 @@ pub fn execute(plan: QueryPlan) -> Result[Vec[Row], DbError]
     }
 }
 
+// Run one plan that only reads. An Insert or Delete is refused here rather
+// than run, so this function needs only `reads(Db)`.
+pub fn execute_read(plan: QueryPlan) -> Result[Vec[Row], DbError]
+    with reads(Db) panics
+{
+    match plan {
+        FullScan { table, columns } => {
+            let rows = Db.query_table(table)?;
+            Ok(project(rows, columns))
+        },
+
+        FilterScan { table, columns, column, value } => {
+            let rows = Db.query_table(table)?;
+            let filtered = filter_rows(rows, column, value);
+            Ok(project(filtered, columns))
+        },
+
+        Insert { table, .. } => Err(DbError.ConstraintViolation {
+            message: f"a read-only plan may not insert into {table}",
+        }),
+
+        Delete { table, .. } => Err(DbError.ConstraintViolation {
+            message: f"a read-only plan may not delete from {table}",
+        }),
+    }
+}
+
 // Run two read-only plans concurrently.
 // Safe because reads(Db) + reads(Db) does not conflict.
 pub fn execute_pair(plan_a: QueryPlan, plan_b: QueryPlan)
     -> (Result[Vec[Row], DbError], Result[Vec[Row], DbError])
-    with reads(Db) writes(Db) panics
+    with reads(Db) panics
 {
-    // GAP-T: par {} requires the compiler to verify effect non-conflict
-    // statically.  If plan_a or plan_b is an Insert/Delete (writes(Db)),
-    // this par {} block is a compile error.  But QueryPlan is an enum —
-    // we cannot statically guarantee the variant at this call site.
-    // The type system has no way to express "this function only accepts
-    // FullScan / FilterScan variants of QueryPlan."  A separate
-    // `ReadPlan` enum type would fix this.
-    let (result_a, result_b) = par { execute(plan_a), execute(plan_b) };
+    // GAP-T (closed): a `par` whose branches both call `execute` conflicts on
+    // `writes(Db)` whatever the plans are, since `execute`'s declared set
+    // has it, and `karac check` reports that even with no caller
+    // (B-2026-11-22-24). The branches call `execute_read`, which only reads
+    // and refuses a write plan with an error, so the pair runs concurrently.
+    // A `ReadPlan` enum would move that refusal into the type.
+    let (result_a, result_b) = par { execute_read(plan_a), execute_read(plan_b) };
     (result_a, result_b)
 }
 

@@ -444,6 +444,14 @@ pub struct ParConflict {
     /// value whose method conflicts, and the line of that call
     /// ([`Analysis::through_callers`]).
     pub via: Option<(String, String, usize)>,
+    /// Whether the conflict holds for every caller of the body: a use of
+    /// one of its places by both branches, or both branches' effects on
+    /// one program-wide resource or on one value-rooted resource through
+    /// the same binding. One that rests on which values or providers a
+    /// caller passes (two parameters that may be one value, a call through
+    /// a parameter's function value) is not (B-2026-11-22-24, review
+    /// ruling 2026-11-23).
+    pub definite: bool,
 }
 
 /// Compute every body's effects.
@@ -703,6 +711,8 @@ fn par_conflicts(body: &Body, sites: &[Site], origins: &Origins) -> Vec<ParConfl
             let found = effect_conflict(&sides, i, j, &alias)
                 .or_else(|| place_conflict(body, &touched, i, j, origins));
             if let Some((first, second)) = found {
+                let definite = place_conflict(body, &touched, i, j, origins).is_some()
+                    || definite_effect_conflict(&sides, i, j);
                 out.push(ParConflict {
                     region: ri,
                     line: r.span.line,
@@ -710,6 +720,7 @@ fn par_conflicts(body: &Body, sites: &[Site], origins: &Origins) -> Vec<ParConfl
                     first,
                     second,
                     via: None,
+                    definite,
                 });
             }
         }
@@ -821,6 +832,34 @@ fn effect_conflict(
         }
     }
     None
+}
+
+/// Do branches `i` and `j` have two effects that keep their order whatever
+/// the body's callers pass ([`ParConflict::definite`]): on one program-wide
+/// resource (`Any` on both sides), or on one value reached through the same
+/// binding. A set that calls a parameter's function value or an unknown
+/// callee is left out: what it does is the caller's.
+fn definite_effect_conflict(sides: &[Vec<(BasicBlock, EffectSet)>], i: usize, j: usize) -> bool {
+    let same = |a: &Key, b: &Key| match (a, b) {
+        (Key::Any, Key::Any) => true,
+        (Key::Param(r1, p1), Key::Param(r2, p2)) | (Key::Local(r1, p1), Key::Local(r2, p2)) => {
+            let n = p1.len().min(p2.len());
+            r1 == r2 && p1[..n] == p2[..n]
+        }
+        _ => false,
+    };
+    sides[i].iter().enumerate().any(|(k, (_, x))| {
+        let from = if i == j { k } else { 0 };
+        let x = bounded(x);
+        sides[j][from..].iter().any(|(_, y)| {
+            let y = bounded(y);
+            x.effects.iter().any(|ex| {
+                y.effects.iter().any(|ey| {
+                    conflicts(ex, ey, &|_: &Key, _: &Key| false) && same(&ex.key, &ey.key)
+                })
+            })
+        })
+    })
 }
 
 /// How a `par` branch uses a place of the body (core §11.2): it conflicts

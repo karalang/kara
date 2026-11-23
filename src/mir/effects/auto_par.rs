@@ -941,6 +941,7 @@ pub(super) fn verdict(
             first: (a, fa.to_string()),
             second: (b, fb.to_string()),
             via: None,
+            definite: false,
         })
     };
     let panic: Vec<Option<String>> = sets
@@ -1064,6 +1065,7 @@ pub(super) fn verdict(
                 first,
                 second,
                 via: None,
+                definite: false,
             })
     };
     match r.kind {

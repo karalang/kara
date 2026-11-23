@@ -31719,15 +31719,72 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
     {
         return Vec::new();
     }
-    let Ok(lowered) = build_source(src) else {
-        return Vec::new();
-    };
+    let built = build_source(src).ok();
     let user_lines = src.lines().count();
+    let mut out: Vec<((usize, usize), SourceEffectError, String)> = Vec::new();
+    // A `par` conflict that holds for every caller is a property of the
+    // function it is written in, so it is reported in every function of the
+    // program's own that check can build alone, not only in what `main`
+    // reaches: a library's `pub fn`, or
+    // a file with no `main`, has its conflicts reported where they are
+    // written rather than at a caller's build (B-2026-11-22-24). The rest
+    // of the findings depend on the program's providers, which only the
+    // build from `main` decides.
+    let own_conflicts = mentions_par(src) || src.contains("with_provider");
+    if let Some(mut all) = own_conflicts
+        .then(|| lower_source_for_checks(src, true, AutoPar::Off).ok())
+        .flatten()
+    {
+        if !all.program.resources.is_empty() {
+            crate::mir::providers::route_files(&mut all.program, &all.tys);
+            crate::mir::providers::route_network(&mut all.program, &all.tys);
+        }
+        let report = crate::mir::effects::analyze(&all.program, &all.tys);
+        let unbuilt = |name: &str| {
+            !built
+                .as_ref()
+                .is_some_and(|b| b.program.bodies.contains_key(name))
+        };
+        let mut add = |span: crate::token::Span, kind, text: String| {
+            let at = (span.line, span.column);
+            if span.line == 0
+                || span.line > user_lines
+                || out.iter().any(|(a, k, _)| *a == at && *k == kind)
+            {
+                return;
+            }
+            out.push((at, kind, text));
+        };
+        for (name, found) in report.par_conflicts.iter().filter(|(n, _)| unbuilt(n)) {
+            let body = &all.program.bodies[name];
+            // Only a conflict every caller would meet: one that rests on
+            // what a caller passes is the caller's build's to report, as
+            // the provider checks are (review ruling 2026-11-23).
+            for c in found.iter().filter(|c| c.definite && c.via.is_none()) {
+                add(
+                    body.par_regions[c.region].span,
+                    SourceEffectError::Par,
+                    par_conflict_text(c),
+                );
+            }
+        }
+        // A use of a provider while a task of the same group holds it is
+        // the function's own too (§14.9): the provider is bound by a
+        // `with_provider` in its body.
+        for (_, found) in report.task_conflicts.iter().filter(|(n, _)| unbuilt(n)) {
+            for c in found {
+                add(c.span, SourceEffectError::TaskConflict, c.text());
+            }
+        }
+    }
+    let Some(lowered) = built else {
+        out.sort();
+        return out;
+    };
     let report = match lowered.effects {
         Some(r) => r,
         None => crate::mir::effects::analyze(&lowered.program, &lowered.tys),
     };
-    let mut out: Vec<((usize, usize), SourceEffectError, String)> = Vec::new();
     let mut add = |span: crate::token::Span, kind, text: String| {
         let at = (span.line, span.column);
         if span.line == 0

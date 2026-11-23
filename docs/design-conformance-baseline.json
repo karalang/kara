@@ -1,12 +1,4 @@
 {
   "note": "Non-conforming design.md blocks. Shrink me. `reason` says why a block is here; UNTRIAGED means nobody has decided yet.",
-  "blocks": {
-    "5258df9b240d": {
-      "line": 5845,
-      "heading": "13. Concurrency > `par` blocks",
-      "outcome": "MISSING-REJECTION",
-      "reason": "SPEC GAP B-2026-11-22-24: the MIR effect pass checks `par` conflicts only in functions main reaches",
-      "first_diagnostic": null
-    }
-  }
+  "blocks": {}
 }

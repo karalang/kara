@@ -5375,8 +5375,8 @@ fn two_channels() -> Result[(), SendError[i64]] {
 
 fn one_channel() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(8);
-    let (r1, r2) = par { produce(tx, 0, 4), produce(tx, 4, 8) };
-    // error: both branches have `sends(tx)`; sends on one channel keep their order
+    let (r1, r2) = par { produce(tx, 0, 4), produce(tx, 4, 8) };   // error[E0418]: both branches have `sends(tx)`
+    // sends on one channel keep their order
 }
 ```
 
