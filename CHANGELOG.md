@@ -818,6 +818,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- A function's effects are listed in the order of their text
+  (`allocates(Heap)`, `panics`, `writes(Stderr)`, `writes(Stdout)`) in
+  `program_effects`, `public_function_effects` and the list an E0400
+  message gives, and the effect checker's diagnostics come in source order.
+  Both followed the checker's internal tables, so an unrelated compiler
+  change could reorder them for a program it did not touch
+  (B-2026-11-23-9).
 - `std.path.parent` ends in no `.` component: `parent("a/./b")` is `"a"`
   and `parent("../x/./y")` is `"../x"`, where they were `"a/."` and
   `"../x/."` (review-thread ruling 2026-11-20, B-2026-11-20-52).

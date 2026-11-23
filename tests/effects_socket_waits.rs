@@ -68,7 +68,7 @@ fn undeclared_tcp_read_asks_for_blocks_and_suspends() {
              }
          }
          fn main() {}",
-        &["Add: with sends(Network) receives(Network) blocks suspends"],
+        &["Add: with blocks receives(Network) sends(Network) suspends"],
     );
 }
 
@@ -80,7 +80,7 @@ fn undeclared_bind_asks_for_its_network_effects_and_blocks() {
              TcpListener.bind(addr).is_ok()
          }
          fn main() {}",
-        &["Add: with sends(Network) receives(Network) blocks"],
+        &["Add: with blocks receives(Network) sends(Network)"],
     );
 }
 
@@ -110,7 +110,7 @@ fn undeclared_child_wait_asks_for_blocks_and_suspends() {
              }
          }
          fn main() {}",
-        &["Add: with sends(ProcessTable) blocks suspends"],
+        &["Add: with blocks sends(ProcessTable) suspends"],
     );
 }
 

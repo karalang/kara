@@ -223,6 +223,15 @@ impl EffectSet {
     fn is_empty(&self) -> bool {
         self.effects.is_empty()
     }
+
+    /// Put the effects in the order a `with` clause's fix writes them, by
+    /// their text. A set is filled in the order inference reaches its
+    /// callees, which follows the checker's hash tables, so the same program
+    /// listed its effects differently after an unrelated change to the
+    /// compiler (B-2026-11-23-9).
+    fn sort(&mut self) {
+        self.effects.sort_by_cached_key(|e| e.effect.to_string());
+    }
 }
 
 /// Whether a function's effects are declared, polymorphic, or absent.
@@ -2932,6 +2941,8 @@ impl<'a> EffectChecker<'a> {
         // Phase B: Infer and verify
         self.infer_effects();
         self.infer_private_trait_ceilings();
+        // Before any diagnostic lists a function's effects.
+        self.inferred_effects.values_mut().for_each(EffectSet::sort);
         self.check_contract_purity();
         self.check_const_initializer_effects();
         self.verify_declarations();
@@ -2979,6 +2990,14 @@ impl<'a> EffectChecker<'a> {
         // the programs it exists for.
         self.emit_pure_loop_in_par_warnings();
         let unused_effects = self.find_unused_effects();
+        // One order for every reader of the result: each set by its
+        // effects' text, the diagnostics by where they point. The passes
+        // above walk hash tables, so their own order moves with the
+        // tables' layout (B-2026-11-23-9). The sort is stable: two
+        // diagnostics at one place keep the order their pass gave them.
+        self.inferred_effects.values_mut().for_each(EffectSet::sort);
+        self.errors
+            .sort_by_key(|e| (e.span.line, e.span.column, e.span.offset));
 
         // Internal working tables are Symbol-keyed (name-interning spike
         // stage 3); the public result stays String-keyed std HashMap, so
