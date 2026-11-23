@@ -1572,6 +1572,9 @@ impl<'a> Lexer<'a> {
         };
         // The newline after the opening quotes. (Line bookkeeping first, then
         // the advance, so the column is 1-based like every other newline here.)
+        if self.peek() == b'\r' {
+            self.advance();
+        }
         self.line += 1;
         self.column = 0;
         self.advance();
@@ -1585,7 +1588,9 @@ impl<'a> Lexer<'a> {
             let mut value = String::new();
             let mut failed = None;
             while self.current < layout.body_end {
-                if self.peek() == b'\n' {
+                if self.at_crlf() {
+                    self.advance();
+                } else if self.peek() == b'\n' {
                     value.push('\n');
                     self.line += 1;
                     self.column = 0;
@@ -1631,6 +1636,13 @@ impl<'a> Lexer<'a> {
                 .take_while(|&&b| b == b' ' || b == b'\t')
                 .count()
         };
+        // A CRLF file ends the opening line with `\r\n`; the `\r` belongs to
+        // the line break, here and on every line of the body.
+        let open = if src[open..].starts_with(b"\r\n") {
+            open + 1
+        } else {
+            open
+        };
         if src.get(open) != Some(&b'\n') {
             let resume = line_end(open);
             return Err((
@@ -1658,7 +1670,7 @@ impl<'a> Lexer<'a> {
         while line < close_line {
             let end = line_end(line);
             let ws = lead_ws(line);
-            let blank = line + ws == end;
+            let blank = line + ws == end || (line + ws + 1 == end && src[line + ws] == b'\r');
             if !blank && !src[line..end].starts_with(indent_bytes) {
                 return Err((
                     "a line of a `\"\"\"` string is indented less than its closing \
@@ -1671,6 +1683,8 @@ impl<'a> Lexer<'a> {
         }
         let body_end = if close_line == body_start {
             body_start
+        } else if close_line >= body_start + 2 && src[close_line - 2] == b'\r' {
+            close_line - 2
         } else {
             close_line - 1
         };
@@ -1679,6 +1693,12 @@ impl<'a> Lexer<'a> {
             indent,
             close_end,
         })
+    }
+
+    /// At the `\r` of a `\r\n` line break: a `"""` body's line breaks are
+    /// `\n` in the value whatever the file's line endings are.
+    fn at_crlf(&self) -> bool {
+        self.source[self.current..].starts_with(b"\r\n")
     }
 
     /// Skip up to `indent` leading spaces/tabs at the start of a `"""` line
@@ -1748,6 +1768,10 @@ impl<'a> Lexer<'a> {
             };
             if done {
                 break;
+            }
+            if layout.is_some() && self.at_crlf() {
+                self.advance();
+                continue;
             }
             if self.peek() == b'\n' {
                 if let Some(l) = layout {
