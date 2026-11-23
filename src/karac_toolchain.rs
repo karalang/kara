@@ -253,6 +253,65 @@ pub fn parse_toolchain_file(path: &Path, source: &str) -> Result<ToolchainSpec, 
     Ok(ToolchainSpec { version, targets })
 }
 
+/// A `version` written as a bare number (`version = 1.0`, or `version =
+/// 0.8.1`, which is not TOML at all), as the edit that quotes it: the
+/// literal's byte offset and length in `source`, and its replacement. `None`
+/// unless the quoted file parses with exactly that string as its `version`
+/// and the string is a constraint, so the edit is offered only where it
+/// leaves a pin that loads (B-2026-11-23-2).
+pub fn quoted_version_edit(source: &str) -> Option<(usize, usize, String)> {
+    let mut at = 0;
+    for line in source.split_inclusive('\n') {
+        let start = at;
+        at += line.len();
+        let body = line.trim_start();
+        // `version` is a top-level key: none follows a table header.
+        if body.starts_with('[') {
+            return None;
+        }
+        let Some(value) = body
+            .strip_prefix("version")
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+            .map(str::trim_start)
+        else {
+            continue;
+        };
+        let len = value
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(value.len());
+        let literal = &value[..len];
+        let tail = value[len..].trim();
+        if literal.is_empty() || !(tail.is_empty() || tail.starts_with('#')) {
+            return None;
+        }
+        semver::VersionReq::parse(literal).ok()?;
+        let offset = start + (line.len() - value.len());
+        let replacement = format!("\"{literal}\"");
+        let mut quoted = source.to_string();
+        quoted.replace_range(offset..offset + len, &replacement);
+        let table: toml::Table = quoted.parse().ok()?;
+        return (table.get("version").and_then(|v| v.as_str()) == Some(literal)).then_some((
+            offset,
+            len,
+            replacement,
+        ));
+    }
+    None
+}
+
+/// [`quoted_version_edit`] for the file a load error names, with that file:
+/// the fix `karac fix` applies and the error's JSON record carries.
+pub fn version_quote_fix(err: &ToolchainError) -> Option<(PathBuf, usize, usize, String)> {
+    let path = match err {
+        ToolchainError::InvalidVersionType { path } | ToolchainError::InvalidToml { path, .. } => {
+            path
+        }
+        _ => return None,
+    };
+    let (offset, length, replacement) = quoted_version_edit(&fs::read_to_string(path).ok()?)?;
+    Some((path.clone(), offset, length, replacement))
+}
+
 /// Check the active compiler version against the declared constraint.
 /// Returns `Ok(())` when the version matches; `Err(ToolchainMismatch)`
 /// otherwise. The caller emits the structured diagnostic from the
@@ -355,6 +414,36 @@ targets = []"#;
         let err = parse_toolchain_file(&p(), src).unwrap_err();
         assert!(matches!(err, ToolchainError::MissingVersion { .. }));
         assert_eq!(err.code(), "E_TOOLCHAIN_MISSING_VERSION");
+    }
+
+    #[test]
+    fn a_bare_number_version_carries_the_edit_that_quotes_it() {
+        let quoted = |src: &str| {
+            quoted_version_edit(src).map(|(at, len, text)| {
+                let mut out = src.to_string();
+                out.replace_range(at..at + len, &text);
+                out
+            })
+        };
+        assert_eq!(
+            quoted("version = 1.0\n").as_deref(),
+            Some("version = \"1.0\"\n")
+        );
+        assert_eq!(
+            quoted("# pin\n  version=0.8.1  # the release\ntargets = []\n").as_deref(),
+            Some("# pin\n  version=\"0.8.1\"  # the release\ntargets = []\n")
+        );
+        assert_eq!(quoted("version = 1").as_deref(), Some("version = \"1\""));
+        // Not a number, not a constraint once quoted, already a string, or
+        // not the top-level key: no edit.
+        assert_eq!(quoted("version = true\n"), None);
+        assert_eq!(quoted("version = 1.2.3.4\n"), None);
+        assert_eq!(quoted("version = \"1.0\"\n"), None);
+        assert_eq!(quoted("version = [1]\n"), None);
+        assert_eq!(quoted("[pin]\nversion = 1\n"), None);
+        assert_eq!(quoted("versions = 1\n"), None);
+        // Quoting the version does not mend a file broken elsewhere.
+        assert_eq!(quoted("version = 0.8.1\ntargets = [\n"), None);
     }
 
     #[test]

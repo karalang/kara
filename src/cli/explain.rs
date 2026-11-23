@@ -4219,7 +4219,7 @@ const CODE_PROSE: &[(&str, &str)] = &[
         "E_TOOLCHAIN_INVALID_VERSION_TYPE",
         "`version` in `karac-toolchain.toml` is not a string (design.md § \
          Packages and manifests, Toolchain pinning). Quote it: `version = \
-         \"0.8\"`, not `version = 0.8`.",
+         \"0.8\"`, not `version = 0.8`. `karac fix` quotes a bare number.",
     ),
     (
         "E_TOOLCHAIN_MISSING_VERSION",

@@ -214,6 +214,41 @@ pub(super) fn cmd_debug(input: &str, output: OutputMode) {
 /// Set while `karac fix` with no file walks the package.
 static FIXING_PACKAGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The one manifest edit `karac fix` makes: a `karac-toolchain.toml` whose
+/// `version` is a bare number gets its quotes, in the pin file found from
+/// `start` upward, the one `karac check` reads from there. A manifest is
+/// project source, and this edit is determined; any other pin error stays
+/// with `karac check` (review-thread ruling 2026-11-23, B-2026-11-23-2).
+fn fix_toolchain_pin(start: &std::path::Path, dry_run: bool) {
+    let Err(err) = crate::karac_toolchain::load_from_start(start) else {
+        return;
+    };
+    let Some((path, offset, length, quoted)) = crate::karac_toolchain::version_quote_fix(&err)
+    else {
+        return;
+    };
+    let Ok(source) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let shown = path.strip_prefix(&cwd).unwrap_or(&path).display();
+    if dry_run {
+        let (line, col) = crate::byte_offset_to_line_col(&source, offset);
+        println!("would apply 1 fix(es) to {shown}:");
+        println!(
+            "  {shown}:{line}:{col}: `{}` → `{quoted}`",
+            &source[offset..offset + length]
+        );
+        return;
+    }
+    let mut rewritten = source;
+    rewritten.replace_range(offset..offset + length, &quoted);
+    match std::fs::write(&path, rewritten) {
+        Ok(()) => println!("applied 1 fix(es) to {shown}"),
+        Err(e) => eprintln!("error: cannot write {shown}: {e}"),
+    }
+}
+
 pub(super) fn cmd_fix_project(dry_run: bool, lints: &crate::lints::CliLintOverrides) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let Some(root) = crate::manifest::discover_project_root(&cwd) else {
@@ -224,6 +259,7 @@ pub(super) fn cmd_fix_project(dry_run: bool, lints: &crate::lints::CliLintOverri
         );
         process::exit(1);
     };
+    fix_toolchain_pin(&root, dry_run);
     let files = kara_files_under(&root.join("src"));
     if files.is_empty() {
         eprintln!(
@@ -255,6 +291,12 @@ const FIX_PASSES: usize = 10;
 /// every fix is in, so a fix loop can tell a clean file from one only a
 /// person can finish (B-2026-11-16-287).
 pub(super) fn cmd_fix(filename: &str, dry_run: bool, lints: &crate::lints::CliLintOverrides) {
+    // The pin `karac check <file>` reads: from the file's directory up.
+    let file_dir = std::path::Path::new(filename)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    fix_toolchain_pin(file_dir, dry_run);
     if !fix_file(filename, dry_run, lints) {
         process::exit(1);
     }

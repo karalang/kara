@@ -2525,6 +2525,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   rename its help names, of the binding and every use, f-strings included;
   the fix is withheld when a use cannot be placed exactly or the new name is
   already bound or a builtin's (B-2026-11-21-74).
+- A `karac-toolchain.toml` whose `version` is a bare number (`version = 0.8`,
+  or `version = 0.8.1`, which is not TOML) says `write it as a string`, its
+  JSON record names the pin file and carries the edit, and `karac fix`
+  applies it, with or without a file argument. It is the one manifest edit
+  `karac fix` makes; E_TEST_OUTSIDE_TEST_FILE, whose edit would move a test
+  to another file, stays help only (B-2026-11-23-2).
 - More diagnostics carry the edit their help names, each withheld where the
   text does not place it exactly. One edit: a reassigned `let x: T;` gets
   `mut` (E0506); a misspelled `break 'label` takes its suggestion as

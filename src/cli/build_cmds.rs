@@ -3047,13 +3047,32 @@ pub(super) fn emit_toolchain_load_error(
 ) {
     let code = err.code();
     let primary = err.to_string();
+    // A `version` written as a bare number has one edit, the quotes, which
+    // `karac fix` applies to the pin file: the record names the file and
+    // the edit, with offsets into that file (B-2026-11-23-2).
+    let fix = crate::karac_toolchain::version_quote_fix(err);
+    let help = fix
+        .as_ref()
+        .map(|(_, _, _, quoted)| format!("write it as a string: `version = {quoted}`"));
+    let tail = match (&fix, &help) {
+        (Some((path, offset, length, quoted)), Some(help)) => format!(
+            ",\"file\":{},\"help\":{},\"fix_diff\":[{{\"offset\":{offset},\"length\":{length},\"text\":{}}}]",
+            json_string(&path.display().to_string()),
+            json_string(help),
+            json_string(quoted),
+        ),
+        _ => String::new(),
+    };
     match output {
         OutputMode::Text => {
             eprintln!("error[{code}]: {primary}");
+            if let Some(help) = &help {
+                eprintln!("   = help: {help}");
+            }
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}{tail}}}]}}",
                 json_string(code),
                 json_string(&primary),
             );
@@ -3062,7 +3081,7 @@ pub(super) fn emit_toolchain_load_error(
             emit_jsonl_event(
                 "toolchain_pin_error",
                 &format!(
-                    "\"code\":{},\"message\":{}",
+                    "\"code\":{},\"message\":{}{tail}",
                     json_string(code),
                     json_string(&primary),
                 ),
