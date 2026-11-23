@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 713 |
-| false-positive | 356 |
+| false-positive | 357 |
 | missing-feature | 245 |
 | perf | 200 |
 | other | 148 |
 | soundness | 126 |
-| miscompile | 104 |
+| miscompile | 105 |
 | crash | 64 |
 | run-vs-build | 62 |
 | codegen-gap | 45 |
@@ -78,12 +78,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 867 |
 | mir-llvm | 321 |
-| mir | 319 |
+| mir | 320 |
 | cli | 282 |
 | parser | 152 |
 | ownership | 133 |
 | runtime | 107 |
-| interp | 98 |
+| interp | 99 |
 | effect | 62 |
 | other | 52 |
 | resolver | 51 |
@@ -139,6 +139,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-15 | 2026-11-23 | effect | high | UNDER-REPORT: a built-in operation that runs a trait impl on the values it holds is not charged that impl's effects: `xs.contains(x)`, `xs == ys`, `xs.sort()`, `it.max()`, a `Map`/`Set`/`SortedSet` insert or lookup, `println(x)`, an f-string hole, `xs.join(sep)`, `xs.clone()`, `xs.resize(n, v)`, `o.unwrap_or_default()` and a derived impl over a field all run a program `eq`/`cmp`/`hash`/`to_string`/`clone`/`default` that writes Stderr and report nothing | — |
 | B-2026-11-23-16 | 2026-11-23 | effect | high | UNDER-REPORT: an associated function called through a type-parameter bound (`T.make()` with `T: Make`) is not charged the instance's impl: `fn build[T: Make]() -> T { T.make() }` called at a `Big` whose `make` writes Stderr reports program_effects [] and a `pub fn` calling it owes no clause, while the method form `x.step()` through the same kind of bound is charged at the instance | — |
 | B-2026-11-23-17 | 2026-11-23 | effect | high | UNDER-REPORT: a library method written in Kāra is not charged the program impls it calls through its bounds. A program iterator's `next` is charged only where it is called by name: a `for` loop over it and every provided method that drives it (`count`, `sum`, `collect`, a `map(..)` chain, `zip`, `Vec.extend`) report none of its effects, as do `rev()` and a program `next_back`, `sum()` and a program `Add`, `extend` and a program `IntoIterator`, `collect` and a program `FromIterator` | — |
+| B-2026-11-23-18 | 2026-11-23 | interp | high | The MIR interpreter's `Vec.dedup` ignores the program's `PartialEq` impl and compares structurally: with `eq` as `self.v % 10 == o.v % 10`, `[P{1}, P{11}, P{2}, P{2}].dedup()` leaves 3 elements on `karac run --interp` and `__mir-run`, 2 on `karac run` (JIT) and `karac build`; the written `eq` never runs on the interpreter | — |
+| B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
 
 ### Relocated
 
