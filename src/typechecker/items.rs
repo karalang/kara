@@ -3307,6 +3307,7 @@ impl<'a> super::TypeChecker<'a> {
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
         let saved_list_lit_lets = std::mem::take(&mut self.list_lit_lets);
         let saved_open_collection_lets = std::mem::take(&mut self.open_collection_lets);
+        let saved_d5_ref_fills = std::mem::take(&mut self.d5_ref_fills);
         let saved_str_list_lets = std::mem::take(&mut self.str_list_lets);
         let saved_literal_lets = std::mem::take(&mut self.literal_lets);
         let saved_closure_tail_lets = std::mem::take(&mut self.closure_tail_lets);
@@ -3424,6 +3425,7 @@ impl<'a> super::TypeChecker<'a> {
         self.offer_for_into_iter_fixes(f);
         self.offer_let_ref_fixes(f);
         self.offer_ref_list_annotations(f, errors_before_body);
+        self.offer_d5_fill_owns(f, errors_before_body);
         self.settle_d5_cursor_steps(cursor_mark, errors_before_body);
         self.iter_lets = saved_iter_lets;
         self.explain_str_lit_lets();
@@ -3431,6 +3433,7 @@ impl<'a> super::TypeChecker<'a> {
         self.explain_list_lit_lets();
         self.list_lit_lets = saved_list_lit_lets;
         self.open_collection_lets = saved_open_collection_lets;
+        self.d5_ref_fills = saved_d5_ref_fills;
         self.str_list_lets = saved_str_list_lets;
         self.literal_lets = saved_literal_lets;
         self.closure_tail_lets = saved_closure_tail_lets;
@@ -11280,6 +11283,77 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A mismatch at a use of a local collection whose elements came out of
+    /// a bare `for` over a bare parameter (`for (k, v) in pairs {
+    /// map.insert(k, v) }` then `Value.Dict(map)`): the collection holds
+    /// borrows, so the type found differs from the one wanted only by
+    /// `ref`s. Rust's by-value parameter is `own` here, iterated with
+    /// `.into_iter()` (B-2026-11-23-63).
+    fn offer_d5_fill_owns(&mut self, f: &Function, from: usize) {
+        let fills = std::mem::take(&mut self.d5_ref_fills);
+        if fills.is_empty() || !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let mut lets: Vec<ListLet> = Vec::new();
+        let mut idents: Vec<(Span, String)> = Vec::new();
+        list_lets(&f.body, &mut lets, &mut idents);
+        let api_break = self.d5_own_breaks_api();
+        let mut diffs = Vec::new();
+        for e in self.errors.iter_mut().skip(from) {
+            if e.kind != TypeErrorKind::TypeMismatch || e.fix_it.is_some() {
+                continue;
+            }
+            let (Some(want), Some(got)) = (&e.expected, &e.got) else {
+                continue;
+            };
+            let want = want.strip_prefix("ref ").unwrap_or(want);
+            if !got.contains("ref ") || got.replace("ref ", "") != want {
+                continue;
+            }
+            let Some((_, name)) = idents.iter().find(|(sp, _)| *sp == e.span) else {
+                continue;
+            };
+            let Some((_, elem, param, own_at, iter_at)) = fills.iter().find(|(c, ..)| c == name)
+            else {
+                continue;
+            };
+            e.message += &format!(
+                ". `{name}` holds borrows: `{elem}` is an element of `{param}`, which a \
+                 bare `for` borrows (core-semantics.md §4.6), and `{param}` is a bare \
+                 parameter, which borrows too (§4.1)"
+            );
+            if api_break {
+                e.message += &format!(
+                    ". Put a copy in with `{elem}.clone()`; `own` on `{param}` would change \
+                     this library `pub fn`'s signature for every caller outside the package"
+                );
+                continue;
+            }
+            e.message += &format!(
+                ". Take `{param}` by value with `own` and iterate `{param}.into_iter()`, \
+                 which moves each element in"
+            );
+            diffs.push((e.span, *own_at, *iter_at));
+        }
+        for (at, own_at, iter_at) in diffs {
+            self.error_fix_diffs.insert(
+                SpanKey::from_span(&at),
+                vec![
+                    crate::resolver::TextEdit {
+                        offset: own_at.offset,
+                        length: 0,
+                        replacement: "own ".to_string(),
+                    },
+                    crate::resolver::TextEdit {
+                        offset: iter_at.offset,
+                        length: 0,
+                        replacement: ".into_iter()".to_string(),
+                    },
+                ],
+            );
+        }
+    }
+
     /// B-2026-11-07-31: an unannotated `let x = [k];` whose elements are
     /// `ref`s to a `Copy` value is a `Vec[ref T]`, refused where a `Vec[T]`
     /// is wanted. Annotating the `let` reads each `ref` as its value
@@ -11288,9 +11362,14 @@ impl<'a> super::TypeChecker<'a> {
         if !self.cli_lint_overrides.strict_core {
             return;
         }
-        let mut lets: Vec<(String, Span, usize)> = Vec::new();
+        let mut lets: Vec<ListLet> = Vec::new();
         let mut idents: Vec<(Span, String)> = Vec::new();
         list_lets(&f.body, &mut lets, &mut idents);
+        let owned_text = |span: &Span, types: &rustc_hash::FxHashMap<SpanKey, Type>| {
+            types.get(&SpanKey::from_span(span)).is_some_and(|t| {
+                matches!(t, Type::Str) || matches!(t, Type::Ref(i) if **i == Type::Str)
+            })
+        };
         for e in self.errors.iter_mut().skip(from) {
             if e.kind != TypeErrorKind::TypeMismatch || e.fix_it.is_some() {
                 continue;
@@ -11298,26 +11377,49 @@ impl<'a> super::TypeChecker<'a> {
             let (Some(want), Some(got)) = (&e.expected, &e.got) else {
                 continue;
             };
+            // A borrowed parameter's `ref Vec[..]` takes the list as it is.
+            // `Str` is held as `StringSlice` until the message is shown.
+            let want = word_swap(
+                want.strip_prefix("ref ").unwrap_or(want),
+                "StringSlice",
+                "Str",
+            );
             let Some(inner) = want.strip_prefix("Vec[") else {
                 continue;
             };
-            if *got != format!("Vec[ref {inner}") {
+            // B-2026-11-07-31: a list of borrows of `Copy` values. B-2026-11-23-64: a
+            // list whose string literals defaulted to `String`, as nothing at
+            // the `let` named `Str`; the annotation makes them `Str`.
+            let borrows = *got == format!("Vec[ref {inner}");
+            let literals =
+                !borrows && want.contains("Str") && *got == word_swap(&want, "Str", "String");
+            if !borrows && !literals {
                 continue;
             }
             let Some((_, name)) = idents.iter().find(|(sp, _)| *sp == e.span) else {
                 continue;
             };
-            let Some((_, at, _)) = lets
+            let Some((_, at, _, other)) = lets
                 .iter()
-                .filter(|(n, _, o)| n == name && *o < e.span.offset)
-                .max_by_key(|(_, _, o)| *o)
+                .filter(|(n, _, o, _)| n == name && *o < e.span.offset)
+                .max_by_key(|(_, _, o, _)| *o)
             else {
                 continue;
             };
-            e.message += &format!(
-                ". `{name}` is a list of borrows of its elements: the fix annotates it \
-                 `{name}: {want}`, which reads each one as its value"
-            );
+            if literals && other.iter().any(|sp| owned_text(sp, &self.expr_types)) {
+                continue;
+            }
+            if borrows {
+                e.message += &format!(
+                    ". `{name}` is a list of borrows of its elements: the fix annotates it \
+                     `{name}: {want}`, which reads each one as its value"
+                );
+            } else {
+                e.message += &format!(
+                    ". Nothing at `{name}`'s `let` names `Str`, so its string literals are \
+                     `String`s: the fix annotates it `{name}: {want}`, which makes them `Str`"
+                );
+            }
             e.fix_it = Some(crate::typechecker::FixIt {
                 span: Span {
                     offset: at.offset + at.length,
@@ -15735,13 +15837,38 @@ fn consumable_after(body: &Block, root: &str, field: Option<&str>, lp: &Span) ->
 /// Each un-annotated `let name = [..];` in `body` (its name, the name's span
 /// and the statement's offset), and every identifier, for
 /// [`TypeChecker::offer_ref_list_annotations`].
-fn list_lets(
-    body: &Block,
-    lets: &mut Vec<(String, Span, usize)>,
-    idents: &mut Vec<(Span, String)>,
-) {
+/// `t` with each whole type name `from` written `to`.
+fn word_swap(t: &str, from: &str, to: &str) -> String {
+    let mut out = String::new();
+    let mut word = String::new();
+    for ch in t.chars().chain(std::iter::once(' ')) {
+        if ch.is_alphanumeric() || ch == '_' {
+            word.push(ch);
+            continue;
+        }
+        out.push_str(if word == from { to } else { &word });
+        word.clear();
+        out.push(ch);
+    }
+    out.pop();
+    out
+}
+
+/// An unannotated `let` of a list literal: its name, pattern span, statement
+/// offset, and the spans of the elements (or tuple elements' parts) that are
+/// not string literals, which an annotation naming `Str` would not retype.
+type ListLet = (String, Span, usize, Vec<Span>);
+
+fn list_lets(body: &Block, lets: &mut Vec<ListLet>, idents: &mut Vec<(Span, String)>) {
     use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
-    fn block(b: &Block, lets: &mut Vec<(String, Span, usize)>, idents: &mut Vec<(Span, String)>) {
+    fn leaves(e: &Expr, out: &mut Vec<Span>) {
+        match &e.kind {
+            ExprKind::StringLit(_) => {}
+            ExprKind::Tuple(parts) => parts.iter().for_each(|p| leaves(p, out)),
+            _ => out.push(e.span),
+        }
+    }
+    fn block(b: &Block, lets: &mut Vec<ListLet>, idents: &mut Vec<(Span, String)>) {
         for stmt in &b.stmts {
             if let StmtKind::Let {
                 pattern,
@@ -15754,18 +15881,16 @@ fn list_lets(
                     (&pattern.kind, &value.kind)
                 {
                     if !items.is_empty() {
-                        lets.push((n.clone(), pattern.span, stmt.span.offset));
+                        let mut other = Vec::new();
+                        items.iter().for_each(|i| leaves(i, &mut other));
+                        lets.push((n.clone(), pattern.span, stmt.span.offset, other));
                     }
                 }
             }
         }
         for_each_block_child(b, &mut |ch| child(ch, lets, idents));
     }
-    fn child(
-        ch: Child<'_>,
-        lets: &mut Vec<(String, Span, usize)>,
-        idents: &mut Vec<(Span, String)>,
-    ) {
+    fn child(ch: Child<'_>, lets: &mut Vec<ListLet>, idents: &mut Vec<(Span, String)>) {
         let e = match ch {
             Child::Block(b) => return block(b, lets, idents),
             Child::Expr(e) => e,

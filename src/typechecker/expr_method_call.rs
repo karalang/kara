@@ -2090,6 +2090,7 @@ impl<'a> super::TypeChecker<'a> {
         );
         self.method_call_ends.push(ends);
         self.note_literal_push(object, method, args);
+        self.note_d5_ref_fill(object, method, args);
         self.note_last_mut_receiver(object, args);
         // The dependency traits the file this call is written in does not
         // import supply none of its methods (B-2026-11-16-180).
@@ -3496,6 +3497,9 @@ impl<'a> super::TypeChecker<'a> {
         // batches (B-2026-07-14-6). Extracted to
         // `method_optres_combinator.rs`; it keeps this position in the
         // first-match-wins chain and the batch order within it.
+        if let Some(t) = self.rust_ok_on_option(object, method, args, args_close_span, &obj_ty) {
+            return t;
+        }
         if let Some(t) = self.try_option_result_combinator(method, args, span, &obj_ty) {
             return t;
         }

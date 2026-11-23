@@ -1,0 +1,681 @@
+// bt_tracker: a BitTorrent tracker (BEP 3 announce, BEP 23 compact peer
+// lists, BEP 48 scrape) served over HTTP on loopback, and the peers that
+// announce to it. Every tracker answer is a bencoded dictionary; the compact
+// peer list and the scrape's keys are raw bytes, not text, so the handler
+// answers with a byte body.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::thread;
+
+const ADDR: &str = "127.0.0.1:47784";
+const INTERVAL: i64 = 1800;
+const MIN_INTERVAL: i64 = 900;
+const DEFAULT_NUMWANT: usize = 50;
+const MAX_NUMWANT: usize = 200;
+
+struct Response {
+    status: i64,
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+}
+
+// ---- bencode
+
+#[derive(Clone, Debug, PartialEq)]
+enum Value {
+    Int(i64),
+    Bytes(Vec<u8>),
+    List(Vec<Value>),
+    Dict(BTreeMap<Vec<u8>, Value>),
+}
+
+fn text(s: &str) -> Value {
+    Value::Bytes(s.as_bytes().to_vec())
+}
+
+fn encode(v: &Value, out: &mut Vec<u8>) {
+    match v {
+        Value::Int(n) => {
+            out.extend_from_slice(format!("i{}e", n).as_bytes());
+        }
+        Value::Bytes(b) => {
+            out.extend_from_slice(format!("{}:", b.len()).as_bytes());
+            out.extend_from_slice(b);
+        }
+        Value::List(items) => {
+            out.push(b'l');
+            for item in items {
+                encode(item, out);
+            }
+            out.push(b'e');
+        }
+        Value::Dict(map) => {
+            out.push(b'd');
+            for (k, item) in map {
+                encode(&Value::Bytes(k.clone()), out);
+                encode(item, out);
+            }
+            out.push(b'e');
+        }
+    }
+}
+
+fn bencode(v: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode(v, &mut out);
+    out
+}
+
+fn dict(pairs: Vec<(&str, Value)>) -> Value {
+    let mut map = BTreeMap::new();
+    for (k, v) in pairs {
+        map.insert(k.as_bytes().to_vec(), v);
+    }
+    Value::Dict(map)
+}
+
+struct Decoder<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Decoder<'a> {
+    fn find(&self, byte: u8) -> Option<usize> {
+        self.data[self.pos..].iter().position(|&b| b == byte).map(|i| self.pos + i)
+    }
+
+    fn value(&mut self) -> Result<Value, String> {
+        if self.pos >= self.data.len() {
+            return Err("ends early".to_string());
+        }
+        let c = self.data[self.pos];
+        if c == b'i' {
+            let end = self.find(b'e').ok_or("integer has no end")?;
+            let digits = String::from_utf8(self.data[self.pos + 1..end].to_vec()).unwrap();
+            let n: i64 = digits.parse().map_err(|_| format!("bad integer {}", digits))?;
+            self.pos = end + 1;
+            Ok(Value::Int(n))
+        } else if c == b'l' {
+            self.pos += 1;
+            let mut items = Vec::new();
+            while self.pos < self.data.len() && self.data[self.pos] != b'e' {
+                items.push(self.value()?);
+            }
+            if self.pos >= self.data.len() {
+                return Err("list has no end".to_string());
+            }
+            self.pos += 1;
+            Ok(Value::List(items))
+        } else if c == b'd' {
+            self.pos += 1;
+            let mut map = BTreeMap::new();
+            while self.pos < self.data.len() && self.data[self.pos] != b'e' {
+                let key = match self.value()? {
+                    Value::Bytes(b) => b,
+                    _ => return Err("a key that is not a string".to_string()),
+                };
+                let v = self.value()?;
+                map.insert(key, v);
+            }
+            if self.pos >= self.data.len() {
+                return Err("dictionary has no end".to_string());
+            }
+            self.pos += 1;
+            Ok(Value::Dict(map))
+        } else if c.is_ascii_digit() {
+            let colon = self.find(b':').ok_or("string has no colon")?;
+            let digits = String::from_utf8(self.data[self.pos..colon].to_vec()).unwrap();
+            let n: usize = digits.parse().map_err(|_| format!("bad length {}", digits))?;
+            if colon + 1 + n > self.data.len() {
+                return Err("string runs past the end".to_string());
+            }
+            let b = self.data[colon + 1..colon + 1 + n].to_vec();
+            self.pos = colon + 1 + n;
+            Ok(Value::Bytes(b))
+        } else {
+            Err(format!("unexpected byte 0x{:02x}", c))
+        }
+    }
+}
+
+fn bdecode(data: &[u8]) -> Result<Value, String> {
+    let mut d = Decoder { data, pos: 0 };
+    let v = d.value()?;
+    if d.pos != data.len() {
+        return Err(format!("{} bytes after the value", data.len() - d.pos));
+    }
+    Ok(v)
+}
+
+fn get<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
+    match v {
+        Value::Dict(map) => map.get(key.as_bytes()),
+        _ => None,
+    }
+}
+
+fn int(v: &Value, key: &str) -> i64 {
+    match get(v, key) {
+        Some(Value::Int(n)) => *n,
+        _ => -1,
+    }
+}
+
+// ---- hex, percent-encoding, metainfo
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+fn pct(data: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in data {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_' || b == b'~' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+fn unpct(text: &str) -> Option<Vec<u8>> {
+    let raw = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' {
+            if i + 2 >= raw.len() || !raw[i + 1].is_ascii_hexdigit() || !raw[i + 2].is_ascii_hexdigit() {
+                return None;
+            }
+            let h = std::str::from_utf8(&raw[i + 1..i + 3]).ok()?;
+            out.push(u8::from_str_radix(h, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
+fn sha1(data: &[u8]) -> [u8; 20] {
+    let mut h = Sha1::new();
+    h.update(data);
+    h.finish()
+}
+
+fn make_info(name: &str, length: i64, piece_len: i64) -> Value {
+    let mut pieces = Vec::new();
+    let n = (length + piece_len - 1) / piece_len;
+    for i in 0..n {
+        pieces.extend_from_slice(&sha1(format!("{}:{}", name, i).as_bytes()));
+    }
+    dict(vec![
+        ("length", Value::Int(length)),
+        ("name", text(name)),
+        ("piece length", Value::Int(piece_len)),
+        ("pieces", Value::Bytes(pieces)),
+    ])
+}
+
+// ---- the tracker
+
+struct Peer {
+    ip: [u8; 4],
+    port: u16,
+    left: i64,
+}
+
+struct Torrent {
+    name: String,
+    peers: BTreeMap<Vec<u8>, Peer>,
+    downloaded: i64,
+}
+
+impl Torrent {
+    fn seeds(&self) -> i64 {
+        self.peers.values().filter(|p| p.left == 0).count() as i64
+    }
+}
+
+struct Tracker {
+    torrents: BTreeMap<Vec<u8>, Torrent>,
+    announces: i64,
+    scrapes: i64,
+    failures: i64,
+    not_found: i64,
+}
+
+fn reply(status: i64, body: Vec<u8>) -> Response {
+    Response {
+        status,
+        body,
+        headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
+    }
+}
+
+impl Tracker {
+    fn fail(&mut self, why: String) -> Vec<u8> {
+        self.failures += 1;
+        bencode(&dict(vec![("failure reason", Value::Bytes(why.into_bytes()))]))
+    }
+
+    fn handle(&mut self, path: &str, q: &[(String, Vec<u8>)]) -> Response {
+        if path == "/announce" {
+            self.announces += 1;
+            let body = self.announce(q);
+            reply(200, body)
+        } else if path == "/scrape" {
+            self.scrapes += 1;
+            let body = self.scrape(q);
+            reply(200, body)
+        } else if path == "/stats" {
+            let peers: usize = self.torrents.values().map(|t| t.peers.len()).sum();
+            let s = format!(
+                "torrents {} peers {} announces {} scrapes {} failures {} not found {}",
+                self.torrents.len(),
+                peers,
+                self.announces,
+                self.scrapes,
+                self.failures,
+                self.not_found
+            );
+            reply(200, s.into_bytes())
+        } else {
+            self.not_found += 1;
+            reply(404, format!("no route for {}", path).into_bytes())
+        }
+    }
+
+    fn announce(&mut self, q: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut params: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        for (k, v) in q {
+            if !params.contains_key(k) {
+                params.insert(k.clone(), v.clone());
+            }
+        }
+        let ih = match params.get("info_hash") {
+            Some(ih) => ih.clone(),
+            None => return self.fail("missing info_hash".to_string()),
+        };
+        if ih.len() != 20 {
+            return self.fail(format!("info_hash is {} bytes, not 20", ih.len()));
+        }
+        if !self.torrents.contains_key(&ih) {
+            return self.fail("unregistered torrent".to_string());
+        }
+        let pid = match params.get("peer_id") {
+            Some(p) => p.clone(),
+            None => return self.fail("missing peer_id".to_string()),
+        };
+        if pid.len() != 20 {
+            return self.fail(format!("peer_id is {} bytes, not 20", pid.len()));
+        }
+        let mut nums = [0i64; 4];
+        for (i, k) in ["port", "uploaded", "downloaded", "left"].iter().enumerate() {
+            let raw = match params.get(*k) {
+                Some(raw) => raw.clone(),
+                None => return self.fail(format!("missing {}", k)),
+            };
+            if raw.is_empty() || !raw.iter().all(|b| b.is_ascii_digit()) {
+                return self.fail(format!("invalid {}", k));
+            }
+            nums[i] = String::from_utf8(raw).unwrap().parse().unwrap();
+        }
+        if nums[0] < 1 || nums[0] > 65535 {
+            return self.fail("invalid port".to_string());
+        }
+        let ip_text = String::from_utf8_lossy(params.get("ip").map(|v| v.as_slice()).unwrap_or(b"")).to_string();
+        let parts: Vec<&str> = ip_text.split('.').collect();
+        let mut ip = [0u8; 4];
+        if parts.len() != 4 {
+            return self.fail("invalid ip".to_string());
+        }
+        for (i, p) in parts.iter().enumerate() {
+            match p.parse::<u8>() {
+                Ok(n) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => ip[i] = n,
+                _ => return self.fail("invalid ip".to_string()),
+            }
+        }
+        let event = String::from_utf8_lossy(params.get("event").map(|v| v.as_slice()).unwrap_or(b"")).to_string();
+        if !["", "started", "completed", "stopped"].contains(&event.as_str()) {
+            return self.fail(format!("invalid event {}", event));
+        }
+        let mut numwant = DEFAULT_NUMWANT;
+        if let Some(raw) = params.get("numwant") {
+            if raw.is_empty() || !raw.iter().all(|b| b.is_ascii_digit()) {
+                return self.fail("invalid numwant".to_string());
+            }
+            let n: usize = String::from_utf8(raw.clone()).unwrap().parse().unwrap();
+            numwant = n.min(MAX_NUMWANT);
+        }
+        let compact = params.get("compact").map(|v| v.as_slice() == b"1").unwrap_or(true);
+        let no_peer_id = params.get("no_peer_id").map(|v| v.as_slice() == b"1").unwrap_or(false);
+
+        let t = self.torrents.get_mut(&ih).unwrap();
+        if event == "stopped" {
+            t.peers.remove(&pid);
+        } else {
+            if event == "completed" {
+                if let Some(was) = t.peers.get(&pid) {
+                    if was.left > 0 {
+                        t.downloaded += 1;
+                    }
+                }
+            }
+            t.peers.insert(pid.clone(), Peer { ip, port: nums[0] as u16, left: nums[3] });
+        }
+
+        let mut others: Vec<(&Vec<u8>, &Peer)> = Vec::new();
+        if event != "stopped" {
+            for (k, p) in t.peers.iter() {
+                if *k != pid && others.len() < numwant {
+                    others.push((k, p));
+                }
+            }
+        }
+        let peers = if compact {
+            let mut b = Vec::new();
+            for (_, p) in &others {
+                b.extend_from_slice(&p.ip);
+                b.extend_from_slice(&p.port.to_be_bytes());
+            }
+            Value::Bytes(b)
+        } else {
+            let mut list = Vec::new();
+            for (k, p) in &others {
+                let ip = format!("{}.{}.{}.{}", p.ip[0], p.ip[1], p.ip[2], p.ip[3]);
+                let mut d = vec![("ip", text(&ip)), ("port", Value::Int(p.port as i64))];
+                if !no_peer_id {
+                    d.push(("peer id", Value::Bytes((*k).clone())));
+                }
+                list.push(dict(d));
+            }
+            Value::List(list)
+        };
+        let seeds = t.seeds();
+        bencode(&dict(vec![
+            ("complete", Value::Int(seeds)),
+            ("downloaded", Value::Int(t.downloaded)),
+            ("incomplete", Value::Int(t.peers.len() as i64 - seeds)),
+            ("interval", Value::Int(INTERVAL)),
+            ("min interval", Value::Int(MIN_INTERVAL)),
+            ("peers", peers),
+        ]))
+    }
+
+    fn scrape(&mut self, q: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut wanted: Vec<Vec<u8>> = q.iter().filter(|(k, _)| k == "info_hash").map(|(_, v)| v.clone()).collect();
+        if wanted.is_empty() {
+            wanted = self.torrents.keys().cloned().collect();
+        }
+        let mut files = BTreeMap::new();
+        for ih in wanted {
+            if let Some(t) = self.torrents.get(&ih) {
+                let seeds = t.seeds();
+                files.insert(
+                    ih.clone(),
+                    dict(vec![
+                        ("complete", Value::Int(seeds)),
+                        ("downloaded", Value::Int(t.downloaded)),
+                        ("incomplete", Value::Int(t.peers.len() as i64 - seeds)),
+                    ]),
+                );
+            }
+        }
+        bencode(&dict(vec![("files", Value::Dict(files))]))
+    }
+}
+
+fn serve(tracker: &Mutex<Tracker>, req: Request) -> Response {
+    let url = req.url();
+    let (path, query) = match url.find('?') {
+        Some(i) => (url[..i].to_string(), url[i + 1..].to_string()),
+        None => (url.clone(), String::new()),
+    };
+    let mut q = Vec::new();
+    if !query.is_empty() {
+        for part in query.split('&') {
+            let (k, v) = match part.find('=') {
+                Some(i) => (&part[..i], &part[i + 1..]),
+                None => (part, ""),
+            };
+            match (unpct(k), unpct(v)) {
+                (Some(kb), Some(vb)) => q.push((String::from_utf8_lossy(&kb).to_string(), vb)),
+                _ => return reply(400, b"bad percent-encoding".to_vec()),
+            }
+        }
+    }
+    let mut t = tracker.lock().unwrap();
+    t.handle(&path, &q)
+}
+
+// ---- the peers
+
+fn show_peers(peers: &Value) -> String {
+    match peers {
+        Value::Bytes(b) => {
+            if b.len() % 6 != 0 {
+                return format!("compact list of {} bytes, not a multiple of 6", b.len());
+            }
+            let mut out = Vec::new();
+            for c in b.chunks(6) {
+                let port = u16::from_be_bytes([c[4], c[5]]);
+                out.push(format!("{}.{}.{}.{}:{}", c[0], c[1], c[2], c[3], port));
+            }
+            format!("compact [{}]", out.join(", "))
+        }
+        Value::List(items) => {
+            let mut out = Vec::new();
+            for p in items {
+                let ip = match get(p, "ip") {
+                    Some(Value::Bytes(b)) => String::from_utf8_lossy(b).to_string(),
+                    _ => "?".to_string(),
+                };
+                let mut s = format!("{}:{}", ip, int(p, "port"));
+                if let Some(Value::Bytes(id)) = get(p, "peer id") {
+                    s.push_str(&format!(" {}", String::from_utf8_lossy(id)));
+                }
+                out.push(s);
+            }
+            format!("dicts [{}]", out.join(", "))
+        }
+        _ => "no peers".to_string(),
+    }
+}
+
+fn fetch(client: &Client, path: &str) -> (i64, Vec<u8>) {
+    for _ in 0..100 {
+        match client.get(format!("http://{}{}", ADDR, path)) {
+            Ok(r) => return (r.status, r.body),
+            Err(e) => match e.status() {
+                Some(s) => return (s, e.body().unwrap_or_default().into_bytes()),
+                None => thread::sleep(Duration::from_millis(20)),
+            },
+        }
+    }
+    panic!("tracker never came up");
+}
+
+struct Announcer {
+    name: String,
+    peer_id: Vec<u8>,
+    ip: String,
+    port: i64,
+}
+
+impl Announcer {
+    fn announce(&self, c: &Client, ih: &[u8], left: i64, event: &str, extra: &str, uploaded: i64, downloaded: i64) {
+        let mut q = format!(
+            "info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&ip={}",
+            pct(ih),
+            pct(&self.peer_id),
+            self.port,
+            uploaded,
+            downloaded,
+            left,
+            self.ip
+        );
+        if !event.is_empty() {
+            q.push_str(&format!("&event={}", event));
+        }
+        q.push_str(extra);
+        let (status, body) = fetch(c, &format!("/announce?{}", q));
+        let what = if event.is_empty() { "update" } else { event };
+        self.report(what, status, &body);
+    }
+
+    fn report(&self, what: &str, status: i64, body: &[u8]) {
+        let d = match bdecode(body) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("{}: {} -> {}, not bencode: {}", self.name, what, status, e);
+                return;
+            }
+        };
+        if let Some(Value::Bytes(why)) = get(&d, "failure reason") {
+            println!("{}: {} -> failure: {}", self.name, what, String::from_utf8_lossy(why));
+            return;
+        }
+        println!(
+            "{}: {} -> {} bytes, seeds {} leechers {} done {} every {}s (min {}s)",
+            self.name,
+            what,
+            body.len(),
+            int(&d, "complete"),
+            int(&d, "incomplete"),
+            int(&d, "downloaded"),
+            int(&d, "interval"),
+            int(&d, "min interval")
+        );
+        println!("{}:   {}", self.name, show_peers(get(&d, "peers").unwrap()));
+    }
+}
+
+fn scrape(c: &Client, label: &str, hashes: &[Vec<u8>], names: &BTreeMap<Vec<u8>, String>) {
+    let q: Vec<String> = hashes.iter().map(|h| format!("info_hash={}", pct(h))).collect();
+    let path = if q.is_empty() { "/scrape".to_string() } else { format!("/scrape?{}", q.join("&")) };
+    let (status, body) = fetch(c, &path);
+    let d = bdecode(&body).unwrap();
+    let files = match get(&d, "files") {
+        Some(Value::Dict(f)) => f.clone(),
+        _ => BTreeMap::new(),
+    };
+    println!("scrape {} -> {}, {} bytes, {} torrents", label, status, body.len(), files.len());
+    for (ih, f) in &files {
+        let name = names.get(ih).cloned().unwrap_or("?".to_string());
+        println!(
+            "  {} {}: seeds {} leechers {} done {}",
+            &hex(ih)[..16],
+            name,
+            int(f, "complete"),
+            int(f, "incomplete"),
+            int(f, "downloaded")
+        );
+    }
+}
+
+fn main() {
+    let infos = vec![make_info("debian-13.iso", 700_000, 65_536), make_info("weather-2026.tar", 40_000, 16_384)];
+    let mut names = BTreeMap::new();
+    let mut hashes = Vec::new();
+    let mut tracker = Tracker { torrents: BTreeMap::new(), announces: 0, scrapes: 0, failures: 0, not_found: 0 };
+    println!("== metainfo");
+    for info in &infos {
+        let meta = bencode(&dict(vec![
+            ("announce", text(&format!("http://{}/announce", ADDR))),
+            ("created by", text("kara-tracker-demo")),
+            ("info", info.clone()),
+        ]));
+        let ih = sha1(&bencode(info)).to_vec();
+        let name = match get(info, "name") {
+            Some(Value::Bytes(b)) => String::from_utf8(b.clone()).unwrap(),
+            _ => String::new(),
+        };
+        let npieces = match get(info, "pieces") {
+            Some(Value::Bytes(b)) => b.len() / 20,
+            _ => 0,
+        };
+        hashes.push(ih.clone());
+        names.insert(ih.clone(), name.clone());
+        tracker.torrents.insert(ih.clone(), Torrent { name: name.clone(), peers: BTreeMap::new(), downloaded: 0 });
+        let back = bdecode(&meta).unwrap();
+        let again = sha1(&bencode(get(&back, "info").unwrap())).to_vec();
+        println!(
+            "{}: {}-byte metainfo, {} pieces, info_hash {}, round trip {}",
+            name,
+            meta.len(),
+            npieces,
+            hex(&ih),
+            again == ih
+        );
+    }
+    let iso = hashes[0].clone();
+    let tar = hashes[1].clone();
+    let unknown = sha1(b"not registered").to_vec();
+
+    let tracker = Arc::new(Mutex::new(tracker));
+    let group = TaskGroup::new();
+    let t = tracker.clone();
+    group.spawn(move || Server::serve(ADDR.to_string(), move |req| serve(&t, req)));
+    let c = Client::new();
+
+    let seed = Announcer { name: "seed".to_string(), peer_id: b"-KR0100-seed00000001".to_vec(), ip: "10.0.0.1".to_string(), port: 6881 };
+    let alice = Announcer { name: "alice".to_string(), peer_id: b"-KR0100-alice0000002".to_vec(), ip: "10.0.0.2".to_string(), port: 6882 };
+    let bob = Announcer { name: "bob".to_string(), peer_id: b"-KR0100-bob000000003".to_vec(), ip: "10.0.0.3".to_string(), port: 51413 };
+    let carol = Announcer { name: "carol".to_string(), peer_id: b"-KR0100-carol0000004".to_vec(), ip: "192.168.7.20".to_string(), port: 6889 };
+
+    println!("== announce");
+    seed.announce(&c, &iso, 0, "started", "", 0, 0);
+    alice.announce(&c, &iso, 700_000, "started", "", 0, 0);
+    bob.announce(&c, &iso, 700_000, "started", "&compact=0", 0, 0);
+    bob.announce(&c, &iso, 500_000, "", "&compact=0&no_peer_id=1&numwant=1", 0, 200_000);
+    carol.announce(&c, &iso, 700_000, "started", "&numwant=0", 0, 0);
+    alice.announce(&c, &iso, 0, "completed", "", 50_000, 700_000);
+    alice.announce(&c, &iso, 0, "completed", "", 0, 0);
+    seed.announce(&c, &iso, 0, "stopped", "", 900_000, 0);
+    bob.announce(&c, &iso, 300_000, "", "&numwant=500", 0, 0);
+    carol.announce(&c, &tar, 40_000, "started", "", 0, 0);
+    seed.announce(&c, &tar, 0, "started", "", 0, 0);
+    carol.announce(&c, &tar, 0, "completed", "", 0, 40_000);
+
+    println!("== scrape");
+    scrape(&c, "iso", &[iso.clone()], &names);
+    scrape(&c, "both", &[tar.clone(), iso.clone()], &names);
+    scrape(&c, "all", &[], &names);
+    scrape(&c, "unknown", &[unknown.clone()], &names);
+
+    println!("== refused");
+    let bad = Announcer { name: "mallory".to_string(), peer_id: b"-XX0001-mallory00009".to_vec(), ip: "10.0.0.9".to_string(), port: 6881 };
+    let pid = pct(&bad.peer_id);
+    let tail = "&uploaded=0&downloaded=0&left=0&ip=10.0.0.9";
+    let cases = vec![
+        ("no info_hash", "peer_id=x".to_string()),
+        ("short info_hash", format!("info_hash={}&peer_id={}", pct(&iso[..19]), pid)),
+        ("unknown torrent", format!("info_hash={}&peer_id={}", pct(&unknown), pid)),
+        ("no peer_id", format!("info_hash={}&port=1", pct(&iso))),
+        ("long peer_id", format!("info_hash={}&peer_id={}%21&port=1", pct(&iso), pid)),
+        ("port 0", format!("info_hash={}&peer_id={}&port=0{}", pct(&iso), pid, tail)),
+        ("left -1", format!("info_hash={}&peer_id={}&port=1&uploaded=0&downloaded=0&left=-1&ip=10.0.0.9", pct(&iso), pid)),
+        ("bad ip", format!("info_hash={}&peer_id={}&port=1&uploaded=0&downloaded=0&left=0&ip=10.0.0.300", pct(&iso), pid)),
+        ("bad event", format!("info_hash={}&peer_id={}&port=1{}&event=paused", pct(&iso), pid, tail)),
+        ("bad numwant", format!("info_hash={}&peer_id={}&port=1{}&numwant=lots", pct(&iso), pid, tail)),
+    ];
+    for (label, q) in &cases {
+        let (status, body) = fetch(&c, &format!("/announce?{}", q));
+        bad.report(label, status, &body);
+    }
+    let (status, body) = fetch(&c, "/announce?info_hash=%G1");
+    println!("mallory: bad escape -> {} {}", status, String::from_utf8_lossy(&body));
+    let (status, body) = fetch(&c, "/peers");
+    println!("mallory: /peers -> {} {}", status, String::from_utf8_lossy(&body));
+
+    println!("== stats");
+    let (status, body) = fetch(&c, "/stats");
+    println!("stats -> {} {}", status, String::from_utf8_lossy(&body));
+    group.cancel();
+    println!("done");
+}

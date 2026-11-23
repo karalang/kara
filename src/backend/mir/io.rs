@@ -1589,6 +1589,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let status_k = self.response_field(rt, "status")?;
                 let body_k = self.response_field(rt, "body")?;
                 let headers_k = self.response_field(rt, "headers").ok();
+                let raw_body = self.body_is_bytes(rt);
                 self.if_then(is_ok, |cx| {
                     cx.store_tag(d, dty, okv)?;
                     let st = cx.load_i64(status)?;
@@ -1610,6 +1611,15 @@ impl<'ctx> Cx<'ctx, '_> {
                         cx.builder
                             .build_call(f, &[key.into(), hs.into()], "")
                             .map_err(e)?;
+                    }
+                    // A `Vec[u8]` body is the bytes the body came as,
+                    // not their lossy decoding (B-2026-11-23-60).
+                    if raw_body {
+                        let f = cx.extern_fn(
+                            "karac_runtime_http_client_mir_raw_body",
+                            cx.llcx.void_type().fn_type(&[ptr.into()], false),
+                        );
+                        cx.builder.build_call(f, &[body.into()], "").map_err(e)?;
                     }
                     Ok(())
                 })?;
@@ -1883,6 +1893,23 @@ impl<'ctx> Cx<'ctx, '_> {
     /// `{ status, body }`, or a program's own `Response` in the shape io.md
     /// § HTTP server documents, whose fields may come in any order and may
     /// add `headers`.
+    /// Whether the `Response` type `rt` declares its `body` a `Vec[u8]`,
+    /// which goes out and comes in as the bytes themselves (B-2026-11-23-60).
+    fn body_is_bytes(&self, rt: Ty) -> bool {
+        let Ok(k) = self.response_field(rt, "body") else {
+            return false;
+        };
+        let Some(t) = self.tys.field_ty(rt, None, k) else {
+            return false;
+        };
+        match self.tys.kind(t) {
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => {
+                matches!(self.tys.kind(e), TyKind::Int(crate::mir::ty::IntTy::U8))
+            }
+            _ => false,
+        }
+    }
+
     fn response_field(&self, rt: Ty, name: &str) -> R<u32> {
         let TyKind::Adt(adt) = self.tys.kind(rt) else {
             return Err(format!(
@@ -1936,8 +1963,15 @@ impl<'ctx> Cx<'ctx, '_> {
         let (b, bn) = parts(field("body"))?;
         let (h, hn) = parts(field("headers"))?;
         let d = self.place_ptr(dest)?;
+        // A `Vec[u8]` body is laid out as a `String`; only its default
+        // `Content-Type` differs (B-2026-11-23-60).
+        let wire_fn = if self.body_is_bytes(rt) {
+            "karac_mir_http_wire_bytes"
+        } else {
+            "karac_mir_http_wire"
+        };
         let wire = self.extern_fn(
-            "karac_mir_http_wire",
+            wire_fn,
             self.llcx.void_type().fn_type(
                 &[
                     i64t.into(),

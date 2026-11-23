@@ -683,6 +683,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_http_need,
         mir_io::karac_mir_http_wait_ms,
         mir_io::karac_mir_http_wire,
+        mir_io::karac_mir_http_wire_bytes,
         mir_io::karac_mir_http_keep_alive,
         mir_io::karac_mir_http_served,
         mir_io::karac_mir_http_report,
@@ -710,6 +711,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_runtime_http_client_mir_send,
         mir_io::karac_runtime_http_client_mir_header,
         mir_io::karac_runtime_http_client_mir_headers,
+        mir_io::karac_runtime_http_client_mir_raw_body,
     );
     // `HttpError`'s readers of the response an error status keeps
     // (B-2026-11-09-44), and `Response.bytes()` (B-2026-11-15-8): in both

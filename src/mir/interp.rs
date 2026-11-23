@@ -18824,16 +18824,6 @@ impl<'a> Interp<'a> {
         }
         // The body as it came, which `bytes()` returns: a body that is
         // not UTF-8 keeps its bytes there, as the compiled backend's does.
-        let text = String::from_utf8_lossy(&a.raw).into_owned();
-        let body = self.alloc_box("String", Value::Str(text));
-        let headers = a.headers.clone();
-        if let Value::Box(id) = body {
-            self.http_headers.insert(id, a.headers);
-            self.http_bodies.insert(id, a.raw);
-        }
-        // The fields by name: a program's own `Response` (io.md § HTTP
-        // server) may order them its way and add `headers`, which get the
-        // response's headers (B-2026-11-09-34).
         let ok_ty = match self.tys.kind(ret) {
             TyKind::Adt(a) => self
                 .tys
@@ -18844,6 +18834,23 @@ impl<'a> Interp<'a> {
                 .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0)),
             _ => None,
         };
+        // A program's own `Response` whose `body` is a `Vec[u8]` gets the
+        // bytes the body came as (B-2026-11-23-60).
+        let body = if ok_ty.is_some_and(|t| self.body_is_bytes(t)) {
+            let bytes = a.raw.iter().map(|b| Value::Int(i128::from(*b))).collect();
+            self.alloc_box("Vec", Value::Agg(bytes))
+        } else {
+            let text = String::from_utf8_lossy(&a.raw).into_owned();
+            self.alloc_box("String", Value::Str(text))
+        };
+        let headers = a.headers.clone();
+        if let Value::Box(id) = body {
+            self.http_headers.insert(id, a.headers);
+            self.http_bodies.insert(id, a.raw);
+        }
+        // The fields by name: a program's own `Response` (io.md § HTTP
+        // server) may order them its way and add `headers`, which get the
+        // response's headers (B-2026-11-09-34).
         let names = match ok_ty {
             Some(t) => self.response_fields(t),
             None => vec!["status".to_string(), "body".to_string()],
@@ -18866,6 +18873,27 @@ impl<'a> Interp<'a> {
             });
         }
         self.variant_named(ret, None, "Ok", vec![Value::Agg(fields)])
+    }
+
+    /// Whether the `Response` type `t` declares its `body` a `Vec[u8]`,
+    /// which goes out and comes in as the bytes themselves (B-2026-11-23-60).
+    fn body_is_bytes(&self, t: Ty) -> bool {
+        let mut t = t;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            t = i;
+        }
+        let Some(k) = self.response_fields(t).iter().position(|n| n == "body") else {
+            return false;
+        };
+        let Some(bt) = self.tys.field_ty(t, None, k as u32) else {
+            return false;
+        };
+        match self.tys.kind(bt) {
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => {
+                matches!(self.tys.kind(e), TyKind::Int(crate::mir::ty::IntTy::U8))
+            }
+            _ => false,
+        }
     }
 
     /// `Response`'s field names: the library's `status, body`, or those of a
@@ -19693,9 +19721,15 @@ impl<'a> Interp<'a> {
                 let rty = self.deref_ty(arg_tys.first().copied(), name)?;
                 let resp = self.through_refs(&args[0])?;
                 let (status, body, headers) = self.response_parts(&resp, rty, name)?;
+                let raw = self.body_is_bytes(rty);
                 let task = self.cur_task;
                 let req = self.http_requests.entry(task).or_default();
-                let wire = crate::http1::response_bytes(status, body.as_bytes(), &headers, req);
+                // A `Vec[u8]` body goes out as it is (B-2026-11-23-60).
+                let wire = if raw {
+                    crate::http1::response_bytes_raw(status, &body, &headers, req)
+                } else {
+                    crate::http1::response_bytes(status, &body, &headers, req)
+                };
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__wire_fixed") => {
@@ -19808,7 +19842,8 @@ impl<'a> Interp<'a> {
         resp: &Value,
         rty: Ty,
         name: &str,
-    ) -> R<(i64, String, crate::http1::Headers)> {
+    ) -> R<(i64, Vec<u8>, crate::http1::Headers)> {
+        let raw = self.body_is_bytes(rty);
         let Value::Agg(fs) = resp else {
             return err(format!("{name}: a handler returned {resp:?}"));
         };
@@ -19826,8 +19861,9 @@ impl<'a> Interp<'a> {
             _ => return err(format!("{name}: a Response without a `status`")),
         };
         let body = match field("body") {
-            Some(v) => self.string_at(&v.clone())?,
-            None => String::new(),
+            Some(v) if raw => self.bytes_of_view(&v.clone(), name)?,
+            Some(v) => self.string_at(&v.clone())?.into_bytes(),
+            None => Vec::new(),
         };
         let mut headers = Vec::new();
         if let Some(Value::Box(id)) = field("headers").cloned() {

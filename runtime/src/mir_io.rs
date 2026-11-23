@@ -1550,6 +1550,48 @@ pub unsafe extern "C" fn karac_runtime_http_error_mir_body(
     }
 }
 
+/// A client `Response` whose `body` field is a `Vec[u8]` (a program's own
+/// `Response`, docs/library/io.md § HTTP client, B-2026-11-23-60): the `String`
+/// at `body` the client filled in becomes the bytes the body came as. A
+/// body that came as UTF-8 is already those bytes; one that did not is
+/// put back from `MIR_RESPONSE_RAW`, in a buffer of its own, and the
+/// response's headers follow the buffer to its new address.
+///
+/// # Safety
+///
+/// `body` is a live `String` (or `Vec[u8]`) the client just filled.
+#[cfg(feature = "tls")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_mir_raw_body(body: *mut RawVec) {
+    // SAFETY: the caller's contract.
+    let b = unsafe { &mut *body };
+    let old = b.ptr as usize;
+    // SAFETY: `b` is a live buffer of `b.len` bytes.
+    let now = unsafe { buf_bytes(b.ptr, b.len) }.to_vec();
+    let raw = MIR_RESPONSE_RAW
+        .lock()
+        .ok()
+        .and_then(|mut t| match t.get(&old) {
+            Some((text, _)) if *text == now => t.remove(&old).map(|(_, raw)| raw),
+            _ => None,
+        });
+    let Some(raw) = raw else {
+        return;
+    };
+    let cap = raw.len().max(1);
+    let q = karac_realloc_or_panic(b.ptr, cap);
+    // SAFETY: `q` has room for `raw.len()` bytes.
+    unsafe { std::ptr::copy_nonoverlapping(raw.as_ptr(), q, raw.len()) };
+    *b = RawVec::new(q, raw.len(), cap);
+    if q as usize != old {
+        if let Ok(mut t) = MIR_RESPONSE_HEADERS.lock() {
+            if let Some(h) = t.remove(&old) {
+                t.insert(q as usize, h);
+            }
+        }
+    }
+}
+
 /// `Response.bytes()` for the response whose body is the `String` of `len`
 /// bytes at `body`: the bytes the body came as (`MIR_RESPONSE_RAW`), or the
 /// `String`'s own when it came as UTF-8 or the program built the
@@ -1893,6 +1935,32 @@ pub unsafe extern "C" fn karac_mir_http_wire(
     // SAFETY: the caller's contract.
     let body = unsafe { bytes_at(body, body_len as usize) };
     let wire = with_request_mut(|req| http1::response_bytes(status, body, &pairs, req));
+    // SAFETY: the caller's contract; a `Vec[u8]` is laid out as a `String`.
+    unsafe { string_of(out, &wire) };
+}
+
+/// `Server.__wire(resp)` for a `Response` whose `body` is a `Vec[u8]`: as
+/// [`karac_mir_http_wire`], the body sent as it is and typed
+/// `application/octet-stream` when the handler sets no type (B-2026-11-23-60).
+///
+/// # Safety
+///
+/// As [`karac_mir_http_wire`].
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_wire_bytes(
+    status: i64,
+    body: *const u8,
+    body_len: u64,
+    headers: *const RawVec,
+    headers_len: u64,
+    out: *mut RawVec,
+) {
+    // SAFETY: the caller's contract.
+    let pairs = unsafe { header_pairs(headers, headers_len as usize) };
+    // SAFETY: the caller's contract.
+    let body = unsafe { bytes_at(body, body_len as usize) };
+    let wire = with_request_mut(|req| http1::response_bytes_raw(status, body, &pairs, req));
     // SAFETY: the caller's contract; a `Vec[u8]` is laid out as a `String`.
     unsafe { string_of(out, &wire) };
 }

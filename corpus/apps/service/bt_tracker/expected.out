@@ -1,0 +1,54 @@
+== metainfo
+debian-13.iso: 379-byte metainfo, 11 pieces, info_hash 9fc87c60007b4ee4ad1d816fd919dc3d46e24e74, round trip true
+weather-2026.tar: 220-byte metainfo, 3 pieces, info_hash 4930c8ff01834f3e55a51e4296cd575bfc9c5209, round trip true
+== announce
+seed: started -> 92 bytes, seeds 1 leechers 0 done 0 every 1800s (min 900s)
+seed:   compact []
+alice: started -> 98 bytes, seeds 1 leechers 1 done 0 every 1800s (min 900s)
+alice:   compact [10.0.0.1:6881]
+bob: started -> 212 bytes, seeds 1 leechers 2 done 0 every 1800s (min 900s)
+bob:   dicts [10.0.0.2:6882 -KR0100-alice0000002, 10.0.0.1:6881 -KR0100-seed00000001]
+bob: update -> 120 bytes, seeds 1 leechers 2 done 0 every 1800s (min 900s)
+bob:   dicts [10.0.0.2:6882]
+carol: started -> 92 bytes, seeds 1 leechers 3 done 0 every 1800s (min 900s)
+carol:   compact []
+alice: completed -> 111 bytes, seeds 2 leechers 2 done 1 every 1800s (min 900s)
+alice:   compact [10.0.0.3:51413, 192.168.7.20:6889, 10.0.0.1:6881]
+alice: completed -> 111 bytes, seeds 2 leechers 2 done 1 every 1800s (min 900s)
+alice:   compact [10.0.0.3:51413, 192.168.7.20:6889, 10.0.0.1:6881]
+seed: stopped -> 92 bytes, seeds 1 leechers 2 done 1 every 1800s (min 900s)
+seed:   compact []
+bob: update -> 105 bytes, seeds 1 leechers 2 done 1 every 1800s (min 900s)
+bob:   compact [10.0.0.2:6882, 192.168.7.20:6889]
+carol: started -> 92 bytes, seeds 0 leechers 1 done 0 every 1800s (min 900s)
+carol:   compact []
+seed: started -> 98 bytes, seeds 1 leechers 1 done 0 every 1800s (min 900s)
+seed:   compact [192.168.7.20:6889]
+carol: completed -> 98 bytes, seeds 2 leechers 0 done 1 every 1800s (min 900s)
+carol:   compact [10.0.0.1:6881]
+== scrape
+scrape iso -> 200, 81 bytes, 1 torrents
+  9fc87c60007b4ee4 debian-13.iso: seeds 1 leechers 2 done 1
+scrape both -> 200, 151 bytes, 2 torrents
+  4930c8ff01834f3e weather-2026.tar: seeds 2 leechers 0 done 1
+  9fc87c60007b4ee4 debian-13.iso: seeds 1 leechers 2 done 1
+scrape all -> 200, 151 bytes, 2 torrents
+  4930c8ff01834f3e weather-2026.tar: seeds 2 leechers 0 done 1
+  9fc87c60007b4ee4 debian-13.iso: seeds 1 leechers 2 done 1
+scrape unknown -> 200, 11 bytes, 0 torrents
+== refused
+mallory: no info_hash -> failure: missing info_hash
+mallory: short info_hash -> failure: info_hash is 19 bytes, not 20
+mallory: unknown torrent -> failure: unregistered torrent
+mallory: no peer_id -> failure: missing peer_id
+mallory: long peer_id -> failure: peer_id is 21 bytes, not 20
+mallory: port 0 -> failure: invalid port
+mallory: left -1 -> failure: invalid left
+mallory: bad ip -> failure: invalid ip
+mallory: bad event -> failure: invalid event paused
+mallory: bad numwant -> failure: invalid numwant
+mallory: bad escape -> 400 bad percent-encoding
+mallory: /peers -> 404 no route for /peers
+== stats
+stats -> 200 torrents 2 peers 5 announces 22 scrapes 4 failures 10 not found 1
+done

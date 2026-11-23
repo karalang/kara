@@ -15153,6 +15153,37 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `map.insert(k, v)` / `out.push(v)` with `v` a bare `for` element of
+    /// a bare parameter: remembered against the collection for
+    /// `offer_d5_fill_owns` (B-2026-11-23-63).
+    pub(super) fn note_d5_ref_fill(&mut self, object: &Expr, method: &str, args: &[CallArg]) {
+        if !self.cli_lint_overrides.strict_core
+            || !matches!(method, "insert" | "push" | "push_back" | "push_front")
+        {
+            return;
+        }
+        let ExprKind::Identifier(target) = &object.kind else {
+            return;
+        };
+        let mut parts: Vec<&Expr> = Vec::new();
+        for a in args {
+            match &a.value.kind {
+                ExprKind::Tuple(xs) => parts.extend(xs.iter()),
+                _ => parts.push(&a.value),
+            }
+        }
+        for p in parts {
+            if !matches!(p.kind, ExprKind::Identifier(_)) {
+                continue;
+            }
+            if let Some((elem, param, own_at, iter_at)) = self.d5_for_element_at(p.span) {
+                self.d5_ref_fills
+                    .push((target.clone(), elem, param, own_at, iter_at));
+                return;
+            }
+        }
+    }
+
     /// `left[k].push(a)` with `a` a [`LiteralLet`]: remembered against
     /// `left`, so a value read back out of it names `a` (B-2026-11-09-15).
     pub(super) fn note_literal_push(&mut self, object: &Expr, method: &str, args: &[CallArg]) {

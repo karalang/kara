@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 714 |
+| diagnostics | 718 |
 | false-positive | 357 |
-| missing-feature | 245 |
+| missing-feature | 246 |
 | perf | 200 |
 | other | 148 |
 | soundness | 126 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 868 |
-| mir-llvm | 321 |
+| typecheck | 873 |
+| mir-llvm | 322 |
 | mir | 320 |
-| cli | 282 |
+| cli | 286 |
 | parser | 152 |
 | ownership | 133 |
-| runtime | 107 |
-| interp | 99 |
+| runtime | 108 |
+| interp | 100 |
 | effect | 62 |
 | other | 52 |
 | resolver | 51 |
@@ -136,6 +136,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-18 | 2026-11-23 | interp | high | The MIR interpreter's `Vec.dedup` ignores the program's `PartialEq` impl and compares structurally: with `eq` as `self.v % 10 == o.v % 10`, `[P{1}, P{11}, P{2}, P{2}].dedup()` leaves 3 elements on `karac run --interp` and `__mir-run`, 2 on `karac run` (JIT) and `karac build`; the written `eq` never runs on the interpreter | — |
 | B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
 | B-2026-11-23-20 | 2026-11-23 | typecheck | low | A provider-using closure returned inside `Ok(..)` from a `with_provider` body draws MIR's internal E0516 'a type that failed to check is not lowered yet' first, before the real E0600 escape diagnostic; every other escape shape (bare, Some, tuple, struct field, Vec push, lazy iterator) gets E0600 alone | — |
+| B-2026-11-23-60 | 2026-11-23 | interp+mir-llvm+runtime+typecheck | high | An HTTP `Response` body can only be a `String`, so a server cannot send bytes (a bencoded tracker reply, a SHA-1, a 0xFF) and a client cannot read a binary body into its `Response`; a `body: Vec[u8]` was refused at the handler | — |
+| B-2026-11-23-61 | 2026-11-23 | typecheck+cli | medium | Rust's `let n: i64 = s.parse().map_err(f)?` is refused with "no method 'map_err' on type 'Option'" and no fix, though the target is named: an untargeted `s.parse()` was typed `Option[T]`, so the `Result` combinator after it stopped the check before the target reached it | — |
+| B-2026-11-23-62 | 2026-11-23 | typecheck+cli | low | Rust's `.ok()` on a call that is a `Result` in Rust and an `Option` here (`u8.from_str_radix(h, 16).ok()?`) is refused with "no method 'ok' on type 'Option'" and no fix | — |
+| B-2026-11-23-63 | 2026-11-23 | typecheck+cli | medium | A local map filled from a bare `for` over a bare parameter (`fn dict(pairs: Vec[(Str, Value)]) { let mut map = SortedMap.new(); for (k, v) in pairs { map.insert(k, v) }; Value.Dict(map) }`) is a map of borrows, refused only at its use as "expected 'SortedMap[String, Value]', found 'SortedMap[String, ref Value]'", with no cause and no fix | — |
+| B-2026-11-23-64 | 2026-11-23 | typecheck+cli | low | `let mut d = [("ip", x)]` passed on as `Vec[(Str, Value)]` is refused as "expected 'Vec[(Str, Value)]', found 'Vec[(String, Value)]'" with no fix: nothing at the `let` names `Str`, so its string literals default to `String` | — |
 
 ### Relocated
 

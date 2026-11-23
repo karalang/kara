@@ -1927,7 +1927,8 @@ impl Walk<'_, '_> {
 
     /// A `Server.serve` handler returns a `Response`, and a program may declare
     /// its own (examples/shortener/README.md): `status: i64` and
-    /// `body: String`, then optionally `headers: Vec[(String, String)]`. A
+    /// `body: String` or `body: Vec[u8]` (bytes sent as they are, B-2026-11-23-60),
+    /// then optionally `headers: Vec[(String, String)]`. A
     /// struct of any other shape is refused here, where the legacy pipeline
     /// refused it in codegen (the misshaped-handler test in
     /// tests/http_client_codegen.rs).
@@ -1948,12 +1949,27 @@ impl Walk<'_, '_> {
             ("body", "String"),
             ("headers", "Vec[(String, String)]"),
         ];
-        let fits = (2..=3).contains(&fields.len())
-            && fields
-                .iter()
-                .zip(want.iter())
-                .all(|((n, t), (wn, wt))| n == wn && t == wt);
-        if fits {
+        let fits_but_body = |body_ok: &dyn Fn(&str) -> bool| {
+            (2..=3).contains(&fields.len())
+                && fields
+                    .iter()
+                    .zip(want.iter())
+                    .all(|((n, t), (wn, wt))| n == wn && (t == wt || (*wn == "body" && body_ok(t))))
+        };
+        if fits_but_body(&|t| t == "Vec[u8]") {
+            return;
+        }
+        // The right fields with another body type: name the two it may be.
+        if fits_but_body(&|_| true) {
+            let body = &fields[1].1;
+            self.handler_shapes.push((
+                call.span,
+                format!(
+                    "a `Server.{method}` handler's `Response` declares `body: {body}`, but a \
+                     response body is `String` (text) or `Vec[u8]` (bytes sent as they are); \
+                     declare `body: Vec[u8]` and build it with `.to_vec()` for bytes"
+                ),
+            ));
             return;
         }
         let shape = fields
@@ -1965,8 +1981,8 @@ impl Walk<'_, '_> {
             call.span,
             format!(
                 "a `Server.{method}` handler must return a `Response` with `status: i64` and \
-                 `body: String` (then, optionally, `headers: Vec[(String, String)]`), but this \
-                 program's `struct Response` is {{ {shape} }}"
+                 `body: String` or `body: Vec[u8]` (then, optionally, `headers: Vec[(String, \
+                 String)]`), but this program's `struct Response` is {{ {shape} }}"
             ),
         ));
     }

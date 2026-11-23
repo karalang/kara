@@ -22,6 +22,11 @@ pub type Headers = Vec<(String, String)>;
 /// (B-2026-11-16-275).
 pub const DEFAULT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 
+/// The `Content-Type` of a response whose body is a `Vec[u8]` and whose
+/// handler sets none: bytes of no stated kind (review-thread ruling
+/// 2026-11-23, B-2026-11-23-60).
+pub const DEFAULT_BYTES_CONTENT_TYPE: &str = "application/octet-stream";
+
 /// One request, as read off the wire.
 /// A request target in origin form: an absolute URL's path and query, `/`
 /// when it has neither, and any other target itself. A server reads an
@@ -223,6 +228,27 @@ pub fn response_bytes(
     headers: &[(String, String)],
     req: &mut Request,
 ) -> Vec<u8> {
+    response_bytes_typed(status, body, headers, req, DEFAULT_CONTENT_TYPE)
+}
+
+/// [`response_bytes`] for a body of `Vec[u8]`, sent as it is, whose default
+/// `Content-Type` is [`DEFAULT_BYTES_CONTENT_TYPE`] (B-2026-11-23-60).
+pub fn response_bytes_raw(
+    status: i64,
+    body: &[u8],
+    headers: &[(String, String)],
+    req: &mut Request,
+) -> Vec<u8> {
+    response_bytes_typed(status, body, headers, req, DEFAULT_BYTES_CONTENT_TYPE)
+}
+
+fn response_bytes_typed(
+    status: i64,
+    body: &[u8],
+    headers: &[(String, String)],
+    req: &mut Request,
+    default_type: &str,
+) -> Vec<u8> {
     let refused = !(100..=999).contains(&status)
         || headers.iter().any(|(k, v)| !is_token(k) || breaks_line(v));
     if refused {
@@ -248,7 +274,7 @@ pub fn response_bytes(
         req.keep_alive = false;
     }
     if !typed && !bodiless {
-        head.push_str(&format!("content-type: {DEFAULT_CONTENT_TYPE}\r\n"));
+        head.push_str(&format!("content-type: {default_type}\r\n"));
     }
     // A HEAD response's length is the one a GET would get (RFC 9110
     // §9.3.2); a 1xx, 204 or 304 has none.

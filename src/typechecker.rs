@@ -3167,6 +3167,13 @@ pub(crate) enum ScrutineePart {
 /// loop's scope depth (B-2026-11-20-136).
 pub(super) type ForParamElement = (String, Span, Span, usize);
 
+/// A bare `for` element of a bare parameter put into a local collection
+/// (`map.insert(k, v)`, `out.push(v)`): the collection, the element, the
+/// parameter, where its `own` goes and where `.into_iter()` goes. A mismatch
+/// at a use of the collection that is only its `ref` elements takes both
+/// edits as its fix (B-2026-11-23-63).
+pub(super) type D5RefFill = (String, String, String, Span, Span);
+
 /// A list cursor's step over a bare parameter (`cur = node.next` with `cur`
 /// bound out of `head`), reported with `own` on the parameter until the
 /// body is checked: a body that only reads through the cursor takes
@@ -3471,6 +3478,7 @@ pub struct TypeChecker<'a> {
     /// loop's scope depth: moving the element out is fixed by both, the
     /// parameter's `own` and `.into_iter()` (§4.1, §4.6).
     pub(super) core_for_param_elements: FxHashMap<String, ForParamElement>,
+    pub(super) d5_ref_fills: Vec<D5RefFill>,
     /// The `let` bindings in [`Self::core_for_into_iter`] that re-bind a
     /// `for` element (`let mut next = team;`): views by `view_let_bindings`
     /// rather than by the scope's own view marks.
@@ -5018,6 +5026,7 @@ impl<'a> TypeChecker<'a> {
             core_let_ref_fix: false,
             core_for_into_iter: FxHashMap::default(),
             core_for_param_elements: FxHashMap::default(),
+            d5_ref_fills: Vec::new(),
             core_for_into_iter_aliases: FxHashSet::default(),
             core_let_mut_views: FxHashMap::default(),
             core_into_iter_loops: FxHashMap::default(),
@@ -9363,7 +9372,7 @@ impl<'a> TypeChecker<'a> {
     /// A use at `span` of a bare `for` element whose loop iterates a bare
     /// parameter: the element, the parameter, where its `own` goes and where
     /// `.into_iter()` goes.
-    fn d5_for_element_at(&self, span: Span) -> Option<(String, String, Span, Span)> {
+    pub(super) fn d5_for_element_at(&self, span: Span) -> Option<(String, String, Span, Span)> {
         let (name, _, _) = self.named_binding_at(span)?;
         let (param, own_at, iter_at, depth) = self.core_for_param_elements.get(&name)?;
         (self.local_scope.depth_of(&name) == Some(*depth))

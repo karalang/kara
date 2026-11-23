@@ -1,0 +1,640 @@
+// bt_tracker: a BitTorrent tracker (BEP 3 announce, BEP 23 compact peer
+// lists, BEP 48 scrape) served over HTTP on loopback, and the peers that
+// announce to it. Every tracker answer is a bencoded dictionary; the compact
+// peer list and the scrape's keys are raw bytes, not text, so the handler
+// answers with a byte body.
+
+import std.sync.{Mutex};
+import std.time.Duration;
+import std.time.sleep;
+import std.crypto.legacy.{Sha1};
+
+const ADDR: Str = "127.0.0.1:47784";
+const INTERVAL: i64 = 1800;
+const MIN_INTERVAL: i64 = 900;
+const DEFAULT_NUMWANT: i64 = 50;
+const MAX_NUMWANT: i64 = 200;
+
+struct Response {
+    status: i64,
+    body: Vec[u8],
+    headers: Vec[(String, String)],
+}
+
+// ---- bencode
+
+#[derive(Clone, Debug, PartialEq)]
+enum Value {
+    Int(i64),
+    Bytes(Vec[u8]),
+    List(Vec[Value]),
+    Dict(SortedMap[Vec[u8], Value]),
+}
+
+fn text(s: Str) -> Value {
+    Value.Bytes(s.bytes().to_vec())
+}
+
+fn encode(v: ref Value, out: mut ref Vec[u8]) {
+    match v {
+        Value.Int(n) => {
+            out.extend_from_slice(f"i{n}e".bytes());
+        }
+        Value.Bytes(b) => {
+            out.extend_from_slice(f"{b.len()}:".bytes());
+            out.extend_from_slice(b);
+        }
+        Value.List(items) => {
+            out.push(b'l');
+            for item in items {
+                encode(item, mut out);
+            }
+            out.push(b'e');
+        }
+        Value.Dict(map) => {
+            out.push(b'd');
+            for (k, item) in map {
+                encode(Value.Bytes(k.clone()), mut out);
+                encode(item, mut out);
+            }
+            out.push(b'e');
+        }
+    }
+}
+
+fn bencode(v: ref Value) -> Vec[u8] {
+    let mut out = Vec.new();
+    encode(v, mut out);
+    out
+}
+
+fn dict(pairs: own Vec[(Str, Value)]) -> Value {
+    let mut map = SortedMap.new();
+    for (k, v) in pairs.into_iter() {
+        map.insert(k.bytes().to_vec(), v);
+    }
+    Value.Dict(map)
+}
+
+struct Decoder {
+    data: Slice[u8],
+    pos: i64,
+}
+
+impl Decoder {
+    fn find(self, byte: u8) -> Option[i64] {
+        self.data[self.pos..].iter().position(|b| b == byte).map(|i| self.pos + i)
+    }
+
+    fn value(mut ref self) -> Result[Value, String] {
+        if self.pos >= self.data.len() {
+            return Err("ends early".to_string());
+        }
+        let c = self.data[self.pos];
+        if c == b'i' {
+            let end = self.find(b'e').ok_or("integer has no end")?;
+            let digits = String.from_utf8(self.data[self.pos + 1..end].to_vec()).unwrap();
+            let n: i64 = i64.parse(digits).map_err(|_| f"bad integer {digits}")?;
+            self.pos = end + 1;
+            Ok(Value.Int(n))
+        } else if c == b'l' {
+            self.pos += 1;
+            let mut items = Vec.new();
+            while self.pos < self.data.len() and self.data[self.pos] != b'e' {
+                items.push(self.value()?);
+            }
+            if self.pos >= self.data.len() {
+                return Err("list has no end".to_string());
+            }
+            self.pos += 1;
+            Ok(Value.List(items))
+        } else if c == b'd' {
+            self.pos += 1;
+            let mut map = SortedMap.new();
+            while self.pos < self.data.len() and self.data[self.pos] != b'e' {
+                let key = match self.value()? {
+                    Value.Bytes(b) => b,
+                    _ => return Err("a key that is not a string".to_string()),
+                };
+                let v = self.value()?;
+                map.insert(key, v);
+            }
+            if self.pos >= self.data.len() {
+                return Err("dictionary has no end".to_string());
+            }
+            self.pos += 1;
+            Ok(Value.Dict(map))
+        } else if c.is_ascii_digit() {
+            let colon = self.find(b':').ok_or("string has no colon")?;
+            let digits = String.from_utf8(self.data[self.pos..colon].to_vec()).unwrap();
+            let n: i64 = (usize.parse(digits).map_err(|_| f"bad length {digits}")?) as i64;
+            if colon + 1 + n > self.data.len() {
+                return Err("string runs past the end".to_string());
+            }
+            let b = self.data[colon + 1..colon + 1 + n].to_vec();
+            self.pos = colon + 1 + n;
+            Ok(Value.Bytes(b))
+        } else {
+            Err(f"unexpected byte 0x{c:02x}")
+        }
+    }
+}
+
+fn bdecode(data: Slice[u8]) -> Result[Value, String] {
+    let mut d = Decoder { data, pos: 0 };
+    let v = d.value()?;
+    if d.pos != data.len() {
+        return Err(f"{data.len() - d.pos} bytes after the value");
+    }
+    Ok(v)
+}
+
+fn get(v: ref Value, key: Str) -> Option[ref Value] {
+    match v {
+        Value.Dict(map) => map.get(key.bytes()),
+        _ => None,
+    }
+}
+
+fn int(v: ref Value, key: Str) -> i64 {
+    match get(v, key) {
+        Some(Value.Int(n)) => n,
+        _ => -1,
+    }
+}
+
+// ---- hex, percent-encoding, metainfo
+
+fn hex(b: Slice[u8]) -> String {
+    Vec[String].from_iter(b.iter().map(|x| f"{x:02x}")).join("")
+}
+
+fn pct(data: Slice[u8]) -> String {
+    let mut out = String.new();
+    for b in data {
+        if b.is_ascii_alphanumeric() or b == b'-' or b == b'.' or b == b'_' or b == b'~' {
+            out.push(b as char);
+        } else {
+            out.push_str(f"%{b:02X}");
+        }
+    }
+    out
+}
+
+fn unpct(text: Str) -> Option[Vec[u8]] {
+    let raw = text.bytes();
+    let mut out = Vec.new();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' {
+            if i + 2 >= raw.len() or not raw[i + 1].is_ascii_hexdigit() or not raw[i + 2].is_ascii_hexdigit() {
+                return None;
+            }
+            let h = String.from_utf8(raw[i + 1..i + 3]).ok()?;
+            out.push(u8.from_str_radix(h, 16)?);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
+fn sha1(data: Slice[u8]) -> Array[u8, 20] {
+    let mut h = Sha1.new();
+    h.update(data);
+    h.finish()
+}
+
+fn make_info(name: Str, length: i64, piece_len: i64) -> Value {
+    let mut pieces = Vec.new();
+    let n = (length + piece_len - 1) / piece_len;
+    for i in 0..n {
+        pieces.extend_from_slice(sha1(f"{name}:{i}".bytes()));
+    }
+    dict([
+        ("length", Value.Int(length)),
+        ("name", text(name)),
+        ("piece length", Value.Int(piece_len)),
+        ("pieces", Value.Bytes(pieces)),
+    ])
+}
+
+// ---- the tracker
+
+struct Peer {
+    ip: Array[u8, 4],
+    port: u16,
+    left: i64,
+}
+
+struct Torrent {
+    name: String,
+    peers: SortedMap[Vec[u8], Peer],
+    downloaded: i64,
+}
+
+impl Torrent {
+    fn seeds(self) -> i64 {
+        self.peers.values().filter(|p| p.left == 0).count()
+    }
+}
+
+struct Tracker {
+    torrents: SortedMap[Vec[u8], Torrent],
+    announces: i64,
+    scrapes: i64,
+    failures: i64,
+    not_found: i64,
+}
+
+fn reply(status: i64, body: own Vec[u8]) -> Response {
+    Response {
+        status,
+        body,
+        headers: [("Content-Type".to_string(), "text/plain".to_string())],
+    }
+}
+
+impl Tracker {
+    fn fail(mut ref self, why: String) -> Vec[u8] {
+        self.failures += 1;
+        bencode(dict([("failure reason", Value.Bytes(why.bytes().to_vec()))]))
+    }
+
+    fn handle(mut ref self, path: Str, q: Slice[(String, Vec[u8])]) -> Response {
+        if path == "/announce" {
+            self.announces += 1;
+            let body = self.announce(q);
+            reply(200, body)
+        } else if path == "/scrape" {
+            self.scrapes += 1;
+            let body = self.scrape(q);
+            reply(200, body)
+        } else if path == "/stats" {
+            let peers: i64 = self.torrents.values().map(|t| t.peers.len()).sum();
+            let s = f"torrents {self.torrents.len()} peers {peers} announces {self.announces} scrapes {self.scrapes} failures {self.failures} not found {self.not_found}";
+            reply(200, s.bytes().to_vec())
+        } else {
+            self.not_found += 1;
+            reply(404, f"no route for {path}".bytes().to_vec())
+        }
+    }
+
+    fn announce(mut ref self, q: Slice[(String, Vec[u8])]) -> Vec[u8] {
+        let mut params: SortedMap[String, Vec[u8]] = SortedMap.new();
+        for (k, v) in q {
+            if not params.contains_key(k) {
+                params.insert(k.clone(), v.clone());
+            }
+        }
+        let ih = match params.get("info_hash") {
+            Some(ih) => ih.clone(),
+            None => return self.fail("missing info_hash".to_string()),
+        };
+        if ih.len() != 20 {
+            return self.fail(f"info_hash is {ih.len()} bytes, not 20");
+        }
+        if not self.torrents.contains_key(ih) {
+            return self.fail("unregistered torrent".to_string());
+        }
+        let pid = match params.get("peer_id") {
+            Some(p) => p.clone(),
+            None => return self.fail("missing peer_id".to_string()),
+        };
+        if pid.len() != 20 {
+            return self.fail(f"peer_id is {pid.len()} bytes, not 20");
+        }
+        let mut nums = [0; 4];
+        for (i, k) in ["port", "uploaded", "downloaded", "left"].iter().enumerate() {
+            let raw = match params.get(*k) {
+                Some(raw) => raw.clone(),
+                None => return self.fail(f"missing {k}"),
+            };
+            if raw.is_empty() or not raw.iter().all(|b| b.is_ascii_digit()) {
+                return self.fail(f"invalid {k}");
+            }
+            nums[i] = i64.parse(String.from_utf8(raw).unwrap()).unwrap();
+        }
+        if nums[0] < 1 or nums[0] > 65535 {
+            return self.fail("invalid port".to_string());
+        }
+        let ip_text = String.from_utf8_lossy(params.get("ip").map(|v| v.as_slice()).unwrap_or(b"")).to_string();
+        let parts: Vec[Str] = ip_text.split(".").collect();
+        let mut ip = [0u8; 4];
+        if parts.len() != 4 {
+            return self.fail("invalid ip".to_string());
+        }
+        for (i, p) in parts.iter().enumerate() {
+            match u8.parse(p) {
+                Ok(n) if not p.is_empty() and p.chars().all(|c| c.is_ascii_digit()) => ip[i] = n,
+                _ => return self.fail("invalid ip".to_string()),
+            }
+        }
+        let event = String.from_utf8_lossy(params.get("event").map(|v| v.as_slice()).unwrap_or(b"")).to_string();
+        if not ["", "started", "completed", "stopped"].contains(event.as_str()) {
+            return self.fail(f"invalid event {event}");
+        }
+        let mut numwant = DEFAULT_NUMWANT;
+        if let Some(raw) = params.get("numwant") {
+            if raw.is_empty() or not raw.iter().all(|b| b.is_ascii_digit()) {
+                return self.fail("invalid numwant".to_string());
+            }
+            let n: i64 = usize.parse(String.from_utf8(raw.clone()).unwrap()).unwrap() as i64;
+            numwant = n.min(MAX_NUMWANT);
+        }
+        let compact = params.get("compact").map(|v| v.as_slice() == b"1").unwrap_or(true);
+        let no_peer_id = params.get("no_peer_id").map(|v| v.as_slice() == b"1").unwrap_or(false);
+
+        let t = self.torrents.get_mut(ih).unwrap();
+        if event == "stopped" {
+            t.peers.remove(pid);
+        } else {
+            if event == "completed" {
+                if let Some(was) = t.peers.get(pid) {
+                    if was.left > 0 {
+                        t.downloaded += 1;
+                    }
+                }
+            }
+            t.peers.insert(pid.clone(), Peer { ip, port: nums[0] as u16, left: nums[3] });
+        }
+
+        let mut others: Vec[(ref Vec[u8], ref Peer)] = Vec.new();
+        if event != "stopped" {
+            for (k, p) in t.peers.iter() {
+                if *k != pid and others.len() < numwant {
+                    others.push((k, p));
+                }
+            }
+        }
+        let peers = if compact {
+            let mut b = Vec.new();
+            for (_, p) in ref others {
+                b.extend_from_slice(p.ip);
+                b.extend_from_slice(p.port.to_be_bytes());
+            }
+            Value.Bytes(b)
+        } else {
+            let mut list = Vec.new();
+            for (k, p) in ref others {
+                let ip = f"{p.ip[0]}.{p.ip[1]}.{p.ip[2]}.{p.ip[3]}";
+                let mut d: Vec[(Str, Value)] = [("ip", text(ip)), ("port", Value.Int(p.port))];
+                if not no_peer_id {
+                    d.push(("peer id", Value.Bytes((*k).clone())));
+                }
+                list.push(dict(d));
+            }
+            Value.List(list)
+        };
+        let seeds = t.seeds();
+        bencode(dict([
+            ("complete", Value.Int(seeds)),
+            ("downloaded", Value.Int(t.downloaded)),
+            ("incomplete", Value.Int(t.peers.len() - seeds)),
+            ("interval", Value.Int(INTERVAL)),
+            ("min interval", Value.Int(MIN_INTERVAL)),
+            ("peers", peers),
+        ]))
+    }
+
+    fn scrape(mut ref self, q: Slice[(String, Vec[u8])]) -> Vec[u8] {
+        let mut wanted: Vec[Vec[u8]] = q.iter().filter(|(k, _)| k == "info_hash").map(|(_, v)| v.clone()).collect();
+        if wanted.is_empty() {
+            wanted = self.torrents.keys().cloned().collect();
+        }
+        let mut files = SortedMap.new();
+        for ih in wanted {
+            if let Some(t) = self.torrents.get(ih) {
+                let seeds = t.seeds();
+                files.insert(
+                    ih.clone(),
+                    dict([
+                        ("complete", Value.Int(seeds)),
+                        ("downloaded", Value.Int(t.downloaded)),
+                        ("incomplete", Value.Int(t.peers.len() - seeds)),
+                    ]),
+                );
+            }
+        }
+        bencode(dict([("files", Value.Dict(files))]))
+    }
+}
+
+fn serve(tracker: ref Mutex[Tracker], req: Request) -> Response {
+    let url = req.url();
+    let (path, query) = match url.find("?") {
+        Some(i) => (url[..i].to_string(), url[i + 1..].to_string()),
+        None => (url.clone(), String.new()),
+    };
+    let mut q = Vec.new();
+    if not query.is_empty() {
+        for part in query.split("&") {
+            let (k, v) = match part.find("=") {
+                Some(i) => (part[..i], part[i + 1..]),
+                None => (part, ""),
+            };
+            match (unpct(k), unpct(v)) {
+                (Some(kb), Some(vb)) => q.push((String.from_utf8_lossy(kb).to_string(), vb)),
+                _ => return reply(400, b"bad percent-encoding".to_vec()),
+            }
+        }
+    }
+    let mut t = tracker.lock();
+    t.value.handle(path, q)
+}
+
+// ---- the peers
+
+fn show_peers(peers: ref Value) -> String {
+    match peers {
+        Value.Bytes(b) => {
+            if b.len() % 6 != 0 {
+                return f"compact list of {b.len()} bytes, not a multiple of 6";
+            }
+            let mut out = Vec.new();
+            for c in b.chunks(6) {
+                let port = u16.from_be_bytes([c[4], c[5]]);
+                out.push(f"{c[0]}.{c[1]}.{c[2]}.{c[3]}:{port}");
+            }
+            f"compact [{out.join(", ")}]"
+        }
+        Value.List(items) => {
+            let mut out = Vec.new();
+            for p in items {
+                let ip = match get(p, "ip") {
+                    Some(Value.Bytes(b)) => String.from_utf8_lossy(b).to_string(),
+                    _ => "?".to_string(),
+                };
+                let mut s = f"{ip}:{int(p, "port")}";
+                if let Some(Value.Bytes(id)) = get(p, "peer id") {
+                    s.push_str(f" {String.from_utf8_lossy(id)}");
+                }
+                out.push(s);
+            }
+            f"dicts [{out.join(", ")}]"
+        }
+        _ => "no peers".to_string(),
+    }
+}
+
+fn fetch(client: ref Client, path: Str) -> (i64, Vec[u8]) {
+    for _ in 0..100 {
+        match client.get(f"http://{ADDR}{path}") {
+            Ok(r) => return (r.status, r.body),
+            Err(e) => match e.status() {
+                Some(s) => return (s, e.body().unwrap_or_default().bytes().to_vec()),
+                None => sleep(Duration.ms(20)),
+            },
+        }
+    }
+    panic("tracker never came up");
+}
+
+struct Announcer {
+    name: String,
+    peer_id: Vec[u8],
+    ip: String,
+    port: i64,
+}
+
+impl Announcer {
+    fn announce(self, c: ref Client, ih: Slice[u8], left: i64, event: Str, extra: Str, uploaded: i64, downloaded: i64) {
+        let mut q = f"info_hash={pct(ih)}&peer_id={pct(self.peer_id)}&port={self.port}&uploaded={uploaded}&downloaded={downloaded}&left={left}&ip={self.ip}";
+        if not event.is_empty() {
+            q.push_str(f"&event={event}");
+        }
+        q.push_str(extra);
+        let (status, body) = fetch(c, f"/announce?{q}");
+        let what = if event.is_empty() { "update" } else { event };
+        self.report(what, status, body);
+    }
+
+    fn report(self, what: Str, status: i64, body: Slice[u8]) {
+        let d = match bdecode(body) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"{self.name}: {what} -> {status}, not bencode: {e}");
+                return;
+            }
+        };
+        if let Some(Value.Bytes(why)) = get(d, "failure reason") {
+            println(f"{self.name}: {what} -> failure: {String.from_utf8_lossy(why)}");
+            return;
+        }
+        println(f"{self.name}: {what} -> {body.len()} bytes, seeds {int(d, "complete")} leechers {int(d, "incomplete")} done {int(d, "downloaded")} every {int(d, "interval")}s (min {int(d, "min interval")}s)");
+        println(f"{self.name}:   {show_peers(get(d, "peers").unwrap())}");
+    }
+}
+
+fn scrape(c: ref Client, label: Str, hashes: Slice[Vec[u8]], names: ref SortedMap[Vec[u8], String]) {
+    let q: Vec[String] = hashes.iter().map(|h| f"info_hash={pct(h)}").collect();
+    let path = if q.is_empty() { "/scrape".to_string() } else { f"/scrape?{q.join("&")}" };
+    let (status, body) = fetch(c, path);
+    let d = bdecode(body).unwrap();
+    let files = match get(d, "files") {
+        Some(Value.Dict(f)) => f.clone(),
+        _ => SortedMap.new(),
+    };
+    println(f"scrape {label} -> {status}, {body.len()} bytes, {files.len()} torrents");
+    for (ih, f) in ref files {
+        let name = names.get(ih).cloned().unwrap_or("?".to_string());
+        println(f"  {hex(ih)[..16]} {name}: seeds {int(f, "complete")} leechers {int(f, "incomplete")} done {int(f, "downloaded")}");
+    }
+}
+
+fn main() {
+    let infos = [make_info("debian-13.iso", 700_000, 65_536), make_info("weather-2026.tar", 40_000, 16_384)];
+    let mut names = SortedMap.new();
+    let mut hashes = Vec.new();
+    let mut tracker = Tracker { torrents: SortedMap.new(), announces: 0, scrapes: 0, failures: 0, not_found: 0 };
+    println("== metainfo");
+    for info in ref infos {
+        let meta = bencode(dict([
+            ("announce", text(f"http://{ADDR}/announce")),
+            ("created by", text("kara-tracker-demo")),
+            ("info", info.clone()),
+        ]));
+        let ih = sha1(bencode(info)).to_vec();
+        let name = match get(info, "name") {
+            Some(Value.Bytes(b)) => String.from_utf8(b.clone()).unwrap(),
+            _ => String.new(),
+        };
+        let npieces = match get(info, "pieces") {
+            Some(Value.Bytes(b)) => b.len() / 20,
+            _ => 0,
+        };
+        hashes.push(ih.clone());
+        names.insert(ih.clone(), name.clone());
+        tracker.torrents.insert(ih.clone(), Torrent { name: name.clone(), peers: SortedMap.new(), downloaded: 0 });
+        let back = bdecode(meta).unwrap();
+        let again = sha1(bencode(get(back, "info").unwrap())).to_vec();
+        println(f"{name}: {meta.len()}-byte metainfo, {npieces} pieces, info_hash {hex(ih)}, round trip {again == ih}");
+    }
+    let iso = hashes[0].clone();
+    let tar = hashes[1].clone();
+    let unknown = sha1(b"not registered").to_vec();
+
+    let tracker = Mutex.new(tracker);
+    let group = TaskGroup.new();
+    let t = ref tracker;
+    group.spawn(|| Server.serve(ADDR.to_string(), |req| serve(t, req)));
+    let c = Client.new();
+
+    let seed = Announcer { name: "seed".to_string(), peer_id: b"-KR0100-seed00000001".to_vec(), ip: "10.0.0.1".to_string(), port: 6881 };
+    let alice = Announcer { name: "alice".to_string(), peer_id: b"-KR0100-alice0000002".to_vec(), ip: "10.0.0.2".to_string(), port: 6882 };
+    let bob = Announcer { name: "bob".to_string(), peer_id: b"-KR0100-bob000000003".to_vec(), ip: "10.0.0.3".to_string(), port: 51413 };
+    let carol = Announcer { name: "carol".to_string(), peer_id: b"-KR0100-carol0000004".to_vec(), ip: "192.168.7.20".to_string(), port: 6889 };
+
+    println("== announce");
+    seed.announce(c, iso, 0, "started", "", 0, 0);
+    alice.announce(c, iso, 700_000, "started", "", 0, 0);
+    bob.announce(c, iso, 700_000, "started", "&compact=0", 0, 0);
+    bob.announce(c, iso, 500_000, "", "&compact=0&no_peer_id=1&numwant=1", 0, 200_000);
+    carol.announce(c, iso, 700_000, "started", "&numwant=0", 0, 0);
+    alice.announce(c, iso, 0, "completed", "", 50_000, 700_000);
+    alice.announce(c, iso, 0, "completed", "", 0, 0);
+    seed.announce(c, iso, 0, "stopped", "", 900_000, 0);
+    bob.announce(c, iso, 300_000, "", "&numwant=500", 0, 0);
+    carol.announce(c, tar, 40_000, "started", "", 0, 0);
+    seed.announce(c, tar, 0, "started", "", 0, 0);
+    carol.announce(c, tar, 0, "completed", "", 0, 40_000);
+
+    println("== scrape");
+    scrape(c, "iso", [iso.clone()], names);
+    scrape(c, "both", [tar.clone(), iso.clone()], names);
+    scrape(c, "all", [], names);
+    scrape(c, "unknown", [unknown.clone()], names);
+
+    println("== refused");
+    let bad = Announcer { name: "mallory".to_string(), peer_id: b"-XX0001-mallory00009".to_vec(), ip: "10.0.0.9".to_string(), port: 6881 };
+    let pid = pct(bad.peer_id);
+    let tail = "&uploaded=0&downloaded=0&left=0&ip=10.0.0.9";
+    let cases = [
+        ("no info_hash", "peer_id=x".to_string()),
+        ("short info_hash", f"info_hash={pct(iso[..19])}&peer_id={pid}"),
+        ("unknown torrent", f"info_hash={pct(unknown)}&peer_id={pid}"),
+        ("no peer_id", f"info_hash={pct(iso)}&port=1"),
+        ("long peer_id", f"info_hash={pct(iso)}&peer_id={pid}%21&port=1"),
+        ("port 0", f"info_hash={pct(iso)}&peer_id={pid}&port=0{tail}"),
+        ("left -1", f"info_hash={pct(iso)}&peer_id={pid}&port=1&uploaded=0&downloaded=0&left=-1&ip=10.0.0.9"),
+        ("bad ip", f"info_hash={pct(iso)}&peer_id={pid}&port=1&uploaded=0&downloaded=0&left=0&ip=10.0.0.300"),
+        ("bad event", f"info_hash={pct(iso)}&peer_id={pid}&port=1{tail}&event=paused"),
+        ("bad numwant", f"info_hash={pct(iso)}&peer_id={pid}&port=1{tail}&numwant=lots"),
+    ];
+    for (label, q) in ref cases {
+        let (status, body) = fetch(c, f"/announce?{q}");
+        bad.report(label, status, body);
+    }
+    let (status, body) = fetch(c, "/announce?info_hash=%G1");
+    println(f"mallory: bad escape -> {status} {String.from_utf8_lossy(body)}");
+    let (status, body) = fetch(c, "/peers");
+    println(f"mallory: /peers -> {status} {String.from_utf8_lossy(body)}");
+
+    println("== stats");
+    let (status, body) = fetch(c, "/stats");
+    println(f"stats -> {status} {String.from_utf8_lossy(body)}");
+    group.cancel();
+    println("done");
+}

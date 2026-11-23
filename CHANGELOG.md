@@ -574,6 +574,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- An HTTP `Response` may declare `body: Vec[u8]`. A server sends it as it is,
+  with `Content-Length` its byte count and `content-type:
+  application/octet-stream` when the handler sets none, and `Client.get`,
+  `post` and `RequestBuilder.send` fill it with the body's bytes as they
+  came. A bencoded tracker reply, a protobuf or CBOR API or a file server
+  could not send a 20-byte hash or a 0xFF before; a body of any other type
+  is refused at the handler, naming the two allowed (B-2026-11-23-60).
+
 - A program's trait impl for a concrete tuple type (`impl Show for (i64,
   i64)`) answers method calls, default methods, `Show.show(p)`, `T: Show`
   bounds and `dyn Show`, with its receiver mode and effects checked; it was

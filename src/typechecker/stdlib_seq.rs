@@ -1072,9 +1072,20 @@ impl<'a> super::TypeChecker<'a> {
                 // (`report_untargeted_parses`, kata 1058).
                 let target = self.env.fresh_type_var();
                 self.untargeted_parses.push((*span, target.clone()));
-                Type::Named {
-                    name: "Option".to_string(),
-                    args: vec![target],
+                // Typed as the `T.parse(s)` that fix writes, a
+                // `Result[T, ParseError]`, so Rust's `s.parse().map_err(f)?`
+                // and `s.parse()?` reach the target through the rest of the
+                // expression and get the fix, where an `Option` stopped at
+                // "no method 'map_err'" (B-2026-11-23-61).
+                match self.library_parse_result("i64") {
+                    Some(Type::Named { name, mut args }) if args.len() == 2 => {
+                        args[0] = target;
+                        Type::Named { name, args }
+                    }
+                    _ => Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![target],
+                    },
                 }
             }
             // Unknown string method — typo-suggestion diagnostic if close to

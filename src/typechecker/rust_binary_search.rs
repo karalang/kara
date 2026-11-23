@@ -540,6 +540,58 @@ impl TypeChecker<'_> {
         }
     }
 
+    /// Rust's `.ok()` on a call that is a `Result` in Rust and an `Option`
+    /// here (`u8.from_str_radix(h, 16).ok()`, `s.find(c).ok()`): the
+    /// `Option` already is what `.ok()` makes, so the fix drops `.ok()`
+    /// (B-2026-11-23-62). A `binary_search` keeps its own explanation, as its
+    /// `Option` is not Rust's `Ok`.
+    pub(super) fn rust_ok_on_option(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        args_close_span: &Span,
+        obj_ty: &super::types::Type,
+    ) -> Option<super::types::Type> {
+        use super::types::{type_display, Type};
+        if method != "ok" || !args.is_empty() || binary_search_call(object).is_some() {
+            return None;
+        }
+        let peeled = match obj_ty {
+            Type::Ref(i) | Type::MutRef(i) => &**i,
+            other => other,
+        };
+        let opt = super::inference::resolve_type_var_top(peeled, &self.env.substitutions);
+        if !matches!(&opt, Type::Named { name, args } if name == "Option" && args.len() == 1) {
+            return None;
+        }
+        let from = object.span.offset + object.span.length;
+        let end = args_close_span.offset + args_close_span.length;
+        if end <= from {
+            return None;
+        }
+        let at = Span {
+            offset: from,
+            length: end - from,
+            line: object.span.line,
+            column: object.span.column,
+        };
+        self.type_error_with_fix_it(
+            format!(
+                "no method 'ok' on type '{}': this is already an `Option`, which is what \
+                 Rust's `.ok()` makes of a `Result`; drop `.ok()`",
+                type_display(&opt)
+            ),
+            at,
+            TypeErrorKind::NoMethodFound,
+            super::FixIt {
+                span: at,
+                replacement: String::new(),
+            },
+        );
+        Some(opt)
+    }
+
     /// After `xs.binary_search(v).method(args)` failed to check, spanning
     /// `whole`: Rust's `Result` methods give way to Kāra's shape.
     pub(super) fn explain_rust_binary_search_call(
