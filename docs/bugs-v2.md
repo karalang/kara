@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | miscompile | 102 |
 | crash | 64 |
 | run-vs-build | 62 |
-| codegen-gap | 43 |
+| codegen-gap | 44 |
 | use-after-free | 13 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 864 |
+| typecheck | 865 |
 | mir-llvm | 320 |
-| mir | 315 |
+| mir | 316 |
 | cli | 277 |
 | parser | 152 |
 | ownership | 132 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -136,10 +136,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
 | B-2026-11-22-24 | 2026-11-22 | mir+effect | medium | A `par` branch conflict (E0418) in a function nothing calls is not reported: `karac check` of a file with no `main`, or of a library's `pub fn`, accepts `par { append_log(mut log), read_log_count(log) }` | — |
 | B-2026-11-22-40 | 2026-11-22 | cli | low | `karac check` of a program with a comptime-backed derive still takes ~0.6 s on a 3-line file (release) against ~0.07 s without it: the library's bodies are type-checked three times (check's first pass, the comptime evaluation's retype, and the re-check after splicing) | — |
-| B-2026-11-22-49 | 2026-11-22 | ownership+typecheck | medium | An owned local or an indexed place stored into a reference slot is read as moved by `karac check`, except by `push`, Vec `insert`, a deque's pushes and `Option.replace` of a local: E0500 after `fill` / `resize` / `Set.insert` / `Map.insert` / `or_insert` / `v[i] = a`, and E0515 (help: write `.clone()`) for `refs.push(words[0])` and every other store of a place; the MIR pipeline lends all of them and runs them | — |
 | B-2026-11-22-50 | 2026-11-22 | typecheck | low | `ptr.mut(xs[i])` on a `mut Slice[ref i32]` (or a `Vec[ref T]`) is typed `*mut i32`, a pointer to what the element refers to, outside a generic function: `let p: *mut ref i32 = ptr.mut(xs[1]);` is E0200 "expected '*mut ref i32', found '*mut i32'", while the same line as `*mut T` at `T = ref i32` checks | — |
 | B-2026-11-22-51 | 2026-11-22 | typecheck | low | A `T: Copy` bound is not satisfied by a shared reference: `fn swap2[T: Copy](xs: mut Slice[T])` called with a `Vec[ref String]` is E0200 "`ref String` does not implement `Copy`", though core-semantics §1.1 lists `ref T` as `Copy` | — |
 | B-2026-11-22-52 | 2026-11-22 | typecheck+mir | low | NEEDS A RULING: for `x` of `for x in nums.iter()` over `Copy` elements, `let start = x; q.push(start)` into a queue of `ref i32` lends `nums` and is accepted (B-2026-11-20-35), while `q.push(x)` and `count.entry(x)` lend the loop's own copy and are E0516 (pin corpus/core/err_written_ref_map_key_lends_loop_item) | — |
+| B-2026-11-23-1 | 2026-11-23 | typecheck+mir | medium | `h.r = b` and `t.0 = b`, an owned `String` assigned to a `ref String` field or tuple part, pass `karac check` and stop every backend with "invalid MIR: assigning String to _3.0 of type ref String"; `h.r = ref b` runs | — |
 
 ### Relocated
 
@@ -2174,6 +2174,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-46 | mir | medium | KARAC_HTTP_EXTRA_CA naming an empty file, or one holding only a private key, is accepted in silence: no extra root is trusted and every fetch to the… | dd8d028f22 |
 | B-2026-11-22-47 | mir+typecheck | high | A temporary stored into a reference slot by `m[k] = temp`, `m.entry(k).or_insert(temp)`, `Option[ref T].replace(temp)` or `Vec[ref T].extend(owned so… | d09b11338c |
 | B-2026-11-22-48 | mir | medium | `Option.take()` and `Option.replace(v)` borrow their receiver shared in MIR, so both run while a borrow of the Option's value is live and `karac chec… | d09b11338c |
+| B-2026-11-22-49 | ownership+typecheck | medium | An owned local or an indexed place stored into a reference slot is read as moved by `karac check`, except by `push`, Vec `insert`, a deque's pushes a… | 6d4fe390fa |
 
 </details>
 
