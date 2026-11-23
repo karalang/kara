@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 721 |
+| diagnostics | 725 |
 | false-positive | 360 |
-| missing-feature | 246 |
+| missing-feature | 247 |
 | perf | 200 |
-| other | 148 |
+| other | 149 |
 | soundness | 126 |
 | miscompile | 106 |
 | crash | 65 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 876 |
+| typecheck | 879 |
+| mir | 325 |
 | mir-llvm | 323 |
-| mir | 323 |
-| cli | 288 |
+| cli | 289 |
 | parser | 153 |
 | ownership | 134 |
-| runtime | 108 |
+| runtime | 109 |
 | interp | 101 |
 | effect | 62 |
 | other | 52 |
@@ -132,6 +132,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-18 | 2026-11-23 | interp | high | The MIR interpreter's `Vec.dedup` ignores the program's `PartialEq` impl and compares structurally: with `eq` as `self.v % 10 == o.v % 10`, `[P{1}, P{11}, P{2}, P{2}].dedup()` leaves 3 elements on `karac run --interp` and `__mir-run`, 2 on `karac run` (JIT) and `karac build`; the written `eq` never runs on the interpreter | — |
 | B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
 | B-2026-11-23-20 | 2026-11-23 | typecheck | low | A provider-using closure returned inside `Ok(..)` from a `with_provider` body draws MIR's internal E0516 'a type that failed to check is not lowered yet' first, before the real E0600 escape diagnostic; every other escape shape (bare, Some, tuple, struct field, Vec push, lazy iterator) gets E0600 alone | — |
+| B-2026-11-23-71 | 2026-11-23 | typecheck | low | A use of a `MutFn` local after a move reported E0518 (FnKindMismatch) instead of E0500, the code core-semantics §3.2 gives every use of a moved place | — |
+| B-2026-11-23-72 | 2026-11-23 | typecheck | low | E_SHARED_FIELD_MOVE said the owner is "declared `shared`/`par`" and "a refcounted box": `par struct` is the retired spelling of `sync struct` (core-semantics §6.3), and the message did not say which the type is | — |
+| B-2026-11-23-73 | 2026-11-23 | mir+runtime | medium | The shared-field borrow-flag panic named the conflicting access twice, not where the holding borrow was made, when the holder is a `let r = ref h.f` borrow | — |
+| B-2026-11-23-74 | 2026-11-23 | typecheck | low | A `mut` argument made from a bare parameter reported a bare E0200 "expected 'mut ref Vec[i64]', found 'ref Vec[i64]'" beside E0517 at the same span | — |
+| B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
+| B-2026-11-23-76 | 2026-11-23 | mir | low | core-semantics §5.7 says a view may not flow into an escaping closure, but one passed to an `escaping` parameter whose callee's signature cannot keep it is accepted; needs a ruling on the text or the check | — |
 
 ### Relocated
 

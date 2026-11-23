@@ -1196,6 +1196,11 @@ pub enum TypeErrorKind {
     /// iterator's item borrowing the iterator itself, a view stored where
     /// its borrow is not kept (B-2026-11-10-7).
     BorrowOutlivesOwner,
+    /// v2 core §3.2: a use of a place a move already took, found by the
+    /// typechecker rather than the ownership pass (a `MutFn` local moved by a
+    /// `let` or an `own` argument, B-2026-10-19-36). The same code as the
+    /// ownership pass's, E0500 (B-2026-11-23-71).
+    UseAfterMove,
     /// v2 core §9.6: a function value of a less permissive kind passed where
     /// a more permissive one is expected (a closure that mutates a capture
     /// where `Fn` is expected), or a `MutFn` called through a `ref` (E0518).
@@ -1942,6 +1947,7 @@ pub(crate) fn class_for_type_error_kind(
         TypeErrorKind::BorrowConflict
         | TypeErrorKind::WriteThroughSharedRef
         | TypeErrorKind::BorrowOutlivesOwner => Some(DC::OwnershipBorrowConflict),
+        TypeErrorKind::UseAfterMove => Some(DC::OwnershipMoveAfterUse),
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)
         }

@@ -154,6 +154,8 @@ struct Walk<'t, 'a> {
     moved_mut_fns: Vec<((usize, usize), String)>,
     /// Function-kind errors (§9.6).
     kind_errors: Vec<(Span, String, Option<FixIt>)>,
+    /// §3.2: a use of a `MutFn` local a move took (E0500).
+    moved_fn_uses: Vec<(Span, String, Option<FixIt>)>,
     /// Removed capture prefixes, with the edit that deletes each (§9.6).
     prefix_errors: Vec<(Span, String, FixIt)>,
     /// `Server.serve*` calls whose handler's `Response` is misshaped: a type
@@ -384,6 +386,7 @@ impl<'a> TypeChecker<'a> {
             immutable_mut_closure_locals: Vec::new(),
             moved_mut_fns: Vec::new(),
             kind_errors: Vec::new(),
+            moved_fn_uses: Vec::new(),
             prefix_errors: Vec::new(),
             once_calls: FxHashSet::default(),
             removed_calls: Vec::new(),
@@ -599,6 +602,7 @@ impl<'a> TypeChecker<'a> {
         let mut conflicts = w.conflicts;
         let mut errors = w.errors;
         let kind_errors = w.kind_errors;
+        let moved_fn_uses = w.moved_fn_uses;
         let shared_mut_fn_calls = w.shared_mut_fn_calls;
         let mut_fn_local_calls = w.mut_fn_local_calls;
         let mut_fn_place_calls = w.mut_fn_place_calls;
@@ -663,6 +667,14 @@ impl<'a> TypeChecker<'a> {
                 None => self.type_error(message, span, TypeErrorKind::FnKindMismatch),
             }
         }
+        for (span, message, fix) in moved_fn_uses {
+            match fix {
+                Some(fix) => {
+                    self.type_error_with_fix_it(message, span, TypeErrorKind::UseAfterMove, fix)
+                }
+                None => self.type_error(message, span, TypeErrorKind::UseAfterMove),
+            }
+        }
         for (span, message, fix) in shared_mut_fn_calls {
             match fix {
                 Some(fix) => {
@@ -701,6 +713,15 @@ impl<'a> TypeChecker<'a> {
         // attach it once, or `karac fix` would apply it once per write.
         let mut fixed: FxHashSet<usize> = FxHashSet::default();
         for (span, message, fix) in errors {
+            // A `mut` argument from a borrowed place also fails the
+            // argument's type check (`expected 'mut ref T', found 'ref T'`)
+            // at the same span; this error says why and how to fix it, so
+            // the bare mismatch is dropped (B-2026-11-23-74).
+            self.errors.retain(|e| {
+                !(e.span.offset == span.offset
+                    && e.kind == TypeErrorKind::TypeMismatch
+                    && e.message.starts_with("expected 'mut ref "))
+            });
             match fix.filter(|f| fixed.insert(f.span.offset)) {
                 Some(fix) => self.type_error_with_fix_it(
                     message,
@@ -1434,7 +1455,7 @@ impl Walk<'_, '_> {
         }
         if let Some(k) = self.moved_mut_fns.iter().position(|(r, _)| *r == (i, j)) {
             let (_, how) = self.moved_mut_fns.remove(k);
-            self.kind_errors.push((
+            self.moved_fn_uses.push((
                 e.span,
                 format!(
                     "use of moved value `{x}`: it writes a captured binding, so it is a \

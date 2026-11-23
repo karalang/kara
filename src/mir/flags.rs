@@ -34,6 +34,10 @@ use super::place_ty::place_ty;
 use super::syntax::*;
 use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
 
+/// One borrow-flag op to insert: the point it goes before, its order there,
+/// the op, and its own source position where that is not the point's.
+type FlagInsert = (usize, u8, FlagOp, Option<SourceInfo>);
+
 /// Inserts the borrow-flag operations into an elaborated `body`.
 /// `has_receiver` is the borrow checker's.
 /// `mut_field(adt, variant, index)` says whether a handle may write a
@@ -56,12 +60,22 @@ pub fn insert_borrow_flags(
     // one point a loan made by the previous statement takes its flag
     // first, then dead loans give theirs back, then the point's own
     // accesses are checked.
-    let mut ins: Vec<Vec<(usize, u8, FlagOp)>> = vec![Vec::new(); body.blocks.len()];
+    // The fourth element is the op's own source position, where it is not
+    // the statement it goes before: an `Acquire` is placed after its loan's
+    // statement but is that loan's, so the conflict panic names where the
+    // borrow holding the flag was made (design.md § Shared types: "the
+    // source spans of both accesses"), not the next statement (B-2026-11-23-73).
+    let mut ins: Vec<Vec<FlagInsert>> = vec![Vec::new(); body.blocks.len()];
     let preds = predecessors(body);
     for (li, (_, _, (bi, si))) in loans.iter().enumerate() {
         if held[li].is_empty() {
             continue;
         }
+        let block = &body.blocks[*bi];
+        let at = block
+            .statements
+            .get(*si)
+            .map_or(block.terminator.source_info, |st| st.source_info);
         for (place, kind) in &held[li] {
             ins[*bi].push((
                 si + 1,
@@ -71,6 +85,7 @@ pub fn insert_borrow_flags(
                     kind: *kind,
                     loan: li as u32,
                 },
+                Some(at),
             ));
         }
         for (b, points) in live.iter().enumerate() {
@@ -84,7 +99,7 @@ pub fn insert_borrow_flags(
                     points[p - 1][li] || (b, p - 1) == (*bi, *si)
                 };
                 if before && !now[li] {
-                    ins[b].push((p, 1, FlagOp::Release { loan: li as u32 }));
+                    ins[b].push((p, 1, FlagOp::Release { loan: li as u32 }, None));
                 }
             }
         }
@@ -106,7 +121,7 @@ pub fn insert_borrow_flags(
                     Access::Borrow(_) | Access::StorageDead => continue,
                 };
                 for (fp, k) in flagged_prefixes(body, tys, &place, kind, mut_field) {
-                    ins[bi].push((p, 2, FlagOp::Check { place: fp, kind: k }));
+                    ins[bi].push((p, 2, FlagOp::Check { place: fp, kind: k }, None));
                 }
             }
         }
@@ -115,24 +130,24 @@ pub fn insert_borrow_flags(
         if ops.is_empty() {
             continue;
         }
-        ops.sort_by_key(|(p, order, _)| (*p, *order));
+        ops.sort_by_key(|(p, order, _, _)| (*p, *order));
         let block = &mut body.blocks[bi];
         let info = block.terminator.source_info;
         let old = std::mem::take(&mut block.statements);
         let mut ops = ops.into_iter().peekable();
         for (si, s) in old.into_iter().enumerate() {
-            while let Some((_, _, op)) = ops.next_if(|(p, _, _)| *p == si) {
+            while let Some((_, _, op, own)) = ops.next_if(|(p, _, _, _)| *p == si) {
                 block.statements.push(Statement {
                     kind: StatementKind::BorrowFlag(op),
-                    source_info: s.source_info,
+                    source_info: own.unwrap_or(s.source_info),
                 });
             }
             block.statements.push(s);
         }
-        for (_, _, op) in ops {
+        for (_, _, op, own) in ops {
             block.statements.push(Statement {
                 kind: StatementKind::BorrowFlag(op),
-                source_info: info,
+                source_info: own.unwrap_or(info),
             });
         }
     }

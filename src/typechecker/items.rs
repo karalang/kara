@@ -9800,10 +9800,15 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let has_clone = self.type_supports_clone(ty);
+        // The keyword the program wrote on `owner` (`par` is the former
+        // spelling of `sync`, core-semantics §6.3; B-2026-11-23-72).
+        let sync = self.env.structs.get(owner).is_some_and(|s| s.is_par)
+            || self.env.enums.get(owner).is_some_and(|e| e.is_par);
+        let keyword = if sync { "sync" } else { "shared" };
         let message = if has_clone {
             format!(
                 "error[E_SHARED_FIELD_MOVE]: cannot move a field out of `{owner}`, which is \
-                 declared `shared`/`par`: the value is a refcounted box, so any other handle \
+                 declared `{keyword}`: the value is a counted handle, so any other handle \
                  to it would still see the moved-from field — and would read it after this \
                  field's `Drop` body has run and its buffer is freed. Take an independent \
                  copy (`.clone()`), or borrow the field instead"
@@ -9811,7 +9816,7 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             format!(
                 "error[E_SHARED_FIELD_MOVE]: cannot move a field out of `{owner}`, which is \
-                 declared `shared`/`par`: the value is a refcounted box, so any other handle \
+                 declared `{keyword}`: the value is a counted handle, so any other handle \
                  to it would still see the moved-from field — and would read it after this \
                  field's `Drop` body has run and its buffer is freed. Borrow the field \
                  instead. (No `.clone()` is offered: this field type does not have one.)"
