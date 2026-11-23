@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 245 |
 | perf | 200 |
 | other | 148 |
-| soundness | 123 |
+| soundness | 126 |
 | miscompile | 104 |
 | crash | 64 |
 | run-vs-build | 62 |
@@ -84,7 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 133 |
 | runtime | 107 |
 | interp | 98 |
-| effect | 59 |
+| effect | 62 |
 | other | 52 |
 | resolver | 51 |
 | codegen | 22 |
@@ -136,6 +136,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-11 | 2026-11-23 | mir | medium | A trait default body that declares `let x: T;` and assigns it later is refused once two impls of the generic trait inherit it: error[E0516] 'the capture of `x` is not lowered yet'; one impl alone builds and runs | — |
 | B-2026-11-23-12 | 2026-11-23 | typecheck+ownership | medium | `m.entry(k)` with an owned key on a `Map[ref String, V]` is read as a move by `karac check`: E0500 at the next use of a local `k`, E0515 (help: `.clone()`) for `m.entry(words[i])`; the MIR pipeline lends the key and runs both | — |
 | B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
+| B-2026-11-23-15 | 2026-11-23 | effect | high | UNDER-REPORT: a built-in operation that runs a trait impl on the values it holds is not charged that impl's effects: `xs.contains(x)`, `xs == ys`, `xs.sort()`, `it.max()`, a `Map`/`Set`/`SortedSet` insert or lookup, `println(x)`, an f-string hole, `xs.join(sep)`, `xs.clone()`, `xs.resize(n, v)`, `o.unwrap_or_default()` and a derived impl over a field all run a program `eq`/`cmp`/`hash`/`to_string`/`clone`/`default` that writes Stderr and report nothing | — |
+| B-2026-11-23-16 | 2026-11-23 | effect | high | UNDER-REPORT: an associated function called through a type-parameter bound (`T.make()` with `T: Make`) is not charged the instance's impl: `fn build[T: Make]() -> T { T.make() }` called at a `Big` whose `make` writes Stderr reports program_effects [] and a `pub fn` calling it owes no clause, while the method form `x.step()` through the same kind of bound is charged at the instance | — |
+| B-2026-11-23-17 | 2026-11-23 | effect | high | UNDER-REPORT: a library method written in Kāra is not charged the program impls it calls through its bounds. A program iterator's `next` is charged only where it is called by name: a `for` loop over it and every provided method that drives it (`count`, `sum`, `collect`, a `map(..)` chain, `zip`, `Vec.extend`) report none of its effects, as do `rev()` and a program `next_back`, `sum()` and a program `Add`, `extend` and a program `IntoIterator`, `collect` and a program `FromIterator` | — |
 
 ### Relocated
 
