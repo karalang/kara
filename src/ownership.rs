@@ -697,6 +697,7 @@ pub(crate) enum ValueState {
     /// promotes — to `Live` if `is_mut`, to `InitOnce` otherwise.
     Uninit {
         let_span: Span,
+        name_span: Span,
         is_mut: bool,
     },
     /// A non-mut LetUninit binding that has been assigned exactly once.
@@ -705,6 +706,9 @@ pub(crate) enum ValueState {
     /// initialization, not reassignment".
     InitOnce {
         first_assign: Span,
+        /// The declaration's name, where the reassignment's fix writes
+        /// `mut` (B-2026-11-21-74).
+        name_span: Span,
     },
     /// The binding has been consumed at `at`. Round 12.42 collapsed
     /// the former `MoveKind` enum (Direct / BranchMerged /

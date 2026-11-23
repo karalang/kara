@@ -1852,13 +1852,21 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         for warn in &t.warnings {
             id_counter += 1;
             let code = type_warning_code(&warn.kind);
-            // A multi-edit fix (the style lints', B-2026-11-05-31), rendered
-            // as an error's is above.
+            // A multi-edit fix (a style lint's, B-2026-11-05-31; W0298's
+            // rename, B-2026-11-21-74), rendered as an error's is above.
+            // The map is keyed by span, so a warning that shares its span
+            // with an error leaves the edits to the error's record.
+            let key = crate::resolver::SpanKey::from_span(&warn.span);
             let fix_diff = t
                 .error_fix_diffs
-                .get(&crate::resolver::SpanKey::from_span(&warn.span))
+                .get(&key)
                 .filter(|v| {
-                    !v.is_empty() && warn.kind == crate::typechecker::TypeErrorKind::StyleLint
+                    !v.is_empty()
+                        && warn.fix_it.is_none()
+                        && !t
+                            .errors
+                            .iter()
+                            .any(|e| crate::resolver::SpanKey::from_span(&e.span) == key)
                 })
                 .map(|edits| {
                     let items: Vec<String> = edits

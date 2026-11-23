@@ -687,7 +687,9 @@ impl<'a> super::Resolver<'a> {
 
             ExprKind::Break {
                 label,
-                value: Some(ref expr),
+                // The error sits on the `break`, not on its value
+                // (B-2026-11-21-74).
+                value: Some(ref value),
             } => {
                 if let Some(name) = label {
                     if !self
@@ -710,7 +712,7 @@ impl<'a> super::Resolver<'a> {
                         });
                     }
                 }
-                self.resolve_expr(expr);
+                self.resolve_expr(value);
             }
 
             ExprKind::Tuple(exprs) => {

@@ -414,6 +414,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     name.clone(),
                     ValueState::Uninit {
                         let_span: stmt.span,
+                        name_span: *name_span,
                         is_mut: *is_mut,
                     },
                 );
@@ -518,11 +519,16 @@ impl<'a> super::OwnershipChecker<'a> {
                         // First assignment to a `let x: T;` (non-mut) — this
                         // counts as initialization, not reassignment, so it
                         // succeeds without `mut`. Subsequent assigns will fail.
-                        Some(ValueState::Uninit { is_mut: false, .. }) => {
+                        Some(ValueState::Uninit {
+                            is_mut: false,
+                            name_span,
+                            ..
+                        }) => {
                             states.insert(
                                 name.clone(),
                                 ValueState::InitOnce {
                                     first_assign: target.span,
+                                    name_span,
                                 },
                             );
                         }
@@ -530,7 +536,10 @@ impl<'a> super::OwnershipChecker<'a> {
                         // binding. Per design.md "first assignment is
                         // initialization, not reassignment" — anything more
                         // requires `let mut`.
-                        Some(ValueState::InitOnce { first_assign }) => {
+                        Some(ValueState::InitOnce {
+                            first_assign,
+                            name_span,
+                        }) => {
                             self.errors.push(OwnershipError {
                                 message: format!(
                                     "cannot reassign `{}` — declared without `mut` (first assignment at line {}:{})",
@@ -542,7 +551,13 @@ impl<'a> super::OwnershipChecker<'a> {
                                     "change the declaration to `let mut {}: ...;`",
                                     name
                                 )),
-                                replacement: None,
+                                // `mut` before the declared name
+                                // (B-2026-11-21-74).
+                                replacement: Some(Box::new(crate::resolver::TextEdit {
+                                    offset: name_span.offset,
+                                    length: 0,
+                                    replacement: "mut ".to_string(),
+                                })),
                                 consume_span: None,
                             });
                             // Leave state as InitOnce — further reads still

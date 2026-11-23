@@ -1223,7 +1223,8 @@ pub(crate) enum LibraryBodiesState {
 
 impl Pipeline {
     fn new(filename: &str, source: &str) -> Self {
-        let parsed = crate::parse(source);
+        let mut parsed = crate::parse(source);
+        source_fixes::complete_parsed(source, &mut parsed);
         Pipeline {
             filename: filename.to_string(),
             target_skipped: std::collections::HashMap::new(),

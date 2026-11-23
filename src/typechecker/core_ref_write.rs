@@ -153,7 +153,7 @@ struct Walk<'t, 'a> {
     /// B-2026-11-05-2).
     moved_mut_fns: Vec<((usize, usize), String)>,
     /// Function-kind errors (§9.6).
-    kind_errors: Vec<(Span, String)>,
+    kind_errors: Vec<(Span, String, Option<FixIt>)>,
     /// Removed capture prefixes, with the edit that deletes each (§9.6).
     prefix_errors: Vec<(Span, String, FixIt)>,
     /// `Server.serve*` calls whose handler's `Response` is misshaped: a type
@@ -655,8 +655,13 @@ impl<'a> TypeChecker<'a> {
         for (span, message) in handler_shapes {
             self.type_error(message, span, TypeErrorKind::TypeMismatch);
         }
-        for (span, message) in kind_errors {
-            self.type_error(message, span, TypeErrorKind::FnKindMismatch);
+        for (span, message, fix) in kind_errors {
+            match fix {
+                Some(fix) => {
+                    self.type_error_with_fix_it(message, span, TypeErrorKind::FnKindMismatch, fix)
+                }
+                None => self.type_error(message, span, TypeErrorKind::FnKindMismatch),
+            }
         }
         for (span, message, fix) in shared_mut_fn_calls {
             match fix {
@@ -1435,6 +1440,7 @@ impl Walk<'_, '_> {
                     "use of moved value `{x}`: it writes a captured binding, so it is a \
                      MutFn, and a MutFn is never Copy (core-semantics §1.1), so {how}"
                 ),
+                None,
             ));
         }
     }
@@ -1764,7 +1770,17 @@ impl Walk<'_, '_> {
                         "the closure mutates {n}, so it is a MutFn, but it is stored where `Fn` is \
                          expected (§9.6): declare the slot `MutFn(..)`"
                     );
-                    self.kind_errors.push((value.span, message));
+                    // The slot's `Fn` becomes `MutFn`; the text is checked
+                    // where the source is at hand (`source_fixes`,
+                    // B-2026-11-21-74).
+                    let fix = FixIt {
+                        span: Span {
+                            length: 0,
+                            ..ty.span
+                        },
+                        replacement: "Mut".to_string(),
+                    };
+                    self.kind_errors.push((value.span, message, Some(fix)));
                 }
             }
             (ExprKind::Tuple(es), TypeKind::Tuple(ts)) => {
@@ -2309,7 +2325,7 @@ impl Walk<'_, '_> {
                 || self
                     .kind_errors
                     .iter()
-                    .any(|(s, _)| s.offset == a.value.span.offset)
+                    .any(|(s, _, _)| s.offset == a.value.span.offset)
             {
                 continue;
             }
@@ -2437,7 +2453,7 @@ impl Walk<'_, '_> {
                 }
                 _ => continue,
             };
-            self.kind_errors.push((a.value.span, message));
+            self.kind_errors.push((a.value.span, message, None));
         }
     }
 
@@ -2488,6 +2504,32 @@ impl Walk<'_, '_> {
     /// elements as `mut ref`: append `.iter_mut()` to the iterated place.
     /// Other iterables (a map, a set, an iterator chain) have no one edit.
     fn iter_mut_fix(&self, iterable: &Expr) -> Option<FixIt> {
+        // `for x in v.iter()` says the read-only walk outright: the call
+        // becomes `.iter_mut()` (B-2026-11-21-74).
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            args_close_span,
+            ..
+        } = &iterable.kind
+        {
+            let end = object.span.offset + object.span.length;
+            let close = args_close_span.offset + args_close_span.length;
+            return (method == "iter"
+                && args.is_empty()
+                && args_close_span.length == 1
+                && close > end
+                && self.iter_mut_fix(object).is_some())
+            .then(|| FixIt {
+                span: Span {
+                    offset: end,
+                    length: close - end,
+                    ..object.span
+                },
+                replacement: ".iter_mut()".to_string(),
+            });
+        }
         place_root(iterable)?;
         let mut t = &self.node_types.get(&iterable.id)?.0;
         while let Type::Ref(inner) | Type::MutRef(inner) = t {

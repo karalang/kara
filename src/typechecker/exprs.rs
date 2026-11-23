@@ -13708,10 +13708,13 @@ impl<'a> super::TypeChecker<'a> {
                     | ExprKind::MethodCall { .. }
                     | ExprKind::Call { .. }
                     | ExprKind::Index { .. }
-                    | ExprKind::Unary {
-                        op: UnaryOp::Deref,
-                        ..
-                    }
+                    // `-n as i64` casts `-n` (`as` binds looser than a
+                    // prefix operator), a suffixed literal and a cast end
+                    // at their own last token: the deletion keeps each
+                    // whole (B-2026-11-21-74).
+                    | ExprKind::Unary { .. }
+                    | ExprKind::Integer(..)
+                    | ExprKind::Cast { .. }
             ))
             && end > start)
             .then(|| {

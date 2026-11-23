@@ -202,6 +202,11 @@ impl ProgramTree {
 pub struct ModuleParseErrors {
     pub file: PathBuf,
     pub errors: Vec<ParseError>,
+    /// The parse's machine-applicable edits, keyed by the diagnostic's
+    /// span (`ParseResult::fix_edits`, `fix_diffs`), so a package's check
+    /// reports the fixes a lone file's does (B-2026-11-21-74).
+    pub fix_edits: rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
+    pub fix_diffs: rustc_hash::FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Output of [`build_program_tree`]: the assembled tree plus any per-file
@@ -403,6 +408,8 @@ pub fn build_program_tree_with_overlay(
             parse_errors.push(ModuleParseErrors {
                 file: w.file.clone(),
                 errors: parsed.errors.clone(),
+                fix_edits: parsed.fix_edits.clone(),
+                fix_diffs: parsed.fix_diffs.clone(),
             });
         }
         parsed_files.push(ParsedFile {
@@ -701,6 +708,8 @@ pub fn build_program_tree_with_overlay(
                     parse_errors.push(ModuleParseErrors {
                         file: w.file.clone(),
                         errors: parsed.errors.clone(),
+                        fix_edits: parsed.fix_edits.clone(),
+                        fix_diffs: parsed.fix_diffs.clone(),
                     });
                 }
                 let module_doc_comment = parsed.program.module_doc_comment.clone();

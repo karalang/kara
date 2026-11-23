@@ -608,13 +608,14 @@ pub(super) fn format_late_diags(phase: &str, diags: &[LateDiag]) -> String {
 pub(super) fn print_parse_errors_text(parse_errors: &[ModuleParseErrors]) {
     for pe in parse_errors {
         for err in &pe.errors {
+            // The symbolic code a message opens with is the one printed,
+            // once, as a lone file's check prints it.
+            let (code, _, message) = super::specific_code(err.kind.code(), &err.message);
             eprintln!(
-                "error[{}]: {}:{}:{}: {}",
-                err.kind.code(),
+                "error[{code}]: {}:{}:{}: {message}",
                 super::project_v2::shown(&pe.file),
                 err.span.line,
                 err.span.column,
-                err.message,
             );
         }
     }
@@ -1234,10 +1235,16 @@ pub(super) fn typecheck_modules(
         // structurally incapable of reporting `deprecated` no matter what the
         // render path did.
         if !result.warnings.is_empty() {
+            // The map is keyed by span: where an error shares a warning's
+            // span, the edits are the error's (B-2026-11-21-74).
+            let mut fix_diffs = result.error_fix_diffs.clone();
+            for e in &result.errors {
+                fix_diffs.remove(&crate::resolver::SpanKey::from_span(&e.span));
+            }
             warn_out.push(ModuleTypeErrors {
                 file: m.file.clone(),
                 errors: result.warnings,
-                fix_diffs: result.error_fix_diffs.clone(),
+                fix_diffs,
             });
         }
         if !result.errors.is_empty() {
@@ -1564,11 +1571,7 @@ pub(super) fn type_warnings_json(per_module: &[ModuleTypeErrors]) -> Vec<String>
             if let Some(lint) = warn.lint_name.as_deref() {
                 record.push_str(&format!(",\"lint_name\":{}", json_string(lint)));
             }
-            // A lone file's warning carries a multi-edit fix only for a
-            // style lint; its single edit always.
-            if warn.fix_it.is_some() || warn.kind == crate::typechecker::TypeErrorKind::StyleLint {
-                record.push_str(&typed_fix_json_tail(warn, &te.fix_diffs));
-            }
+            record.push_str(&typed_fix_json_tail(warn, &te.fix_diffs));
             record.push('}');
             out.push(record);
         }
@@ -2242,14 +2245,61 @@ pub(super) fn parse_errors_json(parse_errors: &[ModuleParseErrors]) -> Vec<Strin
     let mut out = Vec::new();
     for pe in parse_errors {
         let file = super::project_v2::shown(&pe.file);
+        // The fixes a lone file's check carries: the parse's own, and the
+        // ones its help names (`source_fixes`), as offsets into the
+        // module's file (B-2026-11-21-74).
+        let mut fix_diffs = pe.fix_diffs.clone();
+        if let Ok(text) = std::fs::read_to_string(&pe.file) {
+            super::source_fixes::complete_parse_errors(
+                &text,
+                &pe.errors,
+                &pe.fix_edits,
+                &mut fix_diffs,
+            );
+        }
         for err in &pe.errors {
-            out.push(format!(
-                "{{\"severity\":\"error\",\"phase\":\"parse\",\"concept\":\"syntax/lexical-structure\",\"code\":\"E0001\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+            // The symbolic code a message opens with is the record's, with
+            // the kind's as `parent_code`, as in a lone file's feed.
+            let (code, parent, message) = super::specific_code(err.kind.code(), &err.message);
+            let mut record = format!(
+                "{{\"severity\":\"error\",\"phase\":\"parse\",\"concept\":\"syntax/lexical-structure\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}",
+                json_string(code),
                 json_string(&file),
                 err.span.line,
                 err.span.column,
-                json_string(&err.message),
-            ));
+                json_string(message),
+            );
+            if let Some(parent) = parent {
+                record.push_str(&format!(",\"parent_code\":{}", json_string(parent)));
+            }
+            let key = crate::resolver::SpanKey::from_span(&err.span);
+            // A `!`'s edit depends on its operand's type (`not`, or `~` for
+            // an integer), which `karac fix` reads from the checked file:
+            // it is left out here rather than guessed.
+            let bang = message.starts_with("the `!` operator is not used");
+            if let Some(e) = pe.fix_edits.get(&key).filter(|_| !bang) {
+                record.push_str(&format!(
+                    ",\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                    e.offset,
+                    e.length,
+                    json_string(&e.replacement),
+                ));
+            } else if let Some(edits) = fix_diffs.get(&key).filter(|v| !v.is_empty()) {
+                let items: Vec<String> = edits
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                            e.offset,
+                            e.length,
+                            json_string(&e.replacement),
+                        )
+                    })
+                    .collect();
+                record.push_str(&format!(",\"fix_diff\":[{}]", items.join(",")));
+            }
+            record.push('}');
+            out.push(record);
         }
     }
     out

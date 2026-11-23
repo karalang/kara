@@ -2488,6 +2488,37 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   rename its help names, of the binding and every use, f-strings included;
   the fix is withheld when a use cannot be placed exactly or the new name is
   already bound or a builtin's (B-2026-11-21-74).
+- More diagnostics carry the edit their help names, each withheld where the
+  text does not place it exactly. One edit: a reassigned `let x: T;` gets
+  `mut` (E0506); a misspelled `break 'label` takes its suggestion as
+  `continue` did, and the error sits on the `break`, not on its value
+  (E0107); `fn drop[T]` loses a generic list its body does not use
+  (E_DROP_SIGNATURE_INVALID); `size_of[T]()` / `align_of[T]()` become
+  `T.size_of()` (E0200); `ref_eq(a, b)` on values that are not `shared`
+  becomes `a == b` (E0232); an `Fn(..)` slot holding a closure that writes
+  becomes `MutFn(..)` (E0518); `for x in v.iter()` that writes `x` iterates
+  `.iter_mut()` (E0517); `serde(skip: true)` becomes `serde(skip)`
+  (E_UNKNOWN_ATTRIBUTE); the receiving parameter of a `frozen` handle is
+  declared `frozen` (E0511); and `-n as i64`, `5u8 as i64` and
+  `x as u64 as u64` lose a cast that changes nothing (W0309, W0310).
+  Several edits: an argument-position `impl Trait` a trait method or a
+  nested type cannot take becomes a generic parameter
+  (E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG, E_IMPL_TRAIT_IN_NESTED_POSITION); a
+  trait alias or an effect group is written out at each use and deleted
+  (E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET, E_DEFERRED_EFFECT_GROUP); a method its
+  trait does not declare moves to an inherent `impl` (E0204); a codegen hint
+  on an `impl` block moves onto each method
+  (E_CODEGEN_HINT_INVALID_POSITION); a sliced temporary is bound to a local
+  first (E_SLICE_FROM_TEMPORARY_ESCAPES); a removed `Base64.` / `Hex.` /
+  `Url.encode` call becomes its `std.encoding` function with the import
+  (E0520); and a foreign import's `ref CStr` or `String` parameter becomes
+  `*const u8` with `.as_ptr()` at each call (E_EXTERN_REF_PARAM,
+  E_EXTERN_TYPE_NOT_FFI_SAFE) (B-2026-11-21-74).
+- `karac check --output=json` carries a warning's multi-edit fix whatever
+  its lint: W0298's acronym rename, which `karac fix` applied, was missing
+  from the record. A package's parse errors carry their symbolic code
+  (with E0001 as `parent_code`) and the parse's fixes, as a lone file's do,
+  and its text render names the code once (B-2026-11-21-74).
 
 - `std.random.next_u64()` or `std.uuid.v4()` written inside an f-string
   hole names the import form and is fixed with its import, as it is outside

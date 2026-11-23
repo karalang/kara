@@ -542,6 +542,788 @@ fn drop_frozen(src: &[u8], at: usize) -> Option<Vec<TextEdit>> {
     Some(vec![edit(i, trim_fwd(src, i + 6) - i, "")])
 }
 
+/// The label `'old` of the `break` at `span` as `'new`.
+fn break_label(src: &[u8], span: Span, old: &str, new: &str) -> Option<Vec<TextEdit>> {
+    if !word_at(src, span.offset, "break") {
+        return None;
+    }
+    let tick = trim_fwd(src, span.offset + 5);
+    (src.get(tick) == Some(&b'\'') && word_at(src, tick + 1, old))
+        .then(|| vec![edit(tick + 1, old.len(), new)])
+}
+
+/// Whether `w` is a whole word anywhere in `src[from..to]`.
+fn has_word(src: &[u8], from: usize, to: usize, w: &str) -> bool {
+    (from..to.min(src.len())).any(|i| word_at(src, i, w))
+}
+
+/// The `[..]` generic list of `fn drop` in the impl at `span`, when the
+/// body names none of its parameters.
+fn drop_generics(src: &[u8], span: Span) -> Option<Vec<TextEdit>> {
+    let end = (span.offset + span.length).min(src.len());
+    let name = (span.offset..end).find(|&i| {
+        word_at(src, i, "drop") && word_ending_at(src, trim_back(src, i)).map(|w| w.1) == Some("fn")
+    })?;
+    let open = trim_fwd(src, name + 4);
+    if src.get(open) != Some(&b'[') {
+        return None;
+    }
+    let close = matching(src, open)?;
+    let list = std::str::from_utf8(&src[open + 1..close]).ok()?;
+    for param in list.split(',') {
+        let param = param.trim();
+        let n = param
+            .bytes()
+            .position(|b| !is_ident(b))
+            .unwrap_or(param.len());
+        if n == 0 || has_word(src, close + 1, end, &param[..n]) {
+            return None;
+        }
+    }
+    Some(vec![edit(open, close + 1 - open, "")])
+}
+
+/// Where an argument-position `impl Bound` at `at` sits in its method's
+/// signature: the end of the bound, and the place the method's generic
+/// parameter goes with the text that opens and closes it there.
+struct ImplArg {
+    bound_end: usize,
+    insert_at: usize,
+    open: &'static str,
+    close: &'static str,
+}
+
+fn impl_arg(src: &[u8], at: usize) -> Option<ImplArg> {
+    if !word_at(src, at, "impl") {
+        return None;
+    }
+    let bound = trim_fwd(src, at + 4);
+    let bound_end = trim_back(
+        src,
+        find_top(src, bound, src.len(), |s, i| {
+            matches!(s[i], b',' | b')' | b']')
+        })?,
+    );
+    if bound_end <= bound || has_word(src, bound, bound_end, "with") {
+        return None;
+    }
+    // The parameter list's `(`: the first one back from `at` that nothing
+    // closes. A string, a comment or a body in between is not a signature.
+    let mut depth = 0usize;
+    let mut i = at;
+    let paren = loop {
+        i = i.checked_sub(1)?;
+        match src[i] {
+            b')' | b']' => depth += 1,
+            b'(' if depth == 0 => break i,
+            // An unclosed `[` is the generic argument list the `impl`
+            // sits in (`Vec[impl T]`).
+            b'[' if depth == 0 => {}
+            b'(' | b'[' => depth -= 1,
+            b'"' | b'{' | b'}' | b';' | b'/' => return None,
+            _ => {}
+        }
+    };
+    let before = trim_back(src, paren);
+    let is_fn = |name_end: usize| {
+        word_ending_at(src, name_end).is_some_and(|(s, w)| {
+            !w.is_empty() && word_ending_at(src, trim_back(src, s)).map(|w| w.1) == Some("fn")
+        })
+    };
+    if before > 0 && src[before - 1] == b']' {
+        // `fn m[A](..)`: the parameter joins the list.
+        let close = before - 1;
+        let mut depth = 0usize;
+        let mut j = close;
+        let open = loop {
+            j = j.checked_sub(1)?;
+            match src[j] {
+                b']' | b')' => depth += 1,
+                b'[' if depth == 0 => break j,
+                b'[' | b'(' => depth = depth.checked_sub(1)?,
+                b'"' | b'{' | b'}' | b';' | b'/' => return None,
+                _ => {}
+            }
+        };
+        if !is_fn(trim_back(src, open)) {
+            return None;
+        }
+        let last = trim_back(src, close);
+        let (open, insert_at) = match src[last - 1] {
+            b'[' => ("", last),
+            b',' => (" ", last),
+            _ => (", ", last),
+        };
+        Some(ImplArg {
+            bound_end,
+            insert_at,
+            open,
+            close: "",
+        })
+    } else {
+        is_fn(before).then_some(ImplArg {
+            bound_end,
+            insert_at: before,
+            open: "[",
+            close: "]",
+        })
+    }
+}
+
+/// The parser's: an argument-position `impl Trait` in a trait method
+/// (`fn log(self, msg: impl Display)`), or one nested in a parameter's
+/// type (`xs: Vec[impl Display]`), as the explicit generic parameter its
+/// message names (`fn log[T: Display](self, msg: T)`). A function with
+/// several has them all in the first one's fix, since they share the one
+/// generic list (B-2026-11-21-74).
+pub(super) fn complete_parsed(source: &str, p: &mut crate::parser::ParseResult) {
+    complete_parse_errors(source, &p.errors, &p.fix_edits, &mut p.fix_diffs);
+}
+
+/// [`complete_parsed`] over a parse's parts, as a package's module carries
+/// them (`ModuleParseErrors`).
+pub(super) fn complete_parse_errors(
+    source: &str,
+    errors: &[crate::parser::ParseError],
+    fix_edits: &rustc_hash::FxHashMap<SpanKey, TextEdit>,
+    fix_diffs: &mut rustc_hash::FxHashMap<SpanKey, Vec<TextEdit>>,
+) {
+    let src = source.as_bytes();
+    // Per method, keyed by where its generic parameters go: the diagnostic
+    // that owns the fix, the insertion's two ends, and each `impl Bound`
+    // with the name it takes.
+    struct Method {
+        owner: SpanKey,
+        site: ImplArg,
+        args: Vec<(usize, String, String)>,
+    }
+    let mut methods: Vec<Method> = Vec::new();
+    let mut taken: Vec<String> = Vec::new();
+    for e in errors {
+        if !e
+            .message
+            .starts_with("error[E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG]")
+            && !e
+                .message
+                .starts_with("error[E_IMPL_TRAIT_IN_NESTED_POSITION]")
+        {
+            continue;
+        }
+        let key = SpanKey::from_span(&e.span);
+        if fix_edits.contains_key(&key) || fix_diffs.contains_key(&key) {
+            continue;
+        }
+        let Some(site) = impl_arg(src, e.span.offset) else {
+            continue;
+        };
+        // A name the file does not use anywhere, so it shadows nothing.
+        let Some(name) = ["T", "U", "V", "W", "X", "Y", "Z"]
+            .into_iter()
+            .find(|n| !taken.iter().any(|t| t == n) && !has_word(src, 0, src.len(), n))
+        else {
+            continue;
+        };
+        taken.push(name.to_string());
+        let Ok(bound) = std::str::from_utf8(&src[trim_fwd(src, e.span.offset + 4)..site.bound_end])
+        else {
+            continue;
+        };
+        let arg = (e.span.offset, name.to_string(), bound.to_string());
+        match methods
+            .iter_mut()
+            .find(|m| m.site.insert_at == site.insert_at)
+        {
+            Some(m) => m.args.push(arg),
+            None => methods.push(Method {
+                owner: key,
+                site,
+                args: vec![arg],
+            }),
+        }
+    }
+    for m in methods {
+        let params: Vec<String> = m.args.iter().map(|(_, n, b)| format!("{n}: {b}")).collect();
+        let mut edits = vec![edit(
+            m.site.insert_at,
+            0,
+            &format!("{}{}{}", m.site.open, params.join(", "), m.site.close),
+        )];
+        for (at, name, bound) in &m.args {
+            let end = trim_fwd(src, at + 4) + bound.len();
+            edits.push(edit(*at, end - at, name));
+        }
+        fix_diffs.insert(m.owner, edits);
+    }
+}
+
+/// The attribute argument that opens with `key` at `at`, value and all
+/// (`skip: true`), as the key alone.
+fn bare_key(src: &[u8], at: usize, key: &str) -> Option<Vec<TextEdit>> {
+    if !word_at(src, at, key) {
+        return None;
+    }
+    let end = trim_back(
+        src,
+        find_top(src, at, src.len(), |s, i| matches!(s[i], b',' | b')'))?,
+    );
+    (end > at + key.len()).then(|| vec![edit(at, end - at, key)])
+}
+
+/// `size_of[T]()` / `align_of[T]()` at `at` as `to`, the method form its
+/// message spells.
+fn type_arg_call(src: &[u8], at: usize, to: &str) -> Option<Vec<TextEdit>> {
+    let name = ["size_of", "align_of"]
+        .into_iter()
+        .find(|n| word_at(src, at, n))?;
+    let open = at + name.len();
+    if src.get(open) != Some(&b'[') {
+        return None;
+    }
+    let args = matching(src, open)? + 1;
+    let close = trim_fwd(src, args + 1);
+    (src.get(args) == Some(&b'(') && src.get(close) == Some(&b')'))
+        .then(|| vec![edit(at, close + 1 - at, to)])
+}
+
+/// Whether the expression text `e` needs no parentheses as an operand of
+/// `==`: names, paths, calls, indexing, literals.
+fn is_postfix_text(src: &[u8], from: usize, to: usize) -> bool {
+    let mut i = from;
+    while i < to {
+        if let Some(next) = skip_literal(src, i) {
+            i = next;
+        } else if matches!(src[i], b'(' | b'[') {
+            match matching(src, i) {
+                Some(c) if c < to => i = c + 1,
+                _ => return false,
+            }
+        } else if is_ident(src[i]) || src[i] == b'.' {
+            i += 1;
+        } else {
+            return false;
+        }
+    }
+    to > from
+}
+
+/// The `ref_eq(a, b)` call around the argument at `arg` as `a == b`.
+fn ref_eq_as_eq(src: &[u8], arg: Span) -> Option<Vec<TextEdit>> {
+    // The call's `(`: the first one back from the argument nothing closes.
+    let mut depth = 0usize;
+    let mut i = arg.offset;
+    let open = loop {
+        i = i.checked_sub(1)?;
+        match src[i] {
+            b')' | b']' => depth += 1,
+            b'(' if depth == 0 => break i,
+            b'(' | b'[' => depth = depth.checked_sub(1)?,
+            b'"' | b'{' | b'}' | b';' => return None,
+            _ => {}
+        }
+    };
+    let (name, word) = word_ending_at(src, open)?;
+    if word != "ref_eq" || (name > 0 && src[name - 1] == b'.') {
+        return None;
+    }
+    let close = matching(src, open)?;
+    let comma = find_top(src, open + 1, close, |s, i| s[i] == b',')?;
+    if find_top(src, comma + 1, close, |s, i| s[i] == b',').is_some() {
+        return None;
+    }
+    let side = |from: usize, to: usize| {
+        let (from, to) = (trim_fwd(src, from), trim_back(src, to));
+        let text = std::str::from_utf8(src.get(from..to)?).ok()?;
+        Some(if is_postfix_text(src, from, to) {
+            text.to_string()
+        } else {
+            format!("({text})")
+        })
+    };
+    let eq = format!("{} == {}", side(open + 1, comma)?, side(comma + 1, close)?);
+    // Alone in a condition, an argument, an initializer or a statement the
+    // comparison stands as written; under an operator it keeps parentheses.
+    let before = trim_back(src, name);
+    let after = trim_fwd(src, close + 1);
+    let opens = before == 0
+        || matches!(src[before - 1], b'(' | b'{' | b',' | b';' | b'[')
+        || (src[before - 1] == b'='
+            && before >= 2
+            && !matches!(src[before - 2], b'=' | b'!' | b'<' | b'>'))
+        || word_ending_at(src, before)
+            .is_some_and(|(_, w)| matches!(w, "if" | "while" | "return" | "in"));
+    let closes = src
+        .get(after)
+        .is_none_or(|b| matches!(b, b')' | b'{' | b'}' | b',' | b';' | b']'));
+    let text = if opens && closes {
+        eq
+    } else {
+        format!("({eq})")
+    };
+    Some(vec![edit(name, close + 1 - name, &text)])
+}
+
+/// The item that starts at `at`, through its `;` or its closing `}`, with
+/// the rest of its line.
+fn item_extent(src: &[u8], at: usize) -> Option<(usize, usize)> {
+    let stop = find_top(src, at, src.len(), |s, i| matches!(s[i], b';' | b'{'))?;
+    let mut end = if src[stop] == b'{' {
+        matching(src, stop)? + 1
+    } else {
+        stop + 1
+    };
+    while src.get(end).is_some_and(|b| matches!(b, b' ' | b'\t')) {
+        end += 1;
+    }
+    if src.get(end) == Some(&b'\n') {
+        end += 1;
+    }
+    let mut start = at;
+    while start > 0 && matches!(src[start - 1], b' ' | b'\t') {
+        start -= 1;
+    }
+    (start == 0 || src[start - 1] == b'\n').then_some((start, end))
+}
+
+/// Every whole-word `name` in `src` outside `skip` and outside strings and
+/// comments.
+fn uses_of(src: &[u8], name: &str, skip: (usize, usize)) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < src.len() {
+        if let Some(next) = skip_literal(src, i) {
+            i = next;
+            continue;
+        }
+        if (i < skip.0 || i >= skip.1) && word_at(src, i, name) {
+            out.push(i);
+            i += name.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The trait alias declared at `span` (`trait Numeric = Copy + Clone;`)
+/// deleted, and `bounds` written at each use of its name. Every use must be
+/// a bound (after `:`, `+`, `impl` or `dyn`, and not the trait of an impl
+/// block), or nothing is offered.
+fn inline_trait_alias(src: &[u8], span: Span, name: &str, bounds: &str) -> Option<Vec<TextEdit>> {
+    let (start, end) = item_extent(src, span.offset)?;
+    let decl = std::str::from_utf8(&src[start..end]).ok()?;
+    // `trait Name = ..;` with no parameters of its own.
+    let head = decl.split('=').next()?;
+    if !decl.trim_end().ends_with(';') || head.contains('[') || !decl.contains('=') {
+        return None;
+    }
+    let mut edits = vec![edit(start, end - start, "")];
+    for at in uses_of(src, name, (start, end)) {
+        let before = trim_back(src, at);
+        let bound = before > 0 && matches!(src[before - 1], b':' | b'+')
+            || word_ending_at(src, before).is_some_and(|(_, w)| matches!(w, "impl" | "dyn"));
+        let after = trim_fwd(src, at + name.len());
+        // `impl Numeric for W` implements it; a bound list cannot stand
+        // there.
+        if !bound || src.get(after) == Some(&b'[') || word_at(src, after, "for") {
+            return None;
+        }
+        edits.push(edit(at, name.len(), bounds));
+    }
+    Some(edits)
+}
+
+/// The `effect group` declared at `span` deleted, and its effects written
+/// out at each use of its name in a `with` clause. A use anywhere else, or
+/// a group whose own list names another group's `+`-joined form the clause
+/// cannot take, withholds the fix.
+fn inline_effect_group(src: &[u8], span: Span, name: &str) -> Option<Vec<TextEdit>> {
+    let (start, end) = item_extent(src, span.offset)?;
+    let decl = std::str::from_utf8(&src[start..end]).ok()?;
+    let (_, list) = decl.trim_end().strip_suffix(';')?.split_once('=')?;
+    // `a + b(..)` in the declaration is `a b(..)` in a clause.
+    let mut effects = Vec::new();
+    let bytes = list.as_bytes();
+    let mut from = 0;
+    while from < bytes.len() {
+        let to = find_top(bytes, from, bytes.len(), |s, i| s[i] == b'+').unwrap_or(bytes.len());
+        let one = list[from..to].trim();
+        if one.is_empty() {
+            return None;
+        }
+        effects.push(one);
+        from = to + 1;
+    }
+    let effects = effects.join(" ");
+    let mut edits = vec![edit(start, end - start, "")];
+    for at in uses_of(src, name, (start, end)) {
+        // Back over the clause's other effects to its `with`.
+        let mut i = at;
+        let in_clause = loop {
+            i = trim_back(src, i);
+            if i > 0 && src[i - 1] == b')' {
+                let mut depth = 0usize;
+                loop {
+                    i = i.checked_sub(1)?;
+                    match src[i] {
+                        b')' => depth += 1,
+                        b'(' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            match word_ending_at(src, i) {
+                Some((_, "with")) => break true,
+                Some((s, w)) if !w.is_empty() => i = s,
+                _ => break false,
+            }
+        };
+        if !in_clause {
+            return None;
+        }
+        edits.push(edit(at, name.len(), &effects));
+    }
+    Some(edits)
+}
+
+/// The method at `span`, which its trait does not declare, moved out of
+/// the `impl Trait for Type` block into an `impl Type` block after it.
+fn move_to_inherent_impl(src: &[u8], span: Span) -> Option<Vec<TextEdit>> {
+    let (start, end) = item_extent(src, span.offset)?;
+    if src[end - 1] != b'\n' || !src[..end].trim_ascii_end().ends_with(b"}") {
+        return None;
+    }
+    // The enclosing block's `{`: the first one back that nothing closes.
+    let mut depth = 0usize;
+    let mut i = start;
+    let open = loop {
+        i = i.checked_sub(1)?;
+        match src[i] {
+            b'}' => depth += 1,
+            b'{' if depth == 0 => break i,
+            b'{' => depth -= 1,
+            _ => {}
+        }
+    };
+    let close = matching(src, open)?;
+    // Its header, `impl Trait for Type {`, alone on its line and with no
+    // parameters or `where` of its own to carry over.
+    let line = src[..open]
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(0, |n| n + 1);
+    let header = std::str::from_utf8(&src[line..open]).ok()?;
+    let rest = header.strip_prefix("impl ")?;
+    let (_, target) = rest.split_once(" for ")?;
+    let target = target.trim();
+    if target.is_empty()
+        || header.contains(" where ")
+        || !target.bytes().all(|b| is_ident(b) || b == b'.')
+        || src.get(close + 1) != Some(&b'\n')
+    {
+        return None;
+    }
+    let method = std::str::from_utf8(&src[start..end]).ok()?;
+    Some(vec![
+        edit(start, end - start, ""),
+        edit(close + 2, 0, &format!("\nimpl {target} {{\n{method}}}\n")),
+    ])
+}
+
+/// Where the line holding `at` starts.
+fn line_start(src: &[u8], at: usize) -> usize {
+    src[..at]
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(0, |n| n + 1)
+}
+
+/// The codegen hint at `at`, written on an `impl` block, moved onto each
+/// of the block's methods.
+fn hint_onto_methods(src: &[u8], at: usize) -> Option<Vec<TextEdit>> {
+    if src.get(at..at + 2) != Some(b"#[") || line_start(src, at) != at {
+        return None;
+    }
+    let attr_end = matching(src, at + 1)? + 1;
+    let attr = std::str::from_utf8(&src[at..attr_end]).ok()?;
+    if src.get(attr_end) != Some(&b'\n') || !word_at(src, attr_end + 1, "impl") {
+        return None;
+    }
+    let open = find_top(src, attr_end, src.len(), |s, i| matches!(s[i], b'{' | b';'))?;
+    if src[open] != b'{' {
+        return None;
+    }
+    let close = matching(src, open)?;
+    let mut edits = vec![edit(at, attr_end + 1 - at, "")];
+    let mut i = open + 1;
+    while i < close {
+        if let Some(next) = skip_literal(src, i) {
+            i = next;
+        } else if src[i] == b'{' {
+            i = matching(src, i)? + 1;
+        } else if word_at(src, i, "fn") {
+            // The hint goes on a line of its own above the method's, at
+            // the method's indentation.
+            let line = line_start(src, i);
+            let indent = src[line..i]
+                .iter()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+            let indent = std::str::from_utf8(&src[line..line + indent]).ok()?;
+            edits.push(edit(line, 0, &format!("{indent}{attr}\n")));
+            i = signature_end(src, i)?;
+        } else {
+            i += 1;
+        }
+    }
+    (edits.len() > 1).then_some(edits)
+}
+
+/// `let s = <temporary><slice>;` at `value` (the initializer) with the
+/// temporary bound to a local of its own on the line before, and the slice
+/// taken from that.
+fn hoist_sliced_temporary(
+    src: &[u8],
+    value: usize,
+    taken: &mut Vec<&'static str>,
+) -> Option<Vec<TextEdit>> {
+    let semi = find_top(src, value, src.len(), |s, i| matches!(s[i], b';' | b'{'))?;
+    if src[semi] != b';' {
+        return None;
+    }
+    let end = trim_back(src, semi);
+    let text = std::str::from_utf8(&src[value..end]).ok()?;
+    // The slice is the initializer's last postfix: `.as_slice()`,
+    // `.as_slice_mut()`, or a `[a..b]` index.
+    let (source_end, keyword) = if let Some(rest) = text.strip_suffix(".as_slice()") {
+        (value + rest.len(), "let")
+    } else if let Some(rest) = text.strip_suffix(".as_slice_mut()") {
+        (value + rest.len(), "let mut")
+    } else if text.ends_with(']') {
+        let mut depth = 0usize;
+        let mut i = end;
+        loop {
+            i = i.checked_sub(1).filter(|i| *i > value)?;
+            match src[i] {
+                b']' | b')' => depth += 1,
+                b'[' | b'(' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                b'"' => return None,
+                _ => {}
+            }
+        }
+        (trim_back(src, i), "let")
+    } else {
+        return None;
+    };
+    // The statement is a `let` that opens its line.
+    let line = line_start(src, value);
+    let head = std::str::from_utf8(&src[line..value]).ok()?;
+    let indent = &head[..head.len() - head.trim_start().len()];
+    if source_end <= value
+        || !head.trim_start().starts_with("let ")
+        || !head.trim_end().ends_with('=')
+    {
+        return None;
+    }
+    // A name the file does not use, nor an earlier fix of this pass.
+    let name = ["backing", "backing_2", "backing_3", "backing_4"]
+        .into_iter()
+        .find(|n| !taken.contains(n) && !has_word(src, 0, src.len(), n))?;
+    taken.push(name);
+    let source = std::str::from_utf8(&src[value..source_end]).ok()?;
+    Some(vec![
+        edit(line, 0, &format!("{indent}{keyword} {name} = {source};\n")),
+        edit(value, source_end - value, name),
+    ])
+}
+
+/// The call of a removed encoding namespace at `at` (`Base64.encode(b)`)
+/// as the `std.encoding` function that replaces it, with its import. Each
+/// call's fix carries the import it needs, so any one of them leaves a
+/// program that resolves; two that write the same import are applied a
+/// pass apart, and the second finds the name there.
+fn removed_encoding_call(src: &[u8], at: usize, ty: &str, method: &str) -> Option<Vec<TextEdit>> {
+    // The function, what its argument gains, and what the call gains.
+    let (name, arg_suffix, call_suffix) = match (ty, method) {
+        ("Base64", "encode") => ("base64_encode", "", ""),
+        ("Base64", "encode_url_safe") => ("base64url_encode", "", ""),
+        ("Base64", "decode") => ("base64_decode", "", ""),
+        ("Hex", "encode") => ("hex_encode", "", ""),
+        ("Hex", "encode_upper") => ("hex_encode", "", ".to_uppercase()"),
+        ("Hex", "decode") => ("hex_decode", "", ""),
+        ("Url", "encode") => ("percent_encode", ".bytes()", ""),
+        _ => return None,
+    };
+    if !word_at(src, at, ty) || src.get(at + ty.len()) != Some(&b'.') {
+        return None;
+    }
+    let m = at + ty.len() + 1;
+    let open = m + method.len();
+    if !word_at(src, m, method) || src.get(open) != Some(&b'(') {
+        return None;
+    }
+    let close = matching(src, open)?;
+    let (arg, arg_end) = (trim_fwd(src, open + 1), trim_back(src, close));
+    if arg >= arg_end || find_top(src, arg, arg_end, |s, i| s[i] == b',').is_some() {
+        return None;
+    }
+    let mut edits = vec![edit(at, open - at, name)];
+    if !arg_suffix.is_empty() {
+        if is_postfix_text(src, arg, arg_end) {
+            edits.push(edit(arg_end, 0, arg_suffix));
+        } else {
+            edits.push(edit(arg, 0, "("));
+            edits.push(edit(arg_end, 0, &format!("){arg_suffix}")));
+        }
+    }
+    if !call_suffix.is_empty() {
+        edits.push(edit(close + 1, 0, call_suffix));
+    }
+    // The import: the name joins `import std.encoding.{..};` where the
+    // file has one, else a line of its own after the last import.
+    const HEAD: &[u8] = b"import std.encoding.{";
+    let mut last_import_end = 0;
+    let mut i = 0;
+    while i < src.len() {
+        if let Some(next) = skip_literal(src, i) {
+            i = next;
+            continue;
+        }
+        if line_start(src, i) == i && src[i..].starts_with(b"import ") {
+            let semi = find_top(src, i, src.len(), |s, i| s[i] == b';')?;
+            if src[i..].starts_with(HEAD) {
+                let brace = i + HEAD.len() - 1;
+                let end = (brace..semi).find(|&j| src[j] == b'}')?;
+                if !has_word(src, brace, end, name) {
+                    let last = trim_back(src, end);
+                    let sep = if src[last - 1] == b'{' { "" } else { ", " };
+                    edits.push(edit(last, 0, &format!("{sep}{name}")));
+                }
+                return Some(edits);
+            }
+            last_import_end = semi + 1;
+            i = semi + 1;
+            continue;
+        }
+        i += 1;
+    }
+    let line = format!("import std.encoding.{{{name}}};\n");
+    if last_import_end > 0 {
+        if src.get(last_import_end) != Some(&b'\n') {
+            return None;
+        }
+        edits.push(edit(last_import_end + 1, 0, &line));
+    } else {
+        edits.push(edit(0, 0, &format!("{line}\n")));
+    }
+    Some(edits)
+}
+
+/// The `(` that opens the list `at` sits in, and how many top-level
+/// commas lie between the two: the first `(` back from `at` that nothing
+/// closes, with no body, statement end or string on the way.
+fn enclosing_paren(src: &[u8], at: usize) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let mut commas = 0;
+    let mut i = at;
+    loop {
+        i = i.checked_sub(1)?;
+        match src[i] {
+            b')' | b']' => depth += 1,
+            b'(' if depth == 0 => return Some((i, commas)),
+            b'(' | b'[' => depth = depth.checked_sub(1)?,
+            b',' if depth == 0 => commas += 1,
+            b'"' | b'{' | b'}' | b';' => return None,
+            _ => {}
+        }
+    }
+}
+
+/// The `index`th top-level argument of the list that opens at `open`.
+fn nth_argument(src: &[u8], open: usize, index: usize) -> Option<(usize, usize)> {
+    let close = matching(src, open)?;
+    let mut from = open + 1;
+    for _ in 0..index {
+        from = find_top(src, from, close, |s, i| s[i] == b',')? + 1;
+    }
+    let to = find_top(src, from, close, |s, i| s[i] == b',').unwrap_or(close);
+    let (from, to) = (trim_fwd(src, from), trim_back(src, to));
+    (to > from).then_some((from, to))
+}
+
+/// A foreign import's parameter whose type at `ty` does not cross to C
+/// (`ref CStr`, `String`) as `*const u8`, with `.as_ptr()` on that argument
+/// of every call of `name`. A use of `name` that is not a call withholds it.
+fn extern_param_as_ptr(src: &[u8], ty: usize, name: &str) -> Option<Vec<TextEdit>> {
+    let (open, index) = enclosing_paren(src, ty)?;
+    let (decl, word) = word_ending_at(src, trim_back(src, open))?;
+    let ty_end = trim_back(
+        src,
+        find_top(src, ty, src.len(), |s, i| matches!(s[i], b',' | b')'))?,
+    );
+    if word != name || ty_end <= ty {
+        return None;
+    }
+    let mut edits = vec![edit(ty, ty_end - ty, "*const u8")];
+    for at in uses_of(src, name, (decl, decl + name.len())) {
+        let call = at + name.len();
+        if src.get(call) != Some(&b'(') || (at > 0 && src[at - 1] == b'.') {
+            return None;
+        }
+        let (from, to) = nth_argument(src, call, index)?;
+        if is_postfix_text(src, from, to) {
+            edits.push(edit(to, 0, ".as_ptr()"));
+        } else {
+            edits.push(edit(from, 0, "("));
+            edits.push(edit(to, 0, ").as_ptr()"));
+        }
+    }
+    Some(edits)
+}
+
+/// `frozen` on the parameter of the free function that receives the
+/// argument at `arg`: the one `fn` of that name in the file.
+fn frozen_receiving_param(src: &[u8], arg: usize) -> Option<Vec<TextEdit>> {
+    let (open, index) = enclosing_paren(src, arg)?;
+    let (name_at, name) = word_ending_at(src, open)?;
+    if name_at > 0 && src[name_at - 1] == b'.' {
+        return None;
+    }
+    let mut decls = uses_of(src, name, (0, 0))
+        .into_iter()
+        .filter(|&at| word_ending_at(src, trim_back(src, at)).map(|w| w.1) == Some("fn"));
+    let decl = decls.next()?;
+    if decls.next().is_some() {
+        return None;
+    }
+    let mut list = decl + name.len();
+    if src.get(list) == Some(&b'[') {
+        list = matching(src, list)? + 1;
+    }
+    if src.get(list) != Some(&b'(') {
+        return None;
+    }
+    let (from, to) = nth_argument(src, list, index)?;
+    // `name: T`, with no mode of its own.
+    let colon = find_top(src, from, to, |s, i| s[i] == b':')?;
+    let ty = trim_fwd(src, colon + 1);
+    let plain = !["frozen", "own", "mut", "ref"]
+        .iter()
+        .any(|w| word_at(src, ty, w))
+        && word_ending_at(src, trim_back(src, colon)).is_some_and(|(s, _)| s == from);
+    plain.then(|| vec![edit(ty, 0, "frozen ")])
+}
+
 /// The quoted text after `after` up to `until` in `message`.
 fn between<'m>(message: &'m str, after: &str, until: &str) -> Option<&'m str> {
     let s = message.find(after)? + after.len();
@@ -553,6 +1335,10 @@ fn between<'m>(message: &'m str, after: &str, until: &str) -> Option<&'m str> {
 fn typed_fix(src: &[u8], e: &TypeError) -> Option<Vec<TextEdit>> {
     let m = e.message.as_str();
     let lint = e.lint_name.as_deref();
+    if let Some(call) = between(m, "`", "` is removed: encodings are the free functions of") {
+        let (ty, method) = call.split_once('.')?;
+        return removed_encoding_call(src, e.span.offset, ty, method);
+    }
     if lint == Some("irrefutable_let_pattern") {
         let form = if m.contains("irrefutable `if let`") {
             "if"
@@ -600,6 +1386,45 @@ fn typed_fix(src: &[u8], e: &TypeError) -> Option<Vec<TextEdit>> {
     if let Some(name) = between(m, "` on union `", "` — derives are not supported on union") {
         return remove_derive_line(src, "union", name);
     }
+    if m.contains("hand over the data pointer at the call site with `.as_ptr()`")
+        || m.contains("take `*const u8` and pass `s.as_ptr()`")
+    {
+        let name = between(m, "the foreign import '", "'")?;
+        return extern_param_as_ptr(src, e.span.offset, name);
+    }
+    if let Some(to) = between(
+        m,
+        "has no call-site type arguments (design.md §8): write `",
+        "()`",
+    ) {
+        return type_arg_call(src, e.span.offset, &format!("{to}()"));
+    }
+    if m.contains("`ref_eq` compares reference identity of `shared` values only") {
+        return ref_eq_as_eq(src, e.span);
+    }
+    if let (Some(name), Some(bounds)) = (
+        between(
+            m,
+            "trait alias `",
+            "` is not available: trait aliases are deferred",
+        ),
+        between(m, "where the alias would be used: `", "`"),
+    ) {
+        return inline_trait_alias(src, e.span, name, bounds);
+    }
+    if let Some(name) = between(
+        m,
+        "`effect group ",
+        "` is not available: effect groups are deferred",
+    ) {
+        return inline_effect_group(src, e.span, name);
+    }
+    if m.contains("holds only the trait's items; move it to an inherent `impl ") {
+        return move_to_inherent_impl(src, e.span);
+    }
+    if m.ends_with("— the `drop` method must not declare its own generic parameters") {
+        return drop_generics(src, e.span);
+    }
     if m.contains("cannot implement `Drop` for union") {
         return remove_impl_block(src, e.span);
     }
@@ -635,6 +1460,19 @@ pub(super) fn complete_typed_at(
     diffs: &mut rustc_hash::FxHashMap<SpanKey, Vec<TextEdit>>,
 ) {
     let src = source.as_bytes();
+    // A slot's `Fn` as `MutFn` is the typechecker's, from the type's span
+    // alone: the text there must be `Fn(`, or the edit is dropped
+    // (B-2026-11-21-74).
+    for e in errors.iter_mut() {
+        if e.message.ends_with("declare the slot `MutFn(..)`")
+            && e.fix_it.as_ref().is_some_and(|f| {
+                src.get(f.span.offset..f.span.offset + 3) != Some(b"Fn(")
+                    || (f.span.offset > 0 && is_ident(src[f.span.offset - 1]))
+            })
+        {
+            e.fix_it = None;
+        }
+    }
     for e in errors.iter_mut() {
         if e.fix_it.is_some()
             || e.span.offset < base
@@ -734,6 +1572,16 @@ pub(super) fn complete_resolved_at(
             add_derive(src, "enum", name, &["Default"])
         } else if m.contains("accepts no arguments — write it as a bare") {
             bare_attribute(src, local)
+        } else if m.contains("is not valid on impl block; codegen hints attach to named functions")
+        {
+            hint_onto_methods(src, local.offset)
+        } else if let Some(key) = between(m, "`serde(", ")` takes no value; write `") {
+            bare_key(src, local.offset, key)
+        } else if let (Some(old), Some(new)) = (
+            between(m, "undefined loop label `", "`"),
+            between(m, ", did you mean `", "`?"),
+        ) {
+            break_label(src, local, old, new)
         } else {
             None
         };
@@ -757,9 +1605,11 @@ pub(super) fn complete_resolved_at(
 }
 
 /// The ownership checker's: a closure's capture prefix that its body
-/// contradicts, and `frozen` on a `sync struct`, which adds nothing.
+/// contradicts, `frozen` on a `sync struct`, which adds nothing, and a
+/// slice of a temporary bound past its statement.
 pub(super) fn complete_ownership(source: &str, o: &mut crate::ownership::OwnershipCheckResult) {
     let src = source.as_bytes();
+    let mut taken = Vec::new();
     for e in o.errors.iter_mut() {
         if e.replacement.is_some() || e.span.offset + e.span.length > src.len() {
             continue;
@@ -775,12 +1625,22 @@ pub(super) fn complete_ownership(source: &str, o: &mut crate::ownership::Ownersh
             closure_prefix(src, e.span, "ref")
         } else if m.contains("is a `sync struct`, so `frozen` adds nothing") {
             drop_frozen(src, e.span.offset)
+        } else if m.starts_with("`frozen` parameter `")
+            && m.ends_with("` is passed to a non-`frozen` slot")
+        {
+            frozen_receiving_param(src, e.span.offset)
+        } else if m == "slice from temporary value escapes the enclosing statement"
+            && !o.error_fix_diffs.contains_key(&SpanKey::from_span(&e.span))
+        {
+            hoist_sliced_temporary(src, e.span.offset, &mut taken)
         } else {
             None
         };
         if let Some(mut edits) = fix {
             if edits.len() == 1 {
                 e.replacement = Some(Box::new(edits.remove(0)));
+            } else {
+                o.error_fix_diffs.insert(SpanKey::from_span(&e.span), edits);
             }
         }
     }
