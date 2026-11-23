@@ -5281,6 +5281,12 @@ pub(crate) fn collect_method_param_modes(
         "Vec.contains",
         "VecDeque.contains",
         "String.contains",
+        // `binary_search(val: T)` only compares `val` with the elements
+        // (collections.md), so a `String` asked of two sorted lists in turn
+        // stays usable (kata 2512, B-2026-11-23-65).
+        "Vec.binary_search",
+        "Slice.binary_search",
+        "Array.binary_search",
     ] {
         map.insert(key.to_string(), vec![OwnershipMode::Ref]);
     }
