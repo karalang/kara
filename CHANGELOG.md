@@ -2461,6 +2461,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `m.entry(k)` on a `Map[ref String, V]` or `SortedMap[ref String, V]` lends
+  an owned `k`, as `m.insert(k, v)` does: `karac check` no longer reports the
+  key as moved (E0500 at its next use, or E0515 with a `.clone()` fix for
+  `m.entry(words[i])`), and `m.entry(w.clone())` is refused there as a
+  reference to a temporary (B-2026-11-23-12).
 - The item of `for x in nums.iter()` over `Copy` elements, stored where a
   written `ref` slot wants one, is the reference into `nums`: `q.push(x)` into
   a `PriorityQueue[ref i32]`, `count.entry(x)` on a `Map[ref i64, i64]`,

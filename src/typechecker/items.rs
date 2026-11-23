@@ -12362,6 +12362,9 @@ impl<'a> super::TypeChecker<'a> {
             ("Vec" | "VecDeque", "fill", [t], 1) => vec![(0, t.clone())],
             ("Set" | "SortedSet", "insert", [t], 1) => vec![(0, t.clone())],
             ("Map" | "SortedMap", "insert", [k, v], 2) => vec![(0, k.clone()), (1, v.clone())],
+            // `entry(k)` keeps the key when the entry is vacant
+            // (B-2026-11-23-12).
+            ("Map" | "SortedMap", "entry", [k, _], 1) => vec![(0, k.clone())],
             _ => Vec::new(),
         }
     }

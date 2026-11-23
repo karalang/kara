@@ -8,6 +8,10 @@
 //! reference key through as a number at `self[key]`. Lent for the call, the
 //! key is not kept by the collection either, so a key that dies before the
 //! map is not a borrow conflict.
+//!
+//! `m.entry(k)` does keep its key. `karac check` read an owned `k` as moved
+//! there (E0500 at its next use, E0515 for an element), where the MIR
+//! builder lends it (B-2026-11-23-12).
 
 mod common;
 
@@ -220,5 +224,79 @@ fn ref_key_insert_of_a_key_that_dies_first_is_still_refused() {
         );
         assert!(!out.status.success(), "{cmd}: accepted\n{src}");
         assert!(shown.contains("E0516"), "{cmd}: {shown}");
+    }
+}
+
+#[test]
+fn ref_key_entry_lends_its_key() {
+    runs_everywhere(
+        "ref_key_entry",
+        "fn main() {\n\
+         let words: Vec[String] = [\"a\".to_string(), \"b\".to_string(), \"a\".to_string()];\n\
+         let a = \"a\".to_string();\n\
+         let user = (\"z\".to_string(), 1);\n\
+         let mut m: Map[ref String, i64] = Map.new();\n\
+         let mut s: SortedMap[ref String, i64] = SortedMap.new();\n\
+         for w in words.iter() {\n\
+         *m.entry(w).or_insert(0) += 1;\n\
+         }\n\
+         for i in 0..3 {\n\
+         *m.entry(words[i]).or_insert(0) += 1;\n\
+         *s.entry(words[i]).or_insert(0) += 1;\n\
+         }\n\
+         *m.entry(a).or_insert(0) += 1;\n\
+         *m.entry(user.0).or_insert(0) += 1;\n\
+         *m.entry(\"lit\").or_insert(0) += 1;\n\
+         m.entry(a).or_insert(7);\n\
+         println(f\"{m.len()} {m[a]} {m[\"b\"]} {s.len()} {a} {user.0} {words.len()}\");\n\
+         }\n",
+        "4 5 2 2 a z 3\n",
+    );
+}
+
+#[test]
+fn ref_key_entry_of_a_key_that_dies_first_is_refused() {
+    for (name, body, needle) in [
+        (
+            "ref_key_entry_temp",
+            "let words: Vec[String] = [\"a\".to_string()];\n\
+             let mut m: Map[ref String, i64] = Map.new();\n\
+             *m.entry(words[0].clone()).or_insert(0) += 1;\n\
+             println(f\"{m.len()}\");\n",
+            "a reference to a temporary outlives its statement (core-semantics.md §5.5)",
+        ),
+        (
+            "ref_key_entry_block_local",
+            "let mut m: Map[ref String, i64] = Map.new();\n\
+             {\n\
+             let t = \"t\".to_string();\n\
+             *m.entry(t).or_insert(0) += 1;\n\
+             }\n\
+             println(f\"{m.len()}\");\n",
+            "cannot drop `t` while `m` still holds a borrow of it",
+        ),
+        (
+            "ref_key_entry_lender_written",
+            "let mut words: Vec[String] = [\"a\".to_string()];\n\
+             let mut m: Map[ref String, i64] = Map.new();\n\
+             *m.entry(words[0]).or_insert(0) += 1;\n\
+             words.push(\"b\".to_string());\n\
+             println(f\"{m.len()}\");\n",
+            "cannot mutably borrow `words` while `m` still holds a borrow of it",
+        ),
+    ] {
+        let src = format!("fn main() {{\n{body}}}\n");
+        let check = karac(name, &src, "check");
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&check.stdout),
+            String::from_utf8_lossy(&check.stderr)
+        );
+        assert!(!check.status.success(), "{name}: check passed\n{src}");
+        assert!(shown.contains(needle), "{name}: no `{needle}` in:\n{shown}");
+        let run = karac(name, &src, "__mir-run");
+        let err = String::from_utf8_lossy(&run.stderr).to_string();
+        assert!(!run.status.success(), "{name}: ran\n{src}");
+        assert!(err.contains("E0516"), "{name}: {err}");
     }
 }
