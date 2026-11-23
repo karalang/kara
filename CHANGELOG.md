@@ -2533,6 +2533,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   key as moved (E0500 at its next use, or E0515 with a `.clone()` fix for
   `m.entry(words[i])`), and `m.entry(w.clone())` is refused there as a
   reference to a temporary (B-2026-11-23-12).
+- Rust's `let (x, y, z);`, assigned in each branch afterwards, is told at
+  once that a destructuring `let` needs a value, with the form to write
+  (`let (x, y, z) = if .. { .. } else { .. };`). It was told to add a type
+  annotation first, and following that only met the destructuring refusal
+  (B-2026-11-18-91).
 - The item of `for x in nums.iter()` over `Copy` elements, stored where a
   written `ref` slot wants one, is the reference into `nums`: `q.push(x)` into
   a `PriorityQueue[ref i32]`, `count.entry(x)` on a `Map[ref i64, i64]`,

@@ -1280,11 +1280,43 @@ impl super::Parser {
         };
 
         // Uninitialized form: `let pat: T;` (no `=` initializer).
-        // Requires a type annotation (no RHS to infer from) and a single-name
-        // pattern (destructuring needs a value). Definite-assignment analysis
-        // tracks initialization through later assignments.
+        // Requires a single-name pattern (destructuring needs a value) and a
+        // type annotation (no RHS to infer from). Definite-assignment analysis
+        // tracks initialization through later assignments. The pattern is
+        // tested first: Rust's `let (x, y, z);` told to add a type only met
+        // the destructuring refusal once it had one (B-2026-11-18-91).
         if self.check(&Token::Semicolon) {
             self.advance();
+            let (name, name_span) = match &pattern.kind {
+                PatternKind::Binding(name) => (name.clone(), pattern.span),
+                _ => {
+                    let shown = self
+                        .source
+                        .as_ref()
+                        .and_then(|(source, base)| {
+                            source.get(
+                                pattern.span.offset.checked_sub(*base)?
+                                    ..pattern.span.offset - base + pattern.span.length,
+                            )
+                        })
+                        .filter(|t| !t.contains('\n'))
+                        .map(str::to_string);
+                    let whole = match shown {
+                        Some(p) => format!("`let {p} = if .. {{ .. }} else {{ .. }};`"),
+                        None => "`let (a, b) = if .. { (..) } else { (..) };`".to_string(),
+                    };
+                    self.errors.push(ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
+                        message: format!(
+                            "uninitialized `let` must bind a single name; destructuring patterns \
+                             require an initializer. Bind the whole pattern from one value \
+                             ({whole}), or declare each name on its own (`let x: T;`)"
+                        ),
+                        span: pattern.span,
+                    });
+                    return None;
+                }
+            };
             let Some(ty) = ty else {
                 self.errors.push(ParseError {
                     kind: crate::parser::ParseErrorKind::Syntax,
@@ -1293,18 +1325,6 @@ impl super::Parser {
                     span: self.span_from(&start),
                 });
                 return None;
-            };
-            let (name, name_span) = match &pattern.kind {
-                PatternKind::Binding(name) => (name.clone(), pattern.span),
-                _ => {
-                    self.errors.push(ParseError {
-                        kind: crate::parser::ParseErrorKind::Syntax,
-                        message: "uninitialized `let` must bind a single name; destructuring patterns require an initializer"
-                            .to_string(),
-                        span: pattern.span,
-                    });
-                    return None;
-                }
             };
             return Some(Stmt {
                 id: crate::ids::NodeId::DUMMY,
