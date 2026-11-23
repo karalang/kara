@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 713 |
+| diagnostics | 714 |
 | false-positive | 357 |
 | missing-feature | 245 |
 | perf | 200 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 867 |
+| typecheck | 868 |
 | mir-llvm | 321 |
 | mir | 320 |
 | cli | 282 |
@@ -141,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-17 | 2026-11-23 | effect | high | UNDER-REPORT: a library method written in Kāra is not charged the program impls it calls through its bounds. A program iterator's `next` is charged only where it is called by name: a `for` loop over it and every provided method that drives it (`count`, `sum`, `collect`, a `map(..)` chain, `zip`, `Vec.extend`) report none of its effects, as do `rev()` and a program `next_back`, `sum()` and a program `Add`, `extend` and a program `IntoIterator`, `collect` and a program `FromIterator` | — |
 | B-2026-11-23-18 | 2026-11-23 | interp | high | The MIR interpreter's `Vec.dedup` ignores the program's `PartialEq` impl and compares structurally: with `eq` as `self.v % 10 == o.v % 10`, `[P{1}, P{11}, P{2}, P{2}].dedup()` leaves 3 elements on `karac run --interp` and `__mir-run`, 2 on `karac run` (JIT) and `karac build`; the written `eq` never runs on the interpreter | — |
 | B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
+| B-2026-11-23-20 | 2026-11-23 | typecheck | low | A provider-using closure returned inside `Ok(..)` from a `with_provider` body draws MIR's internal E0516 'a type that failed to check is not lowered yet' first, before the real E0600 escape diagnostic; every other escape shape (bare, Some, tuple, struct field, Vec push, lazy iterator) gets E0600 alone | — |
 
 ### Relocated
 
