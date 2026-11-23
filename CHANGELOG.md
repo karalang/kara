@@ -975,6 +975,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A built-in type's method is no longer charged the effects of a trait
+  default method of the same name. `s.find(" ")` on a `String` took the
+  effects of every trait default named `find` in the program, so a
+  `#[no_effect(writes(Stderr))]` function calling it was refused once any
+  trait had a default `find` that writes Stderr. A call the type checker
+  resolves to a concrete type's method reaches a trait's default only when
+  the type has an impl of that trait (B-2026-11-23-5).
 - A `#[derive(Serialize)]` on any type no longer changes the effects check
   reports for the rest of the file. With a derive present, the passes after
   the type check read the library's bodies, which they read for no other

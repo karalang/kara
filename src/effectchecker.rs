@@ -562,6 +562,91 @@ pub(crate) fn stores_beside_value_calls(
     out
 }
 
+/// Which type implements which trait, as the program's impl blocks say it.
+/// A method call the typechecker resolved to a concrete type's method that
+/// has no body of its own can only be a trait default the type inherits, and
+/// only from a trait the type implements (core-semantics.md §12 default 4:
+/// a callee is identified by its definition, never by its name).
+#[derive(Default)]
+pub(crate) struct TraitImpls {
+    /// `(type, trait)`, the type keyed as a method key's owner is.
+    pairs: FxHashSet<(String, String)>,
+    /// Traits an impl gives to a type that has no such key: a blanket impl's
+    /// parameter, a slice, an array, a type alias. Any type may have these.
+    open_traits: FxHashSet<String>,
+    /// Types with an impl of a trait the program does not define under the
+    /// impl's name for it (an import's alias). Any trait may be theirs.
+    open_types: FxHashSet<String>,
+}
+
+impl TraitImpls {
+    pub(crate) fn of(program: &Program, trait_names: &FxHashSet<String>) -> Self {
+        let aliases: FxHashSet<&str> = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::TypeAlias(a) => Some(a.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut out = Self::default();
+        for item in &program.items {
+            let Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            let Some(tr) = impl_trait_name(imp) else {
+                continue;
+            };
+            let own_param = |name: &str| {
+                imp.generic_params
+                    .as_ref()
+                    .is_some_and(|g| g.params.iter().any(|p| p.name == name))
+            };
+            let ty = match &imp.target_type.kind {
+                TypeKind::Path(p) => match p.segments.last().map(String::as_str) {
+                    Some(name) if p.segments.len() == 1 && own_param(name) => None,
+                    Some(name) if aliases.contains(name) => None,
+                    // The typechecker's name for both string types.
+                    Some("Str") => Some("String".to_string()),
+                    Some(name) => Some(name.to_string()),
+                    None => None,
+                },
+                TypeKind::Tuple(_) | TypeKind::Pointer { .. } => {
+                    Some(crate::formatter::render_type_expr(&imp.target_type))
+                }
+                _ => None,
+            };
+            match ty {
+                Some(ty) if trait_names.contains(tr) => {
+                    out.pairs.insert((ty, tr.to_string()));
+                }
+                Some(ty) => {
+                    out.open_types.insert(ty);
+                }
+                None => {
+                    out.open_traits.insert(tr.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether the type keyed `ty` may have `trait_name`'s default methods.
+    pub(crate) fn gives(&self, ty: &str, trait_name: &str) -> bool {
+        // `BufReader[TcpStream]` is keyed with its argument; the impl is
+        // `BufReader`'s.
+        let head = match ty.split_once('[') {
+            Some((head, _)) if !head.is_empty() => head,
+            _ => ty,
+        };
+        self.open_traits.contains(trait_name)
+            || self.open_types.contains(head)
+            || self
+                .pairs
+                .contains(&(head.to_string(), trait_name.to_string()))
+    }
+}
+
 /// The trait an impl block implements, by its last segment.
 pub(crate) fn impl_trait_name(imp: &ImplBlock) -> Option<&str> {
     imp.trait_name
@@ -1456,6 +1541,8 @@ pub struct EffectChecker<'a> {
     pub(crate) bound_events: std::cell::RefCell<Option<Vec<BoundEvent>>>,
     /// The program's trait names, for `fallback_can_reach`.
     pub(crate) trait_names: FxHashSet<String>,
+    /// Which type implements which trait, for `fallback_can_reach`.
+    pub(crate) trait_impls: TraitImpls,
     /// Phase 6 line 26 slice 8aa: per-call-site effect-variable
     /// substitutions, populated by `check_call_args_subtyping` from
     /// the existing `compute_call_var_bindings` output. Exposed via
@@ -1687,6 +1774,7 @@ impl<'a> EffectChecker<'a> {
             bound_calls: FxHashMap::default(),
             bound_events: std::cell::RefCell::new(None),
             trait_names: FxHashSet::default(),
+            trait_impls: TraitImpls::default(),
             call_effect_subs: FxHashMap::default(),
             modbind_let_mut: FxHashMap::default(),
             lazy_lock_inits: FxHashMap::default(),

@@ -22,7 +22,7 @@ use crate::token::Span;
 
 use super::{
     tarjan_scc, BoundEvent, DeclaredEffects, Effect, EffectError, EffectErrorKind, EffectOrigin,
-    EffectSet,
+    EffectSet, TraitImpls,
 };
 
 /// Which edge kinds `build_call_graph_with` puts in the graph.
@@ -1035,8 +1035,8 @@ impl<'a> super::EffectChecker<'a> {
     /// resolution, or one naming a trait (a `dyn` receiver), any impl may be
     /// the callee. A resolution to a concrete type's own method excludes
     /// every other impl; one to a concrete type with no such body (a trait
-    /// default it inherits, or a built-in type's method) keeps only the trait
-    /// defaults (B-2026-10-15-21).
+    /// default it inherits, or a built-in type's method) keeps only the
+    /// defaults of the traits that type implements (B-2026-10-15-21).
     fn fallback_can_reach(&self, precise: Option<Symbol>, key: Symbol) -> bool {
         let Some(precise) = precise else {
             return true;
@@ -1057,7 +1057,15 @@ impl<'a> super::EffectChecker<'a> {
         if self.method_bodies.contains_key(&precise) {
             return false;
         }
-        is_trait(&owner(key))
+        // Only a default of a trait the receiver's type implements: a
+        // built-in type's own method is no trait's default, whatever traits
+        // have a default of its name (B-2026-11-23-5).
+        match (owner(precise), owner(key)) {
+            (Some(ty), Some(tr)) if self.trait_names.contains(tr.as_str()) => {
+                self.trait_impls.gives(&ty, &tr)
+            }
+            _ => false,
+        }
     }
 
     /// Whether `trait_name` declares a method `method_name`, with or without a
@@ -1241,6 +1249,7 @@ impl<'a> super::EffectChecker<'a> {
                 _ => None,
             })
             .collect();
+        self.trait_impls = TraitImpls::of(self.program, &self.trait_names);
         if self.typeparam_nodes.is_empty() {
             return;
         }
