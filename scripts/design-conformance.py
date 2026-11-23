@@ -804,7 +804,7 @@ RESOLUTION_ERROR_RE = re.compile(
 
 def run_karac(karac, source, extra_timeout=60):
     with tempfile.NamedTemporaryFile(
-        "w", suffix=".kara", delete=False, encoding="utf-8"
+        "w", suffix=".kara", delete=False, encoding="utf-8", newline="\n"
     ) as f:
         f.write(source)
         tmp = f.name
@@ -812,7 +812,7 @@ def run_karac(karac, source, extra_timeout=60):
         p = subprocess.run(
             [karac, "check", "--output=json", tmp],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=extra_timeout,
         )
         try:
@@ -896,10 +896,10 @@ def mir_run(karac, source, cwd=None, timeout=30):
     stderr), exit None on a timeout."""
     with tempfile.TemporaryDirectory() as d:
         f = Path(d) / "main.kara"
-        f.write_text(source, encoding="utf-8")
+        f.write_text(source, encoding="utf-8", newline="\n")
         try:
             p = subprocess.run([karac, "__mir-run", str(f)], capture_output=True,
-                               text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                               text=True, encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL,
                                cwd=cwd or d, env={"KARAC_HASH_SEED": "1",
                                                   "PATH": "/usr/bin:/bin"})
         except subprocess.TimeoutExpired:
@@ -960,6 +960,9 @@ def judge_run(block, rc, stdout, stderr, expected):
 
 
 def main():
+    # A Windows console codec (cp1252) cannot print the summary line.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--karac", default=str(ROOT / "target" / "debug" / "karac"))
     ap.add_argument("--json", dest="json_out")

@@ -14,6 +14,10 @@ fn karac(dir: &std::path::Path, args: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(dir)
         .args(args)
+        // The f16 lint (E0311/W0311) judges the target CPU, and an Apple
+        // Silicon host runs f16 natively, so the entries pin a CPU that does
+        // not (their meta.toml `env`, for the corpus runner, says the same).
+        .env("KARAC_TARGET_CPU", "generic")
         .stdin(Stdio::null())
         .output()
         .expect("karac");

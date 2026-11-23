@@ -51,7 +51,11 @@ fn d1417_the_cascade_cap_counts_each_file_of_a_package() {
     for file in ["src/main.kara", "src/other.kara"] {
         let errors = diags
             .iter()
-            .filter(|d| d["severity"] == "error" && d["file"] == file)
+            .filter(|d| {
+                // Windows reports `src\\other.kara`.
+                d["severity"] == "error"
+                    && d["file"].as_str().map(|f| f.replace('\\', "/")).as_deref() == Some(file)
+            })
             .count();
         assert_eq!(
             errors,

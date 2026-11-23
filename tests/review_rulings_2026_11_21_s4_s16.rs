@@ -98,7 +98,8 @@ fn lone_entry_package_names_its_file_relative_to_the_package() {
     );
     let (ok, out) = karac(&dir, &["check"]);
     assert!(!ok, "{out}");
-    assert!(out.contains("src/main.kara:1:"), "{out}");
+    // Windows prints the relative path with its own separator.
+    assert!(out.replace('\\', "/").contains("src/main.kara:1:"), "{out}");
     assert!(!out.contains(dir.to_str().unwrap()), "{out}");
     let _ = std::fs::remove_dir_all(&dir);
 }

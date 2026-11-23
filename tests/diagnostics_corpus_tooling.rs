@@ -531,13 +531,18 @@ fn diagnostics_corpus_tooling_codes_are_reported_and_explained() {
             .is_ok_and(|o| o.status.success())
     };
     if git(&["init", "-q"]) && git(&["add", "."]) && git(&["commit", "-qm", "init"]) {
+        // A Windows path has backslashes (TOML escapes in a basic string)
+        // and no leading `/`: `file:///C:/...`.
+        let repo_path = repo.display().to_string().replace('\\', "/");
+        let repo_url = if repo_path.starts_with('/') {
+            format!("file://{repo_path}")
+        } else {
+            format!("file:///{repo_path}")
+        };
         package(
             &d.join("app"),
             "app",
-            &format!(
-                "[dependencies]\nlib = {{ git = \"file://{}\" }}\n",
-                repo.display()
-            ),
+            &format!("[dependencies]\nlib = {{ git = \"{repo_url}\" }}\n"),
             true,
         );
         let cache = d.join("cache");

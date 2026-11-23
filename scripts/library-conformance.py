@@ -121,10 +121,10 @@ def program_blocks(path):
 def mir_run(karac, source, cwd=None, timeout=30):
     with tempfile.TemporaryDirectory() as d:
         f = Path(d) / "main.kara"
-        f.write_text(source, encoding="utf-8")
+        f.write_text(source, encoding="utf-8", newline="\n")
         try:
             p = subprocess.run([karac, "__mir-run", str(f)], capture_output=True,
-                               text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                               text=True, encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL,
                                cwd=cwd or d, env={"KARAC_HASH_SEED": "1",
                                                   "PATH": "/usr/bin:/bin"})
         except subprocess.TimeoutExpired:
@@ -134,7 +134,7 @@ def mir_run(karac, source, cwd=None, timeout=30):
 
 def check_package(karac, pkg):
     p = subprocess.run([karac, "check", "--output=json"], cwd=pkg,
-                       capture_output=True, text=True, timeout=300,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
                        stdin=subprocess.DEVNULL)
     try:
         payload = json.loads(p.stdout or "{}")
@@ -198,6 +198,9 @@ def classify_block(b, karac, declared):
 
 
 def main():
+    # A Windows console codec (cp1252) cannot print the summary line.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--karac", default=str(ROOT / "target" / "debug" / "karac"))
     ap.add_argument("--json", dest="json_out")

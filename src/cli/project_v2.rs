@@ -829,13 +829,18 @@ pub(super) fn amalgamate(
 }
 
 /// A file's path as reports show it: relative to the working directory when
-/// it is under it, as `karac run src/main.kara` names its file.
+/// it is under it, as `karac run src/main.kara` names its file. A relative
+/// path is written with `/` on every platform, so a diagnostic's `file` (and
+/// a tool that matches on it) reads the same on Windows as elsewhere.
 pub(super) fn shown(path: &std::path::Path) -> String {
     let cwd = std::env::current_dir().ok();
     let canonical = cwd.as_ref().and_then(|c| std::fs::canonicalize(c).ok());
     for base in [cwd, canonical].into_iter().flatten() {
         if let Ok(rel) = path.strip_prefix(&base) {
-            return rel.display().to_string();
+            return rel
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/");
         }
     }
     path.display().to_string()
