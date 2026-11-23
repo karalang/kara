@@ -15,7 +15,7 @@ use crate::token::Span;
 
 #[path = "comptime_mir.rs"]
 mod on_mir;
-pub use on_mir::{evaluate_on_mir, is_spliced, STEP_LIMIT};
+pub use on_mir::{derive_cache_stats, evaluate_on_mir, is_spliced, STEP_LIMIT};
 
 /// Parses `s` as one Kāra expression: an `ast.expr(s)` quote.
 pub(crate) fn parse_quoted_expr(s: &str) -> Result<Expr, String> {
@@ -101,7 +101,7 @@ pub fn expand_proto_schemas(program: &mut Program) -> Vec<ComptimeError> {
         let resolved = crate::resolve_v2(program);
         let typed =
             crate::typecheck_with_pruned_library_source(program, &resolved, Default::default());
-        return evaluate_on_mir(program, &typed, "", true, &|p, r| {
+        return evaluate_on_mir(program, &typed, "", true, &[], &|p, r| {
             crate::typecheck_with_pruned_library_source(p, r, Default::default())
         });
     }

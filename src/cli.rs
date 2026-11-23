@@ -1219,6 +1219,25 @@ pub(crate) enum LibraryBodiesState {
     Kept(std::ops::Range<usize>),
     /// Set aside after typecheck, to put back once the checks end.
     Aside(crate::mir::lower::LibraryBodies),
+    /// A program with comptime work, before it is resolved: the range to set
+    /// aside for the comptime evaluation, the one pass that runs them.
+    KeptForComptime {
+        /// The sources every program gets.
+        sources: std::ops::Range<usize>,
+        /// The baked modules after them.
+        baked: std::ops::Range<usize>,
+    },
+    /// Set aside before resolving, for the comptime evaluation.
+    ForComptime {
+        /// The bodies of the sources every program gets: checked by no pass
+        /// of this pipeline, as in a program with no comptime work.
+        sources: crate::mir::lower::LibraryBodies,
+        /// The baked modules' bodies, when a derive is to be spliced: the
+        /// program is resolved and type-checked again after that, and they
+        /// are back in it by then, so the passes after read them as they do
+        /// in a program with no comptime work.
+        baked: Option<crate::mir::lower::LibraryBodies>,
+    },
 }
 
 impl Pipeline {
@@ -1305,12 +1324,13 @@ impl Pipeline {
         }
         crate::mir::lower::mark_library_builtins(&mut self.parsed.program, user_len);
         library_closures_take_their_callers_effects(&mut self.parsed.program, user_len);
-        // A comptime evaluation runs library bodies (a derive's), so they stay.
+        // The always-appended sources, not the baked modules after them: a
+        // derive or `proto_schema` runs its `comptime` body at check.
+        let end = crate::mir::lower::library_sources_end(user_len);
+        let library_end = text.len();
+        let keep_bodies = std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() == Ok("1");
         if !crate::comptime::has_comptime_work(&self.parsed.program) {
-            // The always-appended sources, not the baked modules after them:
-            // a derive or `proto_schema` runs its `comptime` body at check.
-            let end = crate::mir::lower::library_sources_end(user_len);
-            if std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() == Ok("1") {
+            if keep_bodies {
                 self.library_bodies = LibraryBodiesState::Kept(user_len..end);
             } else {
                 crate::mir::lower::library_bodies_unchecked(
@@ -1318,6 +1338,18 @@ impl Pipeline {
                     user_len..end,
                 );
             }
+        } else if !keep_bodies {
+            // A comptime evaluation runs library bodies (a derive's), and it
+            // alone needs them all: they are set aside for it once the
+            // rewrites before resolving have run on them
+            // ([`Self::resolve_phase`]), and the program is checked against
+            // the library's signatures like any other (B-2026-11-22-40).
+            // `KARAC_CHECK_LIBRARY_BODIES=1` leaves them in the program,
+            // where every pass checks them.
+            self.library_bodies = LibraryBodiesState::KeptForComptime {
+                sources: user_len..end,
+                baked: end..library_end,
+            };
         }
         self.parsed.program.library_start = Some(user_len);
         self.library_fns = library_fn_names(&self.parsed.program, user_len);
@@ -1642,6 +1674,22 @@ impl Pipeline {
         // name (B-2026-07-31-33) — the same blind spot that makes a
         // single-file `karac build` on a package member a refusal.
         let in_package = is_package_member(&self.filename);
+        // The rewrites above have run on the library's bodies; from here to
+        // the comptime evaluation nothing reads them (B-2026-11-22-40).
+        if let LibraryBodiesState::KeptForComptime { sources, baked } = &self.library_bodies {
+            let (sources, baked) = (sources.clone(), baked.clone());
+            let program = &mut self.parsed.program;
+            // The baked modules' bodies come back for the re-check a derive
+            // forces; with no derive to splice there is no re-check, and
+            // they stay.
+            let baked = crate::comptime::has_derives_to_expand(program)
+                .then(|| crate::mir::lower::take_library_bodies(program, baked));
+            let sources = crate::mir::lower::take_library_bodies(program, sources);
+            self.library_bodies = LibraryBodiesState::ForComptime { sources, baked };
+            if std::env::var("KARAC_MIR_TIME").as_deref() == Ok("1") {
+                eprintln!("[mir-time] library bodies set aside for the comptime evaluation");
+            }
+        }
         let mut resolver = crate::resolver::Resolver::new(&self.parsed.program);
         if in_package {
             if let Some(name) = std::path::Path::new(&self.filename)
@@ -2218,6 +2266,9 @@ impl Pipeline {
         // rewrites its operators, so check keeps that copy for them
         // (B-2026-10-19-21). A program with comptime work is re-checked once
         // its derives are spliced, below, and keeps the copy from there.
+        // `KARAC_CHECK_SHARED_FRONT=0` is an internal switch, the control arm
+        // of the tests that pin this sharing: it is no part of the command
+        // line's surface and may go without notice.
         let keep_mir_copy = self.strict_core
             && self.library_len.is_some()
             && std::env::var("KARAC_CHECK_SHARED_FRONT").as_deref() != Ok("0")
@@ -2261,16 +2312,27 @@ impl Pipeline {
             || (on_mir && crate::comptime::has_comptime_work(&self.parsed.program))
         {
             let typed = self.typed.take().unwrap();
+            let evaluation = std::time::Instant::now();
             let fold_errors = if on_mir {
                 let mut profile_config = self.profile_config.clone();
                 profile_config.profile = self.profile;
                 let (overrides, pruned) =
                     (self.lint_overrides.clone(), self.library_pruned.clone());
-                crate::comptime::evaluate_on_mir(
+                let (sources, baked) = match std::mem::take(&mut self.library_bodies) {
+                    LibraryBodiesState::ForComptime { sources, baked } => (Some(sources), baked),
+                    other => {
+                        self.library_bodies = other;
+                        (None, None)
+                    }
+                };
+                let bodies: Vec<&crate::mir::lower::LibraryBodies> =
+                    sources.iter().chain(baked.iter()).collect();
+                let errors = crate::comptime::evaluate_on_mir(
                     &mut self.parsed.program,
                     &typed,
                     "",
                     false,
+                    &bodies,
                     &|p, r| {
                         crate::typecheck_with_lint_overrides_profile_and_library(
                             p,
@@ -2280,13 +2342,25 @@ impl Pipeline {
                             pruned.clone(),
                         )
                     },
-                )
+                );
+                // The baked modules' bodies are in the program the re-check
+                // below reads, as they are in a program with no derive.
+                if let Some(baked) = baked {
+                    crate::mir::lower::restore_library_bodies(&mut self.parsed.program, baked);
+                }
+                errors
             } else {
                 crate::comptime::evaluate(&mut self.parsed.program, &typed)
             };
             self.comptime_errors
                 .get_or_insert_with(Vec::new)
                 .extend(fold_errors);
+            // Its share of the `check lower` phase, which the re-check below
+            // takes the rest of.
+            if std::env::var("KARAC_MIR_TIME").as_deref() == Ok("1") {
+                let ms = evaluation.elapsed().as_secs_f64() * 1e3;
+                eprintln!("[mir-time] {:<24} {ms:8.1} ms", "check evaluate");
+            }
             // The spliced items get ids of their own, as the MIR front end
             // gives them, so the MIR checks can lower this program rather
             // than expand the derives a second time (B-2026-11-21-91).
@@ -2415,6 +2489,21 @@ impl Pipeline {
     fn effectcheck_phase(&mut self) {
         if self.has_parse_errors() {
             return;
+        }
+        // The comptime evaluation did not run (name resolution refused the
+        // program, so nothing was lowered) and still holds the baked
+        // modules' bodies: they go back, so this pass reads the library as
+        // it reads it for a program with no derive.
+        if matches!(
+            self.library_bodies,
+            LibraryBodiesState::ForComptime { baked: Some(_), .. }
+        ) {
+            if let LibraryBodiesState::ForComptime {
+                baked: Some(baked), ..
+            } = std::mem::take(&mut self.library_bodies)
+            {
+                crate::mir::lower::restore_library_bodies(&mut self.parsed.program, baked);
+            }
         }
         if self.strict_core {
             fn_params_take_argument_effects(&mut self.parsed.program);
@@ -3251,7 +3340,8 @@ impl Pipeline {
         // The library's bodies have been resolved and type-checked, as the
         // build needs them; what the passes after find in them is dropped,
         // so they run without them, as when the bodies are unchecked.
-        if let LibraryBodiesState::Kept(range) = std::mem::take(&mut self.library_bodies) {
+        if let LibraryBodiesState::Kept(range) = &self.library_bodies {
+            let range = range.clone();
             self.library_bodies = LibraryBodiesState::Aside(
                 crate::mir::lower::take_library_bodies(&mut self.parsed.program, range),
             );
@@ -3282,8 +3372,10 @@ impl Pipeline {
         self.simd_check();
         self.drop_library_diagnostics();
         on(self, "simd_check", true);
-        if let LibraryBodiesState::Aside(aside) = std::mem::take(&mut self.library_bodies) {
-            crate::mir::lower::restore_library_bodies(&mut self.parsed.program, aside);
+        if matches!(self.library_bodies, LibraryBodiesState::Aside(_)) {
+            if let LibraryBodiesState::Aside(aside) = std::mem::take(&mut self.library_bodies) {
+                crate::mir::lower::restore_library_bodies(&mut self.parsed.program, aside);
+            }
         }
         crate::mir::lower::phase_time("check rest", t);
     }

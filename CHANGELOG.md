@@ -975,6 +975,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A `#[derive(Serialize)]` on any type no longer changes the effects check
+  reports for the rest of the file. With a derive present, the passes after
+  the type check read the library's bodies, which they read for no other
+  program, so a function returning `s.split(",").map(..).collect()` was
+  found to perform `panics` in a file with a derive and not without, and
+  three corpus apps reported `receives(Channel)` with no channel in them
+  (B-2026-11-22-40).
 - `karac check` in a package runs under the manifest's `[package].profile`
   and `[profile]` table, as `karac build` and `karac run` do: it was checked
   under the default profile, so a profile-gated error (`v.push(1)` under
@@ -2124,6 +2131,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- `karac check` of a program with a comptime-backed derive (`Serialize`,
+  `Deserialize`) is a third faster: the library's bodies are
+  type-checked once, in the derive's evaluation, where they were checked
+  three times. A three-line file with one derive: 671 ms to 432 ms; the
+  `flag_eval` app: 1062 ms to 727 ms. In an editor, a re-check after an edit
+  that changes no type skips the evaluation (about half of what remains): a
+  library derive's answer for a type is kept for the process
+  (B-2026-11-22-40).
 - A `substring` or `s[a..b]` whose `String` is only lent and dropped, such as
   `w.push_str("abcde".substring(k, k + 1))`, views the bytes of its text
   rather than copying them, when that text is a constant, a shared reference

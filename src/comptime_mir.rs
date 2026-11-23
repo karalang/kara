@@ -44,6 +44,123 @@ pub fn is_spliced(span: &Span) -> bool {
     (SPLICE_BASE..crate::prelude::gated_span_base(0)).contains(&span.offset)
 }
 
+/// What every root function's name starts with.
+const ROOT_PREFIX: &str = "__comptime_job_";
+
+/// What each library derive returned for a type, kept for the process
+/// (B-2026-11-22-40): an editor checks the same buffer after every edit, and
+/// an edit that changes no type leaves every derive's answer as it was, so
+/// the evaluation (a type check of the library's bodies, a lowering and a
+/// run) is skipped.
+///
+/// A library `comptime fn derive_x` sees the program through the reflection
+/// natives alone, so its answer is a function of the reflected types
+/// ([`reflection`]), which the key fingerprints whole. An answer is kept
+/// only from an evaluation that reached no code of the program's and
+/// reported nothing. `KARAC_DERIVE_CACHE=0` turns it off.
+mod derive_cache {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// The derive function, the type, the fingerprint of the program's
+    /// reflected types, and the target.
+    pub(super) type Key = (String, String, (u64, u64), String);
+
+    static KEPT: Mutex<Option<HashMap<Key, Arc<Vec<String>>>>> = Mutex::new(None);
+    static HITS: AtomicUsize = AtomicUsize::new(0);
+    static MISSES: AtomicUsize = AtomicUsize::new(0);
+
+    /// More entries than any one session's programs make; past it the cache
+    /// starts over.
+    const LIMIT: usize = 4096;
+
+    pub(super) fn enabled() -> bool {
+        std::env::var("KARAC_DERIVE_CACHE").as_deref() != Ok("0")
+    }
+
+    pub(super) fn get(key: &Key) -> Option<Arc<Vec<String>>> {
+        let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        kept.as_ref().and_then(|m| m.get(key).cloned())
+    }
+
+    pub(super) fn put(key: Key, items: Vec<String>) {
+        let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        let map = kept.get_or_insert_with(HashMap::new);
+        if map.len() >= LIMIT {
+            map.clear();
+        }
+        map.insert(key, Arc::new(items));
+    }
+
+    pub(super) fn count(hit: bool) {
+        if hit { &HITS } else { &MISSES }.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The evaluations skipped and run so far in this process, counted once
+    /// per program with a cacheable derive.
+    pub fn stats() -> (usize, usize) {
+        (HITS.load(Ordering::Relaxed), MISSES.load(Ordering::Relaxed))
+    }
+}
+
+pub use derive_cache::stats as derive_cache_stats;
+
+/// The fingerprint of `refl`: two independent 64-bit hashes of every type's
+/// reflection, in name order.
+fn fingerprint(refl: &natives::Reflection) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut names: Vec<&String> = refl.types.keys().collect();
+    names.sort();
+    let mut a = std::collections::hash_map::DefaultHasher::new();
+    let mut b = std::collections::hash_map::DefaultHasher::new();
+    0x9e37_79b9_7f4a_7c15u64.hash(&mut b);
+    for name in names {
+        let text = format!("{name}={:?};", refl.types[name]);
+        text.hash(&mut a);
+        text.hash(&mut b);
+    }
+    (a.finish(), b.finish())
+}
+
+/// The items a derive or a schema returned as `texts`, each parsed and
+/// placed in a window of its own from `window` on, or the error that one
+/// does not parse.
+fn quoted_items(
+    job: &Job,
+    texts: &[String],
+    window: &mut usize,
+    errors: &mut Vec<ComptimeError>,
+) -> Option<Vec<Item>> {
+    let mut items = Vec::new();
+    for text in texts {
+        match super::parse_quoted_item(text) {
+            Ok(mut item) => {
+                let base = *window;
+                *window += 1_000_000;
+                crate::span_visitor::visit_item_spans_mut(&mut item, &mut |s| {
+                    s.line = job.site.line;
+                    s.column = job.site.column;
+                    s.offset = base.wrapping_add(s.offset);
+                });
+                items.push(item);
+            }
+            Err(why) => {
+                errors.push(ComptimeError {
+                    message: format!(
+                        "error[E_COMPTIME_PANIC]: {} panicked: ast.item: could not parse quoted \
+                         item `{text}`: {why}",
+                        job.what
+                    ),
+                    span: job.site,
+                });
+                return None;
+            }
+        }
+    }
+    Some(items)
+}
+
 enum JobKind {
     /// A `comptime { .. }` block, by its span, with its type.
     Block { ty: Option<Type> },
@@ -62,6 +179,9 @@ struct Job {
     root: String,
     /// What the diagnostics call it.
     what: String,
+    /// A derive that a library `comptime fn` runs, as that function and the
+    /// type: what it returns is kept for the process ([`derive_cache`]).
+    library_derive: Option<(String, String)>,
 }
 
 /// What a whole evaluation left to splice.
@@ -77,12 +197,16 @@ struct Spliced {
 /// appended from `library_start` on, it is resolved and type-checked as
 /// `typed`, and `src` is its text. `retype` type-checks a program as the
 /// caller's pipeline does (the library's methods from source, pruned as the
-/// caller pruned them).
+/// caller pruned them). `bodies` are the library bodies the caller set aside
+/// from `program`, when it checks the program against the library's
+/// signatures: the evaluation program gets a copy of them back, since it
+/// runs them, and `program` stays without them.
 pub fn evaluate_on_mir(
     program: &mut Program,
     typed: &TypeCheckResult,
     src: &str,
     schemas_only: bool,
+    bodies: &[&crate::mir::lower::LibraryBodies],
     retype: &dyn Fn(&Program, &crate::resolver::ResolveResult) -> TypeCheckResult,
 ) -> Vec<ComptimeError> {
     let mut jobs = Vec::new();
@@ -99,7 +223,47 @@ pub fn evaluate_on_mir(
     if jobs.is_empty() {
         return errors;
     }
+    // Every job a library derive whose answer for these types is kept: the
+    // answers are spliced and nothing is evaluated.
+    let keys: Vec<Option<derive_cache::Key>> =
+        if derive_cache::enabled() && jobs.iter().any(|j| j.library_derive.is_some()) {
+            let print = fingerprint(&reflection(program, typed));
+            let target = crate::target::active_target().to_string();
+            jobs.iter()
+                .map(|j| {
+                    j.library_derive
+                        .clone()
+                        .map(|(f, t)| (f, t, print, target.clone()))
+                })
+                .collect()
+        } else {
+            vec![None; jobs.len()]
+        };
+    let kept: Option<Vec<_>> = keys
+        .iter()
+        .map(|k| k.as_ref().and_then(derive_cache::get))
+        .collect();
+    if keys.iter().any(Option::is_some) {
+        derive_cache::count(kept.is_some());
+    }
+    if let Some(kept) = kept {
+        let mut spliced = Spliced::default();
+        let mut window = SPLICE_BASE;
+        for (job, texts) in jobs.iter().zip(&kept) {
+            let JobKind::Derive { after } = job.kind else {
+                continue;
+            };
+            if let Some(items) = quoted_items(job, texts, &mut window, &mut errors) {
+                spliced.derived.push((after, items));
+            }
+        }
+        splice(program, spliced);
+        return errors;
+    }
     let mut eval = program.clone();
+    for aside in bodies {
+        crate::mir::lower::restore_library_bodies(&mut eval, (*aside).clone());
+    }
     for item in &mut eval.items {
         if let Item::Function(f) = item {
             if f.is_comptime {
@@ -138,9 +302,46 @@ pub fn evaluate_on_mir(
         }
         lowered = crate::mir::lower::lower_program_with_roots(&eval, src, user_len, &tc, &r, &fine);
     }
+    // An evaluation that runs any of the program's own code answers for
+    // more than its types, so nothing is kept from it. A body is the
+    // program's by its name: a function of the program's, or a method or a
+    // closure of one of its types or functions.
+    let library_only = user_len.is_some_and(|n| {
+        let mut own: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for item in &program.items {
+            let (name, span) = match item {
+                Item::Function(f) => (Some(f.name.as_str()), f.span),
+                Item::StructDef(s) => (Some(s.name.as_str()), s.span),
+                Item::EnumDef(e) => (Some(e.name.as_str()), e.span),
+                Item::DistinctType(d) => (Some(d.name.as_str()), d.span),
+                Item::TraitDef(t) => (Some(t.name.as_str()), t.span),
+                Item::ImplBlock(b) => (
+                    match &b.target_type.kind {
+                        TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                        _ => None,
+                    },
+                    b.span,
+                ),
+                _ => continue,
+            };
+            if span.offset < n {
+                // An impl whose target has no one name is the program's
+                // code all the same.
+                own.insert(name.unwrap_or(""));
+            }
+        }
+        !own.contains("")
+            && lowered.program.bodies.keys().all(|name| {
+                let head = name
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or("");
+                name.starts_with(ROOT_PREFIX) || !own.contains(head)
+            })
+    });
     let mut spliced = Spliced::default();
     let mut window = SPLICE_BASE;
-    for job in &jobs {
+    for (job, key) in jobs.iter().zip(keys) {
         if let Some(why) = broken.get(&job.root) {
             errors.push(ComptimeError {
                 message: format!(
@@ -157,6 +358,7 @@ pub fn evaluate_on_mir(
             (run, natives::take_result())
         });
         let (run, result) = run;
+        let reported = !diags.is_empty();
         for d in diags {
             let at = Span {
                 line: d.line,
@@ -240,48 +442,31 @@ pub fn evaluate_on_mir(
                 }
             }
             JobKind::Derive { after } | JobKind::Schema { at: after } => {
-                let texts = match &value {
+                let values = match &value {
                     CtValue::Vec(items) | CtValue::Array(items) => items.clone(),
                     CtValue::Str(_) => vec![value.clone()],
                     _ => Vec::new(),
                 };
-                let mut items = Vec::new();
-                let mut ok = true;
-                for t in &texts {
-                    let CtValue::Str(text) = t else {
-                        ok = false;
-                        break;
-                    };
-                    match super::parse_quoted_item(text) {
-                        Ok(mut item) => {
-                            let base = window;
-                            window += 1_000_000;
-                            crate::span_visitor::visit_item_spans_mut(&mut item, &mut |s| {
-                                s.line = job.site.line;
-                                s.column = job.site.column;
-                                s.offset = base.wrapping_add(s.offset);
-                            });
-                            items.push(item);
-                        }
-                        Err(why) => {
-                            errors.push(ComptimeError {
-                                message: format!(
-                                    "error[E_COMPTIME_PANIC]: {} panicked: ast.item: could not \
-                                     parse quoted item `{text}`: {why}",
-                                    job.what
-                                ),
-                                span: job.site,
-                            });
-                            ok = false;
-                            break;
+                let texts: Option<Vec<String>> = values
+                    .into_iter()
+                    .map(|t| match t {
+                        CtValue::Str(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                let Some(texts) = texts else {
+                    continue;
+                };
+                let Some(items) = quoted_items(job, &texts, &mut window, &mut errors) else {
+                    continue;
+                };
+                match job.kind {
+                    JobKind::Derive { after } => {
+                        spliced.derived.push((after, items));
+                        if let (Some(key), true, false) = (key, library_only, reported) {
+                            derive_cache::put(key, texts);
                         }
                     }
-                }
-                if !ok {
-                    continue;
-                }
-                match job.kind {
-                    JobKind::Derive { after } => spliced.derived.push((after, items)),
                     _ => spliced.schemas.push((*after, items)),
                 }
             }
@@ -316,8 +501,9 @@ fn plan(
                     site: Span,
                     what: String,
                     ret: &str,
-                    body: Block| {
-        let root = format!("__comptime_job_{}", jobs.len());
+                    body: Block,
+                    library_derive: Option<(String, String)>| {
+        let root = format!("{ROOT_PREFIX}{}", jobs.len());
         match root_fn(&root, ret, body, site) {
             Ok(f) => {
                 roots.push(Item::Function(f));
@@ -326,6 +512,7 @@ fn plan(
                     site,
                     root,
                     what,
+                    library_derive,
                 });
             }
             Err(why) => errors.push(ComptimeError {
@@ -345,6 +532,7 @@ fn plan(
                     "proto schema".to_string(),
                     "Vec[Item]",
                     expr_block(call),
+                    None,
                 );
             }
         }
@@ -393,11 +581,28 @@ fn plan(
             "`comptime` evaluation".to_string(),
             &ret,
             block,
+            None,
         );
     }
     let derive_fns = super::collect_derive_fns(program);
     if derive_fns.is_empty() {
         return;
+    }
+    // The derive functions the library defines: the program's own are not
+    // cached, since what one returns can depend on any of its code.
+    let library = program.library_start.unwrap_or(usize::MAX);
+    let mut library_fns = std::collections::HashSet::new();
+    let mut program_fns = std::collections::HashSet::new();
+    for item in &program.items {
+        if let Item::Function(f) = item {
+            if f.is_comptime && f.name.starts_with("derive_") {
+                if f.span.offset >= library && !is_spliced(&f.span) {
+                    library_fns.insert(f.name.as_str());
+                } else {
+                    program_fns.insert(f.name.as_str());
+                }
+            }
+        }
     }
     let mut quoted = 0;
     for (idx, item) in program.items.iter().enumerate() {
@@ -423,6 +628,9 @@ fn plan(
                     continue;
                 }
             };
+            let library_derive = (library_fns.contains(fn_name.as_str())
+                && !program_fns.contains(fn_name.as_str()))
+            .then(|| (fn_name.clone(), type_name.clone()));
             push(
                 errors,
                 JobKind::Derive { after: idx },
@@ -430,6 +638,7 @@ fn plan(
                 format!("derive `{fn_name}`"),
                 "Vec[Item]",
                 expr_block(call),
+                library_derive,
             );
         }
     }

@@ -32249,6 +32249,7 @@ pub fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::o
 /// with [`restore_library_bodies`]: a check that type-checks them runs its
 /// later passes, whose findings in the library it drops, without them
 /// (B-2026-10-31-16).
+#[derive(Clone)]
 pub struct LibraryBodies {
     range: std::ops::Range<usize>,
     bodies: Vec<(Vec<crate::ast::Stmt>, Option<Box<crate::ast::Expr>>)>,
@@ -33632,9 +33633,10 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
     // `encode` / `decode`) splices its items into the program; they are
     // resolved and checked like the rest, as the CLI's pipeline does.
     if crate::comptime::has_comptime_work(&program) {
-        let errs = crate::comptime::evaluate_on_mir(&mut program, &tc, &src, false, &|p, r| {
-            crate::typecheck_with_pruned_library_source(p, r, pruned.clone())
-        });
+        let errs =
+            crate::comptime::evaluate_on_mir(&mut program, &tc, &src, false, &[], &|p, r| {
+                crate::typecheck_with_pruned_library_source(p, r, pruned.clone())
+            });
         if let Some(e) = errs.first() {
             return Err(format!(
                 "comptime: {}:{}: {}",
