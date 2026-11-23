@@ -177,12 +177,17 @@ impl<'a> super::Resolver<'a> {
                 ty,
             } => {
                 self.resolve_type_expr(ty);
-                if let Err(e) = self.table.define_shadowable(
+                let defined = self.table.define_shadowable(
                     name.clone(),
                     SymbolKind::Variable { is_mut: *is_mut },
                     *name_span,
                     false,
-                ) {
+                );
+                // The statement is the binding's node, as for `errdefer(e)`:
+                // the copies of a trait default body share the name's span
+                // (B-2026-11-23-11).
+                self.record_binding_node(&defined, stmt.id);
+                if let Err(e) = defined {
                     self.errors.push(e);
                 }
             }

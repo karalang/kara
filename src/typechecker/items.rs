@@ -14083,6 +14083,7 @@ impl<'a> super::TypeChecker<'a> {
                 // LetUninit has no RHS so we record directly.
                 self.expr_types
                     .insert(SpanKey::from_span(name_span), declared.clone());
+                self.node_let_uninit_types.insert(stmt.id, declared.clone());
                 self.local_scope.insert(name.clone(), declared);
             }
             StmtKind::LetElse {

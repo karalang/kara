@@ -1049,6 +1049,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A trait default body that declares `let x: T;` and assigns it later runs
+  for every impl that inherits it. Once two impls inherited it, the program
+  was refused with E0516 "the capture of `x` is not lowered yet", for a
+  generic trait and a plain one alike; one impl alone ran
+  (B-2026-11-23-11).
 - `dedup` and a slice's `contains` compare elements by the program's own
   `eq`. The interpreter's `Vec.dedup` compared structurally, so with an `eq`
   that treats 1 and 11 as equal `karac run --interp` kept 3 of

@@ -1,0 +1,59 @@
+// design.md § Traits: a default method's body runs for each implementing
+// type that does not override it, with that type's `Self` and the impl's
+// trait arguments. A `let x: T;` declared there and assigned later is each
+// copy's own local, of each impl's `T`.
+trait Pick[T] {
+    fn get(self) -> T;
+
+    fn run(self) -> T {
+        let x: T;
+        x = self.get();
+        x
+    }
+}
+
+struct A { n: i64 }
+
+impl Pick[i64] for A {
+    fn get(self) -> i64 {
+        self.n
+    }
+}
+
+struct B { s: String }
+
+impl Pick[String] for B {
+    fn get(self) -> String {
+        self.s.clone()
+    }
+}
+
+trait Twice {
+    fn one(self) -> i64;
+
+    fn two(self) -> i64 {
+        let mut t: i64;
+        t = self.one();
+        t = t + self.one();
+        t
+    }
+}
+
+impl Twice for A {
+    fn one(self) -> i64 {
+        self.n
+    }
+}
+
+impl Twice for B {
+    fn one(self) -> i64 {
+        self.s.len()
+    }
+}
+
+fn main() {
+    println(A { n: 7 }.run());
+    println(B { s: "seven".to_string() }.run());
+    println(A { n: 7 }.two());
+    println(B { s: "seven".to_string() }.two());
+}

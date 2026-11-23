@@ -2456,6 +2456,10 @@ pub struct TypeCheckResult {
     /// `self.inner().go()` may call a different `go`, with its own defaults
     /// (B-2026-11-23-8). Read through [`Self::method_default_fill`].
     pub node_default_fills: FxHashMap<crate::ids::NodeId, Vec<crate::ast::CallArg>>,
+    /// The declared type of each `let x: T;`, keyed by the statement's
+    /// `NodeId`: the node twin of `expr_types` at the name, which the copies
+    /// of a trait default body two impls inherit share (B-2026-11-23-11).
+    pub node_let_uninit_types: FxHashMap<crate::ids::NodeId, Type>,
     /// For every method call dispatched to a user `impl` with its own generic
     /// params, the impl's `T -> concrete` binding at that call site. Keyed by
     /// `(span, method)` for the same reason `method_impl_dispatch` above is:
@@ -4040,6 +4044,8 @@ pub struct TypeChecker<'a> {
     pub(super) method_default_fills: FxHashMap<(SpanKey, String), Vec<crate::ast::CallArg>>,
     /// Working half of `TypeCheckResult::node_default_fills`.
     pub(super) node_default_fills: FxHashMap<crate::ids::NodeId, Vec<crate::ast::CallArg>>,
+    /// Working half of `TypeCheckResult::node_let_uninit_types`.
+    pub(super) node_let_uninit_types: FxHashMap<crate::ids::NodeId, Type>,
     /// Declared defaults for every instance METHOD, keyed `"Type.method"`.
     /// Built once from the program (`default_args::method_default_table`);
     /// consulted only after the impl is resolved, so the key is exact.
@@ -5162,6 +5168,7 @@ impl<'a> TypeChecker<'a> {
             dyn_coercion_spans: FxHashMap::default(),
             method_default_fills: FxHashMap::default(),
             node_default_fills: FxHashMap::default(),
+            node_let_uninit_types: FxHashMap::default(),
             method_defaults: crate::default_args::method_default_table(program),
             named_fns: crate::default_args::named_param_table(program),
             log_level_fns: crate::log_calls::level_fns(program).into_keys().collect(),
@@ -5906,6 +5913,7 @@ impl<'a> TypeChecker<'a> {
             node_dyn_coercions,
             method_default_fills: self.method_default_fills,
             node_default_fills: self.node_default_fills,
+            node_let_uninit_types: self.node_let_uninit_types,
             method_impl_type_subs: self.method_impl_type_subs,
             direct_iter_terminals: self.direct_iter_terminals,
             method_typeparam_receiver: self.method_typeparam_receiver,

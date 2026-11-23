@@ -7695,8 +7695,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             StmtKind::LetUninit {
                 name, name_span, ..
             } => {
+                // By the statement's node first: the copies of a trait
+                // default body share the name's span (B-2026-11-23-11).
                 let key = SpanKey::from_span(name_span);
-                let Some(ty) = self.lcx.tc.expr_types.get(&key) else {
+                let Some(ty) = self
+                    .lcx
+                    .tc
+                    .node_let_uninit_types
+                    .get(&s.id)
+                    .or_else(|| self.lcx.tc.expr_types.get(&key))
+                else {
                     return self.unsupported(s.span, "this statement");
                 };
                 let args = self.args.clone();
@@ -7716,8 +7724,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         node: s.id,
                     },
                 );
-                let key = (name.clone(), name_span.offset, name_span.length);
-                if let Some(&sym) = self.lcx.unbound_vars.get(&key) {
+                if let Some(&sym) = self.lcx.binding_syms.get(&(s.id, name.clone())) {
                     self.locals.insert(sym, l);
                 }
                 let bb = self.cur;

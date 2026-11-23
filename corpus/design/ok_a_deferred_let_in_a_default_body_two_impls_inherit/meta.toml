@@ -1,0 +1,9 @@
+source = "B-2026-11-23-11"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "traits", "generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Traits: a default body runs for each implementing type that does not override it. `run` declares `let x: T;` and assigns `self.get()`: A gives 7 and B gives \"seven\"; `two` assigns a deferred `let mut t: i64` twice: 7 + 7 = 14 and 5 + 5 = 10. Before the fix the program was refused (E0516 'the capture of `x` is not lowered yet') once two impls inherited the default: the copies share the name's span, and the MIR builder found the local and its type by that span."
