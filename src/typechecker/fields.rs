@@ -1646,6 +1646,10 @@ impl<'a> super::TypeChecker<'a> {
                 // concrete type — so read the value's recorded synthesized type
                 // back for the param-binding unify.
                 self.check_expr(&f.value, &push_ty);
+                // A local or a place written into a `ref` field is lent
+                // (`Parser { source: s, .. }`, design.md § Views;
+                // B-2026-11-22-49).
+                self.note_parts_lent_into_ref_slots(&f.value, &push_ty, true);
                 // B-2026-09-03-20 — a struct-literal FIELD is a value
                 // position: `Box2 { r: w.r }` moves `r` out of an own-`Drop`
                 // `W` exactly as `let x = w.r;` does. Measured: two `R` bodies,
@@ -2100,6 +2104,10 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 };
                 self.check_expr(&f.value, &push_ty);
+                // A local or a place written into a `ref` field is lent
+                // (`Parser { source: s, .. }`, design.md § Views;
+                // B-2026-11-22-49).
+                self.note_parts_lent_into_ref_slots(&f.value, &push_ty, true);
                 // B-2026-09-03-20 — a struct-literal FIELD is a value
                 // position: `Box2 { r: w.r }` moves `r` out of an own-`Drop`
                 // `W` exactly as `let x = w.r;` does. Measured: two `R` bodies,

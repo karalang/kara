@@ -255,18 +255,6 @@ fn a_temporary_stored_over_a_reference_is_refused() {
         ),
     ] {
         let src = format!("{head}{body}}}\n");
-        // `v.push(words[1])` is refused by `karac check` for its own
-        // reason (a lent element read as moved), so the first program is
-        // asked of the borrow check alone.
-        if name == "vec_index" {
-            let run = karac(name, &src, "__mir-run");
-            let err = String::from_utf8_lossy(&run.stderr).to_string();
-            assert!(
-                !run.status.success() && err.contains("E0516"),
-                "{name}: {err}"
-            );
-            continue;
-        }
         refused_by_borrowck(name, &src, &["E0516", temp]);
     }
 }

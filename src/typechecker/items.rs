@@ -12282,17 +12282,7 @@ impl<'a> super::TypeChecker<'a> {
         let Type::Named { name, args: targs } = &recv else {
             return;
         };
-        let slots: Vec<(usize, Type)> = match (name.as_str(), method, targs.as_slice(), args.len())
-        {
-            ("Vec" | "VecDeque", "push" | "push_back" | "push_front", [t], 1) => {
-                vec![(0, t.clone())]
-            }
-            ("Vec" | "VecDeque", "insert" | "resize", [t], 2) => vec![(1, t.clone())],
-            ("Vec" | "VecDeque", "fill", [t], 1) => vec![(0, t.clone())],
-            ("Set" | "SortedSet", "insert", [t], 1) => vec![(0, t.clone())],
-            ("Map" | "SortedMap", "insert", [k, v], 2) => vec![(0, k.clone()), (1, v.clone())],
-            _ => return,
-        };
+        let slots = Self::core_stored_arg_slots(name, method, targs, args.len());
         for (i, elem) in slots {
             let elem = self.resolved_now(&elem);
             if !self.core_is_view(&elem) {
@@ -12353,6 +12343,63 @@ impl<'a> super::TypeChecker<'a> {
                 temp,
                 TypeErrorKind::TypeMismatch,
             );
+        }
+    }
+
+    /// The arguments of `recv.method(..)` that a library collection keeps as
+    /// elements or entries, each with the type of the slot it is stored in.
+    fn core_stored_arg_slots(
+        name: &str,
+        method: &str,
+        targs: &[Type],
+        nargs: usize,
+    ) -> Vec<(usize, Type)> {
+        match (name, method, targs, nargs) {
+            ("Vec" | "VecDeque", "push" | "push_back" | "push_front", [t], 1) => {
+                vec![(0, t.clone())]
+            }
+            ("Vec" | "VecDeque", "insert" | "resize", [t], 2) => vec![(1, t.clone())],
+            ("Vec" | "VecDeque", "fill", [t], 1) => vec![(0, t.clone())],
+            ("Set" | "SortedSet", "insert", [t], 1) => vec![(0, t.clone())],
+            ("Map" | "SortedMap", "insert", [k, v], 2) => vec![(0, k.clone()), (1, v.clone())],
+            _ => Vec::new(),
+        }
+    }
+
+    /// v2 core §5.3: an owned local or a place stored into a `ref` element
+    /// is lent, not moved, as `push` lends a local (B-2026-10-14-13). Every
+    /// storing method records the lend, and so does `entry(k).or_insert(v)`,
+    /// so the ownership pass reports neither a use after a move nor an
+    /// element moved out of its collection where the MIR builder borrows
+    /// (B-2026-11-22-49).
+    pub(super) fn core_note_lent_into_view_elements(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+    ) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let Some(recv) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
+            return;
+        };
+        let recv = self.resolved_now(&recv.clone());
+        let recv = match recv {
+            Type::Ref(t) | Type::MutRef(t) => *t,
+            t => t,
+        };
+        let Type::Named { name, args: targs } = &recv else {
+            return;
+        };
+        let slots = match (name.as_str(), method, targs.as_slice(), args.len()) {
+            ("Entry", "or_insert", [_, v], 1) => vec![(0, v.clone())],
+            _ => Self::core_stored_arg_slots(name, method, targs, args.len()),
+        };
+        for (i, elem) in slots {
+            let elem = self.resolved_now(&elem);
+            self.note_view_lent_into_ref(&args[i].value, &elem, true);
+            self.note_parts_lent_into_ref_slots(&args[i].value, &elem, false);
         }
     }
 
@@ -13438,6 +13485,9 @@ impl<'a> super::TypeChecker<'a> {
                 // element read here is rejected (B-2026-08-26-21).
                 self.reject_index_move_non_copy(value, &expected_ty);
                 self.reject_deref_move_of_lent_item(value);
+                // `let o: Option[ref T] = Some(a);` lends `a` to the slot
+                // inside (B-2026-11-22-49).
+                self.note_parts_lent_into_ref_slots(value, &expected_ty, false);
                 // v2 core §3.7: a branch yielding a reference where the `let`
                 // keeps an owned value would move out of the borrow.
                 if self.cli_lint_overrides.strict_core
@@ -14209,6 +14259,36 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 self.name_d5_cursor_assign(target, &target_ty, value, errors_before_check);
                 let mut errors_before_check = errors_before_check;
+                // `v[i] = x` and `m[k] = x` into a `ref` element lend `x`, as
+                // the storing call they stand for does (v2 core §5.3): no
+                // element is moved out of `words[1]` in `v[0] = words[1]`,
+                // and a local stays usable (B-2026-11-22-49).
+                self.note_parts_lent_into_ref_slots(value, &slot_ty, false);
+                if matches!(&target.kind, ExprKind::Index { index, .. }
+                        if !matches!(index.kind, ExprKind::Range { .. }))
+                    && matches!(self.resolved_now(&target_ty), Type::Ref(_))
+                {
+                    self.note_view_lent_into_ref(value, &target_ty, true);
+                    // The corpus backends check without the strict rules and
+                    // lower the same borrow.
+                    if matches!(value.kind, ExprKind::Index { .. })
+                        && !self.core_expr_is_temp(value)
+                    {
+                        let mut i = errors_before_rhs;
+                        while i < errors_before_check {
+                            let e = &self.errors[i];
+                            if e.span == value.span
+                                && (e.kind == TypeErrorKind::IndexMoveNonCopy
+                                    || e.lint_name.as_deref() == Some("borrow_projection_copy"))
+                            {
+                                self.errors.remove(i);
+                                errors_before_check -= 1;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    }
+                }
                 // An `if`, `if let` or `match` checked against the slot widens
                 // each branch to it, as after `let y: i64 =`; the first walk
                 // joined the branches with no slot to widen to, and its

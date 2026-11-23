@@ -2349,19 +2349,31 @@ impl<'a> super::TypeChecker<'a> {
     /// (v2 core §5.3), as the MIR pipeline lowers it. Only the stored slot
     /// asks for that: an argument to a `ref` parameter is already a borrow,
     /// and its span also carries a closure's by-move capture into a task.
+    ///
+    /// B-2026-11-22-49 — with `owned`, a place under a local is lent as the
+    /// local is: `v.push(words[0])` and `v.push(user.name)` borrow the
+    /// element and the field. A value a call builds is a temporary, which
+    /// §5.5 refuses and nothing here records.
     pub(super) fn note_view_lent_into_ref(&mut self, expr: &Expr, slot: &Type, owned: bool) {
-        if !self.cli_lint_overrides.strict_core {
+        if !self.cli_lint_overrides.strict_core
+            || !matches!(
+                resolve_type_var_top(slot, &self.env.substitutions),
+                Type::Ref(_)
+            )
+        {
             return;
         }
-        if let (ExprKind::Identifier(n), Type::Ref(_)) = (
-            &expr.kind,
-            resolve_type_var_top(slot, &self.env.substitutions),
-        ) {
-            if owned || self.local_scope.is_view(n) {
-                self.core_ref_copy_spans
-                    .insert(SpanKey::from_span(&expr.span));
-                self.core_ref_copy_nodes.insert(expr.id);
+        let lent = match &expr.kind {
+            ExprKind::Identifier(n) => owned || self.local_scope.is_view(n),
+            ExprKind::Index { .. } | ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                owned && !self.core_expr_is_temp(expr)
             }
+            _ => false,
+        };
+        if lent {
+            self.core_ref_copy_spans
+                .insert(SpanKey::from_span(&expr.span));
+            self.core_ref_copy_nodes.insert(expr.id);
         }
     }
 
@@ -2375,6 +2387,70 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn note_named_arg_lent_into_ref(&mut self, arg: &Expr, slot: &Type) {
         if self.cli_lint_overrides.strict_core && self.closure_return_types.is_empty() {
             self.note_view_lent_into_ref(arg, slot, true);
+        }
+    }
+
+    /// B-2026-11-22-49 — the locals and places `value` lends to the `ref`
+    /// slots of `slot`, where `value` is written straight into it: a tuple
+    /// literal's elements, a list literal's, and the payload of `Some(..)`,
+    /// `Ok(..)` or `Err(..)`, each against its own slot. With `top`, `value`
+    /// itself when `slot` is a `ref` (a stored argument or a literal's
+    /// field; a `let` or an assignment to a local never borrows, §5.1). A
+    /// branch or a block is not walked: its result is a value of its own,
+    /// which moves out of the place it names. Not inside a closure body, as
+    /// [`Self::note_named_arg_lent_into_ref`].
+    pub(super) fn note_parts_lent_into_ref_slots(&mut self, value: &Expr, slot: &Type, top: bool) {
+        if !self.cli_lint_overrides.strict_core || !self.closure_return_types.is_empty() {
+            return;
+        }
+        // A literal handed to a borrowed parameter is built for the call,
+        // and its own slots are the parameter type's.
+        let slot = match self.resolved_now(slot) {
+            Type::Ref(inner)
+                if matches!(
+                    value.kind,
+                    ExprKind::Tuple(_) | ExprKind::ArrayLiteral(_) | ExprKind::Call { .. }
+                ) =>
+            {
+                self.resolved_now(&inner)
+            }
+            slot => slot,
+        };
+        match (&value.kind, &slot) {
+            (ExprKind::Tuple(elems), Type::Tuple(slots)) if elems.len() == slots.len() => {
+                for (e, s) in elems.iter().zip(slots) {
+                    self.note_parts_lent_into_ref_slots(e, s, true);
+                }
+            }
+            (ExprKind::ArrayLiteral(elems), Type::Named { name, args })
+                if matches!(name.as_str(), "Vec" | "VecDeque" | "Array") && !args.is_empty() =>
+            {
+                for e in elems {
+                    self.note_parts_lent_into_ref_slots(e, &args[0], true);
+                }
+            }
+            (
+                ExprKind::Call {
+                    callee,
+                    args: payload,
+                },
+                Type::Named { name, args },
+            ) => {
+                let (ExprKind::Identifier(ctor), [payload]) = (&callee.kind, payload.as_slice())
+                else {
+                    return;
+                };
+                let at = match (ctor.as_str(), name.as_str()) {
+                    ("Some", "Option") | ("Ok", "Result") => 0,
+                    ("Err", "Result") => 1,
+                    _ => return,
+                };
+                if let Some(s) = args.get(at) {
+                    self.note_parts_lent_into_ref_slots(&payload.value, s, true);
+                }
+            }
+            (_, Type::Ref(_)) if top => self.note_view_lent_into_ref(value, &slot, true),
+            _ => {}
         }
     }
 
@@ -6486,6 +6562,9 @@ impl<'a> super::TypeChecker<'a> {
                     borrowed_fn.get(i) == Some(&true),
                 );
                 self.note_named_arg_lent_into_ref(&arg.value, param_ty);
+                if !matches!(arg.value.kind, ExprKind::Identifier(_)) {
+                    self.note_parts_lent_into_ref_slots(&arg.value, param_ty, false);
+                }
                 self.borrow_context = saved_borrow_ctx;
                 self.mut_through_param_arg = saved_mut_through;
                 // B-2026-08-26-37 — a call ARGUMENT is a value position exactly

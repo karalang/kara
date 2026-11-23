@@ -3088,6 +3088,23 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
 
+        // A field or tuple part stored into a `ref` slot is lent, not moved
+        // (`v.push(user.name)` into a `Vec[ref String]`; B-2026-11-22-49):
+        // the type check recorded the part, and the use after it is no
+        // use after a move.
+        if core_rules() {
+            let lent = &self.typecheck_result.core_ref_copy_spans;
+            let parts = &self.core_projection_consumes;
+            self.errors.retain(|e| {
+                e.kind != OwnershipErrorKind::UseAfterMove
+                    || !e.consume_span.is_some_and(|c| {
+                        parts
+                            .get(&SpanKey::from_span(&c))
+                            .is_some_and(|(moved, _)| lent.contains(&SpanKey::from_span(moved)))
+                    })
+            });
+        }
+
         // v2 core: a use after a field projection moved (`h.o`) names the
         // projection and clones it, not its root. The projections are known
         // only once each body is classified, after its witnesses were built.

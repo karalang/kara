@@ -2371,6 +2371,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A local or a place stored into a slot that holds a reference is lent, as
+  `v.push(a)` into a `Vec[ref T]` lends `a`: `karac check` no longer reports
+  the local as moved (E0500 at its next use) after `fill`, `resize`,
+  `Set.insert`, `Map.insert`, `entry(k).or_insert(a)`, `v[i] = a`,
+  `Holder { r: a }`, `Some(a)`, a list or a tuple literal, nor an element or a
+  field as moved out (E0515, E_INDEX_MOVE_NON_COPY) for `v.push(words[0])` and
+  every other such store. Their fix appended `.clone()`, which stored a
+  reference to a temporary (B-2026-11-22-49).
 - An `https://` fetch refused for its certificate says why in words, not by a
   Rust type: `it does not chain to a trusted root (...)` for a self-signed
   certificate, an unknown root or a missing intermediate (was `UnknownIssuer`),

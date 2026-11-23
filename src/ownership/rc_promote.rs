@@ -350,6 +350,11 @@ impl<'a> super::OwnershipChecker<'a> {
             if (!judged && self.core_non_move_sources.contains(&key)) || !seen.insert(key) {
                 continue;
             }
+            // An element stored into a `ref` slot is lent, not moved
+            // (B-2026-11-22-49).
+            if self.typecheck_result.core_ref_copy_spans.contains(&key) {
+                continue;
+            }
             let supports_clone = self.moved_type_supports_clone(span);
             let derive_copy = if supports_clone {
                 None

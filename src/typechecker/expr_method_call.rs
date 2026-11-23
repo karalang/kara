@@ -2139,6 +2139,7 @@ impl<'a> super::TypeChecker<'a> {
             self.check_key_borrows_item(object, method, &args[0].value);
         }
         self.core_reject_temp_into_view_elements(object, method, args, errors_before);
+        self.core_note_lent_into_view_elements(object, method, args);
         if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
             self.explain_rust_scan(args, errors_before);
         }
