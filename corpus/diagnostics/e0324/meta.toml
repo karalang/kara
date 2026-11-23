@@ -1,0 +1,9 @@
+source = "B-2026-11-20-146"
+dedup_of = []
+expect = "error:E0324"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-20-146: the smallest program that produces E0324, the example behind `karac explain E0324`. tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

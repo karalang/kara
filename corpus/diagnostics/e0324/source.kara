@@ -1,0 +1,7 @@
+#[deny(unused_variable)]
+fn main() {
+    let steps: Vec[i64] = [1, 2, 3].to_vec();
+    for (i, step) in steps.iter().enumerate() {
+        println(step);
+    }
+}

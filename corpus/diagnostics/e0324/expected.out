@@ -1,0 +1,1 @@
+ERROR at line 4: `i` is bound and never used; name it `_i` to keep the binding and say it is unused on purpose

@@ -994,15 +994,30 @@ impl FixSet {
             let Some(&binding) = awaits.get(anchor) else {
                 continue;
             };
+            // Only a `let`'s binding: one a `match` arm or a `for` pattern
+            // binds is not rewritten by an edit to a statement.
+            let start = source
+                .get(..binding)
+                .and_then(|before| before.rfind([';', '{', '}']))
+                .map_or(0, |i| i + 1);
+            let is_let = source.get(start..binding).is_some_and(|head| {
+                head.trim_start()
+                    .strip_prefix("let")
+                    .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+            });
+            if !is_let {
+                continue;
+            }
             let end = source
                 .get(binding..)
                 .and_then(|rest| rest.find(';'))
                 .map_or(source.len(), |i| binding + i);
-            if self
-                .edits
-                .iter()
-                .any(|(other, e)| other != id && (binding..=end).contains(&e.offset))
-            {
+            let in_let = |e: &crate::resolver::TextEdit| (binding..=end).contains(&e.offset);
+            // A fix that itself edits the `let` is not waiting on it.
+            if self.edits.iter().any(|(own, e)| own == id && in_let(e)) {
+                continue;
+            }
+            if self.edits.iter().any(|(other, e)| other != id && in_let(e)) {
                 held.insert(*id);
             }
         }
