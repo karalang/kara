@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- An associated function called through a type-parameter bound is charged
+  the instance's impl. `fn build[T: Make]() -> T { T.make() }` called at a
+  type whose `make` writes Stderr reported no effects, so a `pub fn`
+  calling it owed no clause and `#[no_effect(writes(Stderr))]` on it
+  passed; the method form through a bound was already charged
+  (B-2026-11-23-16).
 - A built-in operation is charged the element impls it runs.
   `xs.contains(x)`, `xs == ys`, `xs.sort()`, `it.max()`, a `Map`, `Set` or
   `SortedSet` insert or lookup, `println(x)`, an f-string hole,

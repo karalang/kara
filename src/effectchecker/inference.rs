@@ -1337,6 +1337,50 @@ impl<'a> super::EffectChecker<'a> {
             .is_some_and(|f| !f.body.stmts.is_empty() || f.body.final_expr.is_some())
     }
 
+    /// `T.make()` through a bound whose trait writes no clause on `make`
+    /// runs the instance's `make` (design.md § Generics), as a method call
+    /// through the bound does: charged at each call that instantiates `T`
+    /// (B-2026-11-23-16). A bare `make()` names no parameter, so it is
+    /// charged every impl's.
+    fn charge_assoc_fn_instance(
+        &self,
+        callee: &Expr,
+        trait_keys: &[Symbol],
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        let claused = trait_keys.iter().any(|key| {
+            !matches!(
+                self.declared_effects.get(key),
+                Some(DeclaredEffects::None) | None
+            ) || self.fn_uses_with_underscore.contains(key)
+        });
+        if claused {
+            return;
+        }
+        let (param, name) = match &callee.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                (Some(&segments[0]), &segments[1])
+            }
+            ExprKind::Identifier(name) => (None, name),
+            _ => return,
+        };
+        let Some(method) = self.interner.get(name) else {
+            return;
+        };
+        match param.filter(|p| p.as_str() != "Self") {
+            Some(param) => self.note_bound_event(BoundEvent::TypeParam {
+                param: param.clone(),
+                method,
+            }),
+            None => {
+                if let Some(keys) = self.method_name_index.get(&method) {
+                    calls.extend(keys.iter().map(|&key| (key, span)));
+                }
+            }
+        }
+    }
+
     /// Charge `traits` on the whole type of the expression `node`.
     fn charge_elem(
         &self,
@@ -1718,6 +1762,7 @@ impl<'a> super::EffectChecker<'a> {
                         for &key in &trait_keys {
                             calls.push((key, expr.span));
                         }
+                        self.charge_assoc_fn_instance(callee, &trait_keys, expr.span, calls);
                         trait_keys.into_iter().next()
                     } else {
                         let n = self.extract_callee_name(callee);
