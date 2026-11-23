@@ -4,6 +4,8 @@ The types themselves are in [design.md §5](../design.md#5-types): what `Option[
 
 Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's source location ([design.md §10](../design.md#10-errors-and-panics)).
 
+A method or operator that runs a trait on the value an `Option` or `Result` holds (`==`, the ordering operators, `clone()`, `cloned`, `unwrap_or_default`, `Display`) has the effects of that trait's impl for the held type ([collections.md](collections.md), Element traits).
+
 ## `Option[T]`
 
 **Ordering.** Where `T` is ordered, `None` is less than every `Some(x)`, and two `Some`s compare by their values, so `sort()` puts `None` first. Where the types are comparable, `Ok(x)` is less than every `Err(e)`, and two `Ok`s or two `Err`s compare by their values. This is the order Rust, Haskell and OCaml give (review-thread ruling 2026-11-08; 0.8.1 and earlier put `None` last, B-2026-11-08-24).

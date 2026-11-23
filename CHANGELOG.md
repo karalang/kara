@@ -20,6 +20,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A built-in operation is charged the element impls it runs.
+  `xs.contains(x)`, `xs == ys`, `xs.sort()`, `it.max()`, a `Map`, `Set` or
+  `SortedSet` insert or lookup, `println(x)`, an f-string hole,
+  `xs.join(sep)`, `xs.clone()`, `xs.resize(n, v)`, `o.unwrap_or_default()`
+  and a derived impl over a field each run the element type's `eq`, `cmp`,
+  `hash`, `to_string`, `clone` or `default`, and reported none of its
+  effects: a function that called `contains` on a `Vec[Big]` whose `eq`
+  writes Stderr passed `#[no_effect(writes(Stderr))]`. Each is now charged
+  the impl its documented bound names, for the element type at the call
+  (docs/library/collections.md § Element traits). A call through a bound
+  on a standard trait (`T: PartialEq`) is charged at the instance too:
+  `same(1, 2)` no longer takes the effects of every `eq` in the program
+  (B-2026-11-23-15).
 - An operator is charged the program impl it runs. `==` / `!=`, a compound
   assignment (`+=`, `-=`, `*=`), unary `-` and `~`, indexing `c[k]` and
   `assert_eq` on a type whose impl has effects reported none of them:

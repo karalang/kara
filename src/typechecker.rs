@@ -2341,6 +2341,12 @@ pub struct TypeCheckResult {
     /// supplies `cmp`/`partial_cmp`, and keeps the direct `T.lt(a, b)` form
     /// when the impl really does define `lt`.
     pub trait_impl_methods: FxHashSet<(String, String)>,
+    /// [`Self::trait_impl_methods`] without the appended library's impls:
+    /// the methods whose bodies the program wrote. The effect pass charges a
+    /// built-in operation the written impls it reaches and looks through a
+    /// library impl to its type arguments (`VecIter[Big]`'s `Clone` to
+    /// `Big`'s).
+    pub program_trait_impl_methods: FxHashSet<(String, String)>,
     /// Phase 7 user-`impl Drop` dispatch — Prereq.1 side-table.
     /// `type_name → "Type.drop"` for every `impl Drop for Type` block
     /// that passes `env_add_impl`'s focused signature validation
@@ -5561,6 +5567,22 @@ impl<'a> TypeChecker<'a> {
                     .map(|m| (imp.target_type.clone(), m.clone()))
             })
             .collect();
+        // The same, for the impls the program wrote: the appended library's
+        // are left out (B-2026-11-23-15).
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let program_trait_impl_methods: FxHashSet<(String, String)> = self
+            .env
+            .impls
+            .iter()
+            .filter(|imp| {
+                imp.trait_name.is_some() && imp.target_span.is_some_and(|s| s.offset < library)
+            })
+            .flat_map(|imp| {
+                imp.methods
+                    .keys()
+                    .map(|m| (imp.target_type.clone(), m.clone()))
+            })
+            .collect();
         // Phase 7 user-`impl Drop` dispatch — Prereq.1. Surface the
         // `Type → "Type.drop"` mapping for every `impl Drop for Type`
         // that passed `env_add_impl`'s focused signature validation.
@@ -5833,6 +5855,7 @@ impl<'a> TypeChecker<'a> {
             wp_result_types: self.wp_result_types,
             trait_impls,
             trait_impl_methods,
+            program_trait_impl_methods,
             drop_method_keys,
             into_conversions: self.into_conversions,
             parse_conversions: self.parse_conversions,

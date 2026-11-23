@@ -774,6 +774,25 @@ pub fn node_type_facts(
         facts.default_copy_spans = typed.default_copy_spans.clone();
         facts.copy_method_callees = typed.node_method_callees.clone();
     }
+    // What a built-in operation runs on the values an expression holds
+    // (B-2026-11-23-15), once per distinct type.
+    let elem_index = effectchecker::ElemImplIndex::new(typed);
+    if !elem_index.is_empty() {
+        let mut by_type: FxHashMap<String, Option<std::sync::Arc<effectchecker::TypeImpls>>> =
+            FxHashMap::default();
+        for (&node, (ty, _)) in &typed.node_types {
+            if !elem_index.touches(ty) {
+                continue;
+            }
+            let impls = by_type
+                .entry(format!("{ty:?}"))
+                .or_insert_with(|| elem_index.of(ty).map(std::sync::Arc::new));
+            if let Some(impls) = impls {
+                facts.elem_impls.insert(node, impls.clone());
+            }
+        }
+    }
+    facts.elem_index = std::sync::Arc::new(elem_index);
     let mut drops = DropReach::new(typed);
     // A pattern binding that takes its part by value has its type here,
     // not in `node_types` (B-2026-11-17-100).

@@ -19,6 +19,7 @@ mod bounds;
 mod drop_edges;
 mod dyn_effects;
 mod effect_vars;
+mod elem_impls;
 mod extern_ffi;
 mod fn_values;
 mod gpu_effect_gate;
@@ -33,6 +34,7 @@ pub mod unused_effect;
 mod verify;
 mod with_e;
 
+pub use elem_impls::{ElemImplIndex, TypeImpls};
 pub use unused_effect::UnusedEffect;
 
 use modbind_synth::ModBindingInfo;
@@ -1309,6 +1311,11 @@ pub struct NodeTypeFacts {
     /// The `Type.method` each operator on a program type runs, by the
     /// operator's node (`TypeCheckResult::node_operator_calls`).
     pub operator_calls: FxHashMap<crate::ids::NodeId, String>,
+    /// What the element traits reach in each expression's type, for the
+    /// expressions where one reaches anything ([`ElemImplIndex::of`]), and
+    /// the index itself, for the types a call binds its parameters to.
+    pub elem_impls: FxHashMap<crate::ids::NodeId, std::sync::Arc<TypeImpls>>,
+    pub elem_index: std::sync::Arc<ElemImplIndex>,
 }
 
 #[derive(Debug, Clone)]
@@ -1524,6 +1531,9 @@ pub struct EffectChecker<'a> {
     pub(crate) copy_method_callees: FxHashMap<crate::ids::NodeId, Symbol>,
     /// See [`NodeTypeFacts::operator_calls`].
     pub(crate) operator_calls: FxHashMap<crate::ids::NodeId, Symbol>,
+    /// See [`NodeTypeFacts::elem_impls`].
+    pub(crate) elem_impls: FxHashMap<crate::ids::NodeId, std::sync::Arc<TypeImpls>>,
+    pub(crate) elem_index: std::sync::Arc<ElemImplIndex>,
     /// Each operator expression the typechecker dispatched to a program impl
     /// (`TypeCheckResult.user_operator_calls`), by span, with its `Type.method`
     /// key. The lowering rewrites an operator only when its operands share a
@@ -1826,6 +1836,8 @@ impl<'a> EffectChecker<'a> {
             default_copy_spans: FxHashSet::default(),
             copy_method_callees: FxHashMap::default(),
             operator_calls: FxHashMap::default(),
+            elem_impls: FxHashMap::default(),
+            elem_index: Default::default(),
             user_operator_calls: FxHashMap::default(),
             dyn_coercions: FxHashMap::default(),
             dyn_clauses: FxHashMap::default(),
@@ -1942,6 +1954,8 @@ impl<'a> EffectChecker<'a> {
             .into_iter()
             .map(|(node, callee)| (node, self.interner.intern(&callee)))
             .collect();
+        self.elem_impls = facts.elem_impls;
+        self.elem_index = facts.elem_index;
         self.operator_calls = facts
             .operator_calls
             .into_iter()

@@ -20,6 +20,7 @@ use crate::intern::Symbol;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
+use super::elem_impls::{self, ElemTrait, Family, ImplReach, Scope, TypeImpls};
 use super::{
     tarjan_scc, BoundEvent, DeclaredEffects, Effect, EffectError, EffectErrorKind, EffectOrigin,
     EffectSet, TraitImpls,
@@ -1091,6 +1092,10 @@ impl<'a> super::EffectChecker<'a> {
     /// Whether `trait_name` declares a method `method_name`, with or without a
     /// receiver.
     fn trait_declares_method(&self, trait_name: &str, method_name: &str) -> bool {
+        // The standard traits are declared by no item of the program.
+        if elem_impls::standard_trait_declares(trait_name, method_name) {
+            return true;
+        }
         self.program.items.iter().any(|item| match item {
             Item::TraitDef(t) if t.name == trait_name => t
                 .items
@@ -1279,6 +1284,212 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Charge the written impls `tr` reaches in a type (B-2026-11-23-15):
+    /// each impl's method; for a type parameter the instance's, at each
+    /// call that says what it is; for `Self`, a `dyn` or an opaque type,
+    /// every impl of the method.
+    fn charge_reach(
+        &self,
+        reach: &ImplReach,
+        tr: ElemTrait,
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        for key in &reach.keys {
+            if let Some(key) = self.interner.get(key) {
+                calls.push((key, span));
+                // Its own calls through bounds: no call site binds them.
+                self.charge_bound_calls_unresolved(key, span, calls);
+            }
+        }
+        if reach.params.is_empty() && !reach.open {
+            return;
+        }
+        let Some(method) = self.interner.get(tr.method()) else {
+            return;
+        };
+        let mut every = reach.open;
+        for param in &reach.params {
+            if param == "Self" {
+                every = true;
+            } else {
+                self.note_bound_event(BoundEvent::TypeParam {
+                    param: param.clone(),
+                    method,
+                });
+            }
+        }
+        if every {
+            if let Some(keys) = self.method_name_index.get(&method) {
+                calls.extend(keys.iter().map(|&key| (key, span)));
+            }
+        }
+    }
+
+    /// Whether the method `key` has a body this check reads. A library
+    /// method written in Kāra has none here: a program is checked against
+    /// the library's signatures (`library_bodies_unchecked`), so what such
+    /// a method runs on its elements is charged by its documented bound,
+    /// as a native one's is.
+    fn has_written_body(&self, key: Symbol) -> bool {
+        self.method_bodies
+            .get(&key)
+            .is_some_and(|f| !f.body.stmts.is_empty() || f.body.final_expr.is_some())
+    }
+
+    /// Charge `traits` on the whole type of the expression `node`.
+    fn charge_elem(
+        &self,
+        node: crate::ids::NodeId,
+        traits: &[ElemTrait],
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        if let Some(impls) = self.elem_impls.get(&node) {
+            for &tr in traits {
+                self.charge_reach(impls.reach(tr, Scope::Whole), tr, span, calls);
+            }
+        }
+    }
+
+    /// Charge the key traits of the keyed collection the expression `node`
+    /// is: `hash` and `eq` for a `Map` or `Set` (and the methods of a
+    /// program hasher), `cmp` for a sorted one.
+    fn charge_elem_keys(
+        &self,
+        node: crate::ids::NodeId,
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        let Some(impls) = self.elem_impls.get(&node) else {
+            return;
+        };
+        let traits: &[ElemTrait] = match impls.family {
+            Family::Hashed => &[ElemTrait::Hash, ElemTrait::Eq],
+            Family::Sorted => &[ElemTrait::Ord],
+            _ => return,
+        };
+        for &tr in traits {
+            self.charge_reach(impls.reach(tr, Scope::Key), tr, span, calls);
+        }
+        self.charge_hasher(impls, span, calls);
+    }
+
+    fn charge_hasher(&self, impls: &TypeImpls, span: Span, calls: &mut Vec<(Symbol, Span)>) {
+        for key in &impls.hasher {
+            if let Some(key) = self.interner.get(key) {
+                calls.push((key, span));
+            }
+        }
+    }
+
+    /// A method of a built-in type, or a trait method no impl writes (a
+    /// derived one), runs the element impls its documented bound names
+    /// ([`elem_impls::method_traits`]).
+    fn charge_elem_method(
+        &self,
+        call: &Expr,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        if self.elem_index.is_empty() {
+            return;
+        }
+        let span = call.span;
+        // A receiver that is a type parameter itself is a call through its
+        // bound, charged above.
+        if !self.typeparam_nodes.contains_key(&object.id) {
+            if let Some(impls) = self.elem_impls.get(&object.id) {
+                let traits = elem_impls::method_traits(impls.family, method);
+                for &(tr, scope) in traits {
+                    self.charge_reach(impls.reach(tr, scope), tr, span, calls);
+                }
+                if traits.iter().any(|(tr, _)| *tr == ElemTrait::Hash) {
+                    self.charge_hasher(impls, span, calls);
+                }
+            }
+        }
+        if elem_impls::BY_KEY.contains(&method) {
+            if let Some(key) = args.first() {
+                self.charge_elem(key.value.id, &[ElemTrait::Ord], span, calls);
+            }
+        }
+        if elem_impls::BUILDS.contains(&method) {
+            self.charge_elem_keys(call.id, span, calls);
+        }
+        // `mem.take(mut x)` leaves `Default.default()` behind.
+        if method == "take" && matches!(&object.kind, ExprKind::Identifier(m) if m == "mem") {
+            if let Some(taken) = args.first() {
+                self.charge_elem(taken.value.id, &[ElemTrait::Default], span, calls);
+            }
+        }
+    }
+
+    /// A call of a built-in function that renders, compares or copies its
+    /// arguments, of a keyed collection's constructor, or of a trait method
+    /// no impl writes (`Wrap.eq(a, b)` on a derived `PartialEq`).
+    fn charge_elem_call(
+        &self,
+        call: &Expr,
+        callee: &Expr,
+        args: &[CallArg],
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        if self.elem_index.is_empty() {
+            return;
+        }
+        let span = call.span;
+        let each = |traits: &[ElemTrait], calls: &mut Vec<(Symbol, Span)>| {
+            for arg in args {
+                self.charge_elem(arg.value.id, traits, span, calls);
+            }
+        };
+        match &callee.kind {
+            ExprKind::Identifier(name)
+                if !self
+                    .interner
+                    .get(name)
+                    .is_some_and(|f| self.function_bodies.contains_key(&f)) =>
+            {
+                for (function, traits) in elem_impls::FUNCTIONS {
+                    if function == name {
+                        each(traits, calls);
+                    }
+                }
+            }
+            ExprKind::Path { segments, .. } if segments.len() >= 2 => {
+                let head = segments[segments.len() - 2].as_str();
+                let tail = segments[segments.len() - 1].as_str();
+                let keyed = matches!(
+                    head,
+                    "Map" | "Set" | "SortedMap" | "SortedSet" | "PriorityQueue"
+                );
+                if keyed && !elem_impls::UNKEYED.contains(&tail) {
+                    self.charge_elem_keys(call.id, span, calls);
+                } else if let Some((_, _, tr)) = elem_impls::ASSOCIATED
+                    .iter()
+                    .find(|(ty, function, _)| *ty == head && *function == tail)
+                {
+                    each(&[*tr], calls);
+                } else if let Some(tr) = ElemTrait::of_method(tail) {
+                    let written = self
+                        .interner
+                        .get(&format!("{head}.{tail}"))
+                        .is_some_and(|key| self.has_written_body(key));
+                    if !written {
+                        match args.first() {
+                            Some(first) => self.charge_elem(first.value.id, &[tr], span, calls),
+                            None => self.charge_elem(call.id, &[tr], span, calls),
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// At a call of `callee` (call node `node`), charge the calls `callee`
     /// makes through bounds (`bound_calls`) to the instances this call binds
     /// its parameters to. A parameter bound to one of the CALLER's own type
@@ -1304,6 +1515,7 @@ impl<'a> super::EffectChecker<'a> {
         let subs = self.node_call_subs.get(&node);
         for (param, method) in pairs {
             let resolved = subs.and_then(|s| s.get(param));
+
             if let Some(ty) = resolved {
                 if let crate::typechecker::Type::TypeParam(q) = ty {
                     if q != "Self" {
@@ -1315,6 +1527,17 @@ impl<'a> super::EffectChecker<'a> {
                         .dotted_str(&name, &self.interner.resolve(*method));
                     if self.method_bodies.contains_key(&key) {
                         calls.push((key, span));
+                        continue;
+                    }
+                }
+                // A built-in type, or one whose impl is derived: the written
+                // impls the trait reaches in it, and no other type's
+                // (B-2026-11-23-15).
+                if let Some(tr) = ElemTrait::of_method(&self.interner.resolve(*method)) {
+                    if !self.elem_index.is_empty() && elem_impls::is_solved(ty) {
+                        if let Some(impls) = self.elem_index.of(ty) {
+                            self.charge_reach(impls.reach(tr, Scope::Whole), tr, span, calls);
+                        }
                         continue;
                     }
                 }
@@ -1414,12 +1637,22 @@ impl<'a> super::EffectChecker<'a> {
                         continue;
                     };
                     for (p, m) in pairs {
-                        if let Some(crate::typechecker::Type::TypeParam(q)) =
-                            self.node_call_subs.get(node).and_then(|s| s.get(&p))
-                        {
-                            if q != "Self"
-                                && bound_calls.entry(*f).or_default().insert((q.clone(), m))
-                            {
+                        let bound = self.node_call_subs.get(node).and_then(|s| s.get(&p));
+                        // The caller's own parameters in the type: the one
+                        // the parameter is bound to, or for an element trait
+                        // those inside it (`Vec[Q]`).
+                        let passed_on: Vec<String> = match bound {
+                            Some(crate::typechecker::Type::TypeParam(q)) => vec![q.clone()],
+                            Some(ty) => ElemTrait::of_method(&self.interner.resolve(m))
+                                .and_then(|tr| {
+                                    let impls = self.elem_index.of(ty)?;
+                                    Some(impls.reach(tr, Scope::Whole).params.clone())
+                                })
+                                .unwrap_or_default(),
+                            None => Vec::new(),
+                        };
+                        for q in passed_on {
+                            if q != "Self" && bound_calls.entry(*f).or_default().insert((q, m)) {
                                 changed = true;
                             }
                         }
@@ -1449,6 +1682,7 @@ impl<'a> super::EffectChecker<'a> {
                 if self.operator_calls.contains_key(&expr.id) {
                     self.charge_operator(expr.id, expr.span, calls);
                 }
+                self.charge_elem_call(expr, callee, args, calls);
                 // Trait-assoc-fn redirect: when the callee dispatches through
                 // a typeparam-bound trait, push the resolved `Trait.method`
                 // key(s) so the trait's declared ceiling propagates to the
@@ -1831,6 +2065,10 @@ impl<'a> super::EffectChecker<'a> {
                 // only the network (B-2026-11-04-27). A trait-owned key still
                 // takes the seeds, since the instance behind it is unknown.
                 let resolved_to_body = precise.is_some_and(|k| self.method_bodies.contains_key(&k));
+                let program_body = precise.is_some_and(|k| self.has_written_body(k));
+                if !program_body {
+                    self.charge_elem_method(expr, object, method, args, calls);
+                }
                 let resolved_elsewhere = |quals: &Vec<Symbol>| {
                     precise.is_some_and(|k| {
                         !quals.contains(&k)
@@ -1921,6 +2159,29 @@ impl<'a> super::EffectChecker<'a> {
                 // no `Eq`) calls that impl (B-2026-10-29-51).
                 self.charge_operator(expr.id, expr.span, calls);
                 self.charge_param_operator(left, binary_methods(op), expr.span, calls, bounds);
+                // A comparison of built-in types, or through a derived impl,
+                // compares what they hold.
+                let compares = match op {
+                    BinOp::Eq | BinOp::NotEq => Some(ElemTrait::Eq),
+                    BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                        Some(ElemTrait::PartialOrd)
+                    }
+                    _ => None,
+                };
+                if let Some(tr) = compares {
+                    let side = [left, right]
+                        .into_iter()
+                        .find(|e| self.elem_impls.contains_key(&e.id))
+                        .filter(|e| !self.typeparam_nodes.contains_key(&e.id));
+                    if let Some(side) = side {
+                        self.charge_elem(side.id, &[tr], expr.span, calls);
+                        // Two tables are equal when each key of one is found
+                        // in the other.
+                        if tr == ElemTrait::Eq {
+                            self.charge_elem_keys(side.id, expr.span, calls);
+                        }
+                    }
+                }
                 self.collect_calls_in_expr(left, calls, bounds);
                 self.collect_calls_in_expr(right, calls, bounds);
                 if matches!(op, BinOp::Div | BinOp::Mod) {
@@ -1977,8 +2238,17 @@ impl<'a> super::EffectChecker<'a> {
             ExprKind::InterpolatedStringLit(parts) => {
                 let mut holes = false;
                 for part in parts {
-                    if let crate::ast::ParsedInterpolationPart::Expr(inner, _) = part {
+                    if let crate::ast::ParsedInterpolationPart::Expr(inner, spec) = part {
                         holes = true;
+                        // A hole renders through `Display`, `{x:?}` through
+                        // `Debug`.
+                        let tr = match spec.as_deref().is_some_and(|s| s.ends_with('?')) {
+                            true => ElemTrait::Debug,
+                            false => ElemTrait::Display,
+                        };
+                        if !self.typeparam_nodes.contains_key(&inner.id) {
+                            self.charge_elem(inner.id, &[tr], expr.span, calls);
+                        }
                         self.collect_calls_in_expr(inner, calls, bounds);
                     }
                 }
@@ -2108,6 +2378,8 @@ impl<'a> super::EffectChecker<'a> {
                     calls,
                     bounds,
                 );
+                // `m[k]` on a keyed collection looks its key up.
+                self.charge_elem_keys(object.id, expr.span, calls);
                 self.collect_calls_in_expr(object, calls, bounds);
                 self.collect_calls_in_expr(index, calls, bounds);
                 // Indexing with [] calls Index::index which has panics effect
@@ -2127,6 +2399,8 @@ impl<'a> super::EffectChecker<'a> {
                 // A `Map` / `SortedMap` literal builds a heap table
                 // (B-2026-11-04-28).
                 calls.push((self.syms.builtin_heap_alloc, expr.span));
+                // ...and files each key by its `hash` and `eq`, or its `cmp`.
+                self.charge_elem_keys(expr.id, expr.span, calls);
                 for (key, val) in entries {
                     self.collect_calls_in_expr(key, calls, bounds);
                     self.collect_calls_in_expr(val, calls, bounds);
@@ -2214,6 +2488,8 @@ impl<'a> super::EffectChecker<'a> {
                 if self.heap_nodes.contains(&expr.id) {
                     calls.push((self.syms.builtin_heap_alloc, expr.span));
                 }
+                // A literal typed `Set` or `SortedSet` files its elements.
+                self.charge_elem_keys(expr.id, expr.span, calls);
             }
             ExprKind::RepeatLiteral {
                 value,
@@ -2222,6 +2498,9 @@ impl<'a> super::EffectChecker<'a> {
             } => {
                 self.collect_calls_in_expr(value, calls, bounds);
                 self.collect_calls_in_expr(count, calls, bounds);
+                // `[v; n]` clones a `v` that is not `Copy` (design.md
+                // § Array literals).
+                self.charge_elem(value.id, &[ElemTrait::Clone], expr.span, calls);
                 if type_name.as_deref() == Some("Vec") || self.heap_nodes.contains(&expr.id) {
                     calls.push((self.syms.builtin_heap_alloc, expr.span));
                 }
@@ -2230,6 +2509,7 @@ impl<'a> super::EffectChecker<'a> {
                 if type_name != "Array" {
                     calls.push((self.syms.builtin_heap_alloc, expr.span));
                 }
+                self.charge_elem_keys(expr.id, expr.span, calls);
                 for e in items {
                     self.collect_calls_in_expr(e, calls, bounds);
                 }
