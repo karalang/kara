@@ -13407,6 +13407,8 @@ impl<'a> super::TypeChecker<'a> {
                     // to check is not lowered yet" (B-2026-11-04-44).
                     if matches!(&value.kind, ExprKind::ArrayLiteral(items) if items.is_empty()) {
                         self.report_empty_list_literal(&value.span);
+                    } else {
+                        self.report_unsolved_nested_empty_lists(value);
                     }
                     let inferred = self.open_unsolved_let_params(inferred, value);
                     self.check_unsolved_type_param(&inferred, &value.span);
@@ -13945,6 +13947,8 @@ impl<'a> super::TypeChecker<'a> {
                     // to check is not lowered yet" (B-2026-11-04-44).
                     if matches!(&value.kind, ExprKind::ArrayLiteral(items) if items.is_empty()) {
                         self.report_empty_list_literal(&value.span);
+                    } else {
+                        self.report_unsolved_nested_empty_lists(value);
                     }
                     self.check_unsolved_type_param(&inferred, &value.span);
                     self.record_uninferrable_binding_origin(pattern, &inferred, value);

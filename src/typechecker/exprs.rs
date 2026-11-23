@@ -216,6 +216,128 @@ pub(super) fn tail_waits_for_sibling(e: &Expr) -> bool {
     }
 }
 
+/// An empty `[]` reached through tuple literals and `Some` / `Ok` / `Err`
+/// payloads, at any depth: `(2, [])`, `Some([])`, `((1, []), 2)`. Like the
+/// bare `[]` of [`tail_waits_for_sibling`], such an element names no
+/// element type of its own and takes a sibling's, or the slot's
+/// (B-2026-11-21-49).
+pub(super) fn holds_empty_list(e: &Expr) -> bool {
+    let part = |e: &Expr| {
+        matches!(&e.kind, ExprKind::ArrayLiteral(es) if es.is_empty()) || holds_empty_list(e)
+    };
+    match &e.kind {
+        ExprKind::Tuple(items) => items.iter().any(part),
+        ExprKind::Call { callee, args } if args.len() == 1 => {
+            matches!(&callee.kind, ExprKind::Identifier(n)
+                if matches!(n.as_str(), "Some" | "Ok" | "Err"))
+                && part(&args[0].value)
+        }
+        _ => false,
+    }
+}
+
+/// The empty `[]` literals of `e` that [`holds_empty_list`] reaches, and
+/// those of a list literal's elements.
+pub(super) fn nested_empty_lists(e: &Expr, out: &mut Vec<Span>) {
+    match &e.kind {
+        ExprKind::ArrayLiteral(es) if es.is_empty() => out.push(e.span),
+        ExprKind::ArrayLiteral(es) | ExprKind::Tuple(es) => {
+            es.iter().for_each(|e| nested_empty_lists(e, out))
+        }
+        ExprKind::Call { callee, args } if args.len() == 1 => {
+            if matches!(&callee.kind, ExprKind::Identifier(n)
+                if matches!(n.as_str(), "Some" | "Ok" | "Err"))
+            {
+                nested_empty_lists(&args[0].value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The unsuffixed integer literal `e` is (`-1` included).
+fn seed_literal(e: &Expr) -> Option<(&Expr, i128)> {
+    match &e.kind {
+        ExprKind::Integer(v, None) => Some((e, *v)),
+        ExprKind::Unary { operand, .. } => match &operand.kind {
+            ExprKind::Integer(v, None) => Some((operand.as_ref(), -*v)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+/// The literals a closure body yields, when every value it can
+/// yield is one (`1`, `if c { -1 } else { 0 }`).
+fn yields_literals<'e>(e: &'e Expr, out: &mut Vec<(&'e Expr, i128)>) -> bool {
+    match &e.kind {
+        ExprKind::Block(b) => b
+            .final_expr
+            .as_ref()
+            .is_some_and(|f| yields_literals(f, out)),
+        ExprKind::If {
+            then_block,
+            else_branch: Some(other),
+            ..
+        } => {
+            then_block
+                .final_expr
+                .as_ref()
+                .is_some_and(|f| yields_literals(f, out))
+                && yields_literals(other, out)
+        }
+        _ => match seed_literal(e) {
+            Some(l) => {
+                out.push(l);
+                true
+            }
+            None => false,
+        },
+    }
+}
+
+/// A `fold` with a bare literal seed over a chain in which a `map` yields
+/// only unsuffixed literals (`v.iter().map(|x| 1).fold(0, f)`). Those
+/// literals have already taken the default by the time the fold is checked,
+/// so seeding the accumulator from the call's expected type would only
+/// move the refusal into the closure, where no edit mends it. Left
+/// unseeded, the fold is refused as a whole and [`fold_seed_literals`]
+/// names the seed and the map's literals, each with its suffix
+/// (B-2026-11-17-129, B-2026-11-18-90).
+///
+/// [`fold_seed_literals`]: super::TypeChecker::fold_seed_literals
+pub(super) fn fold_over_literal_map(e: &Expr) -> bool {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &e.kind
+    else {
+        return false;
+    };
+    if method != "fold" || args.len() != 2 || seed_literal(&args[0].value).is_none() {
+        return false;
+    }
+    let mut at = object.as_ref();
+    while let ExprKind::MethodCall {
+        object: inner,
+        method,
+        args: margs,
+        ..
+    } = &at.kind
+    {
+        if method == "map" && margs.len() == 1 {
+            if let ExprKind::Closure { body, .. } = &margs[0].value.kind {
+                if yields_literals(body, &mut Vec::new()) {
+                    return true;
+                }
+            }
+        }
+        at = inner;
+    }
+    false
+}
+
 /// The element types of a `Slice` parameter and the `Vec` or array argument
 /// viewed as it, through any references.
 fn slice_view_elements<'t>(param: &'t Type, arg: &'t Type) -> Option<(&'t Type, &'t Type)> {
@@ -2686,7 +2808,10 @@ impl<'a> super::TypeChecker<'a> {
         // An element that names no type of its own, a bare `collect()` or
         // an empty `[]`, takes the slot's too when no sibling names one:
         // `f([(0..n).map(g).collect()].to_vec())` (kata 2713).
-        let waits = items.iter().all(tail_waits_for_sibling);
+        // So does an empty `[]` inside a tuple or a `Some` / `Ok` / `Err`
+        // payload, whatever its siblings say: `[(1, [1, 2]), (2, [])]
+        // .to_vec()` into a `Vec[(i64, Vec[i64])]` (B-2026-11-21-49).
+        let waits = items.iter().all(tail_waits_for_sibling) || items.iter().any(holds_empty_list);
         if name != "Vec" || contains_type_var(elem) || !(mentions_str_view(elem) || waits) {
             return None;
         }
@@ -5551,6 +5676,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => false,
         };
+        let outer_method_return = self.pending_expected_method_return.take();
         // The enclosing function's own type parameters are as fixed as a
         // concrete type inside its body: `make()` checked against `-> T`
         // solves `make`'s parameter to that `T`.
@@ -5603,7 +5729,7 @@ impl<'a> super::TypeChecker<'a> {
                         Some((SpanKey::from_span(&call.span), targs[0].clone()));
                 }
             }
-            if self.library_methods_from_source && fixed {
+            if self.library_methods_from_source && fixed && !fold_over_literal_map(expr) {
                 self.pending_expected_method_return =
                     Some((SpanKey::from_span(&expr.span), expected.clone()));
             }
@@ -5611,7 +5737,14 @@ impl<'a> super::TypeChecker<'a> {
         let mut actual = self.infer_expr(expr);
         self.pending_expected_call_return = None;
         self.pending_expected_call_payload = None;
-        self.pending_expected_method_return = None;
+        // An enclosing method call still waiting for its own expectation
+        // keeps it: this check is of an argument inside that call's
+        // receiver chain (the `1` of `nums.into_iter().skip(1).fold(0, f)`),
+        // and clearing it left the `fold` seed with the default `i64` where
+        // the same fold with no adapter took the `i32` it is checked
+        // against (B-2026-11-18-90). The entry is keyed by its call's span,
+        // so no other call reads it.
+        self.pending_expected_method_return = outer_method_return;
         // A generic function item named as a value came back with fresh
         // parameters; the slot's `Fn` type solves them
         // (`let f: Fn(own Vec[T], i64) -> i64 = shout`, B-2026-11-07-2).
@@ -16331,43 +16464,7 @@ impl<'a> super::TypeChecker<'a> {
         if method != "fold" || args.len() != 2 {
             return None;
         }
-        /// The unsuffixed integer literal `e` is (`-1` included).
-        fn literal(e: &Expr) -> Option<(&Expr, i128)> {
-            match &e.kind {
-                ExprKind::Integer(v, None) => Some((e, *v)),
-                ExprKind::Unary { operand, .. } => match &operand.kind {
-                    ExprKind::Integer(v, None) => Some((operand.as_ref(), -*v)),
-                    _ => None,
-                },
-                _ => None,
-            }
-        }
-        /// The literals a closure body yields, when every value it can
-        /// yield is one (`1`, `if c { -1 } else { 0 }`).
-        fn yields<'e>(e: &'e Expr, out: &mut Vec<(&'e Expr, i128)>) -> bool {
-            match &e.kind {
-                ExprKind::Block(b) => b.final_expr.as_ref().is_some_and(|f| yields(f, out)),
-                ExprKind::If {
-                    then_block,
-                    else_branch: Some(other),
-                    ..
-                } => {
-                    then_block
-                        .final_expr
-                        .as_ref()
-                        .is_some_and(|f| yields(f, out))
-                        && yields(other, out)
-                }
-                _ => match literal(e) {
-                    Some(l) => {
-                        out.push(l);
-                        true
-                    }
-                    None => false,
-                },
-            }
-        }
-        let (seed, seed_value) = literal(&args[0].value)?;
+        let (seed, seed_value) = seed_literal(&args[0].value)?;
         let t = type_display(target);
         let (lo, hi) = Self::int_literal_range(target)?;
         let suffix = |e: &Expr| crate::resolver::TextEdit {
@@ -16388,7 +16485,7 @@ impl<'a> super::TypeChecker<'a> {
             if method == "map" && margs.len() == 1 {
                 if let ExprKind::Closure { body, .. } = &margs[0].value.kind {
                     let mut found = Vec::new();
-                    if yields(body, &mut found) {
+                    if yields_literals(body, &mut found) {
                         items.extend(found);
                     }
                 }
@@ -21348,13 +21445,19 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else if let Some(lead) = elements
                     .iter()
-                    .position(|e| !tail_waits_for_sibling(e))
-                    .filter(|_| elements.iter().any(tail_waits_for_sibling))
+                    .position(|e| !(tail_waits_for_sibling(e) || holds_empty_list(e)))
+                    .filter(|_| {
+                        elements
+                            .iter()
+                            .any(|e| tail_waits_for_sibling(e) || holds_empty_list(e))
+                    })
                 {
                     // An element that names no type of its own, a bare
                     // `collect()` or an empty `[]`, takes a sibling's, as a
                     // branch of an `if` does: `[(0..n).map(f).collect(),
                     // Vec.filled(n, 0)]` is a `Vec[Vec[i64]]` (kata 2099).
+                    // So does a tuple or a `Some(..)` holding an empty `[]`:
+                    // `[(1, [1, 2]), (2, [])]` (B-2026-11-21-49).
                     let elem = self.infer_expr(&elements[lead]);
                     for (i, e) in elements.iter().enumerate() {
                         if i != lead {

@@ -4460,8 +4460,19 @@ impl<'a> super::TypeChecker<'a> {
         // `*const T`, not `*const ref T`. The place's *value* is
         // the underlying T; ref/mut-ref are borrow modes, not
         // distinct address-space layers.
+        //
+        // An element, field or tuple part whose declared type is a
+        // reference (`xs[1]` of a `mut Slice[ref i32]`) is a slot that holds
+        // the reference: the pointer is to the slot, `*mut ref i32`, as the
+        // same line gives at `T = ref i32` in a generic function. Peeled, it
+        // was a `*mut i32` to what a shared reference refers to
+        // (B-2026-11-22-50).
+        let slot = matches!(
+            arg.value.kind,
+            ExprKind::Index { .. } | ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        );
         let pointee = match inner {
-            Type::Ref(inner) | Type::MutRef(inner) => *inner,
+            Type::Ref(inner) | Type::MutRef(inner) if !slot => *inner,
             other => other,
         };
 

@@ -989,6 +989,26 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   interpreter answered right. The key is lent for the call, and a key that
   dies before the map (a loop's `let key = i`) is no longer refused as kept
   by `get_mut` or `remove` (B-2026-11-23-3).
+- An empty `[]` inside a tuple or a `Some` / `Ok` / `Err` payload takes its
+  element type from a sibling element of the list it is in, or from the slot
+  through `.to_vec()`: `let xs: Vec[(i64, Vec[i64])] = [(1, [1, 2]), (2,
+  [])].to_vec();` and `let a = [(2, []), (1, [1, 2])];` check and run. With
+  neither (`let t = (2, []);`) it is reported where it is written, with the
+  `Vec.new()` fix a bare `let v = [];` has. All three stopped at the
+  internal "a type that failed to check is not lowered yet"
+  (B-2026-11-21-49).
+- `ptr.mut(place)` / `ptr.const(place)` of an element, field or tuple part
+  whose declared type is a reference point at the slot: `ptr.mut(xs[1])` on
+  a `mut Slice[ref i32]` is a `*mut ref i32`, as it is at `T = ref i32` in a
+  generic function. It was typed `*mut i32`, a pointer to what a shared
+  reference refers to (B-2026-11-22-50).
+- A `fold` with a bare literal seed takes the number type the call is
+  checked against through an adapter chain too:
+  `nums.into_iter().skip(1).fold(0, |a, b| a | b)` in an `i32` tail is an
+  `i32` fold, as it was with no `skip`. The check of an adapter's own
+  argument cleared the expectation, so the seed kept `i64` and the fold was
+  refused as a narrowing; the same holds for any library method whose result
+  type its expectation fixes (B-2026-11-18-90).
 - A shared reference satisfies `Copy`, as core-semantics §1.1 lists it: a
   `T: Copy` bound takes `ref String`, and a tuple or `Option` holding one,
   so `fn swap2[T: Copy](xs: mut Slice[T])` is called with a `Vec[ref

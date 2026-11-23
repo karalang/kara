@@ -7562,6 +7562,27 @@ impl<'a> TypeChecker<'a> {
         self.reported_uninferrable_empty_literal = true;
     }
 
+    /// [`Self::report_empty_list_literal`] for each empty `[]` inside the
+    /// tuples, `Some` / `Ok` / `Err` payloads and list elements of an
+    /// unannotated `let`'s value that no sibling gave an element type:
+    /// `let t = (2, []);`. It typed as `Vec[Error]` with nothing reported,
+    /// and MIR refused the program as "a type that failed to check is not
+    /// lowered yet" (B-2026-11-21-49).
+    pub(super) fn report_unsolved_nested_empty_lists(&mut self, value: &Expr) {
+        let mut found = Vec::new();
+        exprs::nested_empty_lists(value, &mut found);
+        for span in found {
+            let unsolved = match self.expr_types.get(&SpanKey::from_span(&span)) {
+                Some(Type::Named { args, .. }) => args.iter().any(|a| matches!(a, Type::Error)),
+                Some(Type::Array { element, .. }) => matches!(**element, Type::Error),
+                _ => false,
+            };
+            if unsolved {
+                self.report_empty_list_literal(&span);
+            }
+        }
+    }
+
     /// Default `_` arm body for per-type `infer_*_method` dispatch on arms
     /// whose typechecker enumeration has reached parity with the interpreter:
     /// **always** emit `NoMethodFound`, type-check the arguments, and return

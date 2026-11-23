@@ -75,19 +75,12 @@ fn a_mut_argument_fixes_a_literal_s_type() {
 
 #[test]
 fn a_fold_seed_left_at_i64_is_named_and_fixed() {
-    for (body, names_map) in [
-        ("v.iter().map(|x| 1).fold(0, |a, b| a.max(b))", true),
-        ("v.iter().map(|x| 1).fold(0, |a, b| (a + b).max(0))", true),
-        (
-            "v.iter().map(|x| 1).fold(0, |a, b| { let s = a + b; s.max(0) })",
-            true,
-        ),
-        (
-            "v.iter().map(|x| if *x > 1 { -1 } else if *x == 1 { 0 } else { 1 })\
-             .fold(0, |depth, step| (depth + step).max(0))",
-            true,
-        ),
-        ("v.iter().map(|x| *x).fold(0, |a, _| a.max(0))", false),
+    for body in [
+        "v.iter().map(|x| 1).fold(0, |a, b| a.max(b))",
+        "v.iter().map(|x| 1).fold(0, |a, b| (a + b).max(0))",
+        "v.iter().map(|x| 1).fold(0, |a, b| { let s = a + b; s.max(0) })",
+        "v.iter().map(|x| if *x > 1 { -1 } else if *x == 1 { 0 } else { 1 })\
+         .fold(0, |depth, step| (depth + step).max(0))",
     ] {
         let src = format!(
             "fn f(v: Vec[i64]) -> i32 {{\n    {body}\n}}\n\
@@ -95,11 +88,7 @@ fn a_fold_seed_left_at_i64_is_named_and_fixed() {
         );
         let es = errors(&src);
         assert_eq!(es.len(), 1, "{body}: {es:#?}");
-        let want = if names_map {
-            "the `fold` seed `0` and the literals the `map` yields kept the default 'i64'"
-        } else {
-            "the `fold` seed `0` kept the default 'i64'"
-        };
+        let want = "the `fold` seed `0` and the literals the `map` yields kept the default 'i64'";
         assert!(es[0].contains(want), "{body}: {}", es[0]);
         let out = karac_fix(&src);
         assert!(out.contains(".fold(0i32,"), "{body}: {out}");
@@ -109,6 +98,21 @@ fn a_fold_seed_left_at_i64_is_named_and_fixed() {
             errors(&out)
         );
     }
+}
+
+/// A fold that never combines an item into the accumulator, behind a `map`
+/// that yields no literal: its seed takes the `i32` the call is checked
+/// against, as the same fold with no `map` always did, so the program
+/// checks. It was refused with "the `fold` seed `0` kept the default 'i64'"
+/// and a `0i32` fix while a method call's argument cleared the call's
+/// expected type (flipped by B-2026-11-18-90).
+#[test]
+fn a_fold_seed_behind_a_map_takes_the_expected_type() {
+    let es = errors(
+        "fn f(v: Vec[i64]) -> i32 {\n    v.iter().map(|x| *x).fold(0, |a, _| a.max(0))\n}\n\
+         fn main() {\n    println(f\"{f([1, 2, 0])}\");\n}\n",
+    );
+    assert!(es.is_empty(), "{es:#?}");
 }
 
 #[test]
