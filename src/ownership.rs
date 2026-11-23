@@ -3199,7 +3199,17 @@ impl<'a> OwnershipChecker<'a> {
                             .is_some_and(|c| retyped.contains(&SpanKey::from_span(&c))))
             });
         }
-        let core_errors = self.core_move_errors();
+        let mut core_errors = self.core_move_errors();
+        // The same for a function result read out of a list of string
+        // literals that check offers `: Vec[Str]` for: its element is a
+        // `Str` once the fix lands, and `.clone()` would not be wanted
+        // (kata 2525).
+        if !retyped.is_empty() {
+            core_errors.retain(|e| {
+                e.kind != OwnershipErrorKind::MoveOutOfPlace
+                    || !retyped.contains(&SpanKey::from_span(&e.span))
+            });
+        }
         OwnershipCheckResult {
             param_modes: self.param_modes,
             declared_param_modes: self.declared_param_modes,

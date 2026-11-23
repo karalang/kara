@@ -20571,6 +20571,7 @@ impl<'a> super::TypeChecker<'a> {
                     // interpreter's ran over the LIVE field, both compiled
                     // backends' over the ZEROED one).
                     let ret_ty = if let Some(ref ret_ty) = self.current_return_type.clone() {
+                        self.note_str_list_result(expr);
                         self.check_expr(expr, ret_ty);
                         ret_ty.clone()
                     } else {

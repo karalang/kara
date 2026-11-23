@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 719 |
+| diagnostics | 720 |
 | false-positive | 359 |
 | missing-feature | 246 |
 | perf | 200 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 875 |
+| typecheck | 876 |
 | mir-llvm | 323 |
 | mir | 322 |
-| cli | 287 |
+| cli | 288 |
 | parser | 152 |
 | ownership | 134 |
 | runtime | 108 |
@@ -138,6 +138,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-65 | 2026-11-23 | ownership | medium | `v.binary_search(s)` with an owned `String` `s` moved it, so asking a second sorted list with the same `s` was refused as a use after move | — |
 | B-2026-11-23-66 | 2026-11-23 | typecheck | low | `["a", "b"].to_vec()` in a tuple slot typed `(Vec[Str], ..)` took `Vec[String]` and was refused, where a `let` of the `Vec` alone takes the slot's `Str` | — |
 | B-2026-11-23-67 | 2026-11-23 | typecheck+mir | medium | `let mut (at, n) = (i, 0)` with `i` an item of `v.iter()` (a `ref i64`) built invalid MIR, where `let mut at = i` reads the lent `Copy` value | — |
+| B-2026-11-23-68 | 2026-11-23 | typecheck+cli | medium | A `-> Str` function returning an element of its own `let names = [".."]` was offered `.as_str()`, which `karac fix` applied and check then refused (E0509); the fix is the binding's `: Vec[Str]` | — |
 
 ### Relocated
 

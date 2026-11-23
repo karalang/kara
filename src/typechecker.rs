@@ -4703,6 +4703,13 @@ pub struct TypeChecker<'a> {
     pub(super) str_list_lets: FxHashMap<String, Span>,
     /// The spans of identifiers that read a `str_list_lets` binding.
     pub(super) str_list_let_uses: FxHashMap<SpanKey, String>,
+    /// A function's result (its tail, or a `return`'s value) whose
+    /// expression starts at a list of string literals: the name of the
+    /// `str_list_lets` binding it reads (`names[i]`), or `None` for a
+    /// literal written in place (`[("a", 1)].iter()..`). A `Str` view of
+    /// such a list cannot outlive the function, so the `.as_str()` fix is
+    /// not offered there (kata 2525).
+    pub(super) str_list_results: FxHashMap<SpanKey, Option<String>>,
     /// The `Peekable[I]` writes already refused (a signature is lowered
     /// more than once).
     pub(super) peekable_arity_reported: FxHashSet<SpanKey>,
@@ -5319,6 +5326,7 @@ impl<'a> TypeChecker<'a> {
             append_is_push: FxHashSet::default(),
             str_list_lets: FxHashMap::default(),
             str_list_let_uses: FxHashMap::default(),
+            str_list_results: FxHashMap::default(),
             peekable_arity_reported: FxHashSet::default(),
             array_arity_reported: FxHashSet::default(),
             str_retyped_uses: FxHashSet::default(),
@@ -8783,6 +8791,34 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Note a function result that reads a list of string literals: the
+    /// `str_list_results` entry for its span.
+    pub(super) fn note_str_list_result(&mut self, result: &Expr) {
+        let mut root = result;
+        while let ExprKind::MethodCall { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. } = &root.kind
+        {
+            root = object;
+        }
+        let str_lit = |e: &Expr| matches!(e.kind, ExprKind::StringLit(_));
+        let holds_str_lit = |e: &Expr| {
+            str_lit(e) || matches!(&e.kind, ExprKind::Tuple(items) if items.iter().any(str_lit))
+        };
+        let entry = match &root.kind {
+            ExprKind::Identifier(name) if !std::ptr::eq(root, result) => Some(name.clone()),
+            ExprKind::ArrayLiteral(items)
+                if !items.is_empty() && items.iter().all(holds_str_lit) =>
+            {
+                None
+            }
+            _ => return,
+        };
+        self.str_list_results
+            .insert(SpanKey::from_span(&result.span), entry);
+    }
+
     /// `name = value`: another value may have another length, so `: Array`
     /// alone no longer fixes the binding, unless the value is an `Array`
     /// itself, whose type carries its length (`result = multiply(result,
@@ -11216,6 +11252,62 @@ impl<'a> TypeChecker<'a> {
             && string_found.is_some()
             && !self.loose_expr_spans.contains(&SpanKey::from_span(&span))
         {
+            // A function's result read out of a list of string literals:
+            // a view of the list's `String` would outlive it. A binding
+            // takes `: Vec[Str]`, which keeps its elements views; a list
+            // written in place has no `let` to annotate (kata 2525).
+            if let Some(root) = self
+                .str_list_results
+                .get(&SpanKey::from_span(&span))
+                .cloned()
+            {
+                let found_name = string_found.unwrap_or_default();
+                let in_place = root.is_none();
+                let binding = root.and_then(|n| self.str_list_lets.get(&n).map(|at| (n, *at)));
+                match binding {
+                    Some((name, at)) => {
+                        self.str_retyped_uses.insert(SpanKey::from_span(&span));
+                        self.type_error_with_fix_it(
+                            format!(
+                                "expected 'Str', found '{found_name}': the string literals `{name}` is \
+                                 built from took `String`, since nothing at its `let` asked for \
+                                 views, and a `Str` view of one cannot outlive this function; \
+                                 declare it `{name}: Vec[Str]` (bound at {}:{})",
+                                at.line, at.column
+                            ),
+                            span,
+                            TypeErrorKind::TypeMismatch,
+                            FixIt {
+                                span: Span {
+                                    line: at.line,
+                                    column: at.column + at.length,
+                                    offset: at.offset + at.length,
+                                    length: 0,
+                                },
+                                replacement: ": Vec[Str]".to_string(),
+                            },
+                        );
+                        return false;
+                    }
+                    None if in_place => {
+                        self.type_error_with_types(
+                            format!(
+                                "expected 'Str', found '{found_name}': the string literals of this list \
+                                 took `String`, since nothing asked for views where it is \
+                                 written, and a `Str` view of one cannot outlive this function. \
+                                 Bind the list with its element type first (`let table: \
+                                 Vec[(Str, ..)] = [..]`), or return a `String`"
+                            ),
+                            span,
+                            TypeErrorKind::TypeMismatch,
+                            expected,
+                            found,
+                        );
+                        return false;
+                    }
+                    None => {}
+                }
+            }
             self.type_error_with_fix_it(
                 format!(
                     "expected 'Str', found '{}': a `String` is passed as a `Str` only at a \

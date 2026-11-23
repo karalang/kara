@@ -3370,6 +3370,9 @@ impl<'a> super::TypeChecker<'a> {
             if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
                 self.check_core_fresh_ref_return(f);
             }
+            if let Some(tail) = &f.body.final_expr {
+                self.note_str_list_result(tail);
+            }
             self.check_block_against(&f.body, &return_type);
         } else {
             // B-2026-08-16-6 — a tail-less body must still satisfy the
