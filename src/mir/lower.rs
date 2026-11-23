@@ -9038,6 +9038,66 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The index of `object[index]`: a `Map` key that is not `Copy` is
     /// borrowed, anything else is a value.
+    /// The key type of `recv` when `method` looks a key up in it, the key
+    /// type is a shared reference, and the key given is of the type it
+    /// refers to: `m.get(k)` with `k: i64` on a `Map[ref i64, V]`.
+    fn ref_key_of(&mut self, recv: Ty, method: &str, a: &'a Expr) -> R<Option<Ty>> {
+        let at = self.expr_ty(a)?;
+        // A number literal is typed at its default width, which need not
+        // be the key's: `m[2]` on a `SortedMap[ref i32, V]`.
+        let literal = matches!(a.kind, ExprKind::Integer(..) | ExprKind::Float(..));
+        Ok(self.ref_key_ty(recv, method, at, literal))
+    }
+
+    fn ref_key_ty(&self, recv: Ty, method: &str, at: Ty, literal: bool) -> Option<Ty> {
+        let tcx = self.tys().tcx();
+        let HK::Intrinsic { kind, args } = tcx.kind(recv) else {
+            return None;
+        };
+        let looks_up = match kind {
+            IntrinsicKind::Map | IntrinsicKind::SortedMap => matches!(
+                method,
+                "get" | "get_or" | "get_mut" | "contains_key" | "remove" | "index" | "index_mut"
+            ),
+            IntrinsicKind::Set | IntrinsicKind::SortedSet => {
+                matches!(method, "contains" | "remove")
+            }
+            _ => false,
+        };
+        if !looks_up {
+            return None;
+        }
+        let kt = *tcx.list(args).first()?;
+        match tcx.kind(kt) {
+            HK::Ref(inner) if inner == at => Some(kt),
+            HK::Ref(inner)
+                if literal
+                    && matches!(tcx.kind(inner), HK::Int(_) | HK::UInt(_) | HK::Float(_)) =>
+            {
+                Some(kt)
+            }
+            _ => None,
+        }
+    }
+
+    /// `a` lent as a `kt` (a `ref` to `a`'s type) for the length of the
+    /// call: a literal is a reference to static data, a place is borrowed
+    /// where it is, and any other value is borrowed from a temporary.
+    fn lent_key(&mut self, a: &'a Expr, kt: Ty) -> R<Operand> {
+        if let Some(op) = self.literal_ref(a, Some(kt))? {
+            return Ok(op);
+        }
+        let p = if self.is_place(a) {
+            self.expr_place(a, false)?
+        } else {
+            let at = self.expr_ty(a)?;
+            Place::local(self.temp_of(a, at)?)
+        };
+        let r = self.temp(kt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+        Ok(Operand::Move(Place::local(r)))
+    }
+
     fn index_operand(&mut self, object: &'a Expr, index: &'a Expr) -> R<Operand> {
         if let Some(op) = self.pre_indices.remove(&index.id) {
             return Ok(op);
@@ -9048,10 +9108,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if let HK::Intrinsic {
             kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
-            ..
+            args,
         } = self.tys().tcx().kind(t)
         {
             let kt = self.expr_ty(index)?;
+            if let Some(rk) = self.ref_key_of(t, "index", index)? {
+                return self.lent_key(index, rk);
+            }
+            // A key that is already the map's reference key type (`self[key]`
+            // in the library's `get_mut` at `K = ref i64`) goes as it is: read
+            // through as a position, the `i64` took the reference's place
+            // (B-2026-11-23-3).
+            let key_t = self.tys().tcx().list(args).first().copied();
+            if key_t == Some(kt) && matches!(self.tys().tcx().kind(kt), HK::Ref(_)) {
+                return self.expr_operand(index);
+            }
             if !self.is_copy(kt) {
                 return self.lib_arg(index, true);
             }
@@ -23474,6 +23545,29 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         match borrow {
             Some(kind) if !arg_is_ref => {
+                // A `T` given where a borrowed `ref T` is read (the key of
+                // the library's `m.get_mut(k)` on a `Map[ref i64, V]`,
+                // whose parameter is `ref K`): lent once to make the
+                // `ref T` the collection compares, and that borrowed for
+                // the call. Borrowed once, the `T` itself was read as the
+                // reference (B-2026-11-23-3).
+                if kind == BorrowKind::Shared {
+                    let inner = match self.tys().tcx().kind(pt) {
+                        HK::Ref(r) => match self.tys().tcx().kind(r) {
+                            HK::Ref(t) if t == at => Some(r),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(rt) = inner {
+                        let op = self.lent_key(a, rt)?;
+                        let l = self.temp(rt);
+                        self.assign(l, Rvalue::Use(op));
+                        let r = self.temp(pt);
+                        self.assign(r, Rvalue::Ref(BorrowKind::Shared, Place::local(l)));
+                        return Ok(Operand::Move(Place::local(r)));
+                    }
+                }
                 let mut p = self.expr_place(a, kind == BorrowKind::Mut)?;
                 if kind == BorrowKind::Shared && p.projection.is_empty() {
                     // A `for` element copied out of the collection lends
@@ -30824,6 +30918,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(r, Rvalue::Ref(BorrowKind::Mut, p));
                         rest.push(Operand::Move(Place::local(r)));
                         continue;
+                    }
+                    // The key of a lookup on a collection whose keys are
+                    // references (`m.get(k)` on a `Map[ref i64, V]`) is
+                    // lent: the native reads a `ref i64`, and the `i64`
+                    // itself went in its place (B-2026-11-23-3).
+                    if !stores && i == 0 {
+                        if let Some(kt) = self.ref_key_of(base, method, &a.value)? {
+                            rest.push(self.lent_key(&a.value, kt)?);
+                            continue;
+                        }
                     }
                     let callable = matches!(self.tys().tcx().kind(at), HK::Closure { .. });
                     let by_ref = !stores && !callable && !self.is_copy(at);

@@ -1328,6 +1328,28 @@ fn source_ty(tys: &TyInterner, t: Ty) -> String {
     out
 }
 
+/// Whether `name` is a keyed collection's lookup, which keeps none of its
+/// arguments: `Map[K, V].remove`, `Set[T].contains`, and so on. The caller
+/// checks that the receiver is the library's collection.
+fn key_lookup(name: &str) -> bool {
+    let Some((recv, method)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let map = recv.starts_with("Map[") || recv.starts_with("SortedMap[");
+    let set = recv.starts_with("Set[") || recv.starts_with("SortedSet[");
+    (map && matches!(
+        method,
+        "get"
+            | "get_or"
+            | "get_mut"
+            | "get_mut_by_view"
+            | "contains_key"
+            | "remove"
+            | "index"
+            | "index_mut"
+    )) || (set && matches!(method, "contains" | "remove"))
+}
+
 /// Whether `l` is a user binding holding a `mut ref` that the body only
 /// reads through: it is never written through, reborrowed mutably, or
 /// passed on whole (where the `mut ref` itself could reach a write), so a
@@ -2314,9 +2336,29 @@ impl Cx<'_> {
             _ => ResultBorrows::Args,
         };
         // Each whole-local `mut ref` argument may store the other operands'
-        // borrows into its pointee (§9.5).
+        // borrows into its pointee (§9.5), except where the callee only
+        // looks a key up: `m.remove(k)` or `m.get_mut(k)` on a
+        // `Map[ref i64, V]` lends `k` for the call, and the map keeps none
+        // of it (B-2026-11-23-3).
         let before = o.clone();
-        for (i, a) in args.iter().enumerate() {
+        let looks_up = matches!(
+            func,
+            Operand::Const(Const { kind: ConstKind::FnDef(c), .. }) if key_lookup(&c.name)
+        ) && args.first().and_then(|a| a.place()).is_some_and(|p| {
+            place_ty(self.body, self.tys, p).is_ok_and(|pt| match self.tys.kind(pt.ty) {
+                TyKind::MutRef(t) | TyKind::Ref(t) => matches!(
+                    self.tys.kind(t),
+                    TyKind::Intrinsic(
+                        IntrinsicTy::Map(..)
+                            | IntrinsicTy::SortedMap(..)
+                            | IntrinsicTy::Set(_)
+                            | IntrinsicTy::SortedSet(_)
+                    )
+                ),
+                _ => false,
+            })
+        });
+        for (i, a) in args.iter().enumerate().filter(|_| !looks_up) {
             let Some(p) = a.place() else { continue };
             let Ok(pt) = place_ty(self.body, self.tys, p) else {
                 continue;

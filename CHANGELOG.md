@@ -982,6 +982,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   found to perform `panics` in a file with a derive and not without, and
   three corpus apps reported `receives(Channel)` with no channel in them
   (B-2026-11-22-40).
+- A lookup on a `Map`, `SortedMap`, `Set` or `SortedSet` whose keys are
+  references (`m[1]`, `m.get(k)`, `get_or`, `get_mut`, `contains_key`,
+  `remove`, `s.contains(k)` on a `Map[ref i64, V]` or a `Set[ref i64]`)
+  crashed the compiled program, reading the key's value as an address; the
+  interpreter answered right. The key is lent for the call, and a key that
+  dies before the map (a loop's `let key = i`) is no longer refused as kept
+  by `get_mut` or `remove` (B-2026-11-23-3).
 - `karac check` in a package runs under the manifest's `[package].profile`
   and `[profile]` table, as `karac build` and `karac run` do: it was checked
   under the default profile, so a profile-gated error (`v.push(1)` under
