@@ -204,6 +204,11 @@ const CORPUS: &[&str] = &[
     "\"\"\"same line\"\"\" y",
     "\"\"\"\n    a\n  b\n    \"\"\" z",
     "f\"\"\"\n  v={v} {{lit}}\n  \"\"\"",
+    // A CRLF file: the `\r` belongs to the line break, on the opening line,
+    // in the body (a blank line too) and before the closing line.
+    "\"\"\"\r\n    crlf\r\n\r\n      two\r\n    \"\"\" + x",
+    "f\"\"\"\r\n  v={v}\r\n  w\r\n  \"\"\"",
+    "\"\"\"\r\n\"\"\" \"\"\"\n  lone \r cr\n  \"\"\"",
     // Raw strings and f-string brace rules.
     r###"r"a\nb" r#"say "hi""# r##"x"#y"##"###,
     "r\"open",

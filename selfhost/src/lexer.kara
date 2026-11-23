@@ -794,7 +794,10 @@ impl Lexer {
             self.skip_to(lay.resume);
             return self.make_spanned(Token.Error(lay.msg));
         }
-        // The newline after the opening quotes.
+        // The newline after the opening quotes (`\r\n` in a CRLF file).
+        if self.peek() == b'\r' {
+            self.advance();
+        }
         self.line = self.line + 1;
         self.column = 0;
         self.advance();
@@ -808,7 +811,12 @@ impl Lexer {
         let mut failed = "".to_string();
         let mut run_start = self.current;
         while self.current < lay.body_end {
-            if self.peek() == b'\n' {
+            if self.at_crlf() {
+                // The `\r` of a CRLF line break is not part of the value.
+                value.push_str(self.src.substring(run_start, self.current));
+                self.advance();
+                run_start = self.current;
+            } else if self.peek() == b'\n' {
                 value.push_str(self.src.substring(run_start, self.current));
                 value.push('\n');
                 self.line = self.line + 1;
@@ -899,8 +907,10 @@ impl Lexer {
     // Where a `"""` body ends and how deep its closing line is indented,
     // without moving the cursor (just past the opening quotes).
     fn triple_layout(ref self) -> TripleLayout {
-        let open = self.current;
         let eof = self.bytes.len();
+        // A CRLF file ends the opening line with `\r\n`; the `\r` belongs to
+        // the line break, here and on every line of the body.
+        let open = if self.at_crlf() { self.current + 1 } else { self.current };
         if open >= eof or self.bytes[open] != b'\n' {
             return layout_err("a `\"\"\"` string starts on the line after its opening quotes; put a line break right after `\"\"\"`".to_string(), self.line_end_from(open));
         }
@@ -925,13 +935,19 @@ impl Lexer {
         while line < close_line {
             let end = self.line_end_from(line);
             let ws = self.lead_ws_from(line);
-            let blank = line + ws == end;
+            let blank = line + ws == end or (line + ws + 1 == end and self.bytes[line + ws] == b'\r');
             if not blank and not self.same_indent(line, close_line, indent, end) {
                 return layout_err("a line of a `\"\"\"` string is indented less than its closing `\"\"\"`; indent it at least as far as the closing quotes".to_string(), close_end);
             }
             line = end + 1;
         }
-        let body_end = if close_line == body_start { body_start } else { close_line - 1 };
+        let body_end = if close_line == body_start {
+            body_start
+        } else if close_line >= body_start + 2 and self.bytes[close_line - 2] == b'\r' {
+            close_line - 2
+        } else {
+            close_line - 1
+        };
         TripleLayout { ok: true, msg: "".to_string(), resume: 0, body_end: body_end, indent: indent, close_end: close_end }
     }
 
@@ -971,6 +987,11 @@ impl Lexer {
             k = k + 1;
         }
         true
+    }
+
+    // At the `\r` of a `\r\n` line break.
+    fn at_crlf(ref self) -> bool {
+        self.current + 1 < self.bytes.len() and self.bytes[self.current] == b'\r' and self.bytes[self.current + 1] == b'\n'
     }
 
     // Skip up to `indent` spaces/tabs at the start of a `"""` line.
@@ -1527,7 +1548,11 @@ impl Lexer {
             if done {
                 break;
             }
-            if triple and self.peek() == b'\n' {
+            if triple and self.at_crlf() {
+                text.push_str(self.src.substring(run_start, self.current));
+                self.advance();
+                run_start = self.current;
+            } else if triple and self.peek() == b'\n' {
                 text.push_str(self.src.substring(run_start, self.current));
                 text.push('\n');
                 self.line = self.line + 1;
