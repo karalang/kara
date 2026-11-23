@@ -14,10 +14,6 @@ fn karac(dir: &std::path::Path, args: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(dir)
         .args(args)
-        // The f16 lint (E0311/W0311) judges the target CPU, and an Apple
-        // Silicon host runs f16 natively, so the entries pin a CPU that does
-        // not (their meta.toml `env`, for the corpus runner, says the same).
-        .env("KARAC_TARGET_CPU", "generic")
         .stdin(Stdio::null())
         .output()
         .expect("karac");
@@ -36,7 +32,23 @@ fn diagnostics_corpus_programs_produce_their_code_and_are_explained() {
     let mut bad = Vec::new();
     for dir in &dirs {
         let code = dir.file_name().unwrap().to_str().unwrap().to_uppercase();
-        let json = karac(dir, &["check", "--output=json", "source.kara"]);
+        // The f16 lint judges the target's CPU, and an Apple Silicon host
+        // runs f16 natively (nothing to report), so its two pins are checked
+        // for a target whose baseline is the same on every host. `check`
+        // reads no CPU override: `KARAC_TARGET_CPU` is `build`'s.
+        let json = if matches!(code.as_str(), "E0311" | "W0311") {
+            karac(
+                dir,
+                &[
+                    "check",
+                    "--targets=wasm_wasi",
+                    "--output=json",
+                    "source.kara",
+                ],
+            )
+        } else {
+            karac(dir, &["check", "--output=json", "source.kara"])
+        };
         // A numeric code may be the `parent_code` of a more specific one.
         if !json.contains(&format!("\"code\":\"{code}\""))
             && !json.contains(&format!("\"parent_code\":\"{code}\""))
