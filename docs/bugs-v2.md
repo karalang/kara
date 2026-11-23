@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 711 |
-| false-positive | 354 |
+| diagnostics | 712 |
+| false-positive | 355 |
 | missing-feature | 245 |
-| perf | 199 |
+| perf | 200 |
 | other | 147 |
-| soundness | 120 |
-| miscompile | 103 |
+| soundness | 123 |
+| miscompile | 104 |
 | crash | 64 |
 | run-vs-build | 62 |
-| codegen-gap | 44 |
+| codegen-gap | 45 |
 | use-after-free | 13 |
 | leak | 5 |
 | double-free | 2 |
@@ -78,13 +78,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 866 |
 | mir-llvm | 321 |
-| mir | 317 |
-| cli | 278 |
+| mir | 319 |
+| cli | 281 |
 | parser | 152 |
 | ownership | 132 |
 | runtime | 107 |
 | interp | 98 |
-| effect | 54 |
+| effect | 59 |
 | other | 51 |
 | resolver | 50 |
 | codegen | 22 |
@@ -132,12 +132,18 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
 | B-2026-11-22-24 | 2026-11-22 | mir+effect | medium | A `par` branch conflict (E0418) in a function nothing calls is not reported: `karac check` of a file with no `main`, or of a library's `pub fn`, accepts `par { append_log(mut log), read_log_count(log) }` | — |
-| B-2026-11-22-40 | 2026-11-22 | cli | low | `karac check` of a program with a comptime-backed derive still takes ~0.6 s on a 3-line file (release) against ~0.07 s without it: the library's bodies are type-checked three times (check's first pass, the comptime evaluation's retype, and the re-check after splicing) | — |
 | B-2026-11-22-50 | 2026-11-22 | typecheck | low | `ptr.mut(xs[i])` on a `mut Slice[ref i32]` (or a `Vec[ref T]`) is typed `*mut i32`, a pointer to what the element refers to, outside a generic function: `let p: *mut ref i32 = ptr.mut(xs[1]);` is E0200 "expected '*mut ref i32', found '*mut i32'", while the same line as `*mut T` at `T = ref i32` checks | — |
 | B-2026-11-22-51 | 2026-11-22 | typecheck | low | A `T: Copy` bound is not satisfied by a shared reference: `fn swap2[T: Copy](xs: mut Slice[T])` called with a `Vec[ref String]` is E0200 "`ref String` does not implement `Copy`", though core-semantics §1.1 lists `ref T` as `Copy` | — |
 | B-2026-11-23-1 | 2026-11-23 | typecheck+mir | medium | `h.r = b` and `t.0 = b`, an owned `String` assigned to a `ref String` field or tuple part, pass `karac check` and stop every backend with "invalid MIR: assigning String to _3.0 of type ref String"; `h.r = ref b` runs | — |
 | B-2026-11-23-2 | 2026-11-23 | typecheck+cli | low | Four diagnostics whose help names one edit still carry no fix: E0113 (drop `as F` from a library import and rename the alias's uses), E0515's `Some(place)` form (bind `let r = ref <place>;` first, return `Some(r)`), E_TOOLCHAIN_INVALID_VERSION_TYPE (quote the manifest scalar) and E_TEST_OUTSIDE_TEST_FILE (move the test to a test file) | — |
 | B-2026-11-23-3 | 2026-11-23 | mir+mir-llvm | high | A keyed lookup on a `Map`, `SortedMap`, `Set` or `SortedSet` of `ref i64` (`m[1]`, `m.get(k)`, `contains_key`, `remove`, `get_or`, `s.contains(k)`) passes the `i64` key where the native reads a reference: it checks clean, prints the right answer on the interpreter, and segfaults when compiled | — |
+| B-2026-11-23-5 | 2026-11-23 | effect | medium | A built-in type's method is charged every trait DEFAULT method of the same name, whether or not the type implements the trait: `s.find(" ")` on a `String` takes the effects of any trait's default `find` (false `#[no_effect]` and E0400 errors); callees identified by name, against core-semantics.md §12 default 4 | — |
+| B-2026-11-23-6 | 2026-11-23 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 library bodies to run 33 | — |
+| B-2026-11-23-7 | 2026-11-23 | effect | high | UNDER-REPORT: when two impls inherit one trait default method, the effect pass charges every impl's copy the LAST impl's callees: `Loud.first_big` (default body calls `self.step()`) is charged `Quiet.step`, so a program that writes Stderr reports no `writes(Stderr)`; swapping the two impl blocks changes the answer | — |
+| B-2026-11-23-8 | 2026-11-23 | mir | high | MISCOMPILE: in a trait default body two impls inherit, a method call that leaves out a defaulted argument takes the LAST impl's default value in every copy: `self.inner().go()` prints 201 for the impl whose `go` defaults `k = 10` (expected 11); swapping the impl blocks prints 11 for both | — |
+| B-2026-11-23-9 | 2026-11-23 | effect+cli | low | The order of a function's effects (`program_effects`, the lists inside E0400 messages) and of the effect checker's diagnostics follows the checker's hash tables: one run to the next it is the same, but an unrelated compiler change reorders it (`receives(Channel), sends(Channel)` became `sends(Channel), receives(Channel)`; E0400 errors at lines 32 17 28 24 20 became 24 20 32 17 28) | — |
+| B-2026-11-23-10 | 2026-11-23 | effect | high | UNDER-REPORT: a program's operator impl reached through `==` / `!=`, a compound assignment (`+=`, `-=`, `*=`), unary `-` or indexing `a[i]` is not charged its effects: `a == b` with an `impl PartialEq` whose `eq` writes Stderr reports no `writes(Stderr)`, while `a.eq(b)`, `a + b` and `a < b` are charged | — |
+| B-2026-11-23-11 | 2026-11-23 | mir | medium | A trait default body that declares `let x: T;` and assigns it later is refused once two impls of the generic trait inherit it: error[E0516] 'the capture of `x` is not lowered yet'; one impl alone builds and runs | — |
 
 ### Relocated
 
@@ -2171,12 +2177,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-21 | other | medium | 157 documentation blocks (87 in design.md, 70 in the library docs, book and examples) were checked only for the names they use: a block relying on a… | 28032737f2 |
 | B-2026-11-22-22 | typecheck | medium | `.raw()` on a borrowed distinct type over a raw pointer gave `ref *mut T`, not the pointer: `ptr.is_null(self.raw())` in a `Drop` for `distinct type… | 24e4e000b4 |
 | B-2026-11-22-23 | typecheck | low | A `break` whose value type disagrees with an earlier `break` of the same loop was reported at the `loop`, not at the `break` carrying the wrong type | 24e4e000b4 |
+| B-2026-11-22-40 | cli | low | `karac check` of a program with a comptime-backed derive still takes ~0.6 s on a 3-line file (release) against ~0.07 s without it: the library's bodi… | e879cf43e3 |
 | B-2026-11-22-45 | mir | medium | An https:// fetch refused for a certificate failure names a Rust type, not the reason: `invalid peer certificate: UnknownIssuer`, `BadSignature`, `Ot… | dd8d028f22 |
 | B-2026-11-22-46 | mir | medium | KARAC_HTTP_EXTRA_CA naming an empty file, or one holding only a private key, is accepted in silence: no extra root is trusted and every fetch to the… | dd8d028f22 |
 | B-2026-11-22-47 | mir+typecheck | high | A temporary stored into a reference slot by `m[k] = temp`, `m.entry(k).or_insert(temp)`, `Option[ref T].replace(temp)` or `Vec[ref T].extend(owned so… | d09b11338c |
 | B-2026-11-22-48 | mir | medium | `Option.take()` and `Option.replace(v)` borrow their receiver shared in MIR, so both run while a borrow of the Option's value is live and `karac chec… | d09b11338c |
 | B-2026-11-22-49 | ownership+typecheck | medium | An owned local or an indexed place stored into a reference slot is read as moved by `karac check`, except by `push`, Vec `insert`, a deque's pushes a… | 6d4fe390fa |
 | B-2026-11-22-52 | typecheck+mir | low | NEEDS A RULING: for `x` of `for x in nums.iter()` over `Copy` elements, `let start = x; q.push(start)` into a queue of `ref i32` lends `nums` and is… | 82a5e962f0 |
+| B-2026-11-23-4 | effect+cli | medium | A comptime-backed `#[derive]` anywhere in a program changes the effects `karac check` reports for the rest of it: a package module's `pub fn` that ca… | e879cf43e3 |
 
 </details>
 
