@@ -14,6 +14,13 @@
 //! memory: the first two moved the value into the reference's slot, the
 //! third lent its receiver shared, and the last consumed the source whose
 //! items the collection referred to (B-2026-11-22-2's remainders).
+//!
+//! The item of `for x in nums.iter()` over `Copy` elements is the reference
+//! into `nums` wherever such a slot wants one (ruled 2026-11-23,
+//! B-2026-11-22-52): `q.push(x)` lent the loop's own copy of the element,
+//! which the queue outlives, and was E0516, while `let start = x;
+//! q.push(start)` lent `nums`; `best = x` into a `ref` local stopped the
+//! build with invalid MIR.
 
 mod common;
 
@@ -151,6 +158,119 @@ fn a_priority_queue_of_references_sifts_its_slots() {
          }\n",
         "1 4\n2\n4\n5\n9\n",
     );
+}
+
+#[test]
+fn a_for_item_is_the_reference_where_a_slot_holds_one() {
+    runs_everywhere(
+        "for_item_stores",
+        "struct H { r: ref i32 }\n\
+         fn keep(v: mut ref Vec[ref i32], x: ref i32) { v.push(x); }\n\
+         fn main() {\n\
+         let nums: Vec[i32] = [5, 1, 4, 9, 2];\n\
+         let mut q: PriorityQueue[ref i32] = PriorityQueue.new();\n\
+         let mut v: Vec[ref i32] = Vec.new();\n\
+         let mut d: VecDeque[ref i32] = VecDeque.new();\n\
+         let mut s: Set[ref i32] = Set.new();\n\
+         let mut m: Map[ref i32, i64] = Map.new();\n\
+         let mut at: Map[i64, ref i32] = Map.new();\n\
+         let mut hs: Vec[H] = Vec.new();\n\
+         let mut ps: Vec[(ref i32, i64)] = Vec.new();\n\
+         let mut last: Option[ref i32] = None;\n\
+         let mut o: Option[ref i32] = None;\n\
+         for x in nums.iter() {\n\
+         q.push(x);\n\
+         v.push(x);\n\
+         d.push_front(x);\n\
+         s.insert(x);\n\
+         m.insert(x, 1);\n\
+         *m.entry(x).or_insert(0) += 1;\n\
+         hs.push(H { r: x });\n\
+         ps.push((x, 1));\n\
+         last = Some(x);\n\
+         let _ = o.replace(x);\n\
+         keep(mut v, x);\n\
+         }\n\
+         for (i, x) in nums.iter().enumerate() {\n\
+         at.insert(i, x);\n\
+         at[i + 10] = x;\n\
+         at.entry(i + 20).or_insert(x);\n\
+         }\n\
+         let mut best: ref i32 = ref nums[0];\n\
+         let mut h = H { r: ref nums[0] };\n\
+         let mut t: (ref i32, i64) = (ref nums[0], 0);\n\
+         for x in nums.iter() {\n\
+         if x < best { best = x; }\n\
+         if x > h.r { h.r = x; }\n\
+         if x < t.0 { t.0 = x; }\n\
+         }\n\
+         println(f\"{q.pop().unwrap()} {v[0]} {v[9]} {d[0]} {s.len()} {m.len()}\");\n\
+         println(f\"{at[1]} {at[14]} {at[22]} {hs[3].r} {ps[2].0}\");\n\
+         println(f\"{last.unwrap()} {o.unwrap()} {best} {h.r} {t.0} {nums.len()}\");\n\
+         }\n",
+        "1 5 2 2 5 5\n1 2 4 9 4\n2 2 1 9 1 5\n",
+    );
+}
+
+#[test]
+fn a_for_item_reference_keeps_its_collection_borrowed() {
+    for (name, src, needle) in [
+        (
+            "for_item_lender_pushed",
+            "fn main() {\n\
+             let mut nums: Vec[i64] = [1, 1, 2];\n\
+             let mut count: Map[ref i64, i64] = Map.new();\n\
+             for x in nums.iter() {\n\
+             *count.entry(x).or_insert(0) += 1;\n\
+             }\n\
+             nums.push(3);\n\
+             println(f\"{count.len()}\");\n\
+             }\n",
+            "cannot mutably borrow `nums` while `count` still holds a borrow of it",
+        ),
+        (
+            "for_item_lender_dropped",
+            "fn main() {\n\
+             let mut q: PriorityQueue[ref i32] = PriorityQueue.new();\n\
+             {\n\
+             let nums: Vec[i32] = [5, 1, 4];\n\
+             for x in nums.iter() {\n\
+             q.push(x);\n\
+             }\n\
+             }\n\
+             println(f\"{q.len()}\");\n\
+             }\n",
+            "cannot drop `nums` while `q` still holds a borrow of it",
+        ),
+        (
+            "for_item_lender_written",
+            "fn main() {\n\
+             let mut nums: Vec[i32] = [5, 1, 4];\n\
+             let mut q: Vec[ref i32] = Vec.new();\n\
+             for x in nums.iter() {\n\
+             q.push(x);\n\
+             }\n\
+             nums[0] = 9;\n\
+             println(f\"{q[0]}\");\n\
+             }\n",
+            "cannot mutably borrow `nums` while `q` still holds a borrow of it",
+        ),
+        (
+            "for_item_lender_moved",
+            "fn main() {\n\
+             let nums: Vec[i32] = [5, 1, 4];\n\
+             let mut best: Option[ref i32] = None;\n\
+             for x in nums.iter() {\n\
+             best = Some(x);\n\
+             }\n\
+             let moved = nums;\n\
+             println(f\"{best.unwrap()} {moved.len()}\");\n\
+             }\n",
+            "cannot move `nums` while `best` still holds a borrow of it",
+        ),
+    ] {
+        refused_by_borrowck(name, src, &["E0516", needle]);
+    }
 }
 
 #[test]

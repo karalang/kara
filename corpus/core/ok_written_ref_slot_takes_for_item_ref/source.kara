@@ -1,0 +1,22 @@
+// core-semantics §4.6: the item of `for x in nums.iter()` is a `ref` into
+// `nums`. Where a WRITTEN `ref` slot wants one (a `Map[ref i64, V]` key, an
+// element of a `Vec[ref i64]`, a `ref i64` local) `x` is that reference, so
+// the collection refers to `nums`, which outlives the loop (design.md §8;
+// ruled 2026-11-23).
+fn main() {
+    let nums: Vec[i64] = [1, 1, 2];
+    let mut count: Map[ref i64, i64] = Map.new();
+    for x in nums.iter() {
+        *count.entry(x).or_insert(0) += 1;
+    }
+    let mut seen: Vec[ref i64] = Vec.new();
+    let mut top: ref i64 = ref nums[0];
+    for x in nums.iter() {
+        seen.push(x);
+        if x > top {
+            top = x;
+        }
+    }
+    println(f"{count.len()}");
+    println(f"{seen.len()} {seen[2]} {top} {nums.len()}");
+}

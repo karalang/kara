@@ -1,0 +1,12 @@
+source = "core-semantics.md §5.6; design.md §8 (a written collection of references keeps them)"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["iterators", "borrow"]
+class = "a"
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "B-2026-11-22-52: the other half of ok_written_ref_slot_takes_for_item_ref. The pushed item is a reference into `nums`, so writing `nums` while `seen` is live is E0516. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

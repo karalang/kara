@@ -2383,6 +2383,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- The item of `for x in nums.iter()` over `Copy` elements, stored where a
+  written `ref` slot wants one, is the reference into `nums`: `q.push(x)` into
+  a `PriorityQueue[ref i32]`, `count.entry(x)` on a `Map[ref i64, i64]`,
+  `Some(x)`, `Holder { r: x }` and `best = x` into a `ref i32` local are
+  accepted and keep `nums` borrowed. They were E0516 (`cannot write to x while
+  q still holds a borrow of it`: the loop's own copy was lent), except behind
+  `let start = x;`, and `best = x` stopped the build with `invalid MIR`.
+  Decided 2026-11-23 (B-2026-11-22-52).
 - A local or a place stored into a slot that holds a reference is lent, as
   `v.push(a)` into a `Vec[ref T]` lends `a`: `karac check` no longer reports
   the local as moved (E0500 at its next use) after `fill`, `resize`,

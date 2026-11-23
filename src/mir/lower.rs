@@ -7919,6 +7919,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut op = self.settle(op);
         let place = self.finish_place(pending, true)?;
         let (place, t) = self.write_through(place, value)?;
+        // A `for` element copied out of the collection, assigned to a
+        // `ref` slot, is the reference it was copied through, as it is
+        // bound by a `let` or passed for a `ref` parameter: `best = x`
+        // stored the copy where the slot holds a reference
+        // (B-2026-11-22-52).
+        if let Operand::Copy(p) = &op {
+            if p.projection.is_empty() {
+                if let Some(&r) = self.copied_elems.get(&p.local) {
+                    if self.b.local_ty(r) == t && matches!(self.tys().tcx().kind(t), HK::Ref(_)) {
+                        op = Operand::Copy(Place::local(r));
+                    }
+                }
+            }
+        }
         // `v = v`: the value moves out of the place before the old value
         // is dropped, so the store does not drop what it is about to store.
         if let Operand::Move(p) = &op {
@@ -23462,6 +23476,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             Some(kind) if !arg_is_ref => {
                 let mut p = self.expr_place(a, kind == BorrowKind::Mut)?;
                 if kind == BorrowKind::Shared && p.projection.is_empty() {
+                    // A `for` element copied out of the collection lends
+                    // the reference it was copied through, as it does
+                    // bound by a `let` (B-2026-11-20-35): `q.push(x)` into
+                    // a queue of `ref i32` refers to the collection's
+                    // element, not to the loop's copy of it, which the
+                    // queue would outlive (ruled 2026-11-23,
+                    // B-2026-11-22-52).
+                    if let Some(&r) = self.copied_elems.get(&p.local) {
+                        if self.b.local_ty(r) == pt {
+                            return Ok(Operand::Copy(Place::local(r)));
+                        }
+                    }
                     if let Some(v) = self.copy_views.get(&p.local) {
                         p = v.clone();
                     }

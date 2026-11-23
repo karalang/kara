@@ -1,0 +1,12 @@
+source = "design.md §8 (a written `Map[ref i64, V]` keeps its references); core-semantics.md §4.6"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["inference", "iterators", "borrow"]
+class = "a"
+expected_from = "decision"
+rules = ["4.6", "5.3"]
+backends = []
+env = {}
+note = "B-2026-11-22-52, ruled by Gowtham 2026-11-23: the item of `for x in nums.iter()` over Copy elements, stored where a written `ref` slot wants one, is the reference into `nums`. Was err_written_ref_map_key_lends_loop_item (B-2026-11-08-19), which expected E0516 for the map key because the loop's own copy was lent, while `let start = x; q.push(start)` already lent `nums` (B-2026-11-20-35). The control for ok_untyped_collection_takes_copy_ref_value; the lender's protection is err_for_item_ref_outlived_by_its_collection."
+bucket = "a"

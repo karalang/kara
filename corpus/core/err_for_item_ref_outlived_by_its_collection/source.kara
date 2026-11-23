@@ -1,0 +1,12 @@
+// core-semantics §5.6: a `Vec[ref i64]` filled with the items of
+// `for x in nums.iter()` borrows `nums` (§4.6), so `nums` is not written
+// while the collection is still used.
+fn main() {
+    let mut nums: Vec[i64] = [1, 1, 2];
+    let mut seen: Vec[ref i64] = Vec.new();
+    for x in nums.iter() {
+        seen.push(x);
+    }
+    nums.push(3);
+    println(f"{seen.len()}");
+}
