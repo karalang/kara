@@ -3121,6 +3121,7 @@ impl Pipeline {
                 ref_binding_fix(&src, &e)
                     .or_else(|| shared_handle_copy_fix(&src, typed, &e))
                     .or_else(|| held_borrow_copy_fix(&src, typed, &e))
+                    .or_else(|| held_tuple_borrow_copy_fix(&src, typed, &e))
                     .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
                     .or_else(|| moved_arg_clone_fix(&src, typed, &e))
             } else if e.code == "E0509" && self.renames.is_empty() {
@@ -4769,6 +4770,107 @@ fn held_borrow_copy_fix(
         },
         _ => None,
     }
+}
+
+/// B-2026-11-21-46: the same repair when the `let` destructures a tuple of
+/// borrows, `let (l, r) = segments.floor(x).unwrap();` over a
+/// `SortedMap[i64, i64]`: `floor` gives `(ref K, ref V)`, each name holds a
+/// borrow of the map, and when every such name is a `Copy` value the copy is
+/// the whole remedy. The edit rebinds them after the statement, `let (l, r)
+/// = (*l, *r);`, so the names own their values and hold no borrow. A name
+/// whose copy would be a deep clone leaves the pattern with no fix-it, as
+/// for a single binding.
+fn held_tuple_borrow_copy_fix(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    use crate::typechecker::types::Type;
+    let holder = e.holder.as_deref()?;
+    let (line, column) = e.loan_at?;
+    let line_start: usize = src
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)?)
+        .map(str::len)
+        .sum();
+    let loan = line_start + column.checked_sub(1)?;
+    // `let (a, b, ..) =`, a flat tuple of plain names and `_`, alone on the
+    // line before its initializer.
+    let let_head = regex::Regex::new(r"^(\s*)let\s+\(([^()=;:]*)\)\s*=\s*").unwrap();
+    let head = src.get(line_start..)?;
+    let caps = let_head.captures(head)?;
+    let indent = caps.get(1)?.as_str();
+    let names: Vec<&str> = caps.get(2)?.as_str().split(',').map(str::trim).collect();
+    let plain = |n: &str| {
+        n == "_"
+            || (n.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && n.chars().next().is_some_and(|c| !c.is_ascii_digit()))
+    };
+    if names.len() < 2 || !names.iter().all(|n| plain(n)) {
+        return None;
+    }
+    let offset = line_start + caps.get(0)?.end();
+    if loan < offset {
+        return None;
+    }
+    // The initializer: the widest typed expression from there to the `;`.
+    let (len, ty) = typed
+        .expr_types
+        .iter()
+        .filter(|(k, _)| {
+            k.0 == offset && k.1 > 0 && src.get(offset + k.1..).is_some_and(|r| r.starts_with(';'))
+        })
+        .max_by_key(|(k, _)| k.1)
+        .map(|(k, t)| (k.1, t))?;
+    let end = offset + len;
+    if loan >= end {
+        return None;
+    }
+    let Type::Tuple(parts) = ty else {
+        return None;
+    };
+    if parts.len() != names.len() {
+        return None;
+    }
+    // Every name bound to a borrow is rebound to its value; one that is not
+    // `Copy` (or is written through) leaves the pattern alone.
+    let mut held = Vec::new();
+    for (name, part) in names.iter().zip(parts) {
+        match part {
+            Type::Ref(_) if *name == "_" => {}
+            Type::Ref(inner)
+                if crate::ownership::is_copy_type_in_scope(inner, typed, &Default::default()) =>
+            {
+                held.push(*name)
+            }
+            Type::Ref(_) | Type::MutRef(_) => return None,
+            _ => {}
+        }
+    }
+    if !held.contains(&holder) {
+        return None;
+    }
+    let rebind = match held.as_slice() {
+        [one] => format!("let {one} = *{one};"),
+        many => format!(
+            "let ({}) = ({});",
+            many.join(", "),
+            many.iter()
+                .map(|n| format!("*{n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let at = end + 1;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset: at,
+            length: 0,
+            line,
+            column: at - line_start + 1,
+        },
+        replacement: format!("\n{indent}{rebind}"),
+    })
 }
 
 /// B-2026-10-25-7: the machine-applicable repair for an E0516 whose borrow

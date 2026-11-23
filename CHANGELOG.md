@@ -2538,6 +2538,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   key as moved (E0500 at its next use, or E0515 with a `.clone()` fix for
   `m.entry(words[i])`), and `m.entry(w.clone())` is refused there as a
   reference to a temporary (B-2026-11-23-12).
+- `karac fix` mends an E0516 whose borrows a `let` destructured from a
+  tuple: after `let (l, r) = segments.floor(x).unwrap();` over a
+  `SortedMap[i64, i64]`, each `remove` or `insert` is refused while `l` and
+  `r` hold their borrows, and the fix writes `let (l, r) = (*l, *r);` after
+  the statement when every held name is a `Copy` value. A part whose copy
+  would be a deep clone leaves the pattern for the author (B-2026-11-21-46).
 - The same closure over items that are not `Copy`
   (`v.iter().filter_map(|child| child)` over `Option[String]`s, Rust's
   spelling) gets one error at its tail that names the borrow, with
