@@ -157,6 +157,101 @@ impl Parser {
 
     /// Statement-start habits, rewritten in place before the statement is
     /// parsed.
+    /// The block-level import at `p`: told, moved to the top of the file
+    /// by the fix, and skipped as an empty block. `false` when it has no
+    /// `;` before its block ends, so nothing is done.
+    fn mend_block_import(&mut self, p: usize) -> bool {
+        let mut i = p;
+        let mut depth = 0i32;
+        loop {
+            match self.tok_at(i) {
+                Some(Token::LeftBrace) => depth += 1,
+                Some(Token::RightBrace) => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return false;
+                    }
+                }
+                Some(Token::Semicolon) if depth == 0 => break,
+                Some(Token::EOF) | None => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        let at = self.span_at(p);
+        let semi = self.span_at(i);
+        let word = if matches!(self.tok_at(p), Some(Token::Import)) {
+            "an `import`"
+        } else {
+            "a `use`"
+        };
+        self.error_at(
+            &format!(
+                "{word} inside a function is Rust's block-level import; Kāra's imports are \
+                 written at the top of the file (design.md §4 Imports), so move it there"
+            ),
+            at,
+        );
+        if let Some((source, base)) = self.source.as_ref() {
+            let (source, base) = (source.clone(), *base);
+            let (start, end) = (at.offset, semi.offset + semi.length);
+            if let Some(text) = start
+                .checked_sub(base)
+                .and_then(|a| source.get(a..end - base))
+            {
+                let text = text.to_string();
+                // The whole line goes when the statement is alone on it.
+                let bytes = source.as_bytes();
+                let mut from = start - base;
+                while from > 0 && matches!(bytes[from - 1], b' ' | b'\t') {
+                    from -= 1;
+                }
+                let mut to = end - base;
+                while to < bytes.len() && matches!(bytes[to], b' ' | b'\t' | b'\r') {
+                    to += 1;
+                }
+                let alone = (from == 0 || bytes[from - 1] == b'\n')
+                    && (to == bytes.len() || bytes[to] == b'\n');
+                let (from, to) = if alone {
+                    (from, (to + 1).min(bytes.len()))
+                } else {
+                    (start - base, end - base)
+                };
+                // Past the file's leading comment and blank lines.
+                let mut top = 0;
+                for line in source.split_inclusive('\n') {
+                    let t = line.trim();
+                    if !(t.is_empty() || t.starts_with("//")) {
+                        break;
+                    }
+                    top += line.len();
+                }
+                if top <= from {
+                    self.fix_diffs.insert(
+                        crate::resolver::SpanKey::from_span(&at),
+                        vec![
+                            crate::resolver::TextEdit {
+                                offset: base + top,
+                                length: 0,
+                                replacement: format!("{text}\n"),
+                            },
+                            crate::resolver::TextEdit {
+                                offset: base + from,
+                                length: to - from,
+                                replacement: String::new(),
+                            },
+                        ],
+                    );
+                }
+            }
+        }
+        self.tokens.drain(p..=i);
+        self.tokens.insert(p, Self::synth(Token::LeftBrace, at));
+        self.tokens
+            .insert(p + 1, Self::synth(Token::RightBrace, at));
+        true
+    }
+
     pub(super) fn mend_statement_habits(&mut self) {
         // An f-string hole is re-parsed as `fn __interp__() { <hole>; }`: its
         // text is an expression, never a statement written by hand, and
@@ -168,6 +263,18 @@ impl Parser {
             return;
         }
         let p = self.pos;
+        // `use std::cmp::Reverse;` inside a function body, which Rust
+        // allows: Kāra's imports are file-level, so the statement is moved
+        // to the top of the file, where the item-level `use` rewrites take
+        // it on the next `fix` pass (kata 2532). Without this the `use`
+        // read as a name and the `;`-insertion fix made `use; BinaryHeap;`.
+        let block_import = (self.ident_at(p) == Some("use")
+            && matches!(self.tok_at(p + 1), Some(Token::Identifier { .. }))
+            && matches!(self.tok_at(p + 2), Some(Token::ColonColon | Token::Dot)))
+            || matches!(self.tok_at(p), Some(Token::Import));
+        if block_import && self.mend_block_import(p) {
+            return;
+        }
         if self.ident_at(p) == Some("switch")
             && !matches!(
                 self.tok_at(p + 1),
