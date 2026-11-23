@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 712 |
-| false-positive | 355 |
+| false-positive | 356 |
 | missing-feature | 245 |
 | perf | 200 |
 | other | 147 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 866 |
+| typecheck | 867 |
 | mir-llvm | 321 |
 | mir | 319 |
 | cli | 281 |
 | parser | 152 |
-| ownership | 132 |
+| ownership | 133 |
 | runtime | 107 |
 | interp | 98 |
 | effect | 59 |
@@ -136,7 +136,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-51 | 2026-11-22 | typecheck | low | A `T: Copy` bound is not satisfied by a shared reference: `fn swap2[T: Copy](xs: mut Slice[T])` called with a `Vec[ref String]` is E0200 "`ref String` does not implement `Copy`", though core-semantics §1.1 lists `ref T` as `Copy` | — |
 | B-2026-11-23-1 | 2026-11-23 | typecheck+mir | medium | `h.r = b` and `t.0 = b`, an owned `String` assigned to a `ref String` field or tuple part, pass `karac check` and stop every backend with "invalid MIR: assigning String to _3.0 of type ref String"; `h.r = ref b` runs | — |
 | B-2026-11-23-2 | 2026-11-23 | typecheck+cli | low | Four diagnostics whose help names one edit still carry no fix: E0113 (drop `as F` from a library import and rename the alias's uses), E0515's `Some(place)` form (bind `let r = ref <place>;` first, return `Some(r)`), E_TOOLCHAIN_INVALID_VERSION_TYPE (quote the manifest scalar) and E_TEST_OUTSIDE_TEST_FILE (move the test to a test file) | — |
-| B-2026-11-23-3 | 2026-11-23 | mir+mir-llvm | high | A keyed lookup on a `Map`, `SortedMap`, `Set` or `SortedSet` of `ref i64` (`m[1]`, `m.get(k)`, `contains_key`, `remove`, `get_or`, `s.contains(k)`) passes the `i64` key where the native reads a reference: it checks clean, prints the right answer on the interpreter, and segfaults when compiled | — |
 | B-2026-11-23-5 | 2026-11-23 | effect | medium | A built-in type's method is charged every trait DEFAULT method of the same name, whether or not the type implements the trait: `s.find(" ")` on a `String` takes the effects of any trait's default `find` (false `#[no_effect]` and E0400 errors); callees identified by name, against core-semantics.md §12 default 4 | — |
 | B-2026-11-23-6 | 2026-11-23 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 library bodies to run 33 | — |
 | B-2026-11-23-7 | 2026-11-23 | effect | high | UNDER-REPORT: when two impls inherit one trait default method, the effect pass charges every impl's copy the LAST impl's callees: `Loud.first_big` (default body calls `self.step()`) is charged `Quiet.step`, so a program that writes Stderr reports no `writes(Stderr)`; swapping the two impl blocks changes the answer | — |
@@ -144,6 +143,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-9 | 2026-11-23 | effect+cli | low | The order of a function's effects (`program_effects`, the lists inside E0400 messages) and of the effect checker's diagnostics follows the checker's hash tables: one run to the next it is the same, but an unrelated compiler change reorders it (`receives(Channel), sends(Channel)` became `sends(Channel), receives(Channel)`; E0400 errors at lines 32 17 28 24 20 became 24 20 32 17 28) | — |
 | B-2026-11-23-10 | 2026-11-23 | effect | high | UNDER-REPORT: a program's operator impl reached through `==` / `!=`, a compound assignment (`+=`, `-=`, `*=`), unary `-` or indexing `a[i]` is not charged its effects: `a == b` with an `impl PartialEq` whose `eq` writes Stderr reports no `writes(Stderr)`, while `a.eq(b)`, `a + b` and `a < b` are charged | — |
 | B-2026-11-23-11 | 2026-11-23 | mir | medium | A trait default body that declares `let x: T;` and assigns it later is refused once two impls of the generic trait inherit it: error[E0516] 'the capture of `x` is not lowered yet'; one impl alone builds and runs | — |
+| B-2026-11-23-12 | 2026-11-23 | typecheck+ownership | medium | `m.entry(k)` with an owned key on a `Map[ref String, V]` is read as a move by `karac check`: E0500 at the next use of a local `k`, E0515 (help: `.clone()`) for `m.entry(words[i])`; the MIR pipeline lends the key and runs both | — |
 
 ### Relocated
 
@@ -2184,6 +2184,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-48 | mir | medium | `Option.take()` and `Option.replace(v)` borrow their receiver shared in MIR, so both run while a borrow of the Option's value is live and `karac chec… | d09b11338c |
 | B-2026-11-22-49 | ownership+typecheck | medium | An owned local or an indexed place stored into a reference slot is read as moved by `karac check`, except by `push`, Vec `insert`, a deque's pushes a… | 6d4fe390fa |
 | B-2026-11-22-52 | typecheck+mir | low | NEEDS A RULING: for `x` of `for x in nums.iter()` over `Copy` elements, `let start = x; q.push(start)` into a queue of `ref i32` lends `nums` and is… | 82a5e962f0 |
+| B-2026-11-23-3 | mir+mir-llvm | high | A keyed lookup on a `Map`, `SortedMap`, `Set` or `SortedSet` of `ref i64` (`m[1]`, `m.get(k)`, `contains_key`, `remove`, `get_or`, `s.contains(k)`) p… | a4ffc5a6ec |
 | B-2026-11-23-4 | effect+cli | medium | A comptime-backed `#[derive]` anywhere in a program changes the effects `karac check` reports for the rest of it: a package module's `pub fn` that ca… | e879cf43e3 |
 
 </details>
