@@ -108,7 +108,10 @@ fn karac_build_mir_writes_the_executable() {
     }
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("Built: {}\n", exe.display())
+        format!(
+            "Effects: allocates(Heap), panics, writes(Stdout)\nBuilt: {}\n",
+            exe.display()
+        )
     );
     let run = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), "hello 30 5 p3\n");

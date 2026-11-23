@@ -738,7 +738,7 @@ fn build(
         // The check's warnings ride the JSON success object under
         // `diagnostics`, after the batch document's effect fields
         // (B-2026-11-16-46); the stream has already carried them.
-        let head = super::diag_json::effects_fields(&checked).0;
+        let (head, program_effects) = super::diag_json::effects_fields(&checked);
         let warnings: Vec<String> = match output {
             OutputMode::Text | OutputMode::Jsonl => Vec::new(),
             _ => collect_diagnostics(&checked)
@@ -750,7 +750,7 @@ fn build(
                 })
                 .collect(),
         };
-        (warnings, head)
+        (warnings, head, program_effects)
     };
     crate::mir::interp::set_source_name(filename);
     if let Some(p) = &project {
@@ -759,11 +759,12 @@ fn build(
     // The MIR builder runs a front end of its own, so it lowers the program
     // while the check runs (B-2026-10-31-7).
     #[cfg(feature = "llvm")]
-    let ((warnings, head), built_mir) = super::run_v2::checked_alongside(check, || {
-        crate::mir::lower::build_source_in_order_later(&source)
-    });
+    let ((warnings, head, program_effects), built_mir) =
+        super::run_v2::checked_alongside(check, || {
+            crate::mir::lower::build_source_in_order_later(&source)
+        });
     #[cfg(not(feature = "llvm"))]
-    let (warnings, head) = check();
+    let (warnings, head, _program_effects) = check();
     // The success object is the batch document (design.md § Structured
     // compiler output): its effect fields and `diagnostics`, empty on a clean
     // build (B-2026-11-16-49, review-thread ruling 2026-11-16), after a
@@ -855,7 +856,15 @@ fn build(
             fail(e);
         }
         match output {
-            OutputMode::Text => println!("Built: {exe}"),
+            OutputMode::Text => {
+                // design.md § Inference and declarations: the program's effect
+                // summary, the inferred set of `main`, on the line before
+                // `Built:` (B-2026-11-22-39, review ruling 2026-11-22).
+                if let Some(line) = effects_line(&program_effects) {
+                    println!("{line}");
+                }
+                println!("Built: {exe}")
+            }
             OutputMode::Jsonl => {
                 super::diag_json::close_held_stream(
                     None,
@@ -964,4 +973,25 @@ fn enforce_monomorphization_budget(
         );
     }
     process::exit(1);
+}
+
+/// The terminal effect summary of a build: `Effects: a, b` sorted by effect
+/// then resource, or `Effects: none`, from `program_effects`' JSON list;
+/// nothing when the set was not established (`null`).
+#[cfg(feature = "llvm")]
+fn effects_line(program_effects: &str) -> Option<String> {
+    let mut list: Vec<String> =
+        serde_json::from_str::<Option<Vec<String>>>(program_effects).ok()??;
+    list.sort_by(|a, b| {
+        let split = |s: &str| {
+            let (v, r) = s.split_once('(').unwrap_or((s, ""));
+            (v.to_string(), r.trim_end_matches(')').to_string())
+        };
+        split(a).cmp(&split(b))
+    });
+    Some(if list.is_empty() {
+        "Effects: none".to_string()
+    } else {
+        format!("Effects: {}", list.join(", "))
+    })
 }
