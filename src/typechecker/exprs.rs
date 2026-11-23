@@ -1491,6 +1491,41 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
         if let [closure] = closures.as_slice() {
             if let Some(at) = value_end(closure) {
+                // `|v| graph.get(v).unwrap_or(Vec.new())`: should the value
+                // be a borrowed collection, its default is a temporary the
+                // `.iter()` would borrow past the closure (B-2026-11-21-47).
+                let mut tail = *closure;
+                loop {
+                    tail = match &tail.kind {
+                        ExprKind::Closure { body, .. } => body,
+                        ExprKind::Block(b) => match b.final_expr.as_deref() {
+                            Some(e) => e,
+                            None => break,
+                        },
+                        _ => break,
+                    };
+                }
+                let parts = match &tail.kind {
+                    ExprKind::MethodCall {
+                        object,
+                        method,
+                        args,
+                        ..
+                    } if method == "unwrap_or" && args.len() == 1 => {
+                        Some((&**object, &args[0].value))
+                    }
+                    ExprKind::NilCoalesce { left, right } => Some((&**left, &**right)),
+                    _ => None,
+                };
+                if let Some((opt, default)) = parts {
+                    let opt_end = Span {
+                        offset: opt.span.offset + opt.span.length,
+                        length: 0,
+                        ..opt.span
+                    };
+                    self.into_iter_default_sites
+                        .insert(at.offset, (opt_end, default.span));
+                }
                 for n in param_names {
                     if !direct.contains(&n.as_str()) {
                         self.into_iter_sites.insert((key, n.clone()), at);
@@ -1521,11 +1556,57 @@ impl<'a> super::TypeChecker<'a> {
              not an `Iterator`; iterate it with `.{method}()` (docs/library/iterators.md)",
             type_display(concrete)
         );
-        match self
+        let site = self
             .into_iter_sites
             .get(&(SpanKey::from_span(&span), type_name.to_string()))
-            .copied()
-        {
+            .copied();
+        // A borrowed collection that is `opt.unwrap_or(<a temporary>)`: the
+        // default dies with the closure, so `.iter()` over it is refused in
+        // turn (E0509) with nothing to apply. Copying the item out first
+        // makes the value owned, and `.into_iter()` iterates it
+        // (B-2026-11-21-47).
+        if let (Some(at), Type::Ref(inner)) = (site, concrete) {
+            let default = self.into_iter_default_sites.get(&at.offset).copied();
+            if let Some((opt_end, default)) = default {
+                let default_owned = self
+                    .expr_types
+                    .get(&SpanKey::from_span(&default))
+                    .map(|t| self.resolved_now(&t.clone()))
+                    .is_some_and(|t| !matches!(t, Type::Ref(_) | Type::MutRef(_)));
+                if default_owned && self.type_supports_clone(inner) {
+                    self.type_error(
+                        format!(
+                            "trait bound `{type_name}: Iterator` is not satisfied: `{}` is a \
+                             collection, not an `Iterator`, and it borrows either the item or \
+                             a default that is dropped with the closure; copy the item out \
+                             with `.cloned()` and iterate the value with `.into_iter()` \
+                             (docs/library/iterators.md)",
+                            type_display(concrete)
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    self.error_fix_diffs.insert(
+                        SpanKey::from_span(&span),
+                        vec![
+                            crate::resolver::TextEdit {
+                                offset: opt_end.offset,
+                                length: 0,
+                                replacement: ".cloned()".to_string(),
+                            },
+                            crate::resolver::TextEdit {
+                                offset: at.offset,
+                                length: 0,
+                                replacement: ".into_iter()".to_string(),
+                            },
+                        ],
+                    );
+                    self.into_iter_hinted = true;
+                    return true;
+                }
+            }
+        }
+        match site {
             Some(at) => self.type_error_with_fix_it(
                 message,
                 span,

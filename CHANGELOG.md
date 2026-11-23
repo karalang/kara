@@ -2538,6 +2538,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   key as moved (E0500 at its next use, or E0515 with a `.clone()` fix for
   `m.entry(words[i])`), and `m.entry(w.clone())` is refused there as a
   reference to a temporary (B-2026-11-23-12).
+- One `karac fix` round no longer writes an edit whose premise another edit
+  of the round removes. `let mut list = g.get(a).unwrap_or(Vec.new());
+  list.push(b); g[a] = list;` got `.cloned()` in the `let` and `.clone()`
+  at `g[a] = list`, the second only because `list` was still a reference;
+  it now waits for the next check, which no longer asks for it, so the
+  `Vec` is moved, not copied. A `flat_map` closure whose value is
+  `opt.unwrap_or(<a temporary>)` gets the two edits that make it check
+  (`.cloned()` and `.into_iter()`), where its `.iter()` fix was refused in
+  turn with nothing to apply (B-2026-11-21-47).
 - `karac fix` mends an E0516 whose borrows a `let` destructured from a
   tuple: after `let (l, r) = segments.floor(x).unwrap();` over a
   `SortedMap[i64, i64]`, each `remove` or `insert` is refused while `l` and

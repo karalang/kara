@@ -744,6 +744,7 @@ fn collect_fixes(pipeline: &Pipeline, source: &str, fixes: &mut FixSet) {
             })
         }));
         fixes.lock_trait_params(&t.trait_locked_params);
+        fixes.hold_fixes_awaiting(&t.fix_awaits_binding, source);
     }
 }
 
@@ -974,6 +975,38 @@ impl FixSet {
             self.anchors.insert(self.next, key.0);
             self.groups([g]);
         }
+    }
+
+    /// A fix whose premise is what a binding is waits for the next check
+    /// when another fix of this round rewrites that binding's own `let`:
+    /// `g[a] = list` offers `.clone()` because `list` borrows its value,
+    /// and `.cloned()` written into `let mut list = g.get(a).unwrap_or(..)`
+    /// in the same round makes `list` own it, so the `.clone()` would copy
+    /// the whole `Vec` for nothing, with no lint left to say so
+    /// (B-2026-11-21-47). `awaits` maps the waiting fix's diagnostic to its
+    /// binding; the `let` runs from the binding to its `;`.
+    fn hold_fixes_awaiting(&mut self, awaits: &rustc_hash::FxHashMap<usize, usize>, source: &str) {
+        if awaits.is_empty() {
+            return;
+        }
+        let mut held = std::collections::HashSet::new();
+        for (id, anchor) in &self.anchors {
+            let Some(&binding) = awaits.get(anchor) else {
+                continue;
+            };
+            let end = source
+                .get(binding..)
+                .and_then(|rest| rest.find(';'))
+                .map_or(source.len(), |i| binding + i);
+            if self
+                .edits
+                .iter()
+                .any(|(other, e)| other != id && (binding..=end).contains(&e.offset))
+            {
+                held.insert(*id);
+            }
+        }
+        self.edits.retain(|(id, _)| !held.contains(id));
     }
 
     /// An `own` written on a trait impl method's parameter that the trait

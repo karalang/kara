@@ -2544,6 +2544,12 @@ pub struct TypeCheckResult {
     /// program's own and its parameter is bare; `None` when the trait's
     /// declaration cannot be fixed with it (B-2026-11-18-66).
     pub trait_locked_params: FxHashMap<usize, Option<usize>>,
+    /// A fix whose premise is what a binding is: the offset of the error
+    /// that carries it, and the offset of the binding it reads. `g[a] =
+    /// list` offers `.clone()` because `list` borrows its value; a fix in the
+    /// same round that rewrites `list`'s own `let` may make it own the value,
+    /// so `karac fix` leaves this one for the next check (B-2026-11-21-47).
+    pub fix_awaits_binding: FxHashMap<usize, usize>,
     /// The statement form of a `par` block refused under the core rules
     /// (§11.1), keyed by the error's span: the block, and each statement's
     /// start and its expression (a `let`'s value), when every statement is
@@ -4105,6 +4111,12 @@ pub struct TypeChecker<'a> {
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// See [`TypeCheckResult::trait_locked_params`].
     pub(super) trait_locked_params: FxHashMap<usize, Option<usize>>,
+    /// See [`TypeCheckResult::fix_awaits_binding`].
+    pub(super) fix_awaits_binding: FxHashMap<usize, usize>,
+    /// Where a closure's value is `opt.unwrap_or(default)` (or `opt ??
+    /// default`), by the `.into_iter()` site recorded for it: the end of
+    /// `opt` and the default's span (B-2026-11-21-47).
+    pub(super) into_iter_default_sites: FxHashMap<usize, (Span, Span)>,
     /// The closure parameters in scope that hold items of literal ranges,
     /// innermost last, with each range's first literal
     /// (`range_literal_sources`, B-2026-11-19-29 / -33).
@@ -5174,6 +5186,8 @@ impl<'a> TypeChecker<'a> {
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
             trait_locked_params: FxHashMap::default(),
+            fix_awaits_binding: FxHashMap::default(),
+            into_iter_default_sites: FxHashMap::default(),
             range_param_sources: Vec::new(),
             range_let_sources: Vec::new(),
             range_source_uses: FxHashMap::default(),
@@ -5901,6 +5915,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_param_types: self.fn_value_param_types,
             error_fix_diffs: self.error_fix_diffs,
             trait_locked_params: self.trait_locked_params,
+            fix_awaits_binding: self.fix_awaits_binding,
             par_stmt_branches: self.par_stmt_branches,
             dbg_arg_types: self.dbg_arg_types,
             impl_trait_captures: self.impl_trait_captures,
@@ -9386,6 +9401,16 @@ impl<'a> TypeChecker<'a> {
         (sym.span.offset != span.offset).then(|| (sym.name.clone(), sym.span.line, sym.span.column))
     }
 
+    /// The offset at which the name an identifier at `span` uses is bound.
+    fn binding_offset_at(&self, span: Span) -> Option<usize> {
+        let id = self
+            .resolve_result
+            .resolutions
+            .get(&SpanKey::from_span(&span))?;
+        let sym = self.resolve_result.symbol_table.get_symbol(*id);
+        (sym.span.offset != span.offset).then_some(sym.span.offset)
+    }
+
     /// Whether the enclosing item bounds type parameter `name` by `Clone`
     /// (or `Copy`), directly or through a supertrait.
     fn type_param_bounded_by_clone(&self, name: &str) -> bool {
@@ -10638,13 +10663,18 @@ impl<'a> TypeChecker<'a> {
                         ),
                         None => (
                             match self.named_binding_at(span) {
-                                Some((name, line, column)) => format!(
-                                    "expected '{shown}', found '{kw} {shown}': a borrowed \
+                                Some((name, line, column)) => {
+                                    if let Some(at) = self.binding_offset_at(span) {
+                                        self.fix_awaits_binding.insert(span.offset, at);
+                                    }
+                                    format!(
+                                        "expected '{shown}', found '{kw} {shown}': a borrowed \
                                      value cannot be moved out of what it borrows, and \
                                      `{name}` (bound at {line}:{column}) borrows its value \
                                      (core-semantics.md §3.7, §4.6). Take an owned copy \
                                      with `.clone()`"
-                                ),
+                                    )
+                                }
                                 None => format!(
                                     "expected '{shown}', found '{kw} {shown}': a borrowed \
                                      value cannot be moved out of what it borrows. Take an \
