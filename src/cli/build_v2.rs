@@ -750,7 +750,14 @@ fn build(
                 })
                 .collect(),
         };
-        (warnings, head, program_effects)
+        // Under `public_effects = "inferred"` the build shows what it
+        // inferred for each public function (design.md § Inference and
+        // declarations); the JSON document carries it in `head`.
+        let inferred = super::public_effects::inferred_summary(&checked).map(|s| match &project {
+            Some(p) => p.remap_text(filename, &s),
+            None => s,
+        });
+        (warnings, head, program_effects, inferred)
     };
     crate::mir::interp::set_source_name(filename);
     if let Some(p) = &project {
@@ -759,12 +766,15 @@ fn build(
     // The MIR builder runs a front end of its own, so it lowers the program
     // while the check runs (B-2026-10-31-7).
     #[cfg(feature = "llvm")]
-    let ((warnings, head, program_effects), built_mir) =
+    let ((warnings, head, program_effects, inferred), built_mir) =
         super::run_v2::checked_alongside(check, || {
             crate::mir::lower::build_source_in_order_later(&source)
         });
     #[cfg(not(feature = "llvm"))]
-    let (warnings, head, _program_effects) = check();
+    let (warnings, head, _program_effects, inferred) = check();
+    // The terminal's summary, on stdout ahead of the `Effects:` line and
+    // `Built:` (review-thread rulings 2026-11-23 and 2026-11-24).
+    let inferred = inferred.filter(|_| output == OutputMode::Text);
     // The success object is the batch document (design.md § Structured
     // compiler output): its effect fields and `diagnostics`, empty on a clean
     // build (B-2026-11-16-49, review-thread ruling 2026-11-16), after a
@@ -857,9 +867,14 @@ fn build(
         }
         match output {
             OutputMode::Text => {
-                // design.md § Inference and declarations: the program's effect
-                // summary, the inferred set of `main`, on the line before
-                // `Built:` (B-2026-11-22-39, review ruling 2026-11-22).
+                // Under `public_effects = "inferred"`, each public function's
+                // inferred set, then the program's effect summary, the
+                // inferred set of `main`, on the line before `Built:`
+                // (design.md § Inference and declarations; B-2026-11-22-39,
+                // review rulings 2026-11-22 and 2026-11-24).
+                if let Some(s) = &inferred {
+                    print!("{s}");
+                }
                 if let Some(line) = effects_line(&program_effects) {
                     println!("{line}");
                 }
@@ -884,6 +899,10 @@ fn build(
     #[cfg(not(feature = "llvm"))]
     if let Some(f) = fields {
         println!("{{\"status\":\"ok\",{}}}", f.trim_end_matches(','));
+    }
+    #[cfg(not(feature = "llvm"))]
+    if let Some(s) = &inferred {
+        print!("{s}");
     }
     #[cfg(not(feature = "llvm"))]
     if output == OutputMode::Jsonl {

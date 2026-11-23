@@ -492,6 +492,7 @@ mod tests {
             queries: Vec::new(),
             call_effect_subs: Default::default(),
             unused_effects: Vec::new(),
+            inferred_public: Vec::new(),
         }
     }
 

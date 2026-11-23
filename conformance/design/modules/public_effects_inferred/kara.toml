@@ -1,0 +1,4 @@
+[package]
+name = "pubinf"
+version = "0.1.0"
+public_effects = "inferred"

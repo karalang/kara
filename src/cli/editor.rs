@@ -180,7 +180,8 @@ pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDi
         return check_source(source);
     };
     let mut lints = crate::lints::CliLintOverrides::default();
-    if let Ok(mf) = manifest::load_from_root(&root) {
+    let mf = manifest::load_from_root(&root).ok();
+    if let Some(mf) = &mf {
         lints.apply_manifest_lints(&mf.lints);
     }
     let platform = super::build_cmds::walk_platform_for_target(crate::target::active_target());
@@ -189,9 +190,16 @@ pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDi
     else {
         return check_source(source);
     };
-    // A lone `src/main.kara` is checked as a file (B-2026-10-24-39).
+    // A lone `src/main.kara` is checked as a file (B-2026-10-24-39), under
+    // its package's `public_effects`: a package that infers its public
+    // effects owes no declaration in the editor either.
     if pc.lone_entry(&root).is_some() {
-        return check_source(source);
+        let mut pipeline = Pipeline::new(BUFFER, source).strict_core().with_library();
+        if let Some(mf) = &mf {
+            pipeline.profile_config.public_effects = mf.profile_config.public_effects;
+        }
+        pipeline.run_all_checks();
+        return diagnostics_of(&pipeline);
     }
     pc.restrict_to_file(path);
     pc.editor_diagnostics(path)

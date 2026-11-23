@@ -49,6 +49,12 @@ pub(super) struct Amalgam {
     /// The dependency traits each copied file does not import, by its byte
     /// range in `text` (`crate::trait_scope`, B-2026-11-16-180).
     pub hidden: crate::trait_scope::HiddenTraits,
+    /// Each dependency file's byte range in `text`, with its package's
+    /// `public_effects` (`super::public_effects`).
+    pub package_effects: Vec<crate::manifest::PackageEffects>,
+    /// The root package's first import of each dependency whose public
+    /// effects are inferred, placed in `text`.
+    pub inferred_imports: Vec<crate::manifest::InferredImport>,
 }
 
 impl Amalgam {
@@ -87,6 +93,13 @@ impl Amalgam {
             .iter()
             .find(|(_, _, f)| f == file)
             .map(|(_, len, _)| *len)
+    }
+
+    /// Give `config`, the root package's, what holds each dependency's
+    /// public functions to its own package's `public_effects`.
+    pub fn package_effects_into(&self, config: &mut crate::manifest::ProfileConfig) {
+        config.package_effects = self.package_effects.clone();
+        config.inferred_imports = self.inferred_imports.clone();
     }
 
     /// Hand the line map to the MIR interpreter and to codegen, which report
@@ -292,6 +305,8 @@ impl Amalgam {
             .get(file)
             .and_then(|t| t.lines().nth(l.checked_sub(1)?));
         match (combined, own) {
+            // A statement blanked in place (an import): the columns hold.
+            (Some(c), Some(_)) if c.chars().all(char::is_whitespace) => col,
             (Some(c), Some(o)) if c != o && col > 0 => {
                 let c: Vec<char> = c.chars().collect();
                 let o: Vec<char> = o.chars().collect();
@@ -557,7 +572,8 @@ fn move_carets(row: &str, combined: &[char], own: &[char]) -> String {
     let body = &row[bar + 2..];
     let lead = body.chars().take_while(|c| *c == ' ').count();
     let marks = body[lead..].chars().take_while(|c| *c == '^').count();
-    if marks == 0 {
+    // A statement blanked in place (an import) keeps its columns.
+    if marks == 0 || combined.iter().all(|c| c.is_whitespace()) {
         return row.to_string();
     }
     let (starts, ends) = word_map(combined, own);
@@ -795,9 +811,48 @@ pub(super) fn amalgamate(
         line += 1;
     }
     let mut hidden = crate::trait_scope::HiddenTraits::computed();
+    let policies = super::public_effects::dependency_policies(tree);
+    let inferred = |package: &str| {
+        policies.get(package) == Some(&crate::effectchecker::PublicEffectsPolicy::Inferred)
+    };
+    let mut package_effects = Vec::new();
+    let mut inferred_imports: Vec<crate::manifest::InferredImport> = Vec::new();
     for (f, body) in files.iter().zip(bodies) {
         lines.push((line, shown(f.path), 1));
         bytes.push((text.len(), body.len(), shown(f.path)));
+        match &f.module.package {
+            Some(package) => package_effects.push(crate::manifest::PackageEffects {
+                start: text.len(),
+                end: text.len() + body.len(),
+                package: package.clone(),
+                policy: policies.get(package).copied().unwrap_or_default(),
+            }),
+            // The root package's own file: its imports of a dependency
+            // whose effects are inferred, the first of each. The import is
+            // blanked in the copy, in place, so its line and column hold.
+            None => {
+                for item in &f.items {
+                    let Item::Import(imp) = item else { continue };
+                    let Some(package) = imp.path.first() else {
+                        continue;
+                    };
+                    if tree.dependency_packages.contains_key(package)
+                        && inferred(package)
+                        && !inferred_imports.iter().any(|i| i.package == *package)
+                    {
+                        // At the package's name in the import.
+                        let at = imp.path_spans.first().copied().unwrap_or(imp.span);
+                        inferred_imports.push(crate::manifest::InferredImport {
+                            package: package.clone(),
+                            line: line + at.line.saturating_sub(1),
+                            column: at.column,
+                            offset: text.len() + at.offset,
+                            length: at.length,
+                        });
+                    }
+                }
+            }
+        }
         hidden.push(
             text.len(),
             body.len(),
@@ -825,6 +880,8 @@ pub(super) fn amalgamate(
         names,
         refusal: None,
         hidden,
+        package_effects,
+        inferred_imports,
     })
 }
 

@@ -358,7 +358,7 @@ impl<'a> super::EffectChecker<'a> {
                     // Intentionally NOT `continue`-ing here, even under Inferred
                     // policy. The `with _` viral rule checked below applies regardless
                     // of policy: calling a polymorphic callee always requires `with _`.
-                    if self.public_effects_policy != PublicEffectsPolicy::Inferred {
+                    if self.public_policy_at(span.offset) != PublicEffectsPolicy::Inferred {
                         // Under Declared policy, require explicit effect annotations.
                         if let Some(inferred_set) = inferred {
                             // Filter synthetic modbind resources out of the
@@ -573,7 +573,7 @@ impl<'a> super::EffectChecker<'a> {
                 Some(DeclaredEffects::None) | None
                     if is_pub
                         && what == "method"
-                        && self.public_effects_policy != PublicEffectsPolicy::Inferred =>
+                        && self.public_policy_of(sym) != PublicEffectsPolicy::Inferred =>
                 {
                     (Default::default(), false, true)
                 }

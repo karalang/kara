@@ -1,0 +1,4 @@
+[package]
+name = "pubother"
+version = "0.1.0"
+public_effects = "off"

@@ -1242,6 +1242,10 @@ pub struct EffectCheckResult {
     /// perform: the `unused_effect` lint's candidates, which the CLI reports
     /// at the level the attributes and lint flags give it.
     pub unused_effects: Vec<UnusedEffect>,
+    /// Under `public_effects = "inferred"`, the package's own public
+    /// functions, by name and sorted: the ones whose effects `karac build`
+    /// shows. A dependency's and the library's are not among them.
+    pub inferred_public: Vec<String>,
 }
 
 // ── Effect Checker ──────────────────────────────────────────────
@@ -1910,6 +1914,69 @@ impl<'a> EffectChecker<'a> {
     /// per-target override). Reads through the [`ProfileConfig`] carrier.
     pub(crate) fn profile(&self) -> CompileProfile {
         self.profile_config.profile
+    }
+
+    /// The `public_effects` policy the function at `offset` is held to: its
+    /// own package's, in a program of several packages.
+    pub(crate) fn public_policy_at(&self, offset: usize) -> PublicEffectsPolicy {
+        self.profile_config
+            .package_effects
+            .iter()
+            .find(|p| (p.start..p.end).contains(&offset))
+            .map_or(self.public_effects_policy, |p| p.policy)
+    }
+
+    /// The root package's public functions when it infers their effects
+    /// ([`EffectCheckResult::inferred_public`]).
+    fn inferred_public(&self) -> Vec<String> {
+        if self.public_effects_policy != PublicEffectsPolicy::Inferred {
+            return Vec::new();
+        }
+        let other_package = |offset: usize| {
+            self.profile_config
+                .package_effects
+                .iter()
+                .any(|p| (p.start..p.end).contains(&offset))
+        };
+        let mut names: Vec<String> = self
+            .function_visibility
+            .iter()
+            .filter(|(sym, is_pub)| **is_pub && **sym != self.syms.main)
+            .filter(|(sym, _)| {
+                self.function_spans
+                    .get(sym)
+                    .is_some_and(|span| !other_package(span.offset))
+            })
+            .map(|(sym, _)| self.interner.resolve(*sym).to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Whether `sym` is a public function or method of a package that
+    /// infers its public effects: one written in the program, not a
+    /// trait's method, whose clause the setting leaves alone, and not the
+    /// library's.
+    pub(crate) fn public_is_inferred(&self, sym: Symbol) -> bool {
+        if self.public_effects_policy == PublicEffectsPolicy::Declared
+            && self.profile_config.package_effects.is_empty()
+        {
+            return false;
+        }
+        self.public_policy_of(sym) == PublicEffectsPolicy::Inferred
+            && self
+                .function_bodies
+                .get(&sym)
+                .or_else(|| self.method_bodies.get(&sym))
+                .is_some_and(|f| matches!(f, FnHandle::Ast(_)) && !f.stdlib_origin)
+    }
+
+    /// [`Self::public_policy_at`] for the function or method `sym`.
+    pub(crate) fn public_policy_of(&self, sym: Symbol) -> PublicEffectsPolicy {
+        match self.function_spans.get(&sym) {
+            Some(span) => self.public_policy_at(span.offset),
+            None => self.public_effects_policy,
+        }
     }
 
     /// Override the per-profile knob carrier wholesale — the `Pipeline` path,
@@ -3052,6 +3119,7 @@ impl<'a> EffectChecker<'a> {
         self.inferred_effects.values_mut().for_each(EffectSet::sort);
         self.errors
             .sort_by_key(|e| (e.span.line, e.span.column, e.span.offset));
+        let inferred_public = self.inferred_public();
 
         // Internal working tables are Symbol-keyed (name-interning spike
         // stage 3); the public result stays String-keyed std HashMap, so
@@ -3090,6 +3158,7 @@ impl<'a> EffectChecker<'a> {
             queries: Vec::new(),
             call_effect_subs,
             unused_effects,
+            inferred_public,
         }
     }
 

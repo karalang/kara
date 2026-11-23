@@ -459,6 +459,14 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              CN-5); `karac fix` writes the `_`, which keeps the binding and its value's \
              lifetime.",
     },
+    LintInfo {
+        name: "inferred_dependency_effects",
+        default_level: LintLevel::Warn,
+        description: "The package imports a dependency whose manifest sets `public_effects = \
+             \"inferred\"`. That dependency's public functions declare no effects: the compiler \
+             infers them from their bodies, so they are not part of its API contract and any \
+             release of it can change them (design.md § Effects).",
+    },
     // The five style lints of design.md § `karac fix` and `karac explain`
     // (B-2026-11-05-31), reported from source text by `crate::style_lints`.
     // Off by default in `check`, `build` and `run`; `karac fix` turns them

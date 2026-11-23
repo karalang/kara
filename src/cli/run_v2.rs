@@ -196,7 +196,13 @@ pub(super) fn check_v2_or_exit(
     }
     // An error `karac check` reports fails the command too (core semantics
     // §0): the MIR builder does not repeat every rule.
-    let checked = || v2_pipeline(filename, source, manifest, lint_overrides.clone());
+    let checked = || {
+        let mut p = v2_pipeline(filename, source, manifest, lint_overrides.clone());
+        if let Some(a) = project {
+            a.package_effects_into(&mut p.profile_config);
+        }
+        p
+    };
     let mut pipeline = checked();
     pipeline.run_all_checks();
     let total = pipeline.total_errors();
@@ -255,6 +261,9 @@ pub(super) fn check_v2_streamed(
         crate::trait_scope::set_program(a.hidden.clone());
     }
     let mut pipeline = v2_pipeline(filename, source, manifest, lint_overrides);
+    if let Some(a) = project {
+        a.package_effects_into(&mut pipeline.profile_config);
+    }
     let tail = match project {
         None => super::diag_json::stream_checks_jsonl(&mut pipeline, &[filename.to_string()], None),
         Some(a) => super::diag_json::stream_checks_jsonl(

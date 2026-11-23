@@ -885,6 +885,15 @@ impl<'a> super::EffectChecker<'a> {
                         None => CalleeEffectSets::One(fixed),
                     }
                 }
+                // Under `public_effects = "inferred"` a public function
+                // with no clause is inferred like a private one, and its
+                // callers are charged what it performs.
+                Some(DeclaredEffects::None) | None if self.public_is_inferred(callee_name) => {
+                    match self.inferred_effects.get(&callee_name) {
+                        Some(set) => CalleeEffectSets::One(set),
+                        None => CalleeEffectSets::None,
+                    }
+                }
                 Some(DeclaredEffects::None) | None => CalleeEffectSets::None, // pure
             }
         } else {

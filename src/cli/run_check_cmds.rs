@@ -1295,6 +1295,7 @@ fn check_package_for_target(
             Ok(a) => {
                 let mut pipeline =
                     super::run_v2::v2_pipeline(&filename, &a.text, Some(mf), lints.clone());
+                a.package_effects_into(&mut pipeline.profile_config);
                 pipeline.run_all_checks();
                 let errors = pipeline.total_errors();
                 if errors > 0 {
@@ -1573,7 +1574,11 @@ fn check_package_machine(
     let a = super::run_v2::combine(root, tree, output, "check");
     let mf = manifest::load_from_root(root).ok();
     let remap = |d: &str| a.remap_json_text(filename, d);
-    let fresh = || super::run_v2::v2_pipeline(filename, &a.text, mf.as_ref(), lints.clone());
+    let fresh = || {
+        let mut p = super::run_v2::v2_pipeline(filename, &a.text, mf.as_ref(), lints.clone());
+        a.package_effects_into(&mut p.profile_config);
+        p
+    };
     let mut pipeline = fresh();
     pipeline.run_all_checks();
     let errors = pipeline.total_errors();

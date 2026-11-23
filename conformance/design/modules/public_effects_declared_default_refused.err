@@ -1,0 +1,2 @@
+error[E0400]
+public function 'warn' performs effects [writes(Stderr)] but has no effect declaration

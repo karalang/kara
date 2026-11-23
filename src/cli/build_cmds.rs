@@ -397,6 +397,11 @@ pub(super) fn run_multi_file_late_phases(
         prune_library: true,
         library_bodies: Default::default(),
     };
+    // Each package's public functions are held to its own `public_effects`,
+    // the library's to `declared`.
+    let library_start = lib.map_or(usize::MAX / 4, |l| l.start);
+    pipeline.profile_config.package_effects = super::public_effects::of_tree(tree, library_start);
+    super::public_effects::library_declared(&mut pipeline.profile_config, library_start);
     pipeline.resolve();
     PackageLibrary::drop_diagnostics(lib, &mut pipeline);
     if pipeline.has_resolve_errors() {
@@ -1369,10 +1374,18 @@ pub(crate) fn editor_module_tables(path: &std::path::Path, source: &str) -> Opti
             ..Default::default()
         })
         .check();
+    // Each package's public functions under its own `public_effects`.
+    let mut config = crate::manifest::ProfileConfig::default();
+    if let Ok(mf) = crate::manifest::load_from_root(&root) {
+        config.public_effects = mf.profile_config.public_effects;
+    }
+    let lib_start = lib.as_ref().map_or(usize::MAX / 4, |l| l.start);
+    config.package_effects = super::public_effects::of_tree(&tree, lib_start);
+    super::public_effects::library_declared(&mut config, lib_start);
     let effects = crate::effectcheck_with_typecheck_tables(
         &program,
-        crate::effectchecker::PublicEffectsPolicy::default(),
-        crate::manifest::ProfileConfig::default(),
+        config.public_effects,
+        config,
         typed.method_callee_types.clone(),
         typed.call_type_subs.clone(),
         typed.node_call_subs.clone(),

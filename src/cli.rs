@@ -43,6 +43,7 @@ mod help;
 mod maintenance_cmds;
 mod pkg_cmds;
 mod project_v2;
+pub(crate) mod public_effects;
 mod query_cmd;
 pub(crate) mod repl_v2;
 mod run_check_cmds;
@@ -2546,6 +2547,11 @@ impl Pipeline {
         // reflected for the moot-flag scaffold and downstream knob consumers.
         let mut profile_config = self.profile_config.clone();
         profile_config.profile = self.profile;
+        // `public_effects` is the package's own setting: the library's
+        // public functions are held to `declared` under either.
+        if let Some(user_len) = self.library_len {
+            public_effects::library_declared(&mut profile_config, user_len);
+        }
         // B-2026-10-15-21: a call through a generic bound is charged at the
         // instance it is made at, which needs the call nodes' solved type
         // arguments and the expressions typed by a type parameter.
@@ -2561,7 +2567,7 @@ impl Pipeline {
             .unwrap_or_default();
         self.effects = Some(crate::effectcheck_with_typecheck_tables(
             &self.parsed.program,
-            crate::effectchecker::PublicEffectsPolicy::default(),
+            profile_config.public_effects,
             profile_config,
             method_types,
             call_type_subs,
@@ -2630,6 +2636,7 @@ impl Pipeline {
                 build_callee_purely_polymorphic_effects_set(effects);
         }
         self.report_unused_effects();
+        public_effects::report_inferred_dependencies(self);
         // Now that `callee_network_yield_effect` is populated, walk each
         // network-boundary function body and enumerate its yield points.
         // Resolves `MethodCall` sites through the typechecker's

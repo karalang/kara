@@ -5441,15 +5441,33 @@ Two `par` branches that both call `record` conflict on `AuditLog`. Parameterized
 - **Declarations are verified, not trusted.** A stale or wrong declaration is an error. The exception is an `extern` function, whose body the compiler cannot see: it has the effects it declares, none if it is declared `pure`, and every effect if it declares nothing ([§15](#effects-of-extern-functions), [core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)).
 - **Inference may change across compiler releases** only under the edition rules of [§2](#2-specification-layers): within an edition a private function's inferred set may only shrink; across editions it may grow, with each change itemized.
 
-**`public_effects` is a project setting** in `kara.toml`:
+**`public_effects` is a package setting** in `kara.toml`:
 
 ```toml
-[project]
+[package]
 public_effects = "declared"   # default: every pub fn declares its effects, and they are verified
 # public_effects = "inferred" # prototyping: pub fn effects are inferred and displayed, not declared
 ```
 
-Under `inferred`, public functions infer their effects like private ones. `karac build` prints each public function's set in terminal and JSON output, and `karac doc` shows it beside the signature. No declaration is required and mismatch errors do not fire. Libraries should stay on `declared`: under `inferred`, the public effect set is not part of the API contract. The setting is per project; there is no per-function override. `#[no_effect]` applies in both modes, because it checks the inferred set. Trait method clauses ([Trait methods and generic calls](#trait-methods-and-generic-calls)) are not affected by the setting.
+Under `inferred`, public functions infer their effects like private ones, and a caller is charged what the function it calls performs. `karac build` prints each public function's set in terminal and JSON output, and `karac doc` shows it beside the signature. In the terminal the sets come directly before the program's `Effects:` line, which is followed by `Built:`, one function to a line:
+
+```text
+Public effects (inferred):
+  parse: allocates(Heap), panics
+  report: writes(Stdout)
+Effects: allocates(Heap), panics, writes(Stdout)
+Built: dist/native/app
+```
+
+In `--output=json` they are `public_function_effects`. No declaration is required and mismatch errors do not fire; a public function that does write a clause is checked against it, as a private one is. Libraries should stay on `declared`: under `inferred`, the public effect set is not part of the API contract. The setting is per package; there is no per-function override. `#[no_effect]` applies in both modes, because it checks the inferred set. Trait method clauses ([Trait methods and generic calls](#trait-methods-and-generic-calls)) are not affected by the setting. Any other value of the key is a manifest error.
+
+**Each package is held to its own setting.** In a program of several packages, a dependency on `declared` owes its declarations whatever the package that depends on it sets, and the standard library is always on `declared`. A package that imports a dependency on `inferred` gets the `inferred_dependency_effects` warning at its first import of it, because the effects it relies on are not part of that dependency's contract and any release of it may change them:
+
+```text
+warning[inferred_dependency_effects]: src/main.kara:1:8: package `util` sets `public_effects = "inferred"`: ...
+```
+
+`-A inferred_dependency_effects` allows it.
 
 **Soundness defaults** ([core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)):
 1. A call whose callee cannot be resolved statically has every effect.
@@ -7591,7 +7609,7 @@ warning[unfulfilled_lint_expectation]: `#[expect(deprecated)]` did not fire; rem
 
 **Names are stable.** Lint names are reported behavior ([§2](#2-specification-layers)). A new lint is non-breaking only if it is warn-by-default and its name is new. Renaming or removing a lint needs an edition boundary and a changelog entry. An attribute naming an unknown lint is the `unknown_lint` warning (suppressible with `#[allow(unknown_lint)]`), so `#[allow(...)]` and `#[expect(...)]` in older code never break a build.
 
-**Built-in lints.** The registry (name, default level, trigger, suppression) is generated from the compiler and listed by `karac lint --list`. The v1 set includes `deprecated` ([§11](#deprecated)), `mutual_recursion_note`, `redundant_suffix`, `float_in_serialized_type`, `undocumented_unsafe`, `unfulfilled_lint_expectation`, `unknown_lint`, `unused_effect` (allowed by default, [§12](#inference-and-declarations)), `lossless_cast`, which flags a lossless `as` cast ([§5](#5-types)), `unused_mut` (warn by default), which flags a `let mut` binding that nothing writes, assigns through or borrows as `mut`, with a fix that deletes the `mut` ([Variable binding rules](#variable-binding-rules)), `redundant_clone` (warn by default), which flags `f(x.clone())` where `f`'s parameter only borrows, with a fix that deletes the `.clone()`, `vec_per_element` (warn by default), which flags a `Vec.filled(n, [a, b])` whose rows are only indexed, since the list literal is a `Vec` in every slot, with a fix to `[v; N]` when the literal repeats one value, `self_rebinding` (warn by default, W0323), which flags a `let` that binds names to themselves and nothing else, `let n = n;` where no binding of `n` is `mut`, with a fix that deletes it, and the style lints of [`karac fix`](#karac-fix-and-karac-explain), among them `unused_variable` (allowed by default, W0324). `unsafe_op_in_unsafe_fn` is a hard rule, not a lint, and takes no level ([§15](#unsafe_op_in_unsafe_fn-rule)).
+**Built-in lints.** The registry (name, default level, trigger, suppression) is generated from the compiler and listed by `karac lint --list`. The v1 set includes `deprecated` ([§11](#deprecated)), `mutual_recursion_note`, `redundant_suffix`, `float_in_serialized_type`, `undocumented_unsafe`, `unfulfilled_lint_expectation`, `unknown_lint`, `unused_effect` (allowed by default, [§12](#inference-and-declarations)), `inferred_dependency_effects` (warn by default, [§12](#inference-and-declarations)), which flags the import of a dependency whose manifest sets `public_effects = "inferred"`, `lossless_cast`, which flags a lossless `as` cast ([§5](#5-types)), `unused_mut` (warn by default), which flags a `let mut` binding that nothing writes, assigns through or borrows as `mut`, with a fix that deletes the `mut` ([Variable binding rules](#variable-binding-rules)), `redundant_clone` (warn by default), which flags `f(x.clone())` where `f`'s parameter only borrows, with a fix that deletes the `.clone()`, `vec_per_element` (warn by default), which flags a `Vec.filled(n, [a, b])` whose rows are only indexed, since the list literal is a `Vec` in every slot, with a fix to `[v; N]` when the literal repeats one value, `self_rebinding` (warn by default, W0323), which flags a `let` that binds names to themselves and nothing else, `let n = n;` where no binding of `n` is `mut`, with a fix that deletes it, and the style lints of [`karac fix`](#karac-fix-and-karac-explain), among them `unused_variable` (allowed by default, W0324). `unsafe_op_in_unsafe_fn` is a hard rule, not a lint, and takes no level ([§15](#unsafe_op_in_unsafe_fn-rule)).
 
 ### Attributes
 

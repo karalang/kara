@@ -759,7 +759,9 @@ impl<'a> super::EffectChecker<'a> {
     /// diagnostic carries both, plus the binding's decl line so the
     /// programmer can navigate without re-reading the span column.
     pub(crate) fn verify_pub_fn_no_synthetic_resource(&mut self) {
-        if self.public_effects_policy != super::PublicEffectsPolicy::Declared {
+        if self.public_effects_policy != super::PublicEffectsPolicy::Declared
+            && self.profile_config.package_effects.is_empty()
+        {
             return;
         }
         if self.modbind_let_mut.is_empty() {
@@ -785,6 +787,9 @@ impl<'a> super::EffectChecker<'a> {
                 offset: 0,
                 length: 0,
             });
+            if self.public_policy_of(name) != super::PublicEffectsPolicy::Declared {
+                continue;
+            }
             // One diagnostic per (function, offending binding). A
             // function that reads AND writes the same binding still
             // produces one diagnostic for that binding (writes

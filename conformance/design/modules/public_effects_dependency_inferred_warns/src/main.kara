@@ -1,0 +1,5 @@
+import util.{shout};
+
+fn main() {
+    shout("hi".to_string());
+}

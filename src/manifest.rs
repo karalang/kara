@@ -73,6 +73,7 @@ const KNOWN_PACKAGE_KEYS: &[&str] = &[
     "profile",
     "kara-version",
     "import",
+    "public_effects",
 ];
 
 /// Target execution environment — constrains which effects are legal at
@@ -257,9 +258,52 @@ pub struct ProfileConfig {
     /// this gates *how* any panic propagates), so it registers no
     /// `ProfileKnob` — it is meaningful under every profile.
     pub panic: Option<PanicStrategy>,
+    /// `[package].public_effects = "declared" | "inferred"` (design.md
+    /// § Effect inference): whether a `pub fn` must declare its effects. A
+    /// package setting, not a `[profile]` knob; it rides here because this
+    /// is the object every pipeline takes from the manifest.
+    pub public_effects: crate::effectchecker::PublicEffectsPolicy,
+    /// In a program of several packages, where each other package's code
+    /// is and the policy its own manifest sets: a package's public
+    /// functions are held to its own setting, never to the root's.
+    pub package_effects: Vec<PackageEffects>,
+    /// The root package's first import of each dependency that sets
+    /// `public_effects = "inferred"`, where the
+    /// `inferred_dependency_effects` lint reports it.
+    pub inferred_imports: Vec<InferredImport>,
+}
+
+/// One package's code in a program of several: the span offsets
+/// `start..end` are its modules', `package` the name they are imported
+/// under (empty for the standard library), `policy` its `public_effects`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageEffects {
+    pub start: usize,
+    pub end: usize,
+    pub package: String,
+    pub policy: crate::effectchecker::PublicEffectsPolicy,
+}
+
+/// An import of a dependency whose public effects are inferred: the
+/// package's import name and the import's place in the program's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InferredImport {
+    pub package: String,
+    pub line: usize,
+    pub column: usize,
+    pub offset: usize,
+    pub length: usize,
 }
 
 impl ProfileConfig {
+    /// The `public_effects` policy of the package whose code is at `offset`.
+    pub fn public_effects_at(&self, offset: usize) -> crate::effectchecker::PublicEffectsPolicy {
+        self.package_effects
+            .iter()
+            .find(|p| (p.start..p.end).contains(&offset))
+            .map_or(self.public_effects, |p| p.policy)
+    }
+
     /// Carrier for `profile` with no knobs — the form used everywhere a
     /// bare [`CompileProfile`] was threaded before the substrate landed.
     pub fn with_profile(profile: CompileProfile) -> Self {
@@ -268,6 +312,9 @@ impl ProfileConfig {
             guarded_knobs: Vec::new(),
             panic_on_alloc_failure: None,
             panic: None,
+            public_effects: Default::default(),
+            package_effects: Vec::new(),
+            inferred_imports: Vec::new(),
         }
     }
 
@@ -983,6 +1030,23 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         None => CompileProfile::Default,
     };
 
+    let public_effects = match package.get("public_effects") {
+        Some(toml::Value::String(s)) if s == "declared" => {
+            crate::effectchecker::PublicEffectsPolicy::Declared
+        }
+        Some(toml::Value::String(s)) if s == "inferred" => {
+            crate::effectchecker::PublicEffectsPolicy::Inferred
+        }
+        Some(_) => {
+            return Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "public_effects".to_string(),
+                expected: "\"declared\" or \"inferred\"",
+            });
+        }
+        None => crate::effectchecker::PublicEffectsPolicy::Declared,
+    };
+
     let edition = match package.get("edition") {
         Some(toml::Value::String(s)) => {
             if !KNOWN_EDITIONS.contains(&s.as_str()) {
@@ -1156,7 +1220,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let toolchain_wasm_tools = parse_toolchain_table(path, &table, &mut warnings)?;
     let (wasm_pool_size, wasm_fallback, wasm_max_memory_pages) =
         parse_wasm_table(path, &table, &mut warnings)?;
-    let profile_config = parse_profile_table(path, &table, profile, &mut warnings)?;
+    let mut profile_config = parse_profile_table(path, &table, profile, &mut warnings)?;
+    profile_config.public_effects = public_effects;
     let (link_libs, link_search_paths) = parse_link_table(path, &table, &mut warnings)?;
     let (lib_name, lib_crate_type) = parse_lib_table(path, &table, &mut warnings)?;
 

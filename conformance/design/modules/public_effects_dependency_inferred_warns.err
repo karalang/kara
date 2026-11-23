@@ -1,0 +1,1 @@
+warning[inferred_dependency_effects]: src/main.kara:1:8: package `util` sets `public_effects = "inferred"`

@@ -68,6 +68,7 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
         .with_library();
     pipeline.profile = mf.profile;
     pipeline.profile_config = mf.profile_config.clone();
+    amalgam.package_effects_into(&mut pipeline.profile_config);
     pipeline.run_all_checks();
     if pipeline.total_errors() > 0 {
         for d in &collect_diagnostics(&pipeline).entries {
@@ -640,6 +641,7 @@ pub(super) fn check_package_tests(
         .with_library();
     pipeline.profile = mf.profile;
     pipeline.profile_config = mf.profile_config.clone();
+    amalgam.package_effects_into(&mut pipeline.profile_config);
     pipeline.run_all_checks();
     let errors = pipeline.total_errors();
     if errors == 0 {

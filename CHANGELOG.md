@@ -590,6 +590,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   binding, so its value is dropped where it was before. A binding that is
   only assigned, a parameter, an or-pattern's name, a shorthand field and a
   name that already starts with `_` are not reported (B-2026-11-20-146).
+- `kara.toml` reads `[package].public_effects = "declared" | "inferred"`
+  (design.md § Inference and declarations); the key was documented and
+  drew an unknown-key notice, and every package was checked as `declared`.
+  Under `inferred` a public function owes no `with` clause, a caller is
+  charged what the function performs, `karac build` prints each public
+  function's inferred set before the `Effects:` line and `Built:`
+  (`public_function_effects` in JSON), and `#[no_effect]`, trait method clauses and any clause that is
+  written are checked as before. Each package of a program is held to its
+  own setting and the standard library to `declared`; a package that
+  imports a dependency on `inferred` gets the new
+  `inferred_dependency_effects` warning at its first import of it
+  (B-2026-11-24-10).
 
 - A program's trait impl for a concrete tuple type (`impl Show for (i64,
   i64)`) answers method calls, default methods, `Show.show(p)`, `T: Show`

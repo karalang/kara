@@ -1,0 +1,12 @@
+pub fn warn(msg: String) {
+    eprintln(msg);
+}
+
+pub fn twice(n: i64) -> i64 {
+    n + n
+}
+
+fn main() {
+    warn("w".to_string());
+    println(twice(21));
+}

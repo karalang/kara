@@ -810,6 +810,7 @@ fn package_member_fixes(
         pipeline.profile = m.profile;
         pipeline.profile_config = m.profile_config.clone();
     }
+    a.package_effects_into(&mut pipeline.profile_config);
     pipeline.run_all_checks();
     let mut all = FixSet::default();
     collect_fixes(&pipeline, &a.text, &mut all);
