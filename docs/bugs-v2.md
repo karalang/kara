@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 710 |
+| diagnostics | 711 |
 | false-positive | 354 |
 | missing-feature | 245 |
 | perf | 199 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 865 |
+| typecheck | 866 |
 | mir-llvm | 320 |
 | mir | 316 |
-| cli | 277 |
+| cli | 278 |
 | parser | 152 |
 | ownership | 132 |
 | runtime | 107 |
@@ -128,7 +128,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-21-55 | 2026-11-21 | typecheck+mir | medium | No way to key a Map or Set by shared-handle identity: `ref_eq` exists but nothing hashes identity, so a node-to-copy map, a visited set or a memo over shared nodes is O(n^2) or needs an id field; spec now gives `Identity[T]` (std.hash) | — |
 | B-2026-11-21-73 | 2026-11-21 | parser | low | Parser diagnostics whose help names one determined edit carry no fix: E0005 (delete `with _`), E_INTERIOR_NUL_IN_C_STRING (remove the `\0`), E_NO_EFFECT_STRING_VALUE (`#[no_effect = "V"]` to `#[no_effect(V)]`), E_PROFILE_STRING_VALUE (`#[profile("x")]` to `#[profile(x)]`), E_RESERVED_KEYWORD (`match` to `r#match`), parser-side E_MALFORMED_ATTRIBUTE_ARGS / E_GPU_ARGS_NOT_PERMITTED / E_TRACK_CALLER_ARGS_NOT_PERMITTED (drop the arguments), E_ATTR_ON_ASSOC_TYPE_DECL, E0002's Rust-style `mut b: T` parameter | — |
-| B-2026-11-21-74 | 2026-11-21 | typecheck+ownership | low | Diagnostics whose help names a determined edit still carry no fix, most because the edit spans several sites: E0113 (drop `as F`, rename uses), E0127 and W0298 (rename to the name given, with uses), E0204 (move the method to an inherent impl), E_DEFERRED_EFFECT_GROUP, E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET, E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG, E_SLICE_FROM_TEMPORARY_ESCAPES, E_EXTERN_REF_PARAM, L0001, and single variants of E0107, E0200, E0212, E0232, E0506, E0511, E0515, E0517, E0518, E0520, E_CODEGEN_HINT_INVALID_POSITION, E_DROP_SIGNATURE_INVALID, E_EXTERN_TYPE_NOT_FFI_SAFE, E_UNKNOWN_ATTRIBUTE, W0309, W0310; and E_TEST_OUTSIDE_TEST_FILE (move the test to a test file), E_TOOLCHAIN_INVALID_VERSION_TYPE (quote the toml scalar) | — |
 | B-2026-11-22-3 | 2026-11-22 | typecheck | medium | Regression from 449dd49566 (B-2026-11-21-57): `a.iter().fold((0, 0), |(p, q), x| (x, p + q))` is refused, expected i64 found ref i64 | — |
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 | B-2026-11-22-39 | 2026-11-22 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect summary, the inferred set of `main`"; only `--output=json` carries it (`program_effects`) | — |
@@ -138,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-51 | 2026-11-22 | typecheck | low | A `T: Copy` bound is not satisfied by a shared reference: `fn swap2[T: Copy](xs: mut Slice[T])` called with a `Vec[ref String]` is E0200 "`ref String` does not implement `Copy`", though core-semantics §1.1 lists `ref T` as `Copy` | — |
 | B-2026-11-22-52 | 2026-11-22 | typecheck+mir | low | NEEDS A RULING: for `x` of `for x in nums.iter()` over `Copy` elements, `let start = x; q.push(start)` into a queue of `ref i32` lends `nums` and is accepted (B-2026-11-20-35), while `q.push(x)` and `count.entry(x)` lend the loop's own copy and are E0516 (pin corpus/core/err_written_ref_map_key_lends_loop_item) | — |
 | B-2026-11-23-1 | 2026-11-23 | typecheck+mir | medium | `h.r = b` and `t.0 = b`, an owned `String` assigned to a `ref String` field or tuple part, pass `karac check` and stop every backend with "invalid MIR: assigning String to _3.0 of type ref String"; `h.r = ref b` runs | — |
+| B-2026-11-23-2 | 2026-11-23 | typecheck+cli | low | Four diagnostics whose help names one edit still carry no fix: E0113 (drop `as F` from a library import and rename the alias's uses), E0515's `Some(place)` form (bind `let r = ref <place>;` first, return `Some(r)`), E_TOOLCHAIN_INVALID_VERSION_TYPE (quote the manifest scalar) and E_TEST_OUTSIDE_TEST_FILE (move the test to a test file) | — |
 
 ### Relocated
 
@@ -2150,6 +2150,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-206 | mir | low | `karac fix` deletes the redundant cast of Rust's `let n = n as i64;` (a length is already `i64`) and leaves `let n = n;`, and the tuple form `let (nr… | 0d28296389 |
 | B-2026-11-21-207 | mir | low | A method on a `collect()` with no target type, `(1..100).collect().iter()`, is refused "no method 'iter' on type parameter 'C'; add a trait bound dec… | 0d28296389 |
 | B-2026-11-21-72 | typecheck+ownership | medium | Twenty-four diagnostic codes whose help names one determined edit carried no machine-applicable fix, so `karac fix` left them for the author: W0302 a… | b91803955e |
+| B-2026-11-21-74 | typecheck+ownership | low | Diagnostics whose help names a determined edit still carry no fix, most because the edit spans several sites: E0113 (drop `as F`, rename uses), E0127… | 2256509d1a |
 | B-2026-11-21-75 | cli | medium | Project-mode `karac check --output=json` drops a typecheck error's fix and its named code: E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN / _LITERAL reach JS… | ac90849f76 |
 | B-2026-11-21-76 | cli | low | Codes `karac explain` lists as RETIRED still fire: E_RC_BUDGET_EXCEEDED on conformance/fix-coverage/probes/agent_named/p/rcbudget/main.kara (beside E… | ac90849f76 |
 | B-2026-11-21-77 | cli | medium | `karac check` in a project ignores the manifest's [profile]: with `panic = "unwind"`, check refuses a C-unwind export with E0415 (the abort-profile r… | 5718c5ef54 |
