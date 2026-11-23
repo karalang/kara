@@ -3311,7 +3311,7 @@ fn match_arm_condition(
     use crate::ast::LiteralPattern;
     match &pattern.kind {
         PatternKind::Wildcard => Ok(None),
-        PatternKind::Literal(LiteralPattern::Integer(n, _)) => {
+        PatternKind::Literal(LiteralPattern::Integer(n, _, _)) => {
             Ok(Some(format!("({subject} == {n})")))
         }
         PatternKind::Literal(LiteralPattern::Bool(b)) => Ok(Some(format!("({subject} == {b})"))),

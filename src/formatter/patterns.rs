@@ -165,7 +165,10 @@ impl super::Formatter {
 
     pub(super) fn format_literal_pattern(&mut self, lit: &LiteralPattern) {
         match lit {
-            LiteralPattern::Integer(n, sfx) => self.write_str(&super::int_literal(*n, *sfx)),
+            LiteralPattern::Integer(n, _, true) if (0..=255).contains(n) => {
+                self.write_str(&super::byte_literal(*n as u8))
+            }
+            LiteralPattern::Integer(n, sfx, _) => self.write_str(&super::int_literal(*n, *sfx)),
             LiteralPattern::Float(f, sfx) => {
                 write!(self.output, "{f:?}").unwrap();
                 if let Some(s) = sfx {

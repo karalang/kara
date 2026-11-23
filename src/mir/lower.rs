@@ -20470,7 +20470,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // An arm's value is the scrutinee's bits, at its width
                     // (`u64::MAX`, not the 128-bit `-1` the literal widens
                     // to, B-2026-10-22-37).
-                    LiteralPattern::Integer(v, _) => match self.tys().int_ty(t) {
+                    LiteralPattern::Integer(v, _, _) => match self.tys().int_ty(t) {
                         Some(it) => {
                             let s = 128 - it.bits();
                             (*v as u128) << s >> s
@@ -20698,7 +20698,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(Some(None));
         };
         Ok(match b {
-            RangeBound::Literal(LiteralPattern::Integer(v, _)) => Some(Some(*v as u128)),
+            RangeBound::Literal(LiteralPattern::Integer(v, _, _)) => Some(Some(*v as u128)),
             RangeBound::Literal(LiteralPattern::Char(c)) => Some(Some(*c as u128)),
             RangeBound::Literal(_) => None,
             RangeBound::Path { segments, .. } => match segments.as_slice() {

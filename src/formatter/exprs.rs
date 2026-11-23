@@ -225,22 +225,7 @@ impl super::Formatter {
                 }
                 self.write_str("\"");
             }
-            ExprKind::ByteLit(b) => {
-                // `b'X'` — mirror the lexer's accepted forms. Printable
-                // ASCII (0x20..=0x7E, except `'` and `\`) round-trips as
-                // `b'X'`. Simple escapes (`\n \t \r \0 \\ \'`) preserve
-                // their named form. Everything else emits `b'\xHH'`.
-                match *b {
-                    b'\n' => self.write_str("b'\\n'"),
-                    b'\t' => self.write_str("b'\\t'"),
-                    b'\r' => self.write_str("b'\\r'"),
-                    0 => self.write_str("b'\\0'"),
-                    b'\\' => self.write_str("b'\\\\'"),
-                    b'\'' => self.write_str("b'\\''"),
-                    0x20..=0x7E => write!(self.output, "b'{}'", *b as char).unwrap(),
-                    _ => write!(self.output, "b'\\x{:02X}'", b).unwrap(),
-                }
-            }
+            ExprKind::ByteLit(b) => self.write_str(&super::byte_literal(*b)),
             ExprKind::StringLit(s) => {
                 self.write_str("\"");
                 self.write_str(&escape_string(s));

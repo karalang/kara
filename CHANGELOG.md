@@ -3632,6 +3632,9 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `karac fmt` keeps a byte literal in a pattern as written: `b'M' => 0` and
+  `b'a'..=b'z'` stayed byte literals in expressions but came out of a pattern
+  as `77u8 => 0` and `97u8..=122u8` (B-2026-11-21-48).
 - `karac build --target=wasm_*` strips the DWARF sections again, linking
   with wasm-ld's `--strip-debug`: a wasi hello is 65757 B rather than
   964526 B. `KARAC_WASM_KEEP_DEBUG=1`, or `KARAC_DEBUG_INFO`, keeps them

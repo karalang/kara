@@ -431,7 +431,9 @@ impl super::Parser {
             Token::Minus => {
                 self.advance();
                 match self.parse_negated_literal()? {
-                    LiteralPattern::Integer(v, sfx) => self.finish_integer_pattern(v, sfx, start),
+                    LiteralPattern::Integer(v, sfx, _) => {
+                        self.finish_integer_pattern(v, sfx, start)
+                    }
                     lit => Some({
                         if matches!(lit, LiteralPattern::Float(..)) {
                             self.refuse_float_range();
@@ -463,7 +465,7 @@ impl super::Parser {
             // `b'I'` and `73u8` are then identical in pattern position.
             &Token::ByteLiteral(b) => {
                 self.advance();
-                let lit = LiteralPattern::Integer(b as i128, Some(IntSuffix::U8));
+                let lit = LiteralPattern::Integer(b as i128, Some(IntSuffix::U8), true);
                 // Range pattern: `b'a'..=b'z'` or `b'a'..`
                 if self.eat(&Token::DotDotEq) {
                     let end = self.parse_range_bound()?;
@@ -1106,7 +1108,7 @@ impl super::Parser {
         sfx: Option<IntSuffix>,
         start: crate::token::Span,
     ) -> Option<Pattern> {
-        let lit = LiteralPattern::Integer(v, sfx);
+        let lit = LiteralPattern::Integer(v, sfx, false);
         if self.eat(&Token::DotDotEq) {
             let end = self.parse_range_bound()?;
             return Some(Pattern {
@@ -1175,7 +1177,7 @@ impl super::Parser {
         match *self.peek_token_ref() {
             Token::Integer(n, sfx) => {
                 self.advance();
-                Some(LiteralPattern::Integer(-n, sfx))
+                Some(LiteralPattern::Integer(-n, sfx, false))
             }
             Token::IntegerOutOfRange(m, sfx) => {
                 self.advance();
@@ -1183,13 +1185,13 @@ impl super::Parser {
                 // `2^127` for `i128`. Each is exactly one past its type's MAX,
                 // so it is representable only with the sign already applied.
                 if m == (1u128 << 63) && !matches!(sfx, Some(IntSuffix::I128)) {
-                    return Some(LiteralPattern::Integer(i64::MIN as i128, sfx));
+                    return Some(LiteralPattern::Integer(i64::MIN as i128, sfx, false));
                 }
                 if m == (1u128 << 127) {
-                    return Some(LiteralPattern::Integer(i128::MIN, sfx));
+                    return Some(LiteralPattern::Integer(i128::MIN, sfx, false));
                 }
                 let v = i128::try_from(m).ok()?;
-                Some(LiteralPattern::Integer(-v, sfx))
+                Some(LiteralPattern::Integer(-v, sfx, false))
             }
             Token::Float(f, sfx) => {
                 self.advance();
@@ -1247,13 +1249,14 @@ impl super::Parser {
             }
             Token::Integer(n, sfx) => {
                 self.advance();
-                Some(LiteralPattern::Integer(n, sfx))
+                Some(LiteralPattern::Integer(n, sfx, false))
             }
             Token::IntegerOutOfRange(m, sfx) => {
                 self.advance();
                 Some(LiteralPattern::Integer(
                     Self::pattern_int_on_carrier(m, sfx)?,
                     sfx,
+                    false,
                 ))
             }
             Token::CharLiteral(c) => {
@@ -1262,7 +1265,11 @@ impl super::Parser {
             }
             Token::ByteLiteral(b) => {
                 self.advance();
-                Some(LiteralPattern::Integer(b as i128, Some(IntSuffix::U8)))
+                Some(LiteralPattern::Integer(
+                    b as i128,
+                    Some(IntSuffix::U8),
+                    true,
+                ))
             }
             _ => {
                 self.error("Expected integer or character literal in range pattern");

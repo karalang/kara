@@ -509,7 +509,7 @@ fn render_rust_pattern(p: &Pattern) -> String {
         PatternKind::Wildcard => format!("(pwild{sp})"),
         PatternKind::Binding(name) => format!("(pbind {name}{sp})"),
         PatternKind::Literal(lit) => match lit {
-            LiteralPattern::Integer(v, sfx) => {
+            LiteralPattern::Integer(v, sfx, _) => {
                 let lex = int_suffix_lex(*sfx);
                 if lex.is_empty() {
                     format!("(pint {v}{sp})")

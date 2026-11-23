@@ -241,3 +241,28 @@ fn fmt_writes_an_empty_struct_on_one_line() {
         "struct Unit {}\n\nstruct Empty {}\n\nfn main() {\n    let u = Unit {};\n}\n"
     );
 }
+
+#[test]
+fn fmt_keeps_a_byte_literal_in_a_pattern() {
+    // A byte literal in a pattern is the same `u8` integer as `77u8` to every
+    // consumer, and the printer wrote it as that number: `b'M' => 0` became
+    // `77u8 => 0`, and a byte range `97u8..=122u8` (B-2026-11-21-48). One
+    // written as a number stays a number.
+    let src = "fn kind(c: u8) -> i64 {
+    match c {
+        b'M' => 0,
+        b'a'..=b'z' => 1,
+        b'\\n' | b'\\'' | b'\\x7F' => 2,
+        b'0'.. => 3,
+        77u8 => 4,
+        _ => 5,
+    }
+}
+
+fn main() {
+    println(kind(b'M'));
+}
+";
+    let once = karac::format_source(src).unwrap();
+    assert_eq!(once, src);
+}

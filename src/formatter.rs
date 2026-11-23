@@ -612,6 +612,23 @@ pub(super) fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
     crate::effect_render::verb_keyword(v).to_string()
 }
 
+/// `b'X'`, the byte literal for `b`, in the lexer's accepted forms: printable
+/// ASCII (0x20..=0x7E, except `'` and `\`) as itself, the simple escapes
+/// (`\n \t \r \0 \\ \'`) by name, and everything else as `b'\xHH'`. An
+/// expression's `b'M'` and a pattern's print the same (B-2026-11-21-48).
+pub(super) fn byte_literal(b: u8) -> String {
+    match b {
+        b'\n' => "b'\\n'".to_string(),
+        b'\t' => "b'\\t'".to_string(),
+        b'\r' => "b'\\r'".to_string(),
+        0 => "b'\\0'".to_string(),
+        b'\\' => "b'\\\\'".to_string(),
+        b'\'' => "b'\\''".to_string(),
+        0x20..=0x7E => format!("b'{}'", b as char),
+        _ => format!("b'\\x{b:02X}'"),
+    }
+}
+
 /// An integer literal as the source wrote it. An unsigned one past the
 /// signed carrier's top rides it as the wrapped bit pattern (`u128::MAX` is
 /// `-1`), so it is printed as the unsigned value, not the carrier.

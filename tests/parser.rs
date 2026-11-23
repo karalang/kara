@@ -7716,7 +7716,7 @@ fn test_byte_literal_in_match_pattern() {
             if let ExprKind::Match { arms, .. } = &expr.kind {
                 assert!(matches!(
                     &arms[0].pattern.kind,
-                    PatternKind::Literal(LiteralPattern::Integer(73, Some(IntSuffix::U8)))
+                    PatternKind::Literal(LiteralPattern::Integer(73, Some(IntSuffix::U8), true))
                 ));
             } else {
                 panic!("Expected Match");
@@ -7742,14 +7742,16 @@ fn test_range_pattern_byte() {
                         start,
                         Some(RangeBound::Literal(LiteralPattern::Integer(
                             48,
-                            Some(IntSuffix::U8)
+                            Some(IntSuffix::U8),
+                            true
                         )))
                     ));
                     assert!(matches!(
                         end,
                         Some(RangeBound::Literal(LiteralPattern::Integer(
                             57,
-                            Some(IntSuffix::U8)
+                            Some(IntSuffix::U8),
+                            true
                         )))
                     ));
                     assert!(*inclusive);
@@ -12090,7 +12092,7 @@ fn test_range_pattern_const_path_mixed_literal_start() {
         PatternKind::RangePattern { start, end, .. } => {
             assert!(matches!(
                 start,
-                Some(RangeBound::Literal(LiteralPattern::Integer(0, _)))
+                Some(RangeBound::Literal(LiteralPattern::Integer(0, _, _)))
             ));
             assert!(matches!(end, Some(RangeBound::Path { segments, .. }) if segments == ["MAX"]));
         }

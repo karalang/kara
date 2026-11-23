@@ -2973,7 +2973,7 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(scrut_int, Type::Int(_) | Type::UInt(_)) {
             let scrut_int = scrut_int.clone();
             for b in [start, end].into_iter().flatten() {
-                if let RangeBound::Literal(LiteralPattern::Integer(n, sfx)) = b {
+                if let RangeBound::Literal(LiteralPattern::Integer(n, sfx, _)) = b {
                     let value = Self::pattern_literal_as_checked_value(*n, *sfx);
                     self.check_int_literal_fits(value, &scrut_int, span, *sfx);
                 }
@@ -3123,7 +3123,7 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let found = match lit {
-            LiteralPattern::Integer(n, sfx) => {
+            LiteralPattern::Integer(n, sfx, _) => {
                 if matches!(expected, Type::Int(_) | Type::UInt(_)) {
                     // Range-check exactly as the expression path does — same
                     // helper, same suffix argument.
@@ -3228,7 +3228,7 @@ impl<'a> super::TypeChecker<'a> {
         const_pattern: bool,
     ) -> Option<(i128, Type, bool)> {
         match bound {
-            RangeBound::Literal(LiteralPattern::Integer(n, sfx)) => {
+            RangeBound::Literal(LiteralPattern::Integer(n, sfx, _)) => {
                 let (ty, explicit) = match int_suffix_to_type(sfx) {
                     Some(t) => (t, true),
                     None => (Type::Int(IntSize::I64), false),

@@ -253,7 +253,11 @@ pub enum LiteralPattern {
     /// An UNSIGNED value keeps riding as its wrapped two's-complement pattern,
     /// exactly as the expression carrier does, so a pattern and its scrutinee
     /// compare as identical bits without either side re-reading the sign.
-    Integer(i128, Option<IntSuffix>),
+    ///
+    /// The `bool` is true when the source wrote a byte literal (`b'M'`),
+    /// which is this same `u8` integer to every consumer and is kept only so
+    /// `karac fmt` prints it as written (B-2026-11-21-48).
+    Integer(i128, Option<IntSuffix>, bool),
     Float(f64, Option<FloatSuffix>),
     Char(char),
     String(String),
