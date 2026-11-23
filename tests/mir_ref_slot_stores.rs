@@ -21,6 +21,11 @@
 //! which the queue outlives, and was E0516, while `let start = x;
 //! q.push(start)` lent `nums`; `best = x` into a `ref` local stopped the
 //! build with invalid MIR.
+//!
+//! `h.r = b` and `t.0 = b` into a `ref String` field or tuple part lend `b`,
+//! as the literal `Holder { r: b }` does (decided 2026-11-23,
+//! B-2026-11-23-1): they passed `karac check` and stopped the build with
+//! "assigning String to _3.0 of type ref String".
 
 mod common;
 
@@ -271,6 +276,113 @@ fn a_for_item_reference_keeps_its_collection_borrowed() {
     ] {
         refused_by_borrowck(name, src, &["E0516", needle]);
     }
+}
+
+#[test]
+fn a_field_or_tuple_part_assignment_lends_its_value() {
+    runs_everywhere(
+        "part_assign_lends",
+        "struct H { r: ref String }\n\
+         struct Outer { h: H, n: i64 }\n\
+         fn set(h: mut ref H, s: ref String) { h.r = s; }\n\
+         fn main() {\n\
+         let words: Vec[String] = [\"w0\".to_string(), \"w1\".to_string()];\n\
+         let a = \"a\".to_string();\n\
+         let b = \"b\".to_string();\n\
+         let c = \"c\".to_string();\n\
+         let user = (\"u\".to_string(), 1);\n\
+         let mut h = H { r: a };\n\
+         h.r = b;\n\
+         let mut t: (ref String, i64) = (a, 1);\n\
+         t.0 = b;\n\
+         println(f\"{h.r} {t.0} {a} {b}\");\n\
+         h.r = words[1];\n\
+         t.0 = words[0];\n\
+         let mut o = Outer { h: H { r: a }, n: 1 };\n\
+         o.h.r = user.0;\n\
+         let mut hs: Vec[H] = [H { r: a }];\n\
+         hs[0].r = user.0;\n\
+         let mut h2 = H { r: a };\n\
+         set(mut h2, c);\n\
+         let mut n: ((ref String, i64), i64) = ((a, 1), 2);\n\
+         n.0.0 = c;\n\
+         h2.r = ref b;\n\
+         println(f\"{h.r} {t.0} {o.h.r} {hs[0].r} {h2.r} {n.0.0}\");\n\
+         println(f\"{user.0} {a} {c} {o.n} {words.len()}\");\n\
+         }\n",
+        "b b a b\nw1 w0 u u b c\nu a c 1 2\n",
+    );
+}
+
+#[test]
+fn a_field_assignment_of_a_value_that_dies_first_is_refused() {
+    let head = "struct H { r: ref String }\n\
+                fn main() {\n\
+                let a = \"a\".to_string();\n\
+                let mut h = H { r: a };\n";
+    for (name, body, needle) in [
+        (
+            "part_assign_temp",
+            "h.r = a.clone();\n\
+             println(f\"{h.r}\");\n",
+            "cannot drop the temporary value",
+        ),
+        (
+            "part_assign_block_local",
+            "{\n\
+             let t = \"t\".to_string();\n\
+             h.r = t;\n\
+             }\n\
+             println(f\"{h.r}\");\n",
+            "cannot drop `t` while `h` still holds a borrow of it",
+        ),
+        (
+            "part_assign_lender_written",
+            "let mut b = \"b\".to_string();\n\
+             h.r = b;\n\
+             b.push_str(\"!\");\n\
+             println(f\"{h.r}\");\n",
+            "cannot mutably borrow `b` while `h` still holds a borrow of it",
+        ),
+        (
+            "part_assign_lender_moved",
+            "let b = \"b\".to_string();\n\
+             h.r = b;\n\
+             let moved = b;\n\
+             println(f\"{h.r} {moved}\");\n",
+            "cannot move `b` while `h` still holds a borrow of it",
+        ),
+    ] {
+        refused_by_borrowck(name, &format!("{head}{body}}}\n"), &["E0516", needle]);
+    }
+}
+
+#[test]
+fn a_part_that_owns_its_value_still_takes_it_and_a_ref_local_takes_ref() {
+    // An owned field moves the value in, as before.
+    refused(
+        "part_assign_owned_moves",
+        "struct P { name: String, n: i64 }\n\
+         fn main() {\n\
+         let a = \"a\".to_string();\n\
+         let mut p = P { name: \"x\".to_string(), n: 1 };\n\
+         p.name = a;\n\
+         println(f\"{p.name} {a} {p.n}\");\n\
+         }\n",
+        &["E0500", "value 'a' moved here"],
+    );
+    // A `ref` local is rebound with the operator (§5.1).
+    refused(
+        "ref_local_assign",
+        "fn main() {\n\
+         let a = \"a\".to_string();\n\
+         let mut r: ref String = ref a;\n\
+         let b = \"b\".to_string();\n\
+         r = b;\n\
+         println(f\"{r}\");\n\
+         }\n",
+        &["write `r = ref b` to borrow it"],
+    );
 }
 
 #[test]

@@ -2461,6 +2461,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- `h.r = b` and `t.0 = b` into a `ref String` field or tuple part borrow
+  `b`, as the literal `Holder { r: b }` and `v[i] = b` do; `b` stays usable
+  and is not written, moved or dropped while `h` is used (E0516). The
+  assignment passed `karac check` and then stopped the build with `invalid
+  MIR: assigning String to _3.0 of type ref String`. A `ref` local still
+  takes `r = ref b`. Decided 2026-11-23 (B-2026-11-23-1).
 - `m.entry(k)` on a `Map[ref String, V]` or `SortedMap[ref String, V]` lends
   an owned `k`, as `m.insert(k, v)` does: `karac check` no longer reports the
   key as moved (E0500 at its next use, or E0515 with a `.clone()` fix for

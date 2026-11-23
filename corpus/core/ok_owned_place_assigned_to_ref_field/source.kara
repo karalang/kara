@@ -1,0 +1,17 @@
+// An owned place assigned to a `ref` field is lent, not moved, as the
+// literal `Holder { r: a }` lends it (design.md § Views; decided
+// 2026-11-23): the place keeps its value and stays usable.
+struct Holder {
+    r: ref String,
+}
+
+fn main() {
+    let words: Vec[String] = ["one".to_string(), "two".to_string()];
+    let a = "a".to_string();
+    let b = "b".to_string();
+    let mut h = Holder { r: a };
+    h.r = b;
+    println(f"{h.r}");
+    h.r = words[1];
+    println(f"{h.r} {a} {b} {words.len()}");
+}

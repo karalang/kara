@@ -7881,6 +7881,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             let tt = self.expr_ty(target)?;
             let (_, tt) = self.strip_ty_full(tt);
             self.operand_at(value, tt)?
+        } else if let Some(slot) = self.ref_part_slot(target, value)? {
+            // `h.r = b` into a `ref String` field or tuple part lends `b`,
+            // as `Holder { r: b }` does (decided 2026-11-23,
+            // B-2026-11-23-1): the `String` itself was assigned to the
+            // reference's slot, which is not valid MIR.
+            self.operand_at(value, slot)?
         } else if let Some(tt) = self.tuple_slot_of_branches(branches, value, target)? {
             // The same for an `if`, `match` or block of tuple literals
             // (`acc = if c { (side, n + 1) } else { acc }`): each tail is
@@ -8104,6 +8110,23 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// The place an assignment writes: a `mut ref` binding assigned a value
     /// of its pointee type writes through the reference (`x = x + 1` for
     /// `x: mut ref i64`), and the type stored there.
+    /// The type of the field or tuple part `target` names when it holds a
+    /// shared reference and `value` is of the type it refers to.
+    fn ref_part_slot(&mut self, target: &'a Expr, value: &'a Expr) -> R<Option<Ty>> {
+        if !matches!(
+            target.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return Ok(None);
+        }
+        let tt = self.expr_ty(target)?;
+        let vt = self.expr_ty(value)?;
+        Ok(match self.tys().tcx().kind(tt) {
+            HK::Ref(inner) if inner == vt => Some(tt),
+            _ => None,
+        })
+    }
+
     fn write_through(&mut self, place: Place, value: &'a Expr) -> R<(Place, Ty)> {
         let t = self.place_type(&place);
         if let HK::MutRef(inner) = self.tys().tcx().kind(t) {

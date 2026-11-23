@@ -2615,6 +2615,7 @@ Rules for views, all in [core-semantics.md §5](core-semantics.md#5-references-a
   ```
 - **Where a view may not go:** a field of a `shared`, `sync` or `frozen` type, a global, a channel, an escaping closure, or the function's result except as the signature rule allows.
 - **`Vec[ref T]` is valid.** `v.push(r)` adds `r`'s origins to `v`'s ([§5.3](core-semantics.md#5-references-and-views-c5)). Usually an iterator of `ref T` items is what is wanted, not a stored `Vec[ref T]`.
+- **An owned place written where a `ref` field or element goes is lent, not moved.** That holds in the literal (`Parser { source: s, position: 0 }`), in a storing call (`v.push(a)` on a `Vec[ref T]`), in an index assignment (`v[i] = a`), and in an assignment to a `ref` field or tuple part (`p.source = other`, `t.0 = other`): the place keeps its value and stays usable, and it may not be written, moved or dropped while the view is used (§5.6). A `ref` local is rebound with the operator, `r = ref other` ([§5.1](core-semantics.md#5-references-and-views-c5)). (Field and tuple-part assignment decided by Gowtham, 2026-11-23, B-2026-11-23-1.)
 - **Views in generic code** are checked on each monomorphised instance ([§5.8](core-semantics.md#5-references-and-views-c5)).
 
 When borrowing outgrows views, the escape hatch is a `shared` type ([§11 Ownership and sharing](#11-ownership-and-sharing)), not annotations.

@@ -1,0 +1,12 @@
+source = "design.md § Views (an owned place written where a `ref` field goes is lent)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+class = "a"
+expected_from = "decision"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "B-2026-11-23-1, decided by Gowtham 2026-11-23: `h.r = b` into a `ref String` field borrows `b` (so does `t.0 = b` into a tuple part, pinned in tests/mir_ref_slot_stores.rs), as `Holder { r: b }` and `v[i] = b` do. Before, the assignment passed check and stopped every backend with invalid MIR (the String assigned to the reference's slot). Neighbour of ok_owned_place_into_ref_slot."
+bucket = "a"

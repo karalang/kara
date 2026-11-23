@@ -14271,8 +14271,17 @@ impl<'a> super::TypeChecker<'a> {
                 // element is moved out of `words[1]` in `v[0] = words[1]`,
                 // and a local stays usable (B-2026-11-22-49).
                 self.note_parts_lent_into_ref_slots(value, &slot_ty, false);
-                if matches!(&target.kind, ExprKind::Index { index, .. }
-                        if !matches!(index.kind, ExprKind::Range { .. }))
+                // So does `h.r = x` and `t.0 = x` into a `ref` field or
+                // tuple part, as the literal `Holder { r: x }` does (decided
+                // 2026-11-23, B-2026-11-23-1). A `ref` local still takes
+                // `r = ref x` (§5.1).
+                let ref_part = matches!(
+                    &target.kind,
+                    ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                );
+                if (ref_part
+                    || matches!(&target.kind, ExprKind::Index { index, .. }
+                        if !matches!(index.kind, ExprKind::Range { .. })))
                     && matches!(self.resolved_now(&target_ty), Type::Ref(_))
                 {
                     self.note_view_lent_into_ref(value, &target_ty, true);
