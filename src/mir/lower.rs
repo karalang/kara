@@ -4547,6 +4547,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .all(|(&x, &y)| x == y || matches!(tcx.kind(x), HK::Never))
     }
 
+    /// `let (a, b): (i64, i64) = m.last().unwrap()`: the value is a
+    /// tuple of `ref i64`s and the annotation names the `i64`s they read
+    /// (core semantics §5.10), as `let pair: (i64, i64) = ..` does. The
+    /// value is read into a tuple of the annotation's type, so the bindings
+    /// hold copies and no borrow of the map (kata 2530).
+    fn reads_ref_elements(&self, t: Ty, want: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        let (HK::Tuple(a), HK::Tuple(b)) = (tcx.kind(t), tcx.kind(want)) else {
+            return false;
+        };
+        let (a, b) = (tcx.list(a), tcx.list(b));
+        a.len() == b.len()
+            && a != b
+            && a.iter().zip(b.iter()).all(|(&x, &y)| {
+                x == y
+                    || (matches!(tcx.kind(x), HK::Ref(i) | HK::MutRef(i) if i == y)
+                        && !matches!(tcx.kind(y), HK::Ref(_) | HK::MutRef(_))
+                        && self.is_copy(y))
+            })
+    }
+
     fn node_ty(&mut self, id: NodeId, span: Span) -> R<Ty> {
         if let Some(&l) = self.old_vals.get(&id) {
             return Ok(self.b.local_ty(l));
@@ -7555,7 +7576,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         // the value past a `par` join (B-2026-11-19-24).
                         if ty.is_some() {
                             if let Some(&pt) = self.lcx.node_types.get(&pattern.id) {
-                                if self.fills_never(t, pt) {
+                                if self.fills_never(t, pt) || self.reads_ref_elements(t, pt) {
                                     t = pt;
                                 }
                             }
