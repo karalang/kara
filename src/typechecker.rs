@@ -2439,6 +2439,11 @@ pub struct TypeCheckResult {
     /// other. The method name is kept in the key as belt-and-braces: an
     /// `(offset, length)` pair already names one expression.
     pub method_default_fills: FxHashMap<(SpanKey, String), Vec<crate::ast::CallArg>>,
+    /// The same completed list by the call's `NodeId`, recorded only at a
+    /// span copies of one trait default body share: each impl's copy of
+    /// `self.inner().go()` may call a different `go`, with its own defaults
+    /// (B-2026-11-23-8). Read through [`Self::method_default_fill`].
+    pub node_default_fills: FxHashMap<crate::ids::NodeId, Vec<crate::ast::CallArg>>,
     /// For every method call dispatched to a user `impl` with its own generic
     /// params, the impl's `T -> concrete` binding at that call site. Keyed by
     /// `(span, method)` for the same reason `method_impl_dispatch` above is:
@@ -3014,6 +3019,24 @@ impl TypeCheckResult {
             }
         }
         by_span
+    }
+
+    /// The argument list the typechecker completed for the method call
+    /// `call` (defaults filled in, named arguments in declaration order),
+    /// read from its own node at a span copies of one default body share
+    /// (see [`Self::expr_type`]). At such a span a call with no list of its
+    /// own has none: the span's list is another copy's.
+    pub fn method_default_fill(&self, call: &crate::ast::Expr) -> Option<&[crate::ast::CallArg]> {
+        let crate::ast::ExprKind::MethodCall { method, .. } = &call.kind else {
+            return None;
+        };
+        let key = SpanKey::from_span(&call.span);
+        if self.default_copy_spans.contains(&key) {
+            return self.node_default_fills.get(&call.id).map(Vec::as_slice);
+        }
+        self.method_default_fills
+            .get(&(key, method.clone()))
+            .map(Vec::as_slice)
     }
 
     /// The `Type.method` callee of the method call `call`, read from its own
@@ -3981,6 +4004,8 @@ pub struct TypeChecker<'a> {
     pub(super) dyn_coercion_spans: FxHashMap<dyn_trait::CoercionKey, (Type, Type)>,
     /// Working half of `TypeCheckResult::method_default_fills`.
     pub(super) method_default_fills: FxHashMap<(SpanKey, String), Vec<crate::ast::CallArg>>,
+    /// Working half of `TypeCheckResult::node_default_fills`.
+    pub(super) node_default_fills: FxHashMap<crate::ids::NodeId, Vec<crate::ast::CallArg>>,
     /// Declared defaults for every instance METHOD, keyed `"Type.method"`.
     /// Built once from the program (`default_args::method_default_table`);
     /// consulted only after the impl is resolved, so the key is exact.
@@ -5083,6 +5108,7 @@ impl<'a> TypeChecker<'a> {
             routed_trait_calls: FxHashSet::default(),
             dyn_coercion_spans: FxHashMap::default(),
             method_default_fills: FxHashMap::default(),
+            node_default_fills: FxHashMap::default(),
             method_defaults: crate::default_args::method_default_table(program),
             named_fns: crate::default_args::named_param_table(program),
             log_level_fns: crate::log_calls::level_fns(program).into_keys().collect(),
@@ -5804,6 +5830,7 @@ impl<'a> TypeChecker<'a> {
             ufcs_calls: self.ufcs_calls,
             node_dyn_coercions,
             method_default_fills: self.method_default_fills,
+            node_default_fills: self.node_default_fills,
             method_impl_type_subs: self.method_impl_type_subs,
             direct_iter_terminals: self.direct_iter_terminals,
             method_typeparam_receiver: self.method_typeparam_receiver,

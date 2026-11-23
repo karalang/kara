@@ -1383,8 +1383,15 @@ impl<'a> super::TypeChecker<'a> {
                     .get(&format!("{type_name}.{method}"))
                     .and_then(|info| crate::default_args::try_fill(args, info));
                 if let Some(list) = &default_filled {
+                    let key = SpanKey::from_span(span);
+                    if let Some((node, _)) = self
+                        .current_call_node
+                        .filter(|(node, k)| *k == key && !node.is_dummy())
+                    {
+                        self.node_default_fills.insert(node, list.clone());
+                    }
                     self.method_default_fills
-                        .insert((SpanKey::from_span(span), method.to_string()), list.clone());
+                        .insert((key, method.to_string()), list.clone());
                 }
                 // A method with named parameters whose call the fill
                 // declined: say which label rule it broke.

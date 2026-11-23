@@ -26900,13 +26900,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // and named arguments in declaration order (the legacy pipeline's
         // `lowering` splices the same list into the tree).
         let tc: &'a TypeCheckResult = self.lcx.tc;
-        let args: &'a [CallArg] = match &e.kind {
-            ExprKind::MethodCall { method, .. } => tc
-                .method_default_fills
-                .get(&(SpanKey::from_span(&e.span), method.clone()))
-                .map_or(args, |v| v.as_slice()),
-            _ => args,
-        };
+        let args: &'a [CallArg] = tc.method_default_fill(e).unwrap_or(args);
         {
             {
                 let f = self.lcx.fns[&d].f;

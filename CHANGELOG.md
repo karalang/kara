@@ -983,6 +983,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- In a trait default body that two impls inherit, a method call that leaves
+  out a defaulted argument takes its own callee's default. Every copy of the
+  body took the default of the method the last impl's copy calls: with
+  `LoudIn.go(self; k: i64 = 10)` and `QuietIn.go(self; k: i64 = 200)`,
+  `self.inner().go()` returned 201 for both impls (11 and 201 expected), and
+  when the two methods left out a different number of defaults the program
+  was refused with E0516 (B-2026-11-23-8).
 - A built-in type's method is no longer charged the effects of a trait
   default method of the same name. `s.find(" ")` on a `String` took the
   effects of every trait default named `find` in the program, so a

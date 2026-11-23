@@ -1587,9 +1587,10 @@ impl<'a> Lowerer<'a> {
         //
         // Before the recursion, so a spliced default is lowered exactly like an
         // argument the author wrote.
-        if let ExprKind::MethodCall { method, .. } = &expr.kind {
-            let key = (SpanKey::from_span(&self_span), method.clone());
-            if let Some(filled) = self.tc.method_default_fills.get(&key).cloned() {
+        if matches!(expr.kind, ExprKind::MethodCall { .. }) {
+            // The call's own list where copies of one default body share the
+            // span (B-2026-11-23-8).
+            if let Some(filled) = self.tc.method_default_fill(expr).map(<[_]>::to_vec) {
                 if let ExprKind::MethodCall { args, .. } = &mut expr.kind {
                     // Also when no argument was left out but labeled ones
                     // were written out of declaration order (named
