@@ -716,7 +716,12 @@ fn a_foreign_parameter_that_cannot_cross_becomes_a_pointer_at_every_call() {
     );
     assert!(text.contains("atoi((text + \"\\0\").as_ptr())"), "{text}");
     assert!(clean, "{text}");
-    assert_eq!(out, "6 42\n");
+    // The interpreter reaches the C library through `dlsym`, which it has on
+    // Unix only (src/mir/foreign.rs); elsewhere it refuses the call, and the
+    // mended program's run is the compiled build's to show.
+    if cfg!(unix) {
+        assert_eq!(out, "6 42\n");
+    }
 }
 
 #[test]
