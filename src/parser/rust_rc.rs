@@ -562,8 +562,8 @@ impl super::Parser {
     /// The `)` that closes the `(` at token `open`.
     pub(crate) fn matching_paren(&self, open: usize) -> Option<usize> {
         let mut depth = 0usize;
-        for k in open..self.tokens.len() {
-            match self.tokens[k].token {
+        for (k, t) in self.tokens.iter().enumerate().skip(open) {
+            match t.token {
                 Token::LeftParen => depth += 1,
                 Token::RightParen => {
                     depth -= 1;

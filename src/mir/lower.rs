@@ -19262,7 +19262,6 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// turn and binds its own locals, which move into the first
     /// alternative's; the body reads those. Leaves `self.cur` at the next
     /// arm's test.
-    #[allow(clippy::too_many_arguments)]
     /// A binding or-pattern arm `P1 | P2 [if G] => body`: the first
     /// alternative that matches binds the names every alternative shares,
     /// then the guard runs once against them (design.md § Or-patterns and

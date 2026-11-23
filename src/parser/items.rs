@@ -2724,8 +2724,8 @@ impl super::Parser {
         // Each field's first and last token, split at top-level commas.
         let mut fields: Vec<(usize, usize)> = Vec::new();
         let mut start = open + 1;
-        for i in open..self.tokens.len() {
-            match self.tokens[i].token {
+        for (i, t) in self.tokens.iter().enumerate().skip(open) {
+            match t.token {
                 Token::LeftParen | Token::LeftBracket => depth += 1,
                 Token::RightParen | Token::RightBracket => {
                     depth = depth.saturating_sub(1);
@@ -3499,8 +3499,8 @@ impl super::Parser {
             let open = self.pos + 2;
             let mut depth = 0usize;
             let mut close = None;
-            for k in open..self.tokens.len() {
-                match self.tokens[k].token {
+            for (k, t) in self.tokens.iter().enumerate().skip(open) {
+                match t.token {
                     Token::LeftBrace => depth += 1,
                     Token::RightBrace => {
                         depth -= 1;

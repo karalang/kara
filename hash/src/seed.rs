@@ -322,10 +322,10 @@ mod lean {
     /// `bytes` to stderr, as far as one `write` takes them.
     pub(super) fn write_stderr(bytes: &[u8]) {
         extern "C" {
-            fn write(fd: i32, buf: *const u8, n: usize) -> isize;
+            fn write(fd: i32, buf: *const core::ffi::c_void, n: usize) -> isize;
         }
         // SAFETY: `bytes` is a live buffer of `bytes.len()` bytes.
-        let _ = unsafe { write(2, bytes.as_ptr(), bytes.len()) };
+        let _ = unsafe { write(2, bytes.as_ptr().cast(), bytes.len()) };
     }
 
     /// The address of a fresh heap allocation, freed again.
@@ -390,7 +390,7 @@ fn os_entropy() -> Option<(u64, u64)> {
     // path is a static C string, so nothing is allocated (B-2026-10-03-11).
     extern "C" {
         fn open(path: *const core::ffi::c_char, flags: i32, ...) -> i32;
-        fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
+        fn read(fd: i32, buf: *mut core::ffi::c_void, count: usize) -> isize;
         fn close(fd: i32) -> i32;
     }
     const O_RDONLY: i32 = 0;
@@ -404,7 +404,7 @@ fn os_entropy() -> Option<(u64, u64)> {
         }
         let mut got = 0usize;
         while got < b.len() {
-            let n = read(fd, b.as_mut_ptr().add(got), b.len() - got);
+            let n = read(fd, b.as_mut_ptr().add(got).cast(), b.len() - got);
             if n <= 0 {
                 close(fd);
                 return None;

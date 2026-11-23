@@ -56,8 +56,8 @@ impl super::Parser {
         let mut entries: Vec<(usize, usize)> = Vec::new();
         let mut entry_start = open + 1;
         let mut close = None;
-        for i in open..self.tokens.len() {
-            match self.tokens[i].token {
+        for (i, t) in self.tokens.iter().enumerate().skip(open) {
+            match t.token {
                 Token::LeftBracket | Token::LeftParen => depth += 1,
                 Token::RightBracket | Token::RightParen => {
                     depth -= 1;

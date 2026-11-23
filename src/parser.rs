@@ -3904,8 +3904,8 @@ impl Parser {
             // The value type follows the first `,` inside the map's brackets.
             let mut depth = 0i32;
             let mut value = None;
-            for k in i + 1..self.tokens.len() {
-                match &self.tokens[k].token {
+            for (k, t) in self.tokens.iter().enumerate().skip(i + 1) {
+                match &t.token {
                     Token::LessThan | Token::LeftBracket | Token::LeftParen => depth += 1,
                     Token::GreaterThan | Token::RightBracket | Token::RightParen => depth -= 1,
                     Token::GreaterGreater => depth -= 2,
@@ -4005,7 +4005,7 @@ impl Parser {
                 && ident(i - 3, "Some")
         };
         let mut in_import = false;
-        for i in 0..self.tokens.len() {
+        for (i, t) in self.tokens.iter().enumerate() {
             match tok(i) {
                 Some(Token::Import) => in_import = true,
                 Some(Token::Identifier { name, .. }) if name == "use" => in_import = true,
@@ -4027,7 +4027,7 @@ impl Parser {
             // `|Reverse(s)| s` over such a heap's items (kata 1086).
             let param = call && matches!(tok(i - 1), Some(Token::Pipe));
             let heap_item = opens(i + 1) && opens(i - 1) && ident(i - 2, "BinaryHeap");
-            let sort_key = sort_keys.contains_key(&self.tokens[i].span.offset);
+            let sort_key = sort_keys.contains_key(&t.span.offset);
             if !(wrapped || let_bound || param || heap_item || sort_key) {
                 return true;
             }
