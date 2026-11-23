@@ -3890,6 +3890,10 @@ impl super::env::TypeEnv {
             // very rule whose suggested fix it already followed
             // (B-2026-08-12-7).
             Type::Pointer { .. } => true,
+            // core-semantics §1.1: `ref T` is `Copy`, whatever `T` is, and
+            // `mut ref T` is not. Copying a shared reference gives a second
+            // reference to the same place (B-2026-11-22-51).
+            Type::Ref(_) => true,
             Type::Tuple(types) => types.iter().all(|t| self.is_type_copy(t)),
             // Array[T, N] is Copy iff T is Copy.
             Type::Array { element, .. } => self.is_type_copy(element),

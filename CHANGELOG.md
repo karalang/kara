@@ -989,6 +989,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   interpreter answered right. The key is lent for the call, and a key that
   dies before the map (a loop's `let key = i`) is no longer refused as kept
   by `get_mut` or `remove` (B-2026-11-23-3).
+- A shared reference satisfies `Copy`, as core-semantics §1.1 lists it: a
+  `T: Copy` bound takes `ref String`, and a tuple or `Option` holding one,
+  so `fn swap2[T: Copy](xs: mut Slice[T])` is called with a `Vec[ref
+  String]`, and `#[derive(Copy)]` takes a struct with a `ref` field. The
+  bound and the derive refused them (E0200) though moves and the compiled
+  program already copied them; `mut ref T` is still not `Copy`
+  (B-2026-11-22-51).
 - `karac check` in a package runs under the manifest's `[package].profile`
   and `[profile]` table, as `karac build` and `karac run` do: it was checked
   under the default profile, so a profile-gated error (`v.push(1)` under
