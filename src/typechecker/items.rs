@@ -13548,6 +13548,55 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // The same read for each element of a tuple literal bound by
+                // a tuple pattern: `let mut (at, n) = (i, 0)` with `i: ref
+                // i64` keeps two counters, as `let mut at = i` keeps one. An
+                // element written with a borrow operator stays a borrow
+                // (kata 2519).
+                if *is_mut
+                    && ty.is_none()
+                    && (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                    && matches!(pattern.kind, PatternKind::Tuple(_))
+                {
+                    if let ExprKind::Tuple(items) = &value.kind {
+                        let resolved = resolve_type_var_top(&expected_ty, &self.env.substitutions);
+                        if let Type::Tuple(elems) = &resolved {
+                            if elems.len() == items.len() {
+                                let mut changed = false;
+                                let mut read = Vec::with_capacity(elems.len());
+                                for (t, e) in elems.iter().zip(items.iter()) {
+                                    let explicit = matches!(
+                                        e.kind,
+                                        ExprKind::Unary {
+                                            op: UnaryOp::Ref | UnaryOp::MutRef,
+                                            ..
+                                        }
+                                    );
+                                    match t {
+                                        Type::Ref(inner) | Type::MutRef(inner)
+                                            if !explicit
+                                                && !matches!(
+                                                    **inner,
+                                                    Type::TypeParam(_) | Type::Error
+                                                )
+                                                && self.is_copy_type_during_check(inner) =>
+                                        {
+                                            changed = true;
+                                            read.push((**inner).clone());
+                                        }
+                                        t => read.push(t.clone()),
+                                    }
+                                }
+                                if changed {
+                                    let read = Type::Tuple(read);
+                                    self.record_expr_type(&value.span, &read);
+                                    self.record_node_type(value.id, &read);
+                                    expected_ty = read;
+                                }
+                            }
+                        }
+                    }
+                }
                 if let PatternKind::Binding(name) = &pattern.kind {
                     if ty.is_none() {
                         self.untyped_let_names
