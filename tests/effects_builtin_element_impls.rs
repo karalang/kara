@@ -223,8 +223,9 @@ fn a_keyed_collection_is_charged_its_keys_hash() {
     }
 }
 
-/// A `Map`'s value is never hashed, and counting or walking a table runs no
-/// key's impl.
+/// A `Map`'s value is never hashed, and a sequence's `len` runs no
+/// element's impl. (Every method of a keyed type is charged its key's
+/// traits, which the type's declaration bounds: B-2026-11-23-17.)
 #[test]
 fn a_keyed_collection_is_not_charged_what_it_does_not_run() {
     let impls = format!("{QUIET_EQ}\n{HASH}");
@@ -234,15 +235,9 @@ fn a_keyed_collection_is_not_charged_what_it_does_not_run() {
             "let mut m: Map[i64, Big] = Map.new();\n    m.insert(1, a);\n    let g = m.get(2);",
         ),
         (
-            "len",
-            "let m: Map[Big, i64] = Map.new();\n    let n = m.len();\n    let e = m.is_empty();",
+            "vec",
+            "let xs = [a, b];\n    let n = xs.len();\n    let f = xs.first();",
         ),
-        (
-            "walk",
-            "let m: Map[Big, i64] = Map.new();\n    let mut n = 0;\n    for v in m.values() { n += \
-             *v; }",
-        ),
-        ("vec", "let xs = [a, b];\n    let n = xs.len();\n    let f = xs.first();"),
     ] {
         let (errors, effects) = check(&format!("unkeyed-{tag}"), &program(&impls, body));
         assert!(errors.is_empty(), "{tag}: {errors:?}");

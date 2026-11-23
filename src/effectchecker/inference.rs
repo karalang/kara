@@ -1183,7 +1183,7 @@ impl<'a> super::EffectChecker<'a> {
             .collect()
     }
 
-    fn note_bound_event(&self, event: BoundEvent) {
+    pub(crate) fn note_bound_event(&self, event: BoundEvent) {
         if let Some(events) = self.bound_events.borrow_mut().as_mut() {
             events.push(event);
         }
@@ -1288,7 +1288,7 @@ impl<'a> super::EffectChecker<'a> {
     /// each impl's method; for a type parameter the instance's, at each
     /// call that says what it is; for `Self`, a `dyn` or an opaque type,
     /// every impl of the method.
-    fn charge_reach(
+    pub(crate) fn charge_reach(
         &self,
         reach: &ImplReach,
         tr: ElemTrait,
@@ -1510,7 +1510,7 @@ impl<'a> super::EffectChecker<'a> {
                     head,
                     "Map" | "Set" | "SortedMap" | "SortedSet" | "PriorityQueue"
                 );
-                if keyed && !elem_impls::UNKEYED.contains(&tail) {
+                if keyed {
                     self.charge_elem_keys(call.id, span, calls);
                 } else if let Some((_, _, tr)) = elem_impls::ASSOCIATED
                     .iter()
@@ -1553,16 +1553,46 @@ impl<'a> super::EffectChecker<'a> {
         if self.observability.contains(&callee) {
             return;
         }
+        self.charge_bound_calls_under(callee, self.node_call_subs.get(&node), span, calls);
+    }
+
+    /// `callee`'s calls through bounds, with its type parameters bound by
+    /// `subs`: a call's, or what a type binds a generic impl's to. One bound
+    /// to a type parameter of the function being walked is that function's
+    /// to pass on.
+    pub(crate) fn charge_bound_calls_under(
+        &self,
+        callee: Symbol,
+        subs: Option<&FxHashMap<String, crate::typechecker::Type>>,
+        span: Span,
+        calls: &mut Vec<(Symbol, Span)>,
+    ) {
+        // The traits `callee` hands a parameter to a library method under
+        // (B-2026-11-23-17): the impl of the type this call binds it to.
+        for (param, tr) in self.bound_traits.get(&callee).into_iter().flatten() {
+            match subs.and_then(|s| s.get(param)) {
+                Some(crate::typechecker::Type::TypeParam(q)) if q != "Self" => self
+                    .note_bound_event(BoundEvent::TraitParam {
+                        param: q.clone(),
+                        tr: tr.clone(),
+                    }),
+                Some(ty) => self.charge_trait_bound(ty, tr, span, calls),
+                None => self.charge_trait_bound_open(tr, span, calls),
+            }
+        }
         let Some(pairs) = self.bound_calls.get(&callee) else {
             return;
         };
-        let subs = self.node_call_subs.get(&node);
         for (param, method) in pairs {
             let resolved = subs.and_then(|s| s.get(param));
 
             if let Some(ty) = resolved {
                 if let crate::typechecker::Type::TypeParam(q) = ty {
                     if q != "Self" {
+                        self.note_bound_event(BoundEvent::TypeParam {
+                            param: q.clone(),
+                            method: *method,
+                        });
                         continue;
                     }
                 } else if let Some(name) = crate::typechecker::type_to_concrete_or_param_name(ty) {
@@ -1571,6 +1601,12 @@ impl<'a> super::EffectChecker<'a> {
                         .dotted_str(&name, &self.interner.resolve(*method));
                     if self.method_bodies.contains_key(&key) {
                         calls.push((key, span));
+                        // A provided method the type inherits from a library
+                        // trait has no body here: its signature says what it
+                        // calls on the type.
+                        if !self.has_written_body(key) {
+                            self.charge_signature(key, Some(ty), None, None, &[], span, calls);
+                        }
                         continue;
                     }
                 }
@@ -1604,6 +1640,9 @@ impl<'a> super::EffectChecker<'a> {
         calls: &mut Vec<(Symbol, Span)>,
     ) {
         self.charge_dyn_params_unresolved(callee, span, calls);
+        for (_, tr) in self.bound_traits.get(&callee).into_iter().flatten() {
+            self.charge_trait_bound_open(tr, span, calls);
+        }
         let Some(pairs) = self.bound_calls.get(&callee) else {
             return;
         };
@@ -1635,79 +1674,122 @@ impl<'a> super::EffectChecker<'a> {
         if self.typeparam_nodes.is_empty() {
             return;
         }
-        let names: Vec<Symbol> = self
-            .function_bodies
-            .keys()
-            .chain(self.method_bodies.keys())
-            .copied()
-            .collect();
-        let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
-        let mut events: Vec<(Symbol, Vec<BoundEvent>)> = Vec::new();
-        for name in names {
-            let Some(func) = self
+        // A generic program impl reached through a library method's bound
+        // (B-2026-11-23-17) is resolved from the tables this computes, so
+        // the walk is repeated with them until it finds nothing new.
+        for _round in 0..4 {
+            let names: Vec<Symbol> = self
                 .function_bodies
-                .get(&name)
-                .or_else(|| self.method_bodies.get(&name))
-            else {
-                continue;
-            };
-            let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
-            *self.bound_events.borrow_mut() = Some(Vec::new());
-            let _ = self.collect_calls_in_block(&func.body, bounds);
-            let walked = self.bound_events.borrow_mut().take().unwrap_or_default();
-            if !walked.is_empty() {
-                events.push((name, walked));
-            }
-        }
-        let mut bound_calls: FxHashMap<Symbol, FxHashSet<(String, Symbol)>> = FxHashMap::default();
-        for (f, walked) in &events {
-            for e in walked {
-                if let BoundEvent::TypeParam { param, method } = e {
-                    bound_calls
-                        .entry(*f)
-                        .or_default()
-                        .insert((param.clone(), *method));
+                .keys()
+                .chain(self.method_bodies.keys())
+                .copied()
+                .collect();
+            let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
+            let mut events: Vec<(Symbol, Vec<BoundEvent>)> = Vec::new();
+            for name in names {
+                let Some(func) = self
+                    .function_bodies
+                    .get(&name)
+                    .or_else(|| self.method_bodies.get(&name))
+                else {
+                    continue;
+                };
+                let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
+                *self.bound_events.borrow_mut() = Some(Vec::new());
+                let _ = self.collect_calls_in_block(&func.body, bounds);
+                let walked = self.bound_events.borrow_mut().take().unwrap_or_default();
+                if !walked.is_empty() {
+                    events.push((name, walked));
                 }
             }
-        }
-        loop {
-            let mut changed = false;
+            let mut bound_calls: FxHashMap<Symbol, FxHashSet<(String, Symbol)>> =
+                FxHashMap::default();
+            let mut bound_traits: FxHashMap<Symbol, FxHashSet<(String, String)>> =
+                FxHashMap::default();
             for (f, walked) in &events {
                 for e in walked {
-                    let BoundEvent::Generic { callee, node } = e else {
-                        continue;
-                    };
-                    let Some(pairs) = bound_calls.get(callee).cloned() else {
-                        continue;
-                    };
-                    for (p, m) in pairs {
-                        let bound = self.node_call_subs.get(node).and_then(|s| s.get(&p));
-                        // The caller's own parameters in the type: the one
-                        // the parameter is bound to, or for an element trait
-                        // those inside it (`Vec[Q]`).
-                        let passed_on: Vec<String> = match bound {
-                            Some(crate::typechecker::Type::TypeParam(q)) => vec![q.clone()],
-                            Some(ty) => ElemTrait::of_method(&self.interner.resolve(m))
-                                .and_then(|tr| {
-                                    let impls = self.elem_index.of(ty)?;
-                                    Some(impls.reach(tr, Scope::Whole).params.clone())
-                                })
-                                .unwrap_or_default(),
-                            None => Vec::new(),
+                    match e {
+                        BoundEvent::TypeParam { param, method } => {
+                            bound_calls
+                                .entry(*f)
+                                .or_default()
+                                .insert((param.clone(), *method));
+                        }
+                        BoundEvent::TraitParam { param, tr } => {
+                            bound_traits
+                                .entry(*f)
+                                .or_default()
+                                .insert((param.clone(), tr.clone()));
+                        }
+                        BoundEvent::Generic { .. } => {}
+                    }
+                }
+            }
+            loop {
+                let mut changed = false;
+                for (f, walked) in &events {
+                    for e in walked {
+                        let BoundEvent::Generic { callee, node } = e else {
+                            continue;
                         };
-                        for q in passed_on {
-                            if q != "Self" && bound_calls.entry(*f).or_default().insert((q, m)) {
-                                changed = true;
+                        // A trait the callee hands on, bound here to a type that
+                        // holds one of this function's own parameters.
+                        for (p, tr) in bound_traits.get(callee).cloned().unwrap_or_default() {
+                            let Some(ty) = self.node_call_subs.get(node).and_then(|s| s.get(&p))
+                            else {
+                                continue;
+                            };
+                            for passed in self.trait_bound_events(ty, &tr, Span::default()) {
+                                let added = match passed {
+                                    BoundEvent::TraitParam { param, tr } => {
+                                        bound_traits.entry(*f).or_default().insert((param, tr))
+                                    }
+                                    BoundEvent::TypeParam { param, method } => {
+                                        bound_calls.entry(*f).or_default().insert((param, method))
+                                    }
+                                    BoundEvent::Generic { .. } => false,
+                                };
+                                changed |= added;
+                            }
+                        }
+                        let Some(pairs) = bound_calls.get(callee).cloned() else {
+                            continue;
+                        };
+                        for (p, m) in pairs {
+                            let bound = self.node_call_subs.get(node).and_then(|s| s.get(&p));
+                            // The caller's own parameters in the type: the one
+                            // the parameter is bound to, or for an element trait
+                            // those inside it (`Vec[Q]`).
+                            let passed_on: Vec<String> = match bound {
+                                Some(crate::typechecker::Type::TypeParam(q)) => vec![q.clone()],
+                                Some(ty) => ElemTrait::of_method(&self.interner.resolve(m))
+                                    .and_then(|tr| {
+                                        let impls = self.elem_index.of(ty)?;
+                                        Some(impls.reach(tr, Scope::Whole).params.clone())
+                                    })
+                                    .unwrap_or_default(),
+                                None => Vec::new(),
+                            };
+                            for q in passed_on {
+                                if q != "Self" && bound_calls.entry(*f).or_default().insert((q, m))
+                                {
+                                    changed = true;
+                                }
                             }
                         }
                     }
                 }
+                if !changed {
+                    break;
+                }
             }
-            if !changed {
+            let same = bound_calls == self.bound_calls && bound_traits == self.bound_traits;
+            self.bound_calls = bound_calls;
+            self.bound_traits = bound_traits;
+            if same || !self.sig_active() {
                 break;
             }
         }
-        self.bound_calls = bound_calls;
     }
 
     pub(crate) fn collect_calls_in_expr(
@@ -1769,6 +1851,16 @@ impl<'a> super::EffectChecker<'a> {
                         if let Some(name) = n {
                             calls.push((name, expr.span));
                             self.charge_bound_calls_at(name, expr.id, expr.span, calls);
+                            let shape = self.sig_type_of(expr.id);
+                            self.charge_signature(
+                                name,
+                                None,
+                                shape.as_deref(),
+                                Some(expr.id),
+                                args,
+                                expr.span,
+                                calls,
+                            );
                         }
                         n
                     };
@@ -2112,7 +2204,32 @@ impl<'a> super::EffectChecker<'a> {
                 let resolved_to_body = precise.is_some_and(|k| self.method_bodies.contains_key(&k));
                 let program_body = precise.is_some_and(|k| self.has_written_body(k));
                 if !program_body {
-                    self.charge_elem_method(expr, object, method, args, calls);
+                    // A method the library writes in Kāra is charged what
+                    // its signature bounds (B-2026-11-23-17); a native one,
+                    // what the library docs say it runs.
+                    if !precise.is_some_and(|k| self.is_kara_library_method(k)) {
+                        self.charge_elem_method(expr, object, method, args, calls);
+                    }
+                    let recv = self.sig_type_of(object.id);
+                    if let Some(key) = precise {
+                        self.charge_signature(
+                            key,
+                            recv.as_deref(),
+                            None,
+                            Some(expr.id),
+                            args,
+                            expr.span,
+                            calls,
+                        );
+                    }
+                    if let Some(recv) = recv.as_deref() {
+                        let traits = self.receiver_traits(recv, bounds);
+                        if !traits.is_empty() {
+                            self.charge_provided_method(
+                                recv, &traits, method, expr.id, expr.span, calls,
+                            );
+                        }
+                    }
                 }
                 let resolved_elsewhere = |quals: &Vec<Symbol>| {
                     precise.is_some_and(|k| {
@@ -2346,13 +2463,17 @@ impl<'a> super::EffectChecker<'a> {
             }
             ExprKind::While {
                 condition, body, ..
-            }
-            | ExprKind::For {
-                iterable: condition,
-                body,
-                ..
             } => {
                 self.collect_calls_in_expr(condition, calls, bounds);
+                let block_calls = self.collect_calls_in_block(body, bounds);
+                calls.extend(block_calls);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                // The loop calls the iterator's `next` (B-2026-11-23-17).
+                if let Some(ty) = self.sig_type_of(iterable.id) {
+                    self.charge_trait_bound(&ty, "Iterator", iterable.span, calls);
+                }
+                self.collect_calls_in_expr(iterable, calls, bounds);
                 let block_calls = self.collect_calls_in_block(body, bounds);
                 calls.extend(block_calls);
             }

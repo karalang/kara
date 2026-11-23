@@ -776,21 +776,31 @@ pub fn node_type_facts(
     }
     // What a built-in operation runs on the values an expression holds
     // (B-2026-11-23-15), once per distinct type.
+    // The type itself too, for a library method's bounds on it
+    // (B-2026-11-23-17).
     let elem_index = effectchecker::ElemImplIndex::new(typed);
-    if !elem_index.is_empty() {
-        let mut by_type: FxHashMap<String, Option<std::sync::Arc<effectchecker::TypeImpls>>> =
-            FxHashMap::default();
+    if elem_index.has_program_impls() {
+        type Interned = (
+            std::sync::Arc<Type>,
+            Option<std::sync::Arc<effectchecker::TypeImpls>>,
+        );
+        let mut by_type: FxHashMap<String, Interned> = FxHashMap::default();
         for (&node, (ty, _)) in &typed.node_types {
             if !elem_index.touches(ty) {
                 continue;
             }
-            let impls = by_type
-                .entry(format!("{ty:?}"))
-                .or_insert_with(|| elem_index.of(ty).map(std::sync::Arc::new));
+            let (shared, impls) = by_type.entry(format!("{ty:?}")).or_insert_with(|| {
+                (
+                    std::sync::Arc::new(ty.clone()),
+                    elem_index.of(ty).map(std::sync::Arc::new),
+                )
+            });
+            facts.node_types.insert(node, shared.clone());
             if let Some(impls) = impls {
                 facts.elem_impls.insert(node, impls.clone());
             }
         }
+        facts.witness_types = typed.impl_trait_witness_types.clone();
     }
     facts.elem_index = std::sync::Arc::new(elem_index);
     let mut drops = DropReach::new(typed);

@@ -72,6 +72,15 @@ impl ElemTrait {
     pub fn of_method(method: &str) -> Option<ElemTrait> {
         ElemTrait::ALL.into_iter().find(|t| t.method() == method)
     }
+
+    /// The element trait a bound on `name` runs (`Eq` adds no method to
+    /// `PartialEq`'s).
+    pub fn of_trait(name: &str) -> Option<ElemTrait> {
+        match name {
+            "Eq" => Some(ElemTrait::Eq),
+            _ => ElemTrait::ALL.into_iter().find(|t| t.trait_name() == name),
+        }
+    }
 }
 
 /// The written impl methods one trait reaches in a type.
@@ -163,12 +172,15 @@ pub struct ElemImplIndex {
     /// `BuildHasher` or `Hasher`.
     hasher_methods: FxHashMap<String, Vec<String>>,
     hashers: Vec<String>,
+    /// The types the program wrote a trait impl for, of any trait.
+    program_targets: FxHashSet<String>,
 }
 
 impl ElemImplIndex {
     pub fn new(typed: &TypeCheckResult) -> Self {
         let mut index = ElemImplIndex::default();
         for (target, method) in &typed.program_trait_impl_methods {
+            index.program_targets.insert(target.clone());
             if let Some(tr) = ElemTrait::of_method(method) {
                 index.written.insert((target.clone(), tr));
             }
@@ -316,6 +328,12 @@ impl ElemImplIndex {
         self.written.is_empty() && self.hasher_methods.is_empty()
     }
 
+    /// The program wrote a trait impl: a library method bounded on the
+    /// trait may run it.
+    pub fn has_program_impls(&self) -> bool {
+        !self.program_targets.is_empty()
+    }
+
     fn collect(&self, ty: &Type, tr: ElemTrait, out: &mut ImplReach) {
         match ty {
             Type::Named { name, args } => {
@@ -384,9 +402,12 @@ impl ElemImplIndex {
             Type::Named { name, args } => {
                 self.by_name.contains_key(name)
                     || self.hasher_methods.contains_key(name)
+                    || self.program_targets.contains(name)
                     || args.iter().any(|a| self.touches(a))
             }
-            Type::Shared(name) => self.by_name.contains_key(name),
+            Type::Shared(name) => {
+                self.by_name.contains_key(name) || self.program_targets.contains(name)
+            }
             Type::Tuple(ts) => ts.iter().any(|t| self.touches(t)),
             Type::Array { element, .. }
             | Type::Vector { element, .. }
@@ -560,8 +581,10 @@ pub fn method_traits(family: Family, method: &str) -> &'static [(ElemTrait, Scop
             "join" => &[(T::Display, Whole)],
             _ => &[],
         },
-        Family::Hashed if !UNKEYED.contains(&method) => &[(T::Hash, Key), (T::Eq, Key)],
-        Family::Sorted if !UNKEYED.contains(&method) => &[(T::Ord, Key)],
+        // Every method: the type is declared with the bound
+        // (`impl[K: Hash + Eq, V] Map[K, V]`), so each may run it.
+        Family::Hashed => &[(T::Hash, Key), (T::Eq, Key)],
+        Family::Sorted => &[(T::Ord, Key)],
         // An iterator's `min` / `max` (iterators.md); a `SortedSet`'s are
         // its ends, read with no comparison.
         Family::Other => match method {
@@ -571,40 +594,8 @@ pub fn method_traits(family: Family, method: &str) -> &'static [(ElemTrait, Scop
             "contains" | "is_empty" => &[(T::PartialOrd, Whole)],
             _ => &[],
         },
-        _ => &[],
     }
 }
-
-/// The methods of a keyed type (`Map`, `Set`, `SortedMap`, `SortedSet`,
-/// `PriorityQueue`) that run no key's `hash`, `eq` or `cmp`: they build an
-/// empty one, count, walk or empty it, or read an end.
-pub const UNKEYED: &[&str] = &[
-    "new",
-    "default",
-    "with_capacity",
-    "try_with_capacity",
-    "max_first",
-    "len",
-    "is_empty",
-    "capacity",
-    "keys",
-    "values",
-    "values_mut",
-    "into_keys",
-    "into_values",
-    "iter",
-    "iter_mut",
-    "into_iter",
-    "clear",
-    "first",
-    "last",
-    "pop_first",
-    "pop_last",
-    "min",
-    "max",
-    "peek",
-    "into_vec",
-];
 
 /// The methods that build a keyed collection from their receiver: charged
 /// the key traits of the collection they return.
@@ -705,50 +696,110 @@ mod tests {
         assert!(seen >= 20, "the pages' bounded rows were not found: {seen}");
     }
 
-    /// A method of a keyed collection that takes a key, an element or
-    /// another collection files or looks one up, so it is never in the
-    /// list of methods that run no key's impl.
+    /// A table entry for a method the library writes in Kāra is never
+    /// used: the signature rule charges such a method by its bounds
+    /// (B-2026-11-23-17). So the table is the natives', and where it names
+    /// a method the library also writes, the signature must bound the same
+    /// trait, or the two would disagree about what a call runs. A keyed
+    /// type's entry covers every method, so each one the library writes,
+    /// in an inherent impl or a trait's, is bounded on its key unless it is
+    /// one that reads no key.
     #[test]
-    fn a_keyed_collections_method_that_takes_a_key_is_charged_the_key_traits() {
-        let mut seen = 0;
-        for (section, method, sig) in rows("collections.md") {
-            let keyed = [
-                "`Map[",
-                "`Set[",
-                "`SortedMap[",
-                "`SortedSet[",
-                "`PriorityQueue[",
-            ]
-            .iter()
-            .any(|s| section.starts_with(s));
-            if !keyed {
-                continue;
-            }
-            let params = sig
-                .split_once('(')
-                .and_then(|(_, rest)| rest.split_once(')'))
-                .map(|(params, _)| params)
-                .unwrap_or_default();
-            let takes_a_value = params.split(',').skip(1).any(|p| {
-                let ty = p.split_once(':').map(|(_, t)| t.trim()).unwrap_or_default();
-                ty.split(|c: char| !c.is_alphanumeric())
-                    .any(|w| matches!(w, "K" | "T" | "V" | "I"))
-            }) || (!params.contains("self") && !params.trim().is_empty() && {
-                let ty = params.split_once(':').map(|(_, t)| t).unwrap_or_default();
-                ty.split(|c: char| !c.is_alphanumeric())
-                    .any(|w| matches!(w, "K" | "T" | "V"))
-            });
-            if takes_a_value {
-                seen += 1;
-                assert!(
-                    !UNKEYED.contains(&method.as_str()),
-                    "§ {section}: `{method}` takes a key or element (`{sig}`)"
-                );
+    fn a_table_entry_the_library_writes_in_kara_is_bounded_the_same_in_its_signature() {
+        let dir = format!("{}/runtime/stdlib/source", env!("CARGO_MANIFEST_DIR"));
+        let families = [
+            (Family::Seq, &["Vec", "VecDeque", "Slice", "Array"][..]),
+            (Family::Hashed, &["Map", "Set"][..]),
+            (
+                Family::Sorted,
+                &["SortedMap", "SortedSet", "PriorityQueue"][..],
+            ),
+        ];
+        // Methods of a keyed type that compare and hash no key: they walk,
+        // count or take an end of what is already in order.
+        const READS_NO_KEY: &[&str] = &[
+            "iter",
+            "keys",
+            "values",
+            "values_mut",
+            "into_keys",
+            "into_values",
+            "into_iter",
+            "first",
+            "last",
+            "pop_first",
+            "pop_last",
+            "default",
+            "len",
+            "is_empty",
+            "serialize",
+        ];
+        let mut written = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            // Each inherent impl block's header and the methods inside it.
+            let mut header: Option<(String, String)> = None;
+            let mut depth = 0i32;
+            let mut native = false;
+            for line in text.lines() {
+                let t = line.trim();
+                if depth == 0 && t.starts_with("impl") && t.ends_with('{') {
+                    let head = t.trim_end_matches('{').trim();
+                    let ty = head
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or_default()
+                        .split('[')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    header = Some((ty, head.to_string()));
+                }
+                if t.starts_with("#[compiler_builtin]") {
+                    native = true;
+                }
+                if depth == 1 && t.starts_with("fn ") {
+                    if let Some((ty, head)) = &header {
+                        let name = t[3..].split(['(', '[']).next().unwrap_or_default();
+                        for (family, types) in families {
+                            if !types.contains(&ty.as_str()) || native {
+                                continue;
+                            }
+                            if matches!(family, Family::Hashed | Family::Sorted)
+                                && READS_NO_KEY.contains(&name)
+                            {
+                                continue;
+                            }
+                            for (tr, _) in method_traits(family, name) {
+                                written += 1;
+                                let bound = match tr {
+                                    ElemTrait::Eq => ["PartialEq", "Eq"],
+                                    ElemTrait::PartialOrd => ["PartialOrd", "Ord"],
+                                    ElemTrait::Ord => ["Ord", "Ord"],
+                                    other => [other.trait_name(), other.trait_name()],
+                                };
+                                assert!(
+                                    bound.iter().any(|b| head.contains(b) || t.contains(b)),
+                                    "{}: `{ty}.{name}` is written in Kāra under `{head}` \
+                                     and the table charges it {tr:?}, which its signature \
+                                     does not bound",
+                                    path.display()
+                                );
+                            }
+                        }
+                    }
+                    native = false;
+                }
+                depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+                if depth == 0 {
+                    header = None;
+                }
             }
         }
         assert!(
-            seen >= 30,
-            "the keyed sections' rows were not found: {seen}"
+            written >= 3,
+            "no Kāra-written table method found: {written}"
         );
     }
 }

@@ -869,7 +869,7 @@ struct IterCloned[I, V] {
     it: I,
 }
 
-impl[I: Iterator, V] Iterator for IterCloned[I, V] {
+impl[I: Iterator, V: Clone] Iterator for IterCloned[I, V] {
     type Item = V;
 
     fn next(mut ref self) -> Option[V] {
@@ -883,7 +883,7 @@ impl[I: Iterator, V] Iterator for IterCloned[I, V] {
     }
 }
 
-impl[I: DoubleEndedIterator, V] DoubleEndedIterator for IterCloned[I, V] {
+impl[I: DoubleEndedIterator, V: Clone] DoubleEndedIterator for IterCloned[I, V] {
     fn next_back(mut ref self) -> Option[V] {
         match self.it.next_back() {
             Some(x) => {

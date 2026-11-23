@@ -28,6 +28,7 @@ mod modbind_synth;
 mod no_effect;
 mod profile_compat;
 mod pure_loop;
+mod sig_bounds;
 mod subtyping;
 mod target_gate;
 pub mod unused_effect;
@@ -1316,6 +1317,13 @@ pub struct NodeTypeFacts {
     /// the index itself, for the types a call binds its parameters to.
     pub elem_impls: FxHashMap<crate::ids::NodeId, std::sync::Arc<TypeImpls>>,
     pub elem_index: std::sync::Arc<ElemImplIndex>,
+    /// The type of each expression whose type names a type the program
+    /// wrote a trait impl for, a type parameter, or a `dyn` or opaque type:
+    /// what a library method's bounds are charged on (`sig_bounds`).
+    pub node_types: FxHashMap<crate::ids::NodeId, std::sync::Arc<crate::typechecker::Type>>,
+    /// The type behind each `impl Trait` return, by where it is written
+    /// (`TypeCheckResult::impl_trait_witness_types`).
+    pub witness_types: FxHashMap<SpanKey, crate::typechecker::Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -1371,6 +1379,10 @@ pub(crate) enum BoundEvent {
     /// `x.method(..)` on a value of type parameter `param`, through a bound
     /// whose trait method declares no effects.
     TypeParam { param: String, method: Symbol },
+    /// A call to a method with no body in the program, bounded on trait
+    /// `tr` for the type parameter `param`: whatever `param` is, the call
+    /// may run its impl of `tr` (`sig_bounds`).
+    TraitParam { param: String, tr: String },
     /// A call to the user function or method `callee`, at call node `node`.
     Generic {
         callee: Symbol,
@@ -1534,6 +1546,11 @@ pub struct EffectChecker<'a> {
     /// See [`NodeTypeFacts::elem_impls`].
     pub(crate) elem_impls: FxHashMap<crate::ids::NodeId, std::sync::Arc<TypeImpls>>,
     pub(crate) elem_index: std::sync::Arc<ElemImplIndex>,
+    /// See [`NodeTypeFacts::node_types`] and [`NodeTypeFacts::witness_types`].
+    pub(crate) sig_types: FxHashMap<crate::ids::NodeId, std::sync::Arc<crate::typechecker::Type>>,
+    pub(crate) witness_types: FxHashMap<SpanKey, crate::typechecker::Type>,
+    /// The program's impls and traits, for the signature rule.
+    pub(crate) sig: sig_bounds::SigIndex<'a>,
     /// Each operator expression the typechecker dispatched to a program impl
     /// (`TypeCheckResult.user_operator_calls`), by span, with its `Type.method`
     /// key. The lowering rewrites an operator only when its operands share a
@@ -1615,6 +1632,11 @@ pub struct EffectChecker<'a> {
     /// the instance's method", so these are left out of the function's own
     /// effects and resolved at each call site from `node_call_subs`.
     pub(crate) bound_calls: FxHashMap<Symbol, FxHashSet<(String, Symbol)>>,
+    /// Per function, the `(type parameter, trait)` pairs its body hands to
+    /// a method with no body in the program that is bounded on the trait
+    /// ([`BoundEvent::TraitParam`]): resolved at each call site like
+    /// `bound_calls`.
+    pub(crate) bound_traits: FxHashMap<Symbol, FxHashSet<(String, String)>>,
     /// Set only while `compute_bound_calls` walks a body: the bound-dispatch
     /// events that walk meets, in order.
     pub(crate) bound_events: std::cell::RefCell<Option<Vec<BoundEvent>>>,
@@ -1838,6 +1860,9 @@ impl<'a> EffectChecker<'a> {
             operator_calls: FxHashMap::default(),
             elem_impls: FxHashMap::default(),
             elem_index: Default::default(),
+            sig_types: FxHashMap::default(),
+            witness_types: FxHashMap::default(),
+            sig: Default::default(),
             user_operator_calls: FxHashMap::default(),
             dyn_coercions: FxHashMap::default(),
             dyn_clauses: FxHashMap::default(),
@@ -1856,6 +1881,7 @@ impl<'a> EffectChecker<'a> {
             heap_nodes: FxHashSet::default(),
             net_buffer_nodes: FxHashSet::default(),
             bound_calls: FxHashMap::default(),
+            bound_traits: FxHashMap::default(),
             bound_events: std::cell::RefCell::new(None),
             trait_names: FxHashSet::default(),
             trait_impls: TraitImpls::default(),
@@ -1956,6 +1982,8 @@ impl<'a> EffectChecker<'a> {
             .collect();
         self.elem_impls = facts.elem_impls;
         self.elem_index = facts.elem_index;
+        self.sig_types = facts.node_types;
+        self.witness_types = facts.witness_types;
         self.operator_calls = facts
             .operator_calls
             .into_iter()
@@ -2957,6 +2985,7 @@ impl<'a> EffectChecker<'a> {
         self.apply_unimpled_private_trait_rule();
         self.collect_function_info();
         self.fn_bounds_index = self.build_fn_bounds_index();
+        self.sig = self.build_sig_index();
         self.fn_effect_var_positions = self.build_fn_effect_var_positions();
         self.impl_effect_var_positions = self.build_impl_effect_var_positions();
         self.compute_bound_calls();

@@ -20,6 +20,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A call to a generic method is charged the instance's impl of each trait its
+  signature bounds, whether or not its body is in view. A `for` loop over a
+  program iterator, and `count`, `sum`, `collect`, `extend`, `zip`, `rev` or a
+  `map` chain driving it, reported none of its `next`'s effects, nor did
+  `sum` with a program `Add` or `extend` with a program `IntoIterator`: a
+  `pub fn` that looped over an iterator whose `next` writes Stderr owed no
+  clause, and `#[no_effect(writes(Stderr))]` on it passed. Each is now
+  charged the impl it reaches, through the library's adapters, a program's
+  generic adapter and an `impl Iterator` result.
+  The library's signatures now bound what their bodies run, so generic code
+  must too: collecting or extending into a `SortedSet` or `SortedMap` and
+  `SortedMap.get_mut` take `Ord` on the key, and `cloned()` takes `Clone`
+  on the item (B-2026-11-23-17).
 - An associated function called through a type-parameter bound is charged
   the instance's impl. `fn build[T: Make]() -> T { T.make() }` called at a
   type whose `make` writes Stderr reported no effects, so a `pub fn`

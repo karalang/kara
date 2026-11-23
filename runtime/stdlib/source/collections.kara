@@ -1010,15 +1010,6 @@ impl[K, V] SortedMap[K, V] {
         SortedMapValues { m: self, front: 0, back: self.len() }
     }
 
-    /// The value at `key`, borrowed to be changed in place.
-    fn get_mut(mut ref self, key: K) -> Option[mut ref V] {
-        if self.contains_key(key) {
-            Some(mut self[key])
-        } else {
-            None
-        }
-    }
-
     /// The values, in key order, each borrowed to be changed in place
     /// (B-2026-11-05-41).
     fn values_mut(mut ref self) -> SortedMapValuesMut[K, V] {
@@ -1105,6 +1096,16 @@ impl[K, V] Iterator for SortedMapValuesMut[K, V] {
 }
 
 impl[K: Ord, V] SortedMap[K, V] {
+    /// The value at `key`, borrowed to be changed in place. The
+    /// key is compared, so it is bounded `Ord` with the lookups.
+    fn get_mut(mut ref self, key: K) -> Option[mut ref V] {
+        if self.contains_key(key) {
+            Some(mut self[key])
+        } else {
+            None
+        }
+    }
+
     /// A map of the list's `(key, value)` pairs; a repeated key keeps its
     /// last value (docs/library/collections.md, Collection literals).
     fn from(v: own Vec[(K, V)]) -> SortedMap[K, V] {
@@ -2041,7 +2042,7 @@ impl[T: Hash + Eq, H: BuildHasher] FromIterator[T] for Set[T, H] {
 }
 
 // B-2026-10-14-20: the ordered twins of `Set` and `Map`.
-impl[T] FromIterator[T] for SortedSet[T] {
+impl[T: Ord] FromIterator[T] for SortedSet[T] {
     fn from_iter[I: Iterator[Item = T]](iter: own I) -> SortedSet[T] {
         let mut it = iter;
         let mut out: SortedSet[T] = SortedSet.new();
@@ -2052,7 +2053,7 @@ impl[T] FromIterator[T] for SortedSet[T] {
     }
 }
 
-impl[K, V] FromIterator[(K, V)] for SortedMap[K, V] {
+impl[K: Ord, V] FromIterator[(K, V)] for SortedMap[K, V] {
     fn from_iter[I: Iterator[Item = (K, V)]](iter: own I) -> SortedMap[K, V] {
         let mut it = iter;
         let mut out: SortedMap[K, V] = SortedMap.new();
@@ -2102,7 +2103,7 @@ impl[T: Hash + Eq, H: BuildHasher] Extend[T] for Set[T, H] {
     }
 }
 
-impl[T] Extend[T] for SortedSet[T] {
+impl[T: Ord] Extend[T] for SortedSet[T] {
     fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I) {
         for x in items.into_iter() {
             self.insert(x);
@@ -2119,7 +2120,7 @@ impl[K: Hash + Eq, V, H: BuildHasher] Extend[(K, V)] for Map[K, V, H] {
     }
 }
 
-impl[K, V] Extend[(K, V)] for SortedMap[K, V] {
+impl[K: Ord, V] Extend[(K, V)] for SortedMap[K, V] {
     fn extend[I: IntoIterator[Item = (K, V)]](mut ref self, items: own I) {
         for (k, v) in items.into_iter() {
             self.insert(k, v);
