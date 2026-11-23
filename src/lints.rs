@@ -449,6 +449,16 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              declaration may reserve one, so a library can add it later without breaking callers; \
              turn this on to find the ones that are not meant (design.md § Effects).",
     },
+    // `unused_variable` (B-2026-11-20-146), reported with the style lints
+    // below and off by default as they are.
+    LintInfo {
+        name: "unused_variable",
+        default_level: LintLevel::Allow,
+        description: "A `let`, `for` or pattern binding that nothing names again. A name that \
+             starts with `_` is unused on purpose and is not reported (design.md § Naming, \
+             CN-5); `karac fix` writes the `_`, which keeps the binding and its value's \
+             lifetime.",
+    },
     // The five style lints of design.md § `karac fix` and `karac explain`
     // (B-2026-11-05-31), reported from source text by `crate::style_lints`.
     // Off by default in `check`, `build` and `run`; `karac fix` turns them

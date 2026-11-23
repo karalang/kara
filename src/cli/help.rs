@@ -583,8 +583,9 @@ DETAILS:
     the same lint flags, and no others. The style lints
     (`counter_while_loop`, `manual_compound_assign`, `needless_return`,
     `redundant_literal_method`, `redundant_ref_param`,
-    `qualified_prelude_variant`) are off in both until `-W NAME`,
-    `#[warn(NAME)]` or a `[lints]` entry turns one on. Coverage today:
+    `qualified_prelude_variant`, `unused_variable`) are off in both until
+    `-W NAME`, `#[warn(NAME)]` or a `[lints]` entry turns one on.
+    Coverage today:
       - Parser: Rust spellings rewritten to Kāra's (`::` paths, `&&` /
         `||` / `!`, macros such as `println!` and `vec![..]`, `<..>`
         generics, `Box`, `{x:?}`, a nested `fn`).

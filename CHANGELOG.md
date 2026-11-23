@@ -581,6 +581,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   came. A bencoded tracker reply, a protobuf or CBOR API or a file server
   could not send a 20-byte hash or a 0xFF before; a body of any other type
   is refused at the handler, naming the two allowed (B-2026-11-23-60).
+- `unused_variable` (W0324), a lint for a `let`, `for`, `match`-arm, `if let`
+  or `while let` binding that nothing names again: `let x = 5;` never read,
+  or the index of `for (i, step) in steps.iter().enumerate()`. Such a binding
+  checked clean with no way to ask about it. It is off by default, as the
+  style lints are; `-W unused_variable`, `#[warn(unused_variable)]` or a
+  `[lints]` entry turns it on. `karac fix` writes `_name`, which keeps the
+  binding, so its value is dropped where it was before. A binding that is
+  only assigned, a parameter, an or-pattern's name, a shorthand field and a
+  name that already starts with `_` are not reported (B-2026-11-20-146).
 
 - A program's trait impl for a concrete tuple type (`impl Show for (i64,
   i64)`) answers method calls, default methods, `Show.show(p)`, `T: Show`

@@ -1578,7 +1578,7 @@ pub enum TypeErrorKind {
     /// One of the style lints (B-2026-11-05-31, `crate::style_lints`):
     /// `counter_while_loop`, `manual_compound_assign`, `needless_return`,
     /// `redundant_literal_method`, `redundant_ref_param`,
-    /// `qualified_prelude_variant`. Reported after
+    /// `qualified_prelude_variant`, `unused_variable`. Reported after
     /// typechecking, from source text; the entry's `lint_name` says which.
     StyleLint,
     /// `unused_doc_comment` lint (B-2026-11-06-18): a `///` run that

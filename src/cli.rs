@@ -1879,7 +1879,12 @@ impl Pipeline {
         if typed.errors.iter().any(|e| e.span.offset < own_len) {
             return;
         }
-        let hits = crate::style_lints::style_hits(&self.parsed.program, typed, source);
+        let hits = crate::style_lints::style_hits(
+            &self.parsed.program,
+            typed,
+            self.resolved.as_ref(),
+            source,
+        );
         for hit in hits {
             if hit.edits.iter().any(|e| e.offset + e.length > own_len) {
                 continue;

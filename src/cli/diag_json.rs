@@ -3621,6 +3621,7 @@ pub(crate) const LINT_CODES: &[(&str, &str, &str)] = &[
     ("vec_per_element", "W0321", "E0321"),
     ("len_saturating_sub", "W0322", "E0322"),
     ("self_rebinding", "W0323", "E0323"),
+    ("unused_variable", "W0324", "E0324"),
 ];
 
 /// The code of lint `lint` at `severity` (`"warning"` or `"error"`), when it

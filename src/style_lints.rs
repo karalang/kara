@@ -1,5 +1,6 @@
-//! The six style lints of design.md § `karac fix` and `karac explain`
-//! (B-2026-11-05-31, B-2026-11-19-12), each with a machine-applicable fix:
+//! The style lints of design.md § `karac fix` and `karac explain`
+//! (B-2026-11-05-31, B-2026-11-19-12, B-2026-11-20-146), each with a
+//! machine-applicable fix:
 //!
 //! - `counter_while_loop`: `let mut i = a; while i < b { ...; i += 1; }`
 //!   becomes `for i in a..b { ... }`;
@@ -11,7 +12,9 @@
 //! - `redundant_ref_param`: `x: ref T` becomes `x: T` ([§7] parameter modes:
 //!   a parameter borrows by default, so the two mean the same);
 //! - `qualified_prelude_variant`: `Option.Some(x)` becomes `Some(x)`, and so
-//!   on for `None`, `Ok` and `Err`, in expressions and patterns.
+//!   on for `None`, `Ok` and `Err`, in expressions and patterns;
+//! - `unused_variable`: a `let`, `for` or pattern binding nothing names
+//!   again becomes `_name` ([§3] CN-5), which says so and keeps the value.
 //!
 //! The pass reads the source text: every fix keeps the author's own spelling
 //! of the operands it moves, and each site checks the text between the parts
@@ -22,7 +25,7 @@
 //! from the attributes around it.
 
 use crate::ast::*;
-use crate::resolver::{SpanKey, TextEdit};
+use crate::resolver::{ResolveResult, SpanKey, SymbolKind, TextEdit};
 use crate::token::Span;
 use crate::typechecker::{Type, TypeCheckResult};
 
@@ -32,17 +35,19 @@ pub const NEEDLESS_RETURN: &str = "needless_return";
 pub const REDUNDANT_LITERAL_METHOD: &str = "redundant_literal_method";
 pub const REDUNDANT_REF_PARAM: &str = "redundant_ref_param";
 pub const QUALIFIED_PRELUDE_VARIANT: &str = "qualified_prelude_variant";
+pub const UNUSED_VARIABLE: &str = "unused_variable";
 
-/// All six. Off (`allow`) in every command, `karac fix` included, until a
+/// All seven. Off (`allow`) in every command, `karac fix` included, until a
 /// `-W NAME`, `#[warn(NAME)]` or `[lints]` entry turns one on
 /// (B-2026-11-20-68).
-pub const LINTS: [&str; 6] = [
+pub const LINTS: [&str; 7] = [
     COUNTER_WHILE_LOOP,
     MANUAL_COMPOUND_ASSIGN,
     NEEDLESS_RETURN,
     REDUNDANT_LITERAL_METHOD,
     REDUNDANT_REF_PARAM,
     QUALIFIED_PRELUDE_VARIANT,
+    UNUSED_VARIABLE,
 ];
 
 /// One site a style lint fires on: where, why, and the edits that fix it.
@@ -55,8 +60,14 @@ pub struct StyleHit {
 }
 
 /// Every style-lint site in the program's own items (those before
-/// `library_start`), in source order.
-pub fn style_hits(program: &Program, typed: &TypeCheckResult, src: &str) -> Vec<StyleHit> {
+/// `library_start`), in source order. `resolved` says which bindings are
+/// named again; without it `unused_variable` reports nothing.
+pub fn style_hits(
+    program: &Program,
+    typed: &TypeCheckResult,
+    resolved: Option<&ResolveResult>,
+    src: &str,
+) -> Vec<StyleHit> {
     // `library_start` is the byte offset the appended library starts at;
     // the program's own items come before it.
     let own = match program.library_start {
@@ -114,6 +125,9 @@ pub fn style_hits(program: &Program, typed: &TypeCheckResult, src: &str) -> Vec<
         }
     }
     qualified_prelude_variants(items, src, &mut cx.out);
+    if let Some(resolved) = resolved {
+        unused_variables(items, resolved, src, &mut cx.out);
+    }
     cx.out.sort_by_key(|h| h.span.offset);
     cx.out
 }
@@ -960,6 +974,120 @@ fn qualified_prelude_variants(items: &[Item], src: &str, out: &mut Vec<StyleHit>
                  `karac fix` drops the `{ty}.`"
             ),
             edits: vec![edit(at, at + ty.len() + 1, "")],
+        });
+    }
+}
+
+/// `unused_variable` (B-2026-11-20-146): a binding of a `let`, a `for`, a
+/// `match` arm, an `if let` or a `while let` that nothing names again.
+///
+/// The resolver gives every binding a symbol at its pattern's span and
+/// records every name that resolves to one, so a binding with no such record
+/// is never read, written or captured. A binding that is only assigned is
+/// named, so it is not reported. The fix writes `_name`, which design.md
+/// § Naming CN-5 reads as "unused on purpose"; it keeps the binding, so the
+/// value still lives to the end of its scope and nothing is dropped earlier
+/// than before.
+///
+/// Not reported: a function's or a closure's parameter (its place in the
+/// signature is the reason it is there), a name bound by an or-pattern
+/// (each alternative binds it), a struct pattern's shorthand field and an
+/// `@` binding (neither is a pattern of its own to rename), and a name that
+/// already starts with `_`.
+fn unused_variables(items: &[Item], resolved: &ResolveResult, src: &str, out: &mut Vec<StyleHit>) {
+    use crate::span_visitor::{walk_item_mut_with, MutVisitor};
+    let used: std::collections::HashSet<_> = resolved
+        .resolutions
+        .values()
+        .copied()
+        .chain(resolved.node_refs.values().map(|r| r.symbol))
+        .collect();
+    // By where the binding is written: a `par` block's branch binding is
+    // defined a second time in the enclosing scope, at the same span, and
+    // the code after the block names that second symbol.
+    let mut declared = std::collections::HashSet::new();
+    let mut named = std::collections::HashSet::new();
+    for sym in resolved.symbol_table.all_symbols() {
+        if matches!(sym.kind, SymbolKind::Variable { .. }) && sym.span.line != 0 {
+            declared.insert(sym.span.offset);
+            if used.contains(&sym.id) {
+                named.insert(sym.span.offset);
+            }
+        }
+    }
+    #[derive(Default)]
+    struct Bindings {
+        found: Vec<(Span, String)>,
+        /// Parameter patterns and or-patterns: no binding inside is reported.
+        skipped: Vec<(usize, usize)>,
+    }
+    impl MutVisitor for Bindings {
+        fn span(&mut self, _: &mut Span) {}
+        fn expr(&mut self, e: &mut Expr) {
+            if let ExprKind::Closure { params, .. } = &e.kind {
+                for p in params {
+                    self.skipped.push((p.span.offset, end(&p.span)));
+                    self.skipped
+                        .push((p.pattern.span.offset, end(&p.pattern.span)));
+                }
+            }
+        }
+        fn pattern(&mut self, p: &mut Pattern) {
+            match &p.kind {
+                PatternKind::Or(_) => self.skipped.push((p.span.offset, end(&p.span))),
+                PatternKind::Binding(name) => self.found.push((p.span, name.clone())),
+                _ => {}
+            }
+        }
+    }
+    let mut bindings = Bindings::default();
+    let skip_params = |params: &[Param], skipped: &mut Vec<(usize, usize)>| {
+        for p in params {
+            skipped.push((p.pattern.span.offset, end(&p.pattern.span)));
+        }
+    };
+    for item in items {
+        match item {
+            Item::Function(f) => skip_params(&f.params, &mut bindings.skipped),
+            Item::ImplBlock(imp) => {
+                for it in &imp.items {
+                    if let ImplItem::Method(m) = it {
+                        skip_params(&m.params, &mut bindings.skipped);
+                    }
+                }
+            }
+            Item::TraitDef(t) => {
+                for it in &t.items {
+                    if let TraitItem::Method(m) = it {
+                        skip_params(&m.params, &mut bindings.skipped);
+                    }
+                }
+            }
+            _ => {}
+        }
+        walk_item_mut_with(&mut item.clone(), &mut bindings);
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (span, name) in bindings.found {
+        let at = span.offset;
+        if name.starts_with('_')
+            || crate::lexer::classify_ident(&name) != crate::lexer::IdentClass::Value
+            || !declared.contains(&at)
+            || named.contains(&at)
+            || bindings.skipped.iter().any(|&(a, b)| a <= at && at < b)
+            || src.get(at..end(&span)) != Some(name.as_str())
+            || !seen.insert(at)
+        {
+            continue;
+        }
+        out.push(StyleHit {
+            lint: UNUSED_VARIABLE,
+            span,
+            message: format!(
+                "`{name}` is bound and never used; name it `_{name}` to keep the binding and \
+                 say it is unused on purpose (design.md § Naming, CN-5), or remove it"
+            ),
+            edits: vec![edit(at, at, "_")],
         });
     }
 }
