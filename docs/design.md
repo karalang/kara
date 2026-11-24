@@ -3117,7 +3117,7 @@ Kāra has nominal types and little subtyping. The subtyping relation has exactly
 | Effect set of a function type | covariant |
 | Function parameter | contravariant |
 
-**`mut ref T` is invariant.** `mut ref Sub` is not a subtype of `mut ref Super`, nor the reverse. A `mut ref Super` can write any `Super`, including one that is not a valid `Sub`; if `mut ref Sub` could become `mut ref Super`, a write through one alias could store a value that a read through the other cannot soundly type. A function taking `mut ref T` therefore receives exactly `T`.
+**`mut ref T` is invariant.** `mut ref Sub` is not a subtype of `mut ref Super`, nor the reverse. A `mut ref Super` can write any `Super`, including one that is not a valid `Sub`; if `mut ref Sub` could become `mut ref Super`, a write through one alias could store a value that a read through the other cannot soundly type. A function taking `mut ref T` therefore receives exactly `T`. For a function type that includes its effect set: a `mut ref` to a function type is invariant in its effect clause, as in its parameter and result types, so a place declared `Fn() -> i64 with ()` is refused where `mut ref Fn() -> i64 with writes(Stdout)` is expected, and the reverse too (an absent clause, every effect, equals only another absent clause). By value and through `ref`, the effect set stays covariant (review-thread ruling 2026-11-24, B-2026-11-24-16).
 
 **Built-in types:**
 

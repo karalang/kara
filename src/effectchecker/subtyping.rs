@@ -406,6 +406,7 @@ impl<'a> super::EffectChecker<'a> {
         args: &[CallArg],
         call_span: &Span,
         solved: &[usize],
+        w: &SubtypingWalk,
     ) {
         let params = self
             .function_bodies
@@ -465,6 +466,10 @@ impl<'a> super::EffectChecker<'a> {
                 continue;
             }
             self.check_dyn_clause_slot(&format!("argument {}", i + 1), &call_arg.value);
+            if let TypeKind::MutRef(target) = &param.ty.kind {
+                self.check_mut_ref_fn_invariance(i, target, &call_arg.value, w);
+                continue;
+            }
             let slot_effects = match &param.ty.kind {
                 TypeKind::FnType {
                     effect_spec: Some(EffectSpec::Polymorphic),
@@ -550,6 +555,78 @@ impl<'a> super::EffectChecker<'a> {
                     });
                 }
             }
+        }
+    }
+
+    /// A `mut ref` to a function type is INVARIANT in its effect set
+    /// (design.md §8 Subtyping and variance; review-thread ruling 2026-11-24,
+    /// B-2026-11-24-16). Through the reference the callee may both call the
+    /// place's function and store a new one, so the place's clause and the
+    /// slot's must be the same set: a `with ()` place handed to a
+    /// `mut ref Fn() with writes(Stdout)` slot would let the callee store a
+    /// printing function that a later call through the `with ()` value runs
+    /// as if it had no effects, and the reverse would let the callee call a
+    /// function with more effects than its slot admits.
+    ///
+    /// A clause that is absent means every effect, so it equals only another
+    /// absent clause. The check fails open, as the other positions here do,
+    /// where a set is not in hand: an argument place with no written type, a
+    /// target that is not a function type, `with _`, or an effect variable.
+    fn check_mut_ref_fn_invariance(
+        &mut self,
+        index: usize,
+        target: &TypeExpr,
+        arg: &Expr,
+        w: &SubtypingWalk,
+    ) {
+        if !matches!(target.kind, TypeKind::FnType { .. }) {
+            return;
+        }
+        let Some(place) = self.receiver_declared_type(arg, w) else {
+            return;
+        };
+        if !matches!(place.kind, TypeKind::FnType { .. }) {
+            return;
+        }
+        let (Some(slot), Some(held)) = (self.fn_clause_set(target), self.fn_clause_set(&place))
+        else {
+            return;
+        };
+        if slot == held {
+            return;
+        }
+        let render = |set: &Option<HashSet<Effect>>| match set {
+            None => "no clause (every effect)".to_string(),
+            Some(set) => {
+                let mut v: Vec<String> = set.iter().map(effect_text).collect();
+                v.sort();
+                format!("`with {}`", slot_clause(&v))
+            }
+        };
+        let (slot_s, held_s) = (render(&slot), render(&held));
+        self.errors.push(EffectError {
+            message: format!(
+                "argument {} is a `mut ref` to a function value whose type has {held_s}, but the slot's function type has {slot_s}: a `mut ref` to a function type is invariant in its effect set (design.md §8 Subtyping and variance), because the callee may both call the function and store a new one. Give the place and the slot the same clause",
+                index + 1
+            ),
+            span: arg.span,
+            kind: EffectErrorKind::EffectSubtypeViolation,
+            subtype_trace: None,
+            replacement: None,
+            undeclared: None,
+        });
+    }
+
+    /// A function type's clause as a set, for the invariance check:
+    /// `Some(None)` for no clause (every effect), `Some(Some(set))` for a
+    /// concrete clause, `None` where no set is in hand (`with _`, a variable).
+    fn fn_clause_set(&self, ty: &TypeExpr) -> Option<Option<HashSet<Effect>>> {
+        match &ty.kind {
+            TypeKind::FnType {
+                effect_spec: None, ..
+            } => Some(None),
+            TypeKind::FnType { .. } => self.fn_annotation_slot_effects(ty).map(Some),
+            _ => None,
         }
     }
 
@@ -1135,7 +1212,7 @@ impl<'a> super::EffectChecker<'a> {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
                 if let Some(cname) = self.extract_callee_name(callee) {
-                    self.check_call_args_subtyping(cname, args, &expr.span, &[]);
+                    self.check_call_args_subtyping(cname, args, &expr.span, &[], w);
                 }
                 // Recurse into callee and args
                 self.check_subtyping_in_expr(callee, w);
@@ -1230,7 +1307,7 @@ impl<'a> super::EffectChecker<'a> {
                         args,
                         &mut w.instances,
                     );
-                    self.check_call_args_subtyping(callee_key, args, &expr.span, &solved);
+                    self.check_call_args_subtyping(callee_key, args, &expr.span, &solved, w);
                 }
                 // The check above reads the slot off the CALLEE's parameter
                 // list, which a baked stdlib method does not have. This one
