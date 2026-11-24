@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 748 |
 | false-positive | 369 |
-| missing-feature | 251 |
+| missing-feature | 252 |
 | perf | 203 |
 | other | 149 |
 | soundness | 130 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 897 |
 | mir | 332 |
 | mir-llvm | 324 |
-| cli | 304 |
+| cli | 305 |
 | parser | 158 |
 | ownership | 136 |
 | runtime | 110 |
@@ -122,6 +122,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-41 | 2026-11-24 | mir-llvm+runtime | medium | Counting 10^5 random keys into a compiled `SortedMap` takes about 3.4x Rust's `BTreeMap` (`*count.entry(x).or_insert(0) += 1`, 100 rounds: 5.5 to 5.8 s against 1.6 s), and plain `insert(x, 1)` about 2.8x (4.6 s against 1.6 s), so kata 1296's bench runs 2x Rust's | — |
 | B-2026-11-24-42 | 2026-11-24 | typecheck+cli | low | `half.find(|c: char| c != 'a')` on `half = s[..n / 2]`, Rust's `str::find` over a string's first half, got only the bare "'find' takes a `Str` pattern, found 'Fn(char) -> bool'" with no fix: the `char_indices().find(..).map(|(i, _)| i)` fix (B-2026-11-20-140) reached only a `String` receiver with an unannotated closure, and a `Str` view or a `c: char` parameter missed it | — |
 | B-2026-11-24-43 | 2026-11-24 | typecheck | medium | `let mat: Vec[Vec[i32]] = [[3, 3, 1, 1].to_vec(), ..].to_vec();`, a list of integer literals turned `.to_vec()` as Rust writes a `Vec`, is refused with "expected 'Vec[Vec[i32]]', found 'Vec[Vec[i64]]'" and the advice to annotate the binding, which is annotated: the wanted element type reaches a list behind `.to_vec()` only when it holds a `Str` (B-2026-11-09-49), so the literals keep the default `i64` | — |
+| B-2026-11-24-46 | 2026-11-24 | cli | low | `karac explain` on a function in a recursive group gives each effect's call chain but not the fixpoint chain design.md § Effects promises (`∅ = φ₀ ⊊ φ₁ ⊊ … ⊊ φ*`, with the callee or operation that added atoms at each step) | — |
 
 ### Relocated
 

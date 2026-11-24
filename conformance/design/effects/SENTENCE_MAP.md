@@ -4,7 +4,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable. Cell names
 
 Run with `python3 conformance/cases.py conformance/design/effects` and, for the two package cells, `python3 conformance/packages.py conformance/design/modules`. Kinds this directory adds to cases.py: `.effects` (the sets `karac query effects` infers), `.cmd` (a karac command's output), `.json` (a predicate over a JSON document), `.notes` and `.absent` (text `karac check` must or must not print).
 
-**Totals (2026-11-24):** 220 normative sentences, 203 covered, 7 partial, 10 not testable. Two of the covered failed when the audit started and are fixed with it: a `par` branch was not charged the program impls a native runs on what it holds (B-2026-11-24-44), and a function declaring a keyed resource was charged nothing for it (B-2026-11-24-45). 39 sentences had no cell before the audit; the rest were covered by the earlier pass, the probe's sweep and the Rust suites.
+**Totals (2026-11-24):** 219 normative sentences, 203 covered, 6 partial, 10 not testable. Two of the covered failed when the audit started and are fixed with it: a `par` branch was not charged the program impls a native runs on what it holds (B-2026-11-24-44), and a function declaring a keyed resource was charged nothing for it (B-2026-11-24-45). 39 sentences had no cell before the audit; the rest were covered by the earlier pass, the probe's sweep and the Rust suites.
 
 ## Introduction
 
@@ -174,7 +174,7 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 | 5522 | Allocation failure is not a `panics` atom | covered | allocation_alone_is_not_a_panics_atom (new) |
 | 5524 | Monotonicity and a unique least fixed point from the empty assignment | covered | self_recursion_with_no_effects_stays_empty_least_fixed |
 | 5526 | A group that exceeds `n · m` iterations is an internal compiler error | not testable | a guard against a monotonicity bug |
-| 5528 | `karac explain` reports the chain `φ₀ ⊊ … ⊊ φ*` with the step that added atoms | partial | explain_shows_default_permitted_effects_and_their_chain (new): explain gives each effect's call chain to the operation that adds it, not the iteration chain |
+| 5528 | `karac explain` reports the chain `φ₀ ⊊ … ⊊ φ*` with the step that added atoms | partial | explain_shows_default_permitted_effects_and_their_chain (new): explain gives each effect's call chain to the operation that adds it, not the iteration chain; B-2026-11-24-46 (open) |
 
 ### Mutual recursion
 
@@ -262,7 +262,6 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 | 5666 | A function type may carry a clause; kind, `escaping` and clause are independent | covered | fn_type_kind_escaping_and_clause_are_independent (new) |
 | 5668 | A value with fewer effects fits a slot expecting more | covered | effect_set_subtyping_reader_writer_and_pure_fit_a_reads |
 | 5682 | The reverse is an error | covered | reverse_is_an_error_a_writes_slot_value_into_a |
-| 5682 | `karac explain` reports the check as `effect-subset-ok` | partial | not printed by `karac explain <item>`; the subset check itself is the two cells above |
 | 5685 | A non-escaping parameter has the argument's effects, charged to the caller | covered | non_escaping_parameter_s_effects_are_charged_to_the |
 | 5685 | With no clause it accepts any value; a clause is an upper bound | covered | each_itself_needs_no_declaration, clause_on_a_non_escaping_parameter_is_an_upper_bound |
 | 5686 | An escaping value has its type's clause; storing one that exceeds it is an error | covered | storing_a_value_whose_effects_exceed_the_slot_s_clause, call_through_a_stored_callback_has_its_clause_s |

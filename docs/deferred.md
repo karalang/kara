@@ -4557,7 +4557,7 @@ Each step is independent: the type resolution in step 2 does not consult the eff
 
 ### Parameterized Resources (opt-in finer granularity)
 
-v1 keys resources by value instead ([design.md §12](design.md#value-rooted-resources)). This is the declared, parameterized form.
+v1 keys resources by value instead ([design.md §12](design.md#value-rooted-resources)). This is the declared, parameterized form. 0.8 accepts the key and charges the whole resource: `writes(UserDB[id])` conflicts with every other `UserDB` access, whatever the keys (B-2026-11-24-45).
 
 ```
 effect resource UserDB[user_id: i64];

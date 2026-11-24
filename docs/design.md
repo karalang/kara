@@ -5417,7 +5417,7 @@ fn handle(req: Request) -> Response {   // inferred: writes(AuditLog), writes(St
 }
 ```
 
-Two `par` branches that both call `record` conflict on `AuditLog`. Parameterized resources (`UserDb[id]`) are deferred to the [effects-expressiveness track](deferred.md#effects-expressiveness).
+Two `par` branches that both call `record` conflict on `AuditLog`. Parameterized resources (`UserDb[id]`) are deferred to the [effects-expressiveness track](deferred.md#effects-expressiveness). 0.8 accepts the key and charges the whole resource, so `writes(UserDb[i])` conflicts with every other `UserDb` access, whatever the keys.
 
 ### Inference and declarations
 
@@ -5679,7 +5679,7 @@ run(writer);    // OK
 run(pure_fn);   // OK: the empty set is below every set
 ```
 
-The reverse is an error: a `Fn(T) -> U with writes(Log)` cannot fill a slot declared `with reads(Log)`. Subtyping here is a relation on effect sets, not a coercion: nothing is converted at run time. `karac explain` reports the check as `effect-subset-ok: {reads(Log)} ⊆ {reads(Log), writes(Log)}`.
+The reverse is an error: a `Fn(T) -> U with writes(Log)` cannot fill a slot declared `with reads(Log)`. Subtyping here is a relation on effect sets, not a coercion: nothing is converted at run time.
 
 **How a call through a function value gets its effects** ([core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)):
 - **A non-escaping parameter** (the default) has, at each call site, the effects of the argument passed there, charged to that caller. With no clause it accepts any function value. A clause, if written, is an upper bound the argument must fit.
