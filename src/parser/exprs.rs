@@ -4243,11 +4243,13 @@ impl super::Parser {
         // `Vec[...]` or `Set[...]` prefix literal"), so each is recorded with
         // its rewrite and the type checker warns `deprecated` on it
         // (B-2026-11-16-255); it still builds what it always did.
+        // `Vec[dyn Shape].new()` names the type: a `dyn` type is no element.
         if self.check(&Token::LeftBracket)
             && matches!(
                 name.as_str(),
                 "Vec" | "Array" | "Set" | "Map" | "VecDeque" | "SortedMap"
             )
+            && !matches!(self.peek_token_ref_at(1), Token::Dyn)
         {
             let lit = self.parse_prefix_collection_literal(name.clone(), &start)?;
             let fix = self.prefix_literal_fix(name, &start, &lit);
@@ -4678,6 +4680,15 @@ impl super::Parser {
                 }
         ) {
             return false;
+        }
+        // `Option[dyn Shape].size_of()`: a `dyn` type cannot be an index, so
+        // the brackets are type arguments whatever follows them (design.md
+        // § Generics, a qualified receiver).
+        if matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.token),
+            Some(Token::Dyn)
+        ) {
+            return true;
         }
         // Balanced bracket scan from the opening `[` at self.pos.
         let mut depth: usize = 0;
