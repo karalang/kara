@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 734 |
-| false-positive | 360 |
+| diagnostics | 736 |
+| false-positive | 361 |
 | missing-feature | 249 |
 | perf | 200 |
 | other | 149 |
@@ -85,8 +85,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | runtime | 109 |
 | interp | 101 |
 | effect | 63 |
+| resolver | 54 |
 | other | 52 |
-| resolver | 51 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -119,6 +119,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
 | B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
 | B-2026-11-24-7 | 2026-11-24 | typecheck | low | A built-in type's method named as a value is refused by the checker: `[1].iter().map(i64.abs)` says "no associated constant `abs` on `i64`", `.map(Str.to_string)` and `.map(String.len)` say "no associated function", where design.md § Function values makes an unbound method a function whose first parameter is the receiver (a user type's work) | — |
+| B-2026-11-24-12 | 2026-11-24 | resolver | medium | A block's `const` in a package module was refused as a binding (E0127 'Const-class but binding names must be Value-class'); the same file alone ran | — |
+| B-2026-11-24-13 | 2026-11-24 | resolver | low | E0113 dropped the list of a small module's exports whenever it found a suggestion; design.md § Imports gives both | — |
+| B-2026-11-24-14 | 2026-11-24 | resolver | low | `#[test]` on a `fn` in a `_test.kara` file was reported at the module's other file (src/util.kara:3:1 for src/util_test.kara), and the message repeated its code | — |
 
 ### Relocated
 
