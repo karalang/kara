@@ -3123,9 +3123,19 @@ impl<'a> super::TypeChecker<'a> {
 
         // Raw-pointer instance methods (design.md § raw pointers).
         // Extracted to `method_pointer.rs`; it keeps this position in the
-        // first-match-wins chain and the block order within it.
-        if let Some(t) = self.try_pointer_receiver_method(object, method, args, span, &obj_ty) {
-            return t;
+        // first-match-wins chain and the block order within it. A UFCS call
+        // that names a trait (`Show.is_null(p)`) skips them: the pointer's own
+        // methods come first only for `p.is_null()` (design.md §9 Raw
+        // pointers, B-2026-11-24-21).
+        let names_trait = self
+            .env
+            .ufcs_trait
+            .as_ref()
+            .is_some_and(|(_, m)| m == method);
+        if !names_trait {
+            if let Some(t) = self.try_pointer_receiver_method(object, method, args, span, &obj_ty) {
+                return t;
+            }
         }
 
         // Comptime `Type` reflection on a `Type`-typed *value* receiver — a

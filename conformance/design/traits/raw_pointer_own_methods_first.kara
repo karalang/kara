@@ -1,0 +1,10 @@
+// design.md §9: "The pointer's own methods come first": `p.is_null()` is
+// the pointer's, `Show.is_null(p)` the trait's.
+trait Show { fn is_null(self) -> String; }
+impl Show for *mut i64 { fn is_null(self) -> String { "trait".to_string() } }
+fn main() {
+    let mut x: i64 = 1;
+    let p: *mut i64 = ptr.mut(x);
+    println(p.is_null());
+    println(Show.is_null(p));
+}

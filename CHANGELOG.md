@@ -1121,6 +1121,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - A qualified receiver may name a `dyn` type: `Option[dyn Shape].size_of()`
   and `Vec[dyn Shape].new()` parse. The brackets were read as an index and
   `dyn` refused as a reserved keyword (B-2026-11-24-17).
+- `Show.is_null(p)` on a raw pointer calls `Show`'s `is_null`, as a UFCS
+  call that names a trait does on any type: the pointer's own methods come
+  first only for `p.is_null()` (design.md §9 Raw pointers). The checker
+  typed the call as the pointer's `bool` and both backends called the
+  pointer's own method (B-2026-11-24-21).
 - In a trait default body that two impls inherit, a method call that leaves
   out a defaulted argument takes its own callee's default. Every copy of the
   body took the default of the method the last impl's copy calls: with

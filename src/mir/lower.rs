@@ -25745,7 +25745,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
         }
-        if self.raw_ptr_method(object, method, args, dest.clone())? {
+        // `Show.is_null(p)` names the trait, so it calls the trait's method
+        // even where the pointer has its own of that name; `p.is_null()`
+        // is the pointer's (design.md §9 Raw pointers, B-2026-11-24-21).
+        let trait_ufcs = self
+            .lcx
+            .tc
+            .ufcs_calls
+            .get(&SpanKey::from_span(&e.span))
+            .is_some_and(|n| self.lcx.trait_defs.contains_key(n.as_str()));
+        if !trait_ufcs && self.raw_ptr_method(object, method, args, dest.clone())? {
             return Ok(());
         }
         // `a.as_ptr()` / `a.as_mut_ptr()` of an array: a raw pointer to its
