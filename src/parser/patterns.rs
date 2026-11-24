@@ -377,6 +377,26 @@ impl super::Parser {
             // Bare `..` is not a valid pattern (use `_` for wildcard).
             Token::DotDot => {
                 self.advance();
+                if !Self::starts_range_bound(self.peek_token_ref())
+                    && !matches!(self.peek_token_ref(), Token::Minus)
+                {
+                    // `match n { .. => … }`: a rest marker outside a
+                    // pattern's brackets or braces (design.md § Pattern
+                    // matching). The `_` stands in, so the arm parses on.
+                    self.errors.push(ParseError {
+                        kind: crate::parser::ParseErrorKind::Syntax,
+                        message: "a bare `..` is not a pattern on its own: it is the rest \
+                                  marker inside `[...]` or `{ ... }`; write `_` to match \
+                                  anything (design.md § Pattern matching)"
+                            .to_string(),
+                        span: self.span_from(&start),
+                    });
+                    return Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
+                        kind: PatternKind::Wildcard,
+                        span: self.span_from(&start),
+                    });
+                }
                 let end = self.parse_range_bound()?;
                 Some(Pattern {
                     id: crate::ids::NodeId::DUMMY,
@@ -961,19 +981,23 @@ impl super::Parser {
             while self.eat(&Token::Dot) {
                 segments.push(self.expect_identifier()?);
             }
-            return Some(RangeBound::Path {
-                segments,
-                span: self.span_from(&bound_start),
-            });
-        }
-        if Self::starts_literal_pattern(self.peek_token_ref()) {
+            if !self.check(&Token::LeftParen) {
+                return Some(RangeBound::Path {
+                    segments,
+                    span: self.span_from(&bound_start),
+                });
+            }
+            // `0..=hi()`: a call, refused as the expression it is rather
+            // than as a stray `(` after the arm's pattern.
+        } else if Self::starts_literal_pattern(self.peek_token_ref()) {
             return Some(RangeBound::Literal(self.parse_literal_pattern()?));
         }
         self.errors.push(ParseError {
             kind: crate::parser::ParseErrorKind::Syntax,
             message: "error[E_RANGE_PATTERN_BOUND_NOT_SIMPLE]: range pattern bound must be \
-                      a literal or a path to a module-level const; arbitrary expressions are \
-                      not accepted at pattern position"
+                      a literal or a path to a module-level const; arbitrary expressions, \
+                      calls included, are not accepted at pattern position (design.md \
+                      § Range patterns): bind the value and compare it in a guard"
                 .to_string(),
             span: bound_start,
         });

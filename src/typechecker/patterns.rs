@@ -1543,8 +1543,11 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 // Cannot-double-consume rule: a by-move non-Copy leaf
                 // binding inside a consuming `@` outer claims heap content
-                // the outer already owns (design.md § @ Bindings).
+                // the outer already owns (design.md § @ Bindings). A unit
+                // variant (`x @ K.A`) binds nothing, so it claims nothing,
+                // whichever pipeline checks it.
                 if matches!(mode, ScrutineeMode::Owned)
+                    && !is_variant_pattern
                     && !self.owned_at_binding_outers.is_empty()
                     && !self.is_copy_type_during_check(expected)
                 {
@@ -3283,8 +3286,22 @@ impl<'a> super::TypeChecker<'a> {
                         super::const_eval::const_value_to_i128(&cv).map(|v| (v, ty))
                     })
                     .filter(|(_, ty)| matches!(ty, Type::Int(_) | Type::UInt(_) | Type::Char));
+                // The constant's value is evaluated at the scrutinee's
+                // width, so its type comes from its declaration: two bounds
+                // `LO..=HI` naming an `i32` and an `i64` constant fall under
+                // the same-type rule (design.md § Range patterns).
+                let declared = (segments.len() == 1)
+                    .then(|| {
+                        self.program.items.iter().find_map(|item| match item {
+                            Item::ConstDecl(c) if c.name == segments[0] => Some(c.ty.clone()),
+                            _ => None,
+                        })
+                    })
+                    .flatten()
+                    .map(|te| self.lower_type_expr(&te, &[]))
+                    .filter(|t| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Char));
                 match resolved {
-                    Some((v, ty)) => Some((v, ty, true)),
+                    Some((v, ty)) => Some((v, declared.unwrap_or(ty), true)),
                     None => {
                         let message = if const_pattern {
                             format!(
