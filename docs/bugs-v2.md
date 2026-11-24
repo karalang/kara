@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 727 |
+| diagnostics | 729 |
 | false-positive | 360 |
 | missing-feature | 247 |
 | perf | 200 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 879 |
+| typecheck | 881 |
 | mir | 325 |
 | mir-llvm | 323 |
-| cli | 291 |
+| cli | 292 |
 | parser | 153 |
 | ownership | 134 |
 | runtime | 109 |
@@ -2217,6 +2217,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-74 | typecheck | low | A `mut` argument made from a bare parameter reported a bare E0200 "expected 'mut ref Vec[i64]', found 'ref Vec[i64]'" beside E0517 at the same span | 30891a6779 |
 | B-2026-11-24-1 | cli | medium | `karac doc` signatures are not rendered as written: `escaping`, `MutFn`, `+ CrossTask` dropped, `pub` and an FFI export's `extern "C"` dropped, exter… | fe06f3f6e7 |
 | B-2026-11-24-2 | cli | medium | `karac doc` of a library publishes its non-`pub` items and fields, does not list `pub import` re-exports at the re-exporting path, and puts an item's… | fe06f3f6e7 |
+| B-2026-11-24-3 | typecheck | medium | `successors(Some(x), \|r\| if r >= 10 { Some(r / 10) } else { None })` with `x: ref i64` from `nums.iter()` still got the bare E0509 "the result borrow… | 7147469257 |
+| B-2026-11-24-4 | typecheck+cli | medium | A closure `\|x\| { let mut x = x; let mut s = 0; while x > 0 { s += x % 10; x /= 10; } s }` summed into an `i32` was refused (`s` is an `i64`) with no… | 7147469257 |
 
 </details>
 
