@@ -119,7 +119,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-37 | 2026-11-24 | mir | medium | A closure's disjoint capture goes only one field deep: a closure reading `u.address.city` captures `u.address` whole, so writing `u.address.zip` while it lives is refused (E0516) | — |
 | B-2026-11-24-38 | 2026-11-24 | typecheck+cli | medium | `a === b` on two handles of a `shared struct`, JavaScript's identity test, became a structural comparison under `karac fix`: the `===` habit mends it to `==`, and the refusal that follows said only "add #[derive(PartialEq)]" and applied that derive whenever every field compares, so the program then printed true for two distinct handles with equal fields; neither message named `a.ref_eq(b)`, a handle's identity | — |
 | B-2026-11-24-39 | 2026-11-24 | cli | low | `karac fix`'s `#[derive(PartialEq)]` (and PartialOrd, Hash) line for a `pub struct` or `shared struct` at the top level is indented by the width of `pub ` or `shared `: derive_line takes the `struct` keyword's column as the item's indentation | — |
-| B-2026-11-24-40 | 2026-11-24 | typecheck | low | `(0..5).scan(v, |x, _| Some((x * x, x)))` with `v` the `ref i64` that iterating a `Set` gives is refused with a bare E0200 "expected 'Option[(ref i64, _)]', found 'Option[(i64, ref i64)]'" at the closure, naming neither the seed nor the `*v` that mends it | — |
 | B-2026-11-24-41 | 2026-11-24 | mir-llvm+runtime | medium | Counting 10^5 random keys into a compiled `SortedMap` takes about 3.4x Rust's `BTreeMap` (`*count.entry(x).or_insert(0) += 1`, 100 rounds: 5.5 to 5.8 s against 1.6 s), and plain `insert(x, 1)` about 2.8x (4.6 s against 1.6 s), so kata 1296's bench runs 2x Rust's | — |
 
 ### Relocated
@@ -2256,6 +2255,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-33 | typecheck | medium | An `@` binding over an or-pattern of unit variants (`x @ (K.A \| K.B)`) on an owned scrutinee is refused at run as E_AT_BINDING_DOUBLE_CONSUME, though… | 8ff0808383 |
 | B-2026-11-24-34 | typecheck | medium | A range pattern whose two bounds are named consts of different integer types (`LO ..= HI` with `const LO: u8`, `const HI: i32`) is accepted: each bou… | 8ff0808383 |
 | B-2026-11-24-35 | parser | low | A bare `..` match arm and a call in a range-pattern bound get generic parse errors that do not say what is accepted: `..` alone is the rest marker, a… | 8ff0808383 |
+| B-2026-11-24-40 | typecheck | low | `(0..5).scan(v, \|x, _\| Some((x * x, x)))` with `v` the `ref i64` that iterating a `Set` gives is refused with a bare E0200 "expected 'Option[(ref i64… | 6d730ff01b |
 
 </details>
 
