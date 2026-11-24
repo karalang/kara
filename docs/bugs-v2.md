@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 747 |
+| diagnostics | 748 |
 | false-positive | 368 |
 | missing-feature | 251 |
 | perf | 203 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 895 |
+| typecheck | 896 |
 | mir | 330 |
 | mir-llvm | 324 |
-| cli | 303 |
+| cli | 304 |
 | parser | 158 |
 | ownership | 136 |
 | runtime | 110 |
@@ -120,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-38 | 2026-11-24 | typecheck+cli | medium | `a === b` on two handles of a `shared struct`, JavaScript's identity test, became a structural comparison under `karac fix`: the `===` habit mends it to `==`, and the refusal that follows said only "add #[derive(PartialEq)]" and applied that derive whenever every field compares, so the program then printed true for two distinct handles with equal fields; neither message named `a.ref_eq(b)`, a handle's identity | — |
 | B-2026-11-24-39 | 2026-11-24 | cli | low | `karac fix`'s `#[derive(PartialEq)]` (and PartialOrd, Hash) line for a `pub struct` or `shared struct` at the top level is indented by the width of `pub ` or `shared `: derive_line takes the `struct` keyword's column as the item's indentation | — |
 | B-2026-11-24-41 | 2026-11-24 | mir-llvm+runtime | medium | Counting 10^5 random keys into a compiled `SortedMap` takes about 3.4x Rust's `BTreeMap` (`*count.entry(x).or_insert(0) += 1`, 100 rounds: 5.5 to 5.8 s against 1.6 s), and plain `insert(x, 1)` about 2.8x (4.6 s against 1.6 s), so kata 1296's bench runs 2x Rust's | — |
+| B-2026-11-24-42 | 2026-11-24 | typecheck+cli | low | `half.find(|c: char| c != 'a')` on `half = s[..n / 2]`, Rust's `str::find` over a string's first half, got only the bare "'find' takes a `Str` pattern, found 'Fn(char) -> bool'" with no fix: the `char_indices().find(..).map(|(i, _)| i)` fix (B-2026-11-20-140) reached only a `String` receiver with an unannotated closure, and a `Str` view or a `c: char` parameter missed it | — |
 
 ### Relocated
 
