@@ -36,6 +36,7 @@ pub(super) struct Data {
     free: Vec<u32>,
     key_index: FxHashMap<AllocId, Option<FxHashMap<Vec<u8>, usize>>>,
     table_holes: FxHashMap<AllocId, Holes>,
+    sorted_order: FxHashMap<AllocId, Order>,
     unkeyed_tables: FxHashSet<AllocId>,
     deque_front: FxHashMap<AllocId, usize>,
     snapshots: FxHashSet<AllocId>,
@@ -791,6 +792,7 @@ fn install_data(it: &mut Interp<'_>, d: Data) {
         free,
         key_index,
         table_holes,
+        sorted_order,
         unkeyed_tables,
         deque_front,
         snapshots,
@@ -823,6 +825,7 @@ fn install_data(it: &mut Interp<'_>, d: Data) {
     it.free = free;
     it.key_index = key_index;
     it.table_holes = table_holes;
+    it.sorted_order = sorted_order;
     it.unkeyed_tables = unkeyed_tables;
     it.deque_front = deque_front;
     it.snapshots = snapshots;
@@ -859,6 +862,7 @@ fn extract_data(it: &mut Interp<'_>) -> Data {
         free: take(&mut it.free),
         key_index: take(&mut it.key_index),
         table_holes: take(&mut it.table_holes),
+        sorted_order: take(&mut it.sorted_order),
         unkeyed_tables: take(&mut it.unkeyed_tables),
         deque_front: take(&mut it.deque_front),
         snapshots: take(&mut it.snapshots),

@@ -2374,6 +2374,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   runs 2.67G instructions rather than 3.35G, about 230 ms rather than 300.
   `drain(..)` and a `Map` or `Set`'s `into_iter` take the same path
   (B-2026-11-24-32).
+- On the MIR interpreter (`karac repl`, comptime, `--interp`), an insert
+  into a `SortedMap` or `SortedSet` no longer shifts every later entry: the
+  table keeps its key order in a chunked index of slots. 10^5 inserts in
+  falling order take 1.6 s rather than 15 s (kata 2364), and 4×10^5 random
+  inserts 4.3 s rather than 313 s; iteration and drops stay in key order
+  (B-2026-11-21-50).
 - An `Atomic` or `Mutex` field that is not `mut`, in a `sync` or `shared`
   struct, no longer takes a run-time borrow flag: its methods take a
   borrowed `self`, so the flag could never trip, and each access through a
