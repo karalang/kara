@@ -2695,6 +2695,36 @@ fn f32_wrapper_from(value: f32) -> F32 {
     F32.from(value)
 }
 
+// `String.from`, `String.from_utf8` and `String.from_utf8_lossy` named as a value
+// (`words.iter().map(String.from)`, Rust's `.map(String::from)`): the
+// constructors are natives with no body to name, so the MIR builder names
+// these for the path, picking `String.from`'s by the value's parameter: a
+// `Str` view, a borrowed or owned `String`, or a `char`
+// (B-2026-11-20-151).
+fn string_from_view(text: Str) -> String {
+    String.from(text)
+}
+
+fn string_from_string(text: ref String) -> String {
+    String.from(text)
+}
+
+fn string_from_owned(text: own String) -> String {
+    text
+}
+
+fn string_from_char(c: char) -> String {
+    String.from(c)
+}
+
+fn string_from_utf8(bytes: Slice[u8]) -> Result[String, Utf8Error] {
+    String.from_utf8(bytes)
+}
+
+fn string_from_utf8_lossy(bytes: Slice[u8]) -> String {
+    String.from_utf8_lossy(bytes)
+}
+
 // A view over a collection or a text copies its borrow and its positions,
 // so it is `Clone` and `Iterator.cycle` is its (B-2026-11-17-80, -97).
 

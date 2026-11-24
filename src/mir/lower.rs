@@ -11348,6 +11348,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
         }
+        // `String.from` as a value is the library's `string_from_str` or
+        // `string_from_char` (B-2026-11-20-151).
+        if let Some(d) = self.string_ctor_value(e)? {
+            let want = self.place_type(&dest);
+            let (op, _) = self.fn_item_value(e, d, Some(want))?;
+            self.assign(dest, Rvalue::Use(op));
+            return Ok(());
+        }
         // `F64.from` as a value is the library's `f64_wrapper_from`.
         if let ExprKind::Path { segments, .. } = &e.kind {
             let wrapper = match segments.as_slice() {
@@ -11433,6 +11441,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let path = path.clone();
                 let t = self.expr_ty(e)?;
                 let Some(v) = int_limit(self.tys().tcx().kind(t), &path) else {
+                    // A library function named as a value with no body of
+                    // its own to name: say what to write in its place.
+                    if let HK::Fn { params, .. } = self.tys().tcx().kind(t) {
+                        let n = self.tys().tcx().list(params).len();
+                        let args: Vec<String> = (0..n).map(|i| format!("a{i}")).collect();
+                        let a = args.join(", ");
+                        self.errors.push(format!(
+                            "{} in `{}`: `{path}` named as a value is not lowered yet; \
+                             write the closure `|{a}| {path}({a})`",
+                            at(e.span),
+                            self.name
+                        ));
+                        return Err(());
+                    }
                     return self.unsupported(e.span, "this path");
                 };
                 self.assign(
@@ -28097,6 +28119,52 @@ impl<'l, 'a> Bx<'l, 'a> {
         cands.iter().copied().find(|&m| !defs.is_trait_method(m))
     }
 
+    /// The library function that stands for `String.from` (or
+    /// `String.from_utf8`, `String.from_utf8_lossy`) named as a value, which is a native with no body:
+    /// `string_from_view` for a `Str`, `string_from_string` /
+    /// `string_from_owned` for a borrowed / owned `String`, `string_from_char`
+    /// for a `char` (B-2026-11-20-151).
+    fn string_ctor_value(&mut self, e: &Expr) -> R<Option<DefId>> {
+        let (ty, m) = match &e.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                (segments[0].as_str(), segments[1].as_str())
+            }
+            ExprKind::FieldAccess { object, field } => match &object.kind {
+                ExprKind::Identifier(n) => (n.as_str(), field.as_str()),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        if ty != "String" || !matches!(self.lcx.res.get(&e.id), Some(Res::Builtin(_))) {
+            return Ok(None);
+        }
+        let t = self.expr_ty(e)?;
+        let tcx = self.tys().tcx();
+        let HK::Fn { params, .. } = tcx.kind(t) else {
+            return Ok(None);
+        };
+        let Some(&p) = tcx.list(params).first() else {
+            return Ok(None);
+        };
+        let (by_ref, inner) = match tcx.kind(p) {
+            HK::Ref(i) | HK::MutRef(i) => (true, i),
+            _ => (false, p),
+        };
+        // `Str` is the view, `HK::StaticStr` (core semantics §5.2).
+        let view = matches!(tcx.kind(inner), HK::StaticStr);
+        let param = Some(tcx.kind(inner));
+        let name = match (m, param) {
+            ("from", _) if view => "string_from_view",
+            ("from", Some(HK::Str)) if by_ref => "string_from_string",
+            ("from", Some(HK::Str)) => "string_from_owned",
+            ("from", Some(HK::Char)) => "string_from_char",
+            ("from_utf8", Some(_)) => "string_from_utf8",
+            ("from_utf8_lossy", Some(_)) => "string_from_utf8_lossy",
+            _ => return Ok(None),
+        };
+        Ok(self.lcx.defs.lookup(0, name))
+    }
+
     /// A function-typed value: a closure literal, a function item, or a
     /// local holding one (moved, or copied when it is `Copy`).
     fn fn_value(&mut self, e: &'a Expr) -> R<(Operand, Ty)> {
@@ -28105,6 +28173,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::Identifier(_) | ExprKind::Path { .. } => {
                 if let Some(Res::Def(d)) = self.lcx.res.get(&e.id) {
                     return self.fn_item_value(e, *d, None);
+                }
+                if let Some(d) = self.string_ctor_value(e)? {
+                    return self.fn_item_value(e, d, None);
                 }
                 if let Some(d) = self.builtin_fn_def(e) {
                     return self.fn_item_value(e, d, None);

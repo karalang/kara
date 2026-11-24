@@ -3177,10 +3177,17 @@ impl<'a> Interp<'a> {
                 self.comptime_native(base, method, args, ret)
             }
             ("String", "from") => {
-                let [Value::Str(s)] = args.as_slice() else {
-                    return err("String.from takes a string constant");
+                // A constant, a view, or a borrowed `String` (`String.from(t)`
+                // with `t: ref String`), whose text is copied, as the
+                // compiled program does (B-2026-11-20-151).
+                let [v] = args.as_slice() else {
+                    return err("String.from takes one string");
                 };
-                Ok(self.alloc_box(ty_name, Value::Str(s.clone())))
+                let s = match v {
+                    Value::Str(s) => s.clone(),
+                    v => self.string_at(&v.clone())?,
+                };
+                Ok(self.alloc_box(ty_name, Value::Str(s)))
             }
             ("Atomic", _) => self.atomic_method(name, method, args, ret),
             // A `Mutex` holds its value as an `Atomic` does; a `lock` block

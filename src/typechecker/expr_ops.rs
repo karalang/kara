@@ -1711,6 +1711,20 @@ impl<'a> super::TypeChecker<'a> {
             // An inherent function hides a trait's of the same name at
             // `T.name` (design.md § Associated functions), whichever impl
             // comes first; `Trait.name` names the trait's (B-2026-11-20-65).
+            // `String.from` named as a value (`.map(String.from)`, Rust's
+            // `.map(String::from)`) converts whatever its use passes: a
+            // string, a `String` or a `char`, as the call does. Its one
+            // registered impl is `From[char]`, which would type every such
+            // value as taking a `char`; its parameter is left open for the
+            // use to fix instead, and the MIR builder picks the library
+            // wrapper for it (B-2026-11-20-151).
+            if type_name == "String" && member == "from" {
+                return Type::Function {
+                    cross_task: Default::default(),
+                    params: vec![self.env.fresh_type_var()],
+                    return_type: Box::new(Type::Str),
+                };
+            }
             let applies = |imp: &ImplInfo| {
                 imp.target_type == *type_name
                     && imp.target_args.is_empty()

@@ -1061,6 +1061,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   slice's `contains` ignored the `eq`, and a `dedup` over tuples or
   `Option`s whose parts have a hand-written `eq`, or a slice's search for
   one, compared the parts structurally (B-2026-11-23-18).
+- `String.from` named as a value (`words.iter().map(String.from)`, Rust's
+  `.map(String::from)`) checks and runs for a `Str`, a borrowed or owned
+  `String` or a `char`: it was typed as taking a `char` whatever its use
+  passed, and refused as "this path is not lowered yet". `String.from_utf8`
+  and `String.from_utf8_lossy` as values work too, and another library
+  function named as a value that is not lowered says which closure to write.
+  `karac run --interp` reads a borrowed `String` in `String.from(t)`; it
+  refused it while the compiled program copied it (B-2026-11-20-151).
 - In a trait default body that two impls inherit, a method call that leaves
   out a defaulted argument takes its own callee's default. Every copy of the
   body took the default of the method the last impl's copy calls: with
