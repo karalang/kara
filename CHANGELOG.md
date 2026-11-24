@@ -2632,6 +2632,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- E0400 for a call through a `dyn` value whose type writes no `with`
+  clause no longer names the internal `__dyn_every.T.t`: its `blocks`
+  finding is the call's every-effect finding like the others, so one
+  error names the call, and which effect it names no longer changes from
+  run to run (the check walked the set in hash order) (B-2026-11-24-23).
 - Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()`,
   `.filter(..).count()` or `.filter_map(..)` chain on their own local are
   accepted. The adaptor's call of the closure in its field had every effect,

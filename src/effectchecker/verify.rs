@@ -291,7 +291,7 @@ impl<'a> super::EffectChecker<'a> {
                 Some(DeclaredEffects::Explicit(declared_set)) => {
                     if let Some(inferred_set) = inferred {
                         let declared_effects = declared_set.effect_set();
-                        let inferred_effects = inferred_set.effect_set();
+                        let inferred_effects = inferred_set.effects_in_order();
 
                         // Check for missing declarations
                         for effect in &inferred_effects {
@@ -327,7 +327,7 @@ impl<'a> super::EffectChecker<'a> {
                         }
 
                         // Check for over-declarations
-                        for effect in &declared_effects {
+                        for effect in &declared_set.effects_in_order() {
                             if self.is_transparent_verb(&effect.verb) {
                                 continue;
                             }

@@ -56,7 +56,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, not drafte
 | 3236 | Orphan rule: a (library) package may write `impl Trait for Type` only if it defines Trait or Type or a type in Trait's args | covered | tests/cross_package_coherence.rs (orphan, from the app and from the library) |
 | 3237 | A local type anywhere in the trait's arguments counts (`impl Mul[Column] for f64`) | covered | tests/cross_package_coherence.rs what_the_orphan_rule_allows_still_checks (Mul2[Col] for i64) |
 | 3237 | A bare type parameter does not count: `impl[T] Mul[Column] for T` is an error outside Mul's package | covered | refused as a blanket impl; probed in a 3-package tree (E0246) |
-| 3237 | An upstream blanket impl covering a downstream header makes it overlap, reported at the downstream impl | FAILS | B-2026-11-24-18: an impl[R] Mul2[R] for i64 and impl Mul2[Col] for i64 do not overlap even in one file |
+| 3237 | An upstream blanket impl covering a downstream header makes it overlap, reported at the downstream impl | covered | traits/impl_trait_args_unify_overlap_refused, control traits/impl_trait_args_disjoint_ok, modules/blanket_trait_args_overlap_across_packages_refused (B-2026-11-24-18, fixed) |
 | 3238 | The application package is exempt: it may implement a foreign trait for a foreign type | covered | app_exempt_foreign_trait_foreign_type, app_foreign_trait_foreign_type, impls/app_foreign_trait_foreign_type_ok |
 | 3238 | The overlap rule still applies in the application | covered | app_impl_overlapping_library_refused, impls/overlap_with_std_* |
 | 3239 | A blanket impl `impl[T: B] Trait for T` is allowed only if the package defines Trait (or is the application) | partial | blanket_impl_own_trait (accepted form only; library refusal untested) |
@@ -237,7 +237,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, not drafte
 | 3690 | Non-escaping dyn param: effects of the value passed at each call site | covered | dyn_param_effects_from_value |
 | 3691 | Elsewhere: the type's clause; coercing a value exceeding it is an error naming method and effect | covered | dyn_effects_clause_bounds_calls_refused |
 | 3691 | The clause is narrowed to the method's own ceiling when the trait declares one | covered | traits/dyn_field_clause_narrowed_to_ceiling (new) |
-| 3691 | A dyn type with neither clause nor ceiling has every effect | covered | traits/dyn_field_no_clause_no_ceiling_refused (new; its second E0400 leaks `__dyn_every.T.t`, B-2026-11-24-23) |
+| 3691 | A dyn type with neither clause nor ceiling has every effect | covered | traits/dyn_field_no_clause_no_ceiling_refused (new; one E0400, naming the call, the same on every run since B-2026-11-24-23) |
 | 3692 | `-> (dyn Shape with reads(Clock))` gives the returned value the clause | covered | traits/dyn_return_clause_parenthesized(_refused) (new) |
 | 3692 | The return_clause_on_fn warning; `-> (dyn Shape) with ..` silences it | partial | dyn_return_clause_warning (.out only; warning not asserted; silencing form untested) |
 | 3693 | An effect variable in the clause is solved from coerced values | covered | dyn_effect_variable_router |

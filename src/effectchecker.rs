@@ -223,6 +223,20 @@ impl EffectSet {
         self.effects.iter().map(|e| e.effect.clone()).collect()
     }
 
+    /// Each effect once, in the order of their text: what a diagnostic
+    /// walks, so its findings come out the same on every run
+    /// (B-2026-11-24-23). `effect_set` is a hash set.
+    fn effects_in_order(&self) -> Vec<Effect> {
+        let mut out: Vec<Effect> = Vec::new();
+        for e in &self.effects {
+            if !out.contains(&e.effect) {
+                out.push(e.effect.clone());
+            }
+        }
+        out.sort_by_cached_key(|e| e.to_string());
+        out
+    }
+
     fn is_empty(&self) -> bool {
         self.effects.is_empty()
     }
@@ -4012,10 +4026,16 @@ impl<'a> EffectChecker<'a> {
                 if traced.effect == *effect {
                     match &traced.origin {
                         EffectOrigin::Direct(_) => return String::new(),
+                        // A callee with every effect: its `blocks` too, which
+                        // has no resource, names the call, not the internal
+                        // key (B-2026-11-24-23).
                         EffectOrigin::Callee {
                             fn_name: callee,
                             span,
-                        } if effect.resource == EVERY_RESOURCE => {
+                        } if effect.resource == EVERY_RESOURCE
+                            || callee == fn_values::FN_EVERY_KEY
+                            || callee.starts_with("__dyn_every.") =>
+                        {
                             return every_effect_origin(callee, span.line);
                         }
                         EffectOrigin::Callee {
