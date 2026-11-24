@@ -550,7 +550,9 @@ A `///` before `self` in a method signature is ignored: `self` is not a document
 
 **Rendering (`karac doc`).** The comments are CommonMark with tables, footnotes, task lists, strikethrough and fenced code.
 - **Cross-references.** A reference-style link whose label is the name of a documented item (`[Vec]`, `[push]`) links to that item's page. Names resolve across the package by bare name; an ambiguous name resolves to the first match in module order, and an unresolved label renders as plain text.
-- **Item pages.** Each documented item gets a page with its signature (with effects, for `pub fn`), its doc text, a parameters section when a parameter is documented, and field or variant sections when one is documented.
+- **Item pages.** Each documented item gets a page with its signature as written (visibility, an `extern "ABI"`, generics, parameter modes, `escaping` and `+ CrossTask` callable types, the `with` clause), then its doc text, then a parameters section when a parameter is documented, field or variant sections, and a type's public methods and trait implementations. A `pub fn` that declares no `with` clause shows the effects the compiler inferred for it, written side by side as in source.
+- **Which items.** A library's docs (`src/lib.kara`) are for its users, so they show only `pub` items and `pub` fields. An executable's docs (`src/main.kara`) are for the people working on it and show every documented item.
+- **Re-exports.** A name brought in with `pub import` is listed under the re-exporting module too, by its alias when it has one, and links to the item's page.
 - **Module docs.** The package root's `//!` text renders above the index. Other modules' text renders before their items.
 
 **Limits in v1.** No path-qualified cross-references (`[std.collections.Vec]`). Inferred effects of private functions are not shown. Code blocks in doc comments are not run as tests.

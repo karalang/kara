@@ -72,7 +72,12 @@ pub(super) fn cmd_doc() {
     } else {
         out_root.join("dist").join("doc").join(&mf.name)
     };
-    match crate::doc::build_docs(&tree, &output_dir, Some(&effects)) {
+    match crate::doc::build_docs(
+        &tree,
+        &output_dir,
+        Some(&effects),
+        walked.entry == walker::EntryKind::Lib,
+    ) {
         Ok(result) => {
             println!(
                 "rendered {} doc page(s) under {}",

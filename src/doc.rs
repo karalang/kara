@@ -212,6 +212,7 @@ pub fn build_docs(
     tree: &ProgramTree,
     output_dir: &Path,
     effects: Option<&EffectsByItem>,
+    public_only: bool,
 ) -> Result<DocBuildResult, DocBuildError> {
     let mut result = DocBuildResult::default();
 
@@ -224,7 +225,7 @@ pub fn build_docs(
     // for in-progress projects). When two modules expose items with the
     // same name, the first one walked wins; this mirrors the index's
     // tie-breaker, which is sorted later anyway.
-    let link_table = build_link_table(tree);
+    let link_table = build_link_table(tree, public_only);
 
     // Pre-walk: collect `IndexEntry` for every documented item before
     // rendering any page. The sidebar (rendered into every page) needs
@@ -236,6 +237,9 @@ pub fn build_docs(
             continue;
         }
         for d in documentables(&module.items) {
+            if !is_shown(d, public_only) {
+                continue;
+            }
             let Some(doc) = documentable_doc(d) else {
                 continue;
             };
@@ -251,6 +255,12 @@ pub fn build_docs(
             });
         }
     }
+
+    // A `pub import` re-exports an item at the importing module's path
+    // (design.md § Re-exports: "users see it at the shorter path"), so the
+    // item is listed there too, linking to its one page.
+    let reexports = reexport_entries(tree, &index_entries);
+    index_entries.extend(reexports);
 
     // Append the compiler-builtin doc entries. These are always present —
     // the builtins are callable from every module — so they surface in the
@@ -290,14 +300,38 @@ pub fn build_docs(
         }
         let module_dir = module_output_dir(output_dir, &module.path);
         let mut module_had_docs = false;
+        // The parser keeps some of a signature's spelling (`escaping`,
+        // `MutFn`, `+ CrossTask`, a parenthesised return type, a map's
+        // hasher) in side tables on the parsed `Program` rather than in
+        // the AST, and the tree keeps only the items. Re-read them so a
+        // signature renders as written (B-2026-11-24-1).
+        let tables = module_signature_tables(module);
 
         for d in documentables(&module.items) {
+            if !is_shown(d, public_only) {
+                continue;
+            }
             let Some(doc) = documentable_doc(d) else {
                 continue;
             };
             let name = documentable_name(d).to_string();
             let kind = documentable_kind(d);
-            let signature = render_signature(d, &module.path, effects);
+            let (signature, extras) =
+                crate::formatter::with_signature_tables(tables.clone(), || {
+                    let file_path = module_dir.join(format!("{name}.html"));
+                    let page_dir = file_path.parent().unwrap_or(output_dir).to_path_buf();
+                    (
+                        render_signature(d, &module.path, effects),
+                        render_item_extras(
+                            d,
+                            &module.items,
+                            &link_table,
+                            &page_dir,
+                            output_dir,
+                            public_only,
+                        ),
+                    )
+                });
 
             if !module_had_docs {
                 create_dir_all(&module_dir)?;
@@ -306,7 +340,6 @@ pub fn build_docs(
 
             let file_path = module_dir.join(format!("{name}.html"));
             let page_dir = file_path.parent().unwrap_or(output_dir).to_path_buf();
-            let extras = render_item_extras(d, &module.items, &link_table, &page_dir, output_dir);
             let sidebar = render_sidebar(&index_entries, &module_docs, &page_dir, output_dir);
             let html = render_item_page_with_links(
                 &name,
@@ -437,6 +470,84 @@ pub fn build_docs(
     })?;
 
     Ok(result)
+}
+
+/// Whether `d` gets a page. A library's docs are for its users, who see
+/// only `pub` items (design.md § Visibility), so `public_only` leaves the
+/// package-internal and `private` ones out; an executable's docs are for
+/// the people working on it and keep every item.
+fn is_shown(d: Documentable<'_>, public_only: bool) -> bool {
+    if !public_only {
+        return true;
+    }
+    match d {
+        Documentable::Top(item) => match item {
+            Item::Function(f) => f.is_pub,
+            Item::StructDef(s) => s.is_pub,
+            Item::EnumDef(e) => e.is_pub,
+            Item::TraitDef(t) => t.is_pub,
+            Item::ConstDecl(c) => c.is_pub,
+            Item::TypeAlias(t) => t.is_pub,
+            Item::DistinctType(d) => d.is_pub,
+            Item::ExternFunction(e) => e.is_pub,
+            Item::LayoutDef(l) => l.is_pub,
+            _ => false,
+        },
+        Documentable::ExternBlockChild { function, .. } => function.is_pub,
+        Documentable::ExternBlockOpaqueType { opaque_type, .. } => {
+            matches!(opaque_type.visibility(), crate::ast::Visibility::Pub)
+        }
+    }
+}
+
+/// The parser's signature side tables for `module`'s own file, keyed in
+/// the tree's rebased spans. Empty when the file cannot be re-read.
+fn module_signature_tables(module: &crate::module::Module) -> crate::formatter::SignatureTables {
+    match std::fs::read_to_string(&module.file) {
+        Ok(source) => crate::formatter::SignatureTables::from_program(
+            &crate::parse_items_only(&source).program,
+            module.span_base,
+        ),
+        Err(_) => crate::formatter::SignatureTables::default(),
+    }
+}
+
+/// One index entry per name a `pub import` re-exports, listed under the
+/// re-exporting module (by its alias, when it has one) and linking to the
+/// item's page in its defining module.
+fn reexport_entries(tree: &ProgramTree, entries: &[IndexEntry]) -> Vec<IndexEntry> {
+    let mut out = Vec::new();
+    for module in &tree.modules {
+        if module.is_synthetic {
+            continue;
+        }
+        for import in module.imports.iter().filter(|i| i.is_pub) {
+            for it in &import.items {
+                let Some(target) = entries
+                    .iter()
+                    .find(|e| e.module_path == import.path && e.item_name == it.name)
+                else {
+                    continue;
+                };
+                let name = it.alias.clone().unwrap_or_else(|| it.name.clone());
+                if entries
+                    .iter()
+                    .chain(out.iter())
+                    .any(|e: &IndexEntry| e.module_path == module.path && e.item_name == name)
+                {
+                    continue;
+                }
+                out.push(IndexEntry {
+                    module_path: module.path.clone(),
+                    item_name: name,
+                    kind: target.kind,
+                    relative_href: target.relative_href.clone(),
+                    summary: target.summary.clone(),
+                });
+            }
+        }
+    }
+    out
 }
 
 fn create_dir_all(path: &Path) -> Result<(), DocBuildError> {
@@ -659,7 +770,7 @@ fn documentable_kind(d: Documentable<'_>) -> ItemKind {
 ///
 /// When `effects` is provided and the item is a `pub fn` whose entry in
 /// the map is non-empty, the signature is suffixed with the rendered
-/// `with <effects>` clause (e.g. ` with reads(File) + writes(Stdout)`).
+/// `with <effects>` clause (e.g. ` with reads(File) writes(Stdout)`).
 /// Private fns and items without an entry in the map are unchanged.
 fn render_signature(
     d: Documentable<'_>,
@@ -669,7 +780,7 @@ fn render_signature(
     let item = match d {
         Documentable::Top(item) => item,
         Documentable::ExternBlockChild { abi, function, .. } => {
-            return format!("extern \"{abi}\" fn {}", function.name);
+            return crate::formatter::render_extern_fn_head(function, Some(abi));
         }
         Documentable::ExternBlockOpaqueType { opaque_type, .. } => {
             return format!("extern type {}", opaque_type.name);
@@ -735,7 +846,7 @@ fn render_signature(
             render_generic_params(&d.generic_params),
             type_repr(&d.base_type)
         ),
-        Item::ExternFunction(e) => format!("extern \"{}\" fn {}", e.abi, e.name),
+        Item::ExternFunction(e) => crate::formatter::render_extern_fn_head(e, None),
         Item::LayoutDef(l) => format!("layout {}", l.name),
         _ => String::new(),
     }
@@ -758,6 +869,7 @@ fn render_item_extras(
     link_table: &HashMap<String, String>,
     page_dir: &Path,
     doc_root: &Path,
+    public_only: bool,
 ) -> String {
     let item = match d {
         Documentable::Top(item) => item,
@@ -771,7 +883,7 @@ fn render_item_extras(
     };
     match item {
         Item::StructDef(s) => {
-            render_struct_extras(s, link_table, page_dir, doc_root)
+            render_struct_extras(s, link_table, page_dir, doc_root, public_only)
                 + &render_impl_extras(&s.name, module_items, link_table, page_dir, doc_root)
         }
         Item::EnumDef(e) => {
@@ -992,12 +1104,20 @@ fn render_struct_extras(
     link_table: &HashMap<String, String>,
     page_dir: &Path,
     doc_root: &Path,
+    public_only: bool,
 ) -> String {
-    if s.fields.is_empty() {
+    // A library's reader cannot name a non-`pub` field, so its page does
+    // not list one.
+    let fields: Vec<_> = s
+        .fields
+        .iter()
+        .filter(|f| !public_only || f.is_pub)
+        .collect();
+    if fields.is_empty() {
         return String::new();
     }
     let mut out = String::from("<h2>Fields</h2>\n<dl class=\"fields\">\n");
-    for f in &s.fields {
+    for f in fields {
         out.push_str("<dt>");
         out.push_str(&html_escape(&f.name));
         out.push_str("</dt>\n<dd>");
@@ -1153,7 +1273,7 @@ fn render_item_page_with_links(
 <p class="kind">{title_kind}</p>
 <h1>{escaped_name}</h1>
 <pre class="signature">{escaped_sig}</pre>
-{extras_html}{html_body}
+{html_body}{extras_html}
 </main>
 </body>
 </html>
@@ -1481,13 +1601,16 @@ fn relative_link(page_dir: &Path, doc_root: &Path, target_rel: &str) -> String {
 /// documentable item's name → `<module-dirs>/Item.html` (path relative
 /// to the doc root). An item without a `doc_comment` has no page, so it is
 /// left out and a reference to it renders as plain text.
-fn build_link_table(tree: &ProgramTree) -> HashMap<String, String> {
+fn build_link_table(tree: &ProgramTree, public_only: bool) -> HashMap<String, String> {
     let mut table = HashMap::new();
     for module in &tree.modules {
         if module.is_synthetic {
             continue;
         }
         for d in documentables(&module.items) {
+            if !is_shown(d, public_only) {
+                continue;
+            }
             let name = documentable_name(d);
             // Only a documented item gets a page; a reference to any other
             // renders as plain text (DC2), never as a link to a page that
@@ -1530,7 +1653,8 @@ fn format_with_clause(display: &EffectDisplay) -> Option<String> {
     if display.polymorphic {
         parts.push("_".to_string());
     }
-    Some(format!(" with {}", parts.join(" + ")))
+    // Effects are written side by side (design.md § Effects > Syntax).
+    Some(format!(" with {}", parts.join(" ")))
 }
 
 fn effect_verb_name(v: &EffectVerbKind) -> &str {
@@ -1729,7 +1853,7 @@ mod tests {
             Some(" with reads(File)")
         );
 
-        // Multiple effects joined with ` + `, in caller-provided order.
+        // Multiple effects written side by side, in caller-provided order.
         let two = EffectDisplay {
             effects: vec![
                 (EffectVerbKind::Reads, "File".to_string()),
@@ -1739,7 +1863,7 @@ mod tests {
         };
         assert_eq!(
             format_with_clause(&two).as_deref(),
-            Some(" with reads(File) + writes(Stdout)")
+            Some(" with reads(File) writes(Stdout)")
         );
 
         // `with _` only.
@@ -1756,7 +1880,7 @@ mod tests {
         };
         assert_eq!(
             format_with_clause(&mixed).as_deref(),
-            Some(" with reads(File) + _")
+            Some(" with reads(File) _")
         );
 
         // Verb without resource (effects whose verb takes no resource —

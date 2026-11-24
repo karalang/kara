@@ -127,12 +127,68 @@ pub fn render_generic_params(gp: &Option<GenericParams>) -> String {
     f.output
 }
 
+/// The parser's side tables a signature's types read: `escaping`, `MutFn`,
+/// `+ CrossTask`, a parenthesized return type and a container's hasher
+/// argument are kept beside the tree, not in it, so a type rendered without
+/// them reads as another type (`MutFn(T)` as `Fn(T)`). `karac doc` renders
+/// signatures from a module tree that does not carry them, and re-reads each
+/// file's tables, its offsets moved to the module's (B-2026-11-24-1).
+#[derive(Default, Clone)]
+pub struct SignatureTables {
+    pub escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    pub mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    pub cross_task_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    pub paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    pub container_hashers:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
+}
+
+impl SignatureTables {
+    /// `program`'s tables, each offset moved by `shift`.
+    pub fn from_program(program: &Program, shift: usize) -> Self {
+        use crate::resolver::SpanKey;
+        let set = |s: &rustc_hash::FxHashSet<SpanKey>| -> rustc_hash::FxHashSet<SpanKey> {
+            s.iter().map(|k| SpanKey(k.0 + shift, k.1)).collect()
+        };
+        SignatureTables {
+            escaping_fn_types: set(&program.escaping_fn_types),
+            mut_fn_types: set(&program.mut_fn_types),
+            cross_task_fn_types: set(&program.cross_task_fn_types),
+            paren_return_types: set(&program.paren_return_types),
+            container_hashers: program
+                .container_hashers
+                .iter()
+                .map(|(k, v)| (SpanKey(k.0 + shift, k.1), v.clone()))
+                .collect(),
+        }
+    }
+}
+
+thread_local! {
+    static SIGNATURE_TABLES: std::cell::RefCell<Option<SignatureTables>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `tables` in force for every `render_*` call it makes.
+pub fn with_signature_tables<R>(tables: SignatureTables, f: impl FnOnce() -> R) -> R {
+    let prev = SIGNATURE_TABLES.with(|t| t.replace(Some(tables)));
+    let out = f();
+    SIGNATURE_TABLES.with(|t| *t.borrow_mut() = prev);
+    out
+}
+
 /// A function's head as declared, without its body: modifiers, name,
 /// generic parameters, receiver and parameters, return type, declared
 /// effects and `where` clause. `karac doc` shows it as the signature
 /// (B-2026-11-08-34).
 pub fn render_fn_head(func: &Function) -> String {
     let mut f = Formatter::new();
+    // Visibility and an FFI export's ABI are part of the declaration as
+    // written: `pub extern "C" fn kara_add` is not `fn kara_add`.
+    f.write_visibility(func.visibility());
+    if let Some(abi) = &func.abi {
+        f.write_str(&format!("extern \"{abi}\" "));
+    }
     if func.is_comptime {
         f.write_str("comptime ");
     }
@@ -156,6 +212,41 @@ pub fn render_fn_head(func: &Function) -> String {
     }
     f.format_effects(&func.effects);
     f.format_where_clause(&func.where_clause);
+    f.output
+}
+
+/// [`render_fn_head`] for a foreign function. `block_abi` is the ABI of
+/// the enclosing `unsafe extern "ABI" { ... }` block, shown as the
+/// prefix so the page names the foreign boundary; `None` renders a
+/// top-level foreign function under its own ABI.
+pub fn render_extern_fn_head(e: &ExternFunction, block_abi: Option<&str>) -> String {
+    let mut f = Formatter::new();
+    f.write_visibility(e.visibility());
+    match block_abi {
+        Some(abi) => f.write_str(&format!("extern \"{abi}\" ")),
+        None if e.abi == "host" => f.write_str("host "),
+        None => f.write_str(&format!("extern \"{}\" ", e.abi)),
+    }
+    if e.is_pure {
+        f.write_str("pure ");
+    }
+    f.write_str("fn ");
+    f.write_str(&e.name);
+    f.write_str("(");
+    for (i, p) in e.params.iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ");
+        }
+        f.format_pattern(&p.pattern);
+        f.write_str(": ");
+        f.format_type_expr(&p.ty);
+    }
+    f.write_str(")");
+    if let Some(ref rt) = e.return_type {
+        f.write_str(" -> ");
+        f.format_return_type(rt);
+    }
+    f.format_effects(&e.effects);
     f.output
 }
 
@@ -272,7 +363,7 @@ pub(super) struct Formatter {
 
 impl Formatter {
     pub(super) fn new() -> Self {
-        Formatter {
+        let mut f = Formatter {
             output: String::new(),
             indent: 0,
             freeze_spans: rustc_hash::FxHashSet::default(),
@@ -293,7 +384,19 @@ impl Formatter {
             stmt_start: false,
             in_head: false,
             one_line: false,
-        }
+        };
+        // A `render_*` call under `with_signature_tables` reads the tables;
+        // a whole-program format sets its own after this.
+        SIGNATURE_TABLES.with(|t| {
+            if let Some(t) = t.borrow().as_ref() {
+                f.escaping_fn_types = t.escaping_fn_types.clone();
+                f.mut_fn_types = t.mut_fn_types.clone();
+                f.cross_task_fn_types = t.cross_task_fn_types.clone();
+                f.paren_return_types = t.paren_return_types.clone();
+                f.container_hashers = t.container_hashers.clone();
+            }
+        });
+        f
     }
 
     pub(super) fn push_indent(&mut self) {

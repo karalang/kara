@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 725 |
+| diagnostics | 727 |
 | false-positive | 360 |
 | missing-feature | 247 |
 | perf | 200 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 879 |
 | mir | 325 |
 | mir-llvm | 323 |
-| cli | 289 |
+| cli | 291 |
 | parser | 153 |
 | ownership | 134 |
 | runtime | 109 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -132,6 +132,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-20 | 2026-11-23 | typecheck | low | A provider-using closure returned inside `Ok(..)` from a `with_provider` body draws MIR's internal E0516 'a type that failed to check is not lowered yet' first, before the real E0600 escape diagnostic; every other escape shape (bare, Some, tuple, struct field, Vec push, lazy iterator) gets E0600 alone | — |
 | B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
 | B-2026-11-23-76 | 2026-11-23 | mir | low | core-semantics §5.7 says a view may not flow into an escaping closure, but one passed to an `escaping` parameter whose callee's signature cannot keep it is accepted; needs a ruling on the text or the check | — |
+| B-2026-11-24-1 | 2026-11-24 | cli | medium | `karac doc` signatures are not rendered as written: `escaping`, `MutFn`, `+ CrossTask` dropped, `pub` and an FFI export's `extern "C"` dropped, extern-block imports shown without parameters, inferred effects joined with ` + ` | — |
+| B-2026-11-24-2 | 2026-11-24 | cli | medium | `karac doc` of a library publishes its non-`pub` items and fields, does not list `pub import` re-exports at the re-exporting path, and puts an item's doc text after its Fields/Methods sections | — |
 
 ### Relocated
 

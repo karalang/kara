@@ -66,7 +66,7 @@ pub trait Counter {
 
 /// A stack of items.
 pub struct Stack[T] {
-    items: Vec[T],
+    pub items: Vec[T],
 }
 
 impl[T] Stack[T] {
