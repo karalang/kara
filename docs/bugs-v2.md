@@ -124,7 +124,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-21 | 2026-11-24 | typecheck | medium | `Trait.method(p)` on a raw pointer calls the pointer's own method of that name instead of the trait's (`Show.is_null(p)` prints the inherent `is_null`) | — |
 | B-2026-11-24-22 | 2026-11-24 | typecheck | low | A qualified associated-type spelling `T.Add.Output` is refused only by an internal lowering error (E0516 'an expression whose type does not lower (Type(UnknownName("Output")))') | — |
 | B-2026-11-24-23 | 2026-11-24 | effect | low | E0400 for a call through a clause-less `dyn` field names the internal function `__dyn_every.T.t`, and its effect list's order changes from run to run | — |
-| B-2026-11-24-26 | 2026-11-24 | typecheck+mir | medium | A trait impl for a tuple over type parameters (`impl[A: Show, B: Show] Show for (A, B)`) is refused as not supported (deferred.md § Generic trait impls for tuple types), so a library author cannot implement their own Serialize-like or Hash-like trait for every pair | — |
 
 ### Relocated
 
@@ -2241,6 +2240,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-17 | parser | low | A qualified receiver naming a `dyn` type failed to parse: `Option[dyn Shape].size_of()` and `Vec[dyn Shape].new()` (its fix commit cites B-2026-11-24… | 22975f3cd3 |
 | B-2026-11-24-24 | typecheck | medium | `[(x, 1)].to_vec()` into a `Vec[(i64, i64)]`, with `x` the `ref i64` that `nums.iter()` yields, was refused as a `Vec[(ref i64, i64)]`, though `[x].t… | dd6a8bebbf |
 | B-2026-11-24-25 | cli | low | An effect set printed as a list (crash report, `karac debug`, editor effect list, hover one-liner, REPL `:effects`) joined effects with ` + ` in grou… | 206bbf679d |
+| B-2026-11-24-26 | typecheck+mir | medium | A trait impl for a tuple over type parameters (`impl[A: Show, B: Show] Show for (A, B)`) is refused as not supported (deferred.md § Generic trait imp… | d263d0b236 |
 
 </details>
 
