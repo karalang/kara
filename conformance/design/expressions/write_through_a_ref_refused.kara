@@ -1,0 +1,3 @@
+// design.md §6 Assignment: nothing is written through a `ref`.
+struct S { n: i64 }
+fn main() { let s = S { n: 1 }; let r = ref s; r.n = 2; println(f"{s.n}"); }

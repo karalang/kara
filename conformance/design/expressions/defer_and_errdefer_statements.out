@@ -1,0 +1,5 @@
+defer
+Ok(1)
+errdefer
+defer
+Err(e)

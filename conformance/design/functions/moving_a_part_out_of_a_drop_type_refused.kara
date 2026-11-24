@@ -1,0 +1,4 @@
+// design.md §7 Binding modes in patterns: a pattern over a type with a `Drop` body may bind the whole value but may not move a part out.
+struct G { name: String }
+impl Drop for G { fn drop(mut ref self) { println("drop"); } }
+fn main() { let g = G { name: "a".to_string() }; let G { name } = g; println(name); }

@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): subsumption: an Fn where MutFn or OnceFn is expected
+fn m(f: own MutFn() -> i64) -> i64 { let mut f = f; f() + f() }
+fn o(f: own OnceFn() -> i64) -> i64 { f() }
+fn main() { let k = 5; println(f"{m(|| k)} {o(|| k)}"); }

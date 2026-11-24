@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): a closure capturing a mut ref path mutates the caller's place
+fn main() { let mut v: Vec[i64] = []; { let mut p = |x: i64| v.push(x); p(1); p(2); } println(f"{v}"); }

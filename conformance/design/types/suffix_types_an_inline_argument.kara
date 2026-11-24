@@ -1,0 +1,2 @@
+// design.md §5 Numeric literals: a suffix types an inline literal, e.g. `Vec.filled(n, 0i32)`.
+fn main() { let v = Vec.filled(2, 7i32); println(f"{v[0].wrapping_add(i32.MAX)} {v.len()}"); }

@@ -1,0 +1,9 @@
+// design.md conformance (moved from the shared folder's design-5-7): mut ref place: writes go through the borrow
+struct M { refused: i64, down_for: i64 }
+fn main() {
+    let mut pool: Vec[M] = [M { refused: 0, down_for: 0 }];
+    let up = mut ref pool[0];
+    up.refused += 1;
+    up.down_for = 3;
+    println(f"{pool[0].refused} {pool[0].down_for}");
+}

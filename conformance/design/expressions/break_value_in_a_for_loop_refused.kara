@@ -1,0 +1,2 @@
+// design.md §6 Loops and labels: a `break` with a non-`()` value that targets a `while` or `for` loop is a compile error.
+fn main() { let x = for i in 0..3 { break i; }; println(f"{x}"); }

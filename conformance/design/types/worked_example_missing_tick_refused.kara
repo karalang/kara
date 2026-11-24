@@ -1,0 +1,6 @@
+// design.md §5 Worked example: without the `Tick` arm the witness is `Tick`.
+enum Event { MouseDown { x: i64, y: i64 }, MouseUp { x: i64, y: i64 }, KeyDown { code: i64 }, Tick }
+fn h(evt: Event) -> String {
+    match evt { Event.MouseDown { x, y } | Event.MouseUp { x, y } => f"mouse {x},{y}", Event.KeyDown { code } => f"key {code}" }
+}
+fn main() { println(h(Event.Tick)); }

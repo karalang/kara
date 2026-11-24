@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): deep plain recursion (100k frames)
+fn count(n: i64) -> i64 { if n == 0 { 0 } else { 1 + count(n - 1) } }
+fn main() { println(f"{count(100_000)}"); }

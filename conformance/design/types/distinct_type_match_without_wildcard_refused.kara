@@ -1,0 +1,5 @@
+// design.md §5 Type-specific rules: a wildcard is needed to cover every `UserId`.
+#[derive(PartialEq, Eq, Copy, Clone)]
+distinct type UserId = i64;
+fn who(u: UserId) -> Str { match u { UserId(0) => "root", UserId(1) => "admin" } }
+fn main() { println(who(UserId(0))); }

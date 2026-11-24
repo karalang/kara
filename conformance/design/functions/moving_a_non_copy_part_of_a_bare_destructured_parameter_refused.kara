@@ -1,0 +1,5 @@
+// design.md §7 Destructuring parameters: over a bare parameter a non-`Copy` part binds as a `ref`, so moving it needs `own`.
+struct Req { body: String, n: i64 }
+fn keep(s: own String) -> String { s }
+fn handle(Req { body, n }: Req) -> String { keep(body) }
+fn main() { let r = Req { body: "b".to_string(), n: 1 }; println(handle(r)); }

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): i32 + u32 is an error
+fn main() { let a: i32 = 1; let d: u32 = 2; let v = a + d; println(f"{v}"); }

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): changing a Copy variable while a reading closure is live is an error
+fn main() { let mut k = 1; let f = || k + 1; k = 5; println(f"{f()}"); }

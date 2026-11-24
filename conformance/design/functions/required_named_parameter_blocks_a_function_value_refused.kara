@@ -1,0 +1,3 @@
+// design.md §7 Function values: a function with named parameters can be a value only if every named parameter has a default.
+fn connect(host: String; port: i64) -> i64 { host.len() + port }
+fn main() { let f = connect; println(f"{f("db".to_string())}"); }

@@ -1,0 +1,15 @@
+// design.md §7 Declarations / Parameter modes: a method's receiver is `self` (borrowed), `own self` (consuming) or `mut ref self` (exclusive).
+struct Counter { n: i64, label: String }
+impl Counter {
+    fn get(self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n += 1; }
+    fn into_label(own self) -> String { self.label }
+}
+fn main() {
+    let mut c = Counter { n: 1, label: "c".to_string() };
+    c.bump();
+    Counter.bump(mut c);
+    let n = c.get();
+    let l = c.into_label();
+    println(f"{n} {l}");
+}

@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a method's named parameter after the receiver
+struct M { v: i64 }
+impl M { fn get(self, key: i64; fallback: i64 = 0) -> i64 { if key == 1 { self.v } else { fallback } } }
+fn main() { let m = M { v: 5 }; println(f"{m.get(1)} {m.get(2)} {m.get(2, fallback: 7)}"); }

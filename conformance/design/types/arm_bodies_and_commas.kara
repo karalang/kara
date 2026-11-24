@@ -1,0 +1,12 @@
+// design.md §5 Pattern matching: a body is an expression, a block, or an assignment; the comma after a block is optional.
+fn main() {
+    let mut total = 0;
+    for x in [1, 2, 3] {
+        match x {
+            1 => total += x,
+            2 => { total *= 10; }
+            _ => total = total - x,
+        }
+    }
+    println(f"{total}");
+}

@@ -1,0 +1,4 @@
+// design.md §5 Slice and array patterns / Type-specific rules: an `Array` match is exhaustive by its positions or a rest marker; `[a, b, c]` over bools.
+fn f(a: Array[bool, 2]) -> Str { match a { [true, true] => "tt", [true, false] => "tf", [false, _] => "f_" } }
+fn g(a: Array[i64, 3]) -> i64 { match a { [0, ..] => 0, [x, ..r] => x + r[1] } }
+fn main() { println(f"{f([true, false])} {f([false, true])} {g([0, 1, 2])} {g([5, 1, 2])}"); }

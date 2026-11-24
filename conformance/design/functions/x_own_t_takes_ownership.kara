@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): |x: own T| takes ownership
+fn sink(s: own String) -> i64 { s.len() }
+fn main() { let f = |s: own String| sink(s); println(f"{f("abc".to_string())}"); }

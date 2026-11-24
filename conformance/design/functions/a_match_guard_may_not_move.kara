@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a match guard may not move
+fn eat(s: own String) -> bool { true }
+fn main() { let s = Some("a".to_string()); match s { Some(x) if eat(x) => println("y"), _ => println("n") } }

@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): / truncates toward zero, % takes the dividend's sign, euclid forms
+fn main() {
+    let a = -7;
+    println(f"{a / 2} {7 / -2} {a / -2}");
+    println(f"{a % 2} {7 % -2} {a % -2}");
+    println(f"{a.div_euclid(2)} {a.rem_euclid(2)} {7.div_euclid(-2)} {7.rem_euclid(-2)}");
+}

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a field of a non-mut binding cannot be assigned
+struct S { port: i64 }
+fn main() { let s = S { port: 1 }; s.port = 2; println(f"{s.port}"); }

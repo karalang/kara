@@ -1,0 +1,15 @@
+// design.md conformance (moved from the shared folder's design-5-7): mixed width: the narrower operand widens, the result is the wider type
+fn main() {
+    let a: i32 = 7;
+    let b: u8 = 200;
+    let c: i64 = 1_000;
+    let d: u32 = 5;
+    let h: f32 = 0.25;
+    let r: f64 = 0.5;
+    let s = a + c;
+    let t = b + c;
+    let u = c * d;
+    let y = h * r;
+    let z: f64 = a;
+    println(f"{s} {t} {u} {y} {z}");
+}

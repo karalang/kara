@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): derive(Default) on a distinct type is the base's default
+#[derive(Default, Display)]
+distinct type Count = i64;
+fn main() { println(f"{Count.default()}"); }

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): sorting a Vec[f64] is refused
+fn main() { let mut s: Vec[f64] = [1.0]; s.sort(); println(f"{s}"); }

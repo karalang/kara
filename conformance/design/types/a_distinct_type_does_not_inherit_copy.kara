@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a distinct type does not inherit Copy
+distinct type M = i64;
+fn take(m: own M) {}
+fn main() { let a = M(1); take(a); take(a); }

@@ -1,0 +1,9 @@
+// design.md §7 Parameter modes / Function types and kinds: `Fn(own T) -> R` takes an owned argument; a bare argument type borrows.
+fn apply_own(f: Fn(own String) -> String, s: own String) -> String { f(s) }
+fn apply_ref(f: Fn(String) -> i64, s: String) -> i64 { f(s) }
+fn main() {
+    let s = "ab".to_string();
+    let n = apply_ref(|x| x.len(), s);
+    let t = apply_own(|x| x + "!", s);
+    println(f"{n} {t}");
+}

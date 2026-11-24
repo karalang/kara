@@ -1,0 +1,4 @@
+// design.md §5 Structs: a field of a plain struct is assigned through a `let mut` binding or a `mut ref`.
+struct Conf { port: i64, host: String }
+fn bump(c: mut ref Conf) { c.port += 1; c.host = "b".to_string(); }
+fn main() { let mut c = Conf { port: 80, host: "a".to_string() }; c.port = 8080; bump(mut c); println(f"{c.port} {c.host}"); }

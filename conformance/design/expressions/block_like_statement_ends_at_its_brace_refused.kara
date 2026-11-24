@@ -1,0 +1,2 @@
+// design.md §6 Statements and blocks: a block-like expression in statement position ends at its `}`; a following `.` is an error whose fix parenthesizes.
+fn main() { let c = true; if c { "a".to_string() } else { "bb".to_string() }.len(); }

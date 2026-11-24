@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): a float suffix wider than the destination is refused (let d: f32 = 0.1f64)
+fn main() { let d: f32 = 0.1f64; println(f"{d}"); }

@@ -1,0 +1,8 @@
+// design.md §5 Numeric literals: literal types are settled by inference over the whole function body.
+fn main() {
+    let x = 250;
+    let y: u8 = x;
+    println(f"{y}");
+    let z = x + 10;
+    println(f"{z}");
+}

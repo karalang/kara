@@ -1,0 +1,17 @@
+// design.md §6 Variable binding rules: the first assignment to `let x: T;` needs no `mut`; definite assignment follows branches and `loop`.
+fn pick(c: bool) -> i64 {
+    let x: i64;
+    if c { x = 1; } else { x = 2; }
+    x
+}
+fn main() {
+    let a: i64;
+    a = 5;
+    let mut b: i64;
+    b = 1;
+    b = b + 1;
+    let l: i64;
+    let mut i = 0;
+    loop { i += 1; if i == 3 { l = i * 10; break; } }
+    println(f"{a} {b} {pick(true)} {pick(false)} {l}");
+}

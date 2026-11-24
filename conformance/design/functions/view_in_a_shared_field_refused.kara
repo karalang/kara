@@ -1,0 +1,3 @@
+// design.md §7 Returns, `ref` returns and views: a view may not go in a field of a `shared` type.
+shared struct Holder { s: ref String }
+fn main() { let t = "a".to_string(); let h = Holder { s: t }; println(h.s); }

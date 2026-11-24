@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): calling a local MutFn needs let mut
+fn main() { let mut n = 0; let f = || { n += 1; }; f(); println(n); }

@@ -1,0 +1,5 @@
+// design.md §5 Type-specific rules: `bool` has two constructors; an enum's are its variants; a struct has one.
+enum Dir { N, S }
+struct Pt { on: bool, d: Dir }
+fn f(p: Pt) -> Str { match p { Pt { on: true, d: Dir.N } => "on n", Pt { on: true, d: Dir.S } => "on s", Pt { on: false, .. } => "off" } }
+fn main() { let flag = false; let s = match flag { true => "yes", false => "no" }; println(f"{s} {f(Pt { on: true, d: Dir.S })}"); }

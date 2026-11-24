@@ -1,0 +1,15 @@
+// design.md §6 `if let` and `let…else`: bindings scoped to the block; `else if let`; or-patterns; `let…else` binds after the statement.
+enum Either { Left(i64), Right(i64) }
+fn try_a() -> Option[i64] { None }
+fn try_b() -> Option[i64] { Some(2) }
+fn parse(s: Str) -> Result[i64, String] { if s == "7" { Ok(7) } else { Err("bad".to_string()) } }
+fn start(s: Str) -> Result[i64, String] {
+    let Ok(n) = parse(s) else { return Err("missing".to_string()); };
+    Ok(n * 2)
+}
+fn main() {
+    if let Some(a) = try_a() { println(f"a {a}"); } else if let Some(b) = try_b() { println(f"b {b}"); } else { println("none"); }
+    let val = Either.Right(9);
+    if let Either.Left(x) | Either.Right(x) = val { println(f"x {x}"); }
+    println(f"{start("7")} {start("8")}");
+}

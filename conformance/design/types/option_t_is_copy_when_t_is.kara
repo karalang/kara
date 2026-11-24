@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): Option[T] is Copy when T is
+fn take(o: own Option[i64]) -> i64 { o ?? 0 }
+fn main() { let o = Some(4); println(f"{take(o) + take(o)}"); }

@@ -1,0 +1,14 @@
+// design.md §6 Loops and labels: labeled `break`/`continue`, `break 'label value` from a `loop`, labeled blocks, an untargeted label, and label shadowing.
+fn main() {
+    let matrix = [[1, 2], [3, 4]];
+    let target = 3;
+    let mut seen = 0;
+    'outer: for row in matrix { for val in row { if *val == target { break 'outer; } seen += 1; } }
+    let found = 'found: { for row in matrix { for cell in row { if *cell == 4 { break 'found *cell * 10; } } } -1 };
+    let mut skipped = 0;
+    'rows: for row in matrix { for val in row { if *val % 2 == 1 { skipped += 1; continue 'rows; } } }
+    let v = 'l: loop { let mut k = 0; 'l: loop { k += 1; if k == 2 { break 'l; } } break 'l k + 40; };
+    let plain = 'unused: { 7 };
+    let unit = 'u: { if true { break 'u; } };
+    println(f"{seen} {found} {skipped} {v} {plain} {unit == ()}");
+}

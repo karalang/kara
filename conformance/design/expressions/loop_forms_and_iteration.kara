@@ -1,0 +1,19 @@
+// design.md §6 Loops and labels: `while`, `while let`, `for` with a destructuring pattern, `loop`; `for` over a collection borrows it; `by_ref` keeps an iterator.
+fn main() {
+    let mut n = 0;
+    while n < 3 { n += 1; }
+    let mut q = [1, 2, 3];
+    let mut popped = 0;
+    while let Some(j) = q.pop() { popped += j; }
+    let pairs = [(1, 'a'), (2, 'b')];
+    let mut keys = 0;
+    for (k, _c) in pairs { keys += k; }
+    let v = [10, 20, 30];
+    let mut s = 0;
+    for x in v { s += x; }
+    let mut it = v.iter();
+    let mut first = 0;
+    for x in it.by_ref() { first = *x; break; }
+    let rest: Vec[i64] = it.map(|x| *x).collect();
+    println(f"{n} {popped} {keys} {s} {v.len()} {first} {rest}");
+}

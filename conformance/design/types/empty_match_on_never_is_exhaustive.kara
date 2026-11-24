@@ -1,0 +1,3 @@
+// design.md §5 Type-specific rules: `match x { }` on a `Never` scrutinee is exhaustive.
+fn absurd(n: Never) -> i64 { match n { } }
+fn main() { let ok = true; let v: i64 = if ok { 3 } else { absurd(panic("no")) }; println(f"{v}"); }

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): an Array literal of the wrong length is a compile error
+fn main() { let a: Array[i64, 3] = [1, 2]; println(f"{a[0]}"); }

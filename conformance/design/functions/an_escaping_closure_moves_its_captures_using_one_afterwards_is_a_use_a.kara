@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): an escaping closure moves its captures: using one afterwards is a use after move
+fn keep(h: escaping Fn() -> i64) {}
+fn main() { let s = "a".to_string(); keep(|| s.len()); println(s); }

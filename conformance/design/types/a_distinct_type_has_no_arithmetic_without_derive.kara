@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a distinct type has no arithmetic without derive
+distinct type M = i64;
+fn main() { let a = M(1); let b = M(2); let c = a + b; }

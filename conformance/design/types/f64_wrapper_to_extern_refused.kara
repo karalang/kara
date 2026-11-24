@@ -1,0 +1,10 @@
+// design.md §5 Floats: `F64` must be unwrapped to `f64` before it is passed to an `extern` function.
+/// # Safety
+/// `fabs` reads only its argument.
+unsafe extern "C" { fn fabs(x: f64) -> f64; }
+fn main() {
+    let w = F64.from(-1.5);
+    // Safety: fabs is pure.
+    let r = unsafe { fabs(w) };
+    println(f"{r}");
+}

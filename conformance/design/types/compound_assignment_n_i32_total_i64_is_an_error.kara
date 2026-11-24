@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): compound assignment: n_i32 += total_i64 is an error
+fn main() { let mut n: i32 = 1; let t: i64 = 2; n += t; println(f"{n}"); }

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): sort[i64] at a use site is not a form
+fn sorted[T: Ord](list: own Vec[T]) -> Vec[T] { list }
+fn main() { let f = sorted[i64]; }

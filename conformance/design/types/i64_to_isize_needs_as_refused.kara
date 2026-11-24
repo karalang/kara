@@ -1,0 +1,2 @@
+// design.md §5 Mixed-width operands: `i64` → `isize` needs `as`.
+fn main() { let k: i64 = 5; let i: isize = k; println(f"{i}"); }

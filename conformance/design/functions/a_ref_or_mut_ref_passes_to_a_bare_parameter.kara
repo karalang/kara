@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a ref or mut ref passes to a bare parameter
+fn show(s: String) -> i64 { s.len() }
+fn via_ref(r: mut ref String) -> i64 { show(r) }
+fn main() { let mut s = "abc".to_string(); let r = ref s; println(f"{show(r)}"); println(f"{via_ref(mut s)}"); }

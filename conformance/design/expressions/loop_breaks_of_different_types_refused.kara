@@ -1,0 +1,2 @@
+// design.md §6 Loops and labels: break values whose types do not unify are an error.
+fn main() { let mut n = 0; let y = loop { n += 1; if n == 1 { break 1; } break "two"; }; println(f"{y}"); }

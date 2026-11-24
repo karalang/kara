@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a named argument before a positional one is an error
+fn f(a: i64; b: i64 = 0) {}
+fn main() { f(b: 2, 1); }

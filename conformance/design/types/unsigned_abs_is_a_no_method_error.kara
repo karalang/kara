@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): unsigned abs is a no-method error
+fn main() { let x: u32 = 3; println(f"{x.abs()}"); }

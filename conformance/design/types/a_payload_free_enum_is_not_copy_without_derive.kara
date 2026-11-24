@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a payload-free enum is not Copy without derive
+enum Color { Red, Green }
+fn take(c: own Color) {}
+fn main() { let c = Color.Red; take(c); take(c); }

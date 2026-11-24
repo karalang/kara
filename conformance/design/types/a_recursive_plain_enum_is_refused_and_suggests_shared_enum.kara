@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a recursive plain enum is refused and suggests shared enum
+enum Expr { Lit(i64), And(Expr, Expr) }
+fn main() {}

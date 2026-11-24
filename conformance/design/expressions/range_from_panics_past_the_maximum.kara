@@ -1,0 +1,2 @@
+// design.md §6 Loops and labels: `254u8..` yields 254, 255, then panics with overflow.
+fn main() { for b in 254u8.. { println(f"{b}"); } }

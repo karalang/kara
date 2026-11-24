@@ -1,0 +1,2 @@
+// design.md §5 Slice and array patterns: slice patterns do not apply to `String` or `Str`.
+fn main() { let s = "ab".to_string(); match s { [a, ..] => println("a"), _ => println("b") } }

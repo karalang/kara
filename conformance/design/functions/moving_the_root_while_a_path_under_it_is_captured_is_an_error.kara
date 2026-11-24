@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): moving the root while a path under it is captured is an error
+struct U { name: String, age: i64 }
+fn sink(u: own U) {}
+fn main() { let u = U { name: "a".to_string(), age: 1 }; let f = || u.name.len(); sink(u); println(f"{f()}"); }

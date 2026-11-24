@@ -1,0 +1,11 @@
+// design.md §7 Function types and kinds: the kind, the `escaping` bit and the effect clause are independent.
+struct Bus { hs: Vec[MutFn(i64) with writes(Stdout)] }
+fn subscribe(bus: mut ref Bus, h: escaping MutFn(i64) with writes(Stdout)) { bus.hs.push(h); }
+fn main() {
+    let mut bus = Bus { hs: [] };
+    let mut seen = 0;
+    subscribe(mut bus, |e| { seen += e; println(f"got {e} {seen}"); });
+    let h = bus.hs.remove(0);
+    h(3);
+    h(4);
+}

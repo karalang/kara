@@ -1,0 +1,15 @@
+// design.md §6 Statements and blocks: block-like expressions need no `;`, and in statement position drop their value.
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+fn mk(t: Str) -> N { N { t: t.to_string() } }
+fn main() {
+    let c = true;
+    if c { mk("if") } else { mk("else") }
+    match 1 { _ => mk("match") }
+    { mk("block") }
+    for i in 0..1 { println(f"for {i}"); }
+    let mut n = 0;
+    while n < 1 { n += 1; }
+    loop { break; }
+    println("end");
+}

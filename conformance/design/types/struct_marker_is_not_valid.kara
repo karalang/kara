@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): struct Marker; is not valid
+struct Marker;
+fn main() {}

@@ -1,0 +1,2 @@
+// design.md §6 Conditionals: `val if cond else other` does not exist.
+fn main() { let c = true; let v = 1 if c else 2; println(f"{v}"); }

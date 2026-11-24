@@ -1,0 +1,2 @@
+// design.md §5 Mixed-width operands: `u32` → `isize` needs `as`.
+fn main() { let k: u32 = 5; let i: isize = k; println(f"{i}"); }

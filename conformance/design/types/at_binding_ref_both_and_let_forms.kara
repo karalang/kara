@@ -1,0 +1,9 @@
+// design.md §5 `@` bindings: `ref x @ Some(ref y)` binds both; `let p @ Point { x, y } = point;` is accepted.
+struct Point { x: i64, y: i64 }
+fn main() {
+    let o = Some("s".to_string());
+    match o { ref x @ Some(ref y) => println(f"{x} {y}"), None => {} }
+    let point = Point { x: 1, y: 2 };
+    let p @ Point { x, y } = point;
+    println(f"{p.x + p.y} {x} {y} {o}");
+}

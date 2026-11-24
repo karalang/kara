@@ -1,0 +1,9 @@
+// design.md §7 Returns, `ref` returns and views: without a receiver, the result borrows from every bare non-`Copy`, `mut ref` and view parameter.
+fn longer(a: String, b: String) -> ref String { if a.len() > b.len() { a } else { b } }
+fn first(xs: Slice[String]) -> ref String { ref xs[0] }
+fn main() {
+    let a = "aaa".to_string();
+    let b = "b".to_string();
+    let v = ["x".to_string()];
+    println(f"{longer(a, b)} {first(v)}");
+}

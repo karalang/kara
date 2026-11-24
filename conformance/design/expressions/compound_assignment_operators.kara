@@ -1,0 +1,9 @@
+// design.md §6 Assignment: `+=` `-=` `*=` `/=` `%=` `&=` `|=` `^=` `<<=` `>>=`, the place evaluated once.
+fn idx(i: i64) -> i64 { println(f"idx {i}"); i }
+fn main() {
+    let mut a = 100;
+    a += 5; a -= 3; a *= 2; a /= 4; a %= 7; a &= 6; a |= 8; a ^= 3; a <<= 2; a >>= 1;
+    let mut v = [1, 2, 3];
+    v[idx(1)] += 10;
+    println(f"{a} {v}");
+}

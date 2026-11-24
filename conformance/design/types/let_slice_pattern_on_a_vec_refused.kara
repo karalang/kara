@@ -1,0 +1,2 @@
+// design.md §5 Slice and array patterns: on `Vec[T]` a slice pattern is refutable, so a plain `let` is refused.
+fn main() { let v: Vec[i64] = [1, 2]; let [a, ..] = v.as_slice(); println(f"{a}"); }

@@ -1,0 +1,2 @@
+// design.md §5 `let`, `if let`, `while let`: the `else` block of `let…else` must diverge.
+fn main() { let o: Option[i64] = None; let Some(v) = o else { println("none") }; println(f"{v}"); }

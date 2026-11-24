@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a generic distinct type; raw gives the base
+distinct type Ids[T] = Vec[T];
+fn main() { let i = Ids([1, 2]); let v: Vec[i64] = i.raw(); println(f"{v}"); }

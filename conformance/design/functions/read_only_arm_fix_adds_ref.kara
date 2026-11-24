@@ -1,0 +1,7 @@
+// design.md §7 Binding modes in patterns: a read-only arm then a later use is a use after move; `karac fix` adds the `ref`.
+struct Foo { field: String }
+fn main() {
+    let v = Foo { field: "a".to_string() };
+    match v { Foo { field } => println(field) }
+    println(v.field);
+}

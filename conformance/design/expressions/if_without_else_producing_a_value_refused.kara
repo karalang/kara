@@ -1,0 +1,2 @@
+// design.md §6 Conditionals: a block that produces a value with no `else` is a type error, even in statement position.
+fn main() { let c = true; if c { 5 } println("x"); }

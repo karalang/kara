@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a unit struct is built with empty braces
+struct Marker {}
+fn main() { let _m = Marker {}; println("ok"); }

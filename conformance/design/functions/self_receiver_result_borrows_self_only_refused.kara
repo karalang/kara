@@ -1,0 +1,4 @@
+// design.md §7 Returns, `ref` returns and views: with a `self` receiver, the result borrows from `self` only.
+struct Book { title: String }
+impl Book { fn pick(self, other: String) -> ref String { other } }
+fn main() { let b = Book { title: "t".to_string() }; let o = "o".to_string(); println(b.pick(o)); }

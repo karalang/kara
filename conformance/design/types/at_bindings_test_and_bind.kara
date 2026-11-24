@@ -1,0 +1,11 @@
+// design.md §5 `@` bindings: `name @ P` binds the whole value; it composes with or-patterns; `x @ P` is `P` for exhaustiveness.
+enum K { A, B, C }
+fn age(n: i64) -> String { match n { a @ 0..=12 => f"child {a}", t @ 13..=19 => f"teen {t}", _ => "adult".to_string() } }
+fn main() {
+    let v = Some(3);
+    let s = match v { x @ Some(_) => f"got {x}", None => "nothing".to_string() };
+    let o: Option[i64] = None;
+    let t = match o { x @ Some(_) | x @ None => x.is_none() };
+    let k = match K.B { x @ (K.A | K.B) => "ab", K.C => "c" };
+    println(f"{s} {t} {k} {age(5)} {age(15)} {age(40)}");
+}

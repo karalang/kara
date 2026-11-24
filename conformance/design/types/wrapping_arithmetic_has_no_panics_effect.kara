@@ -1,0 +1,4 @@
+// design.md §5 Integer overflow: control, the named wrap does not panic, so `#[no_effect(panics)]` holds.
+#[no_effect(panics)]
+fn add(a: i64, b: i64) -> i64 { a.wrapping_add(b) }
+fn main() { println(f"{add(i64.MAX, 1)}"); }

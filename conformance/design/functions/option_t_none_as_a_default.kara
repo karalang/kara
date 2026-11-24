@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): Option[T] = None as a default
+fn find(items: Slice[i64], target: i64; start: Option[i64] = None) -> Option[i64] {
+    let s = start ?? 0;
+    for i in s..items.len() { if items[i] == target { return Some(i); } }
+    None
+}
+fn main() { let v = [1, 2, 1]; println(f"{find(v, 1)} {find(v, 1, start: Some(1))}"); }

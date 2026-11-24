@@ -1,0 +1,1 @@
+a method with a `self` receiver returns a borrow of `self` only

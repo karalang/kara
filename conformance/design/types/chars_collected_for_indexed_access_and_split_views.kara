@@ -1,0 +1,8 @@
+// design.md §5 Strings: `s.chars().collect()` gives O(1) `chars[i]`; splitting yields `Str` views.
+fn main() {
+    let s = "héllo wörld".to_string();
+    let chars: Vec[char] = s.chars().collect();
+    let mut words: Vec[String] = [];
+    for w in s.split(" ") { words.push(w.to_string()); }
+    println(f"{chars[1]} {chars.len()} {words.len()} {s.bytes()[0]}");
+}

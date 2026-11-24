@@ -1,0 +1,11 @@
+// design.md conformance (moved from the shared folder's design-5-7): closure forms; a closure's parameter borrows by default
+fn main() {
+    let a = |x: i64| x + 1;
+    let b = |x: i64, y: i64| x * y;
+    let c = |(p, q): (i64, i64)| p + q;
+    let d = |item: String| item.len();
+    let e = || println("no parameters");
+    let s = "four".to_string();
+    println(f"{a(1)} {b(2, 3)} {c((4, 5))} {d(s)} {s}");
+    e();
+}

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): an integer suffix out of the destination's range is refused (u8 = 300i64)
+fn main() { let d: u8 = 300i64; println(f"{d}"); }

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): omitting a required named parameter names it
+fn f(a: i64; must: i64) {}
+fn main() { f(1); }

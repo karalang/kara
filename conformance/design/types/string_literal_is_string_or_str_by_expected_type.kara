@@ -1,0 +1,10 @@
+// design.md §5 Strings: a literal is a `String` by default and a `Str` where one is expected; string concatenation.
+fn greeting(name: String) -> String { "Hello, " + name }
+fn main() {
+    let s: Str = "static";
+    let t = s;
+    let o = "own";
+    let mut grown = o;
+    grown.push_str("ed");
+    println(f"{s} {t} {grown} {greeting("Ann".to_string())}");
+}

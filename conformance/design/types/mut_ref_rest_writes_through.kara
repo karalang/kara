@@ -1,0 +1,9 @@
+// design.md §5 Slice and array patterns: `..mut ref rest` against a mutable place binds a `mut Slice[T]`; the window writes through.
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4];
+    match v {
+        [_, ..mut ref rest] => { rest[0] = 20; }
+        [] => {}
+    }
+    println(f"{v}");
+}

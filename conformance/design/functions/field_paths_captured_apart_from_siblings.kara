@@ -1,0 +1,10 @@
+// design.md §7 Captures: any chain of `.field` accesses is its own path; unmentioned siblings stay usable.
+struct Addr { city: String, zip: String }
+struct User { name: String, address: Addr, age: i64 }
+fn main() {
+    let mut u = User { name: "n".to_string(), address: Addr { city: "c".to_string(), zip: "z".to_string() }, age: 1 };
+    let show = || u.address.city.len();
+    u.age += 1;
+    u.name = "m".to_string();
+    println(f"{show()} {u.age} {u.name}");
+}

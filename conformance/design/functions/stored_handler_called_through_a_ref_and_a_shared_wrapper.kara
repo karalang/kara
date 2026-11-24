@@ -1,0 +1,11 @@
+// design.md §7 Escaping function values: a stored `Fn` is called through a `ref`; a `shared` wrapper gives it many holders.
+shared struct Handler { f: Fn(i64) -> i64 }
+struct Route { handler: Fn(i64) -> i64 }
+struct Router { routes: Vec[Route] }
+fn main() {
+    let r = Router { routes: [Route { handler: |x| x + 1 }] };
+    let a = (r.routes[0].handler)(1);
+    let h = Handler { f: |x| x * 10 };
+    let h2 = h;
+    println(f"{a} {(h.f)(2)} {(h2.f)(3)}");
+}

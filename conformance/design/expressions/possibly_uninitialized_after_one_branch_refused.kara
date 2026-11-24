@@ -1,0 +1,2 @@
+// design.md §6 Variable binding rules: if only some branches assign `x`, using it is an error.
+fn main() { let c = true; let x: i64; if c { x = 5; } println(f"{x}"); }

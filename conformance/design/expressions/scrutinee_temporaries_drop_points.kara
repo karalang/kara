@@ -1,0 +1,15 @@
+// design.md §6 `if let` and `let…else`: an `if let` scrutinee lives to the end of the construct, `else` included; a `let…else` initializer's temporaries drop before `else`.
+struct T { n: i64 }
+impl Drop for T { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+impl T { fn get(self) -> Option[i64] { if self.n > 0 { Some(self.n) } else { None } } }
+fn mk(n: i64) -> T { T { n: n } }
+fn f(n: i64) -> i64 {
+    let Some(v) = mk(n).get() else { println("else"); return -1; };
+    println("after");
+    v
+}
+fn main() {
+    if let Some(v) = mk(0).get() { println(f"some {v}"); } else { println("in else"); }
+    println(f"{f(0)}");
+    println(f"{f(3)}");
+}

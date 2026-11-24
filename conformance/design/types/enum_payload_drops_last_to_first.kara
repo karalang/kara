@@ -1,0 +1,5 @@
+// design.md §5 Enums: the active variant's payload drops last to first.
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+enum E { Two(N, N), Empty }
+fn main() { let _e = E.Two(N { t: "a".to_string() }, N { t: "b".to_string() }); let _f = E.Empty; }

@@ -1,0 +1,11 @@
+// design.md conformance (moved from the shared folder's design-5-7): MutFn: repeat(3, || count += 1); OnceFn moves a capture
+fn repeat(n: i64, f: own MutFn()) { let mut f = f; for _ in 0..n { f(); } }
+fn run_once(f: own OnceFn() -> String) -> String { f() }
+fn main() {
+    let mut count = 0;
+    repeat(3, || { count += 1; });
+    println(count);
+    let name: String = "ada".to_string();
+    let greeting = run_once(|| name);
+    println(greeting);
+}

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a refutable pattern in parameter position is refused
+fn f(Some(x): Option[i64]) -> i64 { x }
+fn main() {}

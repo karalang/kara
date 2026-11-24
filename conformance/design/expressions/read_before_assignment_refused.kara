@@ -1,0 +1,2 @@
+// design.md §6 Variable binding rules: in sequence, reading `x` before any assignment is an error.
+fn main() { let x: i64; println(f"{x}"); x = 5; }

@@ -1,0 +1,3 @@
+// design.md §5 `Option` and `Result`: control, a `Result` with a non-`Copy` side moves.
+fn take(r: own Result[i64, String]) -> i64 { r ?? 0 }
+fn main() { let r: Result[i64, String] = Ok(4); println(f"{take(r) + take(r)}"); }

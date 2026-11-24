@@ -1,0 +1,12 @@
+// design.md §5 Primitive types: `()` is the unit value; `Never` coerces to any type in any expression position.
+fn unit() -> () { () }
+fn pick(o: own Option[String]) -> String { match o { Some(s) => s, None => panic("none") } }
+fn half(n: i64) -> i64 { let h: i64 = if n % 2 == 0 { n / 2 } else { return -1 }; h }
+fn main() {
+    let u = unit();
+    let _same: () = u;
+    let c = loop { break 5 };
+    let mut acc = 0;
+    for i in 0..4 { let v: i64 = if i == 1 { continue } else { i }; acc += v; }
+    println(f"{pick(Some("s".to_string()))} {half(8)} {half(7)} {c} {acc}");
+}

@@ -1,0 +1,8 @@
+// design.md §5 Slice and array patterns: match `s.bytes()` or a collected `Vec[char]` instead.
+fn main() {
+    let s = "GET /".to_string();
+    let m = match s.bytes() { [71, 69, 84, ..] => "get", _ => "other" };
+    let cs: Vec[char] = s.chars().collect();
+    let n = match cs.as_slice() { ['G', .., '/'] => "path", _ => "no" };
+    println(f"{m} {n}");
+}

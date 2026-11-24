@@ -1,0 +1,8 @@
+// design.md conformance (moved from the shared folder's design-5-7): an escaping parameter may be stored
+struct Bus { handlers: Vec[MutFn(i64)] }
+fn subscribe(bus: mut ref Bus, handler: escaping MutFn(i64)) { bus.handlers.push(handler); }
+fn main() {
+    let mut b = Bus { handlers: [] };
+    subscribe(mut b, |e| println(f"got {e}"));
+    for i in 0..b.handlers.len() { let h = mut ref b.handlers[i]; h(7); }
+}

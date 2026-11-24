@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): unary minus of i32.MIN panics
+fn main() { let x: i32 = i32.MIN; let y = -x; println(f"{y}"); }

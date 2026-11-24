@@ -1,0 +1,5 @@
+// design.md conformance (moved from the shared folder's design-5-7): a result that borrows a temporary may not outlive the statement
+struct User { name: String }
+fn make_user() -> User { User { name: "a".to_string() } }
+fn name(user: User) -> ref String { ref user.name }
+fn main() { let n = name(make_user()); println(n); }

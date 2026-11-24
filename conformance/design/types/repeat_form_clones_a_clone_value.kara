@@ -1,0 +1,6 @@
+// design.md §5 Collection literals: `[v; n]` copies a `Copy` value and clones any other into the later slots.
+fn main() {
+    let a = ["ab".to_string(); 3];
+    let b: Array[u8, 2] = [7; 2];
+    println(f"{a[2]} {a.len()} {b[1]}");
+}

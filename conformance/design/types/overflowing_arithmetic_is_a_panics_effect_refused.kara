@@ -1,0 +1,4 @@
+// design.md §5 Integer overflow: arithmetic that can overflow contributes `panics` to the function's effects.
+#[no_effect(panics)]
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn main() { println(f"{add(1, 2)}"); }

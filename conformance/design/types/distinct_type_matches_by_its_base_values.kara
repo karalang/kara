@@ -1,0 +1,5 @@
+// design.md §5 Distinct types / Type-specific rules: a distinct type has its base type's values for matching, and needs a wildcard.
+#[derive(PartialEq, Eq, Copy, Clone)]
+distinct type UserId = i64;
+fn who(u: UserId) -> Str { match u { UserId(0) => "root", UserId(1) => "admin", UserId(1) => "dup", _ => "user" } }
+fn main() { println(f"{who(UserId(0))} {who(UserId(1))} {who(UserId(7))}"); }

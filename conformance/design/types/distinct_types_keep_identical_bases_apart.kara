@@ -1,0 +1,5 @@
+// design.md conformance (moved from the shared folder's design-5-7): distinct types keep identical bases apart
+distinct type UserId = i64;
+distinct type PostId = i64;
+fn get_user(id: UserId) -> i64 { id.raw() }
+fn main() { let pid = PostId(42); println(f"{get_user(pid)}"); }

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): calling a OnceFn twice is a use after move
+fn main() { let s = "a".to_string(); let f = || s; let a = f(); let b = f(); }

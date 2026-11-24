@@ -1,0 +1,9 @@
+// design.md §5 Primitive types: every primitive is `Copy`; every scalar has `to_string` and `clone`.
+fn take(x: own i64) -> i64 { x }
+fn main() {
+    let n: i64 = 4;
+    let a = take(n) + take(n);
+    let c = 'k';
+    let b: u8 = 7;
+    println(f"{a} {c.to_string()} {true.to_string()} {1.5.to_string()} {b.clone()} {(-3).to_string()}");
+}

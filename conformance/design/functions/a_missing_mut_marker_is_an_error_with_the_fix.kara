@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a missing mut marker is an error with the fix
+fn reset(x: mut ref i64) { *x = 0; }
+fn main() { let mut a = 1; reset(a); }

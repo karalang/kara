@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): abs of i64.MIN panics
+fn main() { let x: i64 = i64.MIN; println(f"{x.abs()}"); }

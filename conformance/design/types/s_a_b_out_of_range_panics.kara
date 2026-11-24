@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): s[a..b] out of range panics
+fn hi() -> i64 { 9 }
+fn main() { let s = "abc".to_string(); println(f"{s[0..hi()]}"); }

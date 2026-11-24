@@ -1,0 +1,4 @@
+// design.md §5 Structs: `base` must have the same struct type.
+struct P { x: i64, y: i64 }
+struct Q { x: i64, y: i64 }
+fn main() { let a = Q { x: 1, y: 2 }; let b = P { x: 3, ..a }; println(f"{b.y}"); }

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a closure with a ref capture may not be returned
+fn mk(s: String) -> Fn() -> i64 { || s.len() }
+fn main() {}

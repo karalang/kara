@@ -1,0 +1,10 @@
+// design.md §5 Mixed-width operands: the rule covers `& | ^` and the comparisons.
+fn main() {
+    let a: u8 = 0xF0;
+    let b: i32 = 0x1FF;
+    let x = a & b;
+    let y = a | b;
+    let z = a ^ b;
+    let c: i64 = 241;
+    println(f"{x} {y} {z} {a < b} {a == c} {a < c}");
+}

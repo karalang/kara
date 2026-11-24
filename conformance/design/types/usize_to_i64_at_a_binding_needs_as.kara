@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): usize to i64 at a binding needs as
+fn main() { let u: usize = 3 as usize; let k: i64 = u; println(f"{k}"); }

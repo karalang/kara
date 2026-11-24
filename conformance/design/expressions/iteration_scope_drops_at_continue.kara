@@ -1,0 +1,4 @@
+// design.md §6 Loops and labels: each iteration is its own scope, and `continue` ends it the same way.
+struct N { n: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() { for i in 0..3 { let _g = N { n: i }; if i == 1 { continue; } println(f"body {i}"); } }

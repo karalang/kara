@@ -1,0 +1,17 @@
+// design.md §6 Assignment: a single tuple-typed expression on the right is taken apart, left to right.
+fn div_rem(a: i64, b: i64) -> (i64, i64) { (a / b, a % b) }
+fn main() {
+    let mut lo = 0;
+    let mut hi = 10;
+    let mid = 5;
+    let c = true;
+    lo, hi = if c { (lo, mid) } else { (mid + 1, hi) };
+    let mut q = 0;
+    let mut r = 0;
+    q, r = div_rem(17, 5);
+    let mut x = 1;
+    let mut y = 2;
+    let mut z = 3;
+    x, y, z = z, x, y;
+    println(f"{lo} {hi} {q} {r} {x} {y} {z}");
+}

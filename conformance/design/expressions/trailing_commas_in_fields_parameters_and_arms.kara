@@ -1,0 +1,8 @@
+// design.md §6 Statements and blocks: fields and parameters take a trailing comma; a match arm's comma is optional after a block.
+struct P { x: i64, y: i64, }
+fn add(a: i64, b: i64,) -> i64 { a + b }
+fn main() {
+    let p = P { x: 1, y: 2, };
+    let r = match p.x { 1 => { add(p.x, p.y,) } _ => 0, };
+    println(f"{r}");
+}

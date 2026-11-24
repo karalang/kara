@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a closure parameter that the body moves, with no own, is an error
+fn sink(s: own String) {}
+fn main() { let f = |s: String| sink(s); }

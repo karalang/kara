@@ -1,0 +1,2 @@
+// design.md §6 Variable binding rules: `while` and `for` bodies may run zero times, so their assignments do not count after the loop.
+fn main() { let x: i64; for i in 0..3 { x = i; } println(f"{x}"); }

@@ -1,0 +1,3 @@
+// design.md §5 Range patterns: a gap is an error that names the first value not covered.
+fn f(b: u8) -> Str { match b { 0..=9 => "digit" } }
+fn main() { println(f(1)); }

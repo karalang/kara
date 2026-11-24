@@ -1,0 +1,14 @@
+// design.md conformance (moved from the shared folder's design-5-7): C-like enum discriminant() and TryFrom on a repr enum
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+#[repr(C)]
+enum E { A = -1, B = 0 }
+fn main() {
+    let c = UsbClass.Hid;
+    let byte: u8 = c.discriminant();
+    println(f"{byte} {E.A.discriminant()} {E.B.discriminant()}");
+    let raw: u8 = 8;
+    match UsbClass.try_from(raw) { Ok(UsbClass.MassStorage) => println("mass"), Ok(_) => println("other"), Err(_) => println("err") }
+    let bad: u8 = 2;
+    println(f"{UsbClass.try_from(bad).is_err()}");
+}

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): make_counter: a returned closure moves its captures in
+fn make_counter() -> MutFn() -> i64 { let mut n = 0; || { n += 1; n } }
+fn main() { let mut c = make_counter(); c(); c(); println(f"{c()}"); }

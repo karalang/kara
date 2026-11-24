@@ -1,0 +1,2 @@
+// design.md §5 `@` bindings: `let x @ Some(y) = opt;` is rejected, because `Some(_)` is refutable.
+fn main() { let opt = Some(1); let x @ Some(y) = opt; println(f"{x} {y}"); }

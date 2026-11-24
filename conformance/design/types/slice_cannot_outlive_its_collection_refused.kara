@@ -1,0 +1,3 @@
+// design.md §5 Slices: a `Slice[T]` cannot outlive the collection it views.
+fn view() -> Slice[i64] { let v: Vec[i64] = [1, 2]; v.as_slice() }
+fn main() { println(f"{view().len()}"); }

@@ -1,0 +1,9 @@
+// design.md §7 Function types and kinds: a `MutFn` closure is never `Copy`.
+fn main() {
+    let mut n = 0;
+    let mut f = || { n += 1; };
+    let mut g = f;
+    f();
+    g();
+    println(f"{n}");
+}

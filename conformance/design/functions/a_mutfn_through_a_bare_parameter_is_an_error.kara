@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a MutFn through a bare parameter is an error
+fn call(f: MutFn()) { f(); }
+fn main() {}

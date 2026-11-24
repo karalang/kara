@@ -1,0 +1,2 @@
+// design.md §6 Loops and labels: `continue 'label` is rejected when `'label` names a block.
+fn main() { let x = 'b: { for i in 0..3 { if i == 1 { continue 'b; } } 0 }; println(f"{x}"); }

@@ -1,0 +1,8 @@
+// design.md conformance (moved from the shared folder's design-5-7): to_bits and bits_as_f64 round-trip
+fn main() {
+    let x: f64 = 1.5;
+    let b = x.to_bits();
+    println(f"{b} {b.bits_as_f64()} {x.to_bits32()}");
+    let w: u32 = 0x3FC00000;
+    println(f"{w.bits_as_f32()}");
+}

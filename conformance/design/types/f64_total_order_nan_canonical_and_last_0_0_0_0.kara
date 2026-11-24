@@ -1,0 +1,17 @@
+// design.md conformance (moved from the shared folder's design-5-7): F64: total order, NaN canonical and last, -0.0 != 0.0
+fn main() {
+    let scores: Vec[f64] = [2.0, f64.NAN, -0.0, 1.0, 0.0, f64.NEG_INFINITY];
+    let mut ranked: Vec[F64] = scores.iter().map(|x| F64.from(*x)).collect();
+    ranked.sort();
+    let mut out: Vec[String] = [];
+    for r in ranked { out.push(r.value.to_string()); }
+    println(out.join(" "));
+    let a = F64.from(f64.NAN);
+    let z: f64 = 0.0;
+    let b = F64 { value: z / z };
+    println(f"{a == b} {F64.from(-0.0) == F64.from(0.0)} {-0.0 == 0.0}");
+    let mut m: Map[F64, i64] = Map.new();
+    m[F64.from(f64.NAN)] = 1;
+    m[b] = 2;
+    println(f"{m.len()}");
+}

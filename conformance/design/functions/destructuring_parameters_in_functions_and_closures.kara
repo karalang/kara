@@ -1,0 +1,10 @@
+// design.md conformance (moved from the shared folder's design-5-7): destructuring parameters in functions and closures
+struct Point { x: f64, y: f64 }
+fn add((a, b): (i64, i64)) -> i64 { a + b }
+fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point) -> f64 { ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt() }
+fn y_only((_, y): (i64, i64)) -> i64 { y }
+fn main() {
+    let pairs: Vec[(i64, i64)] = [(1, 2), (3, 4)];
+    let sums: Vec[i64] = pairs.into_iter().map(|(a, b)| a + b).collect();
+    println(f"{add((2, 3))} {distance(Point { x: 0.0, y: 0.0 }, Point { x: 3.0, y: 4.0 })} {y_only((1, 9))} {sums}");
+}

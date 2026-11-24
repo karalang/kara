@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): slice comparisons: Array vs Slice of other length is false, either order
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let a: Array[i64, 2] = [1, 2];
+    let s = v.as_slice();
+    println(f"{a == s} {s == a} {v == s} {s[0..2] == a} {a == v[0..2]}");
+}

@@ -1,0 +1,2 @@
+// design.md §6 `if let` and `let…else`: an `if let` binding is in scope inside its block only.
+fn main() { let o = Some(1); if let Some(v) = o { println(f"{v}"); } println(f"{v}"); }

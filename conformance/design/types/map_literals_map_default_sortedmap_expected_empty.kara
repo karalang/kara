@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): map literals: Map default, SortedMap expected, [:] empty
+fn main() {
+    let scores = ["alice": 10, "bob": 7];
+    let ranked: SortedMap[String, i64] = ["bob": 7, "al": 1];
+    let empty: Map[String, i64] = [:];
+    println(f"{scores["bob"]} {ranked} {empty.len()}");
+}

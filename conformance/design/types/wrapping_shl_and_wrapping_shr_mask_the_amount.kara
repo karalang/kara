@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): wrapping_shl and wrapping_shr mask the amount
+fn main() { let x: i32 = 1; println(f"{x.wrapping_shl(33)} {x.wrapping_shr(32)}"); }

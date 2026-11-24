@@ -1,0 +1,2 @@
+// design.md §6 Conditionals: an `Option` does not convert to `bool`.
+fn main() { let o = Some(1); if o { println("yes"); } }

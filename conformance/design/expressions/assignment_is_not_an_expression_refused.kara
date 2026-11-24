@@ -1,0 +1,2 @@
+// design.md §6 Assignment: assignment is a statement, not an expression; it has no value.
+fn main() { let mut a = 1; let b = (a = 2); println(f"{b}"); }

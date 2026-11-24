@@ -1,0 +1,9 @@
+// design.md conformance (moved from the shared folder's design-5-7): arrays: literal with expected type, [v; n], Copy, bounds check
+fn idx() -> i64 { 3 }
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    let b = a;
+    let z = [0u8; 4];
+    println(f"{a[0] + b[2]} {z.len()}");
+    println(f"{a[idx()]}");
+}

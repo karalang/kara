@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): using a path captured by mut ref before the closure's last use is an error
+fn main() { let mut k = 1; let mut f = || { k += 1; }; println(f"{k}"); f(); }

@@ -1,0 +1,2 @@
+// design.md §5 Collection literals: in `[v; n]`, `n` must be a constant.
+fn main() { let n = 3; let a = [0; n]; println(f"{a.len()}"); }

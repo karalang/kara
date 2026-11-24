@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): a generic function as a value takes its type from the annotation
+fn sorted[T: Ord](list: own Vec[T]) -> Vec[T] { let mut l = list; l.sort(); l }
+fn main() {
+    let f: Fn(own Vec[i64]) -> Vec[i64] = sorted;
+    let g = |v: own Vec[String]| sorted(v);
+    println(f"{f([3, 1, 2])} {g(["b".to_string(), "a".to_string()])}");
+}

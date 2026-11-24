@@ -1,0 +1,8 @@
+// design.md §5 Division, remainder and shifts: signedness follows the operand type.
+fn main() {
+    let a: u8 = 200;
+    let x: u32 = 0xF000_0000;
+    let m: u32 = 0xFFFF_FFFF;
+    let s: i32 = -1;
+    println(f"{a / 3} {a % 7} {x >> 4} {m < 1u32} {s < 1}");
+}

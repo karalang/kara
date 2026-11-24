@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): a narrower float suffix widens (let w: f64 = 0.1f32)
+fn main() { let w: f64 = 0.1f32; println(f"{w}"); }

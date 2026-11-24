@@ -1,0 +1,6 @@
+// design.md conformance (moved from the shared folder's design-5-7): fields drop in reverse declaration order after the type's own Drop
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+struct Pair { a: N, b: N }
+impl Drop for Pair { fn drop(mut ref self) { println("drop pair"); } }
+fn main() { let _p = Pair { a: N { t: "a".to_string() }, b: N { t: "b".to_string() } }; }

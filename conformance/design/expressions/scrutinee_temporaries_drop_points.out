@@ -1,0 +1,8 @@
+in else
+drop 0
+drop 0
+else
+-1
+drop 3
+after
+3

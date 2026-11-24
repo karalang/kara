@@ -1,0 +1,12 @@
+// design.md conformance (moved from the shared folder's design-5-7): disjoint capture: fields are captured separately
+struct Event { t: i64 }
+struct User { name: String, age: i64, history: Vec[Event] }
+fn archive(h: own Vec[Event]) -> i64 { h.len() }
+fn split_capture(user: own User) {
+    let greet = || println(f"hi, {user.name}");
+    let next_age = || user.age + 1;
+    println(f"{archive(user.history)}");
+    greet();
+    println(next_age());
+}
+fn main() { split_capture(User { name: "ada".to_string(), age: 36, history: [Event { t: 1 }] }); }

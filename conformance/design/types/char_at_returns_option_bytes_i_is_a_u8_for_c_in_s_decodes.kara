@@ -1,0 +1,8 @@
+// design.md conformance (moved from the shared folder's design-5-7): char_at returns Option, bytes()[i] is a u8, for c in s decodes
+fn main() {
+    let s = "aé".to_string();
+    println(f"{s.char_at(1)} {s.char_at(5)} {s.bytes()[1]} {s.len()}");
+    let mut n = 0;
+    for c in s { n += 1; }
+    println(f"{n}");
+}

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): Option[ref T] == Option[T] is refused with .cloned()
+fn main() { let v = [1, 2]; let t: Option[i64] = Some(2); println(f"{v.last() == t}"); }

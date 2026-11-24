@@ -1,0 +1,13 @@
+// design.md conformance (moved from the shared folder's design-5-7): shifts: arithmetic >> on signed, logical via cast, amount of any int type
+fn main() {
+    let a: i32 = -8;
+    println(f"{a >> 1}");
+    println(f"{((a as u32) >> 1) as i32}");
+    let s: u8 = 3;
+    let b: i64 = 1;
+    println(f"{b << s}");
+    let c: i32 = 1;
+    println(f"{c << 31}");
+    let x: u32 = 0xFFFF_FFFF;
+    println(f"{x < 1u32}");
+}

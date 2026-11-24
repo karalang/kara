@@ -1,0 +1,2 @@
+// design.md §5 Mixed-width operands: an unsuffixed literal in a payload is range-checked against the payload type.
+fn main() { let o: Option[u8] = Some(300); println(f"{o}"); }

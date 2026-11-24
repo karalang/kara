@@ -1,0 +1,4 @@
+// design.md §5 Structs: field values are evaluated in written order and move into the struct.
+struct P { x: i64, y: i64 }
+fn f(s: Str, v: i64) -> i64 { println(s); v }
+fn main() { let p = P { y: f("y", 2), x: f("x", 1) }; println(f"{p.x} {p.y}"); }

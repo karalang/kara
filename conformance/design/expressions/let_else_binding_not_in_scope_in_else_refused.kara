@@ -1,0 +1,2 @@
+// design.md §6 `if let` and `let…else`: the pattern's bindings are in scope after the statement, not inside the `else` block.
+fn main() { let o: Option[i64] = None; let Some(v) = o else { println(f"{v}"); return; }; println(f"{v}"); }

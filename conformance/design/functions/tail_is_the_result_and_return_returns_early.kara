@@ -1,0 +1,3 @@
+// design.md §7 Declarations: the body's tail expression is the result; `return e;` returns early.
+fn sign(n: i64) -> Str { if n < 0 { return "neg"; } if n == 0 { "zero" } else { "pos" } }
+fn main() { println(f"{sign(-2)} {sign(0)} {sign(5)}"); }

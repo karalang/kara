@@ -1,0 +1,4 @@
+// design.md §6 Conditionals: a struct literal in a condition must be parenthesized.
+#[derive(PartialEq)]
+struct Point { x: i64, y: i64 }
+fn main() { let p = Point { x: 0, y: 0 }; if p == (Point { x: 0, y: 0 }) { println("origin"); } }

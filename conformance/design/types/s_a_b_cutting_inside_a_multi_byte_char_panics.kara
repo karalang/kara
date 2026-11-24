@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): s[a..b] cutting inside a multi-byte char panics
+fn cut() -> i64 { 1 }
+fn main() { let s = "é!".to_string(); println(f"{s[0..2]}"); println(f"{s[0..cut()]}"); }

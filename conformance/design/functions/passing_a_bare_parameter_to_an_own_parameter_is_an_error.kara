@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): passing a bare parameter to an own parameter is an error
+fn sink(s: own String) {}
+fn f(s: String) { sink(s); }
+fn main() {}

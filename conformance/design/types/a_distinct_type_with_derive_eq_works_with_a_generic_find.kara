@@ -1,0 +1,8 @@
+// design.md conformance (moved from the shared folder's design-5-7): a distinct type with derive(Eq) works with a generic find
+#[derive(PartialEq, Eq, Copy, Clone)]
+distinct type UserId = i64;
+fn find[T: Eq](items: Slice[T], target: T) -> Option[i64] {
+    for i in 0..items.len() { if items[i] == target { return Some(i); } }
+    None
+}
+fn main() { let v = [UserId(3), UserId(5)]; println(f"{find(v, UserId(5))}"); }

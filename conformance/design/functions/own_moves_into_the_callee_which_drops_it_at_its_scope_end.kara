@@ -1,0 +1,5 @@
+// design.md conformance (moved from the shared folder's design-5-7): own moves into the callee, which drops it at its scope end
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+fn take(n: own N) { println("in take"); }
+fn main() { let n = N { t: "x".to_string() }; take(n); println("after"); }

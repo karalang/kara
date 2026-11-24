@@ -1,0 +1,12 @@
+// design.md conformance (moved from the shared folder's design-5-7): type aliases are transparent
+type Counts[T: Eq + Hash] = Map[T, i64];
+type SortedVec[T: Ord] = Vec[T];
+fn total(c: Counts[String]) -> i64 { let mut t = 0; for (_, v) in c { t += v; } t }
+fn main() {
+    let mut by_name: Counts[String] = Map.new();
+    by_name["a"] = 2;
+    by_name["b"] = 3;
+    let s: SortedVec[i64] = [1, 2];
+    let v: Vec[i64] = s;
+    println(f"{total(by_name)} {v}");
+}

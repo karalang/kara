@@ -1,0 +1,2 @@
+// design.md §5 Slice and array patterns: if `K = N − k − j < 0`, the pattern is rejected with a length-mismatch diagnostic.
+fn main() { let a: Array[i64, 2] = [1, 2]; let [x, y, z, ..] = a; println(f"{x}"); }

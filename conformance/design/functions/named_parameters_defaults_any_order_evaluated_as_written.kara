@@ -1,0 +1,8 @@
+// design.md conformance (moved from the shared folder's design-5-7): named parameters: defaults, any order, evaluated as written
+fn connect(host: String; port: i64 = 443, timeout_ms: i64 = 5000) -> String { f"{host}:{port}/{timeout_ms}" }
+fn p(n: i64) -> i64 { println(f"eval {n}"); n }
+fn main() {
+    println(connect("db"));
+    println(connect("db", timeout_ms: 1000));
+    println(connect("db", timeout_ms: p(1000), port: p(8443)));
+}

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a read-only arm then a later use of an owned scrutinee is a use after move
+struct Foo { field: String }
+fn main() { let v = Foo { field: "a".to_string() }; match v { Foo { field } => println(field) } println(v.field); }

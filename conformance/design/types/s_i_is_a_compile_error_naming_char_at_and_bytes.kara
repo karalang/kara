@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): s[i] is a compile error naming char_at and bytes()
+fn main() { let s = "abc".to_string(); println(f"{s[1]}"); }

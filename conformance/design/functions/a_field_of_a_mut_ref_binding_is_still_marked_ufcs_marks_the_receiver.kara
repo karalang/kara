@@ -1,0 +1,15 @@
+// design.md conformance (moved from the shared folder's design-5-7): a field of a mut ref binding is still marked; UFCS marks the receiver
+struct State { n: i64 }
+struct Session { state: State }
+struct Counter { c: i64 }
+impl Counter { fn bump(mut ref self) { self.c += 1; } }
+fn reset(s: mut ref State) { s.n = 0; }
+fn refresh(s: mut ref Session) { reset(mut s.state); }
+fn main() {
+    let mut s = Session { state: State { n: 9 } };
+    refresh(mut s);
+    let mut c = Counter { c: 0 };
+    Counter.bump(mut c);
+    c.bump();
+    println(f"{s.state.n} {c.c}");
+}

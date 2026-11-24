@@ -1,0 +1,11 @@
+// design.md conformance (moved from the shared folder's design-5-7): an unbound method is a function value; a method call is its qualified form
+struct User { age: i64 }
+impl User {
+    fn validate(self) -> Result[(), String] { if self.age >= 0 { Ok(()) } else { Err("neg".to_string()) } }
+    fn new(age: i64) -> User { User { age } }
+}
+fn main() {
+    let check = User.validate;
+    let u = User.new(-1);
+    println(f"{check(u).is_err()} {u.validate().is_err()} {User.validate(u).is_err()}");
+}

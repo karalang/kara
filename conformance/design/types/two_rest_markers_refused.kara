@@ -1,0 +1,2 @@
+// design.md §5 Slice and array patterns: at most one rest marker per slice pattern.
+fn main() { let v: Vec[i64] = [1, 2, 3]; match v.as_slice() { [a, .., b, .., c] => println("x"), _ => println("y") } }

@@ -1,0 +1,4 @@
+// design.md §5 Arrays: an array's elements drop first to last.
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+fn main() { let _a: Array[N, 3] = [N { t: "0".to_string() }, N { t: "1".to_string() }, N { t: "2".to_string() }]; }

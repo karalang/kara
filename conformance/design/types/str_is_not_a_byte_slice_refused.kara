@@ -1,0 +1,3 @@
+// design.md §5 Strings: `Str` is not `Slice[u8]`.
+fn sum(b: Slice[u8]) -> i64 { b.len() }
+fn main() { let s: Str = "ab"; println(f"{sum(s)}"); }

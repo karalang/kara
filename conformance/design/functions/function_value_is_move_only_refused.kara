@@ -1,0 +1,3 @@
+// design.md §7 Escaping function values: a value of a function type is move-only.
+fn keep(f: escaping Fn(i64) -> i64) -> Fn(i64) -> i64 { f }
+fn main() { let s = "x".to_string(); let g = keep(|x| x + s.len()); let h = g; println(f"{g(1)} {h(1)}"); }

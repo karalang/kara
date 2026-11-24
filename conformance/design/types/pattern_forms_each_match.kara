@@ -1,0 +1,25 @@
+// design.md §5 Pattern matching: each pattern form of the table, field shorthand, nesting and `..`.
+const LIMIT: i64 = 7;
+struct Inner { b: i64 }
+struct Outer { inner: Inner, tag: i64 }
+struct Point { x: i64, y: i64, z: i64 }
+enum Token { Eof, Integer(i64), Word { text: String } }
+fn kind(n: i64) -> Str {
+    match n { 0 => "zero", LIMIT => "limit", 1..=5 => "small", big @ 100.. if big > 1000 => "huge", 100.. => "big", _ => "other" }
+}
+fn tok(t: own Token) -> String {
+    match t { Token.Eof => "eof".to_string(), Token.Integer(n) => f"int {n}", Token.Word { text } => text }
+}
+fn main() {
+    let p = Point { x: 3, y: 0, z: 9 };
+    let a = match p { Point { x, y: 0, .. } => x, Point { .. } => -1 };
+    let o = Outer { inner: Inner { b: 5 }, tag: 1 };
+    let Outer { inner: Inner { b }, tag: _ } = o;
+    let t = (1, 'q', true);
+    let c = match t { (1, 'a', _) => "a", (_, ch, true) if ch == 'q' => "q", _ => "none" };
+    let s: Vec[i64] = [4, 5, 6];
+    let e = match s.as_slice() { [first, .., last] => first + last, _ => 0 };
+    let f = match Some(2) { Some(1) | Some(2) => "one or two", Some(_) => "more", None => "none" };
+    println(f"{a} {b} {c} {e} {f} {kind(0)} {kind(7)} {kind(3)} {kind(5000)} {kind(200)} {kind(-4)}");
+    println(f"{tok(Token.Eof)} {tok(Token.Integer(4))} {tok(Token.Word { text: "w".to_string() })}");
+}

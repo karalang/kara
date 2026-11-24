@@ -1,0 +1,9 @@
+// design.md §5 Checked, wrapping, saturating and overflowing arithmetic: float `abs` follows IEEE 754.
+fn main() {
+    let a: f64 = -2.5;
+    let z: f64 = -0.0;
+    let n = f64.NAN;
+    let i = f64.NEG_INFINITY;
+    let h: f32 = -0.5;
+    println(f"{a.abs()} {z.abs()} {n.abs().is_nan()} {i.abs()} {h.abs()}");
+}

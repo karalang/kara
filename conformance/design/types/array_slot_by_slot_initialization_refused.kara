@@ -1,0 +1,2 @@
+// design.md §5 Arrays: writing every slot of an uninitialized array does not initialize it.
+fn main() { let a: Array[i64, 2]; a[0] = 1; a[1] = 2; println(f"{a[0]}"); }

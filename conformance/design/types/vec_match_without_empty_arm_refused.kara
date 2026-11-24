@@ -1,0 +1,3 @@
+// design.md §5 Slice and array patterns: `[x, ..rest]` covers every non-empty sequence, so `[]` or `_` is still needed.
+fn f(v: Slice[i64]) -> i64 { match v { [x, ..rest] => x } }
+fn main() { println(f"{f([1])}"); }

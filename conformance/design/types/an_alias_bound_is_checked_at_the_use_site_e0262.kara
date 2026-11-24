@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): an alias bound is checked at the use site: E0262
+type Counts[T: Eq + Hash] = Map[T, i64];
+fn main() { let c: Counts[f64] = Map.new(); println(f"{c.len()}"); }

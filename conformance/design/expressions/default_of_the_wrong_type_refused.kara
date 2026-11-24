@@ -1,0 +1,2 @@
+// design.md §6 `?` and `??`: `b` must have the type of the value inside `a`.
+fn main() { let o: Option[i64] = None; let v = o ?? "x"; println(f"{v}"); }

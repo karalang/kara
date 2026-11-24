@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a view struct borrowing two parameters
+struct Joiner { left: ref String, right: ref String }
+fn make_joiner(a: String, b: String) -> Joiner { Joiner { left: a, right: b } }
+fn main() { let a = "l".to_string(); let b = "r".to_string(); let j = make_joiner(a, b); println(f"{j.left}{j.right}"); }

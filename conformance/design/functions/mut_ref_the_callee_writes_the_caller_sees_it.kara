@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): mut ref: the callee writes, the caller sees it
+fn bump(counter: mut ref i64) { *counter = counter + 1; }
+fn add2(x: mut ref i64) { x += 2; }
+fn main() { let mut c = 1; bump(mut c); add2(mut c); println(f"{c}"); }

@@ -1,0 +1,2 @@
+// design.md §5 Pattern matching: a bare `..` is not a pattern on its own; use `_`.
+fn main() { let n = 3; match n { .. => println("any") } }

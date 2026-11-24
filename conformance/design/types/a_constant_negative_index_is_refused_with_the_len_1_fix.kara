@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): a constant negative index is refused with the len()-1 fix
+fn main() { let v = [1, 2]; println(f"{v[-1]}"); }

@@ -1,0 +1,17 @@
+// design.md §5 Or-patterns: nested alternatives, a guard that runs once per match, `if let` and `while let`, exhaustiveness over all alternatives.
+enum Inner { A, B, C }
+enum Outer { Foo(Inner), Bar }
+enum Either { Left(i64), Right(i64) }
+fn main() {
+    let mut calls = 0;
+    let v = Outer.Foo(Inner.B);
+    let r = match v { Outer.Foo(Inner.A | Inner.B) if { calls += 1; true } => "ab", Outer.Foo(Inner.C) | Outer.Bar => "c or bar", _ => "rest" };
+    let e = Either.Right(4);
+    if let Either.Left(x) | Either.Right(x) = e { println(f"x={x}"); }
+    let q = [Either.Left(1), Either.Right(2), Either.Left(3)];
+    let mut sum = 0;
+    let mut i = 0;
+    while let Either.Left(x) | Either.Right(x) = q[i] { sum += x; i += 1; if i == 3 { break; } }
+    let w = match Inner.C { Inner.A | Inner.B => 1, Inner.C => 2 };
+    println(f"{r} {calls} {sum} {w}");
+}

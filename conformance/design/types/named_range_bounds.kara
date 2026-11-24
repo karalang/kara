@@ -1,0 +1,6 @@
+// design.md §5 Range patterns: a bound may be a path to a module-level `const` of integer or `char` type.
+const MIN_AGE: i32 = 18;
+const MAX_AGE: i32 = 65;
+const A: char = 'a';
+fn group(age: i32) -> Str { match age { ..MIN_AGE => "minor", MIN_AGE..=MAX_AGE => "working age", _ => "retired" } }
+fn main() { let c = 'c'; let k = match c { A..='f' => "hex letter", _ => "other" }; println(f"{group(10)} {group(18)} {group(65)} {group(66)} {k}"); }

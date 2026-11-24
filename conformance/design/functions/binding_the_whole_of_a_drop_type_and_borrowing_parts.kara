@@ -1,0 +1,11 @@
+// design.md §7 Binding modes in patterns: control, the whole binds, and `ref` parts borrow; `_` and `..` never bind.
+struct G { name: String, n: i64 }
+impl Drop for G { fn drop(mut ref self) { println("drop"); } }
+fn main() {
+    let g = G { name: "a".to_string(), n: 2 };
+    let G { ref name, .. } = g;
+    println(f"{name}");
+    match g { G { n: _, .. } => println("matched") }
+    let whole = g;
+    println(f"{whole.n}");
+}

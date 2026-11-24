@@ -1,0 +1,5 @@
+// design.md §7 Destructuring parameters: a `Copy` part copies; a non-`Copy` part is a `ref`; `own` lets a binding move its part.
+struct Req { body: String, n: i64 }
+fn peek(Req { body, n }: Req) -> i64 { body.len() + n }
+fn take(Req { body, .. }: own Req) -> String { body }
+fn main() { let r = Req { body: "bb".to_string(), n: 1 }; let a = peek(r); let b = take(r); println(f"{a} {b}"); }

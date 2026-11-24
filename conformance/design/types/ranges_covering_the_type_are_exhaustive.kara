@@ -1,0 +1,4 @@
+// design.md §5 Range patterns: ranges that together cover the whole type make a match exhaustive without a wildcard.
+fn half(b: u8) -> Str { match b { 0..=127 => "low", 128..=255 => "high" } }
+fn sign(n: i64) -> Str { match n { ..=-1 => "neg", 0 => "zero", 1.. => "pos" } }
+fn main() { println(f"{half(3)} {half(200)} {sign(-5)} {sign(0)} {sign(8)}"); }

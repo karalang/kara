@@ -1,0 +1,2 @@
+// design.md §5 Enums / `Option` and `Result`: the qualified form `Option.Some(x)` is accepted.
+fn main() { let o = Option.Some(3); let r: Result[i64, String] = Result.Err("e".to_string()); println(f"{o} {r.is_err()}"); }

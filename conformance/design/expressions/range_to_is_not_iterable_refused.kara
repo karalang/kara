@@ -1,0 +1,2 @@
+// design.md §6 Loops and labels: only the forms with a start can be iterated.
+fn main() { for i in ..3 { println(f"{i}"); } }

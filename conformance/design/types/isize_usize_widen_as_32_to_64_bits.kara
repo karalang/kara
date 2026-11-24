@@ -1,0 +1,14 @@
+// design.md §5 Mixed-width operands: `isize` and `usize` widen only where lossless at both 32 and 64 bits.
+fn main() {
+    let a: u16 = 60000;
+    let i: isize = a;
+    let s8: i8 = -3;
+    let j: isize = s8;
+    let b: u32 = 7;
+    let u: usize = b;
+    let k: i64 = 5;
+    let d = i - k;
+    let e: i128 = u;
+    let f: i64 = j;
+    println(f"{d} {e} {f}");
+}

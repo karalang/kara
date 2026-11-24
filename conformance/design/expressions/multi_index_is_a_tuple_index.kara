@@ -1,0 +1,7 @@
+// design.md §6 Operators and precedence: `e[i, j]` is `e[(i, j)]`, calling `Index` with the tuple.
+struct M { w: i64, cells: Vec[i64] }
+impl Index[(i64, i64)] for M {
+    type Output = i64;
+    fn index(self, at: (i64, i64)) -> ref i64 { ref self.cells[at.0 * self.w + at.1] }
+}
+fn main() { let m = M { w: 2, cells: [1, 2, 3, 4] }; println(f"{m[1, 0]} {m[(0, 1)]}"); }

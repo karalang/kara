@@ -1,0 +1,2 @@
+// design.md §6 Loops and labels: `for x in c.into_iter()` moves `c`.
+fn main() { let c = ["a".to_string()]; for x in c.into_iter() { println(x); } println(f"{c.len()}"); }

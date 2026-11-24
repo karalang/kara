@@ -1,0 +1,11 @@
+// design.md conformance (moved from the shared folder's design-5-7): String/Str: a String passes as Str; s[a..b] is a byte-range view
+fn first_word(s: Str) -> Str {
+    let end = s.find(" ").unwrap_or(s.len());
+    s[0..end]
+}
+fn main() {
+    let line = "alice bob".to_string();
+    let w = first_word(line);
+    let owned: String = w.to_string();
+    println(f"{w} {owned.len()} {line.as_str() == line}");
+}

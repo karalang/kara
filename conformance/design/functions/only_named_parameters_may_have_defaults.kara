@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): only named parameters may have defaults
+fn f(a: i64 = 1) {}
+fn main() { f(); }

@@ -1,0 +1,9 @@
+// design.md §5 Range patterns: `lo..=hi`, `lo..hi`, `lo..`, `..=hi`, `..hi`, on integers and `char`, composed with `|` and `@`.
+fn cls(c: char) -> Str { match c { 'a'..='z' => "lower", 'A'..='Z' => "upper", '0'..='9' => "digit", _ => "other" } }
+fn band(n: i64) -> String {
+    match n { ..-10 => "far".to_string(), ..=-1 => "neg".to_string(), 0..=9 | 100..=199 => "pick".to_string(), k @ 10..20 => f"teen {k}", 20.. => "big".to_string() }
+}
+fn main() {
+    println(f"{cls('q')} {cls('Q')} {cls('5')} {cls('-')}");
+    println(f"{band(-50)} {band(-10)} {band(-1)} {band(5)} {band(150)} {band(19)} {band(20)} {band(99)}");
+}

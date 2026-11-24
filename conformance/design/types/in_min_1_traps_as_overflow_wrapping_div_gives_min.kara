@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): iN.MIN / -1 traps as overflow; wrapping_div gives MIN
+fn neg() -> i32 { -1 }
+fn main() {
+    let m: i32 = i32.MIN;
+    println(f"{m.wrapping_div(-1)} {m.wrapping_rem(-1)}");
+    println(f"{m / neg()}");
+}

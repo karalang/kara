@@ -1,0 +1,2 @@
+// design.md §5 Slices: `let` and assignment do not convert to `Slice[T]`.
+fn main() { let v: Vec[i64] = [1, 2]; let s: Slice[i64] = v; println(f"{s.len()}"); }

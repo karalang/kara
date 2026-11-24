@@ -1,0 +1,4 @@
+// design.md §5 Types: `user.validate()` is `User.validate(user)`.
+struct User { name: String }
+impl User { fn validate(self) -> bool { self.name.len() > 0 } }
+fn main() { let u = User { name: "a".to_string() }; println(f"{u.validate()} {User.validate(u)}"); }

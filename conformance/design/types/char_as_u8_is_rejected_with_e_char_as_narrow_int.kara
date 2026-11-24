@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): char as u8 is rejected with E_CHAR_AS_NARROW_INT
+fn main() { let c = 'a'; println(f"{c as u8}"); }

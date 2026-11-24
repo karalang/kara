@@ -1,0 +1,6 @@
+// design.md §5 Worked example: the `Event` match is exhaustive; an or-pattern row covers two constructors.
+enum Event { MouseDown { x: i64, y: i64 }, MouseUp { x: i64, y: i64 }, KeyDown { code: i64 }, Tick }
+fn h(evt: Event) -> String {
+    match evt { Event.MouseDown { x, y } | Event.MouseUp { x, y } => f"mouse {x},{y}", Event.KeyDown { code } => f"key {code}", Event.Tick => "tick".to_string() }
+}
+fn main() { println(f"{h(Event.MouseUp { x: 1, y: 2 })} {h(Event.KeyDown { code: 9 })} {h(Event.Tick)}"); }

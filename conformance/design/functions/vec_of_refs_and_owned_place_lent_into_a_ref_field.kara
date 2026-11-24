@@ -1,0 +1,16 @@
+// design.md §7 Returns, `ref` returns and views: `Vec[ref T]` is valid; an owned place written where a `ref` field goes is lent, not moved.
+struct Parser { source: ref String, position: i64 }
+struct Pair { a: ref String, b: i64 }
+fn main() {
+    let x = "one".to_string();
+    let y = "two".to_string();
+    let mut refs: Vec[ref String] = [];
+    let rx = ref x;
+    let ry = ref y;
+    refs.push(rx);
+    refs.push(ry);
+    let p = Parser { source: x, position: 0 };
+    let mut q = Pair { a: y, b: 1 };
+    q.a = x;
+    println(f"{refs.len()} {refs[1]} {p.source} {p.position} {q.a} {x} {y}");
+}

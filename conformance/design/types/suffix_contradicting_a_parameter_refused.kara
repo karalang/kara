@@ -1,0 +1,3 @@
+// design.md §5 Numeric literals: a suffix cannot contradict a parameter's type (`0.1f64` into `f32`).
+fn f(x: f32) -> f32 { x }
+fn main() { println(f"{f(0.1f64)}"); }

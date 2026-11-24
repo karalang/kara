@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): Some(w) with w: u64 into Option[i64] is refused
+fn main() { let w: u64 = 3; let o: Option[i64] = Some(w); println(f"{o}"); }

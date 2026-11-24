@@ -1,0 +1,10 @@
+// design.md §6 Loops and labels: a loop with no `break` is `Never`; `break value`s join; a conditional break still types the loop.
+fn forever() -> i64 { loop { return 3; } }
+fn main() {
+    let ready = true;
+    let x = loop { if ready { break 5i32; } };
+    let mut n = 0;
+    let y = loop { n += 1; if n == 2 { break 1; } if n > 5 { break 2; } };
+    let big: i64 = x;
+    println(f"{x} {y} {forever()} {big}");
+}

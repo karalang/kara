@@ -1,0 +1,2 @@
+// design.md §6 Statements and blocks: `(if c { a } else { b }).len()` applies the operator.
+fn main() { let c = false; let n = (if c { "a".to_string() } else { "bb".to_string() }).len(); println(f"{n}"); }

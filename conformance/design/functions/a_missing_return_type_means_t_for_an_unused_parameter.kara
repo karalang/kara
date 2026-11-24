@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a missing return type means (); `_: T` for an unused parameter
+fn f(_: i64) { println("f") }
+fn main() { let u: () = f(3); println(f"{u == ()}"); }

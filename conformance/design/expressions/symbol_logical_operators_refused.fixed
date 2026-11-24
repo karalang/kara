@@ -1,0 +1,2 @@
+// design.md §6 Operators and precedence: `&&`, `||` and `!` are rejected with a fix that substitutes the word.
+fn main() { let a = true; let b = false; if a and not b { println("x"); } }

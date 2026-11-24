@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): UFCS without the marker is an error
+struct Counter { c: i64 }
+impl Counter { fn bump(mut ref self) { self.c += 1; } }
+fn main() { let mut c = Counter { c: 0 }; Counter.bump(c); }

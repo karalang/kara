@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): f64 as bool is rejected
+fn main() { let x: f64 = 1.0; println(f"{x as bool}"); }

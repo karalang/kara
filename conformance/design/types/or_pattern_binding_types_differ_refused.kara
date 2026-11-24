@@ -1,0 +1,4 @@
+// design.md §5 Or-patterns: an `x` whose type differs between alternatives is an error.
+enum E { A(i64), B(String) }
+fn f(e: own E) -> i64 { match e { E.A(x) | E.B(x) => 1 } }
+fn main() { println(f"{f(E.A(1))}"); }

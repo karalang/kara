@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a type annotation is not a borrow: let p: mut ref P = w.p
+struct P { s: String }
+struct W { p: P }
+fn main() { let mut w = W { p: P { s: "a".to_string() } }; let p: mut ref P = w.p; }

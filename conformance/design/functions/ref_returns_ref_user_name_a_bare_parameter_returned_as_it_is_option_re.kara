@@ -1,0 +1,13 @@
+// design.md conformance (moved from the shared folder's design-5-7): ref returns: ref user.name, a bare parameter returned as it is, Option[ref T]
+struct User { name: String }
+struct Inv { items: Vec[String] }
+fn name(user: User) -> ref String { ref user.name }
+fn longer(a: String, b: String) -> ref String { if a.len() > b.len() { a } else { b } }
+impl Inv { fn first(self) -> Option[ref String] { if self.items.is_empty() { None } else { Some(ref self.items[0]) } } }
+fn main() {
+    let u = User { name: "ada".to_string() };
+    let x = "xx".to_string();
+    let y = "yyy".to_string();
+    let i = Inv { items: ["k".to_string()] };
+    println(f"{name(u)} {longer(x, y)} {i.first()}");
+}

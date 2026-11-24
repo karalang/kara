@@ -1,0 +1,14 @@
+// design.md conformance (moved from the shared folder's design-5-7): *r copies a Copy value; comparisons look through refs
+fn contains(haystack: Slice[String], needle: String) -> bool {
+    for x in haystack { if *x == needle { return true; } }
+    false
+}
+fn main() {
+    let v = ["a".to_string(), "b".to_string()];
+    let s = ref v[1];
+    println(f"{contains(v, "b".to_string())} {s == "b"} {contains(v, "z".to_string())}");
+    let n = 5;
+    let r = ref n;
+    let m = *r + 1;
+    println(f"{m}");
+}

@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): each operation runs in its operands' type: a_i32 * b_i32 + c_i64 traps in i32
+fn main() {
+    let a: i32 = 65536;
+    let c: i64 = 1;
+    let w = a * a + c;
+    println(f"{w}");
+}

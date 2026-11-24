@@ -1,0 +1,3 @@
+// design.md §5 Strings: returning a view of a `String` the function owns is an error.
+fn make() -> Str { let s = "abc".to_string(); s.as_str() }
+fn main() { println(make()); }

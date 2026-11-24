@@ -1,0 +1,8 @@
+// design.md §5 Type-specific rules: a shared type's handle is transparent to matching; binding the whole copies the handle.
+shared struct Node { pub name: String, pub n: i64 }
+fn main() {
+    let a = Node { name: "x".to_string(), n: 2 };
+    let k = match a { whole @ Node { n: 2, .. } => { let c = whole; c.n + 10 } Node { n, .. } => n };
+    let Node { name, .. } = a;
+    println(f"{k} {name} {a.name}");
+}

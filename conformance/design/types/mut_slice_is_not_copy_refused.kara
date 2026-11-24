@@ -1,0 +1,4 @@
+// design.md §5 Slices: `mut Slice[T]` is not `Copy`; a mutable view is unique.
+fn fill(xs: mut Slice[i64]) { for i in 0..xs.len() { xs[i] = 0; } }
+fn twice(xs: mut Slice[i64]) { let a = xs; fill(mut xs); fill(mut a); }
+fn main() { let mut v = [1, 2]; twice(mut v); println(f"{v}"); }

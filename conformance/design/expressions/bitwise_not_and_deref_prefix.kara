@@ -1,0 +1,2 @@
+// design.md §6 Operators and precedence: `~` is bitwise not; prefix `*` dereferences.
+fn main() { let a: u8 = 0b1010_0000; let n: i64 = 5; let r = ref n; println(f"{~a} {~0} {*r * 2}"); }

@@ -1,0 +1,28 @@
+// design.md §5 Slice and array patterns: every form of the table, over `Vec`, `Slice` and `Array`, rest bindings as views.
+fn describe(items: Slice[i64]) -> String {
+    match items {
+        [] => "empty".to_string(),
+        [only] => f"one: {only}",
+        [first, second] => f"two: {first}, {second}",
+        [first, .., last] => f"many: {first}..{last}",
+    }
+}
+fn shapes(v: Vec[i64]) -> String {
+    match v.as_slice() {
+        [9, ..] => "starts 9".to_string(),
+        [.., 9] => "ends 9".to_string(),
+        [a, ..rest] if rest.len() > 3 => f"head {a} rest {rest.len()}",
+        [..rest, z] if z == 0 => f"init {rest.len()} last 0",
+        [a, ..mid, z] => f"{a} {mid.len()} {z}",
+        _ => "short".to_string(),
+    }
+}
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    println(f"{describe([])} {describe([4])} {describe([4, 5])} {describe(v)}");
+    println(f"{shapes([9, 1])} | {shapes([1, 9])} | {shapes([1, 2, 3, 4, 5])} | {shapes([1, 2, 0])} | {shapes([1, 2, 3])} | {shapes([1])}");
+    let a: Array[i64, 4] = [1, 2, 3, 4];
+    let [h, ..rest] = a;
+    let [x, y, ..] = a;
+    println(f"{h} {rest.len()} {rest[2]} {x + y}");
+}

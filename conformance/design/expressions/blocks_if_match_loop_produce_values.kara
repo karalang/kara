@@ -1,0 +1,11 @@
+// design.md §6 Expressions and statements: blocks, `if`, `match` and `loop` produce values; a block with no final expression is `()`.
+fn example() -> i64 { let a = 1; let b = 2; a + b }
+fn main() {
+    let blk = { let t = 4; t * 2 };
+    let i = if blk > 5 { "big" } else { "small" };
+    let m = match blk { 8 => 80, _ => 0 };
+    let mut k = 0;
+    let l = loop { k += 1; if k == 3 { break k * 100; } };
+    let u: () = { let _z = 1; };
+    println(f"{example()} {blk} {i} {m} {l} {u == ()}");
+}

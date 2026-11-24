@@ -1,0 +1,2 @@
+// design.md §5 Pattern matching: there is no `mut name` pattern in a `match` arm.
+fn main() { match Some(1) { Some(mut n) => { n += 1; println(f"{n}"); } None => {} } }

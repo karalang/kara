@@ -1,0 +1,3 @@
+// design.md §5 Type-specific rules: `[]` and `[x, ..rest]` cover every length; `[.., 0]` after `[0, ..]` is reachable (`[1, 0]`).
+fn f(v: Slice[i64]) -> Str { match v { [0, ..] => "zero first", [.., 0] => "zero last", [] => "empty", [_, ..rest] => "other" } }
+fn main() { println(f"{f([0, 1])} {f([1, 0])} {f([])} {f([2])}"); }

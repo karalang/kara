@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a non-Copy field read through a reference is an error
+struct S { r: String }
+fn f(s: S) -> i64 { let m = s.r; m.len() }
+fn main() {}

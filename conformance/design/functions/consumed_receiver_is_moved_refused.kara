@@ -1,0 +1,4 @@
+// design.md §7 Parameter modes: `own self` is owned (consuming), so the value is gone after the call.
+struct Counter { label: String }
+impl Counter { fn into_label(own self) -> String { self.label } }
+fn main() { let c = Counter { label: "c".to_string() }; let l = c.into_label(); println(f"{l} {c.label}"); }

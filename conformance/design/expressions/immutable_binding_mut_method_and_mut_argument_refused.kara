@@ -1,0 +1,2 @@
+// design.md §6 Variable binding rules: calling a `mut ref self` method on a `let` binding is a compile error.
+fn main() { let seen: Map[String, i64] = Map.new(); seen.insert("k".to_string(), 1); println(f"{seen.len()}"); }

@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): derive(Eq) on a distinct f64 is refused
+#[derive(PartialEq, Eq)]
+distinct type M = f64;
+fn main() {}

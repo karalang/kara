@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): returning a bare non-Copy parameter as owned is an error
+fn id(s: String) -> String { s }
+fn main() {}

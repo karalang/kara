@@ -1,0 +1,8 @@
+// design.md §5 Primitive types / Numeric literals: `i64` and `f64` are the defaults; `i128`, `u128` exist.
+fn main() {
+    let big = 3_000_000_000 * 3;
+    let f = 1.0 / 3.0;
+    let w: i128 = (i64.MAX as i128) * 4;
+    let u: u128 = u128.MAX;
+    println(f"{big} {f} {w} {u}");
+}

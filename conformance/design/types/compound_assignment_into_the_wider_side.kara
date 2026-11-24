@@ -1,0 +1,2 @@
+// design.md §5 Mixed-width operands: `total_i64 += n_i32` is legal.
+fn main() { let t0: i32 = i32.MAX; let mut t: i64 = t0; let n: i32 = 1; t += n; t *= n; println(f"{t}"); }

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): f64.from_bits is an error that names bits_as_f64
+fn main() { let b: u64 = 0; println(f"{f64.from_bits(b)}"); }

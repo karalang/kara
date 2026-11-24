@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): raw() on a borrowed non-Copy base returns ref: returning it owned is a type error
+distinct type Ids = Vec[i64];
+impl Ids { fn f(self) -> Vec[i64] { self.raw() } }
+fn main() {}

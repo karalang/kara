@@ -1,0 +1,3 @@
+// design.md §6 Temporaries: `let r = ref make_value();` is an error; bind the value first.
+fn make_value() -> String { "v".to_string() }
+fn main() { let r = ref make_value(); println(r); }

@@ -1,0 +1,3 @@
+empty one: 4 two: 4, 5 many: 1..3
+starts 9 | ends 9 | head 1 rest 4 | init 2 last 0 | 1 1 3 | short
+1 3 4 3

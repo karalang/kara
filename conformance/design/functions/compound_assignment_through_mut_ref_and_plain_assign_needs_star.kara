@@ -1,0 +1,11 @@
+// design.md §7 `*` and `ref` in expressions: `x += 1` through a `mut ref` writes through; `*x = v` assigns; `total += x` with `x: ref i64` reads.
+fn bump(x: mut ref i64) { x += 1; *x = *x * 10; }
+fn main() {
+    let mut n = 1;
+    bump(mut n);
+    let v = [1, 2, 3];
+    let mut total = 0;
+    for x in v.iter() { total += x; }
+    let r = ref v[2];
+    println(f"{n} {total} {*r + 1}");
+}

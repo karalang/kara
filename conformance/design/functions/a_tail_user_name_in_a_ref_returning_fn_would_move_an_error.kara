@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a tail user.name in a ref-returning fn would move: an error
+struct User { name: String }
+fn name(user: User) -> ref String { user.name }
+fn main() {}

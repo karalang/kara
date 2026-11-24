@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): a recursive shared enum works
+shared enum Expr { Lit(i64), Add(Expr, Expr) }
+fn eval(e: Expr) -> i64 { match e { Expr.Lit(n) => n, Expr.Add(a, b) => eval(a) + eval(b) } }
+fn main() { println(f"{eval(Expr.Add(Expr.Lit(2), Expr.Add(Expr.Lit(3), Expr.Lit(4))))}"); }

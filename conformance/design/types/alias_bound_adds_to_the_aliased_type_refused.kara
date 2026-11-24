@@ -1,0 +1,3 @@
+// design.md §5 Type aliases: `SortedVec[T: Ord] = Vec[T]` adds a requirement `Vec` lacks; `SortedVec[f64]` is refused.
+type SortedVec[T: Ord] = Vec[T];
+fn main() { let s: SortedVec[f64] = [1.0]; println(f"{s.len()}"); }

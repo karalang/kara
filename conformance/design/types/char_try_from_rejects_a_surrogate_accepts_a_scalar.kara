@@ -1,0 +1,6 @@
+// design.md conformance (moved from the shared folder's design-5-7): char.try_from rejects a surrogate, accepts a scalar
+fn main() {
+    let s: u32 = 0xD800;
+    let ok: u32 = 0x1F600;
+    println(f"{char.try_from(s).is_err()} {char.try_from(ok).is_ok()}");
+}

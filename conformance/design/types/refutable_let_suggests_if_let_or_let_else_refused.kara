@@ -1,0 +1,2 @@
+// design.md §5 `let`, `if let`, `while let`: a refutable pattern in `let` is rejected with a diagnostic suggesting `if let` or `let…else`.
+fn main() { let o = Some(1); let Some(v) = o; println(f"{v}"); }

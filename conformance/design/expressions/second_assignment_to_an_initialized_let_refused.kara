@@ -1,0 +1,2 @@
+// design.md §6 Variable binding rules: later assignments to `let x: T;` need `mut`.
+fn main() { let x: i64; x = 5; x = 10; println(f"{x}"); }

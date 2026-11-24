@@ -1,0 +1,2 @@
+// design.md §5 Range patterns: a bounded inclusive range needs start ≤ end; `9..=0` is a compile error.
+fn main() { let n = 3; match n { 9..=0 => println("never"), _ => println("other") } }

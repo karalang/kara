@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): equality is byte equality: NFC and NFD forms differ
+fn main() { let a = "\u{e9}".to_string(); let b = "e\u{301}".to_string(); println(f"{a == b}"); }

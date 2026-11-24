@@ -1,0 +1,5 @@
+// design.md conformance (moved from the shared folder's design-5-7): a shared handle passed to a bare parameter may be stored (it is counted)
+shared struct H { mut n: i64 }
+struct Holder { h: H }
+fn keep(h: H) -> Holder { Holder { h } }
+fn main() { let h = H { n: 1 }; let k = keep(h); h.n = 5; println(f"{k.h.n}"); }

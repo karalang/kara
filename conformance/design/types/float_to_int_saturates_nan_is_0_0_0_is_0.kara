@@ -1,0 +1,13 @@
+// design.md conformance (moved from the shared folder's design-5-7): float to int saturates; NaN is 0; -0.0 is 0
+fn main() {
+    let a: f64 = 3.7;
+    let b: f64 = -3.7;
+    let big: f64 = 1e30;
+    let nan: f64 = f64.NAN;
+    let inf: f64 = f64.INFINITY;
+    let nz: f64 = -0.0;
+    println(f"{a as i32} {b as i32} {big as i32} {big as u8} {-big as i32} {-1.0 as u8}");
+    println(f"{inf as i64} {-inf as i64} {inf as u16} {-inf as u16} {nan as i32} {nan as u64} {nz as i32}");
+    let f: f32 = 3e9;
+    println(f"{f as i32} {f as u32} {f as i8}");
+}

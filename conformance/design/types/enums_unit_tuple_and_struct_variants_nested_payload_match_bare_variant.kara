@@ -1,0 +1,19 @@
+// design.md conformance (moved from the shared folder's design-5-7): enums: unit, tuple and struct variants; nested payload match; bare variant patterns
+enum Command { Start, Stop, Restart { delay_ms: i64 } }
+enum Step { Do(Command), Wait(i64), Done }
+fn run(step: Step) -> String {
+    match step {
+        Step.Do(Command.Restart { delay_ms }) => f"restart {delay_ms}",
+        Step.Do(Command.Start) => "start".to_string(),
+        Step.Do(_) => "other".to_string(),
+        Wait(ms) => f"wait {ms}",
+        Done => "done".to_string(),
+    }
+}
+fn main() {
+    println(run(Step.Do(Command.Restart { delay_ms: 5 })));
+    println(run(Step.Do(Command.Start)));
+    println(run(Step.Do(Command.Stop)));
+    println(run(Step.Wait(3)));
+    println(run(Step.Done));
+}

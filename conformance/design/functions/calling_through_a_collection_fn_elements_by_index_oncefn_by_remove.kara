@@ -1,0 +1,9 @@
+// design.md conformance (moved from the shared folder's design-5-7): calling through a collection: Fn elements by index, OnceFn by remove
+fn main() {
+    let hs: Vec[Fn(i64) -> i64] = [|x| x + 1, |x| x * 2];
+    println(f"{hs[0](3)} {hs[1](3)}");
+    let s = "own".to_string();
+    let mut os: Vec[OnceFn() -> String] = [];
+    os.push(|| s);
+    println(os.remove(0)());
+}

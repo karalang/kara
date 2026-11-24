@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): *r of a non-Copy value as a value is a move out of a reference
+fn f(r: ref String) -> String { *r }
+fn main() {}

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): moving out of a mut ref is an error
+fn f(v: mut ref String) -> String { *v }
+fn main() {}

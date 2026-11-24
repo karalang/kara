@@ -1,0 +1,3 @@
+// design.md §6 Assignment: call results and literals are not places.
+fn f() -> i64 { 1 }
+fn main() { f() = 2; }

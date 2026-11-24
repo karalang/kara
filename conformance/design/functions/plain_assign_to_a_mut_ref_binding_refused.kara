@@ -1,0 +1,3 @@
+// design.md §7 `*` and `ref` in expressions: plain `=` does not auto-deref; write `*x = v`.
+fn set(x: mut ref i64) { x = 5; }
+fn main() { let mut n = 1; set(mut n); println(f"{n}"); }

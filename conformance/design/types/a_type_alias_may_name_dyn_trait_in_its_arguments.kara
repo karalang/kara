@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): a type alias may name dyn Trait in its arguments
+trait Shape { fn area(self) -> f64; }
+struct Sq { s: f64 }
+impl Shape for Sq { fn area(self) -> f64 { self.s * self.s } }
+type Shapes = Vec[dyn Shape];
+fn total(v: Shapes) -> f64 { let mut t = 0.0; for s in v { t += s.area(); } t }
+fn main() { let v: Shapes = [Sq { s: 2.0 }]; println(f"{total(v)}"); }

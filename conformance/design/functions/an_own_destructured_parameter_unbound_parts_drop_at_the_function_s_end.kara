@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): an own destructured parameter: unbound parts drop at the function's end
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+struct R { a: N, b: N }
+fn sink(n: own N) { println("sink"); }
+fn handle(R { a, .. }: own R) { sink(a); println("end of handle"); }
+fn main() { handle(R { a: N { t: "a".to_string() }, b: N { t: "b".to_string() } }); println("back"); }

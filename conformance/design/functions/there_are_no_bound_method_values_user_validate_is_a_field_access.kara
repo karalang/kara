@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): there are no bound method values: user.validate is a field access
+struct User { age: i64 }
+impl User { fn validate(self) -> bool { true } }
+fn main() { let u = User { age: 1 }; let f = u.validate; }

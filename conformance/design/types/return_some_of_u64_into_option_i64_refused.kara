@@ -1,0 +1,3 @@
+// design.md §5 Mixed-width operands: `return Some(w)` with `w: u64` from a function returning `Option[i64]` is refused.
+fn f(w: u64) -> Option[i64] { return Some(w); }
+fn main() { println(f"{f(3)}"); }

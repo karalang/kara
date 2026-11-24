@@ -1,0 +1,9 @@
+// design.md §5 Collection literals: `[]` and `[:]` take their element types from the expected type; `Set.from` and `Map.from` where none is available.
+fn main() {
+    let v: Vec[String] = [];
+    let m: Map[String, i64] = [:];
+    let s: Set[i64] = [];
+    let t = Set.from([1, 2, 2, 3]);
+    let n = Map.from([("a".to_string(), 1)]);
+    println(f"{v.len()} {m.len()} {s.len()} {t.len()} {n["a"]}");
+}

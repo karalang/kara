@@ -1,0 +1,8 @@
+// design.md §6 `defer` and `errdefer`: `defer` runs at scope end; `errdefer` only on an error exit.
+fn work(fail: bool) -> Result[i64, String] {
+    defer println("defer");
+    errdefer println("errdefer");
+    if fail { return Err("e".to_string()); }
+    Ok(1)
+}
+fn main() { println(f"{work(false)}"); println(f"{work(true)}"); }

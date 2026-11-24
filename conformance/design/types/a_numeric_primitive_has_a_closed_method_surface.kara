@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): a numeric primitive has a closed method surface
+fn main() { let x: i64 = 3; println(f"{x.frobnicate()}"); }

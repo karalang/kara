@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): f(ref v) is a parse error
+fn read(x: String) -> i64 { x.len() }
+fn main() { let a = "x".to_string(); println(f"{read(ref a)}"); }

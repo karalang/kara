@@ -1,0 +1,2 @@
+// design.md §6 Variable binding rules: reassigning a `let` binding is a compile error.
+fn main() { let x = 5; x = 10; println(f"{x}"); }

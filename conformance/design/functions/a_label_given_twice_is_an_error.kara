@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a label given twice is an error
+fn f(a: i64; b: i64 = 0) {}
+fn main() { f(1, b: 2, b: 3); }

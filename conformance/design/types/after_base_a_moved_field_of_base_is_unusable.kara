@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): after ..base, a moved field of base is unusable
+struct User { name: String, email: String }
+fn main() {
+    let alice = User { name: "a".to_string(), email: "e".to_string() };
+    let bob = User { name: "b".to_string(), ..alice };
+    println(f"{alice.email} {bob.name}");
+}

@@ -1,0 +1,12 @@
+// design.md conformance (moved from the shared folder's design-5-7): named functions are values; a Vec of them; apply
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn sub(a: i64, b: i64) -> i64 { a - b }
+fn mul(a: i64, b: i64) -> i64 { a * b }
+fn apply(f: Fn(i64, i64) -> i64, a: i64, b: i64) -> i64 { f(a, b) }
+fn main() {
+    let f = add;
+    let ops: Vec[Fn(i64, i64) -> i64] = [add, sub, mul];
+    let mut out: Vec[i64] = [];
+    for i in 0..ops.len() { out.push(ops[i](7, 3)); }
+    println(f"{f(1, 2)} {apply(mul, 3, 4)} {out} {ops[1](1, 1)}");
+}

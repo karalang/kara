@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): storing a bare parameter is an error that names own
+fn remember(names: mut ref Vec[String], name: String) { names.push(name); }
+fn main() {}

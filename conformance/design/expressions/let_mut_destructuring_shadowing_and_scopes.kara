@@ -1,0 +1,19 @@
+// design.md §6 Variable binding rules: `let mut` over a pattern makes every binding mutable; shadowing is always allowed, across scopes too.
+struct Point { x: i64, y: i64 }
+fn main() {
+    let mut (a, b) = (1, 2);
+    a += 10;
+    b += 20;
+    let p = Point { x: 3, y: 4 };
+    let mut Point { x, y } = p;
+    x *= 2;
+    y *= 2;
+    let (c, d) = (5, 6);
+    let mut c = c;
+    c += 1;
+    let s = "42";
+    let s = s.len();
+    let z = 10;
+    if true { let z = 20; println(f"inner {z}"); }
+    println(f"{a} {b} {x} {y} {c} {d} {s} {z}");
+}

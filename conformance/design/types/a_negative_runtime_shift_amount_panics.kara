@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a negative runtime shift amount panics
+fn amt() -> i64 { -1 }
+fn main() { let x: i64 = 1; println(f"{x >> amt()}"); }

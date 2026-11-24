@@ -1,0 +1,3 @@
+// design.md §7 Function types and kinds: in return position a function type with its own clause is parenthesized.
+fn make_logger() -> (Fn(Str) with writes(Stdout)) { |s| println(f"log {s}") }
+fn main() { let l = make_logger(); l("a"); l("b"); }

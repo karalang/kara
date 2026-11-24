@@ -1,0 +1,8 @@
+// design.md conformance (moved from the shared folder's design-5-7): literal in an operator takes the other operand's type (u8 + 1 overflows at 255)
+fn main() {
+    let i: u8 = 255;
+    let j = i - 1;
+    println(f"{j}");
+    let k = i + 1;
+    println(f"{k}");
+}

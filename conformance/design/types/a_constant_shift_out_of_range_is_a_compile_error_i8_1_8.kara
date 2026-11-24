@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): a constant shift out of range is a compile error (i8 = 1 << 8)
+fn main() { let y: i8 = 1 << 8; println(f"{y}"); }

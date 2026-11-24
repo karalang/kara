@@ -1,0 +1,6 @@
+// design.md §6 Temporaries: several temporaries that drop at the same point drop in reverse order of creation.
+struct N { n: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn mk(n: i64) -> N { N { n: n } }
+fn sum(a: N, b: N) -> i64 { a.n + b.n }
+fn main() { let s = sum(mk(1), mk(2)); println(f"{s}"); }

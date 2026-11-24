@@ -1,0 +1,8 @@
+// design.md conformance (moved from the shared folder's design-5-7): derived Arithmetic, Ord and Display on a distinct type
+#[derive(PartialEq, Eq, PartialOrd, Ord, Arithmetic, Display, Copy, Clone)]
+distinct type FloorNum = i64;
+fn main() {
+    let a = FloorNum(7);
+    let b = FloorNum(2);
+    println(f"{a + b} {a - b} {a * b} {a / b} {a % b} {-a} {a > b} {(a + b).raw()}");
+}

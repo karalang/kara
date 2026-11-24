@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): returning a ref with no borrowable parameter is an error
+fn f(n: i64) -> ref String { let s = "a".to_string(); ref s }
+fn main() {}

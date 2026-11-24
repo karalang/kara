@@ -1,0 +1,16 @@
+// design.md conformance (moved from the shared folder's design-5-7): integer as casts: sign-extend/truncate, low bits kept
+fn main() {
+    let m1: i8 = -1;
+    let m32: i32 = -1;
+    println(f"{m1 as u8} {m32 as u64}");
+    let a: i32 = 0x1FF;
+    let b: i32 = 300;
+    println(f"{a as u8} {m32 as u8} {b as i8}");
+    let big: i64 = i64.MAX;
+    println(f"{big as f64}");
+    println(f"{true as i32} {false as u8}");
+    let c = 'é';
+    println(f"{c as u32} {c as i64}");
+    let byte: u8 = 233;
+    println(f"{byte as char}");
+}

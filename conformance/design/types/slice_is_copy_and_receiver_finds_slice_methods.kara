@@ -1,0 +1,9 @@
+// design.md §5 Slices: `Slice[T]` is `Copy`; a `Vec` or `Array` receiver finds `Slice[T]`'s methods.
+fn total(xs: Slice[i64]) -> i64 { let mut t = 0; for x in xs { t += x; } t }
+fn main() {
+    let v: Vec[i64] = [3, 1, 2];
+    let a: Array[i64, 2] = [5, 6];
+    let s = v.as_slice();
+    let t = s;
+    println(f"{total(s) + total(t)} {v.contains(1)} {a.contains(6)} {s.len()}");
+}

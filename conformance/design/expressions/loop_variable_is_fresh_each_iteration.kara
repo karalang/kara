@@ -1,0 +1,8 @@
+// design.md §6 Variable binding rules: a closure created in the loop captures that iteration's value.
+fn main() {
+    let mut callbacks: Vec[Fn() -> i64] = Vec.new();
+    for i in 0..3 { callbacks.push(|| i); }
+    let mut out: Vec[i64] = [];
+    for f in callbacks.iter() { out.push(f()); }
+    println(f"{out}");
+}

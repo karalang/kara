@@ -1,0 +1,9 @@
+// design.md conformance (moved from the shared folder's design-5-7): Slice[T] accepts a Vec, an Array and a sub-range
+fn sum(xs: Slice[i64]) -> i64 { let mut acc = 0; for x in xs { acc += x; } acc }
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    let a: Array[i64, 3] = [10, 20, 30];
+    println(f"{sum(v)} {sum(a)} {sum(v[1..3])}");
+    let w = v.as_slice();
+    println(f"{w.len()}");
+}

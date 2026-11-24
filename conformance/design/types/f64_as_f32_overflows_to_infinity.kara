@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): f64 as f32 overflows to Infinity
+fn main() { let x: f64 = 1e300; let y = x as f32; println(f"{y} {-x as f32}"); }

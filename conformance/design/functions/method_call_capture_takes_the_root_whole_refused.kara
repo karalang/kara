@@ -1,0 +1,9 @@
+// design.md §7 Captures: a method call (`user.update()`) captures `user` whole, in the receiver's mode.
+struct User { name: String, age: i64 }
+impl User { fn older(mut ref self) { self.age += 1; } }
+fn main() {
+    let mut u = User { name: "n".to_string(), age: 1 };
+    let mut grow = || u.older();
+    println(u.name);
+    grow();
+}

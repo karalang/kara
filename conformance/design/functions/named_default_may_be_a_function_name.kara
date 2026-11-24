@@ -1,0 +1,4 @@
+// design.md §7 Named and default parameters: defaults are constant expressions, and a function name is one.
+fn twice(x: i64) -> i64 { x * 2 }
+fn run(x: i64; f: Fn(i64) -> i64 = twice) -> i64 { f(x) }
+fn main() { println(f"{run(4)} {run(4, f: |x| x + 1)}"); }

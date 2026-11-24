@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): struct literal shorthand and ..base update moves the rest
+struct User { name: String, email: String, age: i64 }
+fn main() {
+    let alice = User { name: "alice".to_string(), email: "a@x".to_string(), age: 30 };
+    let bob = User { name: "bob".to_string(), ..alice };
+    println(f"{bob.name} {bob.email} {bob.age} {alice.name}");
+}

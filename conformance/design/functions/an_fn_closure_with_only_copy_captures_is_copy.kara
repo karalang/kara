@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): an Fn closure with only Copy captures is Copy
+fn o(f: own Fn() -> i64) -> i64 { f() }
+fn main() { let k = 5; let f = || k + 1; println(f"{o(f)} {o(f)} {f()}"); }

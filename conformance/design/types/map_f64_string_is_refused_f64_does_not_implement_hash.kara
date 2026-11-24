@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): Map[f64, String] is refused: f64 does not implement Hash
+fn main() { let m: Map[f64, String] = Map.new(); println(f"{m.len()}"); }

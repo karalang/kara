@@ -1,0 +1,4 @@
+// design.md §5 Range patterns: the start ≤ end check runs after named bounds are resolved.
+const HI: i64 = 9;
+const LO: i64 = 0;
+fn main() { let n = 3; match n { HI..=LO => println("never"), _ => println("other") } }

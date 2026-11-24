@@ -1,0 +1,9 @@
+// design.md conformance (moved from the shared folder's design-5-7): over an own scrutinee a binding moves; over a bare one it is a ref
+struct Foo { field: String, score: i64 }
+fn g(val: Foo) -> i64 { match val { Foo { field, .. } => field.len() } }
+fn h(val: own Foo) -> String { match val { Foo { ref field, score } => f"{field}{score}" } }
+fn main() {
+    let a = Foo { field: "ab".to_string(), score: 3 };
+    println(f"{g(a)} {a.field}");
+    println(h(a));
+}

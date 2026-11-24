@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a bare parameter borrows: the caller keeps its value
+fn greet(name: String) -> String { f"hello, {name}" }
+fn main() { let n = "ada".to_string(); println(greet(n)); println(n); }

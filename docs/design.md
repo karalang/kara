@@ -1386,7 +1386,7 @@ enum Option[T] { Some(T), None }
 enum Result[T, E] { Ok(T), Err(E) }
 ```
 
-- Their variants are canonically written bare: `Some(x)`, `None`, `Ok(v)`, `Err(e)`. The qualified form (`Option.Some(x)`, `Result.Err(e)`) is accepted; `karac fix` rewrites it to the bare one.
+- Their variants are canonically written bare: `Some(x)`, `None`, `Ok(v)`, `Err(e)`. The qualified form (`Option.Some(x)`, `Result.Err(e)`) is accepted; with the `qualified_prelude_variant` lint turned on (`-W qualified_prelude_variant`), `karac fix` rewrites it to the bare one.
 - `Option[T]` is `Copy` when `T` is ([core-semantics.md §1.1](core-semantics.md#1-values)). `Result[T, E]` is `Copy` when `T` and `E` both are, and a `Result` of shared handles and `Copy` values is a handle aggregate. An `Option` of shared handles is a handle aggregate ([core-semantics.md §6.1](core-semantics.md#6-sharing-c7)), and `Option[ref T]` is a view ([core-semantics.md §5.2](core-semantics.md#5-references-and-views-c5)).
 - `?` propagates `None` and `Err` ([§10](#results-and-propagation)), and `??` supplies a default in their place ([`?` and `??`](#-and-)). Error handling, the `Error` trait and `AnyError` are in [§10](#10-errors-and-panics). The methods are in [library/core-types.md](library/core-types.md).
 
@@ -1905,7 +1905,7 @@ The exhaustiveness check runs as follows:
 3. Recurse into each constructor's specialized matrix. For `MouseDown` it has one row `[_, _]` (the `{ x, y }` bindings) and the candidate is `[_, _]`. That row covers every pair of `i64`s, so `MouseDown` is exhausted, and likewise `MouseUp`, `KeyDown` and `Tick`.
 4. No branch is useful, so `U(P, _)` is false: the match is exhaustive.
 
-Without the `Tick` arm, step 2 finds `Tick` uncovered and `U(P, _)` is true with the witness `Tick`; the compiler reports `non-exhaustive match: missing Tick`. With a duplicate `MouseDown { x, y } => …` arm after `R0`, the reachability check computes `U([R0], duplicate)`, finds `MouseDown` already covered, and warns that the arm is unreachable.
+Without the `Tick` arm, step 2 finds `Tick` uncovered and `U(P, _)` is true with the witness `Tick`; the compiler reports `non-exhaustive match: missing variants: Tick`. With a duplicate `MouseDown { x, y } => …` arm after `R0`, the reachability check computes `U([R0], duplicate)`, finds `MouseDown` already covered, and warns that the arm is unreachable.
 
 ---
 

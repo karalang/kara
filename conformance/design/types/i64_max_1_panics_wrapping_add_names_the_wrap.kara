@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): i64.MAX + 1 panics; wrapping_add names the wrap
+fn main() {
+    let x: i64 = i64.MAX;
+    println(f"{x.wrapping_add(1)}");
+    let y = x + 1;
+    println(f"{y}");
+}

@@ -1,0 +1,8 @@
+// design.md §6 `?` and `??`: `??` on `Option[ref V]` with `V: Copy` takes a `V`; otherwise `b` has the inner type; `.cloned() ?? d` for others.
+fn main() {
+    let mut counts: Map[String, i64] = Map.new();
+    counts["a"] = 3;
+    let m: Map[String, String] = ["k": "v"];
+    let port: Option[i64] = None;
+    println(f"{counts.get("a") ?? 0} {counts.get("z") ?? 0} {m.get("q").cloned() ?? "d".to_string()} {port ?? 8080}");
+}

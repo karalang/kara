@@ -1,0 +1,12 @@
+// design.md conformance (moved from the shared folder's design-5-7): captures drop with the closure
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+fn run(f: own OnceFn() -> i64) -> i64 { f() }
+fn main() {
+    let a = N { t: "a".to_string() };
+    let f = move_it(a);
+    println("made");
+    println(f"{f()}");
+    println("end");
+}
+fn move_it(n: own N) -> Fn() -> i64 { || n.t.len() }

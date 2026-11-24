@@ -1,0 +1,4 @@
+// design.md conformance (moved from the shared folder's design-5-7): storing a non-escaping function parameter is an error
+struct Bus { hs: Vec[Fn(i64)] }
+fn sub(b: mut ref Bus, h: Fn(i64)) { b.hs.push(h); }
+fn main() {}

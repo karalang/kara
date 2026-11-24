@@ -1,0 +1,2 @@
+// design.md §5 `@` bindings: under an owned scrutinee, `P` may not bind a non-`Copy` part once the whole has moved.
+fn main() { let o = Some("s".to_string()); match o { x @ Some(y) => println(f"{x} {y}"), None => {} } }

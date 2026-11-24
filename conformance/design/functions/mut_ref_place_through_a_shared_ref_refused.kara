@@ -1,0 +1,4 @@
+// design.md §7 `*` and `ref` in expressions: `mut ref place` is never reached through a shared `ref`.
+struct S { n: i64 }
+fn f(s: ref S) { let p = mut ref s.n; *p = 3; }
+fn main() { let s = S { n: 1 }; f(s); println(f"{s.n}"); }

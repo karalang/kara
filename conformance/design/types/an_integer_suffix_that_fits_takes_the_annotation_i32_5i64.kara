@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): an integer suffix that fits takes the annotation (i32 = 5i64)
+fn main() { let d: i32 = 5i64; let e = d + 2147483642; println(f"{e}"); }

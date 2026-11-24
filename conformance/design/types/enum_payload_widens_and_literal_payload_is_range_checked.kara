@@ -1,0 +1,8 @@
+// design.md §5 Mixed-width operands: a payload the expected type fixes is a destination; a `u32` widens, a literal takes the payload type.
+fn wrap(w: u32) -> Option[i64] { Some(w) }
+fn main() {
+    let w: u32 = 5;
+    let o: Option[i64] = Some(w);
+    let p: Option[i32] = Some(0 - 1);
+    println(f"{o} {p} {wrap(9)}");
+}

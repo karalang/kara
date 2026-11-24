@@ -1,0 +1,3 @@
+// design.md §7 Named and default parameters: each call that omits the argument gets a fresh value of the default.
+fn tag(n: i64; s: own String = "a") -> String { let mut s = s; s.push_str(f"{n}"); s }
+fn main() { println(f"{tag(1)} {tag(2)} {tag(3, s: "z")}"); }

@@ -1,0 +1,10 @@
+// design.md §5 Pattern matching: rebind with `let mut x = x;`; `mut ref name` is a mutable borrow; `let mut (a, b)` makes every binding mutable.
+fn main() {
+    match Some(1) { Some(n) => { let mut n = n; n += 1; println(f"{n}"); } None => {} }
+    let mut o = Some(10);
+    match o { Some(mut ref n) => *n += 5, None => {} }
+    let mut (a, b) = (1, 2);
+    a += 10;
+    b += 20;
+    println(f"{o} {a} {b}");
+}

@@ -1,0 +1,9 @@
+// design.md conformance (moved from the shared folder's design-5-7): literal typing: i32 * 2, f32 * 2, comparison in i32
+fn main() {
+    let n: i32 = 2147483647;
+    let x: f32 = 1.5;
+    let c = x * 2;
+    println(f"{c} {n < 100}");
+    let b = n * 2;
+    println(f"{b}");
+}

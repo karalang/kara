@@ -1,0 +1,5 @@
+restart 5
+start
+other
+wait 3
+done

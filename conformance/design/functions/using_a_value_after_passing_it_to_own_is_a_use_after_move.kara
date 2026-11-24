@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): using a value after passing it to own is a use after move
+fn take(s: own String) {}
+fn main() { let s = "a".to_string(); take(s); println(s); }

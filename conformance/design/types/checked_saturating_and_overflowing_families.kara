@@ -1,0 +1,7 @@
+// design.md conformance (moved from the shared folder's design-5-7): checked, saturating and overflowing families
+fn main() {
+    let a: u8 = 250;
+    println(f"{a.checked_add(10)} {a.checked_add(5)} {a.saturating_add(10)} {a.overflowing_add(10)}");
+    let b: i8 = -128;
+    println(f"{b.checked_neg()} {b.saturating_sub(1)} {b.wrapping_neg()}");
+}

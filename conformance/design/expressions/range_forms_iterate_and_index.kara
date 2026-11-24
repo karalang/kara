@@ -1,0 +1,12 @@
+// design.md §6 Loops and labels: the six range forms; those with a start iterate; every form indexes a sequence.
+fn main() {
+    let mut a = 0;
+    for i in 0..10 { a += i; }
+    let mut b = 0;
+    for i in 0..=10 { b += i; }
+    let mut c: Vec[i64] = [];
+    for i in 5.. { if i > 7 { break; } c.push(i); }
+    let items = [0, 1, 2, 3, 4, 5, 6];
+    let n = 3;
+    println(f"{a} {b} {c} {items[2..5]} {items[2..]} {items[..n]} {items[..=n]} {items[..]}");
+}

@@ -1,0 +1,2 @@
+// design.md §6 Conditionals: conditions must be `bool`; there is no truthiness.
+fn main() { let x = 1; if x { println("yes"); } }

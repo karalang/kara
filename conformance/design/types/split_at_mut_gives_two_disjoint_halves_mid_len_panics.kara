@@ -1,0 +1,12 @@
+// design.md conformance (moved from the shared folder's design-5-7): split_at_mut gives two disjoint halves; mid > len panics
+fn at() -> i64 { 9 }
+fn main() {
+    let mut v = [1, 2, 3, 4];
+    {
+        let (a, b) = v.split_at_mut(1);
+        a[0] = 10;
+        b[0] = 20;
+    }
+    println(f"{v}");
+    let (_c, _d) = v.split_at_mut(at());
+}

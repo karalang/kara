@@ -1,0 +1,2 @@
+// design.md §6 Loops and labels: a `break` inside a closure cannot target a label outside the closure.
+fn main() { 'outer: for i in 0..3 { let f = || { break 'outer; }; f(); } }

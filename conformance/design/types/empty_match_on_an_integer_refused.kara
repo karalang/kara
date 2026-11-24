@@ -1,0 +1,3 @@
+// design.md §5 Empty and unreachable arms: an empty match on a type other than `Never` is non-exhaustive.
+fn f(n: i64) -> i64 { match n { } }
+fn main() { println(f"{f(1)}"); }

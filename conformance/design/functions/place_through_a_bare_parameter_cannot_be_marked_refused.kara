@@ -1,0 +1,5 @@
+// design.md §7 Call-site `mut` markers: a place reached through a bare parameter or a `ref` cannot be marked.
+struct S { v: Vec[i64] }
+fn push1(v: mut ref Vec[i64]) { v.push(1); }
+fn f(s: S) { push1(mut s.v); }
+fn main() { let s = S { v: [] }; f(s); println(f"{s.v}"); }

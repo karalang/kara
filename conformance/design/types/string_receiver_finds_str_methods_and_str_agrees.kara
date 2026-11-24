@@ -1,0 +1,10 @@
+// design.md §5 Strings: a `String` receiver finds `Str`'s methods; `s.as_str()` and `s` agree on hash, `==` and `cmp`.
+fn main() {
+    let s = "key".to_string();
+    let v = s.as_str();
+    let mut m: Map[String, i64] = Map.new();
+    m["key"] = 5;
+    let mut st: Set[String] = Set.new();
+    st.insert("key".to_string());
+    println(f"{s.starts_with("k")} {m.get(v)} {st.contains(v)} {v == s} {s == v} {v < "kez"} {s < "kez"}");
+}

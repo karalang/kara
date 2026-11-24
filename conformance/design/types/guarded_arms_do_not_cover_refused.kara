@@ -1,0 +1,3 @@
+// design.md §5 Pattern matching / Or-patterns and guards: a guarded arm does not count toward exhaustiveness.
+fn f(n: i64) -> Str { match n { x if x < 0 => "neg", x if x >= 0 => "nonneg" } }
+fn main() { println(f(1)); }

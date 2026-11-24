@@ -1,0 +1,3 @@
+// design.md §5 Slice and array patterns: `let…else` accepts a refutable slice pattern.
+fn first(v: Slice[i64]) -> i64 { let [a, ..] = v else { return -1 }; a }
+fn main() { println(f"{first([7, 8])} {first([])}"); }

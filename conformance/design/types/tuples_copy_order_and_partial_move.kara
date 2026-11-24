@@ -1,0 +1,14 @@
+// design.md §5 Tuples: `Copy` when every element is; evaluated left to right, dropped last to first; an element moves out on its own.
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+fn say(s: Str) -> i64 { println(s); 1 }
+fn take(p: own (i64, bool)) -> i64 { p.0 }
+fn main() {
+    let c = (say("first"), say("second"));
+    let k = (4, true);
+    println(f"{take(k) + take(k)} {c.0 + c.1}");
+    let pair = ("a".to_string(), "b".to_string());
+    let a = pair.0;
+    println(f"{a} {pair.1}");
+    let _t = (N { t: "x".to_string() }, N { t: "y".to_string() });
+}

@@ -1,0 +1,3 @@
+// design.md §7 Closures: for an expected `Fn(T) -> U`, `x` borrows, and a body that moves `x` is an error at the closure.
+fn apply(f: Fn(String) -> String, s: String) -> String { f(s) }
+fn main() { let s = "ab".to_string(); println(apply(|x| x, s)); }

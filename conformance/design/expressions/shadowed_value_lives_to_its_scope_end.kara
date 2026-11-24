@@ -1,0 +1,8 @@
+// design.md §6 Variable binding rules: shadowing does not end the old value, which stays alive until its scope ends.
+struct N { t: String }
+impl Drop for N { fn drop(mut ref self) { println(f"drop {self.t}"); } }
+fn main() {
+    let x = N { t: "first".to_string() };
+    let x = N { t: "second".to_string() };
+    println(f"using {x.t}");
+}

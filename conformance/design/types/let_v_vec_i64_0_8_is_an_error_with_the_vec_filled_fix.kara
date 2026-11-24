@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): let v: Vec[i64] = [0; 8] is an error with the Vec.filled fix
+fn main() { let v: Vec[i64] = [0; 8]; println(f"{v}"); }

@@ -1,0 +1,3 @@
+// design.md conformance (moved from the shared folder's design-5-7): a computed negative index panics
+fn neg() -> i64 { -1 }
+fn main() { let v = [1, 2]; println(f"{v[neg()]}"); }

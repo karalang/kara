@@ -1,0 +1,5 @@
+// design.md §5 Pattern matching: the guard runs only when the pattern matches; if false, matching continues.
+fn grade(score: Result[i64, String]) -> Str {
+    match score { Ok(n) if n >= 90 => "A", Ok(n) if n >= 70 => "B", Ok(_) => "C or below", Err(_) => "invalid" }
+}
+fn main() { println(f"{grade(Ok(95))} {grade(Ok(75))} {grade(Ok(3))} {grade(Err("x".to_string()))}"); }

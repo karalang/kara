@@ -1,0 +1,1 @@
+Only `loop` and labeled blocks can break with a value

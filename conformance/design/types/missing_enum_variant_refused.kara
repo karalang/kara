@@ -1,0 +1,4 @@
+// design.md §5 Type-specific rules: adding a variant breaks every match over the enum that has no wildcard arm.
+enum Dir { N, S, E }
+fn f(d: Dir) -> Str { match d { Dir.N => "n", Dir.S => "s" } }
+fn main() { println(f(Dir.N)); }

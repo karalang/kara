@@ -1,0 +1,2 @@
+E0262
+'f64' does not satisfy 'T: Ord' required by alias 'SortedVec'

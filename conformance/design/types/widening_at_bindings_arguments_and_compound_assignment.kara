@@ -1,0 +1,21 @@
+// design.md §5 Mixed-width operands: the widening table applies at a binding, an argument and a compound assignment, and composes.
+fn g(x: f64) -> f64 { x * 2.0 }
+fn wide(x: i64) -> i64 { x }
+fn main() {
+    let a8: u8 = 200;
+    let a16: i16 = a8;
+    let a32: u32 = 4_000_000_000;
+    let b64: i64 = a32;
+    let s16: i16 = -5;
+    let c64: i64 = s16;
+    let w16: u16 = 65535;
+    let f1: f64 = w16;
+    let i32v: i32 = 7;
+    let hf: f32 = 0.25;
+    let f2: f64 = hf;
+    let u64v: u64 = u64.MAX;
+    let big: i128 = u64v;
+    let mut total: i64 = 10;
+    total += i32v;
+    println(f"{a16} {b64} {c64} {f1} {g(i32v)} {f2} {wide(a8)} {big} {total}");
+}

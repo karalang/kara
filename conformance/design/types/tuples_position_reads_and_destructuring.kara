@@ -1,0 +1,6 @@
+// design.md conformance (moved from the shared folder's design-5-7): tuples: position reads and destructuring
+fn main() {
+    let entry: (i64, f64, bool) = (3, 0.5, true);
+    let (n, ratio, ok) = entry;
+    println(f"{entry.0} {n} {ratio} {ok}");
+}

@@ -1,0 +1,2 @@
+// design.md conformance (moved from the shared folder's design-5-7): integer + float in an operator is an error
+fn main() { let a: i32 = 1; let r: f64 = 0.5; let v = a + r; println(f"{v}"); }

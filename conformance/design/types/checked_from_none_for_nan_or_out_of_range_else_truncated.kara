@@ -1,0 +1,5 @@
+// design.md conformance (moved from the shared folder's design-5-7): checked_from: None for NaN or out of range, else truncated
+fn main() {
+    let nan: f64 = f64.NAN;
+    println(f"{i32.checked_from(3.9)} {i32.checked_from(nan)} {u8.checked_from(256.0)} {u8.checked_from(-0.5)} {i64.checked_from(1e19)}");
+}
