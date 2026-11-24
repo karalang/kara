@@ -117,11 +117,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-23-6 | 2026-11-23 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 library bodies to run 33 | — |
 | B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
-| B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
 | B-2026-11-24-7 | 2026-11-24 | typecheck | low | A built-in type's method named as a value is refused by the checker: `[1].iter().map(i64.abs)` says "no associated constant `abs` on `i64`", `.map(Str.to_string)` and `.map(String.len)` say "no associated function", where design.md § Function values makes an unbound method a function whose first parameter is the receiver (a user type's work) | — |
-| B-2026-11-24-12 | 2026-11-24 | resolver | medium | A block's `const` in a package module was refused as a binding (E0127 'Const-class but binding names must be Value-class'); the same file alone ran | — |
-| B-2026-11-24-13 | 2026-11-24 | resolver | low | E0113 dropped the list of a small module's exports whenever it found a suggestion; design.md § Imports gives both | — |
-| B-2026-11-24-14 | 2026-11-24 | resolver | low | `#[test]` on a `fn` in a `_test.kara` file was reported at the module's other file (src/util.kara:3:1 for src/util_test.kara), and the message repeated its code | — |
 | B-2026-11-24-15 | 2026-11-24 | typecheck | medium | An unannotated closure parameter is settled to `i64` at the closure, so a later use in the same body cannot fix it: `let f = |x| x + 1; let y: i32 = f(2)` and `let f = |x| x; let y: i32 = f(2)` are refused as an i64-to-i32 narrowing | — |
 | B-2026-11-24-16 | 2026-11-24 | typecheck | medium | A `mut ref` is not invariant over a function type's effect set: a `with ()` callback field passed as `mut ref Fn() -> i64 with writes(Stdout)` takes a printing function, and a call through the `with ()` value then prints | — |
 
@@ -2220,6 +2216,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-72 | typecheck | low | E_SHARED_FIELD_MOVE said the owner is "declared `shared`/`par`" and "a refcounted box": `par struct` is the retired spelling of `sync struct` (core-s… | 30891a6779 |
 | B-2026-11-23-73 | mir+runtime | medium | The shared-field borrow-flag panic named the conflicting access twice, not where the holding borrow was made, when the holder is a `let r = ref h.f`… | 30891a6779 |
 | B-2026-11-23-74 | typecheck | low | A `mut` argument made from a bare parameter reported a bare E0200 "expected 'mut ref Vec[i64]', found 'ref Vec[i64]'" beside E0517 at the same span | 30891a6779 |
+| B-2026-11-23-75 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | bff48fa07c |
 | B-2026-11-23-76 | mir | low | core-semantics §5.7 says a view may not flow into an escaping closure, but one passed to an `escaping` parameter whose callee's signature cannot keep… | 1277362170 |
 | B-2026-11-24-1 | cli | medium | `karac doc` signatures are not rendered as written: `escaping`, `MutFn`, `+ CrossTask` dropped, `pub` and an FFI export's `extern "C"` dropped, exter… | fe06f3f6e7 |
 | B-2026-11-24-2 | cli | medium | `karac doc` of a library publishes its non-`pub` items and fields, does not list `pub import` re-exports at the re-exporting path, and puts an item's… | fe06f3f6e7 |
@@ -2231,6 +2228,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-9 | typecheck+cli | medium | LeetCode's Rust template counting with `*count.entry(x).or_insert(0) += 1` and then `left * c` over `count.values()` into an `i32` was refused (`c` i… | 2b45dbdb27 |
 | B-2026-11-24-10 | effect+cli | medium | `[package].public_effects = "inferred"` (design.md § Inference and declarations) is documented and unimplemented: the key draws an unknown-key notice… | 8bd94a5dcd |
 | B-2026-11-24-11 | cli | medium | REPL `:effects`, the cell effect footer and `:save`'s `main` clause miss every effect that needs a type (`a + b`'s panics, a Vec literal's allocation… | ae2d18fb0a |
+| B-2026-11-24-12 | resolver | medium | A block's `const` in a package module was refused as a binding (E0127 'Const-class but binding names must be Value-class'); the same file alone ran | e8e574922f |
+| B-2026-11-24-13 | resolver | low | E0113 dropped the list of a small module's exports whenever it found a suggestion; design.md § Imports gives both | e8e574922f |
+| B-2026-11-24-14 | resolver | low | `#[test]` on a `fn` in a `_test.kara` file was reported at the module's other file (src/util.kara:3:1 for src/util_test.kara), and the message repeat… | e8e574922f |
 
 </details>
 
