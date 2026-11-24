@@ -411,6 +411,83 @@ impl TypeChecker<'_> {
     /// After a `scan` call whose check failed inside its closure: when the
     /// closure is written over Rust's lent state, its errors give way to
     /// one naming Kāra's shape, with the rewrite when there is one.
+    /// Kata 2501 (B-2026-11-24-40): `(0..5).scan(v, |x, _| Some((x * x,
+    /// x)))` with `v` the `ref i64` that iterating a `Set` gives. The seed makes the state a
+    /// `ref i64`, so the closure's new `x * x` cannot be the next state,
+    /// and the refusal was a bare E0200 at the closure, "expected
+    /// 'Option[(ref i64, _)]', found 'Option[(i64, ref i64)]'", naming
+    /// neither the seed nor the fix. A `Copy` scalar state starts from the
+    /// value, `*v`, so the closure's errors are replaced by one at the seed
+    /// with that fix, as `successors` does (B-2026-11-15-34).
+    pub(super) fn explain_borrowed_scan_seed(&mut self, args: &[CallArg], errors_before: usize) {
+        let [seed, closure] = args else {
+            return;
+        };
+        let (seed, closure) = (&seed.value, &closure.value);
+        if !matches!(closure.kind, ExprKind::Closure { .. }) {
+            return;
+        }
+        let Some(super::Type::Ref(state)) = self
+            .expr_types
+            .get(&SpanKey::from_span(&seed.span))
+            .map(|t| self.resolved_now(t))
+        else {
+            return;
+        };
+        if !matches!(
+            *state,
+            super::Type::Int(_)
+                | super::Type::UInt(_)
+                | super::Type::Float(_)
+                | super::Type::Bool
+                | super::Type::Char
+        ) {
+            return;
+        }
+        let within = |s: &Span| {
+            s.offset >= closure.span.offset
+                && s.offset + s.length <= closure.span.offset + closure.span.length
+        };
+        // Only a refusal of the closure's result: its other errors are
+        // its own.
+        let shown = super::types::type_display(&state);
+        let wanted = format!("expected 'Option[(ref {shown}, ");
+        let mut hit = false;
+        let mut i = errors_before;
+        while i < self.errors.len() {
+            if within(&self.errors[i].span) && self.errors[i].message.starts_with(&wanted) {
+                let e = self.errors.remove(i);
+                self.error_fix_diffs.remove(&SpanKey::from_span(&e.span));
+                hit = true;
+            } else {
+                i += 1;
+            }
+        }
+        if !hit {
+            return;
+        }
+        let value = match &seed.kind {
+            ExprKind::Identifier(n) => format!("*{n}"),
+            _ => "*<seed>".to_string(),
+        };
+        self.type_error_with_fix_it(
+            format!(
+                "the seed makes `scan`'s state a `ref {shown}`, so the closure must return \
+                 `Some((next_state, item))` with a `ref {shown}` state that outlives it, but \
+                 it returns a new `{shown}`; start from the value: `{value}`"
+            ),
+            seed.span,
+            TypeErrorKind::TypeMismatch,
+            super::FixIt {
+                span: Span {
+                    length: 0,
+                    ..seed.span
+                },
+                replacement: "*".to_string(),
+            },
+        );
+    }
+
     pub(super) fn explain_rust_scan(&mut self, args: &[CallArg], errors_before: usize) {
         let Some(closure) = args.get(1).map(|a| &a.value) else {
             return;

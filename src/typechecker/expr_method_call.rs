@@ -2185,6 +2185,9 @@ impl<'a> super::TypeChecker<'a> {
         if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
             self.explain_rust_scan(args, errors_before);
         }
+        if method == "scan" && args.len() == 2 && self.errors.len() > errors_before {
+            self.explain_borrowed_scan_seed(args, errors_before);
+        }
         if self.errors.len() > errors_before {
             self.foreign_method_twin(object, method, args, args_close_span, errors_before);
             self.fix_method_typo(object, method, args, args_close_span, errors_before);

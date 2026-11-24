@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 746 |
+| diagnostics | 747 |
 | false-positive | 368 |
 | missing-feature | 251 |
-| perf | 202 |
+| perf | 203 |
 | other | 149 |
 | soundness | 128 |
 | miscompile | 107 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 894 |
+| typecheck | 895 |
 | mir | 330 |
-| mir-llvm | 323 |
+| mir-llvm | 324 |
 | cli | 303 |
 | parser | 158 |
 | ownership | 136 |
-| runtime | 109 |
+| runtime | 110 |
 | interp | 101 |
 | effect | 64 |
 | resolver | 55 |
@@ -119,6 +119,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-37 | 2026-11-24 | mir | medium | A closure's disjoint capture goes only one field deep: a closure reading `u.address.city` captures `u.address` whole, so writing `u.address.zip` while it lives is refused (E0516) | — |
 | B-2026-11-24-38 | 2026-11-24 | typecheck+cli | medium | `a === b` on two handles of a `shared struct`, JavaScript's identity test, became a structural comparison under `karac fix`: the `===` habit mends it to `==`, and the refusal that follows said only "add #[derive(PartialEq)]" and applied that derive whenever every field compares, so the program then printed true for two distinct handles with equal fields; neither message named `a.ref_eq(b)`, a handle's identity | — |
 | B-2026-11-24-39 | 2026-11-24 | cli | low | `karac fix`'s `#[derive(PartialEq)]` (and PartialOrd, Hash) line for a `pub struct` or `shared struct` at the top level is indented by the width of `pub ` or `shared `: derive_line takes the `struct` keyword's column as the item's indentation | — |
+| B-2026-11-24-40 | 2026-11-24 | typecheck | low | `(0..5).scan(v, |x, _| Some((x * x, x)))` with `v` the `ref i64` that iterating a `Set` gives is refused with a bare E0200 "expected 'Option[(ref i64, _)]', found 'Option[(i64, ref i64)]'" at the closure, naming neither the seed nor the `*v` that mends it | — |
+| B-2026-11-24-41 | 2026-11-24 | mir-llvm+runtime | medium | Counting 10^5 random keys into a compiled `SortedMap` takes about 3.4x Rust's `BTreeMap` (`*count.entry(x).or_insert(0) += 1`, 100 rounds: 5.5 to 5.8 s against 1.6 s), and plain `insert(x, 1)` about 2.8x (4.6 s against 1.6 s), so kata 1296's bench runs 2x Rust's | — |
 
 ### Relocated
 
