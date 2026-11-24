@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 736 |
-| false-positive | 362 |
-| missing-feature | 249 |
+| diagnostics | 739 |
+| false-positive | 363 |
+| missing-feature | 250 |
 | perf | 200 |
 | other | 149 |
-| soundness | 127 |
-| miscompile | 106 |
+| soundness | 128 |
+| miscompile | 107 |
 | crash | 65 |
 | run-vs-build | 64 |
 | codegen-gap | 45 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 885 |
+| typecheck | 888 |
 | mir | 325 |
 | mir-llvm | 323 |
 | cli | 297 |
-| parser | 154 |
-| ownership | 134 |
+| parser | 155 |
+| ownership | 136 |
 | runtime | 109 |
 | interp | 101 |
-| effect | 63 |
+| effect | 64 |
 | resolver | 54 |
 | other | 52 |
 | codegen | 22 |
@@ -116,10 +116,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-23-6 | 2026-11-23 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 library bodies to run 33 | — |
-| B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
-| B-2026-11-24-7 | 2026-11-24 | typecheck | low | A built-in type's method named as a value is refused by the checker: `[1].iter().map(i64.abs)` says "no associated constant `abs` on `i64`", `.map(Str.to_string)` and `.map(String.len)` say "no associated function", where design.md § Function values makes an unbound method a function whose first parameter is the receiver (a user type's work) | — |
 | B-2026-11-24-15 | 2026-11-24 | typecheck | medium | An unannotated closure parameter is settled to `i64` at the closure, so a later use in the same body cannot fix it: `let f = |x| x + 1; let y: i32 = f(2)` and `let f = |x| x; let y: i32 = f(2)` are refused as an i64-to-i32 narrowing | — |
 | B-2026-11-24-16 | 2026-11-24 | typecheck | medium | A `mut ref` is not invariant over a function type's effect set: a `with ()` callback field passed as `mut ref Fn() -> i64 with writes(Stdout)` takes a printing function, and a call through the `with ()` value then prints | — |
+| B-2026-11-24-18 | 2026-11-24 | typecheck | medium | Two impls whose headers differ only in a generic trait argument (`impl[R] Mul2[R] for i64` and `impl Mul2[Col] for i64`) are not reported as overlapping, in one file or across packages | — |
+| B-2026-11-24-19 | 2026-11-24 | ownership | low | An `impl Tok` result whose trait has `Copy` as a supertrait still moves at `karac check` (E0500), though MIR treats it as Copy | — |
+| B-2026-11-24-20 | 2026-11-24 | ownership | medium | `karac check` accepts a use of an owned `dyn` value after it was moved (`let b = a; a.area()`); `karac run` then refuses it in the MIR move check | — |
+| B-2026-11-24-21 | 2026-11-24 | typecheck | medium | `Trait.method(p)` on a raw pointer calls the pointer's own method of that name instead of the trait's (`Show.is_null(p)` prints the inherent `is_null`) | — |
+| B-2026-11-24-22 | 2026-11-24 | typecheck | low | A qualified associated-type spelling `T.Add.Output` is refused only by an internal lowering error (E0516 'an expression whose type does not lower (Type(UnknownName("Output")))') | — |
+| B-2026-11-24-23 | 2026-11-24 | effect | low | E0400 for a call through a clause-less `dyn` field names the internal function `__dyn_every.T.t`, and its effect list's order changes from run to run | — |
 
 ### Relocated
 
@@ -2194,6 +2198,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-10 | effect | high | UNDER-REPORT: a program's operator impl reached through `==` / `!=`, a compound assignment (`+=`, `-=`, `*=`), unary `-` or indexing `a[i]` is not ch… | 478425573a |
 | B-2026-11-23-11 | mir | medium | A trait default body that declares `let x: T;` and assigns it later is refused once two impls of the generic trait inherit it: error[E0516] 'the capt… | 5df43e9a40 |
 | B-2026-11-23-12 | typecheck+ownership | medium | `m.entry(k)` with an owned key on a `Map[ref String, V]` is read as a move by `karac check`: E0500 at the next use of a local `k`, E0515 (help: `.clo… | a014a741e3 |
+| B-2026-11-23-14 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename t… | 4db9ff38ea |
 | B-2026-11-23-13 | other | low | Test infra: two tests in one binary share a temp directory and one's cleanup deletes the other's source | 4f42f9f9ce |
 | B-2026-11-23-15 | effect | high | UNDER-REPORT: a built-in operation that runs a trait impl on the values it holds is not charged that impl's effects: `xs.contains(x)`, `xs == ys`, `x… | bb250331e2 |
 | B-2026-11-23-16 | effect | high | UNDER-REPORT: an associated function called through a type-parameter bound (`T.make()` with `T: Make`) is not charged the instance's impl: `fn build[… | e1359d0161 |
@@ -2224,6 +2229,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-4 | typecheck+cli | medium | A closure `\|x\| { let mut x = x; let mut s = 0; while x > 0 { s += x % 10; x /= 10; } s }` summed into an `i32` was refused (`s` is an `i64`) with no… | 7147469257 |
 | B-2026-11-24-5 | cli | low | `karac doc` shows no effect clause for a `pub` method that declares none, while a `pub` free fn with none shows its inferred set | 75d65ecd56 |
 | B-2026-11-24-6 | cli | low | kara-lsp hover on a function shows its bare `Type` (drops `escaping`, shows `MutFn` as `Fn`, no parameter names), nothing on its declaration's name,… | 75d65ecd56 |
+| B-2026-11-24-7 | typecheck | low | A built-in type's method named as a value is refused by the checker: `[1].iter().map(i64.abs)` says "no associated constant `abs` on `i64`", `.map(St… | 3e78d89862 |
 | B-2026-11-24-8 | parser | low | TypeScript/JavaScript and Java/C# first-day habits had no Kāra form or a misleading one: `===`, template literals, `console.log`/`System.out.println`… | 7de596f5d1 |
 | B-2026-11-24-9 | typecheck+cli | medium | LeetCode's Rust template counting with `*count.entry(x).or_insert(0) += 1` and then `left * c` over `count.values()` into an `i32` was refused (`c` i… | 2b45dbdb27 |
 | B-2026-11-24-10 | effect+cli | medium | `[package].public_effects = "inferred"` (design.md § Inference and declarations) is documented and unimplemented: the key draws an unknown-key notice… | 8bd94a5dcd |
@@ -2231,6 +2237,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-12 | resolver | medium | A block's `const` in a package module was refused as a binding (E0127 'Const-class but binding names must be Value-class'); the same file alone ran | e8e574922f |
 | B-2026-11-24-13 | resolver | low | E0113 dropped the list of a small module's exports whenever it found a suggestion; design.md § Imports gives both | e8e574922f |
 | B-2026-11-24-14 | resolver | low | `#[test]` on a `fn` in a `_test.kara` file was reported at the module's other file (src/util.kara:3:1 for src/util_test.kara), and the message repeat… | e8e574922f |
+| B-2026-11-24-17 | parser | low | A qualified receiver naming a `dyn` type failed to parse: `Option[dyn Shape].size_of()` and `Vec[dyn Shape].new()` (its fix commit cites B-2026-11-24… | 22975f3cd3 |
 
 </details>
 

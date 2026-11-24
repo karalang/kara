@@ -1,4 +1,4 @@
-//! B-2026-11-24-9: a qualified receiver may name a `dyn` type
+//! B-2026-11-24-17: a qualified receiver may name a `dyn` type
 //! (`Option[dyn Shape].size_of()`, `Vec[dyn Shape].new()`, design.md
 //! § Generics). The brackets were parsed as an index, and `dyn` refused as
 //! "a reserved keyword and cannot be used as an identifier".
