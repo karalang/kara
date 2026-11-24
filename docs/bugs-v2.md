@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 748 |
+| diagnostics | 749 |
 | false-positive | 369 |
 | missing-feature | 252 |
 | perf | 203 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 332 |
 | mir-llvm | 324 |
 | cli | 305 |
-| parser | 158 |
+| parser | 159 |
 | ownership | 136 |
 | runtime | 110 |
 | interp | 101 |
@@ -2261,6 +2261,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-40 | typecheck | low | `(0..5).scan(v, \|x, _\| Some((x * x, x)))` with `v` the `ref i64` that iterating a `Set` gives is refused with a bare E0200 "expected 'Option[(ref i64… | 6d730ff01b |
 | B-2026-11-24-44 | mir | high | Two `par` branches that each sort, clone or dedup a `Vec` of a program type, or file or look up its key in a `Map` / `Set`, are accepted with no E041… | c8cca30308 |
 | B-2026-11-24-45 | mir | medium | A function declaring a keyed resource (`fn save(i: u64) with writes(UserDb[i])`, over the deferred `effect resource UserDb[id: u64];`) is charged not… | f2af9c2119 |
+| B-2026-11-24-47 | parser | low | Kotlin and Swift first-day habits had no Kāra form or a misleading one: `val`, `fun f(): T = e`, `Int` / `Double` / `Bool`, `T?`, `?:`, `!!` / `!`, `… | 6be22cb42b |
 
 </details>
 
