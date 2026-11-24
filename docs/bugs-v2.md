@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 731 |
 | false-positive | 360 |
-| missing-feature | 247 |
+| missing-feature | 248 |
 | perf | 200 |
 | other | 149 |
 | soundness | 126 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 881 |
+| typecheck | 882 |
 | mir | 325 |
 | mir-llvm | 323 |
 | cli | 294 |
@@ -113,8 +113,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
-| B-2026-11-20-151 | 2026-11-20 | mir | low | `words.iter().map(String.from)`, Rust's `.map(String::from)` as `karac fix` carries it, passes the type checker and is then refused "this path is not lowered yet" with no hint, where a closure `|w| w.to_string()` works | — |
-| B-2026-11-21-48 | 2026-11-21 | cli | low | `karac fmt` rewrites a byte literal in a pattern as its number: `b'M' => 0` becomes `77u8 => 0`, `b'a'..=b'z'` becomes `97u8..=122u8` and `b'\n'` becomes `10u8`, while the same literals in expressions keep their spelling | — |
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
@@ -123,6 +121,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
 | B-2026-11-23-20 | 2026-11-23 | typecheck | low | A provider-using closure returned inside `Ok(..)` from a `with_provider` body draws MIR's internal E0516 'a type that failed to check is not lowered yet' first, before the real E0600 escape diagnostic; every other escape shape (bare, Some, tuple, struct field, Vec push, lazy iterator) gets E0600 alone | — |
 | B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
+| B-2026-11-24-7 | 2026-11-24 | typecheck | low | A built-in type's method named as a value is refused by the checker: `[1].iter().map(i64.abs)` says "no associated constant `abs` on `i64`", `.map(Str.to_string)` and `.map(String.len)` say "no associated function", where design.md § Function values makes an unbound method a function whose first parameter is the receiver (a user type's work) | — |
 
 ### Relocated
 
@@ -2063,6 +2062,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-148 | typecheck | low | `[first].to_vec()` with `first` a struct that has no `Clone` is refused with "add `#[derive(Copy, Clone)]` to it", and `karac fix` adds the derive, t… | 0d28296389 |
 | B-2026-11-20-149 | typecheck | low | `let p = i.pow(x)` with an `i64` exponent is refused with the `as u32` fix, and the call is then typed as an error, so the next use of `p` fails agai… | 0d28296389 |
 | B-2026-11-20-150 | ownership | low | `words.join(sep)` with `sep` an owned `String` takes `sep` for a move, so a later `joined.split(sep)` is refused "value 'sep' moved here, used again… | 0d28296389 |
+| B-2026-11-20-151 | mir | low | `words.iter().map(String.from)`, Rust's `.map(String::from)` as `karac fix` carries it, passes the type checker and is then refused "this path is not… | 3518b1c4f1 |
 | B-2026-11-21-1 | runtime | medium | A server with many idle connections loses 15-30% of its request rate: each connection's supervisor waits on a join, and every waiting join stays on t… | cecef40ef6 |
 | B-2026-11-21-5 | parser | low | A `struct` or `enum` declared inside a function body is reported as "'struct' is a reserved keyword .. | dafd0cdb06 |
 | B-2026-11-21-6 | mir-llvm | high | `sort_by`, `sort_by_key` and `retain` on a `Vec[ref T]` hand the closure the address of the slot holding each reference, not the reference: compiled,… | 6e5c5d0a95 |
@@ -2107,6 +2107,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-45 | typecheck | medium | A tuple of two `collect`s, `let p = (a.map(f).collect(), b.map(g).collect())`, is refused as if both had one type ('(?T, ?T)'), and one `collect` in… | 002770bf68 |
 | B-2026-11-21-46 | cli | low | `let (l, r) = segments.floor(x).unwrap();` over a `SortedMap[i64, i64]`, then `segments.remove(l)`, is refused three times E0516 "cannot mutably borr… | 450f9f38ed |
 | B-2026-11-21-47 | cli | low | One `karac fix` round applies two dependent edits, `g.get(a).cloned().unwrap_or(Vec.new())` and then `g[a] = list.clone()`, where the first makes the… | 5a4cbc769b |
+| B-2026-11-21-48 | cli | low | `karac fmt` rewrites a byte literal in a pattern as its number: `b'M' => 0` becomes `77u8 => 0`, `b'a'..=b'z'` becomes `97u8..=122u8` and `b'\n'` bec… | a3f79351fa |
 | B-2026-11-21-49 | typecheck | medium | An empty `[]` inside a tuple inside an array literal typed through `.to_vec()`, `let xs: Vec[(i64, Vec[i64])] = [(1, [1, 2]), (2, [])].to_vec();`, st… | cc6fc0c5bb |
 | B-2026-11-21-52 | other | low | Corpus entry fixtures/codegen/generics/a_qualified_channel_pins_through_a_tuple_return expected `5` from `println(rx.recv())`, but `Receiver.recv` re… | 322c1d9075 |
 | B-2026-11-21-53 | interp | low | The 1116 and 1117 kata differentials run 26 s and 45 s on a release MIR interpreter and about 60 s on a debug one, so under the corpus runner's 60 s… | 322c1d9075 |
