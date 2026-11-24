@@ -1309,7 +1309,17 @@ impl Pipeline {
         // The prune reads the program's words from the same tokens the parser
         // takes, rather than lexing the library text a second time.
         let (parsed, code) = crate::parse_with_code_text(&text);
+        // Which way each Rust heap pops is read from the program's own
+        // tokens: the library's would be evidence about heaps it does not
+        // have, and `self.back.push(x)` in `collections.kara` made a heap
+        // the program named `back` unsure, so `karac fix` stopped at it
+        // (kata 2462). The program's text is the prefix of `text`, so the
+        // offsets the program-alone parse recorded are the same.
+        let heap_sides = std::mem::take(&mut self.parsed.program.rust_heap_ctor_sides);
+        let reverse_wraps = std::mem::take(&mut self.parsed.program.rust_reverse_wraps);
         self.parsed = parsed;
+        self.parsed.program.rust_heap_ctor_sides = heap_sides;
+        self.parsed.program.rust_reverse_wraps = reverse_wraps;
         // The library items the program cannot reach are dropped, as the
         // build drops them (`library_prune`), so they are not checked
         // (B-2026-10-19-21). `KARAC_CHECK_PRUNE=0` keeps them.
