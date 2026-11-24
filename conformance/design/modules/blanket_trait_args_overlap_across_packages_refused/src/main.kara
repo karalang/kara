@@ -1,0 +1,13 @@
+import lib.{Mul2};
+
+struct Col { v: i64 }
+
+// Overlaps the library's `impl[R] Mul2[R] for i64`: reported here, at the
+// downstream impl (B-2026-11-24-18).
+impl Mul2[Col] for i64 {
+    fn mul2(self, r: Col) -> i64 { self * r.v }
+}
+
+fn main() {
+    println(2.mul2(Col { v: 3 }));
+}

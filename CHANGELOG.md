@@ -1069,6 +1069,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- Two impls of one trait for one type whose trait arguments unify
+  (`impl[R] Mul2[R] for i64` and `impl Mul2[Col] for i64`) checked clean
+  and one silently answered for both, in one file and across packages.
+  They overlap (design.md § Coherence) and are refused at the later impl,
+  naming both impls' trait arguments; headers that would need a type to
+  hold itself (`Ext[T] for V[T]` beside `Ext[ref U] for V[U]`) do not
+  overlap (B-2026-11-24-18).
 - A trait default body that declares `let x: T;` and assigns it later runs
   for every impl that inherits it. Once two impls inherited it, the program
   was refused with E0516 "the capture of `x` is not lowered yet", for a

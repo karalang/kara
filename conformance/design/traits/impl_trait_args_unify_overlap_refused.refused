@@ -1,0 +1,1 @@
+`impl Mul2[Col] for i64` overlaps another impl of `Mul2[R]` for `i64` at line 6

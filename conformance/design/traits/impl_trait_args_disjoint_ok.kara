@@ -1,0 +1,18 @@
+// Control for impl_trait_args_unify_overlap_refused: headers whose trait
+// arguments never unify do not overlap. `Mul2[Col]` and `Mul2[Row]` name
+// two traits' instances; `Ext[T] for V[T]` and `Ext[ref U] for V[U]` would
+// need `T = U` and `T = ref U` at once.
+trait Mul2[R] { fn mul2(self, r: R) -> i64; }
+struct Col { v: i64 }
+struct Row { w: i64 }
+impl Mul2[Col] for i64 { fn mul2(self, r: Col) -> i64 { self * r.v } }
+impl Mul2[Row] for i64 { fn mul2(self, r: Row) -> i64 { self + r.w } }
+trait Ext[A] { fn ext(self, a: A) -> i64; }
+struct V[T] { t: T }
+impl[T] Ext[T] for V[T] { fn ext(self, a: T) -> i64 { 1 } }
+impl[U] Ext[ref U] for V[U] { fn ext(self, a: ref U) -> i64 { 2 } }
+fn main() {
+    println(2.mul2(Col { v: 3 }));
+    println(2.mul2(Row { w: 3 }));
+    println(V { t: 1 }.ext(2));
+}

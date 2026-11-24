@@ -1,0 +1,8 @@
+// design.md § Coherence: "Two impls of one trait overlap when their headers
+// unify, ignoring their bounds." `Mul2[R]` at `R = Col` is `Mul2[Col]`, so
+// the second impl's header is covered by the first (B-2026-11-24-18).
+trait Mul2[R] { fn mul2(self, r: R) -> i64; }
+struct Col { v: i64 }
+impl[R] Mul2[R] for i64 { fn mul2(self, r: R) -> i64 { self } }
+impl Mul2[Col] for i64 { fn mul2(self, r: Col) -> i64 { self * r.v } }
+fn main() { println(2.mul2(Col { v: 3 })); }

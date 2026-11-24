@@ -3619,6 +3619,29 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         // Where the impl this one overlaps is written, for the message.
+        // The other impl's trait arguments, when they differ from this
+        // one's: `Mul2[R]` beside `Mul2[Col]` (B-2026-11-24-18).
+        let shown_args = |args: &[Type]| {
+            if args.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "[{}]",
+                    args.iter().map(type_display).collect::<Vec<_>>().join(", ")
+                )
+            }
+        };
+        let other_trait_args = overlap
+            .as_ref()
+            .and_then(|(_, i)| self.env.impls.get(*i))
+            .filter(|other| other.trait_args != trait_args)
+            .map(|other| shown_args(&other.trait_args))
+            .unwrap_or_default();
+        let new_trait_args = if other_trait_args.is_empty() {
+            String::new()
+        } else {
+            shown_args(&trait_args)
+        };
         let other_at = overlap
             .as_ref()
             .and_then(|(_, i)| self.env.impls.get(*i))
@@ -3736,7 +3759,7 @@ impl<'a> super::TypeChecker<'a> {
                          (design.md § Coherence)",
                         trait_name
                             .as_deref()
-                            .map(|t| format!(" {} for", t))
+                            .map(|t| format!(" {t}{new_trait_args} for"))
                             .unwrap_or_default(),
                         type_name,
                         if target_args.is_empty() {
@@ -3751,7 +3774,7 @@ impl<'a> super::TypeChecker<'a> {
                         },
                         trait_name
                             .as_deref()
-                            .map(|t| format!(" of `{t}`"))
+                            .map(|t| format!(" of `{t}{other_trait_args}`"))
                             .unwrap_or_default(),
                     ),
                     imp.span,
@@ -4019,7 +4042,20 @@ impl<'a> super::TypeChecker<'a> {
             }
             let existing_empty = existing.target_args.is_empty();
             let new_empty = target_args.is_empty();
-            let overlaps = if existing_empty != new_empty {
+            // Two trait impls for one type whose trait arguments differ as
+            // written but unify, together with the targets (`impl[R]
+            // Mul2[R] for i64` and `impl Mul2[Col] for i64`): one header
+            // covers the other's (design.md § Coherence, B-2026-11-24-18).
+            let trait_args_unify = trait_name.is_some()
+                && !source_differs
+                && existing_empty
+                && new_empty
+                && existing.trait_args != trait_args
+                && existing.trait_args.len() == trait_args.len()
+                && impl_headers_unify_jointly(existing, (written, trait_args), params);
+            let overlaps = if trait_args_unify {
+                true
+            } else if existing_empty != new_empty {
                 // generic-on-name + specialized
                 true
             } else {
@@ -4962,6 +4998,134 @@ fn headers_unify(existing: &ImplInfo, written: &[Type], params: &[String]) -> bo
     mine.iter()
         .zip(written)
         .all(|(a, b)| unify(a, b, &theirs, &ours))
+}
+
+/// Whether two impls' targets and trait arguments unify at once, each
+/// impl's params free and bound consistently across both (`impl[R]
+/// Mul2[R] for i64` and `impl Mul2[Col] for i64` do, at `R = Col`;
+/// `impl[T] Ext[T] for V[T]` and `impl[U] Ext[ref U] for V[U]` do not,
+/// as `T = U` and `T = ref U` cannot both hold). B-2026-11-24-18.
+fn impl_headers_unify_jointly(
+    existing: &ImplInfo,
+    (written, trait_args): (&[Type], &[Type]),
+    params: &[String],
+) -> bool {
+    let theirs: Vec<String> = existing
+        .generic_params
+        .iter()
+        .flat_map(|gp| gp.params.iter().map(|p| p.name.clone()))
+        .collect();
+    // Each side's params as variables of their own.
+    fn rename(t: &Type, params: &[String], tag: char) -> Type {
+        match t {
+            Type::TypeParam(p) if params.contains(p) => Type::TypeParam(format!("{tag}{p}")),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| rename(a, params, tag)).collect(),
+            },
+            Type::Ref(i) => Type::Ref(Box::new(rename(i, params, tag))),
+            Type::MutRef(i) => Type::MutRef(Box::new(rename(i, params, tag))),
+            Type::Weak(i) => Type::Weak(Box::new(rename(i, params, tag))),
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|a| rename(a, params, tag)).collect()),
+            Type::Array { element, size } => Type::Array {
+                element: Box::new(rename(element, params, tag)),
+                size: size.clone(),
+            },
+            Type::Slice { element, mutable } => Type::Slice {
+                element: Box::new(rename(element, params, tag)),
+                mutable: *mutable,
+            },
+            other => other.clone(),
+        }
+    }
+    fn is_var(t: &Type) -> Option<&str> {
+        match t {
+            Type::TypeParam(p) if p.starts_with(['\u{1}', '\u{2}']) => Some(p),
+            _ => None,
+        }
+    }
+    fn walk(t: &Type, sub: &HashMap<String, Type>) -> Type {
+        let mut t = t.clone();
+        while let Some(v) = is_var(&t) {
+            match sub.get(v) {
+                Some(b) => t = b.clone(),
+                None => break,
+            }
+        }
+        t
+    }
+    fn unify(a: &Type, b: &Type, sub: &mut HashMap<String, Type>) -> bool {
+        let (a, b) = (walk(a, sub), walk(b, sub));
+        if a == b {
+            return true;
+        }
+        // A variable never stands for a type that holds it: `T = ref T`
+        // has no solution.
+        fn occurs(v: &str, t: &Type, sub: &HashMap<String, Type>) -> bool {
+            let t = walk(t, sub);
+            match &t {
+                Type::TypeParam(p) => p == v,
+                Type::Named { args, .. } => args.iter().any(|a| occurs(v, a, sub)),
+                Type::Ref(i) | Type::MutRef(i) | Type::Weak(i) => occurs(v, i, sub),
+                Type::Tuple(ts) => ts.iter().any(|a| occurs(v, a, sub)),
+                Type::Array { element, .. } | Type::Slice { element, .. } => {
+                    occurs(v, element, sub)
+                }
+                _ => false,
+            }
+        }
+        if let Some(v) = is_var(&a) {
+            if occurs(v, &b, sub) {
+                return false;
+            }
+            sub.insert(v.to_string(), b);
+            return true;
+        }
+        if let Some(v) = is_var(&b) {
+            if occurs(v, &a, sub) {
+                return false;
+            }
+            sub.insert(v.to_string(), a);
+            return true;
+        }
+        match (&a, &b) {
+            (Type::Named { name: an, args: aa }, Type::Named { name: bn, args: ba }) => {
+                an == bn && aa.len() == ba.len() && aa.iter().zip(ba).all(|(x, y)| unify(x, y, sub))
+            }
+            (Type::Ref(x), Type::Ref(y))
+            | (Type::MutRef(x), Type::MutRef(y))
+            | (Type::Weak(x), Type::Weak(y)) => unify(x, y, sub),
+            (Type::Tuple(xs), Type::Tuple(ys)) => {
+                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| unify(x, y, sub))
+            }
+            (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+            | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => unify(x, y, sub),
+            // A projection (`I.Item`) is decided by bounds, not here: it
+            // may be anything.
+            (Type::AssocProjection { .. }, _) | (_, Type::AssocProjection { .. }) => true,
+            _ => false,
+        }
+    }
+    let mut sub = HashMap::new();
+    let mine = &existing.target_generic_args;
+    if mine.len() == written.len()
+        && !mine.iter().zip(written).all(|(a, b)| {
+            unify(
+                &rename(a, &theirs, '\u{1}'),
+                &rename(b, params, '\u{2}'),
+                &mut sub,
+            )
+        })
+    {
+        return false;
+    }
+    existing.trait_args.iter().zip(trait_args).all(|(a, b)| {
+        unify(
+            &rename(a, &theirs, '\u{1}'),
+            &rename(b, params, '\u{2}'),
+            &mut sub,
+        )
+    })
 }
 
 /// Which instance of its trait an impl is, beyond the trait and target

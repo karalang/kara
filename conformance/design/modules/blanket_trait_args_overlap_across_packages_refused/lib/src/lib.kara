@@ -1,0 +1,9 @@
+// design.md § Coherence: an upstream blanket impl over the trait's
+// argument covers every `Mul2[R] for i64`.
+pub trait Mul2[R] {
+    fn mul2(self, r: R) -> i64;
+}
+
+impl[R] Mul2[R] for i64 {
+    fn mul2(self, r: R) -> i64 { self }
+}
