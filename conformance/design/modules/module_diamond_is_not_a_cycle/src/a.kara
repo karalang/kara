@@ -1,0 +1,2 @@
+import c.k;
+pub fn fa() -> i64 { k() }

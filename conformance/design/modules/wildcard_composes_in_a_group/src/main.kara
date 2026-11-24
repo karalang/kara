@@ -1,0 +1,3 @@
+// design.md § Imports: a wildcard composes with a group (`import a.{b.*, c};`).
+import db.{connection.*, auth.Token};
+fn main() { println(f"{Pool { n: 2 }.n}{Token { t: 3 }.t}"); }

@@ -1,0 +1,4 @@
+// design.md § Modules: control for the cycle rule, a diamond is no cycle.
+import a.fa;
+import b.fb;
+fn main() { println(fa() + fb()); }

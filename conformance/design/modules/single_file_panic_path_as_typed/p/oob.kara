@@ -1,0 +1,3 @@
+// design.md § Packages and manifests, Reproducible builds: a single-file build
+// records the path as it was typed.
+fn main() { let v = [1, 2, 3]; let i = 5; println(v[i]); }

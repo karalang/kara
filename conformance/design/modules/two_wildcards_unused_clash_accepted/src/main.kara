@@ -1,0 +1,4 @@
+// design.md § Imports: two wildcards that both supply a name are no error at the import; other names work.
+import a.*;
+import b.*;
+fn main() { println(f"{ga()}{gb()}"); }

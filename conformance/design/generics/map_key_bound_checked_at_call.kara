@@ -1,0 +1,3 @@
+// design.md §8 Bounds: a call that solves `K` checks `K: Hash + Eq`.
+struct Key { x: i64 }
+fn main() { let mut m: Map[Key, i64] = Map.new(); m.insert(Key { x: 1 }, 1); println(m.len()); }

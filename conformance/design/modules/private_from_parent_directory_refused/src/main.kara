@@ -1,0 +1,3 @@
+// design.md § Visibility: `private` does not extend to a parent directory.
+import db.helpers.h;
+fn main() { println(h()); }

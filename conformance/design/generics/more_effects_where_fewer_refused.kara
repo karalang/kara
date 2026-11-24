@@ -1,0 +1,4 @@
+// design.md §8 Subtyping: effect sets are covariant, so a function with more
+// effects is not one with fewer (`with ()` declares none).
+fn loud() -> i64 { println("x"); 1 }
+fn main() { let f: Fn() -> i64 with () = loud; println(f()); }

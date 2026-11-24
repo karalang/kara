@@ -1,0 +1,12 @@
+// design.md § Constants: a block constant shadows and is shadowed like a `let`,
+// and may name earlier constants at module scope or in an enclosing block.
+const LIM: i64 = 1;
+fn main() {
+    const AA: i64 = LIM + 1;
+    {
+        const BB: i64 = AA * 10;
+        const LIM: i64 = 5;
+        println(f"{LIM} {BB}");
+    }
+    println(f"{LIM} {AA}");
+}

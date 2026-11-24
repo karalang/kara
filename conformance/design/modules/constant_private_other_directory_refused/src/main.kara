@@ -1,0 +1,3 @@
+// design.md § Constants: a `private` constant is visible to its directory only.
+import ui.v.K;
+fn main() { println(K); }

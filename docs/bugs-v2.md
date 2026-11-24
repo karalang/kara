@@ -59,11 +59,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 736 |
-| false-positive | 361 |
+| false-positive | 362 |
 | missing-feature | 249 |
 | perf | 200 |
 | other | 149 |
-| soundness | 126 |
+| soundness | 127 |
 | miscompile | 106 |
 | crash | 65 |
 | run-vs-build | 64 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 883 |
+| typecheck | 885 |
 | mir | 325 |
 | mir-llvm | 323 |
 | cli | 297 |
@@ -122,6 +122,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-12 | 2026-11-24 | resolver | medium | A block's `const` in a package module was refused as a binding (E0127 'Const-class but binding names must be Value-class'); the same file alone ran | — |
 | B-2026-11-24-13 | 2026-11-24 | resolver | low | E0113 dropped the list of a small module's exports whenever it found a suggestion; design.md § Imports gives both | — |
 | B-2026-11-24-14 | 2026-11-24 | resolver | low | `#[test]` on a `fn` in a `_test.kara` file was reported at the module's other file (src/util.kara:3:1 for src/util_test.kara), and the message repeated its code | — |
+| B-2026-11-24-15 | 2026-11-24 | typecheck | medium | An unannotated closure parameter is settled to `i64` at the closure, so a later use in the same body cannot fix it: `let f = |x| x + 1; let y: i32 = f(2)` and `let f = |x| x; let y: i32 = f(2)` are refused as an i64-to-i32 narrowing | — |
+| B-2026-11-24-16 | 2026-11-24 | typecheck | medium | A `mut ref` is not invariant over a function type's effect set: a `with ()` callback field passed as `mut ref Fn() -> i64 with writes(Stdout)` takes a printing function, and a call through the `with ()` value then prints | — |
 
 ### Relocated
 

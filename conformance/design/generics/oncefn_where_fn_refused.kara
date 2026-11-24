@@ -1,0 +1,3 @@
+// design.md §8 Subtyping: an `OnceFn` is not an `Fn`.
+fn run(f: Fn() -> String) -> String { f() }
+fn main() { let s = "a".to_string(); let g = || s; println(run(g)); }

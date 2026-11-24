@@ -1,0 +1,2 @@
+// design.md §8 Type inference: only the numeric casts of §5 are legal outside `unsafe`.
+fn main() { let s = "a".to_string(); let n = s as i64; println(n); }

@@ -1,0 +1,2 @@
+// design.md §8 Type inference: `e as T` synthesizes `T`.
+fn main() { let x: i64 = 300; let y = x as u8; let z: u8 = y; println(z); }

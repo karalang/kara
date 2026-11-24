@@ -1,0 +1,3 @@
+// design.md § Imports: `import path.* as X;` is not a form.
+import db.connection.* as X;
+fn main() { }

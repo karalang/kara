@@ -1,0 +1,3 @@
+// design.md § Imports: submodules are not items, so a wildcard does not bring them.
+import db.*;
+fn main() { println(pool.Pool { n: 1 }.n); }

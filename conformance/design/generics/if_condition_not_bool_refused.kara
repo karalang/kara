@@ -1,0 +1,2 @@
+// design.md §8 Type inference: an `if` condition checks against `bool`.
+fn main() { let n = 1; if n { println("x"); } }

@@ -1,0 +1,4 @@
+// design.md § Constants: an initializer may name an imported constant.
+import limits.BASE;
+const TOP: i64 = BASE * 2 + 1;
+fn main() { println(TOP); }

@@ -1,0 +1,2 @@
+pub import b.fb;
+pub fn fa() -> i64 { 1 }

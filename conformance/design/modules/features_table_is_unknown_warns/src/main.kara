@@ -1,0 +1,2 @@
+// design.md § No feature flags: `[features]` is not a manifest table.
+fn main() { println(1); }

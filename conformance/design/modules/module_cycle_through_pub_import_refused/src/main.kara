@@ -1,0 +1,3 @@
+// design.md § Modules: the module graph includes `pub import` edges.
+import a.fa;
+fn main() { println(fa()); }

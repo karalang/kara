@@ -1,0 +1,2 @@
+pub fn f() -> i64 { 2 }
+pub fn gb() -> i64 { 4 }

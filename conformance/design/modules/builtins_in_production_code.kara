@@ -1,0 +1,11 @@
+// design.md § Imports, The prelude: the compiler builtins are prelude
+// functions, usable in production code with no import.
+fn pick(n: i64) -> i64 {
+    assert(n >= 0);
+    assert_eq(n % 1, 0);
+    assert_ne(n, -1);
+    if n > 100 { unreachable() }
+    if n > 50 { todo() }
+    n * 2
+}
+fn main() { println(pick(dbg(3))); }

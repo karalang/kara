@@ -1,0 +1,4 @@
+// design.md § Modules: items in main.kara belong to the package root, `start` not `main.start`.
+import util.twice;
+fn start() -> i64 { 1 }
+fn main() { println(twice()); }

@@ -1,0 +1,2 @@
+pub struct Connection { pub id: i64 }
+pub struct Pool { pub n: i64 }

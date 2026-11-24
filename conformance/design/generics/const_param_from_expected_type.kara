@@ -1,0 +1,4 @@
+// design.md §8 Const generics: a const parameter only in the return type is
+// solved from the expected type.
+fn zeros[const N: i64]() -> Array[i64, N] { [0; N] }
+fn main() { let a: Array[i64, 8] = zeros(); println(a.len()); }

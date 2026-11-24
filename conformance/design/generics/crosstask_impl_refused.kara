@@ -1,0 +1,4 @@
+// design.md §8 Bounds: `CrossTask` is computed by the compiler and cannot be implemented by hand.
+struct S { x: i64 }
+impl CrossTask for S { }
+fn main() { println(1); }

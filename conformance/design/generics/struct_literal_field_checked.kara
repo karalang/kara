@@ -1,0 +1,4 @@
+// design.md §8 Type inference: a struct literal checks each field against
+// its declared type, so a literal there is range-checked.
+struct S { b: u8 }
+fn main() { let s = S { b: 300 }; println(s.b); }

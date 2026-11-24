@@ -1,0 +1,2 @@
+// design.md § Imports: every reference to another module's item is brought in by an `import`.
+fn main() { println(db.auth.tok()); }

@@ -1,0 +1,4 @@
+// design.md § Modules: `src/db.kara` defines `db`, beside the children in `src/db/`.
+import db.Conn;
+import db.pool.Pool;
+fn main() { println(f"{Conn { id: 1 }.id} {Pool { n: 2 }.n}"); }

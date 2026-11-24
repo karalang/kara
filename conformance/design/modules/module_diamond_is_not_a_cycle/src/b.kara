@@ -1,0 +1,2 @@
+import c.k;
+pub fn fb() -> i64 { k() * 2 }

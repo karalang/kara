@@ -1,0 +1,3 @@
+// design.md § Modules: items in main.kara belong to the package root, so another module imports `start`.
+pub fn start() -> i64 { 1 }
+fn main() { println(start()); }

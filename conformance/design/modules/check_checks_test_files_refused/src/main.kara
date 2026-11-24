@@ -1,0 +1,2 @@
+// design.md § Modules: `karac check` checks `_test.kara` files too.
+fn main() { println("built"); }

@@ -1,0 +1,3 @@
+// design.md § Packages and manifests, Reproducible builds: the same package,
+// built twice, gives the same bytes.
+fn main() { let v = [3, 1, 2]; println(v.len()); }

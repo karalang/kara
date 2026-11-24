@@ -1,0 +1,5 @@
+// design.md § Packages and manifests: two dependencies whose names differ only
+// by `-` against `_` claim one segment; an `alias` resolves it.
+import kara_data.col;
+import kd2.f;
+fn main() { println(f"{col()} {f()}"); }

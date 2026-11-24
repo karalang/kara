@@ -1,0 +1,2 @@
+// design.md § Modules: `karac build` skips `_test.kara` files (this one does not compile).
+fn main() { println("built"); }

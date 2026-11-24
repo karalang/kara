@@ -1,0 +1,3 @@
+// design.md § Constants: a constant is the only value declared at module scope; no module-level `let`.
+let X: i64 = 1;
+fn main() { println(X); }

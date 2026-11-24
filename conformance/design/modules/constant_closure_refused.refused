@@ -1,0 +1,2 @@
+initializer must be a compile-time constant
+closure requires run-time evaluation

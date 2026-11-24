@@ -1,0 +1,2 @@
+import start;
+pub fn twice() -> i64 { start() + start() }

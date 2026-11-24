@@ -1,0 +1,3 @@
+// design.md § Imports: paths are absolute; there is no `self.`, `super.` or relative form.
+import self.db.connection.Connection;
+fn main() { }

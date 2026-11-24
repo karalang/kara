@@ -1,0 +1,3 @@
+// design.md §8 Type inference: control for the field check; the literal takes the field type.
+struct S { b: u8 }
+fn main() { let s = S { b: 200 }; let t: u8 = s.b + 55; println(t); }

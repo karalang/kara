@@ -1,0 +1,9 @@
+// design.md §8 Subtyping: Option and tuples are covariant, so a pure function
+// goes where an effectful one is expected inside them.
+fn pure_one() -> i64 { 1 }
+fn main() {
+    let o: Option[Fn() -> i64 with writes(Stdout)] = Some(pure_one);
+    let t: (Fn() -> i64, i64) = (pure_one, 2);
+    let u: (Fn() -> i64 with writes(Stdout), i64) = t;
+    println(f"{o.unwrap()()} {u.1}");
+}

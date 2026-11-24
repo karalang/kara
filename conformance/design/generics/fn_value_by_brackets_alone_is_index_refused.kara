@@ -1,0 +1,4 @@
+// design.md §8 Generic parameters: there is no generic function value by
+// brackets; `sorted[i32]` alone is an index into `sorted`.
+fn sorted[T: Ord](v: own Vec[T]) -> Vec[T] { v }
+fn main() { let f = sorted[i32]; }

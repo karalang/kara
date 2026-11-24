@@ -1,0 +1,4 @@
+// design.md §8 Literals: a `ref String` beside a `Str` view is a mismatch; the
+// fix writes `.as_str()` on the `ref String` branch.
+fn pick(c: bool, arg: ref String, v: Str) -> Str { match c { true => v, false => arg } }
+fn main() { println(pick(false, "a", "b")); }

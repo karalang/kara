@@ -1,0 +1,3 @@
+// design.md §8 Least upper bound: a `match` joins left to right, and the
+// first pair with no LUB is the error site.
+fn main() { let n = 2; let v = match n { 0 => 1, 1 => 2, _ => "x".to_string() }; println(v); }

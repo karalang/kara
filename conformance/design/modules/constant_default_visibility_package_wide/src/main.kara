@@ -1,0 +1,3 @@
+// design.md § Constants: a default-visibility constant is visible to every file in the package.
+import ui.v.K;
+fn main() { println(K); }

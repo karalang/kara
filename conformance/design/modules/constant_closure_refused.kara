@@ -1,0 +1,3 @@
+// design.md § Constants: a closure is a forbidden initializer.
+const F: Fn() -> i64 = || 1;
+fn main() { println(F()); }

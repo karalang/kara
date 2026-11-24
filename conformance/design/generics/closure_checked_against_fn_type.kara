@@ -1,0 +1,4 @@
+// design.md §8 Type inference: a closure against an expected `Fn(A) -> B`
+// takes `x: A` and checks its body against `B`.
+fn ap(f: Fn(u8) -> u8) -> u8 { f(4) }
+fn main() { println(ap(|x| x * 60)); }

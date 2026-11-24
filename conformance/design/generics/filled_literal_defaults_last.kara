@@ -1,0 +1,2 @@
+// design.md §8 Type variables: literals default last; `Vec.filled(5, 0)` with no other use is `Vec[i64]`.
+fn main() { let v = Vec.filled(5, 0); println(v[0] + 3000000000); }

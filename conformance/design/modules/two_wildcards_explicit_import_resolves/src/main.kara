@@ -1,0 +1,5 @@
+// design.md § Imports: an explicit import resolves a name two wildcards supply.
+import a.*;
+import b.*;
+import b.f;
+fn main() { println(f()); }
