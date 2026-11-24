@@ -1,0 +1,2 @@
+trait T[with E] { fn f(self); }
+fn main() { }

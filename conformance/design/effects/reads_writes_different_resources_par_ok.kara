@@ -1,0 +1,6 @@
+effect resource Db;
+effect resource Other;
+fn r() -> i64 with reads(Db) { 1 }
+fn w() -> i64 with writes(Other) { 2 }
+fn ww() -> i64 with writes(Db) { 3 }
+fn main() { let (a, b) = par { r(), w() }; let (c, d) = par { ww(), w() }; println(a + b + c + d); }

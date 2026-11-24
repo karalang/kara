@@ -1,0 +1,7 @@
+// TaskGroup tasks are not checked for effect conflicts.
+import std.sync.{TaskGroup};
+fn main() {
+    let g = TaskGroup.new();
+    g.spawn(|| println("a"));
+    g.spawn(|| println("b"));
+}

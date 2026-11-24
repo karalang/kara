@@ -1,0 +1,2 @@
+fn mk() -> Vec[i64] { [1, 2] }
+fn main() { println(mk()); }

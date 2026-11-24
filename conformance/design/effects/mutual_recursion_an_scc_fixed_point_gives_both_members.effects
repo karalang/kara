@@ -1,0 +1,2 @@
+even has panics, writes(Stdout)
+odd has panics, writes(Stdout)

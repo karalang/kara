@@ -1,0 +1,6 @@
+// inference stops at a pub fn: the caller gets its declared set
+
+effect resource Db;
+pub fn f() with writes(Stdout) reads(Db) { println("x"); }
+fn g() { f(); }
+fn main() { g(); }

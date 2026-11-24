@@ -1,0 +1,5 @@
+struct P { v: i64 }
+impl PartialEq for P { fn eq(self, o: P) -> bool { self.v == o.v } }
+impl PartialOrd for P { fn partial_cmp(self, o: P) -> Option[Ordering] { println("pc"); self.v.partial_cmp(o.v) } }
+fn f(k: i64) -> i64 { if (P { v: k }) < (P { v: 1 }) { 1 } else { 0 } }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

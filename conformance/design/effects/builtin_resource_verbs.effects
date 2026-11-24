@@ -1,0 +1,8 @@
+line has writes(Stdin), blocks
+put has writes(Env)
+get has reads(Env)
+get lacks writes(Env)
+save has writes(FileSystem), blocks
+load has reads(FileSystem)
+load lacks writes(FileSystem)
+dial has sends(Network)

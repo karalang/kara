@@ -1,0 +1,4 @@
+struct P { v: i64 }
+impl From[i64] for P { fn from(x: own i64) -> P { println("from"); P { v: x } } }
+fn f(k: i64) -> i64 { let p: P = k.into(); p.v }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

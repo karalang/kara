@@ -1,0 +1,4 @@
+idx = panics
+div = panics
+ovf = panics
+unw = panics

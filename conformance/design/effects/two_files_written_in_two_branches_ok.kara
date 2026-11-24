@@ -1,0 +1,8 @@
+// two files are two resources.
+fn put(f: File, s: Str) -> bool { f.write_all(s.bytes()).is_ok() }
+fn main() {
+    let f = File.create("/tmp/kara-conf-two-files-a").unwrap();
+    let g = File.create("/tmp/kara-conf-two-files-b").unwrap();
+    let (a, b) = par { put(f, "a"), put(g, "b") };
+    println(a and b);
+}

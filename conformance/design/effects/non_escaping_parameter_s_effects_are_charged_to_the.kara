@@ -1,0 +1,6 @@
+// a non-escaping parameter's effects are charged to the caller (each/report)
+
+pub fn each(xs: Slice[i64], f: Fn(i64)) { for x in xs { f(x); } }
+fn report(rows: Vec[i64]) { each(rows, |r| println(f"{r}")); }
+fn quiet(rows: Vec[i64]) { each(rows, |r| { let _ = r; }); }
+fn main() { report([1]); quiet([2]); }

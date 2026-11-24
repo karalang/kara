@@ -1,0 +1,3 @@
+build --output=json
+any(g.get("kind") == "mutual_recursion" and {"even", "odd"} <= set(g.get("functions", [])) for g in d["mutual_recursion_groups"])
+any(set(g.get("call_recursive_members", [])) >= {"even", "odd"} for g in d["mutual_recursion_groups"])

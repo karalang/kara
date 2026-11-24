@@ -1,0 +1,2 @@
+make_and_drop has writes(Stdout)
+make_and_return lacks writes(Stdout)

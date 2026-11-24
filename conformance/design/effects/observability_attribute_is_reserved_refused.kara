@@ -1,0 +1,3 @@
+#[observability]
+fn quiet() { println("x"); }
+fn main() { quiet(); }

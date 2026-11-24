@@ -1,0 +1,6 @@
+import std.time.{Instant};
+pub fn stamp() -> i64 with writes(Stdout) reads(Clock) {
+    println("x");
+    Instant.now().elapsed().as_ns()
+}
+fn main() { let _ = stamp(); }

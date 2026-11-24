@@ -1,0 +1,2 @@
+struct S[with E, with F] { f: Fn() with E, g: Fn() with F }
+fn main() { }

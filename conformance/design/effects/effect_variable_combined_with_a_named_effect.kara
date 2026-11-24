@@ -1,0 +1,4 @@
+effect resource Log;
+fn note() with writes(Log) { }
+fn run[with E](f: Fn() with E) with E writes(Log) { note(); f(); }
+fn main() { run(|| println("ran")); }

@@ -1,0 +1,4 @@
+// #[no_effect(allocates(Heap), panics)] accepts float arithmetic
+#[no_effect(allocates(Heap), panics)]
+fn mix(a: f32, b: f32) -> f32 { a * 0.5 + b * 0.5 }
+fn main() { println(f"{mix(1.0, 3.0)}"); }

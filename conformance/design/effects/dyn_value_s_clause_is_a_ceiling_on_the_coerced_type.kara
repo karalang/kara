@@ -1,0 +1,6 @@
+// a dyn value's clause is a ceiling on the coerced type
+
+trait H { fn h(self); }
+struct P {}
+impl H for P { fn h(self) { println("p"); } }
+fn main() { let d: dyn H with () = P {}; d.h(); }

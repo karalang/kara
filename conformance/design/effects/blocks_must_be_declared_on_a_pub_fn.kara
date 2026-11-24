@@ -1,0 +1,4 @@
+// blocks must be declared on a pub fn
+import std.time.{Duration, sleep};
+pub fn nap() with reads(Clock) suspends { sleep(Duration.ms(1)); }
+fn main() { nap(); }

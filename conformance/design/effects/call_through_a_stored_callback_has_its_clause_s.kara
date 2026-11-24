@@ -1,0 +1,6 @@
+// a call through a stored callback has its clause's effects
+
+effect resource OrderDb;
+struct Bus { handlers: Vec[Fn(i64) with writes(OrderDb)] }
+impl Bus { fn emit(self, e: i64) { for h in self.handlers { h(e); } } }
+fn main() { let b = Bus { handlers: [] }; b.emit(1); }

@@ -1,0 +1,5 @@
+// design.md §12: a function without reads(FileSystem) cannot read files.
+pub fn load() -> String with writes(Stdout) blocks {
+    fs.read_to_string("/nonexistent").unwrap_or("")
+}
+fn main() { println(load()); }

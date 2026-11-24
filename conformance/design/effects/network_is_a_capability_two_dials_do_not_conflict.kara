@@ -1,0 +1,3 @@
+import std.net.{TcpStream};
+fn dial() -> bool { TcpStream.connect("127.0.0.1:1").is_ok() }
+fn main() { let (a, b) = par { dial(), dial() }; println(a or b); }

@@ -1,0 +1,6 @@
+// a closure's effects are what it does when called, not what it captures
+
+import std.time.{Instant};
+fn mk_and_drop() { let t = Instant.now(); let f = || println("x"); let _ = t; }
+fn mk_and_call() { let f = || println("x"); f(); }
+fn main() { mk_and_drop(); mk_and_call(); }

@@ -1,0 +1,8 @@
+// effect-set subtyping: reader, writer and pure fit a reads+writes slot
+
+effect resource Log;
+fn run(f: Fn(i64) -> i64 with reads(Log) writes(Log)) -> i64 { f(1) }
+fn reader(x: i64) -> i64 with reads(Log) { x + 1 }
+fn writer(x: i64) -> i64 with writes(Log) { x + 2 }
+fn pure_fn(x: i64) -> i64 { x + 3 }
+fn main() { println(f"{run(reader)} {run(writer)} {run(pure_fn)}"); }

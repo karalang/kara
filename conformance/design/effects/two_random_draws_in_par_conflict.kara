@@ -1,0 +1,3 @@
+// two random draws in par conflict
+import std.random;
+fn main() { let (a, b) = par { random.next_u64(), random.next_u64() }; }

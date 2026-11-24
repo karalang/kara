@@ -1,0 +1,3 @@
+// two par branches that log do not conflict
+import std.log;
+fn main() { let (a, b) = par { log.info("a"), log.info("b") }; }

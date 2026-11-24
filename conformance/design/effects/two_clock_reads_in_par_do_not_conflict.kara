@@ -1,0 +1,3 @@
+// two clock reads in par do not conflict
+import std.time.{Instant};
+fn main() { let (a, b) = par { Instant.now(), Instant.now() }; println(f"{a <= b or b <= a}"); }

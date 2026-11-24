@@ -1,0 +1,5 @@
+// #[no_effect(reads(Clock))] rejects a clock read
+import std.time.{Instant};
+#[no_effect(reads(Clock))]
+fn f() -> i64 { Instant.now().elapsed().as_ns() }
+fn main() { println(f"{f()}"); }

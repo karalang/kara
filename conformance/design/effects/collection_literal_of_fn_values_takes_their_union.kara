@@ -1,0 +1,6 @@
+effect resource X;
+effect resource Y;
+fn f1() with reads(X) { }
+fn f2() with reads(X) writes(Y) { }
+fn all() { let fs = [f1, f2]; for f in fs { f(); } }
+fn main() { all(); }

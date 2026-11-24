@@ -1,0 +1,3 @@
+// a private function may declare a set, and it is checked
+fn f() with reads(Clock) { println("x"); }
+fn main() { f(); }

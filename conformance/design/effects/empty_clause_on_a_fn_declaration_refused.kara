@@ -1,0 +1,2 @@
+fn f() -> i64 with () { 1 }
+fn main() { println(f()); }

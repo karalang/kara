@@ -1,0 +1,2 @@
+fn f(k: i64) -> i64 { let v = [k, 0, 5]; match v.iter().max_by_key(|x| { println("k"); *x }) { Some(m) => *m, None => 0 } }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

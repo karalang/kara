@@ -1,0 +1,4 @@
+struct P { v: i64 }
+impl Add for P { type Output = P; fn add(own self, o: own P) -> P { P { v: self.v + o.v } } }
+fn f(k: i64) -> i64 { (P { v: k } + P { v: 1 }).v }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

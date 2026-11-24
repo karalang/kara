@@ -1,0 +1,5 @@
+// a generator seeded from an argument is deterministic: no RandomSource.
+struct Lcg { s: u64 }
+impl Lcg { fn next(mut ref self) -> u64 { self.s = self.s.wrapping_mul(6364136223846793005).wrapping_add(1); self.s } }
+fn draw(seed: u64) -> u64 { let mut g = Lcg { s: seed }; g.next() }
+fn main() { let (a, b) = par { draw(1), draw(2) }; println(a == b); }

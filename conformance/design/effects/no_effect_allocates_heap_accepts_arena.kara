@@ -1,0 +1,6 @@
+effect resource Arena;
+fn heap() -> Vec[i64] { [1] }
+fn arena() -> i64 with allocates(Arena) { 1 }
+#[no_effect(allocates(Heap))]
+fn g() -> i64 { arena() }
+fn main() { println(g() + heap().len() as i64); }

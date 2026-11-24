@@ -1,0 +1,5 @@
+// control: declaring reads(FileSystem) admits the read.
+pub fn load() -> String with reads(FileSystem) blocks {
+    fs.read_to_string("/nonexistent/kara-conf").unwrap_or("missing")
+}
+fn main() { println(load()); }

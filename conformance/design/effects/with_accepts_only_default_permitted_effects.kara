@@ -1,0 +1,3 @@
+// with () accepts only default-permitted effects
+struct B { hs: Vec[Fn(i64) with ()] }
+fn main() { let mut b = B { hs: [] }; b.hs.push(|x| println(f"{x}")); }

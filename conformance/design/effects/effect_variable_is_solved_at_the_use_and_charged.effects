@@ -1,0 +1,2 @@
+audit has writes(Stdout)
+quiet lacks writes(Stdout)

@@ -1,0 +1,5 @@
+// the mutual recursion note is emitted, and #[allow(mutual_recursion_note)] silences it
+
+fn even(n: i64) -> bool { if n == 0 { true } else { odd(n - 1) } }
+fn odd(n: i64) -> bool { if n == 0 { false } else { even(n - 1) } }
+fn main() { println(f"{even(4)}"); }

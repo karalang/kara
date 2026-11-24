@@ -1,0 +1,4 @@
+// unused_effect is allowed by default
+effect resource Db;
+pub fn f() -> i64 with reads(Db) { 1 }
+fn main() { println(f"{f()}"); }

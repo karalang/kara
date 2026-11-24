@@ -1,0 +1,4 @@
+effect resource Db;
+effect resource Other;
+fn both() -> i64 with reads(Db, Other) writes(Stdout) { println("x"); 1 }
+fn main() { println(both()); }

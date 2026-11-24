@@ -1,0 +1,6 @@
+struct Bag[T, with E] { items: Vec[T], on: Vec[Fn(T) with E] }
+fn main() {
+    let mut b = Bag { items: [1, 2], on: Vec.new() };
+    b.on.push(|x| println(x));
+    for f in b.on { for x in b.items { f(x); } }
+}

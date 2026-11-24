@@ -1,0 +1,13 @@
+effect resource Log;
+fn r1() -> i64 with reads(Log) { 1 }
+struct Hooks {
+    a: Fn() -> i64 with reads(Log),
+    b: MutFn() -> i64 with reads(Log),
+    c: OnceFn() -> i64 with reads(Log),
+}
+fn keep(f: escaping Fn() -> i64 with reads(Log)) -> Fn() -> i64 with reads(Log) { f }
+fn main() {
+    let h = Hooks { a: r1, b: r1, c: r1 };
+    let k = keep(r1);
+    println((h.a)() + k());
+}

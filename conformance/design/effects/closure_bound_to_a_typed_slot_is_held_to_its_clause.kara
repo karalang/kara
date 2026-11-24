@@ -1,0 +1,2 @@
+// a closure bound to a typed slot is held to its clause
+fn main() { let f: Fn() with () = || println("x"); f(); }

@@ -1,0 +1,5 @@
+trait Sh { fn base(self) -> i64; fn twice(self) -> i64 { self.base() * 2 } }
+struct A { }
+impl Sh for A { fn base(self) -> i64 { println("b"); 3 } }
+fn f(k: i64) -> i64 { A { }.twice() + k }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

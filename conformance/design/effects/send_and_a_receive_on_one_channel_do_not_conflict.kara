@@ -1,0 +1,7 @@
+// a send and a receive on one channel do not conflict
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(8);
+    let (a, b) = par { tx.send(1), rx.recv() };
+    println(f"{a.is_ok()} {b.is_ok()}");
+}

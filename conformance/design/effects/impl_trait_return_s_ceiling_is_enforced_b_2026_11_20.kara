@@ -1,0 +1,4 @@
+// an impl Trait return's ceiling is enforced (B-2026-11-20-120)
+
+fn ticks() -> (impl Iterator[Item = i64] with reads(Clock)) { [1, 2].into_iter().map(|x| { println("p"); x }) }
+fn main() { for t in ticks() { println(f"{t}"); } }

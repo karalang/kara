@@ -1,0 +1,5 @@
+// the recursive group is reported under mutual_recursion_groups with kind mutual_recursion
+
+fn even(n: i64) -> bool { if n == 0 { println("e"); true } else { odd(n - 1) } }
+fn odd(n: i64) -> bool { if n == 0 { false } else { even(n - 1) } }
+fn main() { println(f"{even(4)}"); }

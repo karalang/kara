@@ -1,0 +1,5 @@
+effect resource Config;
+fn cfg() -> i64 with reads(Config) { 1 }
+#[no_effect(reads(Config))]
+fn f() -> i64 { cfg() }
+fn main() { println(f()); }

@@ -1,0 +1,4 @@
+// a declared blocks admits suspends
+import std.time.{Duration, sleep};
+pub fn nap() with reads(Clock) blocks { sleep(Duration.ms(1)); }
+fn main() { nap(); }

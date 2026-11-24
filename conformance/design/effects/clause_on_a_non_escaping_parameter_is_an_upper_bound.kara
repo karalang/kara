@@ -1,0 +1,5 @@
+// a clause on a non-escaping parameter is an upper bound
+
+effect resource Log;
+fn run(f: Fn(i64) -> i64 with reads(Log)) -> i64 { f(0) }
+fn main() { println(f"{run(|x| { println("p"); x })}"); }

@@ -1,0 +1,3 @@
+// a pub fn that prints without declaring is an error
+pub fn hello() { println("hi"); }
+fn main() { hello(); }

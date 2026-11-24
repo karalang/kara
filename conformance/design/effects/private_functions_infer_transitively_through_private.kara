@@ -1,0 +1,6 @@
+// private functions infer transitively through private callees
+
+fn leaf() { println("x"); }
+fn mid() { leaf(); }
+fn top() { mid(); }
+fn main() { top(); }

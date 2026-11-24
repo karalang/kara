@@ -1,0 +1,2 @@
+check --output=json
+"writes(Stdout)" in d["program_effects"]

@@ -1,0 +1,5 @@
+// std.time.sleep is reads(Clock) blocks suspends
+
+import std.time.{Duration, sleep};
+fn nap() { sleep(Duration.ms(1)); }
+fn main() { nap(); }

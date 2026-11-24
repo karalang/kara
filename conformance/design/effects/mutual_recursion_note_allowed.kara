@@ -1,0 +1,5 @@
+#[allow(mutual_recursion_note)]
+fn even(n: i64) -> bool { if n == 0 { true } else { odd(n - 1) } }
+#[allow(mutual_recursion_note)]
+fn odd(n: i64) -> bool { if n == 0 { false } else { even(n - 1) } }
+fn main() { println(even(4)); }

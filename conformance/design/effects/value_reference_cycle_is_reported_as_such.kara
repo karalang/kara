@@ -1,0 +1,3 @@
+fn a() -> i64 { let f: Fn() -> i64 = b; let _ = f; 1 }
+fn b() -> i64 { let g: Fn() -> i64 = a; let _ = g; 2 }
+fn main() { println(a() + b()); }

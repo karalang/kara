@@ -1,0 +1,12 @@
+// every effect word except `with` is a contextual keyword.
+fn reads(x: i64) -> i64 { x }
+fn main() {
+    let writes = 1;
+    let sends = 2;
+    let receives = 3;
+    let allocates = 4;
+    let panics = 5;
+    let blocks = 6;
+    let suspends = 7;
+    println(reads(writes + sends + receives + allocates + panics + blocks + suspends));
+}

@@ -1,0 +1,9 @@
+// a function type writes a channel effect as receives(Channel).
+struct Hook { f: Fn(ref Receiver[String]) -> String with receives(Channel) blocks }
+fn take(rx: ref Receiver[String]) -> String { rx.recv().unwrap_or("none") }
+fn main() {
+    let (tx, rx): (Sender[String], Receiver[String]) = channel(1);
+    tx.send("hello").unwrap();
+    let h = Hook { f: take };
+    println((h.f)(rx));
+}

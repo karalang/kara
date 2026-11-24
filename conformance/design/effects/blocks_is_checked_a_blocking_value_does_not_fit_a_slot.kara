@@ -1,0 +1,5 @@
+// blocks is checked: a blocking value does not fit a slot without blocks
+
+import std.time.{Duration, sleep};
+struct B { hs: Vec[Fn() with reads(Clock) suspends] }
+fn main() { let mut b = B { hs: [] }; b.hs.push(|| sleep(Duration.ms(1))); }

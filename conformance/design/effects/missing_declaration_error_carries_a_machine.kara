@@ -1,0 +1,3 @@
+// the missing-declaration error carries a machine-applicable fix
+pub fn hello() { println("hi"); }
+fn main() { hello(); }

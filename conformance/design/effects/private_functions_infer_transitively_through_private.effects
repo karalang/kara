@@ -1,0 +1,3 @@
+leaf = writes(Stdout)
+mid = writes(Stdout)
+top = writes(Stdout)

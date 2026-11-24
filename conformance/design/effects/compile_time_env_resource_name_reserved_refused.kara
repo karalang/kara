@@ -1,0 +1,2 @@
+effect resource CompileTimeEnv;
+fn main() { }

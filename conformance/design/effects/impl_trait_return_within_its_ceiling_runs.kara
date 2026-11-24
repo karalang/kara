@@ -1,0 +1,4 @@
+// an impl Trait return within its ceiling runs
+
+fn evens() -> (impl Iterator[Item = i64] with ()) { [1, 2, 3, 4].into_iter().filter(|x| x % 2 == 0) }
+fn main() { let v: Vec[i64] = evens().collect(); println(f"{v}"); }

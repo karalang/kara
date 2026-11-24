@@ -1,0 +1,2 @@
+check --output=json
+any(x["severity"] == "error" and x["code"] == "E0400" and x.get("replacement") for x in d["diagnostics"])

@@ -1,0 +1,2 @@
+// two par branches that both print conflict
+fn main() { let (a, b) = par { println("a"), println("b") }; }

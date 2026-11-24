@@ -1,0 +1,5 @@
+struct P { v: i64 }
+impl Display for P { fn to_string(self) -> String { println("d"); self.v.to_string() } }
+fn show[T: Display](t: T) -> i64 { t.to_string().len() as i64 }
+fn f(k: i64) -> i64 { show(P { v: k }) }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

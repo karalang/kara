@@ -1,0 +1,5 @@
+effect resource X;
+effect resource Y;
+fn f1() with reads(X) { }
+fn f2() with reads(X) writes(Y) { }
+fn main() { let fs: Vec[Fn() with reads(X) writes(Y)] = [f1, f2]; println(fs.len()); }

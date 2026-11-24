@@ -1,0 +1,4 @@
+pub effect resource Data;
+pub trait Store {
+    fn load(self, k: i64) -> i64 with reads(Data);
+}

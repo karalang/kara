@@ -1,0 +1,5 @@
+c has reads(Clock)
+c lacks writes(Stdout)
+r has writes(RandomSource)
+e has reads(Env)
+s has writes(Stderr)

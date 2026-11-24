@@ -1,0 +1,3 @@
+// a pub fn need not declare allocates(Heap) or panics
+pub fn mk(n: i64) -> Vec[i64] { let mut v: Vec[i64] = []; v.push(10 / n); v }
+fn main() { println(f"{mk(2)}"); }

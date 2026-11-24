@@ -1,0 +1,7 @@
+// a call through a bound with no clause has the instance's effects
+
+trait Show { fn show(self); }
+struct Loud {}
+impl Show for Loud { fn show(self) { println("loud"); } }
+fn go[T: Show](t: T) { t.show(); }
+fn main() { go(Loud {}); }

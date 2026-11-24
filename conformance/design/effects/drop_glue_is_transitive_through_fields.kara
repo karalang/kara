@@ -1,0 +1,7 @@
+// drop glue is transitive through fields
+
+struct N {}
+impl Drop for N { fn drop(mut ref self) { eprintln("drop"); } }
+struct Outer { n: N, v: Vec[N] }
+fn f() { let _o = Outer { n: N {}, v: [] }; }
+fn main() { f(); }

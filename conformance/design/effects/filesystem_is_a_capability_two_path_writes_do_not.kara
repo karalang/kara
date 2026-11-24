@@ -1,0 +1,3 @@
+// FileSystem is a capability: two path writes do not conflict
+
+fn main() { let (a, b) = par { fs.write("/tmp/c12_a.txt", "a"), fs.write("/tmp/c12_b.txt", "b") }; println(f"{a.is_ok()} {b.is_ok()}"); }

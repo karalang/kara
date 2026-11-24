@@ -1,0 +1,5 @@
+// log and dbg are transparent
+
+import std.log;
+fn f(x: i64) -> i64 { log.info("hello"); dbg(x) }
+fn main() { println(f"{f(1)}"); }

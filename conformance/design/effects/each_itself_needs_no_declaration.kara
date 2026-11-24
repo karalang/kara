@@ -1,0 +1,3 @@
+// each itself needs no declaration
+pub fn each(xs: Slice[i64], f: Fn(i64)) { for x in xs { f(x); } }
+fn main() { each([1], |r| println(f"{r}")); }

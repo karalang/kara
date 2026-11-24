@@ -1,0 +1,5 @@
+// an escaping value with no clause has every effect (pub caller must declare)
+
+pub struct Bus { h: Vec[Fn(i64)] }
+pub fn fire(b: Bus) { for h in b.h { h(1); } }
+fn main() {}

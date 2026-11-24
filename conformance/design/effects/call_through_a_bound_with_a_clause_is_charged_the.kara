@@ -1,0 +1,8 @@
+// a call through a bound with a clause is charged the clause
+
+effect resource Data;
+trait Storage { fn load(self, key: i64) -> i64 with reads(Data); }
+struct Mem {}
+impl Storage for Mem { fn load(self, key: i64) -> i64 with reads(Data) { key + 1 } }
+fn get[T: Storage](s: T) -> i64 { s.load(1) }
+fn main() { println(f"{get(Mem {})}"); }

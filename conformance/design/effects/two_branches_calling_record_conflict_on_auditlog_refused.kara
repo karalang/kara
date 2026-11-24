@@ -1,0 +1,4 @@
+pub effect resource AuditLog;
+pub fn record(line: Str) with writes(AuditLog) writes(Stderr) { eprintln(line); }
+fn handle(n: i64) -> i64 { record("req"); n }
+fn main() { let (a, b) = par { handle(1), handle(2) }; println(a + b); }

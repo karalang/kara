@@ -1,0 +1,4 @@
+// a declaration that misses an effect is an error naming it
+import std.time.{Instant};
+pub fn f() -> i64 with writes(Stdout) { println("x"); Instant.now().elapsed().as_ns() }
+fn main() { println(f"{f()}"); }

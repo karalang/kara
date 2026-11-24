@@ -1,0 +1,8 @@
+// design.md §12 Trait methods: control; a downstream impl that stays
+// within the foreign trait's clause (here doing less) is accepted.
+import store.{Store};
+struct Quiet {}
+impl Store for Quiet {
+    fn load(self, k: i64) -> i64 { k + 1 }
+}
+fn main() { println(Quiet {}.load(1)); }

@@ -1,0 +1,4 @@
+// #[no_effect] on a struct is E_NO_EFFECT_INVALID_TARGET
+#[no_effect(panics)]
+struct S {}
+fn main() {}

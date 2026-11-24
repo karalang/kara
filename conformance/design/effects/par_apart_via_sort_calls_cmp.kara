@@ -1,0 +1,7 @@
+struct P { v: i64 }
+impl PartialEq for P { fn eq(self, o: P) -> bool { self.v == o.v } }
+impl Eq for P { }
+impl PartialOrd for P { fn partial_cmp(self, o: P) -> Option[Ordering] { Some(self.cmp(o)) } }
+impl Ord for P { fn cmp(self, o: P) -> Ordering { self.v.cmp(o.v) } }
+fn f(k: i64) -> i64 { let mut v: Vec[P] = [P { v: k }, P { v: 0 }]; v.sort(); v[0].v }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

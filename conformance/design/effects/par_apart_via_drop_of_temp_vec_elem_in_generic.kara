@@ -1,0 +1,5 @@
+struct P { v: i64 }
+impl Drop for P { fn drop(mut ref self) { } }
+fn mkv[T](x: own T) -> i64 { let v: Vec[T] = [x]; v.len() as i64 }
+fn f(k: i64) -> i64 { mkv(P { v: k }) }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

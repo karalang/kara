@@ -1,0 +1,4 @@
+// an extern fn with neither has every effect, blocks included
+unsafe extern "C" { fn getpid() -> i32; }
+pub fn f() -> i32 with reads(Env) { unsafe { getpid() } }
+fn main() { println(f"{f()}"); }

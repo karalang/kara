@@ -1,0 +1,6 @@
+// storing a value whose effects exceed the slot's clause is an error
+
+effect resource OrderDb;
+struct Bus { handlers: Vec[Fn(i64) with writes(OrderDb)] }
+impl Bus { fn register(mut ref self, h: escaping Fn(i64) with writes(OrderDb)) { self.handlers.push(h); } }
+fn main() { let mut b = Bus { handlers: [] }; b.register(|e| println(f"{e}")); }

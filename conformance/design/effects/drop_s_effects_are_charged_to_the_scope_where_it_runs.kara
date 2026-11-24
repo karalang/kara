@@ -1,0 +1,7 @@
+// a drop's effects are charged to the scope where it runs
+
+struct N {}
+impl Drop for N { fn drop(mut ref self) { println("drop"); } }
+fn make_and_drop() { let _n = N {}; }
+fn make_and_return() -> N { N {} }
+fn main() { make_and_drop(); let _k = make_and_return(); }

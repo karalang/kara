@@ -1,0 +1,4 @@
+struct P { v: i64 }
+impl Clone for P { fn clone(self) -> P { P { v: self.v } } }
+fn f(k: i64) -> i64 { let v: Vec[P] = [P { v: k }]; let w = v.clone(); w.len() as i64 }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

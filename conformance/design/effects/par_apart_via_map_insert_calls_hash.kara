@@ -1,0 +1,6 @@
+struct K { v: i64 }
+impl PartialEq for K { fn eq(self, o: K) -> bool { self.v == o.v } }
+impl Eq for K { }
+impl Hash for K { fn hash[H: Hasher](self, h: mut ref H) { h.write_i64(self.v); } }
+fn f(k: i64) -> i64 { let mut m: Map[K, i64] = Map.new(); m.insert(K { v: k }, k); m.len() as i64 }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

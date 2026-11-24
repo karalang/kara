@@ -1,0 +1,4 @@
+// an extern pure fn has no effects
+unsafe extern "C" { pure fn labs(x: i64) -> i64; }
+pub fn f(x: i64) -> i64 { unsafe { labs(x) } }
+fn main() { println(f"{f(-3)}"); }

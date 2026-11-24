@@ -1,0 +1,8 @@
+// two par branches calling stored with() callbacks do not conflict
+
+struct B { hs: Vec[Fn(i64) -> i64 + CrossTask with ()] }
+fn main() {
+    let b = B { hs: [|x| x + 1, |x| x * 2] };
+    let (p, q) = par { (b.hs[0])(3), (b.hs[1])(3) };
+    println(f"{p} {q}");
+}

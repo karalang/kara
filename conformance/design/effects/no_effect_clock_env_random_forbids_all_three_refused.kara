@@ -1,0 +1,6 @@
+import std.random;
+#[no_effect(reads(Clock, Env), writes(RandomSource))]
+fn f() -> u64 { random.next_u64() }
+#[no_effect(reads(Clock, Env), writes(RandomSource))]
+fn g() -> bool { env.var("HOME").is_ok() }
+fn main() { let _ = f(); let _ = g(); }

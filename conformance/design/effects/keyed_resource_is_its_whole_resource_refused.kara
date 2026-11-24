@@ -1,0 +1,9 @@
+// design.md §12 User-declared resources: parameterized resources are
+// deferred, so in v1 a keyed resource is its whole resource: two `par`
+// branches writing `UserDb[1]` and `UserDb[2]` conflict on `UserDb`.
+effect resource UserDb[id: u64];
+fn save(i: u64) -> u64 with writes(UserDb[i]) { i }
+fn main() {
+    let (a, b) = par { save(1), save(2) };
+    println(a + b);
+}

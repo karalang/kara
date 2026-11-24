@@ -1,0 +1,8 @@
+// callees are identified by definition, not name (a method and a free fn named alike)
+
+struct S {}
+impl S { fn run(self) { println("m"); } }
+fn run() { }
+fn a() { run(); }
+fn b() { let s = S {}; s.run(); }
+fn main() { a(); b(); }

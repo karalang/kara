@@ -1,0 +1,4 @@
+// a verb with a resource forbids only it
+#[no_effect(writes(Stdout))]
+fn f() { eprintln("x"); }
+fn main() { f(); }

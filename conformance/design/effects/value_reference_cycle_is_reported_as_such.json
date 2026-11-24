@@ -1,0 +1,3 @@
+build -o prog --output=json
+any(g["kind"] == "value_reference_cycle" and {"a", "b"} <= set(g["functions"]) for g in d["mutual_recursion_groups"])
+all(g["call_recursive_members"] == [] for g in d["mutual_recursion_groups"] if g["kind"] == "value_reference_cycle")

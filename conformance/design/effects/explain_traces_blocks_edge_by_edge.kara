@@ -1,0 +1,4 @@
+import std.time.{Duration, sleep};
+fn g() { sleep(Duration.ms(1)); }
+fn f() { g(); }
+fn main() { f(); }

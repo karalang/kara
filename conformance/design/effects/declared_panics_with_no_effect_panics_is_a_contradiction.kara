@@ -1,0 +1,4 @@
+// declared panics with #[no_effect(panics)] is a contradiction
+#[no_effect(panics)]
+pub fn f() with panics {}
+fn main() { f(); }

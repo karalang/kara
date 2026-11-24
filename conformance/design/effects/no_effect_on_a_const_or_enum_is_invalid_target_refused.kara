@@ -1,0 +1,5 @@
+#[no_effect(panics)]
+const X: i64 = 1;
+#[no_effect(panics)]
+enum E { A }
+fn main() { println(X); }

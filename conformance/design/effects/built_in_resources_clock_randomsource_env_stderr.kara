@@ -1,0 +1,9 @@
+// built-in resources: Clock, RandomSource, Env, Stderr
+
+import std.time.{Instant};
+import std.random;
+fn c() -> i64 { Instant.now().elapsed().as_ns() }
+fn r() -> u64 { random.next_u64() }
+fn e() -> bool { env.var("HOME").is_ok() }
+fn s() { eprintln("e"); }
+fn main() { let _ = c(); let _ = r(); let _ = e(); s(); }

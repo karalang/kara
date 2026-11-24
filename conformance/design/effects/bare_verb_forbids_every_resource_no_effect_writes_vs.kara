@@ -1,0 +1,4 @@
+// a bare verb forbids every resource: #[no_effect(writes)] vs writes(Stderr)
+#[no_effect(writes)]
+fn f() { eprintln("x"); }
+fn main() { f(); }

@@ -1,0 +1,7 @@
+// two branches that write one File conflict.
+fn put(f: File, s: Str) -> bool { f.write_all(s.bytes()).is_ok() }
+fn main() {
+    let f = File.create("/tmp/kara-conf-one-file").unwrap();
+    let (a, b) = par { put(f, "a"), put(f, "b") };
+    println(a and b);
+}

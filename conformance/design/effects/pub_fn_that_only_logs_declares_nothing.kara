@@ -1,0 +1,4 @@
+// a pub fn that only logs declares nothing
+import std.log;
+pub fn f() { log.warn("w"); }
+fn main() { f(); }

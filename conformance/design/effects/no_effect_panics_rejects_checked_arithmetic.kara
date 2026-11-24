@@ -1,0 +1,4 @@
+// #[no_effect(panics)] rejects checked arithmetic
+#[no_effect(panics)]
+fn f(a: i64) -> i64 { a + 1 }
+fn main() { println(f"{f(1)}"); }

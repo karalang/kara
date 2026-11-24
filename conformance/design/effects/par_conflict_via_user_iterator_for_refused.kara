@@ -1,0 +1,4 @@
+struct Ct { n: i64 }
+impl Iterator for Ct { type Item = i64; fn next(mut ref self) -> Option[i64] { println("n"); if self.n == 0 { None } else { self.n -= 1; Some(self.n) } } }
+fn f(k: i64) -> i64 { let mut t = 0; for x in (Ct { n: k }) { t += x; } t }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

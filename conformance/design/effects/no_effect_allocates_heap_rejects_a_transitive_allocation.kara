@@ -1,0 +1,6 @@
+// #[no_effect(allocates(Heap))] rejects a transitive allocation
+
+fn helper() -> Vec[i64] { [1, 2] }
+#[no_effect(allocates(Heap))]
+fn f() -> i64 { helper().len() }
+fn main() { println(f"{f()}"); }

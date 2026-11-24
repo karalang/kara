@@ -1,0 +1,8 @@
+import std.net.{TcpStream};
+fn line() -> String { stdin.read_line().unwrap_or("") }
+fn put() { env.set("KARA_CONF_X", "1"); }
+fn get() -> bool { env.var("HOME").is_ok() }
+fn save() { let _ = fs.write("/nonexistent/kara-conf", "x"); }
+fn load() -> String { fs.read_to_string("/nonexistent/kara-conf").unwrap_or("") }
+fn dial() -> bool { TcpStream.connect("127.0.0.1:1").is_ok() }
+fn main() { let _ = line(); put(); let _ = get(); save(); let _ = load(); let _ = dial(); }

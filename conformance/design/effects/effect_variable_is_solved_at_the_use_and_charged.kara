@@ -1,0 +1,19 @@
+// an effect variable is solved at the use and charged there
+
+effect resource OrderDb;
+struct EventBus[with E] { handlers: Vec[Fn(i64) with E] }
+impl[with E] EventBus[with E] {
+    fn register(mut ref self, h: escaping Fn(i64) with E) { self.handlers.push(h); }
+    fn emit(self, e: i64) with E { for h in self.handlers { h(e); } }
+}
+fn audit() {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(|e| println(f"{e}"));
+    bus.emit(1);
+}
+fn quiet() {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(|e| { let _ = e; });
+    bus.emit(1);
+}
+fn main() { audit(); quiet(); }

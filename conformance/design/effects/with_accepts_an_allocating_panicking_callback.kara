@@ -1,0 +1,3 @@
+// with () accepts an allocating, panicking callback
+struct B { hs: Vec[Fn(i64) -> Vec[i64] with ()] }
+fn main() { let mut b = B { hs: [] }; b.hs.push(|x| [10 / x]); println(f"{b.hs.len()}"); }

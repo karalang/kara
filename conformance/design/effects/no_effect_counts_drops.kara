@@ -1,0 +1,7 @@
+// #[no_effect] counts drops
+
+struct N {}
+impl Drop for N { fn drop(mut ref self) { println("drop"); } }
+#[no_effect(writes(Stdout))]
+fn f() { let _n = N {}; }
+fn main() { f(); }

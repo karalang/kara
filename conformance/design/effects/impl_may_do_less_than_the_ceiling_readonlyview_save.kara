@@ -1,0 +1,7 @@
+// an impl may do less than the ceiling (ReadOnlyView.save panics)
+
+effect resource Data;
+trait Storage { fn save(self, key: i64) with writes(Data); }
+struct Ro {}
+impl Storage for Ro { fn save(self, key: i64) with writes(Data) { panic("read-only view"); } }
+fn main() {}

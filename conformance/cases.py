@@ -20,6 +20,24 @@ expectation, written from the page it checks (the oracle is the page).
   when it is checked: `karac check` passes, and running it on the
   interpreter and building it must both fail, printing every line of this
   file on stderr.
+- `<name>.effects`: the effect sets `karac query effects` must infer, one
+  function to a line: `f = a, b` is the exact set (`f =` for none),
+  `f has a, b` names atoms it must hold, `f lacks a, b` atoms it must not.
+  An atom is written as `writes(Stdout)` or `panics`.
+- `<name>.absent`: lines that must NOT appear in `karac check`'s output
+  (a lint that must stay quiet, a retired code), beside any other kind.
+- `<name>.notes`: `karac check` must accept it and print every line of this
+  file (a note or warning the page promises); beside any other kind.
+- `<name>.cmd`: its first line is karac's arguments, run beside the program
+  as `main.kara` (`{}` stands for that name, which is otherwise added
+  last), and every further line text its output must hold; beside any
+  other kind.
+- `<name>.json`: its first line is karac's arguments (as in `.cmd`), and
+  every further line a Python expression over `d`, the parsed stdout, that
+  must be true.
+
+A case with `.effects`, `.cmd` or `.json` and neither `.out` nor `.refused`
+is static: it is not run.
 
     python3 conformance/cases.py conformance/log conformance/pool
 
@@ -30,8 +48,10 @@ least three runs), and a sanitizer report fails the run with its first line.
 """
 
 import ast
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -49,11 +69,113 @@ def report_line(err: str) -> str:
     return m.group(0)[:200] if m else ""
 
 
+def query_effects(text):
+    """{function: set of atoms} from `karac query effects`, or None with the
+    output when it did not answer."""
+    with tempfile.TemporaryDirectory(prefix="kara-conf-") as td:
+        path = Path(td) / "main.kara"
+        path.write_text(text)
+        p = subprocess.run([KARAC, "query", "effects", str(path)], capture_output=True, text=True, timeout=120)
+    try:
+        doc = json.loads(p.stdout)
+    except ValueError:
+        return None, p.stdout + p.stderr
+    return {f["function"]: {e["verb"] + (f"({e['resource']})" if e["resource"] else "")
+                            for e in f["inferred_effects"]} for f in doc.get("functions", [])}, ""
+
+
+def check_effects(src, text, rep):
+    got, raw = query_effects(text)
+    if got is None:
+        rep.failed.append(f"{src}: karac query effects did not answer:\n{raw}")
+        return
+    for line in src.with_suffix(".effects").read_text().splitlines():
+        m = re.fullmatch(r"\s*(\S+)\s+(=|has|lacks)\s*(.*)", line)
+        if not m:
+            continue
+        fn, op, rest = m.groups()
+        atoms = {a.strip() for a in re.split(r",\s*(?![^()]*\))", rest) if a.strip()}
+        have = got.get(fn)
+        if have is None:
+            rep.failed.append(f"{src}: no effect entry for {fn}; have {sorted(got)}")
+        elif (op == "=" and have != atoms) or (op == "has" and not atoms <= have) or (op == "lacks" and have & atoms):
+            rep.failed.append(f"{src}: {fn} has {sorted(have)}, want {line.strip()!r}")
+        else:
+            rep.passed += 1
+
+
+def karac_beside(text, args):
+    """karac run with `args` in a directory holding the program as
+    `main.kara`; `{}` in an argument names it, and it is added last
+    otherwise."""
+    argv = shlex.split(args)
+    if not any("{}" in a for a in argv):
+        argv.append("{}")
+    with tempfile.TemporaryDirectory(prefix="kara-conf-") as td:
+        (Path(td) / "main.kara").write_text(text)
+        return subprocess.run([KARAC, *(a.replace("{}", "main.kara") for a in argv)], capture_output=True,
+                              text=True, timeout=300, cwd=td)
+
+
+def check_cmd(src, text, rep):
+    lines = src.with_suffix(".cmd").read_text().splitlines()
+    p = karac_beside(text, lines[0])
+    for line in lines[1:]:
+        if line and line not in p.stdout + p.stderr:
+            rep.failed.append(f"{src}: `karac {lines[0]}` output lacks {line!r}:\n{p.stdout}{p.stderr}")
+        elif line:
+            rep.passed += 1
+
+
+def check_json(src, text, rep):
+    lines = [l for l in src.with_suffix(".json").read_text().splitlines() if l.strip()]
+    p = karac_beside(text, lines[0])
+    try:
+        d = json.loads(p.stdout)
+    except ValueError:
+        rep.failed.append(f"{src}: karac {lines[0]} printed no JSON:\n{p.stdout}{p.stderr}")
+        return
+    for expr in lines[1:]:
+        try:
+            ok = bool(eval(expr, {"d": d}))
+        except Exception as e:  # a missing key is a failure, not a crash
+            ok, expr = False, f"{expr} ({e!r})"
+        if ok:
+            rep.passed += 1
+        else:
+            rep.failed.append(f"{src}: not true of `karac {lines[0]}`: {expr}\n{json.dumps(d)[:1500]}")
+
+
 def main():
     rep = Report("cases")
     for d in sys.argv[1:]:
         for src in sorted(Path(d).glob("*.kara")):
             text = src.read_text()
+            absent = src.with_suffix(".absent")
+            if absent.exists():
+                code, out, err = run(text, backends=())["check"]
+                for line in absent.read_text().splitlines():
+                    if line and line in out + err:
+                        rep.failed.append(f"{src}: check output has {line!r}:\n{out}{err}")
+                    elif line:
+                        rep.passed += 1
+            notes = src.with_suffix(".notes")
+            if notes.exists():
+                code, out, err = run(text, backends=())["check"]
+                for line in notes.read_text().splitlines():
+                    if line and (code != 0 or line not in out + err):
+                        rep.failed.append(f"{src}: check exit {code}, want 0 and {line!r}:\n{out}{err}")
+                    elif line:
+                        rep.passed += 1
+            if src.with_suffix(".cmd").exists():
+                check_cmd(src, text, rep)
+            if src.with_suffix(".json").exists():
+                check_json(src, text, rep)
+            if src.with_suffix(".effects").exists():
+                check_effects(src, text, rep)
+            static = any(src.with_suffix(k).exists() for k in (".json", ".cmd", ".effects"))
+            if static and not src.with_suffix(".out").exists() and not src.with_suffix(".refused").exists():
+                continue
             fixed = src.with_suffix(".fixed")
             if fixed.exists():
                 with tempfile.TemporaryDirectory(prefix="kara-conf-") as td:

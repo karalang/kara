@@ -1,0 +1,6 @@
+// the reverse is an error: a writes slot value into a reads slot
+
+effect resource Log;
+fn run(f: Fn(i64) -> i64 with reads(Log)) -> i64 { f(1) }
+fn writer(x: i64) -> i64 with writes(Log) { x }
+fn main() { println(f"{run(writer)}"); }

@@ -1,0 +1,2 @@
+build -o prog --output=json
+set(d["program_effects"]) >= {"writes(Stdout)", "writes(Stderr)"}

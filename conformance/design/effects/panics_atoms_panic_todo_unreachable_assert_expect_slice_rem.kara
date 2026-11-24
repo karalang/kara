@@ -1,0 +1,16 @@
+fn p() { panic("x"); }
+fn t() -> i64 { todo() }
+fn u() -> i64 { unreachable() }
+fn a(x: i64) { assert(x > 0); }
+fn ae(x: i64) { assert_eq(x, 1); }
+fn e(o: Option[i64]) -> i64 { o.expect("none") }
+fn s(v: Vec[i64]) -> i64 { v[0..1].len() as i64 }
+fn r(a: i64, b: i64) -> i64 { a % b }
+shared struct Cell { mut items: Vec[i64] }
+fn sh(c: Cell) -> i64 { c.items.len() as i64 }
+fn main() {
+    a(1); ae(1);
+    let c = Cell { items: [1, 2, 3] };
+    println(e(Some(1)) + s([1, 2]) + r(7, 4) + sh(c));
+    if false { p(); let _ = t(); let _ = u(); }
+}

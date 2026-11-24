@@ -1,0 +1,4 @@
+// a pub fn may declare more than its body does (E0401 retired)
+effect resource Db;
+pub fn f() -> i64 with reads(Db) writes(Stdout) { 1 }
+fn main() { println(f"{f()}"); }

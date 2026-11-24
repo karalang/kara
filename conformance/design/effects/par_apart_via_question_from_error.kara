@@ -1,0 +1,7 @@
+struct E1 { }
+struct E2 { }
+impl From[E1] for E2 { fn from(e: own E1) -> E2 { E2 { } } }
+fn g(k: i64) -> Result[i64, E1] { if k > 5 { Err(E1 { }) } else { Ok(k) } }
+fn h(k: i64) -> Result[i64, E2] { let v = g(k)?; Ok(v) }
+fn f(k: i64) -> i64 { match h(k) { Ok(v) => v, Err(_) => 0 } }
+fn main() { let (a, b) = par { f(1), f(2) }; println(a + b); }

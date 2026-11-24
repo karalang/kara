@@ -1,0 +1,4 @@
+// an empty #[no_effect] is rejected
+#[no_effect]
+fn f() {}
+fn main() { f(); }

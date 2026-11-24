@@ -1,0 +1,10 @@
+// when the compiler cannot tell whether two values are the same, they conflict.
+fn both(a: ref Sender[i64], b: ref Sender[i64]) {
+    let (x, y) = par { a.send(1).is_ok(), b.send(2).is_ok() };
+    println(x and y);
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(8);
+    let (ty, ry): (Sender[i64], Receiver[i64]) = channel(8);
+    both(tx, ty);
+}

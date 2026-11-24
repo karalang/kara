@@ -1,0 +1,4 @@
+effect resource Db;
+effect resource Other;
+fn s() -> i64 with sends(Db) { 1 }
+fn main() { let (a, b) = par { s(), s() }; println(a + b); }

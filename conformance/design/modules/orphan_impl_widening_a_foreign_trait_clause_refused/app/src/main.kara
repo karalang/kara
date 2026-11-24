@@ -1,0 +1,11 @@
+// design.md §12 Trait methods: a downstream impl of a foreign trait is
+// bound by the trait's clauses and cannot widen them.
+import store.{Store};
+struct Loud {}
+impl Store for Loud {
+    fn load(self, k: i64) -> i64 with writes(Stdout) {
+        println("load");
+        k
+    }
+}
+fn main() { println(Loud {}.load(1)); }

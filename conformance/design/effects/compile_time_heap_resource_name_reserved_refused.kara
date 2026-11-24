@@ -1,0 +1,2 @@
+effect resource CompileTimeHeap;
+fn main() { }

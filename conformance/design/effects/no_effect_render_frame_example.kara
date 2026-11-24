@@ -1,0 +1,13 @@
+#[no_effect(allocates(Heap))]
+pub fn render_frame(buf: mut ref Vec[f32]) {
+    for i in 0..buf.len() {
+        buf[i] *= 0.5;
+    }
+}
+#[no_effect(allocates(Heap), panics)]
+fn mix(a: f32, b: f32) -> f32 { a * 0.5 + b * 0.5 }
+fn main() {
+    let mut b: Vec[f32] = [2.0, 4.0];
+    render_frame(mut b);
+    println(f"{b[0]} {b[1]} {mix(2.0, 4.0)}");
+}

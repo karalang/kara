@@ -1,0 +1,9 @@
+// allocates, panics and blocks never conflict, even with themselves.
+import std.time.{Duration, sleep};
+fn mk(n: i64) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100 / n);
+    sleep(Duration.ms(1));
+    v[0]
+}
+fn main() { let (a, b) = par { mk(1), mk(2) }; println(a + b); }

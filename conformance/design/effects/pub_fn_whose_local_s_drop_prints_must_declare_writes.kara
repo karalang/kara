@@ -1,0 +1,6 @@
+// a pub fn whose local's drop prints must declare writes(Stdout)
+
+struct N {}
+impl Drop for N { fn drop(mut ref self) { println("drop"); } }
+pub fn f() { let _n = N {}; }
+fn main() { f(); }

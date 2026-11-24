@@ -1,0 +1,4 @@
+// conflicts are checked between the iterations of a par for.
+fn main() {
+    par for i in 0..4 { println(i); }
+}

@@ -1,0 +1,11 @@
+import std.sync.{Mutex};
+fn lock(m: ref Mutex[i64]) -> i64 { m.lock().value }
+fn send(tx: ref Sender[i64]) { let _ = tx.send(1); }
+fn recv(rx: ref Receiver[i64]) -> i64 { rx.recv().unwrap_or(0) }
+fn spin() -> i64 { let mut i = 0; while i < 10 { i += 1; } i }
+fn main() {
+    let m = Mutex.new(4);
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    send(tx);
+    println(lock(m) + recv(rx) + spin());
+}

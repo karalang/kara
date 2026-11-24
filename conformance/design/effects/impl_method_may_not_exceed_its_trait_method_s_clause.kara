@@ -1,0 +1,7 @@
+// an impl method may not exceed its trait method's clause
+
+effect resource Data;
+trait Storage { fn load(self, key: i64) -> i64 with reads(Data); }
+struct Net {}
+impl Storage for Net { fn load(self, key: i64) -> i64 with reads(Data) writes(Stdout) { println("x"); key } }
+fn main() {}

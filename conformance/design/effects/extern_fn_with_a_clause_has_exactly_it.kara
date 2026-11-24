@@ -1,0 +1,4 @@
+// an extern fn with a clause has exactly it
+unsafe extern "C" { fn getpid() -> i32 with reads(Env); }
+pub fn f() -> i32 { unsafe { getpid() } }
+fn main() { println(f"{f()}"); }

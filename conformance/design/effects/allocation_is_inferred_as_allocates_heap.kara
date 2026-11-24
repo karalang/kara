@@ -1,0 +1,3 @@
+// allocation is inferred as allocates(Heap)
+fn mk() -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(1); v }
+fn main() { println(f"{mk()}"); }
