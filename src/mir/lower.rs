@@ -33885,6 +33885,147 @@ fn write_timings(path: &str, phases: &[(String, f64)], total: f64) -> std::io::R
     )
 }
 
+/// One `shared` or `sync` type's run-time borrow flags, as a build places
+/// them (design.md § Shared types: "`karac explain` reports the total for
+/// each type"; B-2026-11-23-75).
+pub struct TypeFlags {
+    /// `shared` or `sync`.
+    pub keyword: &'static str,
+    pub is_enum: bool,
+    /// Each field that carries a flag, as `field` or `Variant.field`, and
+    /// whether its type is a type parameter's (flagged at the instances
+    /// where it is neither `Copy` nor counted).
+    pub flagged: Vec<(String, bool)>,
+    /// Each field that carries none, with why.
+    pub unflagged: Vec<(String, &'static str)>,
+}
+
+/// The borrow flags of the program's own type `name`, read off the same
+/// predicates the borrow-flag pass uses ([`crate::mir::flags::takes_flag`],
+/// the writable struct fields, and the enum payloads some body writes).
+/// `None` when `name` is no `shared` or `sync` type of the program.
+fn type_text(t: &ast::TypeExpr) -> String {
+    crate::formatter::render_type_expr(t)
+}
+
+pub fn borrow_flag_report(src: &str, name: &str) -> Result<Option<TypeFlags>, String> {
+    // A type the program never uses is lowered nowhere, and a generic one
+    // only at an instance: a function taking it, with each parameter
+    // filled by `String` (neither `Copy` nor counted), makes one.
+    let parsed = crate::parse(src);
+    let found = parsed.program.items.iter().find_map(|i| match i {
+        Item::StructDef(s) if s.name == name => Some((
+            s.is_shared || s.is_par,
+            s.is_par,
+            false,
+            s.generic_params.clone(),
+        )),
+        Item::EnumDef(e) if e.name == name => Some((
+            e.is_shared || e.is_par,
+            e.is_par,
+            true,
+            e.generic_params.clone(),
+        )),
+        _ => None,
+    });
+    let Some((true, sync, is_enum, generics)) = found else {
+        return Ok(None);
+    };
+    let params: Vec<String> = generics
+        .iter()
+        .flat_map(|g| g.params.iter().map(|p| p.name.clone()))
+        .collect();
+    let args = if params.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", vec!["String"; params.len()].join(", "))
+    };
+    let probe =
+        format!("{src}\nfn karac_explain_flags_probe(x: ref {name}{args}) -> i64 {{ 0 }}\n");
+    let fe = frontend(&probe, true)?;
+    let lowered = fe.lower(AutoPar::Off)?;
+    let dr = fe
+        .defs_res
+        .get_or_init(|| DefsRes::build(&fe.program, &fe.r, &fe.tc));
+    let adt = dr
+        .defs
+        .lookup(0, name)
+        .and_then(|d| lowered.tys.tcx().adt_def(d))
+        .ok_or_else(|| format!("`{name}` has no lowered definition"))?;
+    // The AST field types, to tell a field a type parameter types.
+    let ast_fields: Vec<Vec<String>> = parsed
+        .program
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Item::StructDef(s) if s.name == name => {
+                Some(vec![s.fields.iter().map(|f| type_text(&f.ty)).collect()])
+            }
+            Item::EnumDef(e) if e.name == name => Some(
+                e.variants
+                    .iter()
+                    .map(|v| match &v.kind {
+                        ast::VariantKind::Unit => Vec::new(),
+                        ast::VariantKind::Tuple(ts) => ts.iter().map(type_text).collect(),
+                        ast::VariantKind::Struct(fs) => {
+                            fs.iter().map(|f| type_text(&f.ty)).collect()
+                        }
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let by_param = |v: usize, f: usize| {
+        ast_fields.get(v).and_then(|fs| fs.get(f)).is_some_and(|t| {
+            t.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|w| params.iter().any(|p| p == w))
+        })
+    };
+    let written =
+        crate::mir::flags::written_payloads(lowered.program.bodies.values(), &lowered.tys);
+    let tys = &lowered.tys;
+    let mut report = TypeFlags {
+        keyword: if sync { "sync" } else { "shared" },
+        is_enum,
+        flagged: Vec::new(),
+        unflagged: Vec::new(),
+    };
+    for (vi, v) in adt.variants.iter().enumerate() {
+        for (fi, (field, t)) in v.fields.iter().enumerate() {
+            let label = if is_enum {
+                format!("{}.{field}", v.name)
+            } else {
+                field.clone()
+            };
+            let writable = if is_enum {
+                written.contains(&(adt.name.clone(), vi as u32, fi as u32))
+            } else {
+                lowered
+                    .writable_fields
+                    .contains(&(name.to_string(), fi as u32))
+            };
+            if !writable {
+                let why = if is_enum {
+                    "no body writes it"
+                } else {
+                    "not `mut`"
+                };
+                report.unflagged.push((label, why));
+            } else if tys.is_copy(*t) {
+                report.unflagged.push((label, "`Copy`"));
+            } else if !crate::mir::flags::takes_flag(tys, *t) {
+                report
+                    .unflagged
+                    .push((label, "a counted handle or handle aggregate"));
+            } else {
+                report.flagged.push((label, by_param(vi, fi)));
+            }
+        }
+    }
+    Ok(Some(report))
+}
+
 fn lower_source_for_checks(
     src: &str,
     check_only: bool,

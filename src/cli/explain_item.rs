@@ -218,9 +218,102 @@ pub(super) fn render_to_string(
     item: &str,
     format: ExplainFormat,
 ) -> Result<String, String> {
+    if !item.contains('.') {
+        if let Some(out) = type_flags(file, item, format)? {
+            return Ok(out);
+        }
+    }
     let r = report(file, item)?;
     Ok(match format {
         ExplainFormat::Text => render_text(&r),
         ExplainFormat::Json => render_json(&r),
     })
+}
+
+/// `karac explain <file>.<Type>` for a `shared` or `sync` type: the fields
+/// that carry a run-time borrow flag and the total, a byte each per
+/// instance before padding (design.md § Shared types; B-2026-11-23-75).
+/// `None` when `item` is no such type, so the function report answers.
+fn type_flags(file: &str, item: &str, format: ExplainFormat) -> Result<Option<String>, String> {
+    let source = std::fs::read_to_string(file).map_err(|e| format!("cannot read `{file}`: {e}"))?;
+    let declared = crate::parse(&source)
+        .program
+        .items
+        .iter()
+        .find_map(|i| match i {
+            crate::ast::Item::StructDef(s) if s.name == item => Some(s.is_shared || s.is_par),
+            crate::ast::Item::EnumDef(e) if e.name == item => Some(e.is_shared || e.is_par),
+            _ => None,
+        });
+    match declared {
+        None => return Ok(None),
+        Some(false) => {
+            let text = format!(
+                "karac explain — type: {item} ({file})\n\nBorrow flags: none (only a `shared` or `sync` type's fields carry one)\n"
+            );
+            return Ok(Some(match format {
+                ExplainFormat::Text => text,
+                ExplainFormat::Json => format!(
+                    "{{\"kind\":\"type\",\"item\":{},\"file\":{},\"keyword\":null,\"borrow_flags\":0,\"flagged\":[],\"unflagged\":[]}}",
+                    json_string(item),
+                    json_string(file),
+                ),
+            }));
+        }
+        Some(true) => {}
+    }
+    let Some(r) = crate::mir::lower::borrow_flag_report(&source, item)
+        .map_err(|e| format!("`{file}` does not build far enough to place borrow flags: {e}"))?
+    else {
+        return Ok(None);
+    };
+    let n = r.flagged.len();
+    let kind = if r.is_enum { "enum" } else { "struct" };
+    Ok(Some(match format {
+        ExplainFormat::Text => {
+            let mut out = format!(
+                "karac explain — type: {item} ({file}), a `{} {kind}`\n\nBorrow flags: {n} ({n} byte{} per instance before padding)\n",
+                r.keyword,
+                if n == 1 { "" } else { "s" },
+            );
+            for (f, param) in &r.flagged {
+                let note = if *param {
+                    " (typed by a parameter: at an instance whose argument is neither `Copy` nor a handle)"
+                } else {
+                    ""
+                };
+                out.push_str(&format!("  {f}: flagged{note}\n"));
+            }
+            for (f, why) in &r.unflagged {
+                out.push_str(&format!("  {f}: no flag ({why})\n"));
+            }
+            out
+        }
+        ExplainFormat::Json => {
+            let flagged: Vec<String> = r
+                .flagged
+                .iter()
+                .map(|(f, p)| format!("{{\"field\":{},\"by_parameter\":{p}}}", json_string(f)))
+                .collect();
+            let unflagged: Vec<String> = r
+                .unflagged
+                .iter()
+                .map(|(f, why)| {
+                    format!(
+                        "{{\"field\":{},\"why\":{}}}",
+                        json_string(f),
+                        json_string(why)
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"kind\":\"type\",\"item\":{},\"file\":{},\"keyword\":{},\"borrow_flags\":{n},\"flagged\":[{}],\"unflagged\":[{}]}}",
+                json_string(item),
+                json_string(file),
+                json_string(r.keyword),
+                flagged.join(","),
+                unflagged.join(","),
+            )
+        }
+    }))
 }
