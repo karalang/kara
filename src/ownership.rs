@@ -2027,6 +2027,13 @@ pub(crate) fn is_copy_type_in_scope(
         // second use. `*const T` already behaved Copy via `ref`-mode param
         // inference; this makes the rule uniform and explicit for both.
         Type::Pointer { .. } => true,
+        // design.md § `impl Trait`: only a bound that is itself `Copy` (a
+        // trait that is `Copy` or has it as a supertrait) makes the value
+        // `Copy`, as the MIR builder's `impl_traits_are_copy` already reads
+        // it (B-2026-11-24-19).
+        Type::Existential { trait_name, .. } => tc
+            .copy_traits
+            .contains(trait_name.rsplit('.').next().unwrap_or(trait_name)),
         // RC-tier types — `shared struct S`, `Rc[T]`, `Arc[T]` — are
         // cheap-clone reference handles. A use does not consume the
         // originating binding; the runtime bumps the refcount. Without

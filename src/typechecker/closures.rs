@@ -56,6 +56,37 @@ impl<'a> super::TypeChecker<'a> {
     /// not yet exist. Used by the once-callability walker to decide
     /// whether a captured outer binding's type is Copy (no consume
     /// possible) or non-Copy (consume promotes the closure to OnceFn).
+    /// Whether trait `name` is `Copy` or has it among its supertraits, at
+    /// any depth.
+    pub(super) fn trait_is_copy(&self, name: &str) -> bool {
+        let mut seen: Vec<&str> = Vec::new();
+        let mut stack = vec![name];
+        while let Some(n) = stack.pop() {
+            if n == "Copy" {
+                return true;
+            }
+            if seen.contains(&n) {
+                continue;
+            }
+            seen.push(n);
+            if let Some(t) = self.env.traits.get(n) {
+                stack.extend(t.supertraits.iter().map(String::as_str));
+            }
+        }
+        false
+    }
+
+    /// Every trait [`Self::trait_is_copy`] holds of, for
+    /// `TypeCheckResult::copy_traits`.
+    pub(super) fn copy_traits(&self) -> rustc_hash::FxHashSet<String> {
+        self.env
+            .traits
+            .keys()
+            .filter(|n| self.trait_is_copy(n))
+            .cloned()
+            .collect()
+    }
+
     pub(super) fn is_copy_type_during_check(&self, ty: &Type) -> bool {
         // A number whose type a later use has yet to fix is a number either
         // way (B-2026-11-07-3).
@@ -108,6 +139,12 @@ impl<'a> super::TypeChecker<'a> {
             // *mut CFile` copies the pointer rather than borrowing it
             // (B-2026-11-22-22).
             Type::Pointer { .. } => true,
+            // design.md § `impl Trait`: a bound that is itself `Copy` (a
+            // trait that is `Copy` or has it as a supertrait) makes the value
+            // `Copy` (B-2026-11-24-19).
+            Type::Existential { trait_name, .. } => {
+                self.trait_is_copy(trait_name.rsplit('.').next().unwrap_or(trait_name))
+            }
             // B-2026-10-14-10 — v2 core §1.1: a `ref T` is `Copy`, so
             // `let a = v[0];` over a `Vec[ref Node]` copies the reference.
             // Strict commands only, like `StringSlice` below.

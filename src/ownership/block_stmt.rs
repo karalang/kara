@@ -279,7 +279,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 // span is unaliased (unlike LHS chains), so this is the
                 // reliable source of binding types for later consume sites
                 // that walk through chained accesses (`c.inner.unwrap()`).
-                if let Some(rhs_ty) = self.typecheck_result.expr_type(value) {
+                // `let_value_type`: a value coerced into a `dyn` slot binds
+                // the `dyn` (B-2026-11-24-20).
+                if let Some(rhs_ty) = self.typecheck_result.let_value_type(value) {
                     let rhs_ty = rhs_ty.clone();
                     let rhs_ty = match (annotated_borrow, annotated_mut, rhs_ty) {
                         (true, _, t @ (Type::Ref(_) | Type::MutRef(_))) => t,

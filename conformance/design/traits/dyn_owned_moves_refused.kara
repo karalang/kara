@@ -1,0 +1,24 @@
+// design.md § `dyn Trait`: an owned dyn moves, and is Copy never, whatever
+// the concrete value it was made from (here a Copy struct). `let b = a` moves
+// `a`, so the later `a.area()` is a use after move (B-2026-11-24-20).
+trait Shape {
+    fn area(self) -> i64;
+}
+
+#[derive(Copy, Clone)]
+struct Sq {
+    s: i64,
+}
+
+impl Shape for Sq {
+    fn area(self) -> i64 {
+        self.s * self.s
+    }
+}
+
+fn main() {
+    let a: dyn Shape = Sq { s: 2 };
+    let b = a;
+    println(b.area());
+    println(a.area());
+}

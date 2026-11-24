@@ -1,0 +1,23 @@
+// design.md § `impl Trait`: only a bound that is itself Copy (a trait that is
+// Copy or has it as a supertrait) makes the value Copy. `Tok: Copy`, so the
+// `impl Tok` result copies at `let b = a` and `a` is still usable
+// (B-2026-11-24-19).
+trait Tok: Copy {
+    fn n(self) -> i64;
+}
+
+impl Tok for i64 {
+    fn n(self) -> i64 {
+        self
+    }
+}
+
+fn mk() -> impl Tok {
+    5
+}
+
+fn main() {
+    let a = mk();
+    let b = a;
+    println(b.n() + a.n());
+}

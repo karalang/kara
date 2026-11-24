@@ -2294,6 +2294,10 @@ pub struct TypeCheckResult {
     pub union_info: FxHashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
     pub distinct_type_traits: FxHashMap<String, FxHashSet<String>>,
+    /// The traits that are `Copy` or have it among their supertraits, at
+    /// any depth: an `impl Trait` value of one copies (design.md § `impl
+    /// Trait`, B-2026-11-24-19).
+    pub copy_traits: FxHashSet<String>,
     /// The base type of each `distinct type Name = Base`, by name.
     pub distinct_bases: FxHashMap<String, Type>,
     /// The type parameters of each generic distinct type, in order
@@ -3026,6 +3030,18 @@ impl TypeCheckResult {
     /// last impl's type, so the node's own is read: the copy in a
     /// `Pick[String]` impl moves a `String` where the `Pick[i64]` copy reads
     /// an `i64` (B-2026-10-28-9).
+    /// The type a `let` binds from its initializer `value`: the `dyn` slot's
+    /// when the value coerces into one (`let a: dyn Shape = Sq { .. }`,
+    /// whose node type stays `Sq`), else the value's own. An owned `dyn`
+    /// moves whatever it was made from (design.md § `dyn Trait`,
+    /// B-2026-11-24-20).
+    pub fn let_value_type(&self, value: &crate::ast::Expr) -> Option<&Type> {
+        self.node_dyn_coercions
+            .get(&value.id)
+            .map(|(_, slot)| slot)
+            .or_else(|| self.expr_type(value))
+    }
+
     pub fn expr_type(&self, e: &crate::ast::Expr) -> Option<&Type> {
         let key = SpanKey::from_span(&e.span);
         if self.default_copy_spans.contains(&key) {
@@ -5778,6 +5794,7 @@ impl<'a> TypeChecker<'a> {
         self.report_open_receiver_calls();
         self.discharge_deferred_assoc_impl_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
+        let copy_traits = self.copy_traits();
         let distinct_bases = self.env.distinct_bases.clone();
         let distinct_params = self.env.distinct_params.clone();
         let impl_trait_assoc_types = self.impl_trait_assoc_types();
@@ -5912,6 +5929,7 @@ impl<'a> TypeChecker<'a> {
             enum_info: self.env.enums,
             union_info: self.env.unions,
             distinct_type_traits,
+            copy_traits,
             distinct_bases,
             distinct_params,
             question_conversions: self.question_conversions,

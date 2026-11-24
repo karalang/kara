@@ -204,7 +204,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, not drafte
 | 3609 | The result borrows every `mut ref` parameter and every view parameter | covered | traits/impl_trait_result_borrows_view_param_refused (new) |
 | 3609 | With no such parameter the result borrows nothing | covered | impl_trait_borrow_rule |
 | 3609 | The value is live until scope end, so the borrow persists, a Copy hidden type included | covered | traits/impl_trait_borrow_persists_copy_hidden(_refused) (new) |
-| 3609 | Only a bound that is itself Copy makes the value Copy | FAILS | B-2026-11-24-19: trait Tok: Copy; impl Tok value still moves at check (MIR agrees with the page). Refusal half: traits/impl_trait_not_copy_refused (new) |
+| 3609 | Only a bound that is itself Copy makes the value Copy | covered | impl_trait_copy_supertrait_copies (B-2026-11-24-19, fixed); refusal half: traits/impl_trait_not_copy_refused |
 
 ## dyn Trait
 
@@ -212,7 +212,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, not drafte
 |---|---|---|---|
 | 3622 | A call through dyn dispatches to the concrete type's method | covered | dyn_page_example |
 | 3654 | An owned dyn owns its concrete value and drops it | covered | dyn_option_and_drop_in_vec, dyn_calls_and_moves |
-| 3654 | An owned dyn moves, and is Copy never | FAILS | B-2026-11-24-20: check accepts a use after `let b = a` of a dyn; run refuses in the MIR move check |
+| 3654 | An owned dyn moves, and is Copy never | covered | dyn_owned_moves_refused (B-2026-11-24-20, fixed) |
 | 3655 | `ref dyn` / `mut ref dyn` view a concrete value or an owned dyn | covered | dyn_coercion_sites |
 | 3656 | Every associated type is bound in the dyn type; an unbound one is an error naming it | covered | dyn_iterator_bound_assoc, dyn_assoc_type_unbound_refused |
 | 3660 | The `dyn` keyword is required in a type position | partial | impl_trait_bare_trait_type_refused (same refusal; no dyn-context cell) |

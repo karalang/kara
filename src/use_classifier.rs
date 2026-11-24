@@ -919,7 +919,9 @@ impl<'a> UseClassifier<'a> {
                 // at the let-RHS site so subsequent identifier-leaves
                 // have a name-keyed type to fall back on when their
                 // span lookup would alias.
-                if let Some(rhs_ty) = self.tc.expr_type(value) {
+                // A value coerced into a `dyn` slot binds the `dyn`
+                // (`let_value_type`, B-2026-11-24-20).
+                if let Some(rhs_ty) = self.tc.let_value_type(value) {
                     // Decompose a tuple destructure field-by-field so each
                     // binding gets its OWN type, not the whole tuple's. Without
                     // this, `let (n, s) = f()` where `f -> (i64, String)` maps
