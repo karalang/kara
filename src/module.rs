@@ -409,6 +409,10 @@ pub fn build_program_tree_with_overlay(
         // (B-2026-11-08-60). Read later from the module's items, the mark
         // was gone and the `const` a binding (B-2026-11-24-12).
         crate::block_consts::hoist_block_consts(&mut parsed.program);
+        // `import std.io.{File as F};` names a global under another name: the
+        // module's uses of `F` become `File`, as in a lone file
+        // (B-2026-11-23-14).
+        crate::prelude::alias_library_globals(&mut parsed.program);
         let imports = extract_imports(&parsed.program);
         if !parsed.errors.is_empty() {
             parse_errors.push(ModuleParseErrors {

@@ -4567,8 +4567,12 @@ fn library_module_paths_resolve() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 
+    // `File as F` is `File` under another name (B-2026-11-23-14); it is
+    // refused only where the file gives `F` to something else too, here a
+    // generic parameter.
     let src = "import std.sync.{Mutx};\n\
                import std.io.{File as F};\n\
+               fn id[F](x: F) -> F { x }\n\
                fn main() {}\n";
     let (dir, path) = fixture("library-paths-bad", src);
     let out = karac().arg("check").arg(&path).output().unwrap();
@@ -4576,7 +4580,7 @@ fn library_module_paths_resolve() {
     assert!(!out.status.success());
     for want in [
         "`std.sync` has no item `Mutx`, did you mean `Mutex`?",
-        "`std.io.File` cannot be renamed (`as F`) yet",
+        "`std.io.File` cannot be imported as `F`: this file also gives `F`",
     ] {
         assert!(err.contains(want), "want {want:?} in\n{err}");
     }

@@ -762,8 +762,20 @@ pub(crate) fn subst_type_expr(
                     };
                 }
             }
+            // An applied name (`Tx[i64]`) whose replacement is a bare name
+            // (an import alias's `Sender`, B-2026-11-23-14) is that name
+            // applied to the same arguments. A type parameter takes no
+            // arguments, so the trait substitution never meets this.
+            let mut segments = p.segments.clone();
+            if segments.len() == 1 {
+                if let Some(TypeKind::Path(r)) = subst.get(&segments[0]).map(|r| &r.kind) {
+                    if r.segments.len() == 1 && r.generic_args.is_none() {
+                        segments[0] = r.segments[0].clone();
+                    }
+                }
+            }
             TypeKind::Path(PathExpr {
-                segments: p.segments.clone(),
+                segments,
                 generic_args: p.generic_args.as_ref().map(|args| {
                     args.iter()
                         .map(|a| match a {

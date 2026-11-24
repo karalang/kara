@@ -119,7 +119,9 @@ fn a_package_refuses_a_bad_library_import_as_a_lone_file_does() {
     for src in [
         "import std.sync.{Atomikk};\n\nfn main() { }\n",
         "import std.sync;\n\nfn main() { }\n",
-        "import std.json.{Json as J};\n\nfn main() { }\n",
+        // An alias binds the library global (B-2026-11-23-14); one the file
+        // also gives a generic parameter is still refused.
+        "import std.json.{Json as J};\n\nfn id[J](x: J) -> J { x }\n\nfn main() { }\n",
     ] {
         let lone = scratch("bad-lone");
         std::fs::write(lone.join("main.kara"), src).unwrap();

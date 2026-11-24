@@ -1101,6 +1101,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `len`, `is_empty`, `trim` and case conversions, and `char`'s
   classifications and ASCII case; another is still refused by the checker
   (B-2026-11-24-7).
+- `import std.io.{File as F};` and the like bind the alias, as design.md
+  § Imports gives `as`: a library global (a type, a generic type, a trait or
+  a function, from `std.io`, `std.sync`, `std.hash`, `std.net` and the other
+  global modules) imported under another name is used by that name, in a
+  single file and in a package's modules. It was refused with E0113,
+  "cannot be renamed yet". The import is refused only where the file gives
+  the alias's name to something else too (an item, a generic parameter, a
+  second import); that help names the choices and carries no edit
+  (B-2026-11-23-14).
 - In a trait default body that two impls inherit, a method call that leaves
   out a defaulted argument takes its own callee's default. Every copy of the
   body took the default of the method the last impl's copy calls: with

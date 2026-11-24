@@ -2688,8 +2688,18 @@ pub fn library_module_item_error(
     let (have, spec) = library_global_module(path)?;
     let module = path.join(".");
     if have.contains(&name) {
+        // An alias is the global under another name (`alias_library_globals`)
+        // unless the file gives that name to something else as well: an item,
+        // a generic parameter or a second import. Which uses mean which is
+        // then not determined, so the help names the choices and carries no
+        // edit (B-2026-11-23-14).
         return alias.map(|a| {
-            format!("`{module}.{name}` cannot be renamed (`as {a}`) yet; import it as `{name}`")
+            format!(
+                "`{module}.{name}` cannot be imported as `{a}`: this file also gives `{a}` \
+                 to an item, a generic parameter or another import, so which uses of `{a}` \
+                 mean `{name}` is not determined; import it as `{name}` and write `{name}` \
+                 at those uses, or import it under a name the file does not use"
+            )
         });
     }
     if spec.contains(&name) {
@@ -2703,6 +2713,122 @@ pub fn library_module_item_error(
         msg.push_str(&format!(", did you mean `{s}`?"));
     }
     Some(msg)
+}
+
+/// `import std.io.{File as F};` names the global `File` as `F` (design.md
+/// § Imports): every use of `F` the program writes, where no local of that
+/// name is in scope, is rewritten to `File`, and the item dropped, as a
+/// flattened package module's aliased import is (`crate::import_alias`;
+/// B-2026-11-23-14). An alias the program declares a name of its own by,
+/// or gives two globals, stays for the resolver to report.
+pub(crate) fn alias_library_globals(program: &mut Program) {
+    // The library appended after the program is not the program's to rename
+    // in (its `F` is a generic parameter of its own).
+    let user = program.library_start.map_or(program.items.len(), |at| {
+        program
+            .items
+            .iter()
+            .position(|item| item.span().offset >= at)
+            .unwrap_or(program.items.len())
+    });
+    let mut declared = crate::import_alias::declared_names(&program.items[..user]);
+    // A generic parameter of the alias's name hides it where it is in scope;
+    // the import stays for the resolver to report instead.
+    generic_param_names(&program.items[..user], &mut declared);
+    let mut subst: HashMap<String, crate::ast::TypeExpr> = HashMap::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for item in &program.items {
+        let Item::Import(imp) = item else { continue };
+        if library_global_module(&imp.path).is_none() {
+            continue;
+        }
+        for ii in &imp.items {
+            if let Some(a) = &ii.alias {
+                if !taken.insert(a.clone()) {
+                    subst.insert(a.clone(), alias_target(&ii.name, ii.span));
+                }
+            }
+        }
+    }
+    // An alias two items give is reported, not rewritten.
+    let twice: Vec<String> = subst.keys().cloned().collect();
+    subst.clear();
+    for item in &mut program.items {
+        let Item::Import(imp) = item else { continue };
+        let Some((have, _)) = library_global_module(&imp.path) else {
+            continue;
+        };
+        imp.items.retain(|ii| {
+            let Some(a) = ii.alias.as_deref() else {
+                return true;
+            };
+            if !have.contains(&ii.name.as_str())
+                || declared.contains(a)
+                || twice.iter().any(|t| t == a)
+            {
+                return true;
+            }
+            if a != ii.name {
+                subst.insert(a.to_string(), alias_target(&ii.name, ii.span));
+            }
+            false
+        });
+    }
+    if subst.is_empty() {
+        return;
+    }
+    let items = &mut program.items[..user];
+    let hidden = crate::import_alias::local_uses(items);
+    for item in items {
+        crate::import_alias::rewrite_item(item, &subst, &hidden);
+    }
+}
+
+/// Every generic parameter name `items` declare, on an item or a method.
+fn generic_param_names(items: &[Item], out: &mut std::collections::HashSet<String>) {
+    let mut add = |g: &Option<crate::ast::GenericParams>| {
+        for p in g.iter().flat_map(|g| &g.params) {
+            out.insert(p.name.clone());
+        }
+    };
+    for item in items {
+        match item {
+            Item::Function(f) => add(&f.generic_params),
+            Item::StructDef(d) => add(&d.generic_params),
+            Item::EnumDef(d) => add(&d.generic_params),
+            Item::TraitDef(t) => {
+                add(&t.generic_params);
+                for ti in &t.items {
+                    if let crate::ast::TraitItem::Method(m) = ti {
+                        add(&m.generic_params);
+                    }
+                }
+            }
+            Item::ImplBlock(b) => {
+                add(&b.generic_params);
+                for ii in &b.items {
+                    if let crate::ast::ImplItem::Method(m) = ii {
+                        add(&m.generic_params);
+                    }
+                }
+            }
+            Item::TypeAlias(a) => add(&a.generic_params),
+            _ => {}
+        }
+    }
+}
+
+/// `name` as the one-segment type path an alias is rewritten to.
+fn alias_target(name: &str, span: Span) -> crate::ast::TypeExpr {
+    crate::ast::TypeExpr {
+        kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
+            segments: vec![name.to_string()],
+            generic_args: None,
+            effect_args: None,
+            span,
+        }),
+        span,
+    }
 }
 
 /// Fold every named import of one gated module into its first import:
@@ -2761,6 +2887,7 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
     // `import std.path;` + `path.f(..)` → `import std.path.{f};` + `f(..)`.
     crate::module_binding::expand_single_file_std_module_bindings(program);
     merge_gated_imports(program);
+    alias_library_globals(program);
     let mut appended: Vec<Item> = Vec::new();
     // A program's own items and its explicit imports beat a wildcard
     // (design.md § Wildcards).
