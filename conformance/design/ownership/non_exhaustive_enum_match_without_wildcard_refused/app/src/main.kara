@@ -1,0 +1,3 @@
+// design.md §11 #[non_exhaustive]: a match in another package needs a wildcard arm even when it names every current variant.
+import lib.{FetchError};
+fn main() { let e = FetchError.Timeout; let s = match e { FetchError.Timeout => "timeout", FetchError.NotFound => "nf" }; println(s); }

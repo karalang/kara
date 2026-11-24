@@ -1,0 +1,3 @@
+// design.md §11 The freeze site: a sync type is refused.
+sync struct S { v: i64 }
+fn main() { let s = S { v: 1 }; let g = freeze s; println(1); }

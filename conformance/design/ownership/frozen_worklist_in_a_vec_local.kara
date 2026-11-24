@@ -1,0 +1,16 @@
+// design.md §11 Local worklists: push of a frozen place, len, is_empty and q[i] on a Vec local.
+shared struct Deep { d: i64 }
+shared struct Inner { deep: Deep }
+shared struct Node { val: i64, inner: Inner, mut kids: Vec[Node], mut next: Option[Node], mut count: i64 }
+fn leaf(v: i64) -> Node { Node { val: v, inner: Inner { deep: Deep { d: v * 10 } }, kids: Vec.new(), next: None, count: 0 } }
+fn build() -> Node { let r = leaf(1); r.kids.push(leaf(2)); r.kids.push(leaf(3)); r.next = Some(leaf(4)); r }
+fn walk(n: frozen Node) -> i64 {
+    let mut q: Vec[Node] = Vec.new();
+    q.push(n);
+    let mut i = 0;
+    let mut t = 0;
+    while i < q.len() { let cur = q[i]; t += cur.val; for k in cur.kids { q.push(k); } i += 1; }
+    if q.is_empty() { t = -1; }
+    t
+}
+fn main() { let g = freeze build(); println(walk(g)); }

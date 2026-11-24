@@ -1,0 +1,14 @@
+// design.md §11 categories 2-5: an adapter, a guard (its message names the resource), a builder step, and pure transformations.
+import std.process.{Command};
+fn main() {
+    let v = [1, 2, 3];
+    v.iter().map(|x| x * 2);
+    v.iter();
+    let m = Mutex.new(1);
+    m.lock();
+    Command.new("ls").arg("x");
+    "Ab".to_lowercase();
+    "  a ".trim();
+    "ab".replace("a", "b");
+    println(1);
+}

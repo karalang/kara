@@ -1,0 +1,5 @@
+// design.md §11 weak rules: passing a strong handle where a weak type is expected stores a weak reference.
+shared struct Parent { name: String }
+shared struct Kid { mut parent: weak Parent }
+fn set(c: Kid, p: weak Parent) { c.parent = p; }
+fn main() { let p = Parent { name: "p" }; let c = Kid { parent: None }; set(c, p); println(c.parent.expect("set").name); }

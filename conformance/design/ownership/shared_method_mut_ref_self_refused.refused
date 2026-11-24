@@ -1,0 +1,3 @@
+E0200
+takes `mut ref self`
+borrowed `self` only

@@ -1,0 +1,12 @@
+// design.md §11 Equality: `ref_eq` is provided on every shared, sync and frozen handle type, with no bound (no derive here).
+shared struct N { v: i64 }
+sync struct S { v: i64 }
+fn same(a: frozen N, b: frozen N) -> bool { a.ref_eq(b) }
+fn main() {
+    let s1 = S { v: 1 }; let s2 = S { v: 1 }; let s3 = s1;
+    println(s1.ref_eq(s2));
+    println(s1.ref_eq(s3));
+    let n = N { v: 1 };
+    let g = freeze n;
+    println(same(g, g));
+}

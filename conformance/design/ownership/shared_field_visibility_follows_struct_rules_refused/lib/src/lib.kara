@@ -1,0 +1,2 @@
+pub shared struct Acc { pub mut n: i64, mut secret: i64 }
+pub fn acc() -> Acc { Acc { n: 0, secret: 0 } }

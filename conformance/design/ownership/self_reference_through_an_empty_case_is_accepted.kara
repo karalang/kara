@@ -1,0 +1,12 @@
+// design.md §11: a self-reference through Option, Vec, Map or Set is accepted and frees normally.
+#[derive(PartialEq, Eq, Hash)]
+shared struct Key { id: i64 }
+shared struct Node { v: i64, mut a: Option[Node], mut b: Vec[Node], mut c: Map[i64, Node] }
+shared struct KNode { k: Key, mut d: Set[Key] }
+fn main() {
+    let leaf = Node { v: 2, a: None, b: Vec.new(), c: Map.new() };
+    let n = Node { v: 1, a: Some(leaf), b: [leaf], c: Map.new() };
+    n.c.insert(1, leaf);
+    let kn = KNode { k: Key { id: 1 }, d: Set.new() };
+    println(n.v + n.b.len() + n.c.len() + kn.d.len());
+}

@@ -1,0 +1,8 @@
+// design.md §11 One task only: nor a TaskGroup task.
+shared struct N { v: i64 }
+fn main() {
+    let n = N { v: 1 };
+    let g = TaskGroup.new();
+    let h = g.spawn(|| n.v);
+    println(h.join());
+}

@@ -1,0 +1,12 @@
+// design.md §11 Ergonomics: `while let Some(p) = current.parent { current = p; }` upgrades once per iteration.
+shared struct Node { v: i64, mut parent: weak Node }
+fn main() {
+    let root = Node { v: 0, parent: None };
+    let a = Node { v: 1, parent: root };
+    let b = Node { v: 2, parent: a };
+    let mut current = b;
+    let mut depth = 0;
+    while let Some(p) = current.parent { current = p; depth += 1; }
+    println(depth);
+    println(current.v);
+}

@@ -1,0 +1,3 @@
+// design.md §11: field visibility follows the rules for ordinary structs.
+import lib.{Acc, acc};
+fn main() { let a = acc(); a.secret = 1; println(a.n); }

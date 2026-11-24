@@ -1,0 +1,4 @@
+// design.md §11: a `pub mut` field is written through any handle, from another package too.
+import lib.{Acc, acc};
+fn bump(a: Acc) { a.n += 1; }
+fn main() { let a = acc(); let b = a; bump(b); a.n += 1; println(a.n); }

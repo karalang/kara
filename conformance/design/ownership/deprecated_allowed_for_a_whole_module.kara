@@ -1,0 +1,5 @@
+// design.md §11 Suppression: on a module (a file's inner attribute).
+#![allow(deprecated)]
+#[deprecated]
+fn old() -> i64 { 2 }
+fn main() { println(old()); }

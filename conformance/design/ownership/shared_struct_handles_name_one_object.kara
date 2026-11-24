@@ -1,0 +1,17 @@
+// design.md §11 Shared types: `alias` and `root` name the same node; `child` stays usable after it is stored.
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+fn main() {
+    let root = TreeNode { val: 1, left: None, right: None };
+    let child = TreeNode { val: 2, left: None, right: None };
+    root.left = Some(child);
+    println(child.val);
+    let alias = root;
+    alias.right = Some(TreeNode { val: 3, left: None, right: None });
+    match root.right { Some(r) => println(r.val), None => println("none") }
+    match root.left { Some(l) => println(l.val), None => println("none") }
+    println(root.val + alias.val);
+}

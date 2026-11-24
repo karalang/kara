@@ -1,0 +1,25 @@
+// design.md §11: on a function, struct, enum, variant, trait, method, associated function, type alias or constant; a call, a type name, a variant constructor and a pattern each warn.
+#[deprecated]
+struct OldS { v: i64 }
+#[deprecated]
+enum OldE { A }
+enum E2 { #[deprecated] Gone, Here }
+#[deprecated]
+trait OldT { fn f(self) -> i64; }
+struct M {}
+impl OldT for M { fn f(self) -> i64 { 10 } }
+impl M { #[deprecated] fn meth(self) -> i64 { 3 } #[deprecated] fn assoc() -> i64 { 4 } }
+#[deprecated]
+type Alias = i64;
+#[deprecated]
+const OLD_C: i64 = 5;
+fn main() {
+    let s = OldS { v: 1 };
+    let e = OldE.A;
+    let g = E2.Gone;
+    match g { E2.Gone => println("g"), E2.Here => println("h") }
+    let m = M {};
+    println(m.meth() + M.assoc() + m.f());
+    let a: Alias = 1;
+    println(OLD_C + a + s.v);
+}

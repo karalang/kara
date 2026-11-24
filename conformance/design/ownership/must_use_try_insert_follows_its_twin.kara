@@ -1,0 +1,8 @@
+// design.md §11: `m.try_insert(k, v)?;` is exempt; without `?` the Result still warns.
+fn f() -> Result[(), AllocError] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.try_insert(1, 2)?;
+    m.try_insert(3, 4);
+    Ok(())
+}
+fn main() { f().unwrap(); println(1); }

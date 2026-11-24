@@ -1,0 +1,5 @@
+E_NOT_CROSS_TASK
+help: declare `Elevator` as a `sync` type, or read what the branches need out of `state` before the `par`
+- shared struct Elevator { stops: Vec[i64], mut direction: Direction, mut floor: i64, mut on: bool, mut log: String }
++ sync struct Elevator { stops: Vec[i64], direction: Mutex[Direction], floor: Atomic[i64], on: Atomic[bool], log: Mutex[String] }
+`freeze` keeps it `shared`

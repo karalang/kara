@@ -1,0 +1,10 @@
+// design.md §11 Crossing tasks: sync handles enter par for iterations and TaskGroup tasks freely.
+sync struct S { v: Atomic[i64] }
+fn main() {
+    let s = S { v: Atomic.new(0) };
+    par for i in 0..10 { s.v.fetch_add(i); }
+    let g = TaskGroup.new();
+    let h = g.spawn(|| { s.v.fetch_add(100); 0 });
+    h.join();
+    println(s.v.load());
+}

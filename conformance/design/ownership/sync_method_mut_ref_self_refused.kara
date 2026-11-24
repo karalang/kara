@@ -1,0 +1,4 @@
+// design.md §11: methods of a sync type take a borrowed `self`.
+sync struct Counter { count: Atomic[u64] }
+impl Counter { fn clear(mut ref self) { } }
+fn main() { println(1); }

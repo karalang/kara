@@ -1,0 +1,4 @@
+// design.md §11 Handles in closures: shared handles are counted when captured, so the closure holds its own.
+shared struct N { mut v: i64 }
+fn mk() -> Fn() -> i64 { let n = N { v: 5 }; let c = || { n.v += 1; n.v }; c }
+fn main() { let c = mk(); println(c()); println(c()); }

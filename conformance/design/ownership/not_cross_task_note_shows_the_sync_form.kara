@@ -1,0 +1,5 @@
+// design.md §11 From shared to sync: the note shows the declaration before and after; bool/i32/i64/u32/u64 go in Atomic, the rest in Mutex.
+shared struct Elevator { stops: Vec[i64], mut direction: Direction, mut floor: i64, mut on: bool, mut log: String }
+enum Direction { Up, Down }
+fn go(e: Elevator) -> i64 { e.floor }
+fn main() { let state = Elevator { stops: Vec.new(), direction: Direction.Up, floor: 0, on: true, log: "" }; let (a, b) = par { go(state), 1 }; println(a + b); }

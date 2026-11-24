@@ -1,0 +1,4 @@
+// design.md §11 Shared types (table): using a regular struct moves it.
+struct P { n: i64 }
+fn take(p: own P) -> i64 { p.n }
+fn main() { let p = P { n: 1 }; let a = take(p); println(p.n + a); }

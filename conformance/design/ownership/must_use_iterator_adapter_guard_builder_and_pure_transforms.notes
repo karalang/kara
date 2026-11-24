@@ -1,0 +1,8 @@
+discarded `IterMap` value
+discarded `VecIter` value
+discarded `MutexGuard` value
+the mutex is released when this guard drops; bind it to a name to keep the lock
+discarded return value of `Command.arg`
+discarded return value of `String.to_lowercase`
+discarded return value of `String.trim`
+discarded return value of `String.replace`

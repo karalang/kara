@@ -1,0 +1,4 @@
+// design.md §11: on a function, it warns when the return value is discarded.
+#[must_use("check the count")]
+fn count() -> i64 { 3 }
+fn main() { count(); let _ = count(); println(count()); }

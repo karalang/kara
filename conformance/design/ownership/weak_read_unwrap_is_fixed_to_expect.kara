@@ -1,0 +1,4 @@
+// design.md §11 Diagnostic: `.unwrap()` on a weak read is a check warning whose fix writes `.expect("…")`.
+shared struct Parent { name: String }
+shared struct Kid { mut parent: weak Parent }
+fn main() { let p = Parent { name: "p" }; let c = Kid { parent: p }; println(c.parent.unwrap().name); }

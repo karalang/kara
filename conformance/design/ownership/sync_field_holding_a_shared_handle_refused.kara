@@ -1,0 +1,4 @@
+// design.md §11: every field's type must be CrossTask, so a sync type cannot hold a shared handle.
+shared struct H { v: i64 }
+sync struct S { h: H }
+fn main() { println(1); }

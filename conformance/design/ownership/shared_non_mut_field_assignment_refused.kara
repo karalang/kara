@@ -1,0 +1,3 @@
+// design.md §11: fields are immutable by default; assigning a non-`mut` field is an error.
+shared struct P { val: i64 }
+fn main() { let p = P { val: 1 }; p.val = 2; println(p.val); }

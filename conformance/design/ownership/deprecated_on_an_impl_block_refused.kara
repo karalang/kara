@@ -1,0 +1,5 @@
+// design.md §11: rejected on an impl block.
+struct S { v: i64 }
+#[deprecated]
+impl S { fn get(self) -> i64 { self.v } }
+fn main() { println(1); }

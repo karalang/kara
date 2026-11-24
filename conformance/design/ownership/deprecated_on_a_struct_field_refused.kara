@@ -1,0 +1,3 @@
+// design.md §11: rejected on a struct field.
+struct S { #[deprecated] v: i64 }
+fn main() { println(1); }

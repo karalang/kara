@@ -1,0 +1,4 @@
+// design.md §11 Identity keys: never `Ord`, so not a SortedSet element.
+import std.hash.{Identity};
+shared struct N { v: i64 }
+fn main() { let a = N { v: 1 }; let mut s: SortedSet[Identity[N]] = SortedSet.new(); s.insert(Identity.of(a)); println(s.len()); }

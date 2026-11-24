@@ -1,0 +1,3 @@
+// design.md §11 Diagnostic: on any other Option, unwrap is never a check warning.
+fn find(v: i64) -> Option[i64] { if v > 0 { Some(v) } else { None } }
+fn main() { println(find(1).unwrap()); }

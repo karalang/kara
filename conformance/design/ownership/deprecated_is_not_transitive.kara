@@ -1,0 +1,12 @@
+// design.md §11: deprecating a function does not mark its callers; deprecating a struct does not mark its methods.
+#[deprecated]
+fn old() -> i64 { 2 }
+#[allow(deprecated)]
+fn caller() -> i64 { old() }
+#[deprecated]
+struct S { v: i64 }
+#[allow(deprecated)]
+fn mk() -> S { S { v: 3 } }
+#[allow(deprecated)]
+impl S { fn get(self) -> i64 { self.v } }
+fn main() { println(caller() + mk().get()); }

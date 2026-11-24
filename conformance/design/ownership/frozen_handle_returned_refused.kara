@@ -1,0 +1,5 @@
+// design.md §11 property 3: `return n;` is refused.
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node { let r = Node { val: 1, neighbors: Vec.new() }; r.neighbors.push(Node { val: 2, neighbors: Vec.new() }); r.neighbors.push(Node { val: 3, neighbors: Vec.new() }); r }
+fn esc(n: frozen Node) -> Node { n }
+fn main() { let g = freeze build(); println(esc(g).val); }

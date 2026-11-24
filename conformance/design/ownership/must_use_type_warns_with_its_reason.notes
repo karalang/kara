@@ -1,0 +1,3 @@
+warning[must_use]
+discarded `Connection` value
+connections must be explicitly disconnected

@@ -1,0 +1,5 @@
+// design.md §11 property 3: a frozen binding may not outlive its owner.
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node { let r = Node { val: 1, neighbors: Vec.new() }; r.neighbors.push(Node { val: 2, neighbors: Vec.new() }); r.neighbors.push(Node { val: 3, neighbors: Vec.new() }); r }
+fn mk() -> Node { let g = freeze build(); g }
+fn main() { println(mk().val); }

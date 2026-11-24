@@ -1,0 +1,3 @@
+// design.md §11: `sync enum` follows the same rules in every variant.
+sync enum E { A { mut x: i64 }, B }
+fn main() { println(1); }

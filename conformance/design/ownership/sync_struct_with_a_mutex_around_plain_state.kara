@@ -1,0 +1,5 @@
+// design.md §11 Performance note: a plain struct behind one Mutex in a sync type.
+struct SessionState { request_count: i64, last: String }
+sync struct Session { id: u64, state: Mutex[SessionState] }
+fn hit(s: Session, p: own String) { let g = s.state.lock(); g.value.request_count += 1; g.value.last = p; }
+fn main() { let s = Session { id: 1, state: Mutex.new(SessionState { request_count: 0, last: "" }) }; par { hit(s, "a"), hit(s, "a") }; let g = s.state.lock(); println(g.value.request_count); println(g.value.last); }

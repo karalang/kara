@@ -1,0 +1,3 @@
+// design.md §11 Handles in closures: a closure capturing only sync handles may enter tasks.
+sync struct S { v: Atomic[i64] }
+fn main() { let s = S { v: Atomic.new(0) }; let c = || { s.v.fetch_add(1); 0 }; let (a, b) = par { c(), c() }; println(s.v.load() + a + b); }

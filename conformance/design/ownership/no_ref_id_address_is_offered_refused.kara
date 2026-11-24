@@ -1,0 +1,3 @@
+// design.md §11 Identity keys: a plain address (`ref_id`) is deliberately not offered.
+shared struct N { v: i64 }
+fn main() { let a = N { v: 1 }; println(a.ref_id()); }

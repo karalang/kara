@@ -1,0 +1,5 @@
+// design.md §11: a mut field is readable through a frozen place and never writable.
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node { let r = Node { val: 1, neighbors: Vec.new() }; r.neighbors.push(Node { val: 2, neighbors: Vec.new() }); r.neighbors.push(Node { val: 3, neighbors: Vec.new() }); r }
+fn w(n: frozen Node) { n.neighbors.push(Node { val: 9, neighbors: Vec.new() }); }
+fn main() { let g = freeze build(); w(g); }

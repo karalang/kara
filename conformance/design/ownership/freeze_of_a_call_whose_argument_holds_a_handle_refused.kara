@@ -1,0 +1,4 @@
+// design.md §11: a call source's arguments must hold no handle.
+shared struct N { mut v: i64 }
+fn mk(x: N) -> N { x }
+fn main() { let a = N { v: 1 }; let g = freeze mk(a); println(1); }

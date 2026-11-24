@@ -1,0 +1,8 @@
+// design.md §11 #[deprecated]: the bare form, `note:` and `since:`; every use warns and the code keeps compiling.
+#[deprecated]
+fn old_api() -> i64 { 1 }
+#[deprecated(note: "use `read_new` instead")]
+fn read_file_contents(p: Str) -> String { p.to_string() }
+#[deprecated(since: "1.2.0", note: "use `parse_config` instead")]
+fn load_config(p: Str) -> i64 { 2 }
+fn main() { println(old_api()); println(read_file_contents("x")); println(load_config("y")); }

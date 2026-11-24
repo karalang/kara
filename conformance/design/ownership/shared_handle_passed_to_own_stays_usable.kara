@@ -1,0 +1,4 @@
+// design.md §11 Shared types: passing a handle to an `own` parameter counts it; the source stays usable.
+shared struct C { mut n: i64 }
+fn take(c: own C) { c.n += 1; }
+fn main() { let c = C { n: 0 }; take(c); take(c); let v: Vec[C] = [c, c]; v[0].n += 10; println(c.n); }

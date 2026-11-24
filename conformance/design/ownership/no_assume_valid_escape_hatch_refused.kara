@@ -1,0 +1,3 @@
+// design.md §11: there is no unsafe escape hatch such as `assume_valid`.
+shared struct Node { v: i64, mut parent: weak Node }
+fn main() { let r = Node { v: 1, parent: None }; let n = Node { v: 2, parent: r }; println(n.parent.assume_valid().v); }

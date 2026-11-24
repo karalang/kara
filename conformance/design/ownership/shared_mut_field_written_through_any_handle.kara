@@ -1,0 +1,14 @@
+// design.md §11: a `mut` field can be written through any handle, including a borrowed parameter, a ref and a method's borrowed self.
+shared struct C { mut n: i64 }
+impl C { fn bump(self) { self.n += 1000; } }
+fn bump(c: C) { c.n += 1; }
+fn bump_ref(c: ref C) { c.n += 10; }
+fn main() {
+    let c = C { n: 0 };
+    bump(c);
+    bump_ref(c);
+    let r = ref c;
+    r.n += 100;
+    c.bump();
+    println(c.n);
+}

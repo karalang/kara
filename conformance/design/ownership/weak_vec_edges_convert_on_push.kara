@@ -1,0 +1,10 @@
+// design.md §11: `Vec[weak GraphNode]` edges; pushing a strong handle converts it.
+shared struct GraphNode { id: u64, mut neighbors: Vec[weak GraphNode] }
+fn connect(a: own GraphNode, b: own GraphNode) { a.neighbors.push(b); b.neighbors.push(a); }
+fn main() {
+    let a = GraphNode { id: 1, neighbors: Vec.new() };
+    let b = GraphNode { id: 2, neighbors: Vec.new() };
+    connect(a, b);
+    for w in a.neighbors.iter() { match w.upgrade() { Some(n) => println(n.id), None => println("gone") } }
+    for w in b.neighbors.iter() { match w.upgrade() { Some(n) => println(n.id), None => println("gone") } }
+}

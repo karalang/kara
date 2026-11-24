@@ -1,0 +1,4 @@
+// design.md §11 Handles in closures: it may not escape.
+shared struct N { v: i64 }
+fn mk(n: frozen N) -> Fn() -> i64 { || n.v }
+fn main() { let n0 = N { v: 3 }; let g = freeze n0; println(mk(g)()); }

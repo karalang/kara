@@ -1,0 +1,4 @@
+// design.md §11: a type with no `mut` field anywhere is immutable by structure, so no uniqueness is needed.
+shared struct N { v: i64 }
+fn read(n: frozen N) -> i64 { n.v }
+fn main() { let nodes: Vec[N] = [N { v: 1 }]; let root = nodes[0]; let g = freeze root; println(read(g)); println(nodes.len()); }

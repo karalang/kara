@@ -1,0 +1,9 @@
+item `OldS`
+item `OldE`
+item `E2.Gone`
+item `OldT`
+item `M.meth`
+item `M.assoc`
+item `Alias`
+item `OLD_C`
+20:15: use of deprecated item `E2.Gone`

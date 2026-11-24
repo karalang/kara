@@ -1,0 +1,4 @@
+// design.md §11: a consuming `own self` on a shared type is an error.
+shared struct C { mut n: i64 }
+impl C { fn done(own self) -> i64 { self.n } }
+fn main() { let c = C { n: 0 }; println(c.done()); }

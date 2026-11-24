@@ -1,0 +1,5 @@
+// design.md §11 Identity keys: `CrossTask` exactly when `T` is; a shared `T` stays in its task.
+import std.hash.{Identity};
+shared struct N { v: i64 }
+fn f(k: Identity[N]) -> i64 { k.get().v }
+fn main() { let a = N { v: 1 }; let k = Identity.of(a); let (x, y) = par { f(k), 2 }; println(x + y); }

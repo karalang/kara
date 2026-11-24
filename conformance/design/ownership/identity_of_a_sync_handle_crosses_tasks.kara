@@ -1,0 +1,5 @@
+// design.md §11 Identity keys: `Identity[T]` of a sync `T` is CrossTask.
+import std.hash.{Identity};
+sync struct N { v: i64 }
+fn f(k: Identity[N]) -> i64 { k.get().v }
+fn main() { let a = N { v: 1 }; let k = Identity.of(a); let k2 = k.clone(); let (x, y) = par { f(k), f(k2) }; println(x + y); }

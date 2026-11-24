@@ -1,0 +1,8 @@
+// design.md §11 Typestate: the state moves through the protocol.
+struct Disconnected {}
+struct Connected {}
+struct Connection[State] { id: i64 }
+fn connect(c: own Connection[Disconnected]) -> Result[Connection[Connected], String] { Ok(Connection { id: c.id }) }
+fn send(c: Connection[Connected], n: i64) -> i64 { c.id + n }
+fn disconnect(c: own Connection[Connected]) -> i64 { c.id }
+fn main() { let conn: Connection[Disconnected] = Connection { id: 1 }; let c = connect(conn).unwrap(); println(send(c, 2)); println(disconnect(c)); }

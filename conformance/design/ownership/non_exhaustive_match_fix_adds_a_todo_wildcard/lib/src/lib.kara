@@ -1,0 +1,7 @@
+#[non_exhaustive]
+pub enum FetchError { Timeout, NotFound }
+#[non_exhaustive]
+pub struct Options { pub port: i64, pub host: String }
+pub fn options(port: i64) -> Options { Options { port: port, host: "h" } }
+// Inside the defining package, a match is checked for exhaustiveness as usual.
+pub fn name(e: FetchError) -> String { match e { FetchError.Timeout => "t", FetchError.NotFound => "n" } }

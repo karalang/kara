@@ -1,0 +1,18 @@
+// design.md §11 Identity keys: two keys are equal exactly when `ref_eq` holds; `Identity.of(h)` and `h.identity()` are one key; `.get()` returns the handle.
+import std.hash.{Identity};
+shared struct N { v: i64 }
+fn main() {
+    let a = N { v: 1 }; let b = N { v: 1 }; let c = a;
+    let mut m: Map[Identity[N], i64] = Map.new();
+    m.insert(Identity.of(a), 10);
+    m.insert(b.identity(), 20);
+    m.insert(Identity.of(c), 30);
+    println(m.len());
+    println(m.get(a.identity()).unwrap());
+    let k = Identity.of(b);
+    println(k.get().v);
+    println(Identity.of(a) == Identity.of(c));
+    println(Identity.of(a) == Identity.of(b));
+    let k2 = k.clone();
+    println(k2 == k);
+}

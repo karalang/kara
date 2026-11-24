@@ -1,0 +1,2 @@
+warning[must_use]
+discarded `Token` value — `Token` is `#[must_use]`

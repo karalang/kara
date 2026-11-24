@@ -1,0 +1,2 @@
+E0511
+its operand is a temporary, not a place: bind it to a local first

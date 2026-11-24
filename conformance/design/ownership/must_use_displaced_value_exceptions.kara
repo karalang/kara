@@ -1,0 +1,11 @@
+// design.md §11 Displaced-value exception: the standard containers' displacing methods do not warn.
+fn main() {
+    let mut m: Map[i64, i64] = Map.new(); m.insert(1, 2); m.insert(1, 3); m.remove(1);
+    let mut sm: SortedMap[i64, i64] = SortedMap.new(); sm.insert(1, 2); sm.pop_first(); sm.insert(3, 4); sm.pop_last(); sm.insert(5, 6); sm.remove(5);
+    let mut ss: SortedSet[i64] = SortedSet.new(); ss.insert(1); ss.pop_first(); ss.insert(2); ss.pop_last();
+    let mut v: Vec[i64] = [1, 2, 3]; v.pop(); v.remove_first(|x| *x == 1);
+    let mut d: VecDeque[i64] = VecDeque.new(); d.push_back(1); d.push_back(2); d.pop_front(); d.pop_back();
+    let mut pq: PriorityQueue[i64] = PriorityQueue.new(); pq.push(1); pq.pop();
+    let mut s: String = "ab"; s.pop();
+    println(m.len() + v.len() + s.len());
+}

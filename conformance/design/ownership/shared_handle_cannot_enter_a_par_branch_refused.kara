@@ -1,0 +1,4 @@
+// design.md §11 One task only: a shared handle never crosses a task boundary.
+shared struct N { v: i64 }
+fn read(n: N) -> i64 { n.v }
+fn main() { let n = N { v: 1 }; let (a, b) = par { read(n), read(n) }; println(a + b); }

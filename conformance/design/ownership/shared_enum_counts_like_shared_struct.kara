@@ -1,0 +1,6 @@
+// design.md §11: `shared enum` has the same semantics; recursive data such as JSON values.
+shared enum Json { Null, Num(i64), Arr(Vec[Json]) }
+fn count(j: Json) -> i64 {
+    match j { Json.Null => 0, Json.Num(_) => 1, Json.Arr(v) => { let mut t = 0; for x in v { t += count(x); } t } }
+}
+fn main() { let a = Json.Num(1); let b = a; let arr = Json.Arr([a, b, Json.Null]); let c = arr; println(count(arr) + count(c)); }

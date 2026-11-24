@@ -1,0 +1,3 @@
+// design.md §11 #[deprecated]: for a pub item the diagnostic also names the defining package.
+import lib.{load_config, parse_config};
+fn main() { println(load_config("x") + parse_config("y")); }

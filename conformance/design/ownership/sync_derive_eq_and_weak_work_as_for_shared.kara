@@ -1,0 +1,11 @@
+// design.md §11: patterns, equality and weak fields work for sync types as for shared.
+#[derive(PartialEq, Eq)]
+sync struct P { x: i64 }
+sync struct Q { p: weak P }
+fn main() {
+    let a = P { x: 1 }; let b = P { x: 1 };
+    println(a == b);
+    println(a.ref_eq(b));
+    let q = Q { p: a };
+    println(q.p.expect("alive").x);
+}

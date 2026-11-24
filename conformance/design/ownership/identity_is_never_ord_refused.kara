@@ -1,0 +1,4 @@
+// design.md §11 Identity keys: `Identity[T]` is never `Ord`.
+import std.hash.{Identity};
+shared struct N { v: i64 }
+fn main() { let a = N { v: 1 }; let b = N { v: 2 }; println(Identity.of(a) < Identity.of(b)); }

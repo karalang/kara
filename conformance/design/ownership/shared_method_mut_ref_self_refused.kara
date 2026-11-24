@@ -1,0 +1,4 @@
+// design.md §11: a shared type's method taking `mut ref self` is an error.
+shared struct C { mut n: i64 }
+impl C { fn set(mut ref self, v: i64) { self.n = v; } }
+fn main() { let c = C { n: 0 }; c.set(1); println(c.n); }

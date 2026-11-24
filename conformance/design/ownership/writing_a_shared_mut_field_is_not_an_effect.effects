@@ -1,0 +1,2 @@
+set_n =
+set_s lacks writes(Stdout), reads(Stdout)

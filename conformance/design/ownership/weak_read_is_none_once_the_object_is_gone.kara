@@ -1,0 +1,12 @@
+// design.md §11 weak rules: a read checks liveness and gives None once the object is gone.
+shared struct Parent { name: String }
+shared struct Kid { mut parent: weak Parent }
+fn main() {
+    let c = Kid { parent: None };
+    {
+        let p = Parent { name: "p" };
+        c.parent = p;
+        println(c.parent.is_some());
+    }
+    println(c.parent.is_some());
+}

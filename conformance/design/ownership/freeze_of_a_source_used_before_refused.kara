@@ -1,0 +1,4 @@
+// design.md §11: the source must be a local with no other live name.
+shared struct N { mut v: i64 }
+fn read(n: frozen N) -> i64 { n.v }
+fn main() { let a = N { v: 1 }; let b = a; let g = freeze a; println(read(g)); println(b.v); }

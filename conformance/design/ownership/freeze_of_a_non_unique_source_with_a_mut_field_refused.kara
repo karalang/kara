@@ -1,0 +1,3 @@
+// design.md §11 The freeze site: `let root = nodes[0]; let g = freeze root;` is refused while `nodes` is live.
+shared struct N { mut v: i64 }
+fn main() { let nodes: Vec[N] = [N { v: 1 }]; let root = nodes[0]; let g = freeze root; println(nodes.len()); }

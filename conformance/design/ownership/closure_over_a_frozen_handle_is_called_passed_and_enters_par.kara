@@ -1,0 +1,5 @@
+// design.md §11 Handles in closures: a closure over a frozen handle may be called, passed down, and enter par branches.
+shared struct N { v: i64 }
+fn call(f: Fn() -> i64) -> i64 { f() }
+fn use_it(n: frozen N) -> i64 { let c = || n.v * 2; let (a, b) = par { call(c), c() }; a + b }
+fn main() { let n0 = N { v: 3 }; let g = freeze n0; println(use_it(g)); }

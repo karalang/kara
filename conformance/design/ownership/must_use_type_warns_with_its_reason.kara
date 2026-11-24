@@ -1,0 +1,8 @@
+// design.md §11 #[must_use]: the page's example; the warning text is the string argument.
+struct Disconnected {}
+struct Connected {}
+#[must_use("connections must be explicitly disconnected")]
+struct Connection[State] { id: i64 }
+fn connect(c: own Connection[Disconnected]) -> Result[Connection[Connected], String] { Ok(Connection { id: c.id }) }
+fn open_only(conn: own Connection[Disconnected]) -> Result[(), String] { connect(conn)?; Ok(()) }
+fn main() { let c: Connection[Disconnected] = Connection { id: 1 }; open_only(c).unwrap(); println(1); }

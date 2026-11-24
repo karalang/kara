@@ -1,0 +1,4 @@
+// design.md §11 category 1: Result and Option are must-use by a compiler rule, in user code too.
+fn parse(s: Str) -> Result[i64, String] { Ok(s.len()) }
+fn find() -> Option[i64] { Some(1) }
+fn main() { parse("1"); find(); println(1); }

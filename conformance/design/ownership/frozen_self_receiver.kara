@@ -1,0 +1,5 @@
+// design.md §11: `frozen self` for a receiver.
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node { let r = Node { val: 1, neighbors: Vec.new() }; r.neighbors.push(Node { val: 2, neighbors: Vec.new() }); r.neighbors.push(Node { val: 3, neighbors: Vec.new() }); r }
+impl Node { fn total(frozen self) -> i64 { let mut t = self.val; for k in self.neighbors { t += k.val; } t } }
+fn main() { let g = freeze build(); println(g.total()); }

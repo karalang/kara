@@ -1,0 +1,5 @@
+// design.md §11: writing a `mut` field is not an effect.
+shared struct C { mut n: i64, mut s: String }
+fn set_n(c: C) { c.n = 0; }
+fn set_s(c: C) { c.s = "x"; }
+fn main() { let c = C { n: 1, s: "" }; set_n(c); set_s(c); println(c.n); }

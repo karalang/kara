@@ -1,0 +1,4 @@
+// design.md §11: the exemption is scoped to the standard containers; a user-defined insert returning Option warns.
+struct Bag { n: i64 }
+impl Bag { fn insert(mut ref self, v: i64) -> Option[i64] { self.n = v; None } }
+fn main() { let mut b = Bag { n: 0 }; b.insert(1); println(b.n); }

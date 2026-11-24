@@ -1,0 +1,3 @@
+// design.md §11: a flag per `mut` field neither Copy nor a handle aggregate; `karac explain` reports the total for each type.
+shared struct Inbox { id: i64, mut count: i64, mut next: Option[Inbox], mut items: Vec[String], mut tags: Map[String, i64] }
+fn main() { let i = Inbox { id: 1, count: 0, next: None, items: Vec.new(), tags: Map.new() }; println(i.id); }

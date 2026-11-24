@@ -1,0 +1,8 @@
+warning[deprecated]
+`old_api`
+`read_file_contents`
+use `read_new` instead
+`load_config`
+use `parse_config` instead
+1.2.0
+#[allow(deprecated)]

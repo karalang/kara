@@ -1,0 +1,4 @@
+// design.md §11: the sync-form note is not a machine fix; karac fix does not apply it.
+shared struct Elevator { mut floor: i64 }
+fn go(e: Elevator) -> i64 { e.floor }
+fn main() { let state = Elevator { floor: 0 }; let (a, b) = par { go(state), 1 }; println(a + b); }

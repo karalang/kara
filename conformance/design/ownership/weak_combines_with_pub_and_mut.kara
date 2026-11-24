@@ -1,0 +1,3 @@
+// design.md §11 weak rules: `weak` combines with `pub` and `mut`.
+pub shared struct Node { pub mut parent: weak Node, pub v: i64 }
+fn main() { let r = Node { parent: None, v: 1 }; let n = Node { parent: r, v: 2 }; println(n.parent.expect("has a root").v); n.parent = n; println(n.parent.expect("self").v); }

@@ -1,0 +1,3 @@
+// design.md §11: a self-reference with no way to end is an error.
+shared struct Node { v: i64, mut next: Node }
+fn main() { println(1); }

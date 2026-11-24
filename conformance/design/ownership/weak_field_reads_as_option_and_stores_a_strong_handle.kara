@@ -1,0 +1,14 @@
+// design.md §11 Cycles and weak: `None` stores an empty weak; a strong handle stored downgrades; a read gives Option; `.upgrade()` and `.expect` read it too.
+shared struct Parent { name: String, mut kids: Vec[Kid] }
+shared struct Kid { mut parent: weak Parent }
+fn main() {
+    let p = Parent { name: "p", kids: Vec.new() };
+    let c = Kid { parent: None };
+    match c.parent { Some(x) => println(x.name), None => println("empty") }
+    c.parent = p;
+    p.kids.push(c);
+    match c.parent { Some(x) => println(x.name), None => println("empty") }
+    let u: Option[Parent] = c.parent.upgrade();
+    println(u.is_some());
+    println(c.parent.expect("a kid has a parent").name);
+}

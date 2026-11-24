@@ -1,0 +1,4 @@
+// design.md §11 Diagnostic: `w.upgrade().unwrap()` warns too.
+shared struct Parent { name: String }
+shared struct Kid { mut parent: weak Parent }
+fn main() { let p = Parent { name: "p" }; let c = Kid { parent: p }; println(c.parent.upgrade().unwrap().name); }

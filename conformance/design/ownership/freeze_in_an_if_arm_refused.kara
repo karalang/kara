@@ -1,0 +1,4 @@
+// design.md §11: `freeze` is not an expression elsewhere, such as an `if` arm.
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node { let r = Node { val: 1, neighbors: Vec.new() }; r.neighbors.push(Node { val: 2, neighbors: Vec.new() }); r.neighbors.push(Node { val: 3, neighbors: Vec.new() }); r }
+fn main() { let r = build(); let g = if true { freeze r } else { freeze r }; println(1); }

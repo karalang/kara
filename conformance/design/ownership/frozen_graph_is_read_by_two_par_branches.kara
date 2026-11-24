@@ -1,0 +1,10 @@
+// design.md §11 Frozen handles: the page's example; both branches read the same graph.
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node { let r = Node { val: 1, neighbors: Vec.new() }; r.neighbors.push(Node { val: 2, neighbors: Vec.new() }); r.neighbors.push(Node { val: 3, neighbors: Vec.new() }); r }
+fn sum(n: frozen Node, depth: i64) -> i64 {
+    if depth <= 0 { return n.val; }
+    let mut t: i64 = n.val;
+    for k in n.neighbors.iter() { t += sum(k, depth - 1); }
+    t
+}
+fn main() { let root: Node = build(); let g = freeze root; let (a, b) = par { sum(g, 3), sum(g, 4) }; println(f"{a + b}"); }

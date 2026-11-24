@@ -1,0 +1,3 @@
+// design.md §11 #[non_exhaustive]: a struct literal in another package is an error whose diagnostic names the package's constructor function.
+import lib.{Options};
+fn main() { let o = Options { port: 1, host: "x" }; println(o.port); }

@@ -1,0 +1,3 @@
+// design.md §11: a self-reference through a type with no empty case, such as a tuple, is an error.
+shared struct Node { v: i64, mut kid: (Node, i64) }
+fn main() { println(1); }

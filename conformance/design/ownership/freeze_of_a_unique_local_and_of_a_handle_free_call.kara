@@ -1,0 +1,5 @@
+// design.md §11: a unique local, a call with no handle arguments, and a push of such a value into the source's field all keep it unique.
+shared struct N { mut v: i64, mut kids: Vec[N] }
+fn leaf(v: i64) -> N { N { v: v, kids: Vec.new() } }
+fn read(n: frozen N) -> i64 { n.v + n.kids.len() }
+fn main() { let r = leaf(1); r.kids.push(leaf(2)); let g = freeze r; let h = freeze leaf(3); println(read(g) + read(h)); }

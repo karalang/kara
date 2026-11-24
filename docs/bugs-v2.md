@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 761 |
-| false-positive | 373 |
+| diagnostics | 765 |
+| false-positive | 374 |
 | missing-feature | 255 |
 | perf | 203 |
 | other | 149 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 909 |
+| typecheck | 910 |
 | mir | 336 |
 | mir-llvm | 328 |
-| cli | 312 |
+| cli | 314 |
 | parser | 162 |
-| ownership | 136 |
+| ownership | 138 |
 | runtime | 110 |
 | interp | 106 |
 | effect | 64 |
@@ -121,6 +121,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-46 | 2026-11-24 | cli | low | `karac explain` on a function in a recursive group gives each effect's call chain but not the fixpoint chain design.md § Effects promises (`∅ = φ₀ ⊊ φ₁ ⊊ … ⊊ φ*`, with the callee or operation that added atoms at each step) | — |
 | B-2026-11-24-48 | 2026-11-24 | typecheck+cli | low | `min(gap, 360.0 - gap)` on two `f64`s, the free `min` (and `max`), is refused with E0200 "`f64` does not implement `Ord`" and the advice to wrap in `F64` or drop an `Ord` bound the author never wrote; the documented float method `gap.min(360.0 - gap)` (library/core-types.md, Float methods) is not named, and there is no machine fix | — |
 | B-2026-11-24-49 | 2026-11-24 | typecheck+cli | medium | `karac fix` retypes a Rust `usize` index to `i64` and keeps `i.wrapping_sub(1)` as it was, so the idiom `for j in [i.wrapping_sub(1), i + 1] { if j < n { .. arr[j] } }` no longer skips 0 - 1: on `usize` it wrapped past every length, on `i64` it is -1, passes `j < n`, and the fixed program dies with index out of bounds; `checked_sub` and `saturating_sub` get the floor edit, `wrapping_sub` none | — |
+| B-2026-11-24-50 | 2026-11-24 | ownership | medium | `a.ref_eq(b)` on two `frozen` handles is refused as an escape (E0511: "`frozen` parameter `a` escapes here", "`b` is passed to a non-`frozen` slot"), though design.md § Shared types provides `ref_eq` on every `shared`, `sync` and `frozen` handle type | — |
+| B-2026-11-24-51 | 2026-11-24 | typecheck | low | The refusal of a struct literal of a `#[non_exhaustive]` type from another package says "construct through the type's public constructor (commonly `Options.new(...)`)" whatever the package declares, where design.md says the diagnostic names the package's constructor function | — |
+| B-2026-11-24-52 | 2026-11-24 | cli | low | The `deprecated` warning for a `pub` item of a dependency does not name the defining package, which design.md § `#[deprecated]` says it does so the migration target is clear across re-exports | — |
+| B-2026-11-24-53 | 2026-11-24 | ownership | low | Two `freeze` refusals misled: a frozen `let` binding that escapes was called "`frozen` parameter `g`", and `freeze mk(a)` (an argument holding a handle) got a second error saying its operand "is a temporary, not a place" beside the E0512 that explains it | — |
+| B-2026-11-24-54 | 2026-11-24 | cli | low | `karac check` in a package prints a path dependency's own `deprecated` and `must_use` warnings (`warning[must_use]: /abs/path/lib/src/lib.kara:7:28: discarded return value of `mu``), as if they were the dependent's | — |
 | B-2026-11-25-9 | 2026-11-25 | typecheck | medium | An associated function named by a keyword and called bare, `Handle.type()` / `Handle.match(2)`, fails with `E0516 a type that failed to check is not lowered yet`; design.md 283 says any keyword may name a method or associated function and is usable after `.` (`Handle.r#type()` and keyword-named methods work) | — |
 | B-2026-11-25-10 | 2026-11-25 | resolver | medium | Reserved type names are not reserved everywhere: `fn u8()` and a field named `char` are accepted (and `u8()` calls the user's fn), and `enum MutFn` / `trait OnceFn` are accepted (only `struct Fn` is E0102); design.md 224 says primitive names and `Fn`/`MutFn`/`OnceFn` cannot be declared or bound as names | — |
 | B-2026-11-25-11 | 2026-11-25 | interp | medium | A pointee-changing raw-pointer cast is ignored by the interpreter: `*(c as *const u8)` with `c: *const u32` at `0x0A0B0C0D` reads `168496141`, not the low byte `13` a build reads, and `offset(1)` on the cast pointer fails (no sequence) | — |

@@ -1,0 +1,5 @@
+// design.md §11: without a string, a default message is used.
+#[must_use]
+struct Token { v: i64 }
+fn mk() -> Token { Token { v: 1 } }
+fn main() { mk(); let t = mk(); println(t.v); }

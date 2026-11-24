@@ -1,0 +1,4 @@
+// design.md §11 Identity keys: for any shared, sync or frozen handle type; a plain value has no identity.
+import std.hash.{Identity};
+struct N { v: i64 }
+fn main() { let a = N { v: 1 }; let k = Identity.of(a); println(1); }

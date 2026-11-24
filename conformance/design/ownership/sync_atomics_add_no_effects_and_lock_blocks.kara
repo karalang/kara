@@ -1,0 +1,5 @@
+// design.md §11 Effects: a sync type adds none; atomic operations have none; Mutex.lock has blocks.
+sync struct S { a: Atomic[i64], m: Mutex[i64] }
+fn at(s: S) -> i64 { s.a.fetch_add(1); s.a.load() }
+fn lk(s: S) -> i64 { let g = s.m.lock(); g.value }
+fn main() { let s = S { a: Atomic.new(0), m: Mutex.new(1) }; println(at(s) + lk(s)); }

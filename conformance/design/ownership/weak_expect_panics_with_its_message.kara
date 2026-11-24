@@ -1,0 +1,4 @@
+// design.md §11 Ergonomics: `.expect(msg)` panics like unwrap, and the message appears in the panic report.
+shared struct Parent { name: String }
+shared struct Kid { mut parent: weak Parent }
+fn main() { let c = Kid { parent: None }; println("before"); println(c.parent.expect("a constructed tree has a parent").name); }

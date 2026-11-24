@@ -1,0 +1,10 @@
+// design.md §11: `sync enum WorkItem` from the page.
+sync enum WorkItem { Task { id: u64, payload: Mutex[Vec[u8]] }, Control { cmd: Atomic[u32] }, Poison }
+fn main() {
+    let w = WorkItem.Control { cmd: Atomic.new(3) };
+    let x = w;
+    match x { WorkItem.Control { cmd } => { cmd.store(4); } _ => {} }
+    match w { WorkItem.Control { cmd } => println(cmd.load()), _ => println("other") }
+    let p = WorkItem.Poison;
+    match p { WorkItem.Poison => println("poison"), _ => println("other") }
+}

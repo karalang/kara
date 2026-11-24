@@ -1,0 +1,3 @@
+// design.md §11 #[non_exhaustive]: a pattern in another package must end with `..`.
+import lib.{Options, options};
+fn main() { let Options { port, host } = options(8); println(port); }

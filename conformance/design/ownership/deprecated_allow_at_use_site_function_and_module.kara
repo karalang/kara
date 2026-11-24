@@ -1,0 +1,11 @@
+// design.md §11 Suppression: `#[allow(deprecated)]` at a use site and on a function; `#[expect(deprecated)]` is quiet while the use remains and reports itself once it is gone.
+#[deprecated]
+fn old() -> i64 { 2 }
+fn wrapper() -> i64 { #[allow(deprecated)] let x = old(); x }
+#[allow(deprecated)]
+fn quiet() -> i64 { old() }
+#[expect(deprecated)]
+fn planned() -> i64 { old() }
+#[expect(deprecated)]
+fn migrated() -> i64 { 7 }
+fn main() { println(wrapper() + quiet() + planned() + migrated()); }

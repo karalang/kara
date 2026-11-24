@@ -1,0 +1,5 @@
+// design.md §11 With par: the same program without `freeze` is refused.
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node { let r = Node { val: 1, neighbors: Vec.new() }; r.neighbors.push(Node { val: 2, neighbors: Vec.new() }); r.neighbors.push(Node { val: 3, neighbors: Vec.new() }); r }
+fn sum(n: Node) -> i64 { n.val }
+fn main() { let root: Node = build(); let (a, b) = par { sum(root), sum(root) }; println(a + b); }

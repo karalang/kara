@@ -1,0 +1,9 @@
+// design.md §11 Equality: `#[derive(PartialEq, Eq)]` compares structure; `ref_eq` compares identity.
+#[derive(PartialEq, Eq)]
+shared struct P { x: i64 }
+fn main() {
+    let a = P { x: 1 }; let b = P { x: 1 }; let c = a;
+    println(a == b);
+    println(a.ref_eq(b));
+    println(a.ref_eq(c));
+}

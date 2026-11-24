@@ -1,0 +1,9 @@
+// design.md §11: a scalar read out of a frozen place is an ordinary value and may go anywhere.
+shared struct Deep { d: i64 }
+shared struct Inner { deep: Deep }
+shared struct Node { val: i64, inner: Inner, mut kids: Vec[Node], mut next: Option[Node], mut count: i64 }
+fn leaf(v: i64) -> Node { Node { val: v, inner: Inner { deep: Deep { d: v * 10 } }, kids: Vec.new(), next: None, count: 0 } }
+fn build() -> Node { let r = leaf(1); r.kids.push(leaf(2)); r.kids.push(leaf(3)); r.next = Some(leaf(4)); r }
+shared struct Out { mut v: i64 }
+fn scal(n: frozen Node, o: Out) -> i64 { let x = n.kids[0].val; o.v = n.inner.deep.d; x }
+fn main() { let g = freeze build(); let o = Out { v: 0 }; let v = scal(g, o); println(v + o.v); }

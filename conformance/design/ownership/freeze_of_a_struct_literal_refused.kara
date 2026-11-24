@@ -1,0 +1,4 @@
+// design.md §11: the source is a local or a call; a struct literal is neither.
+shared struct N { v: i64 }
+fn read(n: frozen N) -> i64 { n.v }
+fn main() { let g = freeze N { v: 3 }; println(read(g)); }

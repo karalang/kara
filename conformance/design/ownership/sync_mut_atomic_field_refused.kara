@@ -1,0 +1,3 @@
+// design.md §11 sync field constraints: `mut count: Atomic[u64]` is a compile error too.
+sync struct S { mut count: Atomic[u64] }
+fn main() { println(1); }

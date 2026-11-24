@@ -1,0 +1,3 @@
+// design.md §11 #[non_exhaustive]: `let Options { port, .. } = opts;` and the package's constructor.
+import lib.{Options, options};
+fn main() { let opts = options(8); let Options { port, .. } = opts; println(port); }

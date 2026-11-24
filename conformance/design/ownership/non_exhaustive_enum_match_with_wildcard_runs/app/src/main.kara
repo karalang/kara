@@ -1,0 +1,3 @@
+// design.md §11 #[non_exhaustive]: the page's example with its wildcard arm; the defining package's own match needs none.
+import lib.{FetchError, name};
+fn main() { let e = FetchError.NotFound; let s = match e { FetchError.Timeout => "retry", FetchError.NotFound => "skip", _ => "fail" }; println(s); println(name(e)); }
