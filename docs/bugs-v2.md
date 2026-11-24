@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 739 |
-| false-positive | 363 |
+| false-positive | 364 |
 | missing-feature | 250 |
 | perf | 200 |
 | other | 149 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 888 |
+| typecheck | 889 |
 | mir | 325 |
 | mir-llvm | 323 |
 | cli | 297 |
@@ -2238,6 +2238,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-13 | resolver | low | E0113 dropped the list of a small module's exports whenever it found a suggestion; design.md § Imports gives both | e8e574922f |
 | B-2026-11-24-14 | resolver | low | `#[test]` on a `fn` in a `_test.kara` file was reported at the module's other file (src/util.kara:3:1 for src/util_test.kara), and the message repeat… | e8e574922f |
 | B-2026-11-24-17 | parser | low | A qualified receiver naming a `dyn` type failed to parse: `Option[dyn Shape].size_of()` and `Vec[dyn Shape].new()` (its fix commit cites B-2026-11-24… | 22975f3cd3 |
+| B-2026-11-24-24 | typecheck | medium | `[(x, 1)].to_vec()` into a `Vec[(i64, i64)]`, with `x` the `ref i64` that `nums.iter()` yields, was refused as a `Vec[(ref i64, i64)]`, though `[x].t… | dd6a8bebbf |
 
 </details>
 
