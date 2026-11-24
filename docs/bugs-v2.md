@@ -123,8 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
 | B-2026-11-23-20 | 2026-11-23 | typecheck | low | A provider-using closure returned inside `Ok(..)` from a `with_provider` body draws MIR's internal E0516 'a type that failed to check is not lowered yet' first, before the real E0600 escape diagnostic; every other escape shape (bare, Some, tuple, struct field, Vec push, lazy iterator) gets E0600 alone | — |
 | B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
-| B-2026-11-24-5 | 2026-11-24 | cli | low | `karac doc` shows no effect clause for a `pub` method that declares none, while a `pub` free fn with none shows its inferred set | — |
-| B-2026-11-24-6 | 2026-11-24 | cli | low | kara-lsp hover on a function shows its bare `Type` (drops `escaping`, shows `MutFn` as `Fn`, no parameter names), nothing on its declaration's name, and lists effects joined with ` + ` | — |
 
 ### Relocated
 
@@ -2221,6 +2219,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-2 | cli | medium | `karac doc` of a library publishes its non-`pub` items and fields, does not list `pub import` re-exports at the re-exporting path, and puts an item's… | fe06f3f6e7 |
 | B-2026-11-24-3 | typecheck | medium | `successors(Some(x), \|r\| if r >= 10 { Some(r / 10) } else { None })` with `x: ref i64` from `nums.iter()` still got the bare E0509 "the result borrow… | 7147469257 |
 | B-2026-11-24-4 | typecheck+cli | medium | A closure `\|x\| { let mut x = x; let mut s = 0; while x > 0 { s += x % 10; x /= 10; } s }` summed into an `i32` was refused (`s` is an `i64`) with no… | 7147469257 |
+| B-2026-11-24-5 | cli | low | `karac doc` shows no effect clause for a `pub` method that declares none, while a `pub` free fn with none shows its inferred set | 75d65ecd56 |
+| B-2026-11-24-6 | cli | low | kara-lsp hover on a function shows its bare `Type` (drops `escaping`, shows `MutFn` as `Fn`, no parameter names), nothing on its declaration's name,… | 75d65ecd56 |
 
 </details>
 
