@@ -1,0 +1,9 @@
+// design.md § Slice and array patterns (s5.580, s5.589; §7 s7.84): a `mut ref name` element binds a writable reference against a mutable place (B-2026-11-24-36)
+fn bump(xs: mut ref Vec[i64]) {
+    if let [mut ref first, ..] = xs { *first += 1; }
+}
+fn main() {
+    let mut v = [1, 2, 3];
+    bump(mut v);
+    println(v[0]);
+}

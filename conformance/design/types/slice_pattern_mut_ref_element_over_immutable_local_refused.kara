@@ -1,0 +1,6 @@
+// design.md § Slice and array patterns (s5.580, s5.589; §7 s7.84): a `mut ref name` element binds a writable reference against a mutable place (B-2026-11-24-36)
+fn main() {
+    let v = [1, 2, 3];
+    if let [mut ref first, ..] = v { *first += 1; }
+    println(v[0]);
+}

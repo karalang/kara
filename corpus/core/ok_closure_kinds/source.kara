@@ -1,4 +1,4 @@
-fn twice(f: own MutFn()) { f(); f(); }
+fn twice(f: own MutFn()) { let mut f = f; f(); f(); }
 fn once(f: own OnceFn() -> String) -> String { f() }
 fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
 fn main() {

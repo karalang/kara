@@ -1,0 +1,24 @@
+// design.md § Slice and array patterns (s5.580, s5.589; §7 s7.84): a `mut ref name` element binds a writable reference against a mutable place (B-2026-11-24-36)
+fn tail_bump(xs: mut Slice[i64]) {
+    if let [.., mut ref last] = xs { *last += 100; }
+}
+fn main() {
+    let mut names = ["ann", "bob", "cy"];
+    match names {
+        [mut ref first, ..] => { first.push_str("!"); }
+        _ => {}
+    }
+    match names {
+        [.., mut ref last] => { last.push_str("?"); }
+        _ => {}
+    }
+    println(f"{names[0]} {names[1]} {names[2]}");
+    let mut a: Array[i64, 3] = [1, 2, 3];
+    let [mut ref x, _, mut ref z] = a;
+    *x = 50;
+    *z = 70;
+    println(f"{a[0]} {a[2]}");
+    let mut v = [1, 2, 3];
+    tail_bump(mut v);
+    println(v[2]);
+}

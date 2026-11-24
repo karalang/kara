@@ -186,6 +186,7 @@ struct Pair {
 
 impl Pair {
     fn call[A, R](ref self, init: own A, f: own MutFn(own A, own i64) -> R) -> R {
+        let mut f = f;
         f(init, self.v)
     }
 }

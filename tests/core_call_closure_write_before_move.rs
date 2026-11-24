@@ -28,15 +28,15 @@ fn karac(cmd: &str, name: &str, src: &str) -> (bool, String, String) {
     )
 }
 
-const OWN_MUTFN: &str = "fn run(f: own MutFn() -> ()) {\n    f();\n}\n\nfn main() {\n    let mut got: Vec[String] = Vec.new();\n    run(|| {\n        got.push(\"x\");\n    });\n    let all = got;\n    println(f\"{all.len()}\");\n}\n";
+const OWN_MUTFN: &str = "fn run(f: own MutFn() -> ()) {\n    let mut f = f;\n    f();\n}\n\nfn main() {\n    let mut got: Vec[String] = Vec.new();\n    run(|| {\n        got.push(\"x\");\n    });\n    let all = got;\n    println(f\"{all.len()}\");\n}\n";
 
 const WITH_PROVIDER: &str = "effect resource Log: LogSink;\n\ntrait LogSink {\n    fn note(self, s: String) -> String;\n}\n\nstruct Plain {}\n\nimpl LogSink for Plain {\n    fn note(self, s: String) -> String {\n        f\"[{s}]\"\n    }\n}\n\nfn main() {\n    let lines = [\"a\", \"b\"];\n    let mut got: Vec[String] = Vec.new();\n    with_provider[Log](Plain {}, || {\n        for line in lines {\n            got.push(Log.note(line));\n        }\n    });\n    let all = got;\n    println(f\"{all.len()} {all[0]}\");\n}\n";
 
-const IN_A_LOOP: &str = "fn run(f: own MutFn() -> ()) {\n    f();\n}\n\nfn main() {\n    let mut got: Vec[String] = Vec.new();\n    for i in 0..2 {\n        run(|| {\n            got.push(\"x\");\n        });\n        let all = got;\n        println(f\"{all.len()} {i}\");\n    }\n}\n";
+const IN_A_LOOP: &str = "fn run(f: own MutFn() -> ()) {\n    let mut f = f;\n    f();\n}\n\nfn main() {\n    let mut got: Vec[String] = Vec.new();\n    for i in 0..2 {\n        run(|| {\n            got.push(\"x\");\n        });\n        let all = got;\n        println(f\"{all.len()} {i}\");\n    }\n}\n";
 
 const ESCAPING: &str = "fn stash(hs: mut ref Vec[MutFn() -> ()], f: escaping MutFn() -> ()) {\n    hs.push(f);\n}\n\nfn main() {\n    let mut hs: Vec[MutFn() -> ()] = Vec.new();\n    let mut got: Vec[String] = Vec.new();\n    stash(mut hs, || {\n        got.push(\"x\");\n    });\n    let all = got;\n    println(f\"{all.len()}\");\n}\n";
 
-const MOVED_BEFORE: &str = "fn run(f: own MutFn() -> ()) {\n    f();\n}\n\nfn main() {\n    let mut got: Vec[String] = Vec.new();\n    let all = got;\n    run(|| {\n        got.push(\"x\");\n    });\n    println(f\"{all.len()}\");\n}\n";
+const MOVED_BEFORE: &str = "fn run(f: own MutFn() -> ()) {\n    let mut f = f;\n    f();\n}\n\nfn main() {\n    let mut got: Vec[String] = Vec.new();\n    let all = got;\n    run(|| {\n        got.push(\"x\");\n    });\n    println(f\"{all.len()}\");\n}\n";
 
 #[test]
 fn a_binding_moved_after_a_call_whose_closure_writes_it_is_accepted() {

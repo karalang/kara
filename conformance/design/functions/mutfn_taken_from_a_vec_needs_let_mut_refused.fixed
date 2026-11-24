@@ -1,0 +1,8 @@
+// design.md §7 Function types and kinds: calling a `MutFn` changes the binding, so it needs a mutable binding; an `own` parameter or one taken out of a collection is rebound first (review ruling 2026-11-24)
+fn main() {
+    let mut fs: Vec[MutFn() -> i64] = [];
+    let mut n = 0;
+    fs.push(|| { n += 1; n });
+    let mut f = fs.pop().unwrap();
+    println(f());
+}

@@ -20900,6 +20900,63 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(Place::local(out).project(ProjElem::Deref))
     }
 
+    /// [`Self::seq_elem`] as a writable place, for a `mut ref name` element
+    /// binding: a view's element is reached through `index_mut` over a
+    /// mutable borrow, which the borrow checker judges like any other
+    /// (design.md § Slice and array patterns, B-2026-11-24-36).
+    fn seq_elem_mut(&mut self, place: &Place, t: Ty, pos: SeqPos) -> R<Place> {
+        let Some((elem, known)) = self.seq_of(t) else {
+            unreachable!("a sequence type")
+        };
+        if known.is_some() || self.is_reference(elem) {
+            return self.seq_elem(place, t, pos);
+        }
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
+        let idx = match pos {
+            SeqPos::Start(i) => Operand::Const(Const {
+                ty: usize_t,
+                kind: ConstKind::Scalar(i as u128),
+            }),
+            SeqPos::End(m) => {
+                let n = self.seq_len(place, t);
+                let i = self.temp(usize_t);
+                self.assign(
+                    i,
+                    Rvalue::BinaryOp(
+                        BinOp::Sub,
+                        Operand::Copy(Place::local(n)),
+                        Operand::Const(Const {
+                            ty: usize_t,
+                            kind: ConstKind::Scalar(m as u128),
+                        }),
+                    ),
+                );
+                Operand::Copy(Place::local(i))
+            }
+        };
+        let rt = self.tys().tcx().reference(t, true);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, place.clone()));
+        let et = self.tys().tcx().reference(elem, true);
+        let out = self.temp(et);
+        let name = self.tys().display(t);
+        self.call_native(
+            &format!("{name}.index_mut"),
+            vec![Operand::Move(Place::local(r)), idx],
+            Place::local(out),
+        );
+        Ok(Place::local(out).project(ProjElem::Deref))
+    }
+
+    /// Whether `p` is a `mut ref name` binding.
+    fn is_mut_ref_binding(&self, p: &Pattern) -> bool {
+        matches!(p.kind, PatternKind::Binding(_))
+            && self
+                .lcx
+                .mut_ref_bindings
+                .contains(&SpanKey::from_span(&p.span))
+    }
+
     /// The index of the variant `v` names in the enum `t`. A bare variant
     /// name that two enums share (`Str(n)`) may have resolved to the other
     /// one's; the scrutinee's enum decides, by name.
@@ -21195,13 +21252,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let (k, j) = (prefix.len() as u64, suffix.len() as u64);
                 for (i, p) in prefix.iter().enumerate() {
                     if self.pattern_binds(p) {
-                        let ep = self.seq_elem(place, t, SeqPos::Start(i as u64))?;
+                        let pos = SeqPos::Start(i as u64);
+                        let ep = if self.is_mut_ref_binding(p) {
+                            self.seq_elem_mut(place, t, pos)?
+                        } else {
+                            self.seq_elem(place, t, pos)?
+                        };
                         self.bind_pattern(p, &ep, elem, by_ref, out)?;
                     }
                 }
                 for (i, p) in suffix.iter().enumerate() {
                     if self.pattern_binds(p) {
-                        let ep = self.seq_elem(place, t, SeqPos::End(j - i as u64))?;
+                        let pos = SeqPos::End(j - i as u64);
+                        let ep = if self.is_mut_ref_binding(p) {
+                            self.seq_elem_mut(place, t, pos)?
+                        } else {
+                            self.seq_elem(place, t, pos)?
+                        };
                         self.bind_pattern(p, &ep, elem, by_ref, out)?;
                     }
                 }
@@ -28366,20 +28433,116 @@ impl<'l, 'a> Bx<'l, 'a> {
             .collect()
     }
 
-    /// The capture of `object.field` when a closure captured that field of
-    /// an outer binding apart (`disjoint_fields`).
-    fn captured_field(&self, object: &Expr, field: &str) -> Option<Place> {
-        if self.captured_fields.is_empty()
-            || !matches!(object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
-        {
+    /// The field paths of `t`, a struct, that `body` reads `sym` through,
+    /// when every use of `sym` there is such a path and `body` makes no
+    /// closure of its own: `u.address.city` is the path `address.city`,
+    /// followed as deep as each step is a plain struct (design.md §7
+    /// Closures: a closure captures the paths it uses, so a sibling at any
+    /// depth stays usable, B-2026-11-24-37). A path that another one
+    /// extends is kept and the longer one dropped, since the shorter one
+    /// covers it. Each entry is the dotted path, its projections and the
+    /// type at its end.
+    #[allow(clippy::type_complexity)]
+    fn disjoint_paths(
+        &self,
+        body: &Expr,
+        sym: SymbolId,
+        t: Ty,
+    ) -> Option<Vec<(String, Vec<(u32, Ty)>, Ty)>> {
+        let plain_struct = |t: Ty| {
+            self.tys().tcx().adt_of(t).is_some_and(|(adt, _)| {
+                !adt.is_enum && !matches!(self.tys().tcx().kind(t), HK::Shared { .. })
+            })
+        };
+        if !plain_struct(t) {
             return None;
         }
-        let Some(Res::Local(sym)) = self.lcx.res.get(&object.id) else {
+        let res = &self.lcx.res;
+        let is_sym = |x: &Expr| {
+            matches!(x.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+                && matches!(res.get(&x.id), Some(Res::Local(s)) if *s == sym)
+        };
+        // Every field access rooted at `sym`, with the node ids that are
+        // the object of another field access (so not the outermost).
+        let (mut chains, mut inner, mut roots, mut uses, mut nested) = (
+            Vec::new(),
+            FxHashSet::default(),
+            Vec::new(),
+            Vec::new(),
+            false,
+        );
+        crate::span_visitor::for_each_expr(body, &mut |x| match &x.kind {
+            ExprKind::FieldAccess { object, .. } => {
+                inner.insert(object.id);
+                let (mut e, mut names) = (x, Vec::new());
+                while let ExprKind::FieldAccess { object, field } = &e.kind {
+                    names.push(field.clone());
+                    e = object;
+                }
+                if is_sym(e) {
+                    names.reverse();
+                    chains.push((x.id, names));
+                    roots.push(e.id);
+                }
+            }
+            ExprKind::Closure { .. } => nested = true,
+            _ if is_sym(x) => uses.push(x.id),
+            _ => {}
+        });
+        if nested || uses.is_empty() || uses.iter().any(|u| !roots.contains(u)) {
+            return None;
+        }
+        let mut paths: Vec<(Vec<String>, Vec<(u32, Ty)>, Ty)> = Vec::new();
+        for (id, names) in chains {
+            if inner.contains(&id) {
+                continue;
+            }
+            let (mut cur, mut kept, mut proj) = (t, Vec::new(), Vec::new());
+            for n in names {
+                if !plain_struct(cur) {
+                    break;
+                }
+                let (i, ft) = self.field_of(cur, None, &n)?;
+                kept.push(n);
+                proj.push((i, ft));
+                cur = ft;
+            }
+            paths.push((kept, proj, cur));
+        }
+        paths.sort_by_key(|(k, _, _)| k.len());
+        let mut out: Vec<(Vec<String>, Vec<(u32, Ty)>, Ty)> = Vec::new();
+        for p in paths {
+            if !out.iter().any(|(k, _, _)| p.0.starts_with(k)) {
+                out.push(p);
+            }
+        }
+        Some(
+            out.into_iter()
+                .map(|(k, proj, ft)| (k.join("."), proj, ft))
+                .collect(),
+        )
+    }
+
+    /// The capture of `object.field` when a closure captured that field
+    /// path of an outer binding apart (`disjoint_fields`,
+    /// `disjoint_paths`): `u.address.city` looks up `address.city`.
+    fn captured_field(&self, object: &Expr, field: &str) -> Option<Place> {
+        if self.captured_fields.is_empty() {
+            return None;
+        }
+        let (mut e, mut names) = (object, vec![field]);
+        while let ExprKind::FieldAccess { object, field } = &e.kind {
+            names.push(field);
+            e = object;
+        }
+        if !matches!(e.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return None;
+        }
+        let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) else {
             return None;
         };
-        self.captured_fields
-            .get(&(*sym, field.to_string()))
-            .cloned()
+        names.reverse();
+        self.captured_fields.get(&(*sym, names.join("."))).cloned()
     }
 
     /// The symbols a closure body reads from its surroundings, in the order
@@ -28467,27 +28630,34 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `Copy` field cannot change it. Anything else is a read.
     fn changed_fields(&self, body: &Expr, sym: SymbolId) -> FxHashSet<String> {
         let res = &self.lcx.res;
+        // The field path from `sym` to the place changed, cut at an index
+        // (an element's fields are not the binding's): `u.a.b = v` is
+        // `a.b`, `u.xs[i].c = v` is `xs`.
         let field_of = |e: &Expr| -> Option<String> {
             let mut e = e;
-            let mut field = None;
+            let mut names: Vec<String> = Vec::new();
             loop {
                 match &e.kind {
                     ExprKind::FieldAccess { object, field: f } => {
-                        field = Some(f.clone());
+                        names.push(f.clone());
                         e = object;
                     }
                     ExprKind::TupleIndex { object, index } => {
-                        field = Some(index.to_string());
+                        names.push(index.to_string());
                         e = object;
                     }
-                    ExprKind::Index { object, .. } => e = object,
+                    ExprKind::Index { object, .. } => {
+                        names.clear();
+                        e = object;
+                    }
                     _ => break,
                 }
             }
             let is_sym = matches!(e.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
                 && matches!(res.get(&e.id), Some(Res::Local(s)) if *s == sym);
-            if is_sym {
-                field
+            if is_sym && !names.is_empty() {
+                names.reverse();
+                Some(names.join("."))
             } else {
                 None
             }
@@ -29055,16 +29225,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                     HK::MutRef(inner) => (place.clone().project(ProjElem::Deref), inner, true),
                     _ => (place.clone(), t, false),
                 };
-                if let Some(names) = self.disjoint_fields(body, sym, st) {
-                    // Each field takes its own mode (§9.1): one the body
-                    // only reads is lent by `ref` even when another is
+                if let Some(names) = self.disjoint_paths(body, sym, st) {
+                    // Each field path takes its own mode (§9.1): one the
+                    // body only reads is lent by `ref` even when another is
                     // written, so a sibling `par` branch or task may read it
-                    // (B-2026-11-15-126).
+                    // (B-2026-11-15-126). A path is written when a changed
+                    // path lies on it or under it, or it under that one.
                     let changed = self.changed_fields(body, sym);
-                    for (name, idx, ft) in names {
+                    let overlaps = |a: &str, b: &str| {
+                        let under = |x: &str, y: &str| {
+                            x == y || x.strip_prefix(y).is_some_and(|r| r.starts_with('.'))
+                        };
+                        under(a, b) || under(b, a)
+                    };
+                    for (name, proj, ft) in names {
                         let mutable = (cm == CapMode::Mut
                             || (through_mut && assigned.contains(&sym)))
-                            && changed.contains(&name);
+                            && changed.iter().any(|c| overlaps(c, &name));
                         let rt = self.tys().tcx().reference(ft, mutable);
                         let r = self.temp(rt);
                         let kind = if mutable {
@@ -29072,7 +29249,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                         } else {
                             BorrowKind::Shared
                         };
-                        self.assign(r, Rvalue::Ref(kind, base.clone().field(idx, ft)));
+                        let fp = proj
+                            .iter()
+                            .fold(base.clone(), |p, &(idx, t)| p.field(idx, t));
+                        self.assign(r, Rvalue::Ref(kind, fp));
                         let cm = if mutable { CapMode::Mut } else { cm };
                         caps.push((sym, cm, rt));
                         fields.push(Some(name));

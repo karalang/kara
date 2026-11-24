@@ -1,0 +1,11 @@
+// design.md §7 Function types and kinds: calling a `MutFn` changes the binding, so it needs a mutable binding; an `own` parameter or one taken out of a collection is rebound first (review ruling 2026-11-24)
+fn twice(f: own MutFn()) {
+    f();
+    f();
+}
+
+fn main() {
+    let mut n = 0;
+    twice(|| { n += 1; });
+    println(n);
+}

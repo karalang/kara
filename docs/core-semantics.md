@@ -556,7 +556,7 @@ Pins: `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`, `err_taskgro
 
 **9.6 Function types have a kind** (2026-10-07, D2).
 - **`Fn(A) -> R`** may be called any number of times, through any access, `ref` included. Its call only reads the captures.
-- **`MutFn(A) -> R`** may be called any number of times, and a call may mutate its captures. It can be called only through an access that is unique: an owned binding, an `own` parameter or a `mut ref`. A shared borrow of a `MutFn` (a `ref`, or a bare parameter) cannot call it, which rules out a call re-entering the same closure.
+- **`MutFn(A) -> R`** may be called any number of times, and a call may mutate its captures. It can be called only through an access that is unique and mutable: a `let mut` binding (an `own` parameter, or a `MutFn` taken out of a collection or a field, is rebound first, `let mut f = f;`) or a `mut ref`. A call changes the binding's value, so it needs a mutable binding like any other mutation (review ruling 2026-11-24; design.md §7 Function types and kinds). A shared borrow of a `MutFn` (a `ref`, or a bare parameter) cannot call it, which rules out a call re-entering the same closure.
 - **`OnceFn(A) -> R`** may be called once. The call moves the value (§3), so a second call is E0500.
 - **Kinds of closures and functions.**
   - A closure literal gets the most permissive kind its body allows: `Fn` if it only reads its captures, `MutFn` if it mutates one, `OnceFn` if it moves one out. Writing a `mut` field through a captured `shared` handle (`cache.n = 1`, `cache.items.push(x)`) leaves the capture, the handle, as it was (§6.2), so it is a read and the closure stays `Fn`; assigning the handle itself mutates it (B-2026-10-26-10).

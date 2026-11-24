@@ -87,7 +87,7 @@ fn main() {
 /// B-2026-11-19-76; through `own F` the writes reach the caller's counter.
 #[test]
 fn generic_own_mut_fn_param_closure_writes_the_callers_counter() {
-    let src = "fn call[F: MutFn() -> i64](f: own F) -> i64 { f() + f() }
+    let src = "fn call[F: MutFn() -> i64](f: own F) -> i64 { let mut f = f; f() + f() }
 fn main() { let mut n = 0; println(call(|| { n += 1; n })); println(n); }
 ";
     runs_as("counter", src, "3\n2\n");

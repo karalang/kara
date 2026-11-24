@@ -2328,7 +2328,23 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 let elem_mode = if viewed { ScrutineeMode::Ref } else { mode };
                 for pat in prefix.iter().chain(suffix.iter()) {
-                    self.check_pattern_against(pat, &element_ty, elem_mode);
+                    // A `mut ref name` element binds a writable reference
+                    // into the element, as `..mut ref rest` binds a writable
+                    // view; whether the place may be borrowed mutably is the
+                    // borrow checker's question (design.md § Slice and array
+                    // patterns, B-2026-11-24-36).
+                    let explicit_mut = viewed
+                        && matches!(pat.kind, PatternKind::Binding(_))
+                        && self
+                            .program
+                            .mut_ref_binding_spans
+                            .contains(&SpanKey::from_span(&pat.span));
+                    let m = if explicit_mut {
+                        ScrutineeMode::MutRef
+                    } else {
+                        elem_mode
+                    };
+                    self.check_pattern_against(pat, &element_ty, m);
                 }
                 if let Some(RestPattern::Bound(name, mut_ref)) = rest {
                     // Slice-rest mutability propagation
@@ -4739,6 +4755,14 @@ impl<'a> super::TypeChecker<'a> {
     /// `ref`/`function`/`typeparam`/etc. types that Maranget skips. Slice 6
     /// of the exhaustiveness upgrade.
     pub(super) fn is_irrefutable_pattern(&self, pat: &Pattern, ty: &Type) -> bool {
+        // A pattern matches through a reference as it matches the value
+        // behind it, so `let [x, _, _] = a` over `a: ref Array[i64, 3]` is
+        // as irrefutable as over the array (design.md § Slice and array
+        // patterns).
+        let mut ty = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
         match crate::exhaustive::is_pattern_irrefutable(pat, ty, &self.env) {
             Some(b) => b,
             None => self.is_irrefutable_param_pattern(pat),

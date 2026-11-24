@@ -1,0 +1,1 @@
+cannot write to `u.address.inner.a` while `s` still holds a borrow of it

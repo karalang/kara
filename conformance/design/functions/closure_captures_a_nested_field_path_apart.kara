@@ -1,0 +1,15 @@
+// design.md §7 Captures (s7.327-328): a closure captures each field path it uses, at any depth (B-2026-11-24-37)
+struct Inner { a: i64, b: i64 }
+struct Address { city: String, zip: String, inner: Inner }
+struct User { name: String, address: Address }
+fn main() {
+    let mut u = User { name: "n", address: Address { city: "x", zip: "1", inner: Inner { a: 1, b: 2 } } };
+    let mut w = || { u.address.inner.a += 10; };
+    u.address.inner.b = 5;
+    u.address.zip = "3";
+    w();
+    w();
+    let r = || u.address.city.len() + u.address.inner.a;
+    u.name = "m";
+    println(f"{r()} {u.address.inner.a} {u.address.inner.b} {u.address.zip} {u.name}");
+}

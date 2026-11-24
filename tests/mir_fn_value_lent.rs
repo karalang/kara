@@ -33,7 +33,7 @@ fn main() {
     println(bump(mut c, 10));
     last();
 }
-fn consume(f: own MutFn(i64) -> i64) -> i64 { f(1) + f(1) }
+fn consume(f: own MutFn(i64) -> i64) -> i64 { let mut f = f; f(1) + f(1) }
 fn last() { let c = counter(); println(consume(c)); }
 "#;
 

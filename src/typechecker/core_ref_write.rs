@@ -148,6 +148,17 @@ struct Walk<'t, 'a> {
     /// calling a local `MutFn` needs `let mut` (design.md §7;
     /// B-2026-11-04-69).
     immutable_mut_closure_locals: Vec<((usize, usize), FixIt)>,
+    /// The current function's `own` parameters that are a `MutFn` (written,
+    /// or a generic `F` bound by one), with the edit that rebinds each at
+    /// the top of the body, `let mut f = f;`: calling a `MutFn` mutates the
+    /// binding's value, so it needs a mutable binding (design.md §7;
+    /// review ruling 2026-11-24).
+    own_mut_fn_params: FxHashMap<String, Option<FixIt>>,
+    /// `let` bindings of a `MutFn` that is not a closure literal (an `own`
+    /// parameter moved on, an annotated `MutFn`, one taken out of a
+    /// collection or a field declared to hold one), with what it came from
+    /// and, for a plain `let`, the edit that makes it `let mut`.
+    mut_fn_lets: Vec<((usize, usize), String, Option<FixIt>)>,
     /// MutFn locals a `let` or an owned argument has moved out of (§1.1: a
     /// `MutFn` is never `Copy`), with how each one moved (B-2026-10-19-36,
     /// B-2026-11-05-2).
@@ -384,6 +395,8 @@ impl<'a> TypeChecker<'a> {
             for_item_scopes: Vec::new(),
             mut_closure_locals: Vec::new(),
             immutable_mut_closure_locals: Vec::new(),
+            own_mut_fn_params: FxHashMap::default(),
+            mut_fn_lets: Vec::new(),
             moved_mut_fns: Vec::new(),
             kind_errors: Vec::new(),
             moved_fn_uses: Vec::new(),
@@ -452,6 +465,7 @@ impl<'a> TypeChecker<'a> {
             w.mut_fn_params.clear();
             w.mut_closure_locals.clear();
             w.immutable_mut_closure_locals.clear();
+            w.mut_fn_lets.clear();
             w.moved_mut_fns.clear();
             w.declared_types.clear();
             for p in &f.params {
@@ -594,6 +608,38 @@ impl<'a> TypeChecker<'a> {
                         .binding_names()
                         .into_iter()
                         .map(move |n| (n, fix.clone()))
+                })
+                .collect();
+            // design.md §7: an `own` `MutFn` parameter is rebound with `let
+            // mut` before it is called. The edit goes before the body's
+            // first statement, on its own line when the body has lines.
+            let first = f.body.stmts.first().map(|st| st.span).or(f
+                .body
+                .final_expr
+                .as_ref()
+                .map(|e| e.span));
+            w.own_mut_fn_params = f
+                .params
+                .iter()
+                .filter(|p| {
+                    p.is_own
+                        && (w.is_mut_fn(&p.ty)
+                            || generic_fn_bound(f, &p.ty).is_some_and(|b| w.is_mut_fn(b)))
+                })
+                .flat_map(|p| p.pattern.binding_names())
+                .map(|n| {
+                    let fix = first.map(|sp| {
+                        let sep = if sp.line > f.body.span.line {
+                            format!("\n{}", " ".repeat(sp.column.saturating_sub(1)))
+                        } else {
+                            " ".to_string()
+                        };
+                        FixIt {
+                            span: Span { length: 0, ..sp },
+                            replacement: format!("let mut {n} = {n};{sep}"),
+                        }
+                    });
+                    (n, fix)
                 })
                 .collect();
             w.block(&f.body);
@@ -772,6 +818,7 @@ impl Walk<'_, '_> {
         self.mut_closure_locals.retain(|((i, _), _)| *i < depth);
         self.immutable_mut_closure_locals
             .retain(|((i, _), _)| *i < depth);
+        self.mut_fn_lets.retain(|((i, _), _, _)| *i < depth);
         self.moved_mut_fns.retain(|((i, _), _)| *i < depth);
         self.declared_types.retain(|((i, _), _)| *i < depth);
     }
@@ -1290,10 +1337,29 @@ impl Walk<'_, '_> {
                     // left alone: `mut v[a..b]` may be what was meant.
                     _ => (Origin::Owned, self.to_vec_fix(value)),
                 };
+                // Where a `MutFn` comes from is read before the new binding
+                // can shadow it (`let mut f = f;`).
+                let mut_fn_from = match ty {
+                    Some(t) if self.is_mut_fn(t) => Some(String::new()),
+                    _ if matches!(value.kind, ExprKind::Closure { .. }) => None,
+                    _ => self.mut_fn_source(value),
+                };
                 self.bind(pattern, origin, fix);
                 if let (Some(t), PatternKind::Binding(name)) = (ty, &pattern.kind) {
                     if let Root::Local(i, j) = self.root_of(name) {
                         self.declared_types.push(((i, j), t.clone()));
+                    }
+                }
+                if let (Some(from), PatternKind::Binding(name)) = (mut_fn_from, &pattern.kind) {
+                    if let Root::Local(i, j) = self.root_of(name) {
+                        let fix = (!*is_mut).then(|| FixIt {
+                            span: Span {
+                                length: 0,
+                                ..pattern.span
+                            },
+                            replacement: "mut ".to_string(),
+                        });
+                        self.mut_fn_lets.push(((i, j), from, fix));
                     }
                 }
                 let wrote = self.closure_writes.get(&value.span.offset).cloned();
@@ -2056,6 +2122,49 @@ impl Walk<'_, '_> {
                 ));
                 return;
             }
+            let found = self
+                .mut_fn_lets
+                .iter()
+                .rev()
+                .find(|(r, _, _)| *r == (i, j))
+                .map(|(_, from, fix)| (from.clone(), fix.clone()));
+            if let Some((from, fix)) = found {
+                self.mut_fn_local_calls
+                    .insert(SpanKey::from_span(&callee.span));
+                let Some(fix) = fix else {
+                    return;
+                };
+                let from = if from.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (it holds the `MutFn` from {from})")
+                };
+                self.shared_mut_fn_calls.push((
+                    callee.span,
+                    format!(
+                        "`{name}` is a `MutFn`{from}, and calling a `MutFn` changes the \
+                         binding's value, so it needs `let mut {name}` (design.md §7 \
+                         Function types and kinds)"
+                    ),
+                    Some(fix),
+                ));
+                return;
+            }
+            if i == 0 {
+                if let Some(fix) = self.own_mut_fn_params.get(name).cloned() {
+                    self.shared_mut_fn_calls.push((
+                        callee.span,
+                        format!(
+                            "`{name}` is an `own` `MutFn` parameter, and calling a `MutFn` \
+                             changes the binding's value, so it needs a mutable binding: \
+                             rebind it first, `let mut {name} = {name};` (design.md §7 \
+                             Function types and kinds)"
+                        ),
+                        fix,
+                    ));
+                    return;
+                }
+            }
         }
         let (fix, kind) = match (
             self.shared_mut_fn_params.get(name),
@@ -2134,6 +2243,80 @@ impl Walk<'_, '_> {
         );
         self.check_through(object, at, &action);
         self.note_capture_write(object);
+    }
+
+    /// Where `value`, a `let`'s initializer of a function type, takes a
+    /// `MutFn` from, or `None` when it is not known to be one: an `own`
+    /// `MutFn` parameter or another `MutFn` binding (`f`), or an element or
+    /// field whose declared type holds a `MutFn` (`fs.pop().unwrap()` over
+    /// `fs: Vec[MutFn()]`, `s.cb`). The empty string names no source.
+    fn mut_fn_source(&self, value: &Expr) -> Option<String> {
+        if let ExprKind::Identifier(n) = &value.kind {
+            if self.own_mut_fn_params.contains_key(n)
+                && self
+                    .binding_root(n)
+                    .is_some_and(|r| matches!(r, Root::Local(0, _)))
+            {
+                return Some(format!("`{n}`"));
+            }
+            if let Some(Root::Local(i, j)) = self.binding_root(n) {
+                if self.mut_fn_lets.iter().any(|(r, _, _)| *r == (i, j))
+                    || self.mut_closure_locals.iter().any(|(r, _)| *r == (i, j))
+                {
+                    return Some(format!("`{n}`"));
+                }
+            }
+        }
+        if !matches!(
+            self.node_types.get(&value.id),
+            Some((Type::Function { .. }, _))
+        ) {
+            return None;
+        }
+        // Down through the calls that take an element out (`pop`,
+        // `unwrap`, `remove`, ...) and `?` to the place it comes from.
+        let mut e = value;
+        loop {
+            match &e.kind {
+                ExprKind::MethodCall { object, method, .. }
+                    if matches!(
+                        method.as_str(),
+                        "pop"
+                            | "pop_front"
+                            | "pop_back"
+                            | "remove"
+                            | "swap_remove"
+                            | "take"
+                            | "unwrap"
+                            | "expect"
+                            | "unwrap_or"
+                            | "unwrap_or_else"
+                            | "first"
+                            | "last"
+                    ) =>
+                {
+                    e = object
+                }
+                ExprKind::Question(inner) => e = inner,
+                _ => break,
+            }
+        }
+        let declared = self.place_type_expr(e)?;
+        let (lo, hi) = (
+            declared.span.offset,
+            declared.span.offset + declared.span.length,
+        );
+        let holds = self.is_mut_fn(&declared)
+            || self
+                .tc
+                .program
+                .mut_fn_types
+                .iter()
+                .any(|k| k.0 >= lo && k.0 + k.1 <= hi);
+        holds.then(|| match place_text(e) {
+            Some(t) => format!("`{t}`"),
+            None => "a declared `MutFn`".to_string(),
+        })
     }
 
     /// The type a declaration writes for `place`, under any `ref`: a

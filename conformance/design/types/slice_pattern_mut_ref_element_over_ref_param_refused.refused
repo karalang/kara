@@ -1,0 +1,1 @@
+`xs` is a `ref` parameter, so the `mut ref first` binding cannot modify it

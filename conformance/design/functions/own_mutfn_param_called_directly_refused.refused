@@ -1,0 +1,1 @@
+`f` is an `own` `MutFn` parameter, and calling a `MutFn` changes the binding's value, so it needs a mutable binding

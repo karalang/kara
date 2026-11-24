@@ -1,0 +1,9 @@
+// design.md § Slice and array patterns: a pattern matches through a reference as over the value, so an array pattern over `ref Array[T, N]` is irrefutable
+fn first(a: ref Array[i64, 3]) -> i64 {
+    let [x, _, _] = a;
+    x
+}
+fn main() {
+    let a: Array[i64, 3] = [4, 5, 6];
+    println(first(a));
+}

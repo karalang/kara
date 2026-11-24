@@ -21,6 +21,7 @@ fn apply(f: Fn(i64) -> i64) -> i64 {
 }
 
 fn apply_twice(f: own MutFn(i64) -> i64) -> i64 {
+    let mut f = f;
     f(3) + f(4)
 }
 

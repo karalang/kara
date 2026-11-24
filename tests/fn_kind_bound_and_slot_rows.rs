@@ -62,7 +62,11 @@ fn generic_bare_mut_fn_bound_param_is_not_called_and_is_fixed_with_own() {
     let fix = karac("mutfn-bare-fix", &["fix", "--dry-run"], &src);
     let text = String::from_utf8_lossy(&fix.stdout);
     assert!(text.contains("→ `own `"), "{text}");
-    let own = format!("fn call[F: MutFn() -> i64](f: own F) -> i64 {{ f() + f() }}\n{COUNTER}");
+    // The `own` parameter is rebound before it is called (design.md §7;
+    // review ruling 2026-11-24).
+    let own = format!(
+        "fn call[F: MutFn() -> i64](f: own F) -> i64 {{ let mut f = f; f() + f() }}\n{COUNTER}"
+    );
     accepted("mutfn-own", &own);
     let run = karac("mutfn-own-run", &["__mir-run"], &own);
     assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n2\n");
