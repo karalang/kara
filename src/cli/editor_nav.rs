@@ -580,6 +580,63 @@ impl Nav {
         Some((ty, span.offset, span.length, mut_fn, view))
     }
 
+    /// A top-level function named at `at`, by a reference the resolver
+    /// resolved or by its own declaration's name: the function's name (its
+    /// effect key), its declaration's header as written, and the span of
+    /// the name under the cursor. A hover shows the header, as it does a
+    /// method's, because the function's `Type` cannot say `escaping` or
+    /// `MutFn` and has no parameter names (B-2026-11-24-6).
+    pub(crate) fn fn_decl_at(&self, at: usize) -> Option<(String, String, usize, usize)> {
+        let header_of = |f: &crate::ast::Function| -> Option<(usize, usize, String)> {
+            let (fn_kw, name_off) = fn_name_offset(&self.text, &f.span, &f.name)?;
+            let header_end = f.body.span.offset.max(fn_kw).min(self.text.len());
+            let header = self
+                .text
+                .get(fn_kw..header_end)?
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            Some((name_off, f.name.len(), header))
+        };
+        let fns = || {
+            self.program.items.iter().filter_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+        };
+        // The declaration's own name.
+        for f in fns() {
+            if !span_contains(&f.span, at) {
+                continue;
+            }
+            if let Some((name_off, len, header)) = header_of(f) {
+                if name_off <= at && at < name_off + len {
+                    return Some((f.name.clone(), header, name_off, len));
+                }
+            }
+        }
+        // A reference the resolver resolved to a top-level function.
+        let resolved = self.resolved();
+        let mut best: Option<(usize, usize, crate::resolver::SymbolId)> = None;
+        for (key, sym) in &resolved.resolutions {
+            if at < key.0 || at >= key.0.saturating_add(key.1) {
+                continue;
+            }
+            if best.is_none_or(|(_, len, _)| key.1 < len) {
+                best = Some((key.0, key.1, *sym));
+            }
+        }
+        let (ref_off, ref_len, sym) = best?;
+        let sym = resolved.symbol_table.get_symbol(sym);
+        if sym.span.length == 0 {
+            return None;
+        }
+        let decl = self.follow_import(sym.span, &sym.name);
+        let f = fns().find(|f| f.name == sym.name && span_contains(&f.span, decl.offset))?;
+        let (_, _, header) = header_of(f)?;
+        Some((f.name.clone(), header, ref_off, ref_len))
+    }
+
     /// The definition of `ty.method`, and the declaration's header.
     fn method_def(
         &self,

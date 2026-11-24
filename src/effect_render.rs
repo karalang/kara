@@ -6,9 +6,9 @@
 //! Three renderings share a single structured root (a canonically-ordered,
 //! deduplicated list of `(verb, resource)` atoms):
 //!
-//! - [`render_compact`] — one line, `reads(UserDB) + sends(Network) + panics`,
-//!   matching the source effect-combination operator `+`. For CLI output and
-//!   crash reports.
+//! - [`render_compact`] — one line, `reads(UserDB) + sends(Network) + panics`.
+//!   For CLI output and crash reports. The `+` is a display separator only:
+//!   source writes effects side by side (design.md § Effects > Syntax).
 //! - [`render_grouped`] — multi-line, bucketed into Resource / Execution /
 //!   Panic with empty groups omitted. For IDE hover.
 //! - [`effects_json`] — a `serde_json::Value` array, never colored. The
@@ -237,7 +237,7 @@ pub fn render_compact<'a>(
 /// in Resource → Execution → Panic order:
 ///
 /// ```text
-/// Resource: reads(UserDB) + writes(Cache)
+/// Resource: reads(UserDB) writes(Cache)
 /// Execution: blocks
 /// Panic: panics
 /// ```
@@ -266,7 +266,8 @@ pub fn render_grouped<'a>(
             .map(|a| render_atom(a, color))
             .collect();
         if !rendered.is_empty() {
-            lines.push(format!("{label}: {}", rendered.join(" + ")));
+            // Side by side, as an effect clause is written (B-2026-11-24-6).
+            lines.push(format!("{label}: {}", rendered.join(" ")));
         }
     }
     lines.join("\n")
@@ -418,7 +419,7 @@ mod tests {
         let out = render_grouped(refs(&v), ColorChoice::Never);
         assert_eq!(
             out,
-            "Resource: reads(UserDB) + writes(Cache)\nExecution: blocks\nPanic: panics"
+            "Resource: reads(UserDB) writes(Cache)\nExecution: blocks\nPanic: panics"
         );
     }
 

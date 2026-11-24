@@ -2,7 +2,8 @@
 //! (B-2026-11-24-1): signatures render as written, a library's docs show
 //! only its public surface, a `pub import` lists the item at the shorter
 //! path, a page puts the doc text before its sections, and the output is
-//! the same across runs and hash seeds.
+//! the same across runs and hash seeds. A pub method with no `with` clause
+//! shows the same effect clause a pub free fn does (B-2026-11-24-5).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -265,4 +266,35 @@ fn doc_conf_output_is_deterministic_across_hash_seeds() {
             Some(prev) => assert!(prev == &pages, "seed {seed} changed the output"),
         }
     }
+}
+
+const METHOD_LIB: &str = "\
+/// A box.
+pub struct Boxy[T] { pub v: i64, pub items: Vec[T] }
+
+impl[T] Boxy[T] {
+    /// Prints it.
+    pub fn show(self) { println(f\"{self.v}\"); }
+    /// Declared.
+    pub fn show2(self) with writes(Stdout) { println(f\"{self.v}\"); }
+}
+
+/// Prints it.
+pub fn show(b: Boxy[i64]) { println(f\"{b.v}\"); }
+";
+
+#[test]
+fn doc_conf_method_shows_the_same_effect_clause_as_a_free_fn() {
+    let root = build_pkg("method-effects", &[("src/lib.kara", METHOD_LIB)], None);
+    let free = signature(&read(&root, "show.html"));
+    let clause = &free[free.find(" with ").expect("free fn clause")..];
+    let page = read(&root, "Boxy.html").replace("&gt;", ">");
+    assert!(
+        page.contains(&format!("<dt>pub fn show(self){clause}</dt>")),
+        "a pub method with no `with` clause shows the inferred one ({clause}): {page}"
+    );
+    assert!(
+        page.contains("<dt>pub fn show2(self) with writes(Stdout)</dt>"),
+        "a declared clause is shown as written: {page}"
+    );
 }

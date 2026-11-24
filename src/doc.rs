@@ -329,6 +329,9 @@ pub fn build_docs(
                             &page_dir,
                             output_dir,
                             public_only,
+                            &|ty: &str, f: &Function| {
+                                effect_clause(f, &format!("{ty}.{}", f.name), &module.path, effects)
+                            },
                         ),
                     )
                 });
@@ -789,17 +792,11 @@ fn render_signature(
     use crate::formatter::{render_fn_head, render_generic_params, render_where_clause};
     match item {
         Item::Function(f) => {
-            // A `pub fn` declares its effects; when it declares none, the
-            // inferred set is shown instead.
-            let with_clause = if f.is_pub && f.effects.is_none() {
-                effects
-                    .and_then(|map| map.get(&(module_path.to_vec(), f.name.clone())))
-                    .and_then(format_with_clause)
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            format!("{}{with_clause}", render_fn_head(f))
+            format!(
+                "{}{}",
+                render_fn_head(f),
+                effect_clause(f, &f.name, module_path, effects)
+            )
         }
         Item::StructDef(s) => format!(
             "struct {}{}{}",
@@ -870,6 +867,8 @@ fn render_item_extras(
     page_dir: &Path,
     doc_root: &Path,
     public_only: bool,
+    // The effect clause for a method of the named type (B-2026-11-24-5).
+    method_clause: &dyn Fn(&str, &Function) -> String,
 ) -> String {
     let item = match d {
         Documentable::Top(item) => item,
@@ -884,11 +883,25 @@ fn render_item_extras(
     match item {
         Item::StructDef(s) => {
             render_struct_extras(s, link_table, page_dir, doc_root, public_only)
-                + &render_impl_extras(&s.name, module_items, link_table, page_dir, doc_root)
+                + &render_impl_extras(
+                    &s.name,
+                    module_items,
+                    link_table,
+                    page_dir,
+                    doc_root,
+                    &|f: &Function| method_clause(&s.name, f),
+                )
         }
         Item::EnumDef(e) => {
             render_enum_extras(e, link_table, page_dir, doc_root)
-                + &render_impl_extras(&e.name, module_items, link_table, page_dir, doc_root)
+                + &render_impl_extras(
+                    &e.name,
+                    module_items,
+                    link_table,
+                    page_dir,
+                    doc_root,
+                    &|f: &Function| method_clause(&e.name, f),
+                )
         }
         Item::TraitDef(t) => render_trait_extras(t, link_table, page_dir, doc_root),
         Item::Function(f) => render_param_extras(f, link_table, page_dir, doc_root),
@@ -941,6 +954,7 @@ fn render_impl_extras(
     link_table: &HashMap<String, String>,
     page_dir: &Path,
     doc_root: &Path,
+    method_effects: &dyn Fn(&Function) -> String,
 ) -> String {
     let impls = impls_for(module_items, name);
     let mut out = String::new();
@@ -956,7 +970,7 @@ fn render_impl_extras(
     if !methods.is_empty() {
         out.push_str("<h2>Methods</h2>\n<dl class=\"methods\">\n");
         for f in methods {
-            let sig = crate::formatter::render_fn_head(f);
+            let sig = crate::formatter::render_fn_head(f) + &method_effects(f);
             push_method_row(
                 &mut out,
                 &sig,
@@ -1629,6 +1643,24 @@ fn build_link_table(tree: &ProgramTree, public_only: bool) -> HashMap<String, St
         }
     }
     table
+}
+
+/// The ` with ...` clause shown after a `pub` function's or method's head
+/// when it declares none: the set the effect checker recorded under `key`
+/// (a free fn's name, a method's `Type.method`). Empty otherwise.
+fn effect_clause(
+    f: &Function,
+    key: &str,
+    module_path: &[String],
+    effects: Option<&EffectsByItem>,
+) -> String {
+    if !f.is_pub || f.effects.is_some() {
+        return String::new();
+    }
+    effects
+        .and_then(|map| map.get(&(module_path.to_vec(), key.to_string())))
+        .and_then(format_with_clause)
+        .unwrap_or_default()
 }
 
 /// Format the trailing ` with <effects>` clause for a `pub fn` signature.

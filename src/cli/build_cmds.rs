@@ -141,15 +141,38 @@ pub(super) fn build_doc_effects_table(tree: &ProgramTree) -> crate::doc::Effects
         if module.is_synthetic {
             continue;
         }
+        // A pub free fn is keyed by its name; a pub inherent method by
+        // `Type.method`, the key the effect checker records it under, so a
+        // method page row shows the same clause a free fn does
+        // (B-2026-11-24-5).
+        let mut fns: Vec<(String, &crate::ast::Function)> = Vec::new();
         for item in &module.items {
-            let Item::Function(f) = item else { continue };
+            match item {
+                Item::Function(f) => fns.push((f.name.clone(), f)),
+                Item::ImplBlock(imp) if imp.trait_name.is_none() => {
+                    let crate::ast::TypeKind::Path(p) = &imp.target_type.kind else {
+                        continue;
+                    };
+                    let Some(ty) = p.segments.last() else {
+                        continue;
+                    };
+                    for it in &imp.items {
+                        if let crate::ast::ImplItem::Method(m) = it {
+                            fns.push((format!("{ty}.{}", m.name), &**m));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (key, f) in fns {
             if !f.is_pub {
                 continue;
             }
 
             // Prefer the declared annotation (the user's contract);
             // fall back to the inferred set if no explicit annotation.
-            let display = match effects.declared_effects.get(&f.name) {
+            let display = match effects.declared_effects.get(&key) {
                 Some(DeclaredEffects::Explicit(set)) => effect_set_to_display(set, false),
                 Some(DeclaredEffects::Polymorphic) => EffectDisplay {
                     effects: Vec::new(),
@@ -160,13 +183,13 @@ pub(super) fn build_doc_effects_table(tree: &ProgramTree) -> crate::doc::Effects
                 }
                 Some(DeclaredEffects::None) | None => effects
                     .inferred_effects
-                    .get(&f.name)
+                    .get(&key)
                     .map(|set: &EffectSet| effect_set_to_display(set, false))
                     .unwrap_or_default(),
             };
 
             if !display.effects.is_empty() || display.polymorphic {
-                out.insert((module.path.clone(), f.name.clone()), display);
+                out.insert((module.path.clone(), key), display);
             }
         }
     }

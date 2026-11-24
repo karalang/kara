@@ -1558,6 +1558,20 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
                 });
             }
         }
+        // A function's name: its declaration as written and its effects
+        // (B-2026-11-24-6), as for a method above.
+        if let Some((key, header, offset, length)) = nav.fn_decl_at(byte_offset) {
+            return Some(HoverInfo {
+                type_display: header,
+                effect_signature: Some(effect_signature_display(&key, nav.effects())),
+                effect_signature_grouped: Some(effect_signature_display_grouped(
+                    &key,
+                    nav.effects(),
+                )),
+                span_offset: offset,
+                span_length: length,
+            });
+        }
         if let Some((ty, offset, length, mut_fn, view)) = nav.binding_at(byte_offset) {
             let mut type_display = nav.shown(ty);
             // A view of a place the function does not own is a `ref` its
@@ -2814,7 +2828,7 @@ mod playground_tests {
         // `panics` under Panic; empty Execution bucket omitted.
         assert_eq!(
             info.effect_signature_grouped.as_deref(),
-            Some("Resource: reads(Cache) + writes(Db)\nPanic: panics")
+            Some("Resource: reads(Cache) writes(Db)\nPanic: panics")
         );
     }
 
