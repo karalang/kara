@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 732 |
+| diagnostics | 733 |
 | false-positive | 360 |
 | missing-feature | 248 |
 | perf | 200 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 882 |
+| typecheck | 883 |
 | mir | 325 |
 | mir-llvm | 323 |
-| cli | 294 |
+| cli | 295 |
 | parser | 154 |
 | ownership | 134 |
 | runtime | 109 |
@@ -2223,6 +2223,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-5 | cli | low | `karac doc` shows no effect clause for a `pub` method that declares none, while a `pub` free fn with none shows its inferred set | 75d65ecd56 |
 | B-2026-11-24-6 | cli | low | kara-lsp hover on a function shows its bare `Type` (drops `escaping`, shows `MutFn` as `Fn`, no parameter names), nothing on its declaration's name,… | 75d65ecd56 |
 | B-2026-11-24-8 | parser | low | TypeScript/JavaScript and Java/C# first-day habits had no Kāra form or a misleading one: `===`, template literals, `console.log`/`System.out.println`… | 7de596f5d1 |
+| B-2026-11-24-9 | typecheck+cli | medium | LeetCode's Rust template counting with `*count.entry(x).or_insert(0) += 1` and then `left * c` over `count.values()` into an `i32` was refused (`c` i… | 2b45dbdb27 |
 
 </details>
 
