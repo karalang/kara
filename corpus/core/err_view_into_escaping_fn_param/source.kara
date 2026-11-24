@@ -1,0 +1,13 @@
+// core-semantics §5.7: a view may not flow into an escaping closure. A
+// closure passed to an `escaping` parameter escapes (§9.3), whatever the
+// callee does with it: `keep` only calls it, and the capture of `s`, a
+// view of `t`, is still refused (B-2026-11-23-76).
+fn keep(f: escaping Fn() -> i64) -> i64 {
+    f()
+}
+
+fn main() {
+    let t = "abc".to_string();
+    let s = t.as_str();
+    println(f"{keep(|| s.len())}");
+}

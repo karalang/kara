@@ -1,0 +1,11 @@
+source = "B-2026-11-23-76"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "view"]
+class = "a"
+expected_from = "spec"
+rules = ["5.7", "9.3"]
+backends = []
+env = {}
+note = "B-2026-11-23-76: a closure capturing a view, passed to an `escaping` parameter, is refused by §5.7 whatever the callee keeps (review ruling 2026-11-23: §5.7 governs, not the signature). The expected.out wording of an error pin is guidance, not a byte oracle."

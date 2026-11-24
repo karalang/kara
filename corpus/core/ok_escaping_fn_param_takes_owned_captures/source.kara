@@ -1,0 +1,36 @@
+// core-semantics §5.7 and §9.3: what may go to an `escaping` parameter.
+// A closure that owns its captures (`t` moves in) or holds only `Copy`
+// values, a function value a call hands back that captures nothing, and a
+// view passed to a non-escaping parameter are all accepted
+// (B-2026-11-23-76).
+fn keep(f: escaping Fn() -> i64) -> i64 {
+    f()
+}
+
+fn twice(f: escaping Fn(i64) -> i64) -> i64 {
+    f(f(1))
+}
+
+fn call(f: Fn() -> i64) -> i64 {
+    f()
+}
+
+fn op(name: ref String) -> Fn(i64) -> i64 {
+    if name == "double" {
+        |a: i64| a * 2
+    } else {
+        |a: i64| a + 1
+    }
+}
+
+fn main() {
+    let n = 4;
+    println(f"{keep(|| n + 1)}");
+    let name = "double".to_string();
+    println(f"{twice(op(name))}");
+    let u = "hello".to_string();
+    let v = u.as_str();
+    println(f"{call(|| v.len())}");
+    let t = "abc".to_string();
+    println(f"{keep(|| t.len())}");
+}

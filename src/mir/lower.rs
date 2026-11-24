@@ -232,6 +232,11 @@ pub struct Lowered {
     /// type holds ([`crate::mir::OpaqueResults`]; B-2026-11-20-121).
     /// The value is whether the bound itself is `Copy` (B-2026-11-21-92).
     pub opaque_results: FxHashMap<String, bool>,
+    /// The instances with an `escaping` function-typed parameter, with a
+    /// mask of those parameters' argument positions (a receiver counts):
+    /// a view may not flow into a closure passed to one (core semantics
+    /// §5.7; B-2026-11-23-76).
+    pub escaping_args: FxHashMap<String, u64>,
     /// For a program that binds a resource (core semantics §14), the
     /// effects of the program as built, before provider specialisation
     /// replaced its calls on resources: what `par_check` reports from.
@@ -699,6 +704,7 @@ fn lower_program_inner<'a>(
     let mut view_args = FxHashMap::default();
     let mut closure_results = FxHashSet::default();
     let mut opaque_results = FxHashMap::default();
+    let mut escaping_args = FxHashMap::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
             let has_self = lcx.fns.get(&def).is_some_and(|i| i.f.self_param.is_some());
@@ -752,6 +758,19 @@ fn lower_program_inner<'a>(
                     && !receiver_view(&name, &i.f.name)
             });
             lcx.lower_instance(def, &args, &name);
+            let escaping_mask = lcx.fns.get(&def).map_or(0u64, |i| {
+                let skip = usize::from(i.f.self_param.is_some());
+                i.f.params
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, p)| {
+                        k + skip < 64 && lcx.escaping_fns.contains(&SpanKey::from_span(&p.ty.span))
+                    })
+                    .fold(0, |m, (k, _)| m | 1 << (k + skip))
+            });
+            if escaping_mask != 0 {
+                escaping_args.insert(name.clone(), escaping_mask);
+            }
             // A receiver the body borrows, written or (D5) a bare `self`.
             let borrows = lcx.program.bodies.get(&name).is_some_and(|b| {
                 b.arg_count > 0
@@ -856,6 +875,7 @@ fn lower_program_inner<'a>(
         view_args,
         closure_results,
         opaque_results,
+        escaping_args,
         effects: None,
         auto_par_tasks: lcx.auto_par_done,
         auto_par_groups: lcx.auto_par_groups,
@@ -33502,6 +33522,7 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
     );
     let view_results = |n: &str| views.contains(n);
     let opaque_results = |n: &str| lowered.opaque_results.get(n).copied();
+    let escaping_args = |n: &str| lowered.escaping_args.get(n).copied().unwrap_or(0);
     let mut out: Vec<SourceBorrowError> = Vec::new();
     let mut push = |e: SourceBorrowError| {
         if !out
@@ -33531,6 +33552,7 @@ fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
             &closure_sig,
             &view_results,
             &opaque_results,
+            &escaping_args,
         ) {
             if !in_program(e.at) {
                 continue;
@@ -34387,6 +34409,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     };
     let view_results = |n: &str| views.contains(n);
     let opaque_results = &lowered.opaque_results;
+    let escaping_args = &lowered.escaping_args;
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
@@ -34418,6 +34441,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
                 &closure_sig,
                 &view_results,
                 &|n: &str| opaque_results.get(n).copied(),
+                &|n: &str| escaping_args.get(n).copied().unwrap_or(0),
             );
             if !errs.is_empty() {
                 let e: Vec<String> = errs.into_iter().map(|e| e.text).collect();

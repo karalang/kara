@@ -343,7 +343,15 @@ pub fn borrow_errors_with(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
     closure_sig: &ClosureSig<'_>,
 ) -> Vec<BorrowError> {
-    borrow_errors_in(body, tys, has_receiver, closure_sig, &|_| false, &|_| None)
+    borrow_errors_in(
+        body,
+        tys,
+        has_receiver,
+        closure_sig,
+        &|_| false,
+        &|_| None,
+        &|_| 0,
+    )
 }
 
 /// The functions whose result carries a view one of their parameters
@@ -363,6 +371,12 @@ pub type ViewResults<'a> = dyn Fn(&str) -> bool + 'a;
 /// type (B-2026-11-21-92).
 pub type OpaqueResults<'a> = dyn Fn(&str) -> Option<bool> + 'a;
 
+/// For a callee's instance name, the argument positions (a bit each, a
+/// receiver counting) that are `escaping` function-typed parameters: a
+/// closure passed there escapes, and a view may not flow into it (core
+/// semantics §5.7; B-2026-11-23-76).
+pub type EscapingArgs<'a> = dyn Fn(&str) -> u64 + 'a;
+
 /// [`borrow_errors_with`], told which functions hand back a value holding
 /// a view of what their arguments view ([`view_results`]): a closure such
 /// a call returns, passed on to be stored where no borrow is kept, is
@@ -376,6 +390,7 @@ pub fn borrow_errors_in(
     closure_sig: &ClosureSig<'_>,
     view_results: &ViewResults<'_>,
     opaque_results: &OpaqueResults<'_>,
+    escaping_args: &EscapingArgs<'_>,
 ) -> Vec<BorrowError> {
     let mut errs = read_only_errors(body, tys);
     errs.extend(view_into_shared_errors(body, tys));
@@ -387,6 +402,7 @@ pub fn borrow_errors_in(
         has_receiver,
         closure_sig,
         view_results,
+        escaping_args,
     ));
     if loans.is_empty() {
         return errs;
@@ -402,6 +418,7 @@ pub fn borrow_errors_in(
         pred_captures: predicate_captures(body, tys, &loans),
         made_here: closures_made_here(body, view_results),
         opaque: opaque_locals(body, tys, opaque_results),
+        escaping_args,
     };
     let origins = origins_dataflow(&cx, entry);
     let scopes = scope_dataflow(body, &loans);
@@ -679,6 +696,7 @@ fn view_param_escape_errors(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
     closure_sig: &ClosureSig<'_>,
     view_results: &ViewResults<'_>,
+    escaping_args: &EscapingArgs<'_>,
 ) -> Vec<BorrowError> {
     let (params, loans) = view_param_loans(body, tys);
     if params.is_empty() {
@@ -694,6 +712,7 @@ fn view_param_escape_errors(
         pred_captures: LoanSet::default(),
         made_here: closures_made_here(body, view_results),
         opaque: Default::default(),
+        escaping_args,
     };
     let mut entry = Origins::default();
     for (i, &p) in params.iter().enumerate() {
@@ -809,6 +828,7 @@ pub fn view_results<'b>(
             pred_captures: LoanSet::default(),
             made_here: std::collections::HashSet::new(),
             opaque: Default::default(),
+            escaping_args: &|_| 0,
         };
         let mut entry = Origins::default();
         for (i, &p) in params.iter().enumerate() {
@@ -866,6 +886,7 @@ pub(super) fn loan_liveness(
         pred_captures: predicate_captures(body, tys, &loans),
         made_here: closures_made_here(body, &|_| false),
         opaque: Default::default(),
+        escaping_args: &|_| 0,
     };
     let origins = origins_dataflow(&cx, entry);
     let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
@@ -1528,6 +1549,8 @@ struct Cx<'a> {
     /// The locals holding, whole or in a part, an `impl Trait` result, with
     /// the hidden types they hold: see [`opaque_locals`].
     opaque: std::collections::HashMap<Local, Vec<(Ty, bool)>>,
+    /// See [`EscapingArgs`].
+    escaping_args: &'a EscapingArgs<'a>,
 }
 
 /// The locals that hold, whole or in a part, the result of a call of one
@@ -2135,6 +2158,24 @@ impl Cx<'_> {
                     self.operand_origins(o, a, &mut val);
                 }
                 return val;
+            }
+        }
+        // A closure passed to an `escaping` parameter escapes (§9.3), and a
+        // view may not flow into an escaping closure (§5.7), whatever the
+        // callee's signature lets it keep (B-2026-11-23-76).
+        if let Operand::Const(Const {
+            kind: ConstKind::FnDef(callee),
+            ..
+        }) = func
+        {
+            let mask = (self.escaping_args)(&callee.name);
+            for (i, a) in args.iter().enumerate().take(64) {
+                // A function value a call hands back holds a view only
+                // when the callee says so ([`closures_made_here`]).
+                let made = a.place().is_some_and(|p| self.made_here.contains(&p.local));
+                if mask & (1 << i) != 0 && made {
+                    self.operand_origins(o, a, &mut val);
+                }
             }
         }
         for (i, a) in args.iter().enumerate() {
@@ -4358,6 +4399,10 @@ fn main() -> () {
             // (B-2026-11-16-42).
             "ok_find_closure_loan_not_in_result",
             "ok_next_if_closure_loan_not_stored",
+            // Which parameters are `escaping` is the build's own record
+            // (`Lowered::escaping_args`; B-2026-11-23-76).
+            "err_view_into_escaping_fn_param",
+            "err_view_param_into_escaping_fn_param",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

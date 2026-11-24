@@ -1,0 +1,1 @@
+ERROR at line 12: a view of `t` is stored in an escaping closure

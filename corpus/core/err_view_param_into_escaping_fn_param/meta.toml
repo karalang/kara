@@ -1,0 +1,11 @@
+source = "B-2026-11-23-76"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "view"]
+class = "a"
+expected_from = "spec"
+rules = ["5.7", "9.3"]
+backends = []
+env = {}
+note = "B-2026-11-23-76: the same for a view a parameter holds. The expected.out wording of an error pin is guidance, not a byte oracle."

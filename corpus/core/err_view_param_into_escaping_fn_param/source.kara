@@ -1,0 +1,14 @@
+// core-semantics §5.7: a view a parameter holds may not flow into an
+// escaping closure either; `s` views the caller's `t` (B-2026-11-23-76).
+fn keep(f: escaping Fn() -> i64) -> i64 {
+    f()
+}
+
+fn run(s: Str) -> i64 {
+    keep(|| s.len())
+}
+
+fn main() {
+    let t = "abc".to_string();
+    println(f"{run(t.as_str())}");
+}

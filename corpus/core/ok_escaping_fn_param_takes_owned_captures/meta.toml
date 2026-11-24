@@ -1,0 +1,11 @@
+source = "B-2026-11-23-76"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "view"]
+class = "a"
+expected_from = "spec"
+rules = ["5.7", "9.3"]
+backends = []
+env = {}
+note = "B-2026-11-23-76: the control. Owned and Copy captures, a captureless function value from a call, and a view to a non-escaping parameter stay accepted. Expected output worked by hand: 4+1, double(double(1)), len(hello), len(abc)."
