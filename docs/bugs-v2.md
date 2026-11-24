@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 742 |
+| diagnostics | 743 |
 | false-positive | 364 |
 | missing-feature | 251 |
 | perf | 201 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 327 |
 | mir-llvm | 323 |
 | cli | 301 |
-| parser | 156 |
+| parser | 157 |
 | ownership | 136 |
 | runtime | 109 |
 | interp | 101 |
@@ -2245,6 +2245,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-27 | mir | low | A non-`mut` `Atomic` or `Mutex` field of a `sync` or `shared` struct takes a run-time borrow flag that can never trip: every access through a handle… | d15d9cc336 |
 | B-2026-11-24-28 | parser+resolver+cli | medium | `karac fix` stopped on a Rust template whose two `BinaryHeap<Reverse<..>>`s are named `front` and `back`, calling each "cannot be told" and writing `… | 6d13915f46 |
 | B-2026-11-24-29 | cli | medium | REPL: a statement cell under `:provide` lost the provider's state for the next cell (printed 2,3 where the saved file prints 2,5), and a use of a `le… | 9efe717c55 |
+| B-2026-11-24-31 | parser | low | C and C++ first-day habits had no Kāra form or a misleading one: `printf` with a format (renamed to `print` by edit distance, then refused for its ar… | 74f34f3d51 |
 
 </details>
 
