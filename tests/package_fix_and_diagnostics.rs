@@ -70,7 +70,9 @@ fn one_fix_pass_mends_a_mistyped_import_and_its_use_is_left_alone() {
     let out = karac(&root, &["check"]);
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(
-        err.contains("unknown item `analyse` in module `text.stats`, did you mean `analyze`?"),
+        err.contains(
+            "unknown item `analyse` in module `text.stats`; available: analyze; did you mean `analyze`?"
+        ),
         "{err}"
     );
     // The use says what the import's fix binds: no second error, and no

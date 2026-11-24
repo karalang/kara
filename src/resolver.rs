@@ -1560,7 +1560,7 @@ impl<'a> Resolver<'a> {
             }
             self.errors.push(ResolveError {
                 message: format!(
-                    "error[E_TEST_OUTSIDE_TEST_FILE]: test \"{}\" is in `{file}`, and \
+                    "test \"{}\" is in `{file}`, and \
                      `karac test` runs only the `test` blocks in `_test.kara` files, so it \
                      would never run (design.md §14 Testing)",
                     tc.name
@@ -1597,9 +1597,9 @@ impl<'a> Resolver<'a> {
             for attr in attrs.iter().filter(|a| a.is_bare("test")) {
                 if !is_test {
                     self.errors.push(ResolveError {
-                        message: "error[E_TEST_ATTR_INVALID_TARGET]: `#[test(...)]` is not valid \
-                                  on a `fn`: it configures a `test \"name\" { .. }` block, the \
-                                  only form `karac test` runs (design.md §14 Testing)"
+                        message: "`#[test]` is not valid on a `fn`: it marks and configures a \
+                                  `test \"name\" { .. }` block, the only form `karac test` runs \
+                                  (design.md §14 Testing)"
                             .to_string(),
                         span: attr.span,
                         kind: ResolveErrorKind::TestAttributeInvalidTarget,
@@ -1670,7 +1670,7 @@ impl<'a> Resolver<'a> {
             Some(true) => return,
             Some(false) => (
                 format!(
-                    "error[E_TEST_REQUIRES]: `#[test(requires: [{shown}])]` names `{shown}`, \
+                    "`#[test(requires: [{shown}])]` names `{shown}`, \
                      which is provider-rooted: it has no default provider, so a test that ran \
                      would have nothing to use for it (core-semantics §14.13 requires a \
                      program-rooted resource)"
@@ -1683,7 +1683,7 @@ impl<'a> Resolver<'a> {
             ),
             None => (
                 format!(
-                    "error[E_TEST_REQUIRES]: `#[test(requires: [{shown}])]` names `{shown}`, \
+                    "`#[test(requires: [{shown}])]` names `{shown}`, \
                      which is not a resource: no `effect resource {name}` is declared{}",
                     if prefix.is_empty() {
                         String::new()

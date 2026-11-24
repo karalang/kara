@@ -2014,6 +2014,10 @@ impl<'a> super::Resolver<'a> {
                 // be separated by per-process hash order. Sorted for the same
                 // reason as the scope and impl producers; the top-level names
                 // above keep their position ahead of the siblings.
+                // The module's exports, before its submodules join the
+                // candidates: a submodule is not an item (design.md §
+                // Imports, Resolution step 3).
+                let exports = candidates_owned.clone();
                 let mut siblings: Vec<String> = tree
                     .graph
                     .by_path
@@ -2038,12 +2042,18 @@ impl<'a> super::Resolver<'a> {
                     // (B-2026-10-21-7).
                     (message, suggestion) =
                         crate::prelude::gated_module_item_error(&imp.path, &item.name);
-                } else if let Some(ref s) = suggestion {
-                    message.push_str(&format!(", did you mean `{s}`?"));
-                } else if candidates_owned.len() <= 10 && !candidates_owned.is_empty() {
-                    // Design.md § Path resolution algorithm — for small
-                    // modules, list the available exports.
-                    message.push_str(&format!("; available: {}", candidates_owned.join(", ")));
+                } else {
+                    // Design.md § Imports, Resolution step 3: the suggestion
+                    // and, for a module with at most 10 exports, the list of
+                    // them; both when both apply (B-2026-11-24-13).
+                    let listed = exports.len() <= 10 && !exports.is_empty();
+                    if listed {
+                        message.push_str(&format!("; available: {}", exports.join(", ")));
+                    }
+                    if let Some(ref s) = suggestion {
+                        let sep = if listed { ";" } else { "," };
+                        message.push_str(&format!("{sep} did you mean `{s}`?"));
+                    }
                 }
                 let replacement = suggestion.as_ref().map(|s| {
                     Box::new(TextEdit {

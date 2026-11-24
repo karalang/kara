@@ -402,7 +402,13 @@ pub fn build_program_tree_with_overlay(
                 error: e.to_string(),
             })?,
         };
-        let parsed = crate::parse_items_only(&source);
+        let mut parsed = crate::parse_items_only(&source);
+        // A block's `const` is marked by span on the file's own parse, which
+        // a module keeps no copy of: it becomes its module-scope constant
+        // here, as `desugar_program` makes it for a lone file
+        // (B-2026-11-08-60). Read later from the module's items, the mark
+        // was gone and the `const` a binding (B-2026-11-24-12).
+        crate::block_consts::hoist_block_consts(&mut parsed.program);
         let imports = extract_imports(&parsed.program);
         if !parsed.errors.is_empty() {
             parse_errors.push(ModuleParseErrors {
@@ -703,7 +709,9 @@ pub fn build_program_tree_with_overlay(
                     path: w.file.clone(),
                     error: e.to_string(),
                 })?;
-                let parsed = crate::parse_items_only(&source);
+                let mut parsed = crate::parse_items_only(&source);
+                // A block's `const`, as for the package's own modules above.
+                crate::block_consts::hoist_block_consts(&mut parsed.program);
                 if !parsed.errors.is_empty() {
                     parse_errors.push(ModuleParseErrors {
                         file: w.file.clone(),

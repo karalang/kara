@@ -1,1 +1,1 @@
-ERROR at line 1: `#[test(...)]` is not valid on a `fn`: it configures a `test "name" { .. }` block, the only form `karac test` runs (design.md §14 Testing)
+ERROR at line 1: `#[test]` is not valid on a `fn`: it marks and configures a `test "name" { .. }` block, the only form `karac test` runs (design.md §14 Testing)

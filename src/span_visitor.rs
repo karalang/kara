@@ -1452,7 +1452,19 @@ fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl MutVisitor) {
 // pattern walkers (kept in lockstep with the AST by the f-string rebase).
 fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
     match item {
-        Item::Function(f) => visit_function_mut(f, visit),
+        Item::Function(f) => {
+            // A function's attributes are reported at (`#[test]` on a
+            // `fn`, E_TEST_ATTR_INVALID_TARGET), so their spans move with
+            // it when a test companion is merged past its sibling: the
+            // error then names the test file (B-2026-11-24-14).
+            for a in &mut f.attributes {
+                visit.span(&mut a.span);
+                for arg in &mut a.args {
+                    visit.span(&mut arg.span);
+                }
+            }
+            visit_function_mut(f, visit)
+        }
         Item::StructDef(s) => {
             visit.span(&mut s.span);
             visit_generics_mut(
