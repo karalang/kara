@@ -2358,6 +2358,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- `v.into_iter()` no longer copies the vector into a second one on its
+  first `next`: the elements not yet taken stay in one vector, turned round
+  in place the first time a walk needs the other end. Kata 1752's bench
+  (`nums.windows(2).into_iter().filter(..).count()` over 500,000 arrays)
+  runs 2.67G instructions rather than 3.35G, about 230 ms rather than 300.
+  `drain(..)` and a `Map` or `Set`'s `into_iter` take the same path
+  (B-2026-11-24-32).
 - An `Atomic` or `Mutex` field that is not `mut`, in a `sync` or `shared`
   struct, no longer takes a run-time borrow flag: its methods take a
   borrowed `self`, so the flag could never trip, and each access through a

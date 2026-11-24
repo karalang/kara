@@ -411,49 +411,51 @@ impl[T: Display] Slice[T] {
     }
 }
 
-/// The elements of a `Vec`, front to back, each moved out. `front` holds
-/// the next ones reversed, so `pop` takes the first; `back` holds the last
-/// ones in order, so `pop` takes the last. Each side refills from the other
-/// when it runs out, so a walk from one end moves each element once.
+/// The elements of a `Vec`, front to back, each moved out. `items` holds
+/// the ones not yet taken: in order while `rev` is false, so `pop` takes
+/// the last, and reversed while it is true, so `pop` takes the first. A
+/// walk turns the vector round in place the first time it needs the other
+/// end, so a walk from either end allocates nothing (B-2026-11-24-32: each
+/// element was pushed one at a time into a second, growing `Vec`).
 struct VecIntoIter[T] {
-    front: Vec[T],
-    back: Vec[T],
+    items: Vec[T],
+    rev: bool,
 }
 
 impl[T] Iterator for VecIntoIter[T] {
     type Item = T;
 
     fn next(mut ref self) -> Option[T] {
-        if self.front.is_empty() {
-            while let Some(x) = self.back.pop() {
-                self.front.push(x);
-            }
+        if not self.rev {
+            self.items.reverse();
+            self.rev = true;
         }
-        self.front.pop()
+        self.items.pop()
     }
 }
 
 impl[T] DoubleEndedIterator for VecIntoIter[T] {
     fn next_back(mut ref self) -> Option[T] {
-        if self.back.is_empty() {
-            while let Some(x) = self.front.pop() {
-                self.back.push(x);
-            }
+        if self.rev {
+            self.items.reverse();
+            self.rev = false;
         }
-        self.back.pop()
+        self.items.pop()
     }
 }
 
 impl[T] ExactSizeIterator for VecIntoIter[T] {
     fn len(ref self) -> i64 {
-        self.front.len() + self.back.len()
+        self.items.len()
     }
 }
 
 impl[T] Drop for VecIntoIter[T] {
     /// The elements not taken drop front to back, as the vector's would.
     fn drop(mut ref self) {
-        self.front.reverse();
+        if self.rev {
+            self.items.reverse();
+        }
     }
 }
 
@@ -548,7 +550,7 @@ impl[T] Vec[T] {
         // `append` moves the tail back in one step; `extend` pushes it an
         // element at a time, 60 times slower under the interpreter (kata 1047).
         self.append(mut tail);
-        VecIntoIter { front: Vec.new(), back: taken }
+        VecIntoIter { items: taken, rev: false }
     }
 
     /// Removes and returns the first element `pred` accepts, shifting the
@@ -2564,7 +2566,7 @@ impl[T] IntoIterator for Vec[T] {
 
     /// The elements, front to back, each moved out of the vector.
     fn into_iter(own self) -> VecIntoIter[T] {
-        VecIntoIter { front: Vec.new(), back: self }
+        VecIntoIter { items: self, rev: false }
     }
 }
 
