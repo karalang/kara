@@ -116,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-24-30 | 2026-11-24 | cli | low | REPL: E_NO_PROVIDER for a cell that calls a provider-needing fn outside `:provide` is located at the synthetic `__karac_cell_N()` call in main (`<repl>:14:1`), not in the cell | — |
-| B-2026-11-24-32 | 2026-11-24 | mir | medium | `Vec.into_iter`'s first `next` moves every element, one pop and one push at a time, into a second `Vec` that grows as it fills, so kata 1752's `nums.windows(2).into_iter().filter(..).count()` spends more on the into_iter than on the windows | — |
 
 ### Relocated
 
@@ -2247,6 +2246,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-28 | parser+resolver+cli | medium | `karac fix` stopped on a Rust template whose two `BinaryHeap<Reverse<..>>`s are named `front` and `back`, calling each "cannot be told" and writing `… | 6d13915f46 |
 | B-2026-11-24-29 | cli | medium | REPL: a statement cell under `:provide` lost the provider's state for the next cell (printed 2,3 where the saved file prints 2,5), and a use of a `le… | 9efe717c55 |
 | B-2026-11-24-31 | parser | low | C and C++ first-day habits had no Kāra form or a misleading one: `printf` with a format (renamed to `print` by edit distance, then refused for its ar… | 74f34f3d51 |
+| B-2026-11-24-32 | mir | medium | `Vec.into_iter`'s first `next` moves every element, one pop and one push at a time, into a second `Vec` that grows as it fills, so kata 1752's `nums.… | fc3c2c36cc |
 
 </details>
 
