@@ -1,0 +1,8 @@
+fn read_config() -> String {
+    FileSystem.read_to_string("config.toml").unwrap()
+}
+:effects
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn hi() { println("hi"); }
+fn one() -> i64 { 1 }
+:effects

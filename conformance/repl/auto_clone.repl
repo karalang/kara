@@ -1,0 +1,5 @@
+let s = "x".to_string();
+let t = s;
+s
+t
+:save saved.kara

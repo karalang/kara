@@ -1,0 +1,8 @@
+Kāra REPL  (type :help for commands, :quit to exit)
+session effects: reads(FileSystem), panics, blocks
+  read_config: reads(FileSystem), panics, blocks
+session effects: reads(FileSystem), writes(Stdout), panics, blocks
+  add: panics
+  hi: writes(Stdout)
+  read_config: reads(FileSystem), panics, blocks
+

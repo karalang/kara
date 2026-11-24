@@ -1,0 +1,5 @@
+error[E0500]: cell 13:1:9: value 's' moved here, used again here (moved at cell 12:1:13)
+   |
+ 1 | println(s);
+   |         ^
+  help: clone 's' at the move site (`s.clone()`), drop `own` from the callee parameter if it only reads, or restructure to avoid reuse

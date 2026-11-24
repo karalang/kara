@@ -1,0 +1,4 @@
+error[E0200]: cell 4:1:19: expected 'String', found 'i64'
+   |
+ 1 | let bad: String = total;
+   |                   ^^^^^

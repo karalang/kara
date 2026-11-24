@@ -1,0 +1,1 @@
+perf[auto-clone-in-repl]: inserted `.clone()` on `s` at consume site (cell 2, used in cell 3); cross-cell binding kept alive — without auto-clone (`karac repl` without `--auto-clone`, or `%set auto-clone off` in a notebook) the use is refused with the move's cell instead

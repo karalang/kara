@@ -1,0 +1,5 @@
+let v = "a".to_string();
+v
+v
+let w = v;
+w

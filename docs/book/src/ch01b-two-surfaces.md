@@ -103,7 +103,7 @@ You don't have to invent new names for retries:
 Some(2)
 ```
 
-The second `let nums` *shadows* the first — same name, fresh binding. The old vector is dropped at the moment you re-declare. This is what you'd want: experimenting in the REPL shouldn't pile up `nums1`, `nums2`, `nums_v3` in your head.
+The second `let nums` *shadows* the first — same name, fresh binding. As in a file, shadowing ends nothing: the old vector stays alive, out of reach, until the session ends. This is what you'd want: experimenting in the REPL shouldn't pile up `nums1`, `nums2`, `nums_v3` in your head.
 
 ### Ownership crosses cells, honestly
 

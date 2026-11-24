@@ -178,6 +178,26 @@ pub(crate) fn run_checked(worker: &Worker, source: &str, take: bool) -> Result<R
 /// The program `source` is and its types, checked as [`check`] checks a
 /// cell up to the typechecker (the library in scope), or the errors that
 /// stopped it. `:type` reads a `let`'s type from it.
+/// The effects of `source` as `karac query effects` infers them: resolved,
+/// type-checked and lowered first, so an effect that needs a type (the
+/// `panics` of integer `+`, an instance method's callee) is seen. The REPL's
+/// `:effects`, its cell footer and `:save`'s `main` clause read this
+/// (B-2026-11-24-11). `None` when the source does not check.
+pub(crate) fn effects(source: &str) -> Option<crate::effectchecker::EffectCheckResult> {
+    let mut p = Pipeline::new("<repl>", source).strict_core().with_library();
+    p.drop_library_diagnostics();
+    p.resolve();
+    p.drop_library_diagnostics();
+    p.typecheck();
+    p.drop_library_diagnostics();
+    if p.total_errors() != 0 {
+        return None;
+    }
+    p.lower();
+    p.effectcheck();
+    p.effects.take()
+}
+
 pub(crate) fn typed(
     source: &str,
 ) -> Result<(crate::ast::Program, crate::typechecker::TypeCheckResult), Vec<String>> {

@@ -1,0 +1,9 @@
+let mut c = 0;
+c += 1;
+c
+println("printed once");
+c += 1;
+c
+let mut v = [1, 2];
+v.push(3);
+v

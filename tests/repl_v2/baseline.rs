@@ -101,7 +101,9 @@ fn repl_baseline_magics() {
     assert!(ok);
     assert_eq!(
         text.trim_end(),
-        "cell 1: (pure)\ncell 2: (pure)\ncell 3: (pure)"
+        // A `[..]` literal is a Vec and allocates: the timeline reads the
+        // typed effect pass, as `karac query effects` does (B-2026-11-24-11).
+        "cell 1: (pure)\ncell 2: (pure)\ncell 3: allocates(Heap)"
     );
     let (ok, text) = magic(&mut s, "%rc");
     assert!(ok);
@@ -112,8 +114,13 @@ fn repl_baseline_magics() {
     let (ok, text) = magic(&mut s, "%effects");
     assert!(ok);
     // The session's own effects, as `:effects` reports them; it listed
-    // the library's `println` (B-2026-11-20-131).
-    assert_eq!(text, "session effects: none", "{text}");
+    // the library's `println` (B-2026-11-20-131). `x * 2` can overflow
+    // and `[1, 2, 3]` allocates, which only the typed pass sees
+    // (B-2026-11-24-11).
+    assert_eq!(
+        text, "session effects: allocates(Heap), panics\n  double: panics",
+        "{text}"
+    );
     let (ok, text) = magic(&mut s, "%explain TYPE_MISMATCH");
     assert!(ok, "{text}");
     let (ok, text) = magic(&mut s, "%explain a");

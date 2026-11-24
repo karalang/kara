@@ -1,0 +1,13 @@
+error[E0200]: cell 2:1:17: expected 'String', found 'i64'
+  |
+1 | let y: String = x;
+  |                 ^
+error[E0100]: cell 3:1:1: undefined name 'y'
+  |
+1 | y
+  | ^
+error[E0500]: cell 7:1:9: value 's' moved here, used again here (moved at cell 6:1:13)
+   |
+ 1 | println(s);
+   |         ^
+  help: clone 's' at the move site (`s.clone()`), drop `own` from the callee parameter if it only reads, or restructure to avoid reuse

@@ -1,0 +1,9 @@
+Kāra REPL  (type :help for commands, :quit to exit)
+Some(3)
+None
+Some(2)
+Some(2)
+sum=6, owned still here: 3
+[10, 20, 30, 40, 50]
+[10, 20, 30, 40, 50]
+

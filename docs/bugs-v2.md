@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 733 |
+| diagnostics | 734 |
 | false-positive | 360 |
 | missing-feature | 249 |
 | perf | 200 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 883 |
 | mir | 325 |
 | mir-llvm | 323 |
-| cli | 296 |
+| cli | 297 |
 | parser | 154 |
 | ownership | 134 |
 | runtime | 109 |
@@ -119,6 +119,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
 | B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
 | B-2026-11-24-7 | 2026-11-24 | typecheck | low | A built-in type's method named as a value is refused by the checker: `[1].iter().map(i64.abs)` says "no associated constant `abs` on `i64`", `.map(Str.to_string)` and `.map(String.len)` say "no associated function", where design.md § Function values makes an unbound method a function whose first parameter is the receiver (a user type's work) | — |
+| B-2026-11-24-11 | 2026-11-24 | cli | medium | REPL `:effects`, the cell effect footer and `:save`'s `main` clause miss every effect that needs a type (`a + b`'s panics, a Vec literal's allocation); the auto-clone note names a notebook-only command; `:reset` overcounts; the book says a shadowed value drops at the re-declare | — |
 
 ### Relocated
 

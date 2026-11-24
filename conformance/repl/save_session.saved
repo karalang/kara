@@ -1,0 +1,12 @@
+// Saved Kāra REPL session.
+// Re-runs via `karac build` for identical observable behavior.
+
+fn add(a: i64, b: i64) -> i64 { a + b }
+
+fn main() with writes(Stdout) allocates(Heap) panics {
+    let total = add(1, 2);
+
+    println(f"total={total}");
+
+    let _ = total;
+}

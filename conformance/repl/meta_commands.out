@@ -1,0 +1,3 @@
+Kāra REPL  (type :help for commands, :quit to exit)
+Fn() -> i64
+i64

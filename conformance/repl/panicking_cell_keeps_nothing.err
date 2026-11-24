@@ -1,0 +1,10 @@
+runtime error: index out of bounds
+  at cell 2:1:20
+error[E0100]: cell 3:1:1: undefined name 'z'
+  |
+1 | z
+  | ^
+error[E0100]: cell 5:1:1: undefined name 'v'
+  |
+1 | v
+  | ^

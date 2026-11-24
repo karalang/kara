@@ -1500,7 +1500,8 @@ impl Session {
         if !parsed.errors.is_empty() {
             return (CellEffectSnapshot::default(), String::new());
         }
-        let effects = crate::effectcheck(&parsed.program);
+        let effects = crate::cli::repl_v2::effects(&synth)
+            .unwrap_or_else(|| crate::effectcheck(&parsed.program));
         let Some(set) = effects.inferred_effects.get("main") else {
             return (CellEffectSnapshot::default(), String::new());
         };
@@ -1668,7 +1669,15 @@ impl Session {
             ":save" if rest.is_empty() => MagicOutput::error("usage: :save <path.kara>"),
             ":save" => result(self.save(rest)),
             ":reset" => {
-                let cleared = self.persistent_lets.len();
+                // Bindings, not the entries that hold them: a cell that only
+                // mutates (`v.push(2);`) is kept as an entry too, and binds
+                // nothing (B-2026-11-24-11).
+                let cleared = self
+                    .persistent_lets
+                    .iter()
+                    .flat_map(|l| parse_let_binding_names(l))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
                 self.reset_persistent_lets();
                 MagicOutput::ok(format!(
                     "(cleared {cleared} persistent let binding(s); items + history kept)"
@@ -2003,7 +2012,7 @@ impl Session {
             names.sort();
             for name in names {
                 notes.push(format!(
-                    "perf[auto-clone-in-repl]: inserted `.clone()` on `{name}` at consume site (cell {}, used in cell {}); cross-cell binding kept alive — `%set auto-clone off` surfaces the underlying use-after-move diagnostic instead",
+                    "perf[auto-clone-in-repl]: inserted `.clone()` on `{name}` at consume site (cell {}, used in cell {}); cross-cell binding kept alive — without auto-clone (`karac repl` without `--auto-clone`, or `%set auto-clone off` in a notebook) the use is refused with the move's cell instead",
                     self.cell_no(cell),
                     self.cell_no(current),
                 ));
@@ -3186,7 +3195,8 @@ impl Session {
         if items.trim().is_empty() && body.trim().is_empty() {
             return "(no cells yet)\n".to_string();
         }
-        let parsed = crate::parse(&format!("{items}\nfn main() {{\n{body}}}\n"));
+        let synth = format!("{items}\nfn main() {{\n{body}}}\n");
+        let parsed = crate::parse(&synth);
         if !parsed.errors.is_empty() {
             return "(the session has parse errors: fix them first)\n".to_string();
         }
@@ -3195,7 +3205,8 @@ impl Session {
             let owner = key.split_once('.').map_or(key, |(t, _)| t);
             names.contains(key) || names.contains(owner.split('[').next().unwrap_or(owner))
         };
-        let effects = crate::effectcheck(&parsed.program);
+        let effects = crate::cli::repl_v2::effects(&synth)
+            .unwrap_or_else(|| crate::effectcheck(&parsed.program));
         let mut entries: Vec<(&String, &crate::effectchecker::EffectSet)> = effects
             .inferred_effects
             .iter()
@@ -3443,7 +3454,8 @@ impl Session {
         if !parsed.errors.is_empty() {
             return String::new();
         }
-        let effects = crate::effectcheck(&parsed.program);
+        let effects = crate::cli::repl_v2::effects(&synth)
+            .unwrap_or_else(|| crate::effectcheck(&parsed.program));
         let Some(set) = effects.inferred_effects.get("main") else {
             return String::new();
         };

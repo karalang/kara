@@ -1,0 +1,13 @@
+// Saved Kāra REPL session.
+// Re-runs via `karac build` for identical observable behavior.
+// (`--auto-clone` insertions, if any, are baked into the cell bodies below.)
+
+fn main() with allocates(Heap) {
+    let s = "x".to_string();
+
+    let t = s.clone();
+
+    let _ = s;
+
+    let _ = t;
+}

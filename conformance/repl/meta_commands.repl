@@ -1,0 +1,6 @@
+fn f() -> i64 { 7 }
+:type f
+:type f() + 1
+:nope
+:quit
+println("not run");

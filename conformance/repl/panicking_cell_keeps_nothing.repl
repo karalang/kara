@@ -1,0 +1,6 @@
+let mut v = [1];
+v.push(2); let z = v[10];
+z
+v
+:reset
+v

@@ -1,0 +1,26 @@
+fn binary_search(haystack: Vec[i32], needle: i32) -> Option[i64] {
+    let mut lo: i64 = 0;
+    let mut hi: i64 = haystack.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let value = haystack[mid];
+        if value == needle { return Some(mid); }
+        else if value < needle { lo = mid + 1; }
+        else { hi = mid; }
+    }
+    None
+}
+let nums = [1, 3, 5, 7, 9, 11, 13];
+binary_search(nums, 7)
+binary_search(nums, 100)
+binary_search(nums, 5)
+let nums = [10, 20, 30, 40, 50];
+binary_search(nums, 30)
+let owned = [1, 2, 3];
+let sum: i32 = owned.iter().sum();
+println(f"sum={sum}, owned still here: {owned.len()}");
+let s: String = "hello".to_string();
+let taken = s;
+println(s);
+nums
+nums
