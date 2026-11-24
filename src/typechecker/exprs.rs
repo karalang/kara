@@ -2893,7 +2893,18 @@ impl<'a> super::TypeChecker<'a> {
         // payload, whatever its siblings say: `[(1, [1, 2]), (2, [])]
         // .to_vec()` into a `Vec[(i64, Vec[i64])]` (B-2026-11-21-49).
         let waits = items.iter().all(tail_waits_for_sibling) || items.iter().any(holds_empty_list);
-        if name != "Vec" || contains_type_var(elem) || !(mentions_str_view(elem) || waits) {
+        // `[(x, 1)].to_vec()` into a `Vec[(i64, i64)]`, with `x` the `ref
+        // i64` that `nums.iter()` yields: each tuple is checked against the
+        // slot's tuple, which reads a `Copy` part through its reference as
+        // `(x, 1)` alone does (kata 2447's list arm).
+        let copy_tuples = matches!(elem, Type::Tuple(parts) if parts.iter().all(|p| matches!(
+            p,
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+        ))) && items.iter().all(|e| matches!(e.kind, ExprKind::Tuple(_)));
+        if name != "Vec"
+            || contains_type_var(elem)
+            || !(mentions_str_view(elem) || waits || copy_tuples)
+        {
             return None;
         }
         if object.id.is_dummy() {
