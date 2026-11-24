@@ -77,7 +77,7 @@ fn go_func_and_fmt_println_are_named_and_fixed() {
     check_then_fix(
         "go",
         "func main() { fmt.Println(\"hi\") }\n",
-        "`func` is Go: Kāra declares a function with `fn`",
+        "`func` is Go and Swift: Kāra declares a function with `fn`",
         "fn main() { println(\"hi\") }\n",
     );
 }

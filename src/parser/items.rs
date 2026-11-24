@@ -110,7 +110,7 @@ impl super::Parser {
             return false;
         }
         let lang = if word == "func" {
-            "Go"
+            "Go and Swift"
         } else {
             "JavaScript or Kotlin"
         };

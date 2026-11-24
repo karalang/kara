@@ -1283,6 +1283,9 @@ impl Parser {
             writes = ty.pass != super::c_cpp_habits::CPass::Value && !ty.konst;
             v = ty.end;
         }
+        // JavaScript declares its loop variable; Kotlin never does.
+        let declared = matches!(self.tok_at(v), Some(Token::Let | Token::Const))
+            || self.ident_at(v) == Some("var");
         while matches!(self.tok_at(v), Some(Token::Let | Token::Const | Token::Mut))
             || matches!(self.tok_at(v), Some(Token::ReservedFuture("final")))
             || self
@@ -1319,7 +1322,8 @@ impl Parser {
             (_, Some("of")) => ("`for (const x of v)` is JavaScript's", false),
             (Some(Token::Colon), _) => ("`for (int x : v)` is Java's", false),
             (Some(Token::In), _) if foreach => ("`foreach (var x in v)` is C#'s", false),
-            (Some(Token::In), _) => ("`for (const k in o)` is JavaScript's", true),
+            (Some(Token::In), _) if declared => ("`for (const k in o)` is JavaScript's", true),
+            (Some(Token::In), _) => return self.mend_kotlin_for(p, v, sep, close),
             _ => return false,
         };
         if sep + 1 >= close {
@@ -1360,6 +1364,70 @@ impl Parser {
         }
         self.tokens[p].token = Token::For;
         self.tokens.splice(p + 1..=close, head);
+        false
+    }
+
+    /// Kotlin's `for (x in v)`, `for (i in 1..3)` (both ends included),
+    /// `for (i in 0 until n)`: Kāra's `for x in v`, `1..=3`, `0..n`.
+    fn mend_kotlin_for(&mut self, p: usize, v: usize, sep: usize, close: usize) -> bool {
+        let at = self.span_at(p);
+        let mut parts = Vec::new();
+        let mut depth = 0i32;
+        let mut range = None;
+        for k in sep + 1..close {
+            match self.tok_at(k) {
+                Some(Token::LeftParen | Token::LeftBracket) => depth += 1,
+                Some(Token::RightParen | Token::RightBracket) => depth -= 1,
+                Some(Token::DotDot) if depth == 0 => range = Some((k, "..=")),
+                _ if depth == 0 && self.ident_at(k) == Some("until") => range = Some((k, "..")),
+                _ if depth == 0 && matches!(self.ident_at(k), Some("downTo" | "step")) => {
+                    self.error_at(
+                        "`downTo` and `step` are Kotlin's: Kāra counts down with \
+                         `(a..=b).rev()` and steps with `(a..b).step_by(n)`",
+                        at,
+                    );
+                    // Told: the loop is parsed on over an empty range.
+                    let name = self.ident_at(v).unwrap_or_default().to_string();
+                    self.splice_text(p + 1, close, &format!("{name} in 0..0"), at);
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        let iter_text = match range {
+            Some((k, dots)) => {
+                let (Some(a), Some(b)) =
+                    (self.tokens_text(sep + 1, k), self.tokens_text(k + 1, close))
+                else {
+                    return false;
+                };
+                parts.push(if dots == "..=" {
+                    "Kotlin's `a..b` includes `b`, as Kāra's `a..=b` does"
+                } else {
+                    "Kotlin's `a until b` is Kāra's `a..b`"
+                });
+                format!("{a}{dots}{b}")
+            }
+            None => match self.tokens_text(sep + 1, close) {
+                Some(t) => t,
+                None => return false,
+            },
+        };
+        let name = self.ident_at(v).unwrap_or_default().to_string();
+        let end = self.span_at(close);
+        let text = format!("for {name} in {iter_text}");
+        let extra = parts.first().map(|t| format!("; {t}")).unwrap_or_default();
+        self.habit(
+            &format!("`for (x in v)` is Kotlin's: Kāra's loop reads `{text}`{extra}"),
+            at,
+            vec![Self::edit(
+                at.offset,
+                end.offset + end.length - at.offset,
+                &text,
+            )],
+        );
+        self.tokens[p].token = Token::For;
+        self.splice_text(p + 1, close, &text["for ".len()..], at);
         false
     }
 

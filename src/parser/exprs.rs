@@ -1464,6 +1464,8 @@ impl super::Parser {
     fn parse_prefix(&mut self) -> Option<Expr> {
         self.mend_arrow_fn();
         self.mend_conditional_operator();
+        self.mend_kotlin_when();
+        self.mend_kotlin_lambda_value();
         self.mend_object_literal();
         // Java's `switch (x) { case 1 -> "one"; .. }` as a value.
         if self.ident_at(self.pos) == Some("switch")
@@ -3083,6 +3085,7 @@ impl super::Parser {
     fn parse_if_expr(&mut self) -> Option<Expr> {
         let start = self.current_span();
         self.expect(&Token::If)?;
+        self.mend_swift_if_let();
 
         // if let pattern = value { ... }
         if self.check(&Token::Let) {

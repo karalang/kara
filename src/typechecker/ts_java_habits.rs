@@ -40,12 +40,23 @@ impl TypeChecker<'_> {
         let setty = matches!(ty.as_str(), "Set" | "SortedSet");
         let lang = if method == "empty" {
             "C++'s"
+        } else if matches!(
+            method,
+            "uppercase" | "uppercased" | "lowercase" | "lowercased"
+        ) {
+            "Kotlin's and Swift's"
         } else {
             "JavaScript's and Java's"
         };
         let (to, note): (Option<&str>, String) = match method {
             "toUpperCase" if texty => (Some("to_uppercase"), String::new()),
             "toLowerCase" if texty => (Some("to_lowercase"), String::new()),
+            "uppercase" | "uppercased" if texty && args.is_empty() => {
+                (Some("to_uppercase"), String::new())
+            }
+            "lowercase" | "lowercased" if texty && args.is_empty() => {
+                (Some("to_lowercase"), String::new())
+            }
             "startsWith" if texty => (Some("starts_with"), String::new()),
             "endsWith" if texty => (Some("ends_with"), String::new()),
             "includes" if texty || listy || setty => (Some("contains"), String::new()),

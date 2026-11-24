@@ -261,6 +261,7 @@ impl Parser {
         }
         if self.mend_ts_java_statement_forms()
             || self.mend_c_cpp_statement_forms()
+            || self.mend_kotlin_swift_statement_forms()
             || self.mend_go_statement_forms()
             || self.mend_python_tuple_let()
         {

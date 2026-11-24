@@ -2765,6 +2765,13 @@ impl<'a> Resolver<'a> {
             "boolean" => Some("bool"),
             "List" | "ArrayList" | "IList" => Some("Vec"),
             "Dictionary" => Some("Map"),
+            // Kotlin's and Swift's. Swift's `Int` is 64 bits, Kotlin's 32:
+            // `i64` is Kāra's own integer, the type a literal takes.
+            "Int" | "Long" => Some("i64"),
+            "Double" => Some("f64"),
+            "Float" => Some("f32"),
+            "Boolean" | "Bool" => Some("bool"),
+            "Char" | "Character" => Some("char"),
             _ => crate::parser::rust_collection_rename(name),
         }
     }

@@ -200,7 +200,10 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         let obj_ty = self.infer_expr(object);
-        if matches!(field, "length" | "Length" | "Count" | "size") {
+        if matches!(
+            field,
+            "length" | "Length" | "Count" | "size" | "count" | "isEmpty"
+        ) {
             if let Some(t) = self.foreign_length_field(object, &obj_ty, field, span) {
                 return t;
             }
@@ -253,10 +256,34 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             ""
         };
+        if field == "isEmpty" {
+            self.type_error_with_fix_it(
+                format!(
+                    "no field 'isEmpty' on a {kind}: `.isEmpty` is Swift's; Kāra's is the \
+                     method `.is_empty()`"
+                ),
+                *span,
+                TypeErrorKind::UndefinedField,
+                super::FixIt {
+                    span: Span {
+                        offset: from,
+                        length: to - from,
+                        ..object.span
+                    },
+                    replacement: ".is_empty()".to_string(),
+                },
+            );
+            return Some(Type::Bool);
+        }
+        let lang = if field == "count" {
+            "Swift's"
+        } else {
+            "JavaScript's, Java's, C#'s or Kotlin's"
+        };
         self.type_error_with_fix_it(
             format!(
-                "no field '{field}' on a {kind}: `.{field}` is JavaScript's, Java's or C#'s; \
-                 Kāra's is the method `.len()`{chars}"
+                "no field '{field}' on a {kind}: `.{field}` is {lang}; Kāra's is the method \
+                 `.len()`{chars}"
             ),
             *span,
             TypeErrorKind::UndefinedField,

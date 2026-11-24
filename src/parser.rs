@@ -17,6 +17,7 @@ mod items;
 mod items_effects;
 mod items_extern;
 mod items_trait;
+mod kotlin_swift_habits;
 mod patterns;
 mod py_go_habits;
 mod rust_bound;
@@ -1029,6 +1030,7 @@ impl Parser {
         self.mend_floor_division();
         self.mend_ts_java_tokens();
         self.mend_c_cpp_tokens();
+        self.mend_kotlin_swift_tokens();
         self
     }
 
