@@ -1133,8 +1133,8 @@ mod tests {
         }"#;
         let out = render_crash_report(json).expect("valid crash report");
         assert!(out.contains("panic: index out of bounds"));
-        // Effect summary uses the shared compact form (canonical order).
-        assert!(out.contains("reads(Db) + sends(Net)"));
+        // Effect summary uses the shared compact list form (B-2026-11-24-25).
+        assert!(out.contains("reads(Db), sends(Net)"));
         // No ANSI in the LSP surface.
         assert!(!out.contains('\u{1b}'));
     }

@@ -6,9 +6,12 @@
 //! Three renderings share a single structured root (a canonically-ordered,
 //! deduplicated list of `(verb, resource)` atoms):
 //!
-//! - [`render_compact`] — one line, `reads(UserDB) + sends(Network) + panics`.
-//!   For CLI output and crash reports. The `+` is a display separator only:
-//!   source writes effects side by side (design.md § Effects > Syntax).
+//! - [`render_compact`] — one line, `panics, reads(UserDB), sends(Network)`:
+//!   the list form of the build's `Effects:` line (design.md § Inference and
+//!   declarations), one effect per resource, sorted by effect then resource.
+//!   For CLI output, crash reports and the REPL's `:effects`. Never ` + `:
+//!   a `with` clause writes effects side by side, and a list that reads like
+//!   one invites a copy into source that does not parse (B-2026-11-24-25).
 //! - [`render_grouped`] — multi-line, bucketed into Resource / Execution /
 //!   Panic with empty groups omitted. For IDE hover.
 //! - [`effects_json`] — a `serde_json::Value` array, never colored. The
@@ -215,22 +218,44 @@ fn render_atom(atom: &Atom, color: bool) -> String {
     }
 }
 
-/// Compact one-line rendering: `reads(UserDB) + sends(Network) + panics`.
-/// Empty set renders as `(none)`.
+/// Compact one-line rendering: `panics, reads(UserDB), sends(Network)`, one
+/// effect per resource, sorted by effect keyword then resource and
+/// comma-separated, as the build's `Effects:` line is. Empty set renders as
+/// `(none)`.
 pub fn render_compact<'a>(
     effects: impl IntoIterator<Item = (&'a EffectVerbKind, &'a str)>,
     color: ColorChoice,
 ) -> String {
-    let atoms = atoms(effects);
-    if atoms.is_empty() {
+    let mut singles: Vec<(String, String, Atom)> = atoms(effects)
+        .into_iter()
+        .flat_map(|a| {
+            let kw = verb_keyword(&a.verb).to_string();
+            if a.resources.is_empty() {
+                vec![(kw, String::new(), a)]
+            } else {
+                a.resources
+                    .iter()
+                    .map(|r| {
+                        let one = Atom {
+                            verb: a.verb.clone(),
+                            resources: vec![r.clone()],
+                        };
+                        (kw.clone(), r.clone(), one)
+                    })
+                    .collect()
+            }
+        })
+        .collect();
+    if singles.is_empty() {
         return "(none)".to_string();
     }
+    singles.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
     let color = color.enabled();
-    atoms
+    singles
         .iter()
-        .map(|a| render_atom(a, color))
+        .map(|(_, _, a)| render_atom(a, color))
         .collect::<Vec<_>>()
-        .join(" + ")
+        .join(", ")
 }
 
 /// Grouped multi-line rendering for IDE hover. One line per non-empty bucket,
@@ -266,7 +291,7 @@ pub fn render_grouped<'a>(
             .map(|a| render_atom(a, color))
             .collect();
         if !rendered.is_empty() {
-            // Side by side, as an effect clause is written (B-2026-11-24-6).
+            // Side by side, as a `with` clause is written (B-2026-11-24-6).
             lines.push(format!("{label}: {}", rendered.join(" ")));
         }
     }
@@ -371,8 +396,9 @@ mod tests {
 
     #[test]
     fn compact_canonical_order_and_dedup() {
-        // Deliberately out of order + duplicate reads; expect canonical order,
-        // merged resources, sorted within a verb.
+        // Deliberately out of order + duplicate reads; expect one effect per
+        // resource, deduplicated, sorted by effect then resource
+        // (B-2026-11-24-25).
         let v = pairs(&[
             (EffectVerbKind::Sends, "Network"),
             (EffectVerbKind::Reads, "UserDB"),
@@ -381,7 +407,7 @@ mod tests {
             (EffectVerbKind::Panics, ""),
         ]);
         let out = render_compact(refs(&v), ColorChoice::Never);
-        assert_eq!(out, "reads(Cache, UserDB) + sends(Network) + panics");
+        assert_eq!(out, "panics, reads(Cache), reads(UserDB), sends(Network)");
     }
 
     #[test]
@@ -439,7 +465,7 @@ mod tests {
             (EffectVerbKind::Reads, "Db"),
         ]);
         let out = render_compact(refs(&v), ColorChoice::Never);
-        assert_eq!(out, "reads(Db) + audits(Trail) + logs(Sink)");
+        assert_eq!(out, "audits(Trail), logs(Sink), reads(Db)");
     }
 
     #[test]

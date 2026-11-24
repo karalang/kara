@@ -313,8 +313,8 @@ fn test_debug_renders_human_crash_report() {
     assert!(stdout.contains("Kāra crash report"));
     assert!(stdout.contains("panic: index out of bounds"));
     assert!(stdout.contains("src/handlers.kara:42:18"));
-    // Effect set renders through the shared compact form (canonical order).
-    assert!(stdout.contains("effects: reads(UserDB) + sends(Network)"));
+    // Effect set renders through the shared compact list (B-2026-11-24-25).
+    assert!(stdout.contains("effects: reads(UserDB), sends(Network)"));
     assert!(stdout.contains("par@spawn_site_42"));
     assert!(stdout.contains("PostgresPool"));
     assert!(stdout.contains("`session` became RC"));

@@ -178,7 +178,7 @@ fn effect_hint(
     out.push(InlayHint {
         offset: head.trim_end().len(),
         // A `with` clause separates its items with spaces.
-        label: format!("with {}", crate::render_effect_set(set).replace(" + ", " ")),
+        label: format!("with {}", crate::render_effect_set(set).replace(", ", " ")),
         kind: InlayHintKind::Effects,
     });
 }

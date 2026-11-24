@@ -739,10 +739,10 @@ mod tests {
 
     #[test]
     fn top_frame_effects_render_in_canonical_order() {
-        // Declared sends-before-reads; compact re-sorts to reads then sends.
+        // Declared sends-before-reads; the list sorts reads then sends.
         let r = CrashReport::from_value(&sample()).unwrap();
         let line = effects_line(&r.logical_stack[0].effects, ColorChoice::Never);
-        assert_eq!(line, "reads(UserDB) + sends(Network)");
+        assert_eq!(line, "reads(UserDB), sends(Network)");
     }
 
     #[test]
@@ -752,7 +752,7 @@ mod tests {
         assert!(!out.contains('\x1b'), "Never must not emit ANSI");
         assert!(out.contains("panic: index out of bounds"));
         assert!(out.contains("src/handlers.kara:42:18"));
-        assert!(out.contains("effects: reads(UserDB) + sends(Network)"));
+        assert!(out.contains("effects: reads(UserDB), sends(Network)"));
         assert!(out.contains("logical stack:"));
         assert!(out.contains("parallel context:"));
         assert!(out.contains("par@spawn_site_42"));

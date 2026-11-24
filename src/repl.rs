@@ -3224,11 +3224,14 @@ impl Session {
         if all.effects.is_empty() {
             return "session effects: none\n".to_string();
         }
-        let mut out = format!("session effects: {}\n", effect_decl_parts(&all).join(", "));
+        let mut out = format!(
+            "session effects: {}\n",
+            crate::effect_render::compact_of_set(&all, crate::effect_render::ColorChoice::Never)
+        );
         for (name, eff) in entries {
             out.push_str(&format!(
                 "  {name}: {}\n",
-                effect_decl_parts(eff).join(", ")
+                crate::effect_render::compact_of_set(eff, crate::effect_render::ColorChoice::Never)
             ));
         }
         out

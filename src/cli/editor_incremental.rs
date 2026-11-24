@@ -169,7 +169,7 @@ fn fill_for(effects: Option<&str>) -> Option<&'static [u8]> {
         None | Some("pure") => Some(b"loop {}"),
         Some("panics") => Some(b"panic(\"\")"),
         Some("allocates(Heap)") => Some(b"let _a = String.new(); loop {}"),
-        Some("allocates(Heap) + panics") => Some(b"let _a = String.new(); panic(\"\")"),
+        Some("allocates(Heap), panics") => Some(b"let _a = String.new(); panic(\"\")"),
         _ => None,
     }
 }

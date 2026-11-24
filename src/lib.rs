@@ -2812,17 +2812,16 @@ mod playground_tests {
 
     #[test]
     fn hover_at_renders_multi_effect_signature_in_canonical_order() {
-        // Effects declared out of canonical order (panics, then writes, then
-        // reads); the shared `effect_render` compact form re-sorts them
-        // group-first-then-alphabetical and joins with ` + ` — so hover reads
-        // identically to `karac query effects` and the doc generator, not the
-        // old ad-hoc alphabetical `, `-join.
+        // Effects declared out of order (panics, then writes, then reads);
+        // the shared `effect_render` compact form lists them sorted by effect
+        // then resource, comma-separated, as the build's `Effects:` line does
+        // (B-2026-11-24-25).
         let src = "effect resource Db;\neffect resource Cache;\npub fn save(x: i64) with panics writes(Db) reads(Cache) { }\nfn main() { save(1); }";
         let call = src.rfind("save").unwrap();
         let info = hover_at(src, call).expect("expected hover");
         assert_eq!(
             info.effect_signature.as_deref(),
-            Some("reads(Cache) + writes(Db) + panics")
+            Some("panics, reads(Cache), writes(Db)")
         );
         // Grouped form buckets the same set: resource verbs on one line,
         // `panics` under Panic; empty Execution bucket omitted.

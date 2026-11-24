@@ -815,7 +815,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 1`](../
 #### Effect-set rendering library
 
 - [x] **Three rendering modes, JSON as structured root:** *(compact + grouped + `effects_json` structured root landed in `src/effect_render.rs`, 2026-07-23; annotated-source view remains the v1.1 IDE deferral below.)*
-  - **Compact** (CLI / crash reports): `effects: reads(UserDB) + sends(Network) + panics(IoError)` — one-line, matches source-declaration syntax (`+` is the language's effect-combination operator).
+  - **Compact** (CLI / crash reports / REPL `:effects`): `effects: panics, reads(UserDB), sends(Network)` — one line, one effect per resource, sorted by effect then resource and comma-separated, as the build's `Effects:` line is (review ruling 2026-11-24, B-2026-11-24-25).
   - **Grouped** (IDE hover): multi-line, categorized into Resource / Execution / Panic. Empty groups omitted (no "Execution: (none)" visual noise).
   - **Annotated source view**: NOT at v1; v1.1 IDE feature (effect markers in gutter, click-to-explore).
 - [x] **Stable group-first-then-alphabetical ordering** — same effect set always renders identically (load-bearing for diffability, e.g., `karac query effects --diff` between revisions). *(Keyed by `(verb_order, keyword)` so distinct user-defined verbs never collide — a latent bug in the old rank-only REPL ordering, now fixed by consolidation.)*

@@ -146,8 +146,8 @@ In a fresh `karac repl`:
 ..     FileSystem.read_to_string("config.toml").unwrap()
 .. }
 > :effects
-session effects: reads(FileSystem), panics, blocks
-  read_config: reads(FileSystem), panics, blocks
+session effects: blocks, panics, reads(FileSystem)
+  read_config: blocks, panics, reads(FileSystem)
 ```
 
 The first line is the whole session's effects: its functions' and its cells'. Under it comes every function the session defined, with the effects it carries. This is the same effect analysis that the compiler runs on `.kara` files — you're just getting a live readout instead of waiting for a diagnostic to fire. We'll cover the effect system properly in [chapter 11](./ch11-effects.md); for now, treat `:effects` as a "what would I have to declare if this were a public API" lens.
