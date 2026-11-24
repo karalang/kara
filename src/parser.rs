@@ -11,6 +11,7 @@ use rustc_hash::FxHashMap;
 mod attributes;
 mod exprs;
 pub(crate) use exprs::is_primitive_type_name;
+mod c_cpp_habits;
 mod generics;
 mod items;
 mod items_effects;
@@ -1027,6 +1028,7 @@ impl Parser {
         self.source = Some((std::sync::Arc::from(source), base));
         self.mend_floor_division();
         self.mend_ts_java_tokens();
+        self.mend_c_cpp_tokens();
         self
     }
 

@@ -260,6 +260,7 @@ impl Parser {
             return;
         }
         if self.mend_ts_java_statement_forms()
+            || self.mend_c_cpp_statement_forms()
             || self.mend_go_statement_forms()
             || self.mend_python_tuple_let()
         {
@@ -592,6 +593,9 @@ impl Parser {
         let p = self.pos;
         if !matches!(self.tok_at(p), Some(Token::For)) {
             return None;
+        }
+        if self.mend_c_forever() {
+            return Some(Token::Loop);
         }
         self.mend_paren_for();
         let at = self.span_at(p);
@@ -996,13 +1000,17 @@ impl Parser {
             _ => return self.decline_c_for(at, note, brace),
         };
         let b_from = s1 + 3;
-        // step: `i++` | `i += 1`
-        let step_ok = self.ident_at(s2 + 1) == Some(var.as_str())
+        // step: `i++` | `i += 1` | C's `++i`
+        let step_ok = (self.ident_at(s2 + 1) == Some(var.as_str())
             && match (self.tok_at(s2 + 2), self.tok_at(s2 + 3)) {
                 (Some(Token::Plus), Some(Token::Plus)) => s2 + 4 == brace,
                 (Some(Token::PlusEqual), Some(Token::Integer(1, None))) => s2 + 4 == brace,
                 _ => false,
-            };
+            })
+            || (matches!(self.tok_at(s2 + 1), Some(Token::Plus))
+                && matches!(self.tok_at(s2 + 2), Some(Token::Plus))
+                && self.ident_at(s2 + 3) == Some(var.as_str())
+                && s2 + 4 == brace);
         if !step_ok || a_from >= s1 || b_from >= s2 {
             return self.decline_c_for(at, note, brace);
         }

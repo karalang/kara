@@ -38,7 +38,11 @@ impl TypeChecker<'_> {
         let listy = matches!(ty.as_str(), "Vec" | "VecDeque" | "Slice" | "Array");
         let mappy = matches!(ty.as_str(), "Map" | "SortedMap");
         let setty = matches!(ty.as_str(), "Set" | "SortedSet");
-        let lang = "JavaScript's and Java's";
+        let lang = if method == "empty" {
+            "C++'s"
+        } else {
+            "JavaScript's and Java's"
+        };
         let (to, note): (Option<&str>, String) = match method {
             "toUpperCase" if texty => (Some("to_uppercase"), String::new()),
             "toLowerCase" if texty => (Some("to_lowercase"), String::new()),
@@ -48,6 +52,21 @@ impl TypeChecker<'_> {
             "isEmpty" if texty || listy || mappy || setty => (Some("is_empty"), String::new()),
             "size" if listy || mappy || setty => (Some("len"), String::new()),
             "containsKey" if mappy => (Some("contains_key"), String::new()),
+            // C++'s `empty()` asks, as `is_empty` does; it never clears.
+            "empty" if (texty || listy || mappy || setty) && args.is_empty() => {
+                (Some("is_empty"), String::new())
+            }
+            "back" | "front" if listy && args.is_empty() => (
+                None,
+                format!(
+                    "`v.{method}()` is C++'s {} element, undefined on an empty vector: Kāra's \
+                     `v.{}()` is an `Option`, `None` when it is empty, so it is \
+                     `v.{}().unwrap()` where `v` is known to hold one",
+                    if method == "back" { "last" } else { "first" },
+                    if method == "back" { "last" } else { "first" },
+                    if method == "back" { "last" } else { "first" },
+                ),
+            ),
             // Java's `List.add(x)` appends, as `push` does; `Set.add(x)`
             // and `insert` both say whether the value was new.
             "add" if listy && args.len() == 1 => (Some("push"), String::new()),

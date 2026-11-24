@@ -450,7 +450,7 @@ impl Parser {
 
     /// The arguments of the call whose `(` is at `open`: each one's token
     /// range, and the index of the `)`.
-    fn call_args(&self, open: usize) -> Option<(Vec<(usize, usize)>, usize)> {
+    pub(super) fn call_args(&self, open: usize) -> Option<(Vec<(usize, usize)>, usize)> {
         let close = self.matching_close(open)?;
         let mut args = Vec::new();
         let mut depth = 0i32;
@@ -932,23 +932,55 @@ impl Parser {
         } else {
             java_type(&ty_text)
         };
-        let Some(result) = result else {
+        let Some(mut result) = result else {
             return;
         };
         let Some(close) = self.matching_close(open) else {
             return;
         };
         let name = self.ident_at(name_at).unwrap_or_default().to_string();
+        // C's `int main() { ..; return 0; }`: Kāra's `main` returns
+        // nothing, and ending is success. Any other `return` keeps it.
+        let mut c_return_zero = None;
+        if name == "main" && result == "i32" {
+            let body = close + 1;
+            let Some(end) = self.matching_brace(body) else {
+                return;
+            };
+            let last_zero = end >= body + 4
+                && matches!(self.tok_at(end - 3), Some(Token::Return))
+                && matches!(self.tok_at(end - 2), Some(Token::Integer(0, _)))
+                && matches!(self.tok_at(end - 1), Some(Token::Semicolon));
+            let returns = (body..end)
+                .filter(|&k| matches!(self.tok_at(k), Some(Token::Return)))
+                .count();
+            if !last_zero || returns != 1 {
+                self.error_at(
+                    "`int main()` is C's: Kāra's entry point is `fn main()`, and reaching its \
+                     end is success; a program that ends with another status returns \
+                     `ExitCode` (design.md § The `main` function and exit codes)",
+                    at,
+                );
+                return;
+            }
+            c_return_zero = Some(end - 3);
+            result = String::new();
+        }
         let name_span = self.span_at(name_at);
         let close_span = self.span_at(close);
         let mut edits = vec![Self::edit(at.offset, name_span.offset - at.offset, "fn ")];
-        // `main(String[] args)`: Kāra's `main` takes nothing.
-        let java_main_args = name == "main"
-            && self.ident_at(open + 1) == Some("String")
-            && matches!(self.tok_at(open + 2), Some(Token::LeftBracket))
-            && matches!(self.tok_at(open + 3), Some(Token::RightBracket))
-            && self.ident_at(open + 4).is_some()
-            && open + 5 == close;
+        // `main(String[] args)` / `main(int argc, char** argv)`: Kāra's
+        // `main` takes nothing, and the body must not name them.
+        let java_main_args = name == "main" && close > open + 1 && {
+            let names: Vec<&str> = (open + 1..close)
+                .filter(|&k| matches!(self.tok_at(k + 1), Some(Token::Comma | Token::RightParen)))
+                .filter_map(|k| self.ident_at(k))
+                .collect();
+            let body_end = self.matching_brace(close + 1).unwrap_or(close);
+            !names.is_empty()
+                && !(close + 1..body_end)
+                    .any(|k| self.ident_at(k).is_some_and(|w| names.contains(&w)))
+        };
         if java_main_args {
             let o = self.span_at(open);
             edits.push(Self::edit(
@@ -964,18 +996,32 @@ impl Parser {
                 &format!(" -> {result}"),
             ));
         }
+        if let Some(r) = c_return_zero {
+            let (rs, semi) = (self.span_at(r), self.span_at(r + 2));
+            edits.push(Self::edit(
+                rs.offset,
+                semi.offset + semi.length - rs.offset,
+                "",
+            ));
+        }
         self.habit(
-            if java_main_args {
+            if c_return_zero.is_some() {
+                "`int main() { .. return 0; }` is C's: Kāra's entry point is `fn main()`, \
+                 and reaching its end is success"
+            } else if java_main_args {
                 "`void main(String[] args)` is Java's: Kāra's entry point is `fn main()`, \
                  and the command line is `env.args()`"
             } else {
-                "a result type before the name is Java's and C#'s: Kāra declares \
+                "a result type before the name is C's, Java's and C#'s: Kāra declares \
                  `fn name(x: T) -> R { .. }` (no `-> ` for `void`)"
             },
             at,
             edits,
         );
         // Tokens: `fn` name `(` .. `)` [`->` R].
+        if let Some(r) = c_return_zero {
+            self.tokens.drain(r..r + 3);
+        }
         if !result.is_empty() {
             let mut arrow = crate::tokenize(&format!("-> {result}"));
             arrow.retain(|t| !matches!(t.token, Token::EOF));
@@ -1226,8 +1272,17 @@ impl Parser {
         let semis: Vec<usize> = (p + 2..close)
             .filter(|&k| matches!(self.tok_at(k), Some(Token::Semicolon)))
             .collect();
-        // The loop variable, after `let` / `const` / `var` / `int` / `final`.
+        // The loop variable, after `let` / `const` / `var` / `int` / `final`,
+        // or a C++ type: `auto`, `const auto&`, `size_t`.
         let mut v = p + 2;
+        let mut writes = false;
+        if let Some(ty) = self
+            .c_type_at(v)
+            .filter(|t| t.c_only && self.ident_at(t.end).is_some())
+        {
+            writes = ty.pass != super::c_cpp_habits::CPass::Value && !ty.konst;
+            v = ty.end;
+        }
         while matches!(self.tok_at(v), Some(Token::Let | Token::Const | Token::Mut))
             || matches!(self.tok_at(v), Some(Token::ReservedFuture("final")))
             || self
@@ -1276,7 +1331,13 @@ impl Parser {
         let name = self.ident_at(v).unwrap_or_default().to_string();
         let mut head = vec![self.tokens[v].clone(), Self::synth(Token::In, at)];
         head.extend(self.tokens[sep + 1..close].iter().cloned());
-        if keys {
+        if writes {
+            self.error_at(
+                "`for (auto& x : v)` is C++'s loop that writes through `x`: Kāra's is \
+                 `for x in v.iter_mut() { *x = .. }`",
+                at,
+            );
+        } else if keys {
             // JavaScript's `for .. in` walks an object's keys, or an array's
             // indices as text: Kāra's loop takes the values, so it is told.
             self.error_at(
@@ -1432,6 +1493,33 @@ impl Parser {
         false
     }
 
+    /// The text of an alternative `[a, e)`, itself a conditional when it
+    /// holds one at depth 0 (`x > 0 ? "pos" : x < 0 ? "neg" : "zero"`).
+    fn conditional_alternative(&self, a: usize, e: usize) -> Option<String> {
+        let mut depth = 0i32;
+        let mut q = None;
+        let mut colon = None;
+        for k in a..e {
+            match self.tok_at(k)? {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => depth -= 1,
+                Token::Question if depth == 0 && q.is_none() => q = Some(k),
+                Token::Colon if depth == 0 && q.is_some() && colon.is_none() => colon = Some(k),
+                _ => {}
+            }
+        }
+        match (q, colon) {
+            (Some(q), Some(c)) if q > a && c > q + 1 && c + 1 < e => Some(format!(
+                "if {} {{ {} }} else {{ {} }}",
+                self.tokens_text(a, q)?,
+                self.tokens_text(q + 1, c)?,
+                self.conditional_alternative(c + 1, e)?
+            )),
+            (Some(_), _) => None,
+            _ => self.tokens_text(a, e),
+        }
+    }
+
     /// The conditional operator `c ? a : b`: Kāra's `if` is an expression,
     /// `if c { a } else { b }`. Found where the expression starts; a `?`
     /// Kāra reads as propagation (`f()?`, `x?.y`) has no `:` after it.
@@ -1539,9 +1627,6 @@ impl Parser {
                     | Token::EOF,
                 )
                 | None => break,
-                // A nested conditional is declined: its edit would land in
-                // the text this one writes.
-                Some(Token::Question) if depth == 0 => return,
                 _ => {}
             }
             end += 1;
@@ -1552,7 +1637,7 @@ impl Parser {
         let (Some(c), Some(a), Some(b)) = (
             self.tokens_text(p, q),
             self.tokens_text(q + 1, colon),
-            self.tokens_text(colon + 1, end),
+            self.conditional_alternative(colon + 1, end),
         ) else {
             return;
         };

@@ -1959,6 +1959,7 @@ impl super::Parser {
             if self.check(&Token::RightParen) {
                 break;
             }
+            self.mend_c_param();
             self.mend_java_param();
             let mut param = self.parse_param()?;
             param.is_named = named;
@@ -3168,6 +3169,7 @@ impl super::Parser {
             let start = self.current_span();
             let attributes = self.parse_attributes();
             self.recover_marker_as_field_name();
+            self.mend_c_field();
             let is_pub = self.eat_pub();
             let is_private = !is_pub && self.eat(&Token::Private);
             let mut_keyword_span = if self.check(&Token::Mut) {
