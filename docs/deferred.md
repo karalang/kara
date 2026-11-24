@@ -7323,13 +7323,11 @@ A published measurement of how *repairable* a toolchain is by an LLM that has ne
 
 Language extensions and library additions that have a design but no track. Each waits for programs that need it.
 
-### Generic trait impls for tuple types
+### Generic trait impls for raw-pointer types
 
-**Status (2026-11-21, B-2026-11-21-30):** a trait impl for a concrete tuple (`impl Show for (i64, i64)`) works on every surface. One whose elements are type parameters, `impl[A: Show, B: Show] Show for (A, B)`, is refused: "a trait impl for a tuple whose elements are type parameters is not supported yet".
+**Status (2026-11-21, B-2026-11-21-81, review-thread ruling):** a trait impl for a pointer to a concrete type (`impl Show for *mut i64`, `impl Show for *const Node`) works on every surface, keyed by its mutability and pointee. One whose pointee is a type parameter, `impl[T: Show] Show for *mut T`, is refused: "a trait impl for a raw pointer whose pointee is a type parameter is not supported yet". An inherent impl on a pointer type is refused: a pointer's own methods are the fixed set in design.md § Raw pointers.
 
-**Why deferred:** a concrete tuple impl is keyed by its exact element types, as an `Array[i64, 3]` impl is. A generic one needs the impl table to match a tuple receiver by unification against the impl's parameters, solving `A` and `B` per call, and MIR to instance the impl's methods per tuple as it does for a blanket impl. No program in the corpus or the katas needs it yet; a struct wrapper (`struct Pair[A, B] { a: A, b: B }`) covers the case today.
-
-**Raw pointers (2026-11-21, B-2026-11-21-81, review-thread ruling):** the same holds for a raw pointer. A trait impl for a pointer to a concrete type (`impl Show for *mut i64`, `impl Show for *const Node`) works on every surface, keyed by its mutability and pointee; one whose pointee is a type parameter, `impl[T: Show] Show for *mut T`, is refused with the same "not supported yet" and waits on the same unification. An inherent impl on a pointer type is refused: a pointer's own methods are the fixed set in design.md § Raw pointers.
+**Why deferred:** a generic pointer impl needs the impl table to match a pointer receiver by unification against the impl's parameters and MIR to instance its methods per pointee, as generic tuple impls now are (design.md § Coherence, moved out of this file 2026-11-24). No program has needed it; a concrete impl per pointee, or a generic struct wrapping the pointer, covers the case today.
 
 ### References to References (`mut ref (ref T)`)
 

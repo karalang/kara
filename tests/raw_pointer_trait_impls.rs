@@ -5,7 +5,7 @@
 //! defaults, `Trait.m(p)`, bounds and `dyn`, `*mut T` and `*const T` apart
 //! and each pointee apart, on the tuple pattern of B-2026-11-21-30. A
 //! pointee that is a type parameter, and an inherent impl, stay refused
-//! (deferred.md § Generic trait impls for tuple types). On the way: a
+//! (deferred.md § Generic trait impls for raw-pointer types). On the way: a
 //! pointer's own methods through a borrow of it (`self` in such an impl, a
 //! `ref *mut T` parameter) read the pointer through the reference.
 

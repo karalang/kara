@@ -318,7 +318,13 @@ impl<'a> super::TypeChecker<'a> {
                 .env
                 .impls
                 .iter()
-                .filter(|i| i.target_type == "Tuple" && i.target_args == *elems)
+                .filter(|i| {
+                    i.target_type == "Tuple"
+                        && (i.target_args == *elems
+                            || (i.target_args.is_empty()
+                                && super::env::impl_shape_fits(i, elems)
+                                && self.env.impl_bounds_discharge(i, elems)))
+                })
                 .filter_map(|i| Some((i.trait_name.clone()?, i.target_span)))
                 .collect();
             if !impls.is_empty() {

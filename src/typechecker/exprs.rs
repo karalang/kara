@@ -11622,28 +11622,33 @@ impl<'a> super::TypeChecker<'a> {
                 if imp.do_not_recommend {
                     return None;
                 }
-                Some(if imp.target_args.is_empty() {
-                    imp.target_type.clone()
-                } else if imp.target_type == "Tuple" {
-                    // A tuple impl names its tuple (B-2026-11-21-30).
-                    type_display(&Type::Tuple(imp.target_args.clone()))
-                } else if let ("*mut" | "*const", [inner]) =
-                    (imp.target_type.as_str(), imp.target_args.as_slice())
-                {
-                    // A raw-pointer impl names its pointer (B-2026-11-21-81).
-                    type_display(&Type::Pointer {
-                        inner: Box::new(inner.clone()),
-                        is_mut: imp.target_type == "*mut",
-                    })
-                } else {
-                    let args = imp
-                        .target_args
-                        .iter()
-                        .map(type_display)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{}[{}]", imp.target_type, args)
-                })
+                Some(
+                    if imp.target_type == "Tuple" && imp.target_args.is_empty() {
+                        // A generic tuple impl names its written tuple, `(A, B)`.
+                        type_display(&Type::Tuple(imp.target_generic_args.clone()))
+                    } else if imp.target_args.is_empty() {
+                        imp.target_type.clone()
+                    } else if imp.target_type == "Tuple" {
+                        // A tuple impl names its tuple (B-2026-11-21-30).
+                        type_display(&Type::Tuple(imp.target_args.clone()))
+                    } else if let ("*mut" | "*const", [inner]) =
+                        (imp.target_type.as_str(), imp.target_args.as_slice())
+                    {
+                        // A raw-pointer impl names its pointer (B-2026-11-21-81).
+                        type_display(&Type::Pointer {
+                            inner: Box::new(inner.clone()),
+                            is_mut: imp.target_type == "*mut",
+                        })
+                    } else {
+                        let args = imp
+                            .target_args
+                            .iter()
+                            .map(type_display)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{}[{}]", imp.target_type, args)
+                    },
+                )
             })
             .collect();
         renders.sort();

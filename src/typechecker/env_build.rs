@@ -2887,6 +2887,9 @@ impl<'a> super::TypeChecker<'a> {
         let target_generic_args: Vec<Type> = match &lowered_target {
             Type::Named { args, .. } => args.clone(),
             Type::Slice { element, .. } => vec![(**element).clone()],
+            // A tuple's elements, so a generic tuple impl (`impl[A, B] Show
+            // for (A, B)`) binds its params against a receiver's.
+            Type::Tuple(elems) => elems.clone(),
             _ => Vec::new(),
         };
         let (type_name, target_args) = match &lowered_target {
@@ -3057,9 +3060,8 @@ impl<'a> super::TypeChecker<'a> {
             // (design.md § Coherence, B-2026-11-20-122). Any other trait's
             // impl for a concrete tuple registers under `Tuple` with the
             // elements as its arguments, as `impl_table_key` keys a tuple
-            // receiver (B-2026-11-21-30). A tuple with type-parameter
-            // elements (`impl[A, B] Show for (A, B)`) is refused until a
-            // generic tuple impl can be instanced.
+            // receiver (B-2026-11-21-30); one over the impl's own params
+            // (`impl[A, B] Show for (A, B)`) registers generic-on-name.
             Type::Tuple(elems) if !self.registering_baked => {
                 let library_start = self.program.library_start.unwrap_or(usize::MAX);
                 let user = imp.span.offset < library_start;
@@ -3107,22 +3109,15 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return;
                 }
+                // A tuple over the impl's own params registers
+                // generic-on-name, as `impl[T] Show for Vec[T]` does: its
+                // written elements (`target_generic_args`) bind the params
+                // against a receiver's.
                 if !elems.iter().all(type_is_fully_concrete) {
-                    if user {
-                        self.type_error(
-                            format!(
-                                "`impl {t} for {shown}`: a trait impl for a tuple whose \
-                                 elements are type parameters is not supported yet; implement \
-                                 `{t}` for each concrete tuple type, or wrap the tuple in a \
-                                 generic struct (deferred.md § Generic trait impls for tuple types)"
-                            ),
-                            imp.span,
-                            TypeErrorKind::ConflictingImpl,
-                        );
-                    }
-                    return;
+                    ("Tuple".to_string(), Vec::new())
+                } else {
+                    ("Tuple".to_string(), elems.clone())
                 }
-                ("Tuple".to_string(), elems.clone())
             }
             // A trait impl for a raw pointer to a concrete type (`impl Show
             // for *mut i64`), keyed `*mut` / `*const` with the pointee, as
@@ -3157,7 +3152,7 @@ impl<'a> super::TypeChecker<'a> {
                                  pointee is a type parameter is not supported yet; implement \
                                  `{t}` for each concrete pointer type, or wrap the pointer in \
                                  a generic struct (deferred.md § Generic trait impls for \
-                                 tuple types)"
+                                 raw-pointer types)"
                             ),
                             imp.span,
                             TypeErrorKind::ConflictingImpl,
@@ -3676,6 +3671,11 @@ impl<'a> super::TypeChecker<'a> {
                          library type only where the library does not (design.md § Coherence)"
                     )
                 } else {
+                    let type_name = if type_name == "Tuple" {
+                        type_display(&lowered_target)
+                    } else {
+                        type_name.clone()
+                    };
                     format!(
                         "conflicting impl: `{type_name}` already implements \
                          `{trait_shown}{args}`{with}; a type implements a trait once, and \
@@ -3719,6 +3719,14 @@ impl<'a> super::TypeChecker<'a> {
                 return;
             }
             Some(ImplOverlap::WholeImpl) => {
+                // A tuple has no name to show: the written target, `(A, B)`.
+                let tuple_shown;
+                let (type_name, target_args): (&str, &[Type]) = if type_name == "Tuple" {
+                    tuple_shown = type_display(&lowered_target);
+                    (&tuple_shown, &[])
+                } else {
+                    (&type_name, &target_args)
+                };
                 // Overlap is refused by the rules, not by a release's limits
                 // (review-thread ruling 2026-11-20 on the §9 conformance pass).
                 self.type_error(
@@ -4948,7 +4956,8 @@ fn headers_unify(existing: &ImplInfo, written: &[Type], params: &[String]) -> bo
     }
     let mine = &existing.target_generic_args;
     if mine.len() != written.len() {
-        return true;
+        // Tuples of two arities are two types: `(A, B)` and `(A, B, C)`.
+        return existing.target_type != "Tuple";
     }
     mine.iter()
         .zip(written)

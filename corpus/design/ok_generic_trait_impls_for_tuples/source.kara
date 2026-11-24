@@ -1,0 +1,120 @@
+// design.md § Coherence: a program's trait impl for a tuple over type
+// parameters applies to every tuple its written target fits whose parts
+// meet its bounds, and is instanced per tuple.
+
+trait Show {
+    fn show(self) -> String;
+    fn twice(self) -> String {
+        f"{self.show()}{self.show()}"
+    }
+}
+
+impl Show for i64 {
+    fn show(self) -> String { f"i{self}" }
+}
+
+impl Show for String {
+    fn show(self) -> String { f"s{self}" }
+}
+
+impl[A: Show, B: Show] Show for (A, B) {
+    fn show(self) -> String { f"({self.0.show()}, {self.1.show()})" }
+}
+
+impl[A: Show, B: Show, C: Show] Show for (A, B, C) {
+    fn show(self) -> String { f"<{self.0.show()} {self.1.show()} {self.2.show()}>" }
+}
+
+fn render[T: Show](x: T) -> String {
+    x.show()
+}
+
+fn pair[A: Show, B: Show](a: own A, b: own B) -> String {
+    (a, b).show()
+}
+
+trait Zero {
+    fn zero() -> Self;
+}
+
+impl Zero for i64 {
+    fn zero() -> i64 { 0 }
+}
+
+impl Zero for String {
+    fn zero() -> String { "".to_string() }
+}
+
+impl[A: Zero, B: Zero] Zero for (A, B) {
+    fn zero() -> Self { (A.zero(), B.zero()) }
+}
+
+fn mk[T: Zero]() -> T {
+    T.zero()
+}
+
+trait Sink {
+    fn put(mut ref self, n: i64);
+}
+
+struct Sum { total: i64 }
+
+impl Sink for Sum {
+    fn put(mut ref self, n: i64) { self.total = self.total + n; }
+}
+
+trait Feed {
+    fn feed[S: Sink](self, s: mut ref S);
+}
+
+impl Feed for i64 {
+    fn feed[S: Sink](self, s: mut ref S) { s.put(self); }
+}
+
+impl[A: Feed, B: Feed] Feed for (A, B) {
+    fn feed[S: Sink](self, s: mut ref S) {
+        self.0.feed(s);
+        self.1.feed(s);
+    }
+}
+
+trait Bump {
+    fn bump(mut ref self);
+    fn take(own self) -> String;
+}
+
+impl[A] Bump for (A, i64) {
+    fn bump(mut ref self) { self.1 = self.1 + 1; }
+    fn take(own self) -> String { f"took {self.1}" }
+}
+
+trait Same {
+    fn same(self) -> bool;
+}
+
+impl[A: PartialEq] Same for (A, A) {
+    fn same(self) -> bool { self.0 == self.1 }
+}
+
+fn main() {
+    println((1, "a".to_string()).show());
+    println((2, 3).twice());
+    println(render((4, (5, "b".to_string()))));
+    println(Show.show((6, 7)));
+    println(pair(8, "c".to_string()));
+    println((9, "d".to_string(), (10, 11)).show());
+    let shown: Vec[dyn Show] = [(12, 13), (14, 15, 16)];
+    for s in shown.iter() {
+        println(s.show());
+    }
+    let z: (i64, String) = mk();
+    println(f"{z.0} [{z.1}]");
+    let mut sum = Sum { total: 0 };
+    ((1, 2), 3).feed(mut sum);
+    println(sum.total);
+    let mut p = ("keep".to_string(), 1);
+    p.bump();
+    p.bump();
+    println(p.take());
+    println(f"{(3, 3).same()} {("x".to_string(), "y".to_string()).same()}");
+}

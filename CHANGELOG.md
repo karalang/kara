@@ -574,6 +574,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- A program's trait impl for a tuple may be generic over its parts:
+  `impl[A: Show, B: Show] Show for (A, B)` applies to every pair whose
+  parts meet the bounds, nested pairs included, through a method call,
+  `Trait.m(x)`, a bound, a default method, an associated function and a
+  `dyn` coercion, on every backend (design.md § Coherence). It was refused
+  as not supported. A parameter written twice stands for one type, impls
+  for different arities coexist, and two impls whose targets unify are
+  refused as overlapping, naming the tuples (B-2026-11-24-26).
 - An HTTP `Response` may declare `body: Vec[u8]`. A server sends it as it is,
   with `Content-Length` its byte count and `content-type:
   application/octet-stream` when the handler sets none, and `Client.get`,

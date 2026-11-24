@@ -1281,6 +1281,18 @@ struct FnItem<'a> {
 }
 
 impl FnItem<'_> {
+    /// A method of a trait impl for a tuple over the impl's own parameters
+    /// (`impl[A: Show, B: Show] Show for (A, B)`), instanced at each tuple
+    /// receiver its written target fits.
+    fn is_generic_tuple_impl(&self) -> bool {
+        self.impl_target.is_none()
+            && self.impl_prim.is_none()
+            && self.impl_generics.is_some()
+            && self
+                .impl_target_ty
+                .is_some_and(|t| matches!(t.kind, ast::TypeKind::Tuple(_)))
+    }
+
     /// The impl's target's arguments, from the impl's own `args` in its
     /// declared order: `impl[T, I] .. for Tagged[I, T]` writes them
     /// swapped (B-2026-10-18-48). The arguments as given when they are not
@@ -2146,7 +2158,15 @@ impl<'a> Lcx<'a> {
                                 if p.segments.len() == 1
                                     && g.params.iter().any(|q| q.name == p.segments[0])
                         );
-                    if target.is_none() && prim.is_none() && !slice && !blanket {
+                    // A trait impl for a tuple over its own parameters
+                    // (`impl[A, B] Show for (A, B)`): its methods are
+                    // instanced at a tuple receiver its target fits.
+                    let generic_tuple = target.is_none()
+                        && prim.is_none()
+                        && b.trait_name.is_some()
+                        && b.generic_params.is_some()
+                        && matches!(b.target_type.kind, ast::TypeKind::Tuple(_));
+                    if target.is_none() && prim.is_none() && !slice && !blanket && !generic_tuple {
                         continue;
                     }
                     let impl_dispatch = dispatch_names
@@ -3349,7 +3369,9 @@ impl<'a> Lcx<'a> {
     fn fn_self_written(&mut self, def: DefId, args: &[Ty]) -> Option<Result<Ty, String>> {
         let key = self.fn_key(def);
         let (ty, frame) = self.tc.fn_self_types.get(&key)?;
-        if !matches!(ty, Type::Named { args, .. } if !args.is_empty()) {
+        if !matches!(ty, Type::Named { args, .. } if !args.is_empty())
+            && !(matches!(ty, Type::Tuple(_)) && self.fns.get(&def)?.is_generic_tuple_impl())
+        {
             return None;
         }
         let params = self
@@ -6322,6 +6344,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                         elem,
                         mutable: false,
                     })
+                }
+                // A generic tuple impl's `self` is its written target at
+                // this instance's arguments.
+                None if self.lcx.fns[&self.b.instance().def].is_generic_tuple_impl() => {
+                    let (def, args) = (self.b.instance().def, self.args.clone());
+                    match self.lcx.fn_self_written(def, &args) {
+                        Some(Ok(t)) => t,
+                        Some(Err(e)) => return self.unsupported(f.span, &e),
+                        None => return self.unsupported(f.span, "a generic tuple impl's `self`"),
+                    }
                 }
                 None => {
                     let Some((target, n)) = impl_target else {
@@ -13924,6 +13956,45 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         self.nth_impl_method(t, tr, method, 0)
+            .or_else(|| self.generic_tuple_impl_method(t, Some(tr), method))
+    }
+
+    /// `method` of the one trait impl (of `tr`, when given) for a tuple
+    /// over the impl's own parameters whose written target `t` fits, its
+    /// parameters read off `t` (`impl[A, B] Show for (A, B)` at `(i64,
+    /// String)` gives `[i64, String]`).
+    fn generic_tuple_impl_method(
+        &self,
+        t: Ty,
+        tr: Option<&str>,
+        method: &str,
+    ) -> Option<(DefId, Vec<Ty>)> {
+        if !matches!(self.tys().tcx().kind(t), HK::Tuple(_)) {
+            return None;
+        }
+        let label = tr.map(|tr| format!("impl {tr}#"));
+        let mut hits = self.lcx.fns.iter().filter_map(|(&d, item)| {
+            if item.f.name != method || !item.is_generic_tuple_impl() {
+                return None;
+            }
+            if let Some(label) = &label {
+                let path = &self.lcx.defs.table.get(d).path.segments;
+                if path.len() < 2 || !path[path.len() - 2].starts_with(label.as_str()) {
+                    return None;
+                }
+            }
+            let names: Vec<&str> = item
+                .impl_generics
+                .map(|g| g.params.iter().map(|p| p.name.as_str()).collect())
+                .unwrap_or_default();
+            let mut out: Vec<Option<Ty>> = vec![None; item.impl_params];
+            if !self.written_fits(item.impl_target_ty?, t, &names, &mut out) {
+                return None;
+            }
+            Some((d, out.into_iter().collect::<Option<Vec<_>>>()?))
+        });
+        let hit = hits.next()?;
+        hits.next().is_none().then_some(hit)
     }
 
     /// `method` of the `n`th impl of `tr` for `t`'s type, in source order.
@@ -26580,6 +26651,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .is_some_and(|g| !g.params.is_empty());
             return (prim.next().is_none() && !generic).then(|| (d, Vec::new()));
         }
+        if let HK::Tuple(_) = kind {
+            // One with parameters of its own reads them off the call
+            // (`generic_method_by_receiver`).
+            let (d, inst) = self.generic_tuple_impl_method(base, None, method)?;
+            let own = self.lcx.fns[&d]
+                .f
+                .generic_params
+                .as_ref()
+                .is_some_and(|g| !g.params.is_empty());
+            return (!own).then_some((d, inst));
+        }
         // A table's arguments with its hasher, for an impl over any hasher.
         let full = match kind {
             HK::Adt { args, .. } | HK::Shared { args, .. } | HK::Intrinsic { args, .. } => {
@@ -26701,6 +26783,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if !prim.is_empty() {
             return Ok(None);
+        }
+        // A generic tuple impl's method, its impl parameters read off the
+        // tuple and its own off the arguments.
+        if let HK::Tuple(_) = kind {
+            return match self.generic_tuple_impl_method(base, None, method) {
+                Some((d, inst)) if generic(&self.lcx.fns[&d]) => {
+                    self.own_generics_from_args(d, inst, args, ret)
+                }
+                _ => Ok(None),
+            };
         }
         // A table's arguments with its hasher, for an impl over any hasher.
         let full = match kind {

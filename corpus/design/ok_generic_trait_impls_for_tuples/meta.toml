@@ -1,0 +1,9 @@
+source = "B-2026-11-21-30"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "traits", "generics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Coherence (Tuples): an impl over type parameters applies to every tuple its target fits whose parts meet its bounds, instanced per tuple; `self` is the tuple, read by part. So `(A, B)` shows a pair at any part types, nested pairs recursively, through a bound, `Trait.m(x)`, a generic body's own tuple and `dyn`; `(A, B, C)` is a separate impl for triples; `Zero` builds a pair of zeros (`0 []`); a generic method feeds 1, 2, 3 into one sink (6); `(A, i64)` bumps its second part twice (3); `(A, A)` compares equal parts (true) and unequal ones (false). Refused as not supported before this slice."

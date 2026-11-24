@@ -230,6 +230,10 @@ pub(super) fn conversion_param_takes(param: &Type, source: &Type) -> bool {
 /// argument still being inferred; a caller's type parameter is a type of its
 /// own and fits only itself.
 pub(super) fn impl_shape_fits(imp: &ImplInfo, actual: &[Type]) -> bool {
+    // A tuple impl's arity is its shape: `(A, B)` never fits a triple.
+    if imp.target_type == "Tuple" && imp.target_generic_args.len() != actual.len() {
+        return false;
+    }
     if !imp.target_args.is_empty() || imp.target_generic_args.len() != actual.len() {
         return true;
     }
@@ -238,22 +242,37 @@ pub(super) fn impl_shape_fits(imp: &ImplInfo, actual: &[Type]) -> bool {
         .iter()
         .flat_map(|gp| gp.params.iter().map(|p| p.name.as_str()))
         .collect();
-    fn fits(d: &Type, a: &Type, params: &[&str]) -> bool {
+    fn fits(d: &Type, a: &Type, params: &[&str], seen: &mut HashMap<String, Type>) -> bool {
         match (d, a) {
-            (Type::TypeParam(p), _) if params.contains(&p.as_str()) => true,
+            // A param written twice (`impl[A] Show for (A, A)`) stands for
+            // one type: `(i64, String)` does not fit.
+            (Type::TypeParam(p), _) if params.contains(&p.as_str()) => {
+                if matches!(a, Type::TypeVar(_) | Type::Error) {
+                    return true;
+                }
+                match seen.get(p) {
+                    Some(b) => b == a,
+                    None => {
+                        seen.insert(p.clone(), a.clone());
+                        true
+                    }
+                }
+            }
             (_, Type::TypeVar(_) | Type::Error) => true,
             (Type::Named { name: dn, args: da }, Type::Named { name: an, args: aa }) => {
                 dn == an
                     && da.len() == aa.len()
-                    && da.iter().zip(aa).all(|(x, y)| fits(x, y, params))
+                    && da.iter().zip(aa).all(|(x, y)| fits(x, y, params, seen))
             }
-            (Type::Ref(x), Type::Ref(y)) | (Type::MutRef(x), Type::MutRef(y)) => fits(x, y, params),
+            (Type::Ref(x), Type::Ref(y)) | (Type::MutRef(x), Type::MutRef(y)) => {
+                fits(x, y, params, seen)
+            }
             (Type::Tuple(xs), Type::Tuple(ys)) => {
-                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| fits(x, y, params))
+                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| fits(x, y, params, seen))
             }
             (Type::Array { element: x, .. }, Type::Array { element: y, .. })
             | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
-                fits(x, y, params)
+                fits(x, y, params, seen)
             }
             // Two different type constructors never fit, whatever params
             // the written one holds: `W[(T, String)]` is not `W[A[i64]]`
@@ -289,10 +308,11 @@ pub(super) fn impl_shape_fits(imp: &ImplInfo, actual: &[Type]) -> bool {
             _ => false,
         }
     }
+    let mut seen = HashMap::new();
     imp.target_generic_args
         .iter()
         .zip(actual)
-        .all(|(d, a)| fits(d, a, &params))
+        .all(|(d, a)| fits(d, a, &params, &mut seen))
 }
 
 pub(super) fn bind_impl_params(decl: &[Type], actual: &[Type], out: &mut HashMap<String, Type>) {

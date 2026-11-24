@@ -1,0 +1,5 @@
+trait Show { fn show(self) -> String; }
+impl Show for i64 { fn show(self) -> String { f"{self}" } }
+impl Show for bool { fn show(self) -> String { if self { "yes" } else { "no" } } }
+impl[A: Show, B: Show] Show for (A, B) { fn show(self) -> String { f"<{self.0.show()} {self.1.show()}>" } }
+fn main() { println((1, (true, 2)).show()); }

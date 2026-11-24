@@ -5,8 +5,7 @@
 //! supported. Now a concrete tuple's impl answers method calls, default
 //! methods, `Trait.m(x)`, bounds and `dyn` coercions, with its receiver
 //! mode and effects checked as any impl's are. An impl over type
-//! parameters stays refused (deferred.md § Generic trait impls for tuple
-//! types).
+//! parameters is tests/tuple_generic_trait_impls.rs's.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -164,20 +163,17 @@ fn main() { quiet((1, 2)); }
     assert!(out.contains("writes(Stdout)"), "{out}");
 }
 
+/// An impl over type parameters runs (it was refused as not supported
+/// before generic tuple impls); an inherent impl stays refused.
 #[test]
-fn tuple_impl_over_type_parameters_is_refused() {
-    let out = refused(
+fn tuple_impl_over_type_parameters_runs_inherent_refused() {
+    runs_to(
         "generic",
         "trait Show { fn show(self) -> String; }
 impl[A, B] Show for (A, B) { fn show(self) -> String { \"p\" } }
-fn main() { }
+fn main() { println((1, true).show()); }
 ",
-    );
-    assert!(
-        out.contains(
-            "a trait impl for a tuple whose elements are type parameters is not supported yet"
-        ),
-        "{out}"
+        "p\n",
     );
     let out = refused(
         "inherent",

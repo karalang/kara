@@ -6253,7 +6253,9 @@ impl<'a> super::TypeChecker<'a> {
                 // `Type::Shared`'s own doc. There are no args to erase.
                 Type::Shared(_) => lowered.clone(),
                 // A concrete tuple is its own type (B-2026-11-21-30).
-                Type::Tuple(elems) if elems.iter().all(type_is_fully_concrete) => lowered.clone(),
+                // A generic tuple's too: its `self` is a tuple of the
+                // impl's params, whose parts the body reads.
+                Type::Tuple(_) => lowered.clone(),
                 // So is a raw pointer to a concrete type (B-2026-11-21-81).
                 Type::Pointer { inner, .. } if type_is_fully_concrete(inner) => lowered.clone(),
                 // On the MIR pipeline, a generic target that NESTS its
