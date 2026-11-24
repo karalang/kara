@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 740 |
+| diagnostics | 741 |
 | false-positive | 364 |
 | missing-feature | 251 |
 | perf | 201 |
@@ -79,13 +79,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 890 |
 | mir | 327 |
 | mir-llvm | 323 |
-| cli | 298 |
-| parser | 155 |
+| cli | 299 |
+| parser | 156 |
 | ownership | 136 |
 | runtime | 109 |
 | interp | 101 |
 | effect | 64 |
-| resolver | 54 |
+| resolver | 55 |
 | other | 52 |
 | codegen | 22 |
 | autopar | 7 |
@@ -2242,6 +2242,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-25 | cli | low | An effect set printed as a list (crash report, `karac debug`, editor effect list, hover one-liner, REPL `:effects`) joined effects with ` + ` in grou… | 206bbf679d |
 | B-2026-11-24-26 | typecheck+mir | medium | A trait impl for a tuple over type parameters (`impl[A: Show, B: Show] Show for (A, B)`) is refused as not supported (deferred.md § Generic trait imp… | d263d0b236 |
 | B-2026-11-24-27 | mir | low | A non-`mut` `Atomic` or `Mutex` field of a `sync` or `shared` struct takes a run-time borrow flag that can never trip: every access through a handle… | d15d9cc336 |
+| B-2026-11-24-28 | parser+resolver+cli | medium | `karac fix` stopped on a Rust template whose two `BinaryHeap<Reverse<..>>`s are named `front` and `back`, calling each "cannot be told" and writing `… | 6d13915f46 |
 
 </details>
 
