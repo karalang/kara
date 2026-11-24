@@ -1,0 +1,6 @@
+trait Store { fn touch(mut ref self, n: i64) -> i64; }
+effect resource Db: Store;
+fn bump(n: i64) -> i64 with writes(Db) { Db.touch(n) }
+let x = 1;
+println(f"{x + bump(1)}");
+x

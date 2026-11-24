@@ -2489,6 +2489,17 @@ impl<'p> Analysis<'p> {
                 } => Some(i.name.clone()),
                 _ => None,
             };
+        // A REPL cell is a function of its own that the session's `main`
+        // calls: the site is the cell's own call, which names the cell
+        // (B-2026-11-24-30).
+        if let Some(cell) = callee(main, block).filter(|n| n.starts_with("__karac_cell_")) {
+            let body = self.program.bodies.get(&cell)?;
+            let (block, span, _, _) = self
+                .needs_sites_made(body, needs)
+                .into_iter()
+                .find(|(_, _, n, _)| n.contains_key(r))?;
+            return Some((cell, block, span));
+        }
         let case = callee(main, block).filter(|n| n.starts_with("__karac_case_"))?;
         let case = self.program.bodies.get(&case)?;
         let test = self

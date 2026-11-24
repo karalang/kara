@@ -1,0 +1,4 @@
+error[E_NO_PROVIDER]: cell 5:1:16: no provider for `Db`: this needs one and nothing supplies it, since the cell runs outside every provider scope (core semantics §14.6); open one first with `:provide Db = <provider>`
+   |
+ 1 | println(f"{x + bump(1)}");
+   |                ^^^^

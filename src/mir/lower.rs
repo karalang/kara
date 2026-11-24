@@ -31885,6 +31885,15 @@ pub fn stateful_default_text(
 /// The message for a call that needs `resource`'s provider where nothing
 /// supplies it (core semantics §14.6).
 pub fn no_provider_text(resource: &str, instance: &str) -> String {
+    // A REPL cell runs outside every provider until `:provide` opens a
+    // scope (B-2026-11-24-30).
+    if instance.starts_with("__karac_cell_") {
+        return format!(
+            "no provider for `{resource}`: this needs one and nothing supplies it, since the \
+             cell runs outside every provider scope (core semantics §14.6); open one first \
+             with `:provide {resource} = <provider>`"
+        );
+    }
     // A test function's body is a root too (B-2026-11-17-102).
     let root = if instance.starts_with("__test_") {
         "a test body"
