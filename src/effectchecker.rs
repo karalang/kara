@@ -19,7 +19,7 @@ mod bounds;
 mod drop_edges;
 mod dyn_effects;
 mod effect_vars;
-mod elem_impls;
+pub(crate) mod elem_impls;
 mod extern_ffi;
 mod fn_values;
 mod gpu_effect_gate;

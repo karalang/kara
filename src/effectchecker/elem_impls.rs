@@ -42,7 +42,7 @@ impl ElemTrait {
         ElemTrait::Default,
     ];
 
-    fn trait_name(self) -> &'static str {
+    pub fn trait_name(self) -> &'static str {
         match self {
             ElemTrait::Eq => "PartialEq",
             ElemTrait::PartialOrd => "PartialOrd",
@@ -503,7 +503,12 @@ impl ElemImplIndex {
 /// supertraits, declares `method`. None of them writes a clause, so a call
 /// through such a bound has the effects of the instance's impl.
 pub fn standard_trait_declares(trait_name: &str, method: &str) -> bool {
-    let declares: &[&str] = match trait_name {
+    trait_methods(trait_name).contains(&method)
+}
+
+/// The methods a standard trait and its supertraits declare.
+pub fn trait_methods(trait_name: &str) -> &'static [&'static str] {
+    match trait_name {
         "PartialEq" | "Eq" => &["eq"],
         "PartialOrd" => &["partial_cmp", "eq"],
         "Ord" => &["cmp", "partial_cmp", "eq"],
@@ -513,8 +518,7 @@ pub fn standard_trait_declares(trait_name: &str, method: &str) -> bool {
         "Clone" | "Copy" => &["clone"],
         "Default" => &["default"],
         _ => &[],
-    };
-    declares.contains(&method)
+    }
 }
 
 /// Whether the typechecker solved every part of `ty`.

@@ -2217,6 +2217,10 @@ impl<'p> Analysis<'p> {
                 if let Some((_, _, impls)) = self.resource_call(&inst.name) {
                     out.extend(impls);
                 }
+                // A native runs the element impls of the values it holds.
+                if inst.def == DefId(u32::MAX) {
+                    out.extend(self.elem_impl_calls(body, &inst.name, args));
+                }
                 // A function value passed along may run in the callee.
                 for a in args {
                     out.extend(self.fn_value_bodies(body, a));
@@ -2806,6 +2810,98 @@ impl<'p> Analysis<'p> {
     }
 
     /// The types a value of type `ty` owns and drops with it.
+    /// The program impl bodies the native `name` runs on the values its
+    /// receiver holds: the traits the library bounds the method on
+    /// ([`crate::effectchecker::elem_impls::method_traits`], the table the
+    /// AST pass charges from, B-2026-11-23-15), reached through the
+    /// receiver's type, or its key's for a keyed collection's key traits.
+    fn elem_impl_calls(&self, body: &Body, name: &str, args: &[Operand]) -> Vec<String> {
+        use crate::effectchecker::elem_impls::{method_traits, trait_methods, Family, Scope};
+        let (base, method) = split_native(name);
+        let family = match base {
+            "Vec" | "VecDeque" | "Slice" | "Array" => Family::Seq,
+            "Map" | "Set" => Family::Hashed,
+            "SortedMap" | "SortedSet" | "PriorityQueue" => Family::Sorted,
+            _ => Family::Other,
+        };
+        let traits = method_traits(family, method);
+        let mut out = Vec::new();
+        if traits.is_empty() {
+            return out;
+        }
+        let Some(recv) = args.first().and_then(Operand::place) else {
+            return out;
+        };
+        let Ok(pt) = place_ty(body, self.tys, recv) else {
+            return out;
+        };
+        let tcx = self.tys.tcx();
+        let mut whole = pt.ty;
+        while let SK::Ref(t) | SK::MutRef(t) = tcx.kind(whole) {
+            whole = t;
+        }
+        for (tr, scope) in traits {
+            let ty = match (scope, tcx.kind(whole)) {
+                (Scope::Key, SK::Intrinsic { args, .. }) => match tcx.list(args).first() {
+                    Some(k) => *k,
+                    None => continue,
+                },
+                _ => whole,
+            };
+            self.impl_bodies(
+                ty,
+                trait_methods(tr.trait_name()),
+                &mut Vec::new(),
+                &mut out,
+            );
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The written impl bodies of `methods` that a value of `ty` reaches:
+    /// its own type's, or for a type without one (a derived impl, a
+    /// collection, a tuple) its parts'.
+    fn impl_bodies(&self, ty: Ty, methods: &[&str], seen: &mut Vec<Ty>, out: &mut Vec<String>) {
+        let tcx = self.tys.tcx();
+        let mut ty = ty;
+        while let SK::Ref(t) | SK::MutRef(t) = tcx.kind(ty) {
+            ty = t;
+        }
+        if seen.contains(&ty) {
+            return;
+        }
+        seen.push(ty);
+        if matches!(tcx.kind(ty), SK::Adt { .. } | SK::Shared { .. }) {
+            let adt = self.tys.adt_name(ty);
+            // A method with type parameters of its own (`fn hash[H:
+            // Hasher]`) has one instance per argument: `K.hash[H]`.
+            let mut written = Vec::new();
+            for m in methods {
+                let name = format!("{adt}.{m}");
+                if self.program.bodies.contains_key(&name) {
+                    written.push(name.clone());
+                }
+                let open = format!("{name}[");
+                written.extend(
+                    self.program
+                        .bodies
+                        .range(open.clone()..)
+                        .take_while(|(k, _)| k.starts_with(&open))
+                        .map(|(k, _)| k.clone()),
+                );
+            }
+            if !written.is_empty() {
+                out.extend(written);
+                return;
+            }
+        }
+        for part in self.parts(ty) {
+            self.impl_bodies(part, methods, seen, out);
+        }
+    }
+
     fn parts(&self, ty: Ty) -> Vec<Ty> {
         let tcx = self.tys.tcx();
         match tcx.kind(ty) {
@@ -3090,12 +3186,19 @@ impl<'p> Analysis<'p> {
                     let key = key_arg.map_or(unrooted, arg_key);
                     eff.add(Effect::new(verb, class, key));
                 }
-                // A closure or function handed to a native runs inside it.
-                for a in args {
-                    for b in self.fn_value_bodies(body, a) {
-                        if let Some(s) = summaries.get(&b) {
-                            eff.union(substitute(s, &|_| Key::Any, &|_| opaque()));
-                        }
+                // A closure or function handed to a native runs inside it,
+                // and so does each program impl the native runs on the
+                // values it holds (`xs.sort()` the elements' `cmp`, a
+                // `Map`'s key operations their `hash` and `eq`; design.md
+                // § Trait methods and generic calls).
+                let held = self.elem_impl_calls(body, name, args);
+                for b in args
+                    .iter()
+                    .flat_map(|a| self.fn_value_bodies(body, a))
+                    .chain(held)
+                {
+                    if let Some(s) = summaries.get(&b) {
+                        eff.union(substitute(s, &|_| Key::Any, &|_| opaque()));
                     }
                 }
             }
