@@ -1,0 +1,4 @@
+// design.md §9 Associated types: "There is no qualified spelling such as
+// `T.Add.Output`."
+fn f[T: Add + Mul + Copy](a: T) -> T.Add.Output { a + a }
+fn main() { println(f(2)); }

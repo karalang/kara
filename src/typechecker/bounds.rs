@@ -377,6 +377,42 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// `param.Trait.assoc` written as a type: there is no qualified spelling
+    /// of a projection (design.md §9 Associated types, B-2026-11-24-22).
+    /// Once per written span.
+    pub(super) fn report_qualified_assoc(
+        &mut self,
+        param: &str,
+        trait_name: &str,
+        assoc: &str,
+        span: Span,
+    ) {
+        if !self
+            .ambiguous_assoc_reported
+            .insert(crate::resolver::SpanKey::from_span(&span))
+        {
+            return;
+        }
+        let open = if param == "Self" {
+            String::new()
+        } else {
+            format!(
+                ", or keep it open with a type parameter: `{param}: {trait_name}[{assoc} = A]` \
+                 with `A` among the generic parameters, and write `A` here"
+            )
+        };
+        self.type_error(
+            format!(
+                "`{param}.{trait_name}.{assoc}` is not a type: there is no qualified spelling of \
+                 an associated type (design.md § Associated types). Write `{param}.{assoc}` when \
+                 one bound on `{param}` declares `{assoc}`; when several do, fix it on the bound \
+                 that means it, `{trait_name}[{assoc} = ..]`{open}"
+            ),
+            span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
     /// The item a `for` over `ty` binds when `ty` is (a borrow of) a type
     /// parameter whose bounds say `P: Iterable[Item = T]`: that `T`.
     pub(super) fn iterable_param_item(&mut self, ty: &Type) -> Option<Type> {

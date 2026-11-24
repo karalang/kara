@@ -1044,6 +1044,21 @@ impl<'a> super::TypeChecker<'a> {
                     trait_name,
                 };
             }
+            // `T.Add.Output` reads as a projection qualified by its trait,
+            // which Kāra does not have: the bound fixes the type instead
+            // (design.md §9 Associated types, B-2026-11-24-22). A type
+            // parameter is never a module, so the path cannot mean one.
+            if path.segments.len() == 3
+                && (generic_scope.contains(&path.segments[0]) || path.segments[0] == "Self")
+            {
+                self.report_qualified_assoc(
+                    &path.segments[0],
+                    &path.segments[1],
+                    &path.segments[2],
+                    path.span,
+                );
+                return Type::Error;
+            }
             // Multi-segment module path — use last segment as type name
             let name = path.segments.last().unwrap().clone();
             let args =

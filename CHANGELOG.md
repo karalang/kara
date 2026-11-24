@@ -1126,6 +1126,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   first only for `p.is_null()` (design.md §9 Raw pointers). The checker
   typed the call as the pointer's `bool` and both backends called the
   pointer's own method (B-2026-11-24-21).
+- `T.Add.Output` in a type is refused where it is written: "there is no
+  qualified spelling of an associated type", naming `T.Output` and a bound
+  `Add[Output = A]` instead (design.md §9 Associated types). The signature
+  was accepted and the call then refused with an internal lowering error,
+  E0516 (B-2026-11-24-22).
 - In a trait default body that two impls inherit, a method call that leaves
   out a defaulted argument takes its own callee's default. Every copy of the
   body took the default of the method the last impl's copy calls: with

@@ -2,7 +2,7 @@
 
 Status: covered, partial, FAILS (filed, the row named), not testable, not drafted. Cell names without a prefix are in `conformance/design/traits/`; `impls/`, `generics/` and `concurrency/` name other directories under `conformance/` (`concurrency/` is outside the three audited directories). Line numbers are docs/design.md lines.
 
-**Totals (2026-11-24, after the gap audit):** 362 normative sentences, 315 covered, 38 partial, 5 FAILS (a cell would fail; filed as B-2026-11-24-18..22), 2 not testable or not a gap, 2 not drafted (CLI output, a two-process hash check). Before the audit: 262 covered, 40 partial, 60 gaps. `(new)` marks a cell the audit added; every new refusal has a control beside it where one exists.
+**Totals (2026-11-24, after the gap audit):** 362 normative sentences, 317 covered, 38 partial, 3 FAILS (a cell would fail; filed as B-2026-11-24-18..20; -21 and -22 since fixed), 2 not testable or not a gap, 2 not drafted (CLI output, a two-process hash check). Before the audit: 262 covered, 40 partial, 60 gaps. `(new)` marks a cell the audit added; every new refusal has a control beside it where one exists.
 
 ## Declarations and impls
 
@@ -121,7 +121,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, not drafte
 | 3385 | No lookup through the pointer: a method of T needs `(*p).method()` | covered | traits/raw_pointer_no_method_lookup_through_refused + raw_pointer_method_through_deref (new) |
 | 3386 | A program trait may be implemented for a pointer to a concrete type; answers calls, UFCS, bounds, dyn | covered | pointer_user_trait_impl |
 | 3386 | `*mut T` and `*const T` are distinct types, each needing its own impl | partial | pointer_user_trait_impl (both impls written; missing one not refused) |
-| 3386 | The pointer's own methods come first | FAILS | B-2026-11-24-21: Show.is_null(p) calls the pointer's own is_null |
+| 3386 | The pointer's own methods come first | covered | raw_pointer_own_methods_first (new; fixed by B-2026-11-24-21) |
 | 3386 | A pointer impl with a type-parameter pointee, and an inherent impl on a pointer type, are refused | covered | traits/raw_pointer_generic_pointee_impl_refused, raw_pointer_inherent_impl_refused (new) |
 
 ## No specialization
@@ -169,7 +169,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, not drafte
 | 3488 | Projection `T.Name`, and `Self.Name` inside the trait | covered | assoc_type_impl_and_projection, assoc_type_bound_usable_generic |
 | 3498 | A projection two bounds declare is E_AMBIGUOUS_ASSOC_TYPE, `where T.Name = X` too | covered | assoc_type_ambiguous_projection_refused, assoc_type_ambiguous_where_eq_refused |
 | 3498 | Each bound fixes its own; a type parameter names it; an operator's result carries its trait | covered | assoc_type_each_bound_fixes_own |
-| 3498 | There is no qualified spelling such as `T.Add.Output` | FAILS | B-2026-11-24-22: refused only as an internal E0516 lowering error |
+| 3498 | There is no qualified spelling such as `T.Add.Output` | covered | assoc_type_qualified_spelling_refused (new; fixed by B-2026-11-24-22) |
 | 3508 | Equality constraints in where; bound form `I: Iterator[Item = i64]` | covered | assoc_type_equality_constraints, assoc_type_equality_mismatch_refused |
 | 3508 | One equality constraint per associated type | covered | where_two_equalities_one_assoc_type_refused |
 | 3510 | One impl per trait, so one binding of each assoc type | covered | assoc_type_second_impl_refused |
