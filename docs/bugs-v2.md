@@ -116,9 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
 | B-2026-11-24-30 | 2026-11-24 | cli | low | REPL: E_NO_PROVIDER for a cell that calls a provider-needing fn outside `:provide` is located at the synthetic `__karac_cell_N()` call in main (`<repl>:14:1`), not in the cell | — |
-| B-2026-11-24-33 | 2026-11-24 | typecheck | medium | An `@` binding over an or-pattern of unit variants (`x @ (K.A | K.B)`) on an owned scrutinee is refused at run as E_AT_BINDING_DOUBLE_CONSUME, though a unit variant binds nothing | — |
-| B-2026-11-24-34 | 2026-11-24 | typecheck | medium | A range pattern whose two bounds are named consts of different integer types (`LO ..= HI` with `const LO: u8`, `const HI: i32`) is accepted: each bound took the scrutinee's type rather than its declared one | — |
-| B-2026-11-24-35 | 2026-11-24 | parser | low | A bare `..` match arm and a call in a range-pattern bound get generic parse errors that do not say what is accepted: `..` alone is the rest marker, and a bound must be a literal or path | — |
 | B-2026-11-24-36 | 2026-11-24 | typecheck+mir | medium | A `mut ref` element binding in a slice pattern (`[mut ref first, ..]`) cannot write through the element: over a local Array it is bound as `ref` (E0209), and over a `mut ref Vec` parameter the borrow checker refuses it (E0517) | — |
 | B-2026-11-24-37 | 2026-11-24 | mir | medium | A closure's disjoint capture goes only one field deep: a closure reading `u.address.city` captures `u.address` whole, so writing `u.address.zip` while it lives is refused (E0516) | — |
 
@@ -2252,6 +2249,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-29 | cli | medium | REPL: a statement cell under `:provide` lost the provider's state for the next cell (printed 2,3 where the saved file prints 2,5), and a use of a `le… | 9efe717c55 |
 | B-2026-11-24-31 | parser | low | C and C++ first-day habits had no Kāra form or a misleading one: `printf` with a format (renamed to `print` by edit distance, then refused for its ar… | 74f34f3d51 |
 | B-2026-11-24-32 | mir | medium | `Vec.into_iter`'s first `next` moves every element, one pop and one push at a time, into a second `Vec` that grows as it fills, so kata 1752's `nums.… | fc3c2c36cc |
+| B-2026-11-24-33 | typecheck | medium | An `@` binding over an or-pattern of unit variants (`x @ (K.A \| K.B)`) on an owned scrutinee is refused at run as E_AT_BINDING_DOUBLE_CONSUME, though… | 8ff0808383 |
+| B-2026-11-24-34 | typecheck | medium | A range pattern whose two bounds are named consts of different integer types (`LO ..= HI` with `const LO: u8`, `const HI: i32`) is accepted: each bou… | 8ff0808383 |
+| B-2026-11-24-35 | parser | low | A bare `..` match arm and a call in a range-pattern bound get generic parse errors that do not say what is accepted: `..` alone is the rest marker, a… | 8ff0808383 |
 
 </details>
 
