@@ -115,9 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
-| B-2026-11-23-6 | 2026-11-23 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 library bodies to run 33 | — |
-| B-2026-11-24-19 | 2026-11-24 | ownership | low | An `impl Tok` result whose trait has `Copy` as a supertrait still moves at `karac check` (E0500), though MIR treats it as Copy | — |
-| B-2026-11-24-20 | 2026-11-24 | ownership | medium | `karac check` accepts a use of an owned `dyn` value after it was moved (`let b = a; a.area()`); `karac run` then refuses it in the MIR move check | — |
 | B-2026-11-24-30 | 2026-11-24 | cli | low | REPL: E_NO_PROVIDER for a cell that calls a provider-needing fn outside `:provide` is located at the synthetic `__karac_cell_N()` call in main (`<repl>:14:1`), not in the cell | — |
 
 ### Relocated
@@ -2187,6 +2184,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-3 | mir+mir-llvm | high | A keyed lookup on a `Map`, `SortedMap`, `Set` or `SortedSet` of `ref i64` (`m[1]`, `m.get(k)`, `contains_key`, `remove`, `get_or`, `s.contains(k)`) p… | a4ffc5a6ec |
 | B-2026-11-23-4 | effect+cli | medium | A comptime-backed `#[derive]` anywhere in a program changes the effects `karac check` reports for the rest of it: a package module's `pub fn` that ca… | e879cf43e3 |
 | B-2026-11-23-5 | effect | medium | A built-in type's method is charged every trait DEFAULT method of the same name, whether or not the type implements the trait: `s.find(" ")` on a `St… | cf1743152c |
+| B-2026-11-23-6 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 li… | 463cbe4f24 |
 | B-2026-11-23-7 | effect | high | UNDER-REPORT: when two impls inherit one trait default method, the effect pass charges every impl's copy the LAST impl's callees: `Loud.first_big` (d… | f4c1f5e28e |
 | B-2026-11-23-8 | mir | high | MISCOMPILE: in a trait default body two impls inherit, a method call that leaves out a defaulted argument takes the LAST impl's default value in ever… | 855010c55b |
 | B-2026-11-23-9 | effect+cli | low | The order of a function's effects (`program_effects`, the lists inside E0400 messages) and of the effect checker's diagnostics follows the checker's… | 5a36b0da42 |
@@ -2236,6 +2234,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-16 | typecheck | medium | A `mut ref` is not invariant over a function type's effect set: a `with ()` callback field passed as `mut ref Fn() -> i64 with writes(Stdout)` takes… | 2e87b7bf89 |
 | B-2026-11-24-17 | parser | low | A qualified receiver naming a `dyn` type failed to parse: `Option[dyn Shape].size_of()` and `Vec[dyn Shape].new()` (its fix commit cites B-2026-11-24… | 22975f3cd3 |
 | B-2026-11-24-18 | typecheck | medium | Two impls whose headers differ only in a generic trait argument (`impl[R] Mul2[R] for i64` and `impl Mul2[Col] for i64`) are not reported as overlapp… | 72c8f07802 |
+| B-2026-11-24-19 | ownership | low | An `impl Tok` result whose trait has `Copy` as a supertrait still moves at `karac check` (E0500), though MIR treats it as Copy | 53bd04760e |
+| B-2026-11-24-20 | ownership | medium | `karac check` accepts a use of an owned `dyn` value after it was moved (`let b = a; a.area()`); `karac run` then refuses it in the MIR move check | 53bd04760e |
 | B-2026-11-24-21 | typecheck | medium | `Trait.method(p)` on a raw pointer calls the pointer's own method of that name instead of the trait's (`Show.is_null(p)` prints the inherent `is_null… | bf8ed5277c |
 | B-2026-11-24-22 | typecheck | low | A qualified associated-type spelling `T.Add.Output` is refused only by an internal lowering error (E0516 'an expression whose type does not lower (Ty… | e2b3f3e3a5 |
 | B-2026-11-24-23 | effect | low | E0400 for a call through a clause-less `dyn` field names the internal function `__dyn_every.T.t`, and its effect list's order changes from run to run | 06bdd52f6b |
