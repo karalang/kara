@@ -7502,7 +7502,7 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 
 | Request or notification | What it does |
 |---|---|
-| `initialize` / `shutdown` | The handshake. Text sync is full-document. |
+| `initialize` / `shutdown` | The handshake. Text sync is incremental: a change arrives as range edits (B-2026-11-21-33). |
 | `textDocument/didOpen`, `didChange`, `didSave`, `didClose` | Check the document and publish its diagnostics (`textDocument/publishDiagnostics`); `didClose` clears them. A change inside one body re-checks that body. |
 | `textDocument/hover` | The inferred type of the expression under the cursor, and a function's effects. |
 | `textDocument/definition` | Where the name under the cursor is defined. |
