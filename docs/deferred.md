@@ -4798,6 +4798,8 @@ The REPL, notebooks and the playground.
 
 ### REPL (`karac repl`)
 
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `karac repl` ships; its contract is [design.md § REPL (experimental)](design.md#repl-experimental), pinned by `conformance/repl/`. What follows is the original deferral and the full interactive model, of which 0.8 implements the subset that section states.
+
 **Decision:** Defer the interactive REPL. `karac run` for executing `.kara` files and `karac check` for type-checking are the critical CLI tools.
 
 **Why deferred:** A REPL requires significant additional infrastructure (incremental compilation, state persistence, expression-vs-statement disambiguation) that is orthogonal to the compiler pipeline. No test or example depends on REPL availability.

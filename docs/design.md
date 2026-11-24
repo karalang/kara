@@ -63,7 +63,7 @@ Features outside the v1 core return as named tracks. A track enters this specifi
 | **Services (M4a)** | Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, effect variables for stored callbacks, and `dyn`. Gate: the services programs in the corpus, plus a load test of connections and tail latency. Blocking-I/O services already run in v1. | Before the v1 release |
 | **Automatic parallelism (M4b)** | Loop and statement auto-parallelism as compiler passes under the proof bar, and `seq {}` to keep code in order. Gate: measured speedup with zero output changes across the whole corpus. | Before the v1 release |
 | **Data (M4c)** | The `kara-data` package: Tensor, Column, DataFrame, statistics, autograd, Arrow. | After v1 |
-| **Later tracks** | Systems (profiles, interrupts, volatile access, inline assembly, linker control, exported C ABI, SIMD), layout blocks, verification (predicates on distinct types, contracts), effect expressiveness (other named effect variables, parameterized resources), interactive (REPL, notebooks, playground), web (browser glue, component model), `comptime`, GPU, self-hosting. | Ordered in the roadmap |
+| **Later tracks** | Systems (profiles, interrupts, volatile access, inline assembly, linker control, exported C ABI, SIMD), layout blocks, verification (predicates on distinct types, contracts), effect expressiveness (other named effect variables, parameterized resources), interactive (notebooks, playground; the REPL ships as experimental, §17), web (browser glue, component model), `comptime`, GPU, self-hosting. | Ordered in the roadmap |
 
 ### What Kāra is not
 
@@ -7517,6 +7517,33 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 | `kara/renderCrashReport` | A custom request: `{"text": <panic record JSON>}` in, `{"rendered": <text>}` out, as `karac debug` renders it. The record is the one `karac run --output=json` carries ([Panic record](#panic-record)); there is no crash file. |
 
 Positions are UTF-16, as the protocol requires. A diagnostic's `code` is its catalogue code (`E0500`), or its phase when it has none. Requests reach one document: references and rename do not cross files in v1.
+
+### REPL (experimental)
+
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `karac repl`: the compiler implements this and the cells under [`conformance/repl/`](../conformance/repl/README.md) pin what follows, but it is not part of the v1 language and may change until the interactive track lands ([deferred.md § Interactive](deferred.md#interactive)). Notebooks and the playground stay a later track.
+
+Each line or block submitted is a cell. Cells run in order, each checked as `karac check` checks a program and run on the MIR interpreter.
+
+- **Items accumulate.** A cell of items (`fn`, `struct`, `enum`, `trait`, `impl`, `const`, `type`, `distinct`, `effect resource`) adds them to the session; a later item of the same name replaces the earlier one.
+- **Bindings persist.** A cell's statements run as the body of `main` after the earlier cells' `let`s. A later cell starts from the values the earlier ones left, so a mutation (`x += 1;`, `v.push(4);`) is seen by the cells after it, and what the earlier cells printed is not printed again.
+- **Mutation and shadowing behave as in a function body.** A re-declared `let` shadows the earlier binding, which ends nothing: the shadowed value drops when the session ends ([core-semantics.md §7](core-semantics.md)).
+- **A shown value is only lent.** A cell that ends in a bare expression prints its value as `dbg` does, without moving it.
+- **A refused or panicking cell leaves the session unchanged.** Its bindings are not kept, `:save` does not write it, and a use-after-move refusal names the cell of the move (`moved at cell 12:1:13`).
+- **Providers span cells.** `:provide R = expr` opens a `with_provider[R]` scope that the following cells run inside, and the provider's state carries from cell to cell; `:end-provide R` closes it. A `let` made inside the scope goes out of scope with it, and a later use is refused with a note naming the scope and the cell that declared it.
+- **`--auto-clone`** clones a binding where an earlier cell moved it and a later cell uses it, instead of refusing the later cell, with a `perf[auto-clone-in-repl]` note; `:save` writes the inserted clones.
+
+Meta-commands:
+
+| Command | What it does |
+|---|---|
+| `:help` | Lists the commands and the cell rules |
+| `:quit`, `:q` | Ends the session |
+| `:type <expr>` | The inferred type of `<expr>` |
+| `:effects` | The session's effects, then each session function's, as comma-separated lists. They come from the typed pipeline and match `karac query effects` |
+| `:save <file.kara>` | Writes the session as a program: items at file scope, the cells that ran as `main`'s body (a bare expression as `let _ = …;`), open `:provide` scopes as `with_provider` blocks. `karac run` of the file prints what the cells printed |
+| `:reset` | Drops the persistent bindings; items and history are kept |
+| `:provide R = expr`, `:end-provide R` | Opens and closes a cross-cell `with_provider[R]` scope, innermost first |
+| `:dep <name> = "<version>"` | Records a dependency entry. 0.8 does not resolve it, so the package's names are not in scope, and says so |
 
 ### Debugger contract
 

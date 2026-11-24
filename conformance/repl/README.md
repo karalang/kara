@@ -2,8 +2,8 @@
 
 Each `<name>.repl` is fed to `karac repl` on stdin, in a scratch directory.
 The expectation comes from the REPL's own contract: the book's "Two Surfaces"
-chapter (`docs/book/src/ch01b-two-surfaces.md`), `karac repl --help` and
-`:help`. design.md has no REPL section of its own.
+chapter (`docs/book/src/ch01b-two-surfaces.md`), `karac repl --help`, `:help`,
+and design.md § REPL (experimental), which cites these cells as its pins.
 
 | File | Meaning |
 |---|---|
