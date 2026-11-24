@@ -124,7 +124,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-21 | 2026-11-24 | typecheck | medium | `Trait.method(p)` on a raw pointer calls the pointer's own method of that name instead of the trait's (`Show.is_null(p)` prints the inherent `is_null`) | — |
 | B-2026-11-24-22 | 2026-11-24 | typecheck | low | A qualified associated-type spelling `T.Add.Output` is refused only by an internal lowering error (E0516 'an expression whose type does not lower (Type(UnknownName("Output")))') | — |
 | B-2026-11-24-23 | 2026-11-24 | effect | low | E0400 for a call through a clause-less `dyn` field names the internal function `__dyn_every.T.t`, and its effect list's order changes from run to run | — |
-| B-2026-11-24-25 | 2026-11-24 | cli | low | An effect set printed as a list (crash report, `karac debug`, editor effect list, hover one-liner, REPL `:effects`) joined effects with ` + ` in group order instead of the `Effects:` line's comma-separated list sorted by effect then resource | — |
 
 ### Relocated
 
@@ -2240,6 +2239,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-14 | resolver | low | `#[test]` on a `fn` in a `_test.kara` file was reported at the module's other file (src/util.kara:3:1 for src/util_test.kara), and the message repeat… | e8e574922f |
 | B-2026-11-24-17 | parser | low | A qualified receiver naming a `dyn` type failed to parse: `Option[dyn Shape].size_of()` and `Vec[dyn Shape].new()` (its fix commit cites B-2026-11-24… | 22975f3cd3 |
 | B-2026-11-24-24 | typecheck | medium | `[(x, 1)].to_vec()` into a `Vec[(i64, i64)]`, with `x` the `ref i64` that `nums.iter()` yields, was refused as a `Vec[(ref i64, i64)]`, though `[x].t… | dd6a8bebbf |
+| B-2026-11-24-25 | cli | low | An effect set printed as a list (crash report, `karac debug`, editor effect list, hover one-liner, REPL `:effects`) joined effects with ` + ` in grou… | 206bbf679d |
 
 </details>
 
