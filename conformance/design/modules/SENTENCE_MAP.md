@@ -13,7 +13,7 @@ One row per sentence of design.md §4 Modules and packages, as of 2026-11-24, na
 | s4.7 | Modules | `src/db/mod.kara` is not recognized. | mod_kara_not_recognized_refused |
 | s4.8 | Modules | To put items directly in `db`, write them in `src/db.kara` or re-export them there. | NEW module_file_beside_its_directory |
 | s4.9 | Modules | - **Fully qualified paths.** Every type, function and effect resource is named by its module path. | module_tree_and_import_forms |
-| s4.10 | Modules | `db.UserDB` in one package and `otherlib.db.UserDB` from a dependency are distinct resources, and the effect checker treats them as non-conf | GAP: not covered (needs two packages' same-named effect resources in a `par`); left open |
+| s4.10 | Modules | `db.UserDB` in one package and `otherlib.db.UserDB` from a dependency are distinct resources, and the effect checker treats them as non-conf | NEW cross_package_effect_resources_distinct, control cross_package_effect_resource_same_conflicts_refused |
 | s4.11 | Modules | **The package name in paths.** | rationale or cross-reference, no cell |
 | s4.12 | Modules | - **Inside a package**, paths omit the package name. | package_name_not_in_paths_refused |
 | s4.13 | Modules | In package `myproject`, `src/db/connection.kara` is `db.connection`, and its items are imported as `db.connection.Connection`, never `myproj | package_name_not_in_paths_refused, module_tree_and_import_forms |

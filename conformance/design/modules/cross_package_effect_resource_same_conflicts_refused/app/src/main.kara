@@ -1,0 +1,7 @@
+// design.md § Modules: control for the distinct-resource cell; two `par`
+// branches writing the same `db.UserDB` conflict.
+import db.save;
+fn main() {
+    let (a, b) = par { save(1), save(2) };
+    println(f"{a} {b}");
+}

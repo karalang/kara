@@ -90,7 +90,7 @@ One row per sentence of design.md §8 Type inference and generics, as of 2026-11
 | s8.84 | Type inference | The callee's effects join the caller's ([§12](#12-effects)). | §12 effects cells |
 | s8.85 | Type inference | - **Method calls.** `e.m(args)` synthesizes `e ⇒ τ`, resolves `m` ([§9](#9-traits)), and continues as a call. | bounds_body_uses_only_bounds |
 | s8.86 | Type inference | - **Closures.** In check mode against `Fn(A1, ..., An) -> R`, each parameter takes its `Ai` and the body checks against `R`. | NEW closure_checked_against_fn_type |
-| s8.87 | Type inference | In synthesis mode, each parameter needs an annotation or a type that later uses in the same function body fix; a parameter still unknown at  | closure_param_uninferred_error; tests/closure_param_operator_later_use.rs; FAILS for a later use at a narrower type: B-2026-11-24-15 |
+| s8.87 | Type inference | In synthesis mode, each parameter needs an annotation or a type that later uses in the same function body fix; a parameter still unknown at  | closure_param_uninferred_error; NEW closure_param_fixed_by_later_use; tests/closure_param_operator_later_use.rs; fixed by B-2026-11-24-15 (tests/closure_param_open_literal_2026_11_24.rs) |
 | s8.88 | Type inference | - **Struct literals.** In check mode, each field checks against its declared type. | NEW struct_literal_field_checked; field_shorthand |
 | s8.89 | Type inference | In synthesis mode, the literal names the struct. | NEW struct_literal_field_checked; field_shorthand |
 | s8.90 | Type inference | **Field shorthand:** `Point { x, y }` means `Point { x: x, y: y }`, and the forms mix: `User { name, email, password_hash: hash(password) }` | field_shorthand |
@@ -199,17 +199,17 @@ One row per sentence of design.md §8 Type inference and generics, as of 2026-11
 | s8.193 | Subtyping and variance | / Function result / covariant / | see rows below |
 | s8.194 | Subtyping and variance | / Effect set of a function type / covariant / | see rows below |
 | s8.195 | Subtyping and variance | / Function parameter / contravariant / | see rows below |
-| s8.196 | Subtyping and variance | **`mut ref T` is invariant.** `mut ref Sub` is not a subtype of `mut ref Super`, nor the reverse. | FAILS: a `mut ref` is not invariant over effect sets: B-2026-11-24-16 (no cell until fixed) |
-| s8.197 | Subtyping and variance | A `mut ref Super` can write any `Super`, including one that is not a valid `Sub`; if `mut ref Sub` could become `mut ref Super`, a write thr | FAILS: a `mut ref` is not invariant over effect sets: B-2026-11-24-16 (no cell until fixed) |
-| s8.198 | Subtyping and variance | A function taking `mut ref T` therefore receives exactly `T`. | FAILS: a `mut ref` is not invariant over effect sets: B-2026-11-24-16 (no cell until fixed) |
+| s8.196 | Subtyping and variance | **`mut ref T` is invariant.** `mut ref Sub` is not a subtype of `mut ref Super`, nor the reverse. | NEW mut_ref_fn_invariant_over_effects_refused, control mut_ref_fn_same_clause_and_ref_covariance (fixed by B-2026-11-24-16) |
+| s8.197 | Subtyping and variance | A `mut ref Super` can write any `Super`, including one that is not a valid `Sub`; if `mut ref Sub` could become `mut ref Super`, a write thr | NEW mut_ref_fn_invariant_over_effects_refused, control mut_ref_fn_same_clause_and_ref_covariance (fixed by B-2026-11-24-16) |
+| s8.198 | Subtyping and variance | A function taking `mut ref T` therefore receives exactly `T`. | NEW mut_ref_fn_invariant_over_effects_refused, control mut_ref_fn_same_clause_and_ref_covariance (fixed by B-2026-11-24-16) |
 | s8.199 | Subtyping and variance | **Built-in types:** | header |
 | s8.200 | Subtyping and variance | / Type / Variance / | header |
 | s8.201 | Subtyping and variance | / `Option[T]`, `Result[T, E]`, tuples / covariant in every parameter / | NEW covariant_builtins_and_fn_effects (Option, tuple) |
-| s8.202 | Subtyping and variance | / `TaskHandle[T]` / covariant (it only yields a `T`) / | GAP: TaskHandle covariance not covered |
-| s8.203 | Subtyping and variance | / `Vec`, `Slice`, `Array`, `Map`, `Set`, `VecDeque`, `SortedMap`, `SortedSet` / invariant / | accepted on a move, where invariance is unobservable; the observable case is B-2026-11-24-16 |
-| s8.204 | Subtyping and variance | / `Sender[T]`, `Receiver[T]` / invariant / | accepted on a move, where invariance is unobservable; the observable case is B-2026-11-24-16 |
-| s8.205 | Subtyping and variance | / `Atomic[T]`, `Mutex[T]` / invariant (interior mutability) / | accepted on a move, where invariance is unobservable; the observable case is B-2026-11-24-16 |
-| s8.206 | Subtyping and variance | / `MaybeUninit[T]`, `PhantomData[T]` / invariant / | accepted on a move, where invariance is unobservable; the observable case is B-2026-11-24-16 |
+| s8.202 | Subtyping and variance | / `TaskHandle[T]` / covariant (it only yields a `T`) / | NEW taskhandle_covariant, control taskhandle_other_arg_refused |
+| s8.203 | Subtyping and variance | / `Vec`, `Slice`, `Array`, `Map`, `Set`, `VecDeque`, `SortedMap`, `SortedSet` / invariant / | accepted on a move, where invariance is unobservable; the observable case is the `mut ref` one (B-2026-11-24-16, ruling scoped to function types) |
+| s8.204 | Subtyping and variance | / `Sender[T]`, `Receiver[T]` / invariant / | accepted on a move, where invariance is unobservable; the observable case is the `mut ref` one (B-2026-11-24-16, ruling scoped to function types) |
+| s8.205 | Subtyping and variance | / `Atomic[T]`, `Mutex[T]` / invariant (interior mutability) / | accepted on a move, where invariance is unobservable; the observable case is the `mut ref` one (B-2026-11-24-16, ruling scoped to function types) |
+| s8.206 | Subtyping and variance | / `MaybeUninit[T]`, `PhantomData[T]` / invariant / | accepted on a move, where invariance is unobservable; the observable case is the `mut ref` one (B-2026-11-24-16, ruling scoped to function types) |
 | s8.207 | Subtyping and variance | **User-declared generic types are invariant in every parameter.** Variance markers (`+T`, `-T`) are deferred ([deferred.md](deferred.md#unsc | same as above |
 | s8.208 | Monomorphization | Kāra emits **one specialized implementation per tuple of type and const arguments** for every generic: user functions and types, and the sta | instances_per_type |
 | s8.209 | Monomorphization | There is no type erasure, no vtable dispatch for generics and no function-pointer indirection inside collections. | instances_per_type |

@@ -1,0 +1,12 @@
+// design.md §8 Type inference, Closures: an unannotated closure parameter is
+// fixed by a later use in the same body, and a literal default comes only
+// at the end of the body.
+fn main() {
+    let f = |x| x + 1;
+    let a: i32 = 2147483000;
+    let y: i32 = f(a);
+    let g = |x| x;
+    let z: u8 = g(200);
+    let h = |x| x * 2;
+    println(f"{y} {z} {h(3000000000)}");
+}

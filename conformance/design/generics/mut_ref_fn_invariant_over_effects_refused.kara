@@ -1,0 +1,12 @@
+// design.md §8 Subtyping and variance: a `mut ref` to a function type is
+// invariant in its effect set, so a `with ()` place is no
+// `mut ref Fn() -> i64 with writes(Stdout)`.
+fn pure_one() -> i64 { 1 }
+fn loud() -> i64 { println("LOUD"); 2 }
+fn set(r: mut ref Fn() -> i64 with writes(Stdout), g: escaping Fn() -> i64 with writes(Stdout)) { *r = g; }
+struct Holder { f: Fn() -> i64 with () }
+fn main() {
+    let mut h = Holder { f: pure_one };
+    set(mut h.f, loud);
+    println((h.f)());
+}

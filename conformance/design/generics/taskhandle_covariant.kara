@@ -1,0 +1,13 @@
+// design.md §8 Subtyping and variance: `TaskHandle[T]` is covariant (it only
+// yields a `T`), so a handle whose task never returns (`TaskHandle[Never]`)
+// goes where a `TaskHandle[i64]` is expected. `stalled` is never called; the
+// cell checks that it types.
+fn pick(c: bool, a: own TaskHandle[i64], b: own TaskHandle[i64]) -> i64 {
+    if c { a.join() } else { b.join() }
+}
+fn stalled(g: ref TaskGroup) -> i64 {
+    let ok = g.spawn(|| 7);
+    let never: TaskHandle[Never] = g.spawn(|| loop { });
+    pick(true, ok, never)
+}
+fn main() { println("typed"); }

@@ -1,0 +1,15 @@
+// design.md §8 Subtyping and variance: control for
+// `mut_ref_fn_invariant_over_effects_refused`; the same clause on both sides
+// is accepted, and through `ref` the effect set stays covariant.
+fn pure_one() -> i64 { 1 }
+fn loud() -> i64 { println("LOUD"); 2 }
+fn set(r: mut ref Fn() -> i64 with writes(Stdout), g: escaping Fn() -> i64 with writes(Stdout)) { *r = g; }
+fn peek(r: ref Fn() -> i64 with writes(Stdout)) -> i64 { r() }
+struct Holder { f: Fn() -> i64 with writes(Stdout) }
+struct Pure { f: Fn() -> i64 with () }
+fn main() {
+    let mut h = Holder { f: pure_one };
+    set(mut h.f, loud);
+    let p = Pure { f: pure_one };
+    println(f"{(h.f)()} {peek(p.f)}");
+}

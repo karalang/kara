@@ -1,0 +1,2 @@
+pub effect resource UserDB;
+pub fn save(n: i64) -> i64 with writes(UserDB) { n + 100 }

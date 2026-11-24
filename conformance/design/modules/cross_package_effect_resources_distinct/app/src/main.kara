@@ -1,0 +1,9 @@
+// design.md § Modules: `db.UserDB` here and `otherlib.db.UserDB` from a
+// dependency are distinct resources, so two `par` branches writing them
+// do not conflict.
+import db.save;
+import otherlib.db.save as other_save;
+fn main() {
+    let (a, b) = par { save(1), other_save(2) };
+    println(f"{a} {b}");
+}
