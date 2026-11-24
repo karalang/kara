@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 744 |
+| diagnostics | 746 |
 | false-positive | 368 |
 | missing-feature | 251 |
 | perf | 202 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 893 |
+| typecheck | 894 |
 | mir | 330 |
 | mir-llvm | 323 |
-| cli | 301 |
+| cli | 303 |
 | parser | 158 |
 | ownership | 136 |
 | runtime | 109 |
@@ -118,6 +118,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-30 | 2026-11-24 | cli | low | REPL: E_NO_PROVIDER for a cell that calls a provider-needing fn outside `:provide` is located at the synthetic `__karac_cell_N()` call in main (`<repl>:14:1`), not in the cell | — |
 | B-2026-11-24-36 | 2026-11-24 | typecheck+mir | medium | A `mut ref` element binding in a slice pattern (`[mut ref first, ..]`) cannot write through the element: over a local Array it is bound as `ref` (E0209), and over a `mut ref Vec` parameter the borrow checker refuses it (E0517) | — |
 | B-2026-11-24-37 | 2026-11-24 | mir | medium | A closure's disjoint capture goes only one field deep: a closure reading `u.address.city` captures `u.address` whole, so writing `u.address.zip` while it lives is refused (E0516) | — |
+| B-2026-11-24-38 | 2026-11-24 | typecheck+cli | medium | `a === b` on two handles of a `shared struct`, JavaScript's identity test, became a structural comparison under `karac fix`: the `===` habit mends it to `==`, and the refusal that follows said only "add #[derive(PartialEq)]" and applied that derive whenever every field compares, so the program then printed true for two distinct handles with equal fields; neither message named `a.ref_eq(b)`, a handle's identity | — |
+| B-2026-11-24-39 | 2026-11-24 | cli | low | `karac fix`'s `#[derive(PartialEq)]` (and PartialOrd, Hash) line for a `pub struct` or `shared struct` at the top level is indented by the width of `pub ` or `shared `: derive_line takes the `struct` keyword's column as the item's indentation | — |
 
 ### Relocated
 
