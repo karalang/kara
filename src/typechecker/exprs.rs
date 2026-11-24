@@ -16404,7 +16404,18 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     return match &body.kind {
                         ExprKind::Block(b) if b.stmts.is_empty() => b.final_expr.as_deref(),
-                        ExprKind::Block(_) => None,
+                        // `|x| { let mut s = 0; ..; s }`: a body that ends in
+                        // a binding its own `let` made yields that binding
+                        // (kata 2535's Rust arm).
+                        ExprKind::Block(b) => b.final_expr.as_deref().filter(|tail| {
+                            let ExprKind::Identifier(n) = &tail.kind else {
+                                return false;
+                            };
+                            b.stmts.iter().any(|st| {
+                                matches!(&st.kind, StmtKind::Let { pattern, .. }
+                                    if matches!(&pattern.kind, PatternKind::Binding(x) if x == n))
+                            })
+                        }),
                         _ => Some(body),
                     };
                 }

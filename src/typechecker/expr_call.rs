@@ -1243,29 +1243,17 @@ impl<'a> super::TypeChecker<'a> {
         ) {
             return;
         }
-        // The closure's result, `Some(e)` (or a block ending in one), whose
-        // payload is a new value rather than a borrow.
-        let mut tail: &Expr = body;
-        while let ExprKind::Block(b) = &tail.kind {
-            let Some(t) = b.final_expr.as_deref() else {
-                return;
-            };
-            tail = t;
-        }
-        let ExprKind::Call {
-            callee: some_next,
-            args: next,
-        } = &tail.kind
-        else {
-            return;
-        };
-        if !matches!(&some_next.kind, ExprKind::Identifier(s) if s == "Some") || next.len() != 1 {
-            return;
-        }
-        if matches!(
-            typed(self, &next[0].value),
-            None | Some(Type::Ref(_) | Type::MutRef(_) | Type::TypeVar(_))
-        ) {
+        // The closure's result, `Some(e)` (or a block, `if` or `match` whose
+        // branches end in one), some payload a new value rather than a
+        // borrow. Kata 2535 wrote `if r >= 10 { Some(r / 10) } else { None }`.
+        let mut payloads: Vec<&Expr> = Vec::new();
+        collect_some_payloads(body, &mut payloads);
+        if !payloads.iter().any(|p| {
+            !matches!(
+                typed(self, p),
+                None | Some(Type::Ref(_) | Type::MutRef(_) | Type::TypeVar(_))
+            )
+        }) {
             return;
         }
         let shown = type_display(&item);
@@ -4788,4 +4776,46 @@ fn is_library_channel(sig: &super::env::FunctionSig) -> bool {
     sig.generic_params == ["T"]
         && sig.params == [Type::Int(IntSize::I64)]
         && sig.return_type == Type::Tuple(vec![end("Sender"), end("Receiver")])
+}
+
+/// The payloads of the `Some(e)` results a closure body can end in, through
+/// blocks, `if`/`else` branches and `match` arms (B-2026-11-15-34's
+/// `successors` seed check).
+fn collect_some_payloads<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+    match &e.kind {
+        ExprKind::Block(b) => {
+            if let Some(t) = b.final_expr.as_deref() {
+                collect_some_payloads(t, out);
+            }
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            if let Some(t) = then_block.final_expr.as_deref() {
+                collect_some_payloads(t, out);
+            }
+            if let Some(e) = else_branch.as_deref() {
+                collect_some_payloads(e, out);
+            }
+        }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                collect_some_payloads(&arm.body, out);
+            }
+        }
+        ExprKind::Call { callee, args }
+            if args.len() == 1
+                && matches!(&callee.kind, ExprKind::Identifier(s) if s == "Some") =>
+        {
+            out.push(&args[0].value);
+        }
+        _ => {}
+    }
 }
