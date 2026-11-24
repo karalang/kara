@@ -32577,8 +32577,8 @@ fn token_texts(src: &str) -> Vec<String> {
 /// placeholders, so they stay the interpreter's (`index_functions`).
 /// The effects a function type written `Fn(..) -> R with verb(Res), ..`
 /// declares, or `None` when it is not a function type, has no clause, or
-/// its clause names something other than plain verbs on plain resources
-/// (a group, an effect variable, `_`, a user verb, a keyed resource): a
+/// its clause names something other than plain verbs on resources (a
+/// group, an effect variable, `_`, a user verb): a
 /// call through such a value keeps every effect (core semantics §12).
 fn declared_effects(te: &ast::TypeExpr) -> Option<Vec<DeclaredEffect>> {
     let ast::TypeKind::FnType {
@@ -32635,10 +32635,12 @@ pub(super) fn declared_effect_list(list: &ast::EffectList) -> Option<Vec<Declare
                 resource: String::new(),
             });
         }
+        // A keyed resource (`writes(UserDb[id])`) is its whole resource:
+        // parameterized resources are deferred (design.md § User-declared
+        // resources), and the whole resource conflicts wherever any key of
+        // it would. Dropping the clause instead left a function charged
+        // nothing for it (B-2026-11-24-45).
         for r in &v.resources {
-            if r.param.is_some() {
-                return None;
-            }
             out.push(DeclaredEffect {
                 verb: verb.to_string(),
                 resource: r.path.join("."),
