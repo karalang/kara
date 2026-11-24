@@ -73,6 +73,23 @@ impl<'a> super::TypeChecker<'a> {
         Type::Error
     }
 
+    /// The type of `ty.method` named as a value when `ty` is a built-in type
+    /// whose method the compiler implements natively: the signature of the
+    /// library's `method_value_{ty}_{method}`, which the MIR builder lowers
+    /// the value to (runtime/stdlib/source/method_values.kara;
+    /// B-2026-11-24-7).
+    pub(super) fn builtin_method_value(&self, ty: &str, method: &str) -> Option<Type> {
+        let sig = self
+            .env
+            .functions
+            .get(&format!("method_value_{ty}_{method}"))?;
+        Some(Type::Function {
+            cross_task: Default::default(),
+            params: sig.params.clone(),
+            return_type: Box::new(sig.return_type.clone()),
+        })
+    }
+
     pub(super) fn infer_field_access(&mut self, object: &Expr, field: &str, span: &Span) -> Type {
         // Primitive-type associated constants — `i64.MAX`, `f64.INFINITY`,
         // `usize.MAX`, etc. The parser emits these as
@@ -106,6 +123,16 @@ impl<'a> super::TypeChecker<'a> {
                     name: name.clone(),
                     args: Vec::new(),
                 };
+            }
+        }
+        // A built-in type's method named as a value (`i64.abs`,
+        // `char.is_alphabetic`): the library function that stands for it
+        // (B-2026-11-24-7).
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.local_scope.lookup(name).is_none() {
+                if let Some(t) = self.builtin_method_value(name, field) {
+                    return t;
+                }
             }
         }
         // `f64.total_cmp` named as a value is the comparator

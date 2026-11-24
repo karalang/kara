@@ -22060,6 +22060,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.method_call(mc, object, method, args, dest);
             }
         }
+        // `String.len(s)`: a built-in type's method called through its
+        // value is the library function that stands for it, as the checker
+        // typed it (B-2026-11-24-7).
+        if let Some(d) = self.builtin_method_value(callee) {
+            if let Some(f) = self.lcx.fns.get(&d).map(|i| i.f) {
+                return self.def_call(e, d, f, Vec::new(), None, args, dest);
+            }
+        }
         // `i64.one()` naming a program's impl for a primitive (`impl Unit
         // for i64`), as a trait's default body spliced there writes
         // `Self.one()`: the checker records the call as a builtin
@@ -28091,6 +28099,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `Vec.new`, `String.new` and the other empty constructors are the
     /// type's `default`, as is `String.default` (B-2026-10-06-118).
     fn builtin_fn_def(&self, e: &Expr) -> Option<DefId> {
+        if let Some(d) = self.builtin_method_value(e) {
+            return Some(d);
+        }
         // `f64.total_cmp` named as a value is the library's
         // `f64_total_cmp` (B-2026-10-21-30).
         if let ExprKind::FieldAccess { object, field } = &e.kind {
@@ -28117,6 +28128,30 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => defs.builtin_methods.get(ty)?.get("default")?,
         };
         cands.iter().copied().find(|&m| !defs.is_trait_method(m))
+    }
+
+    /// The library's `method_value_{ty}_{m}` for a built-in type's method
+    /// named as a value (`i64.abs`, `String.len`), which the checker typed
+    /// it as (B-2026-11-24-7).
+    fn builtin_method_value(&self, e: &Expr) -> Option<DefId> {
+        let (ty, m) = match &e.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                if !matches!(self.lcx.res.get(&e.id), Some(Res::Builtin(_))) {
+                    return None;
+                }
+                (segments[0].as_str(), segments[1].as_str())
+            }
+            ExprKind::FieldAccess { object, field } => match &object.kind {
+                ExprKind::Identifier(n)
+                    if !matches!(self.lcx.res.get(&object.id), Some(Res::Local(_))) =>
+                {
+                    (n.as_str(), field.as_str())
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.lcx.defs.lookup(0, &format!("method_value_{ty}_{m}"))
     }
 
     /// The library function that stands for `String.from` (or

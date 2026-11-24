@@ -986,6 +986,11 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/dyn_shims.kara",
         include_str!("../runtime/stdlib/source/dyn_shims.kara"),
     ),
+    // A built-in type's method named as a value (B-2026-11-24-7).
+    (
+        "source/method_values.kara",
+        include_str!("../runtime/stdlib/source/method_values.kara"),
+    ),
 ];
 
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to

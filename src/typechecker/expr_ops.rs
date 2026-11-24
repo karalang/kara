@@ -1718,6 +1718,13 @@ impl<'a> super::TypeChecker<'a> {
             // value as taking a `char`; its parameter is left open for the
             // use to fix instead, and the MIR builder picks the library
             // wrapper for it (B-2026-11-20-151).
+            // A built-in type's method named as a value (`String.len`,
+            // `Str.to_string`, `String.trim`) is the library function that
+            // stands for it, ahead of a library impl's method of that name,
+            // whose receiver is not the built-in type (B-2026-11-24-7).
+            if let Some(t) = self.builtin_method_value(type_name, member) {
+                return t;
+            }
             if type_name == "String" && member == "from" {
                 return Type::Function {
                     cross_task: Default::default(),

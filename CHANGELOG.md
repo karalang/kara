@@ -1090,6 +1090,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   with the slot (`|| Ok("s")` for a `Result[i64, String]`) is an E0200 at
   its tail (B-2026-11-23-20).
 
+- A built-in type's method named as a value checks and runs, as design.md
+  § Function values gives every method: `.map(i64.abs)`,
+  `.map(Str.to_string)`, `.map(String.len)`, `.filter(char.is_alphabetic)`,
+  `let f: Fn(i64) -> i64 = i64.abs`. `i64.abs` was "no associated
+  constant", `Str.to_string` and `String.len` "no associated function", and
+  `String.trim` checked and then failed to build. The value behaves as the
+  function of that signature written by hand, and `String.len(s)` calls it.
+  It covers `abs`, `to_string`, the float roundings and `sqrt`, a string's
+  `len`, `is_empty`, `trim` and case conversions, and `char`'s
+  classifications and ASCII case; another is still refused by the checker
+  (B-2026-11-24-7).
 - In a trait default body that two impls inherit, a method call that leaves
   out a defaulted argument takes its own callee's default. Every copy of the
   body took the default of the method the last impl's copy calls: with

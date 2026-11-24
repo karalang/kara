@@ -1,0 +1,207 @@
+// A built-in type's method named as a value (design.md § Function values:
+// `T.m` is a function whose first parameter is the receiver), for the
+// methods the compiler implements natively and so has no body to name:
+// the checker types `i64.abs` as `method_value_i64_abs` and the MIR builder
+// lowers it to that function, which behaves as a function of the same
+// signature written by hand would (B-2026-11-24-7). A method with no entry
+// here is refused with the closure to write instead.
+
+fn method_value_i8_abs(x: i8) -> i8 {
+    x.abs()
+}
+
+fn method_value_i16_abs(x: i16) -> i16 {
+    x.abs()
+}
+
+fn method_value_i32_abs(x: i32) -> i32 {
+    x.abs()
+}
+
+fn method_value_i64_abs(x: i64) -> i64 {
+    x.abs()
+}
+
+fn method_value_i128_abs(x: i128) -> i128 {
+    x.abs()
+}
+
+fn method_value_i8_to_string(x: i8) -> String {
+    x.to_string()
+}
+
+fn method_value_i16_to_string(x: i16) -> String {
+    x.to_string()
+}
+
+fn method_value_i32_to_string(x: i32) -> String {
+    x.to_string()
+}
+
+fn method_value_i64_to_string(x: i64) -> String {
+    x.to_string()
+}
+
+fn method_value_i128_to_string(x: i128) -> String {
+    x.to_string()
+}
+
+fn method_value_u8_to_string(x: u8) -> String {
+    x.to_string()
+}
+
+fn method_value_u16_to_string(x: u16) -> String {
+    x.to_string()
+}
+
+fn method_value_u32_to_string(x: u32) -> String {
+    x.to_string()
+}
+
+fn method_value_u64_to_string(x: u64) -> String {
+    x.to_string()
+}
+
+fn method_value_u128_to_string(x: u128) -> String {
+    x.to_string()
+}
+
+fn method_value_f32_to_string(x: f32) -> String {
+    x.to_string()
+}
+
+fn method_value_f64_to_string(x: f64) -> String {
+    x.to_string()
+}
+
+fn method_value_char_to_string(x: char) -> String {
+    x.to_string()
+}
+
+fn method_value_bool_to_string(x: bool) -> String {
+    x.to_string()
+}
+
+fn method_value_f32_abs(x: f32) -> f32 {
+    x.abs()
+}
+
+fn method_value_f32_sqrt(x: f32) -> f32 {
+    x.sqrt()
+}
+
+fn method_value_f32_floor(x: f32) -> f32 {
+    x.floor()
+}
+
+fn method_value_f32_ceil(x: f32) -> f32 {
+    x.ceil()
+}
+
+fn method_value_f32_round(x: f32) -> f32 {
+    x.round()
+}
+
+fn method_value_f64_abs(x: f64) -> f64 {
+    x.abs()
+}
+
+fn method_value_f64_sqrt(x: f64) -> f64 {
+    x.sqrt()
+}
+
+fn method_value_f64_floor(x: f64) -> f64 {
+    x.floor()
+}
+
+fn method_value_f64_ceil(x: f64) -> f64 {
+    x.ceil()
+}
+
+fn method_value_f64_round(x: f64) -> f64 {
+    x.round()
+}
+
+fn method_value_String_len(x: String) -> i64 {
+    x.len()
+}
+
+fn method_value_String_is_empty(x: String) -> bool {
+    x.is_empty()
+}
+
+fn method_value_String_to_string(x: String) -> String {
+    x.to_string()
+}
+
+fn method_value_String_trim(x: String) -> Str {
+    x.trim()
+}
+
+fn method_value_String_to_uppercase(x: String) -> String {
+    x.to_uppercase()
+}
+
+fn method_value_String_to_lowercase(x: String) -> String {
+    x.to_lowercase()
+}
+
+fn method_value_Str_len(x: Str) -> i64 {
+    x.len()
+}
+
+fn method_value_Str_is_empty(x: Str) -> bool {
+    x.is_empty()
+}
+
+fn method_value_Str_to_string(x: Str) -> String {
+    x.to_string()
+}
+
+fn method_value_Str_trim(x: Str) -> Str {
+    x.trim()
+}
+
+fn method_value_Str_to_uppercase(x: Str) -> String {
+    x.to_uppercase()
+}
+
+fn method_value_Str_to_lowercase(x: Str) -> String {
+    x.to_lowercase()
+}
+
+fn method_value_char_is_alphabetic(x: char) -> bool {
+    x.is_alphabetic()
+}
+
+fn method_value_char_is_numeric(x: char) -> bool {
+    x.is_numeric()
+}
+
+fn method_value_char_is_alphanumeric(x: char) -> bool {
+    x.is_alphanumeric()
+}
+
+fn method_value_char_is_whitespace(x: char) -> bool {
+    x.is_whitespace()
+}
+
+fn method_value_char_is_ascii_digit(x: char) -> bool {
+    x.is_ascii_digit()
+}
+
+fn method_value_char_is_uppercase(x: char) -> bool {
+    x.is_uppercase()
+}
+
+fn method_value_char_is_lowercase(x: char) -> bool {
+    x.is_lowercase()
+}
+
+fn method_value_char_to_ascii_uppercase(x: char) -> char {
+    x.to_ascii_uppercase()
+}
+
+fn method_value_char_to_ascii_lowercase(x: char) -> char {
+    x.to_ascii_lowercase()
+}

@@ -363,6 +363,9 @@ enum Kind {
     /// A free function taking a value of each of these library types: kept
     /// when its name is reached or all of them are.
     Fn { name: String, over: Vec<String> },
+    /// Kept when the program's own text says this word: the method a
+    /// built-in type's `method_value_{T}_{m}` stands for (B-2026-11-24-7).
+    Word(String),
     /// Kept as a frame; its methods are judged one by one.
     Always,
 }
@@ -434,6 +437,19 @@ pub fn prune_code(program: &mut Program, code: &str, user_len: usize) -> Pruned 
             // what `i64.parse` returns), so one is kept without its name
             // being reached once a value of each library type it takes can
             // exist (`vec_extend_deque` once `VecDeque` is reached).
+            // `method_value_i64_abs`, what `i64.abs` named as a value lowers
+            // to, is reached through the method's name (B-2026-11-24-7).
+            Item::Function(f)
+                if f.name
+                    .strip_prefix("method_value_")
+                    .and_then(|r| r.split_once('_'))
+                    .is_some() =>
+            {
+                let (_, m) = f.name["method_value_".len()..]
+                    .split_once('_')
+                    .expect("checked");
+                Kind::Word(m.to_string())
+            }
             Item::Function(f) => {
                 let mut named = FxHashSet::default();
                 for p in &f.params {
@@ -598,6 +614,8 @@ pub fn prune_code(program: &mut Program, code: &str, user_len: usize) -> Pruned 
             if !p.kept {
                 p.kept = match &p.kind {
                     Kind::ImplOf(n) | Kind::Type(n) => is_reached(&reached, n),
+                    // Only the program names a built-in method as a value.
+                    Kind::Word(n) => user_words.contains(n),
                     Kind::Fn { name, over } => {
                         is_reached(&reached, name)
                             || answered.contains(name.as_str())
