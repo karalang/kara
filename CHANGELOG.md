@@ -1082,6 +1082,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `a.ref_eq(b)` on two `frozen` handles was refused as an escape; it is
+  the compiler's identity test, which keeps neither handle, and is
+  accepted (B-2026-11-24-50). The refusal of a struct literal of another
+  package's `#[non_exhaustive]` type names that package's constructor
+  function (`lib.options(...)`) rather than a guessed `Options.new(...)`
+  (B-2026-11-24-51), and two `freeze` refusals say what was refused: a
+  frozen `let` is called a binding, not a parameter, and a `freeze` of a
+  call that shares a handle gets one error, not two (B-2026-11-24-53).
+
 - Two impls of one trait for one type whose trait arguments unify
   (`impl[R] Mul2[R] for i64` and `impl Mul2[Col] for i64`) checked clean
   and one silently answered for both, in one file and across packages.

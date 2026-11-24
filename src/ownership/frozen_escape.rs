@@ -227,6 +227,11 @@ enum Reason {
     FreezeRefused(&'static str),
 }
 
+/// The refusal of a `freeze` whose operand is neither a place nor a call of a
+/// function whose arguments hold no handle.
+const TEMPORARY_OPERAND: &str = "its operand is a temporary, not a place: bind it to a local \
+     first (`let n = ...; let g = freeze n;`), or freeze a call whose arguments hold no handle";
+
 /// One rejected use, with enough to word the diagnostic. `is_alias`
 /// distinguishes a stage-2.5 LOCAL alias from the parameter it was derived
 /// from: both obey the same rule, but calling a `let` binding a "parameter"
@@ -237,6 +242,9 @@ struct Rejection {
     reason: Reason,
     is_alias: bool,
     is_source: bool,
+    /// Bound by a `freeze` statement (`let g = freeze r;`), not a parameter:
+    /// the line to fix is that `let` (B-2026-11-24-53).
+    is_binding: bool,
 }
 
 /// Walk state. `frozen` maps each in-scope frozen parameter name to the *type*
@@ -274,6 +282,12 @@ struct Cx<'a, 't> {
     /// user has extended is not treated as a builtin by the `len`/`is_empty`
     /// exception, so no user body can receive the handle through it.
     user_impl_types: HashSet<String>,
+    /// Type names with a user method named `ref_eq`. On every other `shared`
+    /// type `a.ref_eq(b)` is the compiler's identity test, which reads two
+    /// addresses and keeps neither handle (design.md § Shared types,
+    /// Equality), so both operands may be frozen places. A user body of that
+    /// name could keep one, so it is judged like any other method call.
+    user_ref_eq_types: HashSet<String>,
     /// The program declares a provider-rooted resource (`effect resource R:
     /// Tr;`): a function may then return a handle its provider holds, which
     /// no argument shows, so no call result is fresh ([`fresh_call`]).
@@ -288,6 +302,8 @@ struct Cx<'a, 't> {
     /// Names in `frozen` that are stage-2.5 LOCAL ALIASES rather than
     /// parameters. Diagnostics only — the rule is identical for both.
     aliases: HashSet<&'a str>,
+    /// Names bound by a `freeze` statement in this function. Diagnostics only.
+    freeze_bindings: HashSet<&'a str>,
     /// Names in `frozen` that are the SOURCE of a stage-3 `freeze` — the
     /// binding that still owns the value. Diagnostics only, and separate from
     /// `aliases` because the line to change is different again: an alias is
@@ -652,6 +668,7 @@ impl<'a> Cx<'a, '_> {
         self.found.push(Rejection {
             is_alias: self.aliases.contains(name),
             is_source: self.sources.contains(name),
+            is_binding: self.freeze_bindings.contains(name),
             name: name.to_string(),
             span: *span,
             reason,
@@ -742,13 +759,27 @@ impl super::OwnershipChecker<'_> {
             reason,
             is_alias,
             is_source,
+            is_binding,
         } in found
         {
+            // A temporary operand whose type needs a unique source is
+            // already refused by E0512 at the same span (its operands may
+            // share a handle); a second error calling it a temporary adds
+            // nothing (B-2026-11-24-53).
+            if matches!(reason, Reason::FreezeRefused(w) if w == TEMPORARY_OPERAND)
+                && self.errors.iter().any(|e| {
+                    e.span == span && matches!(e.kind, OwnershipErrorKind::FrozenTypeNotFreezable)
+                })
+            {
+                continue;
+            }
             // Three nouns, because all three name a different line to go fix:
             // a stage-2.5 local ALIAS obeys the parameter's rule but is a
             // `let`; a stage-2.7 `frozen self` RECEIVER is the signature but
             // not a parameter; everything else is a parameter.
-            let noun = if is_alias {
+            let noun = if is_binding {
+                "binding"
+            } else if is_alias {
                 "alias"
             } else if is_source {
                 "source"
@@ -760,7 +791,13 @@ impl super::OwnershipChecker<'_> {
             // Only the `Materialized` help offers "take it by value instead",
             // which is advice about a SIGNATURE — so an alias needs the extra
             // sentence saying which signature.
-            let alias_note = if name == "self" {
+            let alias_note = if is_binding {
+                format!(
+                    " `{name}` is bound by a `freeze` in this scope, so it lives only as long \
+                     as that `let`; return or store the value itself, and freeze it where it \
+                     is read."
+                )
+            } else if name == "self" {
                 " `self` here is a `frozen self` receiver, so the declaration to change is this \
                  method's — take `ref self` (or `self`) instead if the body needs to store, \
                  return, or capture the handle."
@@ -976,12 +1013,14 @@ fn collect_frozen_escapes<'a>(
         used_names: HashSet::new(),
         place_bound: HashSet::new(),
         user_impl_types: collect_user_impl_types(program),
+        user_ref_eq_types: collect_user_ref_eq_types(program),
         user_providers: program.items.iter().any(|i| {
             matches!(i, Item::EffectResource(r)
                 if !r.provider_bounds.is_empty() && r.default.is_none())
         }),
         in_closure: false,
         aliases: HashSet::new(),
+        freeze_bindings: HashSet::new(),
         sources: HashSet::new(),
         found: Vec::new(),
         alias_spans: FxHashSet::default(),
@@ -1112,6 +1151,31 @@ fn collect_user_impl_types(program: &Program) -> HashSet<String> {
                     out.insert(name.clone());
                 }
             }
+        }
+    }
+    out
+}
+
+/// Every type name with a user `impl` method named `ref_eq`, which would shadow
+/// the compiler's identity test (B-2026-11-24-50).
+fn collect_user_ref_eq_types(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for item in &program.items {
+        let Item::ImplBlock(b) = item else { continue };
+        if program.library_start.is_some_and(|n| b.span.offset >= n) {
+            continue;
+        }
+        let TypeKind::Path(path) = &b.target_type.kind else {
+            continue;
+        };
+        let Some(target) = path.segments.last() else {
+            continue;
+        };
+        if b.items
+            .iter()
+            .any(|it| matches!(it, ImplItem::Method(m) if m.name == "ref_eq"))
+        {
+            out.insert(target.clone());
         }
     }
     out
@@ -1763,6 +1827,7 @@ fn try_admit_frozen_freeze<'a>(
     // make the `freeze` a silent no-op, which is worse than a refusal.
     if fresh_call {
         walk_expr(value, cx);
+        cx.freeze_bindings.insert(name.as_str());
         cx.frozen.insert(name.as_str(), ty);
         cx.frozen_owner_path
             .insert(name.as_str(), cx.block_path.clone());
@@ -1772,7 +1837,7 @@ fn try_admit_frozen_freeze<'a>(
         cx.flag(
             name.as_str(),
             &value.span,
-            Reason::FreezeRefused("its operand is a temporary, not a place"),
+            Reason::FreezeRefused(TEMPORARY_OPERAND),
         );
         walk_expr(value, cx);
         return true;
@@ -1788,6 +1853,7 @@ fn try_admit_frozen_freeze<'a>(
         .insert(name.as_str(), cx.block_path.clone());
     cx.frozen_owner_path.insert(root, cx.block_path.clone());
     cx.aliases.insert(name.as_str());
+    cx.freeze_bindings.insert(name.as_str());
     // The source root is frozen from here on. Its own type is looked up the
     // same way; if it cannot be resolved the root is still frozen (with the
     // frozen handle's type as a stand-in), which over-restricts rather than
@@ -2181,6 +2247,29 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
             // ordinary local and must not be judged as a frozen place.
             if try_admit_container_method(object, method, args, cx) {
                 return;
+            }
+            // `a.ref_eq(b)`: the compiler's identity test on two handles. It
+            // compares addresses and keeps neither handle, so a frozen place
+            // on either side stays a frozen place (design.md § Shared types,
+            // Equality: `ref_eq` is provided on every `shared`, `sync` and
+            // `frozen` handle type; B-2026-11-24-50).
+            if method == "ref_eq" && args.len() == 1 && !cx.in_closure {
+                let is_identity_test = |e: &Expr, cx: &Cx<'_, '_>| {
+                    cx.shared_handle_type(e)
+                        .as_ref()
+                        .and_then(head_type_name)
+                        .is_some_and(|t| !cx.user_ref_eq_types.contains(t))
+                };
+                if is_identity_test(object, cx) {
+                    for e in [object.as_ref(), &args[0].value] {
+                        if cx.frozen_place_root(e).is_some() && !args[0].mut_marker {
+                            walk_place_indices(e, cx);
+                        } else {
+                            walk_expr(e, cx);
+                        }
+                    }
+                    return;
+                }
             }
             // Stage 2.7 — a USER method whose receiver is declared `frozen
             // self`. Resolved by the receiver PLACE's type, which this pass

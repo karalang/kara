@@ -864,6 +864,93 @@ impl<'a> super::TypeChecker<'a> {
     /// Whether type `name`, marked `#[non_exhaustive]` or not, is seen from
     /// outside the package that defines it: a library type from a user
     /// function, or a type of another package of the tree (B-2026-11-07-23).
+    /// The public functions in `name`'s defining module that return it
+    /// (`lib.options`, `Options.new`), for the refusal of a struct literal of
+    /// a `#[non_exhaustive]` type in another package, which design.md §
+    /// `#[non_exhaustive]` says names the package's constructor function
+    /// (B-2026-11-24-51). A direct return or one wrapped in `Result` or
+    /// `Option` counts; empty when the module has none.
+    pub(super) fn public_constructors(&self, name: &str) -> Vec<String> {
+        let Some(tree) = self.tree else {
+            return Vec::new();
+        };
+        let defines = |m: &crate::module::Module| {
+            m.items
+                .iter()
+                .any(|it| matches!(it, Item::StructDef(sd) if sd.name == name))
+        };
+        let origin = match self.type_origins.get(name) {
+            Some((path, _, _)) => tree.graph.by_path.get::<[String]>(path).copied(),
+            None => tree
+                .modules
+                .iter()
+                .position(|m| !m.is_synthetic && defines(m))
+                .and_then(|i| {
+                    tree.graph
+                        .by_path
+                        .get::<[String]>(&tree.modules[i].path)
+                        .copied()
+                }),
+        };
+        let Some(origin) = origin else {
+            return Vec::new();
+        };
+        let module = tree.module(origin);
+        fn returns(ty: &Option<crate::ast::TypeExpr>, names: &[&str]) -> bool {
+            let Some(ty) = ty else { return false };
+            let crate::ast::TypeKind::Path(p) = &ty.kind else {
+                return false;
+            };
+            let Some(last) = p.segments.last() else {
+                return false;
+            };
+            if names.contains(&last.as_str()) {
+                return true;
+            }
+            matches!(last.as_str(), "Result" | "Option")
+                && p.generic_args
+                    .as_ref()
+                    .and_then(|a| a.first())
+                    .is_some_and(|a| {
+                        matches!(a, crate::ast::GenericArg::Type(t)
+                        if returns(&Some(t.clone()), names))
+                    })
+        }
+        let mut out = Vec::new();
+        let prefix = module.path.join(".");
+        for it in &module.items {
+            match it {
+                Item::Function(f) if f.is_pub && returns(&f.return_type, &[name]) => {
+                    out.push(if prefix.is_empty() {
+                        f.name.clone()
+                    } else {
+                        format!("{prefix}.{}", f.name)
+                    });
+                }
+                Item::ImplBlock(b) => {
+                    let crate::ast::TypeKind::Path(p) = &b.target_type.kind else {
+                        continue;
+                    };
+                    if p.segments.last().map(String::as_str) != Some(name) {
+                        continue;
+                    }
+                    for m in &b.items {
+                        if let crate::ast::ImplItem::Method(m) = m {
+                            if m.is_pub
+                                && m.self_param.is_none()
+                                && returns(&m.return_type, &[name, "Self"])
+                            {
+                                out.push(format!("{name}.{}", m.name));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     pub(super) fn sees_from_outside(&self, name: &str, defining_stdlib_origin: bool) -> bool {
         if defining_stdlib_origin {
             return !self.current_fn_stdlib_origin;
@@ -1490,13 +1577,26 @@ impl<'a> super::TypeChecker<'a> {
         if struct_info.is_non_exhaustive
             && self.sees_from_outside(&struct_name, struct_info.defining_stdlib_origin)
         {
+            let ctors = self.public_constructors(&struct_name);
+            let through = if ctors.is_empty() {
+                format!(
+                    "Construct through a function of the defining package that \
+                     returns it (commonly `{struct_name}.new(...)`); it declares none"
+                )
+            } else {
+                let list = ctors
+                    .iter()
+                    .map(|c| format!("`{c}(...)`"))
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                format!("Construct it with the package's constructor, {list},")
+            };
             self.type_error(
                 format!(
                     "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL]: \
                      cannot construct `{name}` with a struct literal — \
                      `{name}` is `#[non_exhaustive]` and defined in another \
-                     package, so its field set may grow. Construct through \
-                     the type's public constructor (commonly `{name}.new(...)`) \
+                     package, so its field set may grow. {through} \
                      instead. See design.md § `#[non_exhaustive]` for \
                      Evolvable Public Types.",
                     name = struct_name
