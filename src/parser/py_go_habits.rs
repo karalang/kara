@@ -12,34 +12,34 @@ use crate::token::{Span, SpannedToken, Token};
 use super::Parser;
 
 impl Parser {
-    fn ident_at(&self, at: usize) -> Option<&str> {
+    pub(super) fn ident_at(&self, at: usize) -> Option<&str> {
         match self.tokens.get(at).map(|t| &t.token) {
             Some(Token::Identifier { name, .. }) => Some(name.as_str()),
             _ => None,
         }
     }
 
-    fn tok_at(&self, at: usize) -> Option<&Token> {
+    pub(super) fn tok_at(&self, at: usize) -> Option<&Token> {
         self.tokens.get(at).map(|t| &t.token)
     }
 
-    fn span_at(&self, at: usize) -> Span {
+    pub(super) fn span_at(&self, at: usize) -> Span {
         self.tokens[at].span
     }
 
-    fn touching(&self, a: usize, b: usize) -> bool {
+    pub(super) fn touching(&self, a: usize, b: usize) -> bool {
         let (x, y) = (self.span_at(a), self.span_at(b));
         x.offset + x.length == y.offset
     }
 
-    fn habit(&mut self, message: &str, at: Span, edits: Vec<TextEdit>) {
+    pub(super) fn habit(&mut self, message: &str, at: Span, edits: Vec<TextEdit>) {
         self.error_at(message, at);
         if !edits.is_empty() {
             self.fix_diffs.insert(SpanKey::from_span(&at), edits);
         }
     }
 
-    fn edit(offset: usize, length: usize, replacement: &str) -> TextEdit {
+    pub(super) fn edit(offset: usize, length: usize, replacement: &str) -> TextEdit {
         TextEdit {
             offset,
             length,
@@ -47,7 +47,7 @@ impl Parser {
         }
     }
 
-    fn synth(token: Token, at: Span) -> SpannedToken {
+    pub(super) fn synth(token: Token, at: Span) -> SpannedToken {
         SpannedToken {
             token,
             span: Span { length: 0, ..at },
@@ -259,7 +259,10 @@ impl Parser {
         if self.ident_at(1) == Some("__interp__") {
             return;
         }
-        if self.mend_go_statement_forms() || self.mend_python_tuple_let() {
+        if self.mend_ts_java_statement_forms()
+            || self.mend_go_statement_forms()
+            || self.mend_python_tuple_let()
+        {
             return;
         }
         let p = self.pos;
@@ -275,19 +278,7 @@ impl Parser {
         if block_import && self.mend_block_import(p) {
             return;
         }
-        if self.ident_at(p) == Some("switch")
-            && !matches!(
-                self.tok_at(p + 1),
-                Some(
-                    Token::Equal
-                        | Token::Dot
-                        | Token::LeftParen
-                        | Token::Semicolon
-                        | Token::RightBrace
-                )
-            )
-            && self.mend_go_switch()
-        {
+        if self.at_switch_statement() && self.mend_go_switch() {
             return;
         }
         // `raise e`, `try { .. } except { .. }`, `with open(p) as f { .. }`:
@@ -297,11 +288,17 @@ impl Parser {
         // is Python's.
         let python_try = matches!(self.tok_at(p), Some(Token::Try))
             && matches!(self.tok_at(p + 1), Some(Token::LeftBrace))
+            && self.matching_brace(p + 1).is_some_and(|c| {
+                matches!(self.ident_at(c + 1), Some("except" | "catch" | "finally"))
+            });
+        // Which language's: Python's `except`, or Java's / JavaScript's /
+        // C#'s `catch` / `finally`.
+        let c_try = python_try
             && self
                 .matching_brace(p + 1)
-                .is_some_and(|c| self.ident_at(c + 1) == Some("except"));
+                .is_some_and(|c| self.ident_at(c + 1) != Some("except"));
         let word = if python_try {
-            Some("try".to_string())
+            Some(if c_try { "try-catch" } else { "try" }.to_string())
         } else {
             self.ident_at(p).map(str::to_string)
         };
@@ -322,6 +319,15 @@ impl Parser {
                 }
                 _ => false,
             };
+            // `throw "neg"`, `throw new Error("neg")`, `throw e`.
+            let throw_shape = match self.tok_at(p + 1) {
+                Some(Token::StringLiteral(_) | Token::InterpolatedStringLiteral(_)) => true,
+                Some(Token::Identifier { .. }) => matches!(
+                    self.tok_at(p + 2),
+                    Some(Token::LeftParen | Token::Semicolon | Token::Identifier { .. })
+                ),
+                _ => false,
+            } && !self.word_is_bound("throw");
             let with_shape = matches!(self.tok_at(p + 1), Some(Token::Identifier { .. }))
                 && matches!(self.tok_at(p + 2), Some(Token::LeftParen))
                 && {
@@ -342,6 +348,16 @@ impl Parser {
                 "raise" if raise_shape => Some(
                     "`raise` is Python's: a Kāra function that can fail returns a `Result`, \
                      and fails with `return Err(e)`; `panic(\"..\")` stops the program",
+                ),
+                "throw" if throw_shape => Some(
+                    "`throw` is Java's and JavaScript's: a Kāra function that can fail returns \
+                     a `Result`, and fails with `return Err(e)`; `panic(\"..\")` stops the \
+                     program",
+                ),
+                "try-catch" => Some(
+                    "`try`/`catch` is Java's and JavaScript's: Kāra handles a failure where it \
+                     is returned, with `match r { Ok(v) => .., Err(e) => .. }`, or passes it on \
+                     with `?`; a `finally` block is a `defer` at the top of the block",
                 ),
                 "try" if python_try => Some(
                     "`try`/`except` is Python's: Kāra handles a failure where it is returned, \
@@ -368,7 +384,12 @@ impl Parser {
                             if depth < 0 {
                                 break;
                             }
-                            if depth == 0 && self.ident_at(i + 1) != Some("except") {
+                            if depth == 0
+                                && !matches!(
+                                    self.ident_at(i + 1),
+                                    Some("except" | "catch" | "finally")
+                                )
+                            {
                                 i += 1;
                                 break;
                             }
@@ -572,6 +593,7 @@ impl Parser {
         if !matches!(self.tok_at(p), Some(Token::For)) {
             return None;
         }
+        self.mend_paren_for();
         let at = self.span_at(p);
         if matches!(self.tok_at(p + 1), Some(Token::LeftBrace)) {
             self.habit(
@@ -835,7 +857,7 @@ impl Parser {
     }
 
     /// The source text of `[from, to)`, when the parser has it.
-    fn source_between(&self, from: usize, to: usize) -> Option<String> {
+    pub(super) fn source_between(&self, from: usize, to: usize) -> Option<String> {
         let (src, base) = self.source.as_ref()?;
         src.get(from.checked_sub(*base)?..to.checked_sub(*base)?)
             .map(str::to_string)
@@ -843,7 +865,7 @@ impl Parser {
 
     /// The index of the `{` that opens a `for` body starting at `from`,
     /// with the `;` positions met at depth 0 on the way.
-    fn header_brace(&self, from: usize) -> Option<(usize, Vec<usize>)> {
+    pub(super) fn header_brace(&self, from: usize) -> Option<(usize, Vec<usize>)> {
         let mut depth = 0i32;
         let mut semis = Vec::new();
         let mut i = from;
@@ -861,7 +883,7 @@ impl Parser {
     }
 
     /// The index of the `}` matching the `{` at `open`.
-    fn matching_brace(&self, open: usize) -> Option<usize> {
+    pub(super) fn matching_brace(&self, open: usize) -> Option<usize> {
         let mut depth = 0i32;
         let mut i = open;
         loop {
@@ -882,7 +904,7 @@ impl Parser {
 
     /// Whether the tokens in `[from, to)` write the name `var` (`var =`,
     /// `var += ..`, `var++`) or call a mutating method on any of `names`.
-    fn writes_in(&self, from: usize, to: usize, var: &str, names: &[String]) -> bool {
+    pub(super) fn writes_in(&self, from: usize, to: usize, var: &str, names: &[String]) -> bool {
         (from..to).any(|i| {
             let Some(n) = self.ident_at(i) else {
                 return false;
@@ -943,8 +965,8 @@ impl Parser {
             return false;
         }
         let at = self.span_at(p);
-        let note = "a three-part `for init; cond; step { .. }` is Go's and C's: Kāra counts \
-                    with a range, `for i in a..b { .. }` (`a..=b` for `<=`), or loops with \
+        let note = "a three-part `for init; cond; step { .. }` is Go's, C's, Java's and \
+                    JavaScript's: Kāra counts with a range, `for i in a..b { .. }` (`a..=b` for `<=`), or loops with \
                     `while`";
         let (s1, s2) = (semis[0], semis[1]);
         // init: `i := A` | `let mut i = A` | `let i = A`
@@ -1159,11 +1181,25 @@ impl Parser {
     /// not fall through, and a missing `default` is `_ => {}`. Declined, with
     /// the note, for a tagless `switch`, a non-literal case, or a `break` /
     /// `fallthrough` in a case (a Kāra `break` there would leave the loop).
-    fn mend_go_switch(&mut self) -> bool {
+    ///
+    /// C's, Java's and JavaScript's `switch (x) { case 1: ..; break; }`
+    /// (B-2026-11-24-8): a case ends at its `break;`, and empty cases
+    /// written together (`case 1: case 2:`) share one arm. A case with a body
+    /// and no `break` falls through to the next, which `match` cannot say,
+    /// so that switch is declined. Java's `case 1 -> e;` does not fall
+    /// through, so it is an arm as it stands.
+    pub(super) fn mend_go_switch(&mut self) -> bool {
         let p = self.pos;
         let at = self.span_at(p);
-        let note = "`switch` is Go's: Kāra branches on a value with `match x { 1 | 2 => .., \
-                    _ => .. }`";
+        let c_style = matches!(self.tok_at(p + 1), Some(Token::LeftParen));
+        let note = if c_style {
+            "`switch (x) { case 1: .. break; }` is C's, Java's and JavaScript's: Kāra \
+             branches on a value with `match x { 1 | 2 => .., _ => .. }`, whose arms never \
+             fall through"
+        } else {
+            "`switch` is Go's: Kāra branches on a value with `match x { 1 | 2 => .., \
+             _ => .. }`"
+        };
         let Some((brace, _)) = self.header_brace(p + 1) else {
             return false;
         };
@@ -1185,30 +1221,34 @@ impl Parser {
             let (x, y) = (me.span_at(a), me.span_at(b));
             me.source_between(x.offset, y.offset + y.length)
         };
-        let Some(scrutinee) = src(self, p + 1, brace - 1) else {
+        let scrutinee = if c_style {
+            match self.matching_close(p + 1) {
+                Some(c) if c + 1 == brace && c > p + 2 => src(self, p + 2, c - 1),
+                _ => return decline(self),
+            }
+        } else {
+            src(self, p + 1, brace - 1)
+        };
+        let Some(scrutinee) = scrutinee else {
             return false;
         };
-        // Arms: (values, body token range) in order.
-        let mut out = format!("match {scrutinee} {{ ");
+        // Arms in order: their values (`None` for `default`), their body
+        // text, and whether the body ended (a `break;` or an arrow arm).
+        struct Arm {
+            vals: Option<Vec<String>>,
+            body: String,
+            ended: bool,
+        }
+        let mut arms: Vec<Arm> = Vec::new();
         let mut i = brace + 1;
-        let mut has_default = false;
         let mut depth = 0i32;
-        let mut arm_open = false;
         while i < close {
             let t = self.tok_at(i).cloned();
             let at_arm = depth == 0
                 && (self.ident_at(i) == Some("case") || self.ident_at(i) == Some("default"));
             if at_arm {
-                if arm_open {
-                    out.push_str("} ");
-                }
-                if self.ident_at(i) == Some("default") {
-                    if !matches!(self.tok_at(i + 1), Some(Token::Colon)) {
-                        return decline(self);
-                    }
-                    has_default = true;
-                    out.push_str("_ => { ");
-                    i += 2;
+                let (vals, j) = if self.ident_at(i) == Some("default") {
+                    (None, i + 1)
                 } else {
                     let mut vals = Vec::new();
                     let mut j = i + 1;
@@ -1229,30 +1269,114 @@ impl Parser {
                             return false;
                         };
                         vals.push(v);
-                        match self.tok_at(k + 1) {
-                            Some(Token::Comma) => j = k + 2,
-                            Some(Token::Colon) => {
-                                j = k + 2;
-                                break;
-                            }
-                            _ => return decline(self),
+                        if matches!(self.tok_at(k + 1), Some(Token::Comma)) {
+                            j = k + 2;
+                        } else {
+                            j = k + 1;
+                            break;
                         }
                     }
-                    out.push_str(&format!("{} => {{ ", vals.join(" | ")));
-                    i = j;
+                    (Some(vals), j)
+                };
+                match self.tok_at(j) {
+                    Some(Token::Colon) => {
+                        // `case 1: case 2:` share the arm that follows.
+                        let joins = c_style
+                            && arms
+                                .last()
+                                .is_some_and(|a| a.body.trim().is_empty() && !a.ended);
+                        if joins {
+                            let last = arms.last_mut().expect("checked");
+                            match (&mut last.vals, vals) {
+                                (Some(a), Some(b)) => a.extend(b),
+                                (a, _) => *a = None,
+                            }
+                        } else {
+                            if c_style && arms.last().is_some_and(|a| !a.ended) {
+                                // The last case falls through into this one.
+                                return decline(self);
+                            }
+                            arms.push(Arm {
+                                vals,
+                                body: String::new(),
+                                ended: false,
+                            });
+                        }
+                        i = j + 1;
+                    }
+                    // Java's `case 1 -> e;` / `case 1 -> { .. }`.
+                    Some(Token::Arrow) if c_style => {
+                        if arms.last().is_some_and(|a| !a.ended) {
+                            return decline(self);
+                        }
+                        let (body, next) = if matches!(self.tok_at(j + 1), Some(Token::LeftBrace)) {
+                            let Some(b) = self.matching_brace(j + 1) else {
+                                return false;
+                            };
+                            (src(self, j + 1, b), b + 1)
+                        } else {
+                            let mut e = j + 1;
+                            let mut d = 0i32;
+                            while e < close {
+                                match self.tok_at(e) {
+                                    Some(
+                                        Token::LeftParen | Token::LeftBracket | Token::LeftBrace,
+                                    ) => d += 1,
+                                    Some(
+                                        Token::RightParen | Token::RightBracket | Token::RightBrace,
+                                    ) => d -= 1,
+                                    Some(Token::Semicolon) if d == 0 => break,
+                                    _ => {}
+                                }
+                                e += 1;
+                            }
+                            if e >= close || e == j + 1 {
+                                return decline(self);
+                            }
+                            (src(self, j + 1, e - 1).map(|b| format!("{{ {b} }}")), e + 1)
+                        };
+                        let Some(body) = body else {
+                            return false;
+                        };
+                        arms.push(Arm {
+                            vals,
+                            body,
+                            ended: true,
+                        });
+                        i = next;
+                    }
+                    _ => return decline(self),
                 }
-                arm_open = true;
                 continue;
             }
             match t {
                 Some(Token::LeftBrace | Token::LeftParen | Token::LeftBracket) => depth += 1,
                 Some(Token::RightBrace | Token::RightParen | Token::RightBracket) => depth -= 1,
-                Some(Token::Break) => return decline(self),
+                Some(Token::Break) => {
+                    // C's `break;` ends the case it closes.
+                    let ends_case = c_style
+                        && depth == 0
+                        && matches!(self.tok_at(i + 1), Some(Token::Semicolon))
+                        && (i + 2 == close
+                            || matches!(self.ident_at(i + 2), Some("case" | "default")));
+                    if !ends_case {
+                        return decline(self);
+                    }
+                    match arms.last_mut() {
+                        Some(a) if !a.ended => a.ended = true,
+                        _ => return decline(self),
+                    }
+                    i += 2;
+                    continue;
+                }
                 _ => {}
             }
-            if self.ident_at(i) == Some("fallthrough") || !arm_open {
+            if self.ident_at(i) == Some("fallthrough") {
                 return decline(self);
             }
+            let Some(arm) = arms.last_mut().filter(|a| !a.ended || !c_style) else {
+                return decline(self);
+            };
             // The arm's text, token by token with the source's spacing.
             let next = if i + 1 < close {
                 self.span_at(i + 1).offset
@@ -1263,11 +1387,35 @@ impl Parser {
             let Some(piece) = self.source_between(self.span_at(i).offset, next) else {
                 return false;
             };
-            out.push_str(&piece);
+            arm.body.push_str(&piece);
             i += 1;
         }
-        if arm_open {
-            out.push_str("} ");
+        // A last case with no `break` ends at the switch's `}`; any other
+        // arm with a body ended at its `break`.
+        if c_style
+            && arms
+                .iter()
+                .rev()
+                .skip(1)
+                .any(|a| !a.ended && !a.body.trim().is_empty())
+        {
+            return decline(self);
+        }
+        let mut out = format!("match {scrutinee} {{ ");
+        let mut has_default = false;
+        for a in &arms {
+            let pat = match &a.vals {
+                Some(v) => v.join(" | "),
+                None => {
+                    has_default = true;
+                    "_".to_string()
+                }
+            };
+            if a.body.trim_start().starts_with('{') && a.ended && !a.body.contains(';') {
+                out.push_str(&format!("{pat} => {} ", a.body.trim()));
+            } else {
+                out.push_str(&format!("{pat} => {{ {}}} ", a.body));
+            }
         }
         if !has_default {
             out.push_str("_ => {} ");
@@ -1447,7 +1595,7 @@ impl Parser {
     }
 
     /// The source text of tokens `[a, b)`.
-    fn tokens_text(&self, a: usize, b: usize) -> Option<String> {
+    pub(super) fn tokens_text(&self, a: usize, b: usize) -> Option<String> {
         if a >= b {
             return None;
         }
@@ -1459,7 +1607,7 @@ impl Parser {
     }
 
     /// Tokens `[from, to]` replaced by `text`, lexed, each spanned at `at`.
-    fn splice_text(&mut self, from: usize, to: usize, text: &str, at: Span) {
+    pub(super) fn splice_text(&mut self, from: usize, to: usize, text: &str, at: Span) {
         let mut toks = crate::tokenize(text);
         toks.retain(|t| !matches!(t.token, Token::EOF));
         for t in &mut toks {
@@ -1470,7 +1618,7 @@ impl Parser {
 
     /// A refused habit whose tokens `[from, to]` the Kāra `text` replaces,
     /// in the source and in the token stream.
-    fn rewrite(&mut self, note: &str, at: Span, from: usize, to: usize, text: &str) {
+    pub(super) fn rewrite(&mut self, note: &str, at: Span, from: usize, to: usize, text: &str) {
         let first = self.span_at(from);
         let last = self.span_at(to);
         self.habit(
@@ -1486,7 +1634,7 @@ impl Parser {
     }
 
     /// The index of the `)` or `]` closing the bracket at `open`.
-    fn matching_close(&self, open: usize) -> Option<usize> {
+    pub(super) fn matching_close(&self, open: usize) -> Option<usize> {
         let mut depth = 0i32;
         let mut i = open;
         loop {
@@ -1507,7 +1655,7 @@ impl Parser {
 
     /// `k: v, ..` between `from` and `to` (exclusive) as text pairs: a
     /// Python dict's or a Go map literal's entries.
-    fn key_value_pairs(&self, from: usize, to: usize) -> Option<Vec<(String, String)>> {
+    pub(super) fn key_value_pairs(&self, from: usize, to: usize) -> Option<Vec<(String, String)>> {
         let mut pairs = Vec::new();
         let mut depth = 0i32;
         let (mut start, mut colon) = (from, None);

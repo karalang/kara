@@ -847,6 +847,10 @@ impl<'a> super::TypeChecker<'a> {
                     let hint = match (type_name.as_str(), method) {
                         (_, "max_value") if is_int => format!("; write `{type_name}.MAX`"),
                         (_, "min_value") if is_int => format!("; write `{type_name}.MIN`"),
+                        (_, "Parse" | "TryParse" | "parseInt" | "valueOf") => format!(
+                            "; that is C#'s and Java's: Kāra parses with `{type_name}.parse(s)`, \
+                             a `Result` that is `Err` where they throw"
+                        ),
                         ("char", "from_u32") => "; write `char.try_from(n)`, which takes a \
                              `u32` code point and returns a `Result`"
                             .to_string(),

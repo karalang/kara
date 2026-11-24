@@ -47,6 +47,25 @@ impl super::Parser {
         if word == "class"
             && matches!(self.peek_token_at(1), Token::Identifier { .. })
             && self.peek_token_at(2) == Token::LeftBrace
+            && self.class_has_methods()
+        {
+            // Java's, C#'s and JavaScript's class, with methods and a
+            // constructor (B-2026-11-24-8): its Kāra form is a struct and an
+            // `impl`, two items, so it is told and skipped whole.
+            let span = self.current_span();
+            self.error_at(
+                "`class` is Java's, C#'s and JavaScript's: Kāra declares the data with \
+                 `struct Name { x: T }` and the methods in `impl Name { fn m(self) { .. } }`; \
+                 a constructor is a function of the `impl`, `fn new(x: T) -> Name`, and a \
+                 function needs no class around it",
+                span,
+            );
+            self.skip_class();
+            return false;
+        }
+        if word == "class"
+            && matches!(self.peek_token_at(1), Token::Identifier { .. })
+            && self.peek_token_at(2) == Token::LeftBrace
         {
             let span = self.current_span();
             self.error_at(
@@ -188,6 +207,7 @@ impl super::Parser {
         // item-construction site.
         self.collect_leading_doc_comments();
         let attributes = self.parse_attributes();
+        self.mend_ts_java_item_forms();
         // Visibility keyword: `pub` OR `private`, never both.
         let is_pub = self.eat_pub();
         let is_private = if !is_pub {
@@ -744,6 +764,7 @@ impl super::Parser {
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
         let close = self.tokens[self.pos.saturating_sub(1)].span;
+        self.mend_ts_result_colon();
         self.mend_go_result_without_arrow(close);
         self.mend_python_none_result();
 
@@ -1938,6 +1959,7 @@ impl super::Parser {
             if self.check(&Token::RightParen) {
                 break;
             }
+            self.mend_java_param();
             let mut param = self.parse_param()?;
             param.is_named = named;
             params.push(param);

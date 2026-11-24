@@ -68,6 +68,7 @@ An empty pattern matches at every char boundary, the start and the end included,
 | `trim_end` | `fn trim_end(self) -> Str` | Strips trailing whitespace only; a view into `self` |
 | `replace` | `fn replace(self, from: Str, to: Str) -> String` | Replaces every non-overlapping occurrence, left to right. An empty `from` matches at every char boundary, so `to` is inserted before each char and at the end: `"abc".replace("", "<>")` is `"<>a<>b<>c<>"` |
 | `to_uppercase` | `fn to_uppercase(self) -> String` | Unicode uppercasing |
+| `repeat` | `fn repeat(self, n: i64) -> String` | The text `n` times over, a new `String`: `"ab".repeat(3)` is `"ababab"`; a count of zero or less returns the empty string. A length the allocator cannot hold is an allocation failure, as for any `String` |
 | `to_lowercase` | `fn to_lowercase(self) -> String` | Unicode lowercasing |
 | `normalize` | `fn normalize(self, form: NormalizationForm) -> String` | See [Equality and normalization](#equality-and-normalization) |
 | `to_string` | `fn to_string(self) -> String` | An owned copy of a `Str`. For a `String`, use `clone()` |

@@ -25,6 +25,7 @@ mod rust_rc;
 mod rust_sync;
 mod rust_thread;
 mod stmts;
+mod ts_java_habits;
 mod types;
 
 // ── Parse Errors ─────────────────────────────────────────────────
@@ -1025,6 +1026,7 @@ impl Parser {
     pub fn with_source(mut self, source: &str, base: usize) -> Self {
         self.source = Some((std::sync::Arc::from(source), base));
         self.mend_floor_division();
+        self.mend_ts_java_tokens();
         self
     }
 

@@ -173,7 +173,76 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         let obj_ty = self.infer_expr(object);
+        if matches!(field, "length" | "Length" | "Count" | "size") {
+            if let Some(t) = self.foreign_length_field(object, &obj_ty, field, span) {
+                return t;
+            }
+        }
         self.infer_field_access_on_ty(obj_ty, field, span)
+    }
+
+    /// `v.length` (JavaScript), `v.Count` / `s.Length` (C#), `v.size`
+    /// (Kotlin) on a collection or text, which has no fields: Kāra's
+    /// `v.len()` (B-2026-11-24-8). `len` counts a text's bytes, as C#'s
+    /// `Length` and JavaScript's `length` count its UTF-16 units: the two
+    /// agree on ASCII text, and the note says how to count characters.
+    fn foreign_length_field(
+        &mut self,
+        object: &Expr,
+        obj_ty: &Type,
+        field: &str,
+        span: &Span,
+    ) -> Option<Type> {
+        let ty = super::expr_ops::strip_refs_for_compare(obj_ty);
+        let (kind, texty) = match ty {
+            Type::Str => ("text", true),
+            // A program's own struct of the name (`struct Map { size: i64 }`)
+            // has its fields.
+            Type::Named { name, .. }
+                if self
+                    .env
+                    .structs
+                    .get(name)
+                    .is_some_and(|s| s.fields.iter().any(|(f, _, _)| f == field)) =>
+            {
+                return None
+            }
+            Type::Named { name, .. } => match name.as_str() {
+                "String" | "StringSlice" => ("text", true),
+                "Vec" | "VecDeque" | "Map" | "Set" | "SortedMap" | "SortedSet" | "Slice"
+                | "PriorityQueue" => ("collection", false),
+                _ => return None,
+            },
+            Type::Array { .. } | Type::Slice { .. } => ("collection", false),
+            _ => return None,
+        };
+        let from = object.span.offset + object.span.length;
+        let to = span.offset + span.length;
+        if to <= from {
+            return None;
+        }
+        let chars = if texty {
+            "; `s.chars().count()` counts its characters"
+        } else {
+            ""
+        };
+        self.type_error_with_fix_it(
+            format!(
+                "no field '{field}' on a {kind}: `.{field}` is JavaScript's, Java's or C#'s; \
+                 Kāra's is the method `.len()`{chars}"
+            ),
+            *span,
+            TypeErrorKind::UndefinedField,
+            super::FixIt {
+                span: Span {
+                    offset: from,
+                    length: to - from,
+                    ..object.span
+                },
+                replacement: ".len()".to_string(),
+            },
+        );
+        Some(Type::Int(super::types::IntSize::I64))
     }
 
     /// Resolve `.field` on an object whose type is ALREADY known, with no

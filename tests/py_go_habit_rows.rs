@@ -537,9 +537,11 @@ fn python_none_result_tuple_let_and_bare_split_are_mended_b_2026_11_22_5() {
         "s.split_whitespace()",
         "3\n",
     );
-    let m = mend("fn main() { let s = \"ab\" * 3; println(s); }\n");
-    assert!(!m.clean);
-    assert!(m.first.contains("string repetition"), "{}", m.first);
+    mended(
+        "fn main() { let s = \"ab\" * 3; println(s); let t: Str = \"x\"; println(t * 2); }\n",
+        "\"ab\".repeat(3)",
+        "ababab\nxx\n",
+    );
 }
 
 #[test]
@@ -568,4 +570,15 @@ fn go_package_import_pointer_literal_and_capitals_b_2026_11_22_5() {
     let m = mend(src);
     assert!(m.first.contains("`pub fn`"), "{}", m.first);
     assert_eq!(m.text, src);
+}
+
+#[test]
+fn string_repeat_is_documented_as_it_runs_b_2026_11_22_36() {
+    // `repeat` was the library's all along (d689917dc9); strings.md did not
+    // list it. A count of 0 or less is the empty text.
+    mended(
+        "fn main() { let s = \"ab\"; println(s.repeat(3)); let t: Str = \"xy\"; println(t.repeat(2)); println(\"-\".repeat(0).len()); let k = 0 - 2; println(\"a\".repeat(k).len()); }\n",
+        "s.repeat(3)",
+        "ababab\nxyxy\n0\n0\n",
+    );
 }

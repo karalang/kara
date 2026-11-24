@@ -2098,6 +2098,11 @@ impl<'a> super::TypeChecker<'a> {
                         ": a fixed array is built with the repeat literal `[v; N]`, N a \
                          constant; `Vec.filled(n, v)` is the growable form"
                     }
+                    ("String" | "StringSlice", "format" | "Format") => {
+                        ": `String.format(\"n=%d\", n)` is Java's and C#'s: Kāra formats with \
+                         an f-string, `f\"n={n}\"` (`{n:5}`, `{x:.2}` for widths and \
+                         precision, library/strings.md)"
+                    }
                     ("VecDeque", "from") => {
                         ": a `VecDeque` is built from a list by `collect` \
                          (`let dq: VecDeque[T] = v.into_iter().collect();`), or by \
@@ -4672,8 +4677,8 @@ impl<'a> super::TypeChecker<'a> {
         let int_right = super::types::is_integer(right_ty);
         if matches!(op, BinOp::Mul) && is_string_concat_operand(ty) && int_right {
             return format!(
-                "{base}: `s * n` is Python's string repetition, which Kāra's text does not \
-                 have; build it with a loop, `for _ in 0..n {{ out.push_str(s); }}`"
+                "{base}: `s * n` is Python's string repetition, which Kāra writes \
+                 `s.repeat(n)` (library/strings.md)"
             );
         }
         match ty {
@@ -6115,6 +6120,55 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Error
                 } else {
                     let message = self.arithmetic_rejection_message(op, &left_ty, &right_ty);
+                    // Python's `"ab" * 3` is Kāra's `"ab".repeat(3)`
+                    // (B-2026-11-22-36).
+                    let text_left = is_string_concat_operand(&left_ty)
+                        || matches!(&left_ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
+                        || matches!(&left_ty, Type::Ref(t) if matches!(t.as_ref(), Type::Named { name, .. } if name == "StringSlice"));
+                    if matches!(op, BinOp::Mul) && text_left && super::types::is_integer(&right_ty)
+                    {
+                        let plain = |e: &Expr| {
+                            matches!(
+                                e.kind,
+                                ExprKind::Identifier(_)
+                                    | ExprKind::StringLit(_)
+                                    | ExprKind::FieldAccess { .. }
+                                    | ExprKind::Index { .. }
+                                    | ExprKind::Call { .. }
+                                    | ExprKind::MethodCall { .. }
+                                    | ExprKind::Integer(..)
+                            )
+                        };
+                        let l = crate::formatter::render_expr_one_line(left);
+                        let l = if plain(left) { l } else { format!("({l})") };
+                        let r = crate::formatter::render_expr_one_line(right);
+                        let end = right.span.offset + right.span.length;
+                        // A `MethodCall`'s span ends at its receiver: only
+                        // operands whose text the spans cover take the edit.
+                        let left_ends = left.span.offset + left.span.length <= right.span.offset
+                            && !matches!(left.kind, ExprKind::MethodCall { .. });
+                        let right_whole = !matches!(right.kind, ExprKind::MethodCall { .. });
+                        let message = "`s * n` is Python's string repetition: Kāra repeats \
+                                       text with `s.repeat(n)` (library/strings.md)"
+                            .to_string();
+                        if left_ends && right_whole {
+                            self.type_error_with_fix_it(
+                                message,
+                                left.span,
+                                TypeErrorKind::InvalidBinaryOp,
+                                super::FixIt {
+                                    span: Span {
+                                        length: end.saturating_sub(left.span.offset),
+                                        ..left.span
+                                    },
+                                    replacement: format!("{l}.repeat({r})"),
+                                },
+                            );
+                        } else {
+                            self.type_error(message, left.span, TypeErrorKind::InvalidBinaryOp);
+                        }
+                        return Type::Error;
+                    }
                     if let Some(fix) = self.str_concat_left_fix(op, left, &left_ty, &right_ty) {
                         // `Str + s`: the view is on the left (B-2026-11-03-11).
                         self.type_error_with_fix_it(
@@ -6472,6 +6526,24 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Bool
             }
             BinOp::And | BinOp::Or => {
+                // `x || d` on an `Option`: JavaScript's default. Kāra's is
+                // `x ?? d`, which differs where JavaScript's payload is
+                // falsy (`0`, `""`), so it is told (B-2026-11-24-8).
+                let optional = matches!(&left_ty, Type::Named { name, .. } if name == "Option" || name == "Result");
+                if matches!(op, BinOp::Or) && optional && right_ty != Type::Bool {
+                    self.type_error(
+                        format!(
+                            "logical operator requires 'bool', found '{}': `x || d` is \
+                             JavaScript's default for an absent value, and Kāra's is `x ?? d`, \
+                             which keeps a present `0` or `\"\"` where JavaScript's `||` would \
+                             not",
+                            type_display(&left_ty)
+                        ),
+                        left.span,
+                        TypeErrorKind::InvalidBinaryOp,
+                    );
+                    return Type::Error;
+                }
                 if left_ty != Type::Bool {
                     self.type_error(
                         format!(
@@ -7565,6 +7637,27 @@ impl<'a> super::TypeChecker<'a> {
             // An operand that is already `Error`, or still an unsolved
             // metavar, has nothing to say here — the first would double-report
             // and the second is not yet knowable.
+            // `p?.x ?? d`: TypeScript's optional chaining. Kāra's `?` returns
+            // from the function at a `None`, so the default is never reached
+            // (B-2026-11-24-8).
+            let chained = match &left.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::MethodCall { object, .. } => {
+                    matches!(object.kind, ExprKind::Question(_))
+                }
+                _ => false,
+            };
+            if chained && l_ty != Type::Error {
+                self.type_error(
+                    "`p?.x ?? d` is TypeScript's optional chaining: in Kāra, `p?` returns from \
+                     the function when `p` is `None`, so `??` has no absent value to replace; \
+                     the field or the default is `match p { Some(v) => v.x, None => d }`, \
+                     or `p.map(|v| v.x) ?? d`"
+                        .to_string(),
+                    *span,
+                    TypeErrorKind::NilCoalesceNotWrapped,
+                );
+                return Type::Error;
+            }
             if l_ty != Type::Error && !matches!(l_ty, Type::TypeVar(_)) {
                 self.type_error(
                     format!(

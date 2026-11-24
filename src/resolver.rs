@@ -2656,6 +2656,43 @@ impl<'a> Resolver<'a> {
                 None,
             ),
             "Rc" | "RefCell" => (RC_REFCELL_HELP, None),
+            // JavaScript's and Java's library names (B-2026-11-24-8): the
+            // nearest names by spelling are `Match` and `Interner`, which a
+            // fix would write in (the forms with an edit are mended at
+            // parse, so what arrives here is the rest).
+            "Math" => (
+                "undefined name 'Math': `Math` is JavaScript's and Java's: a Kāra number \
+                 has `max`, `min`, `abs`, `floor`, `ceil`, `sqrt` and `pow` as methods, \
+                 `a.max(b)`, `x.sqrt()`",
+                None,
+            ),
+            "Integer" | "Long" | "Double" | "Float" | "Boolean" | "Short" | "Byte" => (
+                "undefined name: Java's boxed number types are not Kāra's: a number is parsed \
+                 with `i64.parse(s)` (`i32`, `f64`, ..), a `Result` that is `Err` where \
+                 Java throws, and its limits are `i64.MAX` / `i64.MIN`",
+                None,
+            ),
+            "parseInt" | "parseFloat" | "Number" => (
+                "undefined name: JavaScript's `parseInt(s)` reads digits until the first \
+                 that is not one; Kāra's `i64.parse(s)` reads the whole text, a `Result` \
+                 that is `Err` for anything else (`f64.parse(s)` for a float)",
+                None,
+            ),
+            "console" | "System" | "Console" => (
+                "undefined name: JavaScript's `console`, Java's `System` and C#'s `Console` \
+                 are not Kāra's: a line is printed with `println(x)`, without one with \
+                 `print(x)`, to standard error with `eprintln(x)`",
+                None,
+            ),
+            "this" if self.table.lookup("self").is_some() => (
+                "`this` is Java's and JavaScript's: a Kāra method names its receiver `self`",
+                Some(Self::name_only_replacement(name, &span, "self")),
+            ),
+            "this" => (
+                "`this` is Java's and JavaScript's: a Kāra method names its receiver `self`, \
+                 its first parameter (`fn get(self) -> T`)",
+                None,
+            ),
             _ => return false,
         };
         self.errors.push(ResolveError {
@@ -2724,6 +2761,10 @@ impl<'a> Resolver<'a> {
             "list" => Some("Vec"),
             "dict" => Some("Map"),
             "set" => Some("Set"),
+            // Java's, C#'s and TypeScript's (B-2026-11-24-8).
+            "boolean" => Some("bool"),
+            "List" | "ArrayList" | "IList" => Some("Vec"),
+            "Dictionary" => Some("Map"),
             _ => crate::parser::rust_collection_rename(name),
         }
     }
@@ -2947,6 +2988,21 @@ impl<'a> Resolver<'a> {
             return;
         }
         if self.wildcard_hides_unresolved_names() {
+            return;
+        }
+        // TypeScript's `number` is a 64-bit float: whether `f64` or an
+        // integer type was meant, the program says, not the name.
+        if name == "number" {
+            self.errors.push(ResolveError {
+                message: "undefined type 'number': TypeScript's `number` is a 64-bit float, \
+                          Kāra's `f64`; a count or an index is an integer, `i64`"
+                    .to_string(),
+                span,
+                kind: ResolveErrorKind::UndefinedType,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
             return;
         }
         // Rust's `Box<T>` written as `Box[T]` (kata 2046): Kāra has no heap

@@ -1462,6 +1462,16 @@ impl super::Parser {
     }
 
     fn parse_prefix(&mut self) -> Option<Expr> {
+        self.mend_arrow_fn();
+        self.mend_conditional_operator();
+        self.mend_object_literal();
+        // Java's `switch (x) { case 1 -> "one"; .. }` as a value.
+        if self.ident_at(self.pos) == Some("switch")
+            && matches!(self.peek_token_ref_at(1), Token::LeftParen)
+            && self.at_switch_statement()
+        {
+            self.mend_go_switch();
+        }
         self.mend_python_lambda();
         self.mend_python_comprehension();
         self.mend_python_ternary();

@@ -87,6 +87,7 @@ mod method_column_analytics;
 mod method_column_elementwise;
 mod method_concat;
 mod py_go_habits;
+mod ts_java_habits;
 pub(crate) use py_go_habits::{PYTHON_IN, PYTHON_NOT_IN};
 mod method_copy_from_slice;
 mod method_identifier_receiver;
