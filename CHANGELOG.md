@@ -2341,6 +2341,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- An `Atomic` or `Mutex` field that is not `mut`, in a `sync` or `shared`
+  struct, no longer takes a run-time borrow flag: its methods take a
+  borrowed `self`, so the flag could never trip, and each access through a
+  handle paid an acquire and a release. A loop bumping a `sync` struct's
+  `Atomic` 30M times (locking its `Mutex` every eighth) runs in about 810 ms
+  rather than 970; `karac explain` shows the fields unflagged
+  (B-2026-11-24-27).
 - `karac check` of a program with a comptime-backed derive (`Serialize`,
   `Deserialize`) is a third faster: the library's bodies are
   type-checked once, in the derive's evaluation, where they were checked

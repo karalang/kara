@@ -41,8 +41,8 @@ type FlagInsert = (usize, u8, FlagOp, Option<SourceInfo>);
 /// Inserts the borrow-flag operations into an elaborated `body`.
 /// `has_receiver` is the borrow checker's.
 /// `mut_field(adt, variant, index)` says whether a handle may write a
-/// field: a struct's (`variant` `None`) declared `mut`, or an `Atomic` or
-/// `Mutex`; an enum variant's that some body writes ([`written_payloads`]).
+/// field: a struct's (`variant` `None`) declared `mut`; an enum variant's
+/// that some body writes ([`written_payloads`]).
 pub fn insert_borrow_flags(
     body: &mut Body,
     tys: &TyInterner,

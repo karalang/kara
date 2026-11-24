@@ -442,8 +442,10 @@ fn lower_program_inner<'a>(
                     .map(|(i, _)| (s.name.clone(), i as u32))
             })
             .collect(),
-        // A non-`mut` `Atomic` or `Mutex` field may still be written through
-        // a handle (the type checker's `shared_struct_mut_field_names`).
+        // Only a `mut` field: a non-`mut` `Atomic` or `Mutex` changes through
+        // methods that take a borrowed `self` (design.md § `sync` types), so
+        // every access to it is a read, and a flag on it never trips
+        // (B-2026-11-24-27).
         writable_fields: program
             .items
             .iter()
@@ -455,11 +457,7 @@ fn lower_program_inner<'a>(
                 s.fields
                     .iter()
                     .enumerate()
-                    .filter(|(_, f)| {
-                        f.is_mut
-                            || matches!(&f.ty.kind, ast::TypeKind::Path(p)
-                                if matches!(p.segments.last().map(String::as_str), Some("Atomic" | "Mutex")))
-                    })
+                    .filter(|(_, f)| f.is_mut)
                     .map(|(i, _)| (s.name.clone(), i as u32))
             })
             .collect(),
@@ -34133,8 +34131,12 @@ pub fn borrow_flag_report(src: &str, name: &str) -> Result<Option<TypeFlags>, St
                     .contains(&(name.to_string(), fi as u32))
             };
             if !writable {
+                let synced = matches!(tys.kind(*t), crate::mir::ty::TyKind::Adt(a)
+                    if matches!(tys.adt(a).name.as_str(), "Atomic" | "Mutex"));
                 let why = if is_enum {
                     "no body writes it"
+                } else if synced {
+                    "not `mut`; its methods take a borrowed `self`"
                 } else {
                     "not `mut`"
                 };

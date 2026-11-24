@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 740 |
 | false-positive | 364 |
 | missing-feature | 251 |
-| perf | 200 |
+| perf | 201 |
 | other | 149 |
 | soundness | 128 |
 | miscompile | 107 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 890 |
-| mir | 326 |
+| mir | 327 |
 | mir-llvm | 323 |
 | cli | 298 |
 | parser | 155 |
@@ -122,6 +122,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-21 | 2026-11-24 | typecheck | medium | `Trait.method(p)` on a raw pointer calls the pointer's own method of that name instead of the trait's (`Show.is_null(p)` prints the inherent `is_null`) | — |
 | B-2026-11-24-22 | 2026-11-24 | typecheck | low | A qualified associated-type spelling `T.Add.Output` is refused only by an internal lowering error (E0516 'an expression whose type does not lower (Type(UnknownName("Output")))') | — |
 | B-2026-11-24-23 | 2026-11-24 | effect | low | E0400 for a call through a clause-less `dyn` field names the internal function `__dyn_every.T.t`, and its effect list's order changes from run to run | — |
+| B-2026-11-24-27 | 2026-11-24 | mir | low | A non-`mut` `Atomic` or `Mutex` field of a `sync` or `shared` struct takes a run-time borrow flag that can never trip: every access through a handle pays an acquire and a release | — |
 
 ### Relocated
 
