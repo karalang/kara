@@ -4267,6 +4267,9 @@ fn main() -> () {
         // The build in `built_core_pins_match_their_expected_output` runs
         // them with the library, through the same move and borrow checks.
         let needs_library = [
+            // The adaptors whose stored closure the effect pass traces are
+            // the library's `IterMap` and `IterFilterMap` (B-2026-11-23-19).
+            "effect_adaptor_closure_par_apart",
             // Which task captures move is the typechecker's core_taskgroup
             // table, built only under the library-source check
             // (B-2026-11-19-107).

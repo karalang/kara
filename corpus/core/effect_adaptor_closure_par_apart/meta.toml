@@ -1,0 +1,12 @@
+source = "core-semantics.md §12 (effect polymorphism needs no annotation)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "par"]
+class = "a"
+expected_from = "spec"
+rules = ["12", "11.2"]
+backends = []
+env = {}
+note = "B-2026-11-23-19: an iterator adaptor's call of the closure in its field has the closure's effects, traced to the closure the branch passed; before, it had every effect and the two pure branches were refused E0418. A printing closure is still refused (tests/par_adaptor_closures.rs). Neighbour of effect_vars_par_apart."
+bucket = "a"

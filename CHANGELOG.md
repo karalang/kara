@@ -2556,6 +2556,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()`,
+  `.filter(..).count()` or `.filter_map(..)` chain on their own local are
+  accepted. The adaptor's call of the closure in its field had every effect,
+  so the branches were refused E0418 (`unknown (IterMap[..].next: a call
+  through a value)`); it now has the closure's own effects, so a closure
+  that prints or writes a place another branch uses is still refused
+  (B-2026-11-23-19).
 - `h.r = b` and `t.0 = b` into a `ref String` field or tuple part borrow
   `b`, as the literal `Holder { r: b }` and `v[i] = b` do; `b` stays usable
   and is not written, moved or dropped while `h` is used (E0516). The

@@ -1,0 +1,26 @@
+// A lazy adaptor keeps the closure it is given in a field and calls it
+// from its `next` (`IterMap`, `IterFilter`, `IterFilterMap`). The call has
+// the closure's own effects (core semantics §12: effect polymorphism needs
+// no annotation), so two `par` branches that each run a pure chain over
+// their own local may run at once (§11.2).
+fn doubled(k: i64) -> i64 {
+    let v = [k, 2, 3];
+    v.iter().map(|x| x * 2).sum()
+}
+
+fn big(k: i64) -> i64 {
+    let v = [k, 2, 3];
+    v.iter().filter(|x| x > 1).count()
+}
+
+fn tens(k: i64) -> i64 {
+    let v = [k, 2, 3];
+    v.iter().filter_map(|x| if x > 1 { Some(x * 10) } else { None }).map(|x| x + 1).sum()
+}
+
+fn main() {
+    let (a, b) = par { doubled(1), doubled(2) };
+    let (c, d) = par { big(1), big(2) };
+    let (e, f) = par { tens(1), tens(2) };
+    println(f"{a} {b} {c} {d} {e} {f}");
+}

@@ -2905,9 +2905,11 @@ impl<'p> Analysis<'p> {
                 // A body whose clause names an effect variable calls the
                 // function values that can flow into the value it calls
                 // (design.md § Effect variables): a handler read out of
-                // `self` is one `self`'s caller put there.
+                // `self` is one `self`'s caller put there. So does a
+                // library adaptor's call of the closure in its field
+                // ([`Analysis::library_adaptor_call`]).
                 Some(k @ (Key::Param(..) | Key::Local(..)))
-                    if body.clause_names_var
+                    if (body.clause_names_var || self.library_adaptor_call(body, &k))
                         && func
                             .place()
                             .and_then(|p| declared_fn_value_effects(body, p))
@@ -2950,6 +2952,12 @@ impl<'p> Analysis<'p> {
                 None => Key::Any,
             }
         };
+        let stored_key = |i: usize| -> Key {
+            match args.get(i).and_then(Operand::place) {
+                Some(p) => place_key_in(body, defs, p, true),
+                None => Key::Any,
+            }
+        };
         let arg_fn = |i: usize| self.fn_value_effects(body, defs, args.get(i), summaries);
         // Observability adds no effect and conflicts with nothing
         // (design.md § Observability): `std.log`'s functions.
@@ -2978,14 +2986,14 @@ impl<'p> Analysis<'p> {
                     })
                     .collect();
                 if here.is_empty() {
-                    eff.union(substitute(callee, &arg_key, &arg_fn));
+                    eff.union(substitute_stored(callee, &arg_key, &stored_key, &arg_fn));
                 } else {
                     let mut rest = callee.clone();
                     for (s, idx, k) in here {
                         rest.slots.remove(s);
                         eff.union(self.slot_effects(idx, Some(s.dyn_ty), s.slot, k, summaries));
                     }
-                    eff.union(substitute(&rest, &arg_key, &arg_fn));
+                    eff.union(substitute_stored(&rest, &arg_key, &stored_key, &arg_fn));
                 }
             }
             return;
@@ -3434,6 +3442,19 @@ impl<'p> Analysis<'p> {
             })
             .collect();
         e
+    }
+
+    /// A library body calling the function value a field of one of its
+    /// parameters holds, or of a local it moved one into (`IterFilter.count`
+    /// takes `let mut it = self`): an iterator adaptor's closure
+    /// (`IterMap.f`, `IterFilter.pred`), which the code that made the
+    /// adaptor passed in.
+    /// It is traced as a stored call is under a clause naming an effect
+    /// variable, so `v.iter().map(f).sum()` has `f`'s effects rather than
+    /// every effect (B-2026-11-23-19).
+    fn library_adaptor_call(&self, body: &Body, k: &Key) -> bool {
+        matches!(k, Key::Param(_, path) | Key::Local(_, path) if path.len() == 1)
+            && super::providers::is_library(body, self.program.user_source_len)
     }
 
     /// The bodies that call `name` directly, each with the block of the
@@ -4164,6 +4185,17 @@ fn substitute(
     arg_key: &dyn Fn(usize) -> Key,
     arg_fn: &dyn Fn(usize) -> EffectSet,
 ) -> EffectSet {
+    substitute_stored(callee, arg_key, arg_key, arg_fn)
+}
+
+/// [`substitute`], with the keys of the values a stored call is made
+/// through taken from `stored_key`.
+fn substitute_stored(
+    callee: &EffectSet,
+    arg_key: &dyn Fn(usize) -> Key,
+    stored_key: &dyn Fn(usize) -> Key,
+    arg_fn: &dyn Fn(usize) -> EffectSet,
+) -> EffectSet {
     let mut out = EffectSet {
         unknown: callee.unknown,
         why: callee.why.clone(),
@@ -4185,7 +4217,10 @@ fn substitute(
             key: key(&e.key),
         });
     }
-    out.stored.extend(callee.stored.iter().map(key));
+    out.stored.extend(callee.stored.iter().map(|k| match k {
+        Key::Param(p, path) => extend_key(stored_key(*p as usize - 1), path),
+        k => k.clone(),
+    }));
     out.slots.extend(callee.slots.iter().map(|s| Slot {
         key: key(&s.key),
         ..s.clone()
@@ -4253,6 +4288,14 @@ fn single_defs(body: &Body) -> BTreeMap<u32, Place> {
 /// is `Any`, and so is a value reached only through a reference this body
 /// cannot trace.
 fn place_key(body: &Body, defs: &BTreeMap<u32, Place>, place: &Place) -> Key {
+    place_key_in(body, defs, place, false)
+}
+
+/// [`place_key`], except that a temporary it cannot trace further is
+/// named, as a local is, when `temps`: the value a call stores a function
+/// value into is often one (`v.iter().map(f)` hands `sum` a temporary),
+/// and [`Analysis::resolve_stored`] finds what flows into it.
+fn place_key_in(body: &Body, defs: &BTreeMap<u32, Place>, place: &Place, temps: bool) -> Key {
     let mut cur = place.clone();
     for _ in 0..32 {
         let Some(src) = defs.get(&cur.local.0) else {
@@ -4286,6 +4329,7 @@ fn place_key(body: &Body, defs: &BTreeMap<u32, Place>, place: &Place) -> Key {
     }
     match body.locals.get(root as usize).map(|d| &d.kind) {
         Some(LocalKind::User { .. }) => Key::Local(root, path),
+        Some(LocalKind::Temp) if temps => Key::Local(root, path),
         // A temporary we could not trace, or the return place.
         _ => Key::Any,
     }
