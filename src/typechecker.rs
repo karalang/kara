@@ -3907,6 +3907,11 @@ pub struct TypeChecker<'a> {
     /// closure) are checked, a read of one does not settle it, so the
     /// result's use fixes it (design.md §8 Literals, B-2026-11-11-61).
     pub(super) held_open_literals: Vec<TypeVarId>,
+    /// Unannotated closure parameters' fresh variables in the body being
+    /// checked, and the literals an operator made them share, held open
+    /// until the body ends (design.md §8 Type variables, B-2026-11-24-15).
+    pub(super) open_closure_param_vars: std::collections::HashSet<TypeVarId>,
+    pub(super) open_closure_param_literals: Vec<TypeVarId>,
     /// The tuple literal whose numbers [`Self::infer_element_open`] opens.
     pub(super) open_tuple_literal: Option<crate::ids::NodeId>,
     /// The values a closure checked against a return type its callee
@@ -5140,6 +5145,8 @@ impl<'a> TypeChecker<'a> {
             deferred_literal_compares: Vec::new(),
             open_literal_expr: None,
             held_open_literals: Vec::new(),
+            open_closure_param_vars: std::collections::HashSet::new(),
+            open_closure_param_literals: Vec::new(),
             open_tuple_literal: None,
             open_closure_values: FxHashSet::default(),
             closure_result_hints: FxHashMap::default(),

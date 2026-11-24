@@ -5222,6 +5222,33 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return None;
                 }
+                // A variable nothing has typed yet (an unannotated closure
+                // parameter, `|x| x + 1`) becomes the literal's, so it stays
+                // open for a later use in the body (`let y: i32 = f(2)`) and
+                // takes the default only at the end, as the literal would.
+                // Bound the other way, the literal's kind was lost and the
+                // parameter was `i64` by the closure's end (design.md §8
+                // Type variables; review-thread ruling 2026-11-24,
+                // B-2026-11-24-15).
+                let other = self.resolved_now(strip_refs_for_compare(&other));
+                if let Type::TypeVar(v) = other {
+                    if v != l
+                        && super::inference::literal_var_kind(v).is_none()
+                        && self.open_closure_param_vars.contains(&v)
+                    {
+                        let ok = super::inference::unify_types(
+                            &Type::TypeVar(v),
+                            &Type::TypeVar(l),
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        );
+                        if ok {
+                            self.held_open_literals.push(l);
+                            self.open_closure_param_literals.push(l);
+                        }
+                        return ok.then(|| result(l));
+                    }
+                }
                 super::inference::unify_types(
                     &Type::TypeVar(l),
                     &other,

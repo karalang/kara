@@ -7394,6 +7394,11 @@ impl<'a> super::TypeChecker<'a> {
                                 || ((literal_arg || literal_tuple_arg)
                                     && Self::result_carries_param(return_type, p))
                         }
+                        // A closure value's parameter nothing has typed yet
+                        // (`let f = |x| x; f(2)`) takes the literal's open
+                        // variable, so a later use fixes both
+                        // (B-2026-11-24-15).
+                        Type::TypeVar(_) => literal_arg,
                         _ => false,
                     } =>
                     {
@@ -8961,6 +8966,11 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn report_unsolved_call_vars(&mut self) {
+        // The body is done: the literals its closure parameters held open
+        // (B-2026-11-24-15) take their defaults through the final resolve.
+        let opened = std::mem::take(&mut self.open_closure_param_literals);
+        self.held_open_literals.retain(|h| !opened.contains(h));
+        self.open_closure_param_vars.clear();
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
         for (span, id) in std::mem::take(&mut self.unsolved_array_lens) {
             let unsolved = matches!(
@@ -17807,7 +17817,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// An unsuffixed number, its negation, or a tuple of them: what a tuple
     /// literal holds when its numbers are open with it (B-2026-11-10-40).
-    fn is_number_literal_tree(e: &Expr) -> bool {
+    pub(super) fn is_number_literal_tree(e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Integer(_, None) | ExprKind::Float(_, None) => true,
             ExprKind::Unary {
@@ -20644,9 +20654,13 @@ impl<'a> super::TypeChecker<'a> {
                         {
                             self.check_closure_param_annotation_against_seed(ann, seed, ty_expr);
                         }
-                        let ty = annotated
-                            .or(seeded)
-                            .unwrap_or_else(|| self.env.fresh_type_var());
+                        let ty = annotated.or(seeded).unwrap_or_else(|| {
+                            let v = self.env.fresh_type_var();
+                            if let Type::TypeVar(id) = v {
+                                self.open_closure_param_vars.insert(id);
+                            }
+                            v
+                        });
                         let bound = self.copy_item_param(&expr.span, i, p, ty.clone());
                         self.check_param_pattern_irrefutable(&p.pattern, &bound);
                         self.bind_pattern_types(&p.pattern, &bound);

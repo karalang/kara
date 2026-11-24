@@ -3889,9 +3889,29 @@ impl<'a> super::TypeChecker<'a> {
                 // closure literal's RECORDED type (`expr_types`) is resolved
                 // separately in `finalize_closure_expr_types` so codegen's
                 // `fn_value_typed_exprs` sees the solved param.
+                // A literal argument keeps its open variable, which the param
+                // then shares, so a later use in the body fixes both and the
+                // default comes only at the end of the body (design.md §8
+                // Type variables; review-thread ruling 2026-11-24,
+                // B-2026-11-24-15). Before, the literal was settled to `i64`
+                // here, and `let y: i32 = f(2)` was a narrowing.
                 for (param, arg) in params.iter().zip(args.iter()) {
                     if let Type::TypeVar(id) = resolve_type_var_top(param, &self.env.substitutions)
                     {
+                        if super::inference::literal_var_kind(id).is_some() {
+                            continue;
+                        }
+                        if Self::is_number_literal_tree(&arg.value) {
+                            let arg_ty = self.infer_expr_open(&arg.value);
+                            if let Some((lit, _)) = self.unbound_literal_var(&arg_ty) {
+                                self.env.substitutions.insert(id, Type::TypeVar(lit));
+                                continue;
+                            }
+                            if arg_ty != Type::Error && !matches!(arg_ty, Type::TypeVar(_)) {
+                                self.env.substitutions.insert(id, arg_ty);
+                            }
+                            continue;
+                        }
                         let arg_ty = self.infer_expr(&arg.value);
                         if arg_ty != Type::Error && !matches!(arg_ty, Type::TypeVar(_)) {
                             self.env.substitutions.insert(id, arg_ty);
