@@ -41,6 +41,7 @@ pub(super) struct Data {
     deque_front: FxHashMap<AllocId, usize>,
     snapshots: FxHashSet<AllocId>,
     bytes_snapshots: Vec<(Box<[u8]>, AllocId)>,
+    bytes_owned: FxHashMap<AllocId, (Box<[u8]>, AllocId)>,
     forgotten: Vec<Value>,
     arenas: i128,
     channels: Vec<Chan>,
@@ -797,6 +798,7 @@ fn install_data(it: &mut Interp<'_>, d: Data) {
         deque_front,
         snapshots,
         bytes_snapshots,
+        bytes_owned,
         forgotten,
         arenas,
         channels,
@@ -830,6 +832,7 @@ fn install_data(it: &mut Interp<'_>, d: Data) {
     it.deque_front = deque_front;
     it.snapshots = snapshots;
     it.bytes_snapshots = bytes_snapshots;
+    it.bytes_owned = bytes_owned;
     it.forgotten = forgotten;
     it.arenas = arenas;
     it.channels = channels;
@@ -867,6 +870,7 @@ fn extract_data(it: &mut Interp<'_>) -> Data {
         deque_front: take(&mut it.deque_front),
         snapshots: take(&mut it.snapshots),
         bytes_snapshots: take(&mut it.bytes_snapshots),
+        bytes_owned: take(&mut it.bytes_owned),
         forgotten: take(&mut it.forgotten),
         arenas: it.arenas,
         channels: take(&mut it.channels),

@@ -1016,6 +1016,7 @@ fn run_with(
         snapshot_bytes: 0,
         sweep_at: SWEEP_FLOOR,
         bytes_snapshots: Vec::new(),
+        bytes_owned: Default::default(),
         calls: 0,
         arenas: 0,
         channels: Vec::new(),
@@ -1788,6 +1789,14 @@ struct Interp<'a> {
     /// snapshot instead of a fresh copy (B-2026-10-29-38). A sweep keeps
     /// these.
     bytes_snapshots: Vec<(Box<[u8]>, AllocId)>,
+    /// The `bytes` snapshot of each `String` asked for its bytes, by the
+    /// String's box, with the text it copies (B-2026-11-21-51): asked
+    /// again unchanged, the String gets the same snapshot, and the
+    /// snapshot is freed with the String ([`Interp::free_slot`]), since no
+    /// view of a String's bytes outlives the String. A program working
+    /// inside a callback, where [`Interp::sweep_snapshots`] cannot run,
+    /// then holds one snapshot per live String rather than one per call.
+    bytes_owned: rustc_hash::FxHashMap<AllocId, (Box<[u8]>, AllocId)>,
     /// How many [`Interp::call`]s are running: the entry's, and one per
     /// call back into Kāra from a library method or a drop.
     calls: u32,
@@ -13909,6 +13918,26 @@ impl<'a> Interp<'a> {
                     lo: 0,
                     len: n,
                 };
+                // A String's own snapshot lives as long as the String.
+                if let Some(owner) = self.string_owner(&args[0]) {
+                    if let Some((text, id)) = self.bytes_owned.get(&owner) {
+                        if **text == *s.as_bytes() {
+                            return Ok(slice(*id));
+                        }
+                    }
+                    let bytes: Vec<Value> = s.bytes().map(|b| Value::Int(b as i128)).collect();
+                    let Value::Box(id) = self.alloc_box("bytes", Value::Agg(bytes)) else {
+                        unreachable!("alloc_box makes a box")
+                    };
+                    // A snapshot, so a String never freed (a literal's)
+                    // keeps it to exit as any other; the sweep leaves it
+                    // while it is the String's own. The String changed
+                    // since: its old snapshot is the sweep's, freed once
+                    // nothing refers to it.
+                    self.snapshots.insert(id);
+                    self.bytes_owned.insert(owner, (s.as_bytes().into(), id));
+                    return Ok(slice(id));
+                }
                 if let Some((_, id)) = self
                     .bytes_snapshots
                     .iter()
@@ -14240,6 +14269,28 @@ impl<'a> Interp<'a> {
             .entry(text)
             .or_insert_with_key(|t| t.clone().into_bytes().into_boxed_slice());
         Ok(kept.as_ptr() as i128)
+    }
+
+    /// The box of the `String` that `v` is or refers to; `None` for text
+    /// with no box of its own (a `Str` view, a literal).
+    fn string_owner(&mut self, v: &Value) -> Option<AllocId> {
+        match v {
+            Value::Box(id) => Some(*id),
+            Value::Ref(a) => match self.slot(a).ok()? {
+                Value::Box(id) => Some(id),
+                _ => None,
+            },
+            _ => None,
+        }
+        .filter(|id| {
+            matches!(
+                self.heap.get(id.0 as usize),
+                Some(Some(HeapObj {
+                    value: Value::Str(_),
+                    ..
+                }))
+            )
+        })
     }
 
     fn string_at(&mut self, v: &Value) -> R<String> {
@@ -17758,6 +17809,10 @@ impl<'a> Interp<'a> {
         if self.heap[id.0 as usize].take().is_some() {
             self.free.push(id.0);
         }
+        if let Some((_, snap)) = self.bytes_owned.remove(&id) {
+            self.snapshots.remove(&snap);
+            self.free_slot(snap);
+        }
     }
 
     fn release(&mut self, id: AllocId, ty: Ty, a: AdtId) -> R<()> {
@@ -21014,6 +21069,8 @@ impl<'a> Interp<'a> {
                 _ => {}
             }
         }
+        // A String's own snapshot goes with the String ([`Interp::bytes_owned`]).
+        used.extend(self.bytes_owned.values().map(|(_, k)| *k));
         let dead: Vec<AllocId> = self
             .snapshots
             .iter()

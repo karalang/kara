@@ -2380,6 +2380,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   falling order take 1.6 s rather than 15 s (kata 2364), and 4×10^5 random
   inserts 4.3 s rather than 313 s; iteration and drops stay in key order
   (B-2026-11-21-50).
+- On the MIR interpreter, `String.bytes()` keeps one snapshot per String,
+  reused while the text is unchanged and freed with the String. Each call
+  used to copy the text into a snapshot that only a sweep between calls
+  back into Kāra could free, so work done inside `map` closures grew
+  without bound: kata 2416's iter arm was killed past 5 GB and now runs in
+  76 MB (B-2026-11-21-51).
 - An `Atomic` or `Mutex` field that is not `mut`, in a `sync` or `shared`
   struct, no longer takes a run-time borrow flag: its methods take a
   borrowed `self`, so the flag could never trip, and each access through a

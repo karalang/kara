@@ -152,10 +152,10 @@ fn main() -> () {
         drop(_8) -> bb29;
     }
     bb29: {
-        drop(_7) -> bb30;
+        drop(_7) -> bb31;
     }
     bb30: {
-        drop(_6) -> bb31;
+        drop(_6) -> bb38;
     }
     bb31: {
         drop(_5) -> bb32;
@@ -179,7 +179,7 @@ fn main() -> () {
         drop(_27) -> bb37;
     }
     bb37: {
-        drop(_26) -> bb38;
+        drop(_26) -> bb30;
     }
     bb38: {
         _0 = const ();
