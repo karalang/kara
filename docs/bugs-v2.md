@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 731 |
+| diagnostics | 732 |
 | false-positive | 360 |
 | missing-feature | 248 |
 | perf | 200 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 325 |
 | mir-llvm | 323 |
 | cli | 294 |
-| parser | 153 |
+| parser | 154 |
 | ownership | 134 |
 | runtime | 109 |
 | interp | 101 |
@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
 | B-2026-11-21-50 | 2026-11-21 | interp | low | The MIR interpreter's `SortedMap` and `SortedSet` shift every later entry on an insert, so a run of `10^5` inserts each at the front is quadratic under `karac __mir-run`: 14 to 15 s for an arm of katas 2350, 2364 and 2365 that the compiled lanes run in a fraction of a second | — |
 | B-2026-11-21-51 | 2026-11-21 | interp | medium | The MIR interpreter keeps every `String.bytes()` snapshot made inside a callback until control returns to `main`'s own frame: kata 2416's iter arm, a `bytes().iter().zip(..)` per pair of words inside `map` closures, grows about 1 GB a second under `karac __mir-run` and is killed (exit 137); the compiled lanes run it in a second | — |
-| B-2026-11-22-36 | 2026-11-22 | typecheck+runtime | low | `String` / `Str` has no `repeat(n)`: Python's `"ab" * 3`, Rust's `"ab".repeat(3)` and Go's `strings.Repeat` have no Kāra method, so a newcomer writes a push_str loop | — |
 | B-2026-11-23-6 | 2026-11-23 | cli | low | `karac check` of a three-line file with one `#[derive(Serialize)]` still takes 432 ms, 216 of it the derive's evaluation: it type-checks about 800 library bodies to run 33 | — |
 | B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
 | B-2026-11-23-19 | 2026-11-23 | mir | medium | Two `par` branches that each run a pure `v.iter().map(|x| x * 2).sum()` (or `.filter(|x| *x > 1).count()`) on their own local are refused E0418 as conflicting on `unknown (IterMap[VecIter[i64], Fn(ref i64) -> i64, i64].next: a call through a value)`, though the closure is visible and pure; `fold`, `sort_by`, `max_by_key` and `Option.map` with the same closure are accepted | — |
@@ -2164,6 +2163,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-22-33 | typecheck | low | §4 wording roll-up: E0221 called a default-visibility type 'private', module-cycle and walker messages said '<crate root>', a block `pub const` got a… | ccf46cf6e1 |
 | B-2026-11-22-34 | cli | medium | kara.toml accepted a `[package].name` no dependent can import (`"my app"`, `"fn"`), a non-list `authors`, `[build] targets = []`, and an unknown top-… | ccf46cf6e1 |
 | B-2026-11-22-35 | typecheck | medium | `#[target(gpu)]` / `#[target(wasm_browser)]` made `karac check` of a single file run gpu and wasm_browser passes: a hello world with one gpu-gated it… | ccf46cf6e1 |
+| B-2026-11-22-36 | typecheck+runtime | low | `String.repeat(n)` was already native (since d689917dc9) but undocumented, and `"ab" * 3` drew no fix naming it: the gap was strings.md and the `s *… | 7de596f5d1 |
 | B-2026-11-22-37 | typecheck | medium | A type alias whose generic arguments name `dyn Trait` (`type Shapes = Vec[dyn Shape]`, `type OptShape = Option[dyn Shape]`) is refused as "`Shape` is… | 4df624fefe |
 | B-2026-11-22-38 | typecheck | low | A missing call-site `mut` marker (E0218) said "call with fresh binding requires a `mut` marker at this argument to permit the mutation | 4df624fefe |
 | B-2026-11-22-39 | cli | low | `karac build` prints no effect summary in the terminal, though design.md §12 says "After a successful build the compiler prints the program's effect… | 1e76df3b84 |
@@ -2222,6 +2222,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-4 | typecheck+cli | medium | A closure `\|x\| { let mut x = x; let mut s = 0; while x > 0 { s += x % 10; x /= 10; } s }` summed into an `i32` was refused (`s` is an `i64`) with no… | 7147469257 |
 | B-2026-11-24-5 | cli | low | `karac doc` shows no effect clause for a `pub` method that declares none, while a `pub` free fn with none shows its inferred set | 75d65ecd56 |
 | B-2026-11-24-6 | cli | low | kara-lsp hover on a function shows its bare `Type` (drops `escaping`, shows `MutFn` as `Fn`, no parameter names), nothing on its declaration's name,… | 75d65ecd56 |
+| B-2026-11-24-8 | parser | low | TypeScript/JavaScript and Java/C# first-day habits had no Kāra form or a misleading one: `===`, template literals, `console.log`/`System.out.println`… | 7de596f5d1 |
 
 </details>
 
