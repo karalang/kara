@@ -119,7 +119,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-23-14 | 2026-11-23 | resolver+cli | low | E0113 names one edit and carries no fix: `import std.io.{File as F};` says 'import it as `File`', and `karac fix` cannot drop the `as F` and rename the alias's uses. To be fixed when the alias it names exists (review-thread ruling 2026-11-23) | — |
 | B-2026-11-23-75 | 2026-11-23 | cli | low | `karac explain` reports no borrow-flag total for a `shared` type, which design.md § Shared types says it does | — |
 | B-2026-11-24-7 | 2026-11-24 | typecheck | low | A built-in type's method named as a value is refused by the checker: `[1].iter().map(i64.abs)` says "no associated constant `abs` on `i64`", `.map(Str.to_string)` and `.map(String.len)` say "no associated function", where design.md § Function values makes an unbound method a function whose first parameter is the receiver (a user type's work) | — |
-| B-2026-11-24-10 | 2026-11-24 | effect+cli | medium | `[package].public_effects = "inferred"` (design.md § Inference and declarations) is documented and unimplemented: the key draws an unknown-key notice, every package is checked as `declared`, and the checker's own Inferred policy charged a caller of a clause-less `pub fn` none of its effects | — |
 
 ### Relocated
 
@@ -2225,6 +2224,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-6 | cli | low | kara-lsp hover on a function shows its bare `Type` (drops `escaping`, shows `MutFn` as `Fn`, no parameter names), nothing on its declaration's name,… | 75d65ecd56 |
 | B-2026-11-24-8 | parser | low | TypeScript/JavaScript and Java/C# first-day habits had no Kāra form or a misleading one: `===`, template literals, `console.log`/`System.out.println`… | 7de596f5d1 |
 | B-2026-11-24-9 | typecheck+cli | medium | LeetCode's Rust template counting with `*count.entry(x).or_insert(0) += 1` and then `left * c` over `count.values()` into an `i32` was refused (`c` i… | 2b45dbdb27 |
+| B-2026-11-24-10 | effect+cli | medium | `[package].public_effects = "inferred"` (design.md § Inference and declarations) is documented and unimplemented: the key draws an unknown-key notice… | 8bd94a5dcd |
 
 </details>
 
