@@ -7944,7 +7944,31 @@ impl<'a> super::TypeChecker<'a> {
     /// and (for Result) that error types match exactly or convert via `From`.
     /// Returns the unwrapped success type (`T`).
     pub(super) fn infer_question(&mut self, inner: &Expr, span: &Span) -> Type {
+        // `with_provider[R](p, || Ok(v))?` in a function returning
+        // `Result[_, E]`: the closure's open `Err` side is the function's
+        // `E`, which `?` hands it to (B-2026-11-23-20). A closure's own `?`
+        // answers to that closure, so only a function's body seeds it.
+        let outer_wp = self.pending_wp_expected.take();
+        if self.closure_return_types.is_empty() && super::exprs::is_with_provider_call(inner) {
+            if let Some(Type::Named { name, args }) = self
+                .current_return_type
+                .clone()
+                .map(|t| self.resolved_now(&t))
+            {
+                if name == "Result" && args.len() == 2 {
+                    let payload = self.env.fresh_type_var();
+                    self.pending_wp_expected = Some((
+                        SpanKey::from_span(&inner.span),
+                        Type::Named {
+                            name,
+                            args: vec![payload, args[1].clone()],
+                        },
+                    ));
+                }
+            }
+        }
         let inner_ty = self.infer_expr(inner);
+        self.pending_wp_expected = outer_wp;
         if inner_ty == Type::Error {
             return Type::Error;
         }

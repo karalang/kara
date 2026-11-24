@@ -5836,7 +5836,15 @@ impl<'a> super::TypeChecker<'a> {
                     Some((SpanKey::from_span(&expr.span), expected.clone()));
             }
         }
+        let outer_wp = self.pending_wp_expected.take();
+        if *expected != Type::Error
+            && expectation_is_concrete(expected)
+            && is_with_provider_call(expr)
+        {
+            self.pending_wp_expected = Some((SpanKey::from_span(&expr.span), expected.clone()));
+        }
         let mut actual = self.infer_expr(expr);
+        self.pending_wp_expected = outer_wp;
         self.pending_expected_call_return = None;
         self.pending_expected_call_payload = None;
         // An enclosing method call still waiting for its own expectation
@@ -22601,4 +22609,21 @@ fn fn_reached_for_bound<'t>(
         "MutFn" | "OnceFn" => Some(inner),
         _ => None,
     }
+}
+
+/// `with_provider[R](p, f)`: a call of the indexed `with_provider` form
+/// with two arguments.
+pub(super) fn is_with_provider_call(expr: &Expr) -> bool {
+    let ExprKind::Call { callee, args, .. } = &expr.kind else {
+        return false;
+    };
+    let ExprKind::Index { object, .. } = &callee.kind else {
+        return false;
+    };
+    args.len() == 2
+        && match &object.kind {
+            ExprKind::Identifier(n) => n == "with_provider",
+            ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
+            _ => false,
+        }
 }

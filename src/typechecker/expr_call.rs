@@ -932,6 +932,64 @@ impl<'a> super::TypeChecker<'a> {
     /// gate for committing a `with_provider` call to its closure's return
     /// type (B-2026-07-31-20). Conservative on unknown container shapes
     /// (defaults to concrete for leaf scalars and unmodeled variants).
+    /// `got`, a `with_provider` closure's return type, with each part it
+    /// leaves open (an unsolved variable, or a parameter of a signature the
+    /// closure's `Ok(v)` / `Err(e)` came from) taken from `want`, the type
+    /// the call is checked against; `None` where the two disagree on a part
+    /// `got` decides (B-2026-11-23-20).
+    fn wp_fill_open(&self, want: &Type, got: &Type) -> Option<Type> {
+        let got = self.resolved_now(got);
+        if matches!(got, Type::TypeVar(_))
+            || (matches!(got, Type::TypeParam(_)) && self.mentions_foreign_param(&got))
+        {
+            return Self::wp_ret_is_fully_concrete(want, &self.env.substitutions)
+                .then(|| want.clone());
+        }
+        match (want, &got) {
+            (Type::Named { name: a, args: wa }, Type::Named { name: b, args: ga })
+                if a == b && wa.len() == ga.len() =>
+            {
+                let args = wa
+                    .iter()
+                    .zip(ga)
+                    .map(|(w, g)| self.wp_fill_open(w, g))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Type::Named {
+                    name: a.clone(),
+                    args,
+                })
+            }
+            (Type::Tuple(ws), Type::Tuple(gs)) if ws.len() == gs.len() => ws
+                .iter()
+                .zip(gs)
+                .map(|(w, g)| self.wp_fill_open(w, g))
+                .collect::<Option<Vec<_>>>()
+                .map(Type::Tuple),
+            _ => {
+                let mut subs = self.env.substitutions.clone();
+                let mut consts = self.env.const_substitutions.clone();
+                (Self::wp_ret_is_fully_concrete(&got, &subs)
+                    && super::inference::unify_types(want, &got, &mut subs, &mut consts))
+                .then_some(got)
+            }
+        }
+    }
+
+    /// `ty` with each parameter it leaves open written `_`, as a message
+    /// shows an undecided part.
+    fn wp_open_shown(&self, ty: &Type) -> Type {
+        let ty = self.resolved_now(ty);
+        match ty {
+            Type::TypeParam(_) if self.mentions_foreign_param(&ty) => Type::TypeParam("_".into()),
+            Type::Named { name, args } => Type::Named {
+                name,
+                args: args.iter().map(|a| self.wp_open_shown(a)).collect(),
+            },
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| self.wp_open_shown(t)).collect()),
+            other => other,
+        }
+    }
+
     fn wp_ret_is_fully_concrete(
         ty: &Type,
         subs: &rustc_hash::FxHashMap<super::TypeVarId, Type>,
@@ -1748,7 +1806,95 @@ impl<'a> super::TypeChecker<'a> {
                     // and an open one typed the call `Error`
                     // (B-2026-11-11-86).
                     let ret = resolve_type_var_top(return_type, &self.env.substitutions);
-                    let ret = self.settle_literals(&ret);
+                    let mut ret = self.settle_literals(&ret);
+                    // A call checked against a type (a function's tail, an
+                    // annotated `let`) takes the open side of `Ok(v)` from it
+                    // (B-2026-11-23-20).
+                    if !Self::wp_ret_is_fully_concrete(&ret, &self.env.substitutions) {
+                        if let Some((at, want)) = self.pending_wp_expected.clone() {
+                            if at == crate::resolver::SpanKey::from_span(span) {
+                                let filled = self.wp_fill_open(&want, &ret);
+                                if filled.is_none() {
+                                    // The closure decides a part the
+                                    // slot disagrees with (`|| Ok("s")`
+                                    // where `Result[i64, String]` is
+                                    // wanted); said here, where MIR would
+                                    // only meet an untyped call.
+                                    let mut tail: &Expr = &args[1].value;
+                                    if let ExprKind::Closure { body, .. } = &tail.kind {
+                                        tail = body;
+                                    }
+                                    while let ExprKind::Block(b) = &tail.kind {
+                                        match b.final_expr.as_deref() {
+                                            Some(e) => tail = e,
+                                            None => break,
+                                        }
+                                    }
+                                    let shown = self.wp_open_shown(&ret);
+                                    self.type_error(
+                                        format!(
+                                            "expected '{}', found '{}': the closure \
+                                             `with_provider` runs gives this, and the call \
+                                             gives what its closure gives",
+                                            type_display(&want),
+                                            type_display(&shown),
+                                        ),
+                                        tail.span,
+                                        TypeErrorKind::TypeMismatch,
+                                    );
+                                }
+                                if let Some(filled) = filled {
+                                    let mut subs = self.env.substitutions.clone();
+                                    let mut consts = self.env.const_substitutions.clone();
+                                    if super::inference::unify_types(
+                                        &filled,
+                                        &ret,
+                                        &mut subs,
+                                        &mut consts,
+                                    ) {
+                                        self.env.substitutions = subs;
+                                        self.env.const_substitutions = consts;
+                                    }
+                                    ret = filled;
+                                    // The closure and its tail are typed
+                                    // with it too: MIR reads both.
+                                    let closure = &args[1].value;
+                                    let typed_closure = match &clo_ty {
+                                        Type::Function {
+                                            params, cross_task, ..
+                                        } => Some(Type::Function {
+                                            params: params.clone(),
+                                            return_type: Box::new(ret.clone()),
+                                            cross_task: *cross_task,
+                                        }),
+                                        Type::OnceFunction {
+                                            params, cross_task, ..
+                                        } => Some(Type::OnceFunction {
+                                            params: params.clone(),
+                                            return_type: Box::new(ret.clone()),
+                                            cross_task: *cross_task,
+                                        }),
+                                        _ => None,
+                                    };
+                                    if let Some(t) = typed_closure {
+                                        self.record_expr_type(&closure.span, &t);
+                                        self.record_node_type(closure.id, &t);
+                                    }
+                                    if let ExprKind::Closure { body, .. } = &closure.kind {
+                                        let mut tail: &Expr = body;
+                                        while let ExprKind::Block(b) = &tail.kind {
+                                            match b.final_expr.as_deref() {
+                                                Some(e) => tail = e,
+                                                None => break,
+                                            }
+                                        }
+                                        self.record_expr_type(&tail.span, &ret);
+                                        self.record_node_type(tail.id, &ret);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Only commit to the closure's return type when it is
                     // fully concrete. A bare `Ok(v)` tail leaves the Err
                     // side an unbound param (`Result[i64, E]`); committing

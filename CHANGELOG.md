@@ -1069,6 +1069,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   function named as a value that is not lowered says which closure to write.
   `karac run --interp` reads a borrowed `String` in `String.from(t)`; it
   refused it while the compiled program copied it (B-2026-11-20-151).
+- `with_provider[R](p, || Ok(v))` checked against a `Result` (a function's
+  tail, an annotated `let`, or the operand of `?` in a function returning
+  `Result[_, E]`) takes the `Err` side its closure leaves open from there.
+  Every such call was refused with "a type that failed to check is not
+  lowered yet" (E0516), a valid program and the provider-escape case alike,
+  where the escape now gets E0600 alone. A closure whose payload disagrees
+  with the slot (`|| Ok("s")` for a `Result[i64, String]`) is an E0200 at
+  its tail (B-2026-11-23-20).
+
 - In a trait default body that two impls inherit, a method call that leaves
   out a defaulted argument takes its own callee's default. Every copy of the
   body took the default of the method the last impl's copy calls: with

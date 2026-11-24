@@ -4301,6 +4301,11 @@ pub struct TypeChecker<'a> {
     /// it to no one rather than to the first generic call inside its
     /// arguments (B-2026-10-29-5).
     pub(super) pending_expected_call_return: Option<(SpanKey, Type)>,
+    /// The type a `with_provider[R](p, f)` call is checked against, keyed by
+    /// the call's span: a closure whose `Ok(v)` tail leaves the `Err` side
+    /// open takes it from here, and the call is typed rather than left
+    /// `Error` for MIR to refuse (B-2026-11-23-20).
+    pub(super) pending_wp_expected: Option<(SpanKey, Type)>,
     /// B-2026-08-08-7 — the `Result`-wrapped expected type for the RECEIVER of a
     /// `Coll.try_with_capacity(n).unwrap()`. Set by `check_expr` immediately
     /// before that method call's `infer_expr` and TAKEN by `infer_method_call`
@@ -5244,6 +5249,7 @@ impl<'a> TypeChecker<'a> {
             optional_chain_lowering: FxHashMap::default(),
             method_unwrap_err_types: FxHashMap::default(),
             pending_expected_call_return: None,
+            pending_wp_expected: None,
             pending_unwrap_receiver_expectation: None,
             pending_expected_call_payload: None,
             pending_expected_method_return: None,
