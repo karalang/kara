@@ -1,1 +1,1 @@
-error[E_DEFERRED_TRACK]: source.kara:1:41: `impl invariant` on `Counter` is not available: struct invariants are contracts, which are in the verification track (deferred.md § Contracts) and not in 0.8. Check the property where the value is built, in a constructor
+error[E_DEFERRED_TRACK]: source.kara:1:41: `impl invariant` on `Counter` is not available: struct invariants are contracts, which are in the verification track (deferred.md § Contracts) and not in 0.8

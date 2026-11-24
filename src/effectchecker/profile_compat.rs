@@ -117,7 +117,30 @@ impl super::EffectChecker<'_> {
                 subtype_trace: None,
                 replacement: None,
                 undeclared: None,
+                help: Some(profile_help(&tagged.origin, &effect_str, &forbidding)),
             });
         }
     }
+}
+
+/// E_PROFILE_INCOMPATIBLE_EFFECT's help: where the effect comes from, and
+/// the two edits (take the operation out, or drop the profile). Which is
+/// right is the author's call, so neither is applied.
+fn profile_help(
+    origin: &crate::effectchecker::EffectOrigin,
+    effect: &str,
+    forbidding: &[&str],
+) -> String {
+    let at = match origin {
+        crate::effectchecker::EffectOrigin::Direct(span) => {
+            format!("the operation at {}:{}", span.line, span.column)
+        }
+        crate::effectchecker::EffectOrigin::Callee { fn_name, span } => {
+            format!("the call to `{fn_name}` at {}:{}", span.line, span.column)
+        }
+    };
+    format!(
+        "`{effect}` comes from {at}: take it out of this function, or drop `{}` from its `#[profile(...)]`",
+        forbidding.join("`, `")
+    )
 }

@@ -134,6 +134,7 @@ impl super::EffectChecker<'_> {
                 subtype_trace: None,
                 replacement: None,
                 undeclared: None,
+                help: None,
             });
         }
     }

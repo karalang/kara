@@ -212,7 +212,11 @@ impl<'a> super::Resolver<'a> {
                         .to_string(),
                     span: attr.span,
                     kind: ResolveErrorKind::DeprecatedOnImpl,
-                    suggestion: None,
+                    suggestion: Some(
+                        "move the `#[deprecated(...)]` onto each method of the block that is \
+                         deprecated"
+                            .to_string(),
+                    ),
                     replacement: None,
                     stub_hint: None,
                 });
@@ -236,8 +240,12 @@ impl<'a> super::Resolver<'a> {
                         .to_string(),
                     span: attr.span,
                     kind: ResolveErrorKind::DeprecatedOnField,
-                    suggestion: None,
-                    replacement: None,
+                    suggestion: Some(
+                        "remove the attribute, and say in the field's doc comment that it is \
+                         deprecated"
+                            .to_string(),
+                    ),
+                    replacement: delete_attribute(attr),
                     stub_hint: None,
                 });
             }
@@ -273,8 +281,8 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::TrackCallerInvalidTarget,
-                    suggestion: None,
-                    replacement: None,
+                    suggestion: Some("remove the attribute".to_string()),
+                    replacement: delete_attribute(attr),
                     stub_hint: None,
                 });
             }
@@ -309,8 +317,8 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::GpuInvalidTarget,
-                    suggestion: None,
-                    replacement: None,
+                    suggestion: Some("remove the attribute".to_string()),
+                    replacement: delete_attribute(attr),
                     stub_hint: None,
                 });
             }
@@ -346,6 +354,9 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::CodegenHintInvalidTarget,
+                    // The impl-block case has its own fix (the hint moved
+                    // onto each method, B-2026-11-21-74), and a struct's is
+                    // left to the author.
                     suggestion: None,
                     replacement: None,
                     stub_hint: None,
@@ -370,8 +381,8 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::CodegenHintOnExternDecl,
-                    suggestion: None,
-                    replacement: None,
+                    suggestion: Some("remove the attribute".to_string()),
+                    replacement: delete_attribute(attr),
                     stub_hint: None,
                 });
             }
@@ -395,8 +406,8 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::ProfileInvalidTarget,
-                    suggestion: None,
-                    replacement: None,
+                    suggestion: Some("remove the attribute".to_string()),
+                    replacement: delete_attribute(attr),
                     stub_hint: None,
                 });
             }
@@ -422,8 +433,8 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::ProfileInvalidTarget,
-                    suggestion: None,
-                    replacement: None,
+                    suggestion: Some("remove the attribute".to_string()),
+                    replacement: delete_attribute(attr),
                     stub_hint: None,
                 });
             }
@@ -491,8 +502,18 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::NonExhaustiveInvalidTarget,
-                    suggestion: None,
-                    replacement: None,
+                    // A private type could be made `pub` instead, so only
+                    // the other positions take the deletion as a fix.
+                    suggestion: Some(if target_kind.starts_with("private ") {
+                        "make the type `pub`, or remove the attribute".to_string()
+                    } else {
+                        "remove the attribute".to_string()
+                    }),
+                    replacement: if target_kind.starts_with("private ") {
+                        None
+                    } else {
+                        delete_attribute(attr)
+                    },
                     stub_hint: None,
                 });
             }
@@ -527,8 +548,8 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::CompilerBuiltinReserved,
-                    suggestion: None,
-                    replacement: None,
+                    suggestion: Some("remove the attribute".to_string()),
+                    replacement: delete_attribute(attr),
                     stub_hint: None,
                 });
             }
@@ -2307,4 +2328,15 @@ impl<'a> super::Resolver<'a> {
         }
         false
     }
+}
+
+/// The machine fix of an attribute that does nothing where it is written:
+/// delete it. The resolver sees spans, not source, so the attribute's line
+/// is left blank, as `E_UNION_NON_EXHAUSTIVE_FORBIDDEN`'s fix leaves it.
+fn delete_attribute(attr: &Attribute) -> Option<Box<crate::resolver::TextEdit>> {
+    Some(Box::new(crate::resolver::TextEdit {
+        offset: attr.span.offset,
+        length: attr.span.length,
+        replacement: String::new(),
+    }))
 }

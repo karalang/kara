@@ -506,8 +506,15 @@ fn report_helpers(attrs: &[Attribute], site: HelperSite, errors: &mut Vec<Resolv
             ),
             span: attr.span,
             kind: ResolveErrorKind::HelperAttributeInvalidPosition,
-            suggestion: None,
-            replacement: None,
+            // It does nothing here, so deleting it changes nothing.
+            suggestion: Some(format!(
+                "remove the attribute, or move it to where its derive reads it: {valid_at}"
+            )),
+            replacement: Some(Box::new(crate::resolver::TextEdit {
+                offset: attr.span.offset,
+                length: attr.span.length,
+                replacement: String::new(),
+            })),
             stub_hint: None,
         });
     }
@@ -987,7 +994,7 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
                 ),
                 span: conflict_span,
                 kind: ResolveErrorKind::QueryResolutionConflict,
-                suggestion: None,
+                suggestion: Some(format!("remove `#[{a}]` or `#[{b}]`")),
                 replacement: None,
                 stub_hint: None,
             });

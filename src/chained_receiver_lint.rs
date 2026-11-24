@@ -175,6 +175,7 @@ fn diagnostic(receiver: &Expr, ctx: &str) -> TypeError {
         class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
         expected: None,
         got: None,
+        help: None,
     }
 }
 

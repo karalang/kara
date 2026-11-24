@@ -144,14 +144,7 @@ impl<'a> super::TypeChecker<'a> {
         // B-2026-09-23-2: a borrowed bool reads as its value here.
         let cond_ty = super::expr_ops::deref_bool_scalar(self.infer_expr(condition));
         if cond_ty != Type::Bool && cond_ty != Type::Error {
-            self.type_error(
-                format!(
-                    "condition must be 'bool', found '{}'",
-                    type_display(&cond_ty)
-                ),
-                condition.span,
-                TypeErrorKind::ConditionNotBool,
-            );
+            self.condition_not_bool("condition", &cond_ty, condition.span);
         }
         let then_ty = self.check_block_against(then_block, expected);
         if let Some(else_expr) = else_branch {
@@ -305,14 +298,7 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-09-23-2: a borrowed bool reads as its value here.
                 let guard_ty = super::expr_ops::deref_bool_scalar(self.infer_expr(guard));
                 if guard_ty != Type::Bool && guard_ty != Type::Error {
-                    self.type_error(
-                        format!(
-                            "match guard must be 'bool', found '{}'",
-                            type_display(&guard_ty)
-                        ),
-                        guard.span,
-                        TypeErrorKind::ConditionNotBool,
-                    );
+                    self.condition_not_bool("match guard", &guard_ty, guard.span);
                 }
             }
             let arm_ty = self.check_expr(&arm.body, expected);
@@ -714,14 +700,7 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-09-23-2: a borrowed bool reads as its value here.
                 let guard_ty = super::expr_ops::deref_bool_scalar(self.infer_expr(guard));
                 if guard_ty != Type::Bool && guard_ty != Type::Error {
-                    self.type_error(
-                        format!(
-                            "match guard must be 'bool', found '{}'",
-                            type_display(&guard_ty)
-                        ),
-                        guard.span,
-                        TypeErrorKind::ConditionNotBool,
-                    );
+                    self.condition_not_bool("match guard", &guard_ty, guard.span);
                 }
             }
             // B-2026-09-25-8 — an earlier `Array` arm is a later bare
@@ -1524,13 +1503,23 @@ impl<'a> super::TypeChecker<'a> {
                             Some(s) => format!("consider renaming to `{s}`"),
                             None => "rename it to snake_case".to_string(),
                         };
-                        self.type_error(
+                        let renamed = crate::lexer::suggest_name_for_class(
+                            name,
+                            crate::lexer::IdentClass::Value,
+                        )
+                        .map_or_else(|| "a snake_case name".to_string(), |s| format!("`{s}`"));
+                        self.type_error_with_help(
                             format!(
                                 "`{name}` is Type-class but binding names must be \
                                  Value-class (snake_case) (design.md §3 CN-2); {advice}"
                             ),
                             pattern.span,
                             TypeErrorKind::BindingNameClass,
+                            format!(
+                                "if `{name}` is meant as a variant, qualify it with its enum \
+                                 (`Enum.{name}`); if it is a new binding, rename it to {renamed} \
+                                 here and where it is used"
+                            ),
                         );
                     }
                 }

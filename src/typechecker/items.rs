@@ -127,7 +127,7 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         self.lint_override_stack.push(lint_overrides.to_vec());
-        self.type_lint_warning(
+        self.type_lint_warning_with_help(
             format!(
                 "declaration of '{name}' shadows the prelude type of the same name; \
                  built-in paths keyed on '{name}' no longer apply to this type \
@@ -136,6 +136,10 @@ impl<'a> super::TypeChecker<'a> {
             span,
             TypeErrorKind::PreludeShadow,
             "prelude_shadow",
+            format!(
+                "rename the declaration (and its uses) to a name the prelude does not \
+                 have, or write `#[allow(prelude_shadow)]` above it to keep '{name}'"
+            ),
         );
         self.lint_override_stack.pop();
     }
@@ -4464,7 +4468,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         for span in nonconst {
-            self.type_error(
+            self.type_error_with_help(
                 "error[E_NON_CONSTANT_DISCRIMINANT]: an enum discriminant must be a constant \
                  integer expression — an integer literal, arithmetic over such, or a reference to \
                  a module-level integer `const`; a function call, a non-integer or unknown \
@@ -4472,6 +4476,9 @@ impl<'a> super::TypeChecker<'a> {
                     .to_string(),
                 span,
                 TypeErrorKind::DiscriminantInvalid,
+                "write the value as an integer literal, or declare it as a module-level \
+                 `const N: i64 = ...` and name that"
+                    .to_string(),
             );
         }
 
@@ -4652,16 +4659,20 @@ impl<'a> super::TypeChecker<'a> {
                 .map(|i| (i, "invariant"))
                 .chain(s.impl_invariants.iter().map(|i| (i, "impl invariant")))
             {
-                self.type_error(
+                self.type_error_with_help(
                     format!(
                         "`{form}` on `{}` is not available: struct invariants are contracts, \
                          which are in the verification track (deferred.md § Contracts) and \
-                         not in 0.8. Check the property where the value is built, in a \
-                         constructor",
+                         not in 0.8",
                         s.name
                     ),
                     inv.span,
                     TypeErrorKind::DeferredToLaterTrack,
+                    format!(
+                        "remove the `{form}` and check the property where a `{}` is built, \
+                         in a constructor that returns a `Result` or asserts it",
+                        s.name
+                    ),
                 );
             }
         }
@@ -8139,6 +8150,7 @@ impl<'a> super::TypeChecker<'a> {
             fix_it,
             expected: None,
             got: None,
+            help: None,
         });
     }
 

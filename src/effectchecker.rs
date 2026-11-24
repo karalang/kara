@@ -317,6 +317,10 @@ pub struct EffectError {
     /// the inferred and declared sets and the derivation of each
     /// (design.md § Diagnostic quality commitments, rule 5).
     pub undeclared: Option<Box<UndeclaredEffects>>,
+    /// The edit that resolves the error, when the site can name one but
+    /// not apply it. Rendered as a `help:` line and as the JSON record's
+    /// `suggestion`.
+    pub help: Option<String>,
 }
 
 /// The payload of a missing-declaration error: `function` (its key in
@@ -3226,6 +3230,7 @@ impl<'a> EffectChecker<'a> {
                     subtype_trace: None,
                     replacement: None,
                     undeclared: None,
+                    help: None,
                 });
             }
             self.expanded_groups
@@ -3280,6 +3285,7 @@ impl<'a> EffectChecker<'a> {
                                 subtype_trace: None,
                                 replacement: None,
                                 undeclared: None,
+                                help: None,
                             });
                             continue;
                         }
@@ -3521,6 +3527,10 @@ impl<'a> EffectChecker<'a> {
                             subtype_trace: None,
                             replacement: None,
                             undeclared: None,
+                            help: Some(format!(
+                                "write out the effects `{name}` stands for, each as a verb on \
+                                 a resource: `with reads(Db) writes(Log)`"
+                            )),
                         });
                     }
                 }

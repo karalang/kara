@@ -193,6 +193,7 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
             class: None,
             expected: None,
             got: None,
+            help: None,
         })
         .collect()
 }

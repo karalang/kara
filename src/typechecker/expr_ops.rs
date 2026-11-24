@@ -3386,16 +3386,17 @@ impl<'a> super::TypeChecker<'a> {
             FloatSize::BF16 => "on every target: each operation is widened to `f32`".to_string(),
             _ => return,
         };
-        self.type_lint_warning(
-            format!(
-                "`{w}` arithmetic is software-emulated {detail} and rounds back. \
-                 Store in `{w}` if you need the space, but compute in `f32` to \
-                 make the conversions explicit",
-                w = type_display(width),
-            ),
+        let w = type_display(width);
+        self.type_lint_warning_with_help(
+            format!("`{w}` arithmetic is software-emulated {detail} and rounds back"),
             *span,
             TypeErrorKind::TypeMismatch,
             "f16_software_emulated",
+            format!(
+                "store in `{w}` if you need the space, but compute in `f32`: convert the \
+                 operands (`a as f32`) and the result back (`r as {w}`), which makes each \
+                 conversion explicit"
+            ),
         );
     }
 

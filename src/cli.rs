@@ -1942,6 +1942,7 @@ impl Pipeline {
                 class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
                 expected: None,
                 got: None,
+                help: None,
             };
             typed
                 .error_fix_diffs
@@ -2006,6 +2007,7 @@ impl Pipeline {
                 class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
                 expected: None,
                 got: None,
+                help: None,
             };
             if level == LintLevel::Deny {
                 typed.errors.push(entry);
@@ -2137,6 +2139,7 @@ impl Pipeline {
                 class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
                 expected: None,
                 got: None,
+                help: None,
             };
             if level == LintLevel::Deny {
                 typed.errors.push(entry);
@@ -3032,6 +3035,7 @@ impl Pipeline {
                 ),
                 expected: None,
                 got: None,
+                help: None,
             });
         }
     }
@@ -3086,6 +3090,7 @@ impl Pipeline {
                 class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
                 expected: None,
                 got: None,
+                help: None,
             });
         }
     }
@@ -3193,6 +3198,7 @@ impl Pipeline {
                 class,
                 expected: None,
                 got: None,
+                help: None,
             });
         }
         if !typed.errors.is_empty() {
@@ -3217,6 +3223,7 @@ impl Pipeline {
             let Some(span) = source_span_at(&src, Some(at)) else {
                 continue;
             };
+            let mut help = None;
             let (message, kind) = match which {
                 crate::mir::lower::SourceEffectError::Par => (
                     format!(
@@ -3238,10 +3245,18 @@ impl Pipeline {
                     format!("error[E_PROVIDER_UNSUPPORTED]: {text}"),
                     crate::effectchecker::EffectErrorKind::ProviderUnsupported,
                 ),
-                crate::mir::lower::SourceEffectError::HandleUsesOverride => (
-                    text,
-                    crate::effectchecker::EffectErrorKind::HandleUsesOverride,
-                ),
+                crate::mir::lower::SourceEffectError::HandleUsesOverride => {
+                    help = Some(
+                        "take that resource's use out of the handle method, which runs with \
+                         every other resource at its default, or use the file outside the \
+                         override of that resource"
+                            .to_string(),
+                    );
+                    (
+                        text,
+                        crate::effectchecker::EffectErrorKind::HandleUsesOverride,
+                    )
+                }
                 crate::mir::lower::SourceEffectError::DynProvider => (
                     format!("error[E_DYN_PROVIDER]: {text}"),
                     crate::effectchecker::EffectErrorKind::DynProvider,
@@ -3258,6 +3273,7 @@ impl Pipeline {
                 subtype_trace: None,
                 replacement: None,
                 undeclared: None,
+                help,
             });
         }
     }
@@ -3458,7 +3474,7 @@ impl Pipeline {
     fn lint_error_count(&self) -> usize {
         let compile_path = crate::cli::diag_json::lint_entries_for_compile_path(self)
             .iter()
-            .filter(|(_, is_error, _, _)| *is_error)
+            .filter(|(_, is_error, _, _, _)| *is_error)
             .count();
         let must_use = crate::must_use_lint::check_implicit_must_use(
             &self.parsed.program,
@@ -3780,7 +3796,7 @@ pub(crate) fn render_typecheck_warning_blocks(
                 .lint_name
                 .as_deref()
                 .unwrap_or_else(|| crate::cli::diag_json::type_warning_code(&warn.kind));
-            with_snippet(
+            let mut block = with_snippet(
                 format!(
                     "warning[{label}]: {}:{}:{}: {}",
                     filename, warn.span.line, warn.span.column, warn.message
@@ -3789,7 +3805,11 @@ pub(crate) fn render_typecheck_warning_blocks(
                 warn.span.line,
                 warn.span.column,
                 warn.span.length,
-            )
+            );
+            if let Some(help) = &warn.help {
+                block.push_str(&format!("\n  help: {help}"));
+            }
+            block
         })
         .collect()
 }
@@ -3834,7 +3854,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // named the phase, which no index or `--explain` takes.
             let label = crate::resolver::resolve_kind_lint_name(&err.kind)
                 .unwrap_or_else(|| crate::cli::diag_json::resolve_error_code(&err.kind));
-            out.push(with_snippet(
+            let mut block = with_snippet(
                 format!(
                     "{sev}[{label}]: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
@@ -3843,7 +3863,23 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 err.span.line,
                 err.span.column,
                 err.span.length,
-            ));
+            );
+            // The suggestion, as a package's renderer prints it: a name to
+            // put in place reads as a correction, anything else is the help.
+            // A message that already names it (`..., did you mean `x`?`)
+            // is not repeated.
+            if let Some(s) = err
+                .suggestion
+                .as_ref()
+                .filter(|s| !err.message.contains(s.as_str()))
+            {
+                if err.replacement.is_some() && !s.contains(' ') {
+                    block.push_str(&format!("\n  help: did you mean `{s}`?"));
+                } else {
+                    block.push_str(&format!("\n  help: {s}"));
+                }
+            }
+            out.push(block);
         }
     }
     if let Some(ref t) = pipeline.typed {
@@ -3860,7 +3896,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 .lint_name
                 .as_deref()
                 .unwrap_or_else(|| crate::cli::diag_json::type_error_code(&err.kind));
-            out.push(with_snippet(
+            let mut block = with_snippet(
                 format!(
                     "error[{label}]: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
@@ -3869,7 +3905,11 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 err.span.line,
                 err.span.column,
                 err.span.length,
-            ));
+            );
+            if let Some(help) = &err.help {
+                block.push_str(&format!("\n  help: {help}"));
+            }
+            out.push(block);
         }
         // `TypeCheckResult::warnings` — the channel every `type_lint_warning`
         // lint rides (`deprecated`, `unstable_api`, …) plus the CLI-attached
@@ -3938,12 +3978,15 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     // coordinates that do not exist in the file named, so putting them on the
     // JSON feed would feed the Mend loop 68 unresolvable locations — the exact
     // harm this row exists to prevent. Filed separately.
-    for (lint_name, is_error, message, span) in
+    for (lint_name, is_error, message, span, help) in
         crate::cli::diag_json::lint_entries_for_compile_path(pipeline)
     {
-        out.push(render_lint_block_text(
-            &lint_name, is_error, &message, filename, &span, source,
-        ));
+        let mut block =
+            render_lint_block_text(&lint_name, is_error, &message, filename, &span, source);
+        if let Some(help) = help {
+            block.push_str(&format!("\n  = help: {help}"));
+        }
+        out.push(block);
     }
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
@@ -3951,11 +3994,11 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // this renderer cannot drift from the exit-code count above
             // (B-2026-08-21-2). Not `kind_blocks_production`:
             // `TargetGateViolation` prints `error[E0411]` on this path.
-            if crate::effectchecker::kind_is_lint_warning(&err.kind) {
+            let mut block = if crate::effectchecker::kind_is_lint_warning(&err.kind) {
                 // design.md spells this band `warn[<lint>]`, so it renders as a
                 // warning rather than the `error[<code>]` default below — it
                 // blocks nothing (B-2026-08-21-2).
-                out.push(with_snippet(
+                with_snippet(
                     format!(
                         "warning[pure_loop_in_par]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
@@ -3964,10 +4007,10 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                     err.span.line,
                     err.span.column,
                     err.span.length,
-                ));
+                )
             } else if crate::effectchecker::kind_is_note(&err.kind) {
                 let (code, _) = crate::cli::diag_json::effect_error_code(&err.kind);
-                out.push(with_snippet(
+                with_snippet(
                     format!(
                         "note[{code}]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
@@ -3976,10 +4019,10 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                     err.span.line,
                     err.span.column,
                     err.span.length,
-                ));
+                )
             } else {
                 let (code, _) = crate::cli::diag_json::effect_error_code(&err.kind);
-                out.push(with_snippet(
+                with_snippet(
                     format!(
                         "error[{code}]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
@@ -3988,8 +4031,12 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                     err.span.line,
                     err.span.column,
                     err.span.length,
-                ));
+                )
+            };
+            if let Some(help) = &err.help {
+                block.push_str(&format!("\n  help: {help}"));
             }
+            out.push(block);
         }
     }
     if let Some(ref o) = pipeline.ownership {

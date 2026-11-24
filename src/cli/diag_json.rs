@@ -1839,7 +1839,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 message: &err.message,
                 filename,
                 span: &err.span,
-                suggestion: None,
+                suggestion: err.help.as_deref(),
                 extra_json: replacement_json,
                 lint_name: err.lint_name.as_deref(),
                 fix_it: err.fix_it.as_ref(),
@@ -1891,7 +1891,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 message: &warn.message,
                 filename,
                 span: &warn.span,
-                suggestion: None,
+                suggestion: warn.help.as_deref(),
                 extra_json: fix_diff,
                 lint_name: warn.lint_name.as_deref(),
                 fix_it: warn.fix_it.as_ref(),
@@ -1965,7 +1965,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     // `E0250`, already the typecheck `ModuleBindingEffectfulInit`) is fixed:
     // must_use moved to W0278/E0278. `lint_name` remains the addressable key
     // for `-A` / `-D` either way. B-2026-08-18-17.
-    for (lint_name, is_error, message, span) in lint_entries_for_compile_path(pipeline) {
+    for (lint_name, is_error, message, span, help) in lint_entries_for_compile_path(pipeline) {
         id_counter += 1;
         diags.add(DiagEntry {
             id: &format!("d{id_counter}"),
@@ -1976,7 +1976,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             message: &message,
             filename,
             span: &span,
-            suggestion: None,
+            suggestion: help.as_deref(),
             extra_json: None,
             lint_name: Some(&lint_name),
             // No machine-applicable edit for any of the three. A `// Safety:`
@@ -2038,7 +2038,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 message: &err.message,
                 filename,
                 span: &err.span,
-                suggestion: None,
+                suggestion: err.help.as_deref(),
                 extra_json,
                 lint_name: None,
                 fix_it: None,
@@ -3157,32 +3157,33 @@ pub(super) fn close_held_stream(error: Option<&str>, extra: &str) -> bool {
 }
 
 /// The three lints B-2026-08-18-2 moved onto the compile path, as
-/// `(lint_name, is_error, message, span)`.
+/// `(lint_name, is_error, message, span, help)`.
 ///
 /// One list, two renderers: `cli.rs`'s text path and `collect_diagnostics`
 /// above both iterate it, so a lint added here reaches both feeds or neither.
 /// That is the property the row was really about — `must_use` was invisible to
 /// `karac check --output=json` for exactly as long as its call site lived in
 /// one command instead of one shared place.
-pub(super) fn lint_entries_for_compile_path(
-    pipeline: &Pipeline,
-) -> Vec<(String, bool, String, crate::token::Span)> {
+/// One compile-path lint finding: `(lint_name, is_error, message, span, help)`.
+pub(super) type CompilePathLint = (String, bool, String, crate::token::Span, Option<String>);
+
+pub(super) fn lint_entries_for_compile_path(pipeline: &Pipeline) -> Vec<CompilePathLint> {
     let source = pipeline.source.as_deref().unwrap_or("");
-    let mut out: Vec<(String, bool, String, crate::token::Span)> = Vec::new();
+    let mut out: Vec<CompilePathLint> = Vec::new();
     for d in crate::unsafe_lint::check_undocumented_unsafe(
         &pipeline.parsed.program,
         source,
         &pipeline.lint_overrides,
     ) {
         let is_err = d.level == crate::unsafe_lint::LintLevel::Error;
-        out.push((d.lint_name, is_err, d.message, d.span));
+        out.push((d.lint_name, is_err, d.message, d.span, d.help));
     }
     for d in crate::unsafe_lint::check_unsafe_op_in_unsafe_fn(
         &pipeline.parsed.program,
         pipeline.typed.as_ref(),
     ) {
         let is_err = d.level == crate::unsafe_lint::LintLevel::Error;
-        out.push((d.lint_name, is_err, d.message, d.span));
+        out.push((d.lint_name, is_err, d.message, d.span, d.help));
     }
     // `not x == y` reads as `(not x) == y` (design.md § 6); the lint had no
     // caller (B-2026-11-05-23). Both it and `ffi_float_eq` read OPERATORS,
@@ -3199,14 +3200,14 @@ pub(super) fn lint_entries_for_compile_path(
     let operators = crate::parse_shared(source.get(..user_end).unwrap_or(source));
     for d in crate::ffi_lint::check_ffi_float_eq(&operators.program, &pipeline.lint_overrides) {
         let is_err = d.level == crate::ffi_lint::LintLevel::Error;
-        out.push(("ffi_float_eq".to_string(), is_err, d.message, d.span));
+        out.push(("ffi_float_eq".to_string(), is_err, d.message, d.span, None));
     }
     for d in crate::logical_lint::check_ambiguous_not_comparison(
         &operators.program,
         &pipeline.lint_overrides,
     ) {
         let is_err = d.level == crate::logical_lint::LintLevel::Error;
-        out.push((d.lint_name, is_err, d.message, d.span));
+        out.push((d.lint_name, is_err, d.message, d.span, None));
     }
     // `#[diagnostic::*]` misshapes (design.md §17 The `diagnostic::`
     // namespace); the lint had no caller (B-2026-11-19-51).
@@ -3227,13 +3228,14 @@ pub(super) fn lint_entries_for_compile_path(
             is_err,
             message,
             d.span,
+            None,
         ));
     }
     // A library item's finding is not the program's: its span is past the
     // program's own text, at a line the user's file does not have
     // (B-2026-11-08-75).
     let user_end = crate::must_use_lint::user_text_end(&pipeline.parsed.program);
-    out.retain(|(_, _, _, span)| span.offset < user_end);
+    out.retain(|(_, _, _, span, _)| span.offset < user_end);
     out
 }
 

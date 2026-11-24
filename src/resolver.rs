@@ -447,7 +447,10 @@ impl SymbolTable {
                     ),
                     span,
                     kind: ResolveErrorKind::DuplicateDefinition,
-                    suggestion: None,
+                    suggestion: Some(format!(
+                        "rename one of the two '{name}' definitions (and the uses meant for it), \
+                         or remove the one that is not wanted"
+                    )),
                     replacement: None,
                     stub_hint: None,
                 });

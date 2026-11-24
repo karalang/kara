@@ -760,7 +760,7 @@ impl<'a> super::TypeChecker<'a> {
         let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
 
         if self.comptime_depth == 0 {
-            self.type_error(
+            self.type_error_with_help(
                 format!(
                     "error[E_COMPTIME_MODULE_AT_RUNTIME]: the `{module}` module is only \
                      available inside a `comptime` context (deferred.md § Comptime — Comptime \
@@ -768,6 +768,10 @@ impl<'a> super::TypeChecker<'a> {
                 ),
                 *span,
                 TypeErrorKind::TypeMismatch,
+                format!(
+                    "call it inside a `comptime {{ ... }}` block or a `comptime fn`, where \
+                     `{module}` values exist"
+                ),
             );
             return Some(Type::Error);
         }

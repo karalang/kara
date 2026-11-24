@@ -939,8 +939,9 @@ pub(super) fn print_resolve_errors_text(per_module: &[ModuleResolveErrors]) {
             );
             if let Some(ref s) = err.suggestion {
                 // A name to put in place reads as a correction; any other
-                // suggestion (E0111's "mark `x` as `pub` ...") is the help.
-                if err.replacement.is_some() {
+                // suggestion (E0111's "mark `x` as `pub` ...", an attribute
+                // deletion's "remove the attribute") is the help.
+                if err.replacement.is_some() && !s.contains(' ') {
                     eprintln!("  help: did you mean `{s}`?");
                 } else {
                     eprintln!("  help: {s}");
@@ -1014,6 +1015,19 @@ pub(super) fn fix_diff_json_tail(
 /// `,"fix_diff":[..]` tail a lone file's record carries (B-2026-11-21-75);
 /// empty when it has none.
 pub(super) fn typed_fix_json_tail(
+    err: &crate::typechecker::TypeError,
+    fix_diffs: &FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+) -> String {
+    // The help a lone file's record carries as its `suggestion`.
+    let help = err
+        .help
+        .as_deref()
+        .map(|h| format!(",\"suggestion\":{}", json_string(h)))
+        .unwrap_or_default();
+    help + &typed_fix_edit_json(err, fix_diffs)
+}
+
+fn typed_fix_edit_json(
     err: &crate::typechecker::TypeError,
     fix_diffs: &FxHashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 ) -> String {
@@ -1549,6 +1563,9 @@ pub(super) fn print_type_warnings_text(per_module: &[ModuleTypeErrors]) {
                 warn.span.column,
                 warn.message,
             );
+            if let Some(help) = &warn.help {
+                eprintln!("  help: {help}");
+            }
         }
     }
 }
@@ -1571,6 +1588,9 @@ pub(super) fn print_type_errors_text(per_module: &[ModuleTypeErrors]) {
                 err.span.column,
                 err.message,
             );
+            if let Some(help) = &err.help {
+                eprintln!("  help: {help}");
+            }
         }
     }
 }

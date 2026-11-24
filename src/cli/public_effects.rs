@@ -109,6 +109,7 @@ pub(super) fn report_inferred_dependencies(pipeline: &mut super::Pipeline) {
             class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
             expected: None,
             got: None,
+            help: None,
         };
         if level == LintLevel::Deny {
             typed.errors.push(entry);

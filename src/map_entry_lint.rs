@@ -361,6 +361,7 @@ fn check_match(expr: &Expr, typed: &TypeCheckResult, src: &str) -> Option<TypeEr
         class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
         expected: None,
         got: None,
+        help: None,
     })
 }
 

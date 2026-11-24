@@ -657,6 +657,7 @@ impl<'a> super::EffectChecker<'a> {
                 subtype_trace: None,
                 replacement: None,
                 undeclared: None,
+                help: None,
             });
         }
     }
@@ -735,6 +736,7 @@ impl<'a> super::EffectChecker<'a> {
                         subtype_trace: None,
                         replacement: None,
                         undeclared: None,
+                        help: None,
                     });
                 }
             }
@@ -841,6 +843,7 @@ impl<'a> super::EffectChecker<'a> {
                     subtype_trace: None,
                     replacement: None,
                     undeclared: None,
+                    help: None,
                 });
             }
         }

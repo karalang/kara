@@ -2122,6 +2122,7 @@ impl<'a> super::TypeChecker<'a> {
                     class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                     expected: Some(shown),
                     got: Some(got_shown),
+                    help: None,
                 });
                 return true;
             }
@@ -2164,6 +2165,7 @@ impl<'a> super::TypeChecker<'a> {
             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
             expected: Some(shown),
             got: Some(got_shown),
+            help: None,
         });
         true
     }
@@ -2794,6 +2796,7 @@ impl<'a> super::TypeChecker<'a> {
             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
             expected: Some(type_display(expected)),
             got: Some(format!("ref {shown}")),
+            help: None,
         });
         Some(expected.clone())
     }
@@ -3076,6 +3079,7 @@ impl<'a> super::TypeChecker<'a> {
             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
             expected: Some(type_display(expected)),
             got: Some(format!("ref {shown}")),
+            help: None,
         });
         Some(expected.clone())
     }
@@ -3152,6 +3156,7 @@ impl<'a> super::TypeChecker<'a> {
             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
             expected: Some(type_display(expected)),
             got: Some(format!("ref {shown}")),
+            help: None,
         });
         Some(expected.clone())
     }
@@ -3472,6 +3477,7 @@ impl<'a> super::TypeChecker<'a> {
                 class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                 expected: Some(shown.clone()),
                 got: Some(format!("ref {shown}")),
+                help: None,
             });
         }
     }
@@ -19875,14 +19881,7 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-09-23-2: a borrowed bool reads as its value here.
                 let cond_ty = super::expr_ops::deref_bool_scalar(self.infer_expr(condition));
                 if cond_ty != Type::Bool && cond_ty != Type::Error {
-                    self.type_error(
-                        format!(
-                            "condition must be 'bool', found '{}'",
-                            type_display(&cond_ty)
-                        ),
-                        condition.span,
-                        TypeErrorKind::ConditionNotBool,
-                    );
+                    self.condition_not_bool("condition", &cond_ty, condition.span);
                 }
                 // B-2026-10-19-25, B-2026-10-21-82: on the MIR pipeline a bare
                 // `collect()` or empty `[]` tail takes its type from the sibling
@@ -20210,14 +20209,7 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-09-23-2: a borrowed bool reads as its value here.
                 let cond_ty = super::expr_ops::deref_bool_scalar(self.infer_expr(condition));
                 if cond_ty != Type::Bool && cond_ty != Type::Error {
-                    self.type_error(
-                        format!(
-                            "while condition must be 'bool', found '{}'",
-                            type_display(&cond_ty)
-                        ),
-                        condition.span,
-                        TypeErrorKind::ConditionNotBool,
-                    );
+                    self.condition_not_bool("while condition", &cond_ty, condition.span);
                 }
                 // A valueless frame: it catches unlabeled `break`s so they
                 // cannot leak out to an enclosing `loop`'s LUB, but rejects

@@ -2195,17 +2195,21 @@ impl<'a> super::TypeChecker<'a> {
             };
             for (field_name, field_ty, _) in &info.fields {
                 if !self.derived_default_field_ok(field_ty) {
-                    self.type_error(
+                    let field_shown = type_display(field_ty);
+                    self.type_error_with_help(
                         format!(
                             "error[E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT]: cannot \
                              #[derive(Default)] for '{}' — field '{}' of type '{}' does not \
                              implement 'Default'",
-                            name,
-                            field_name,
-                            type_display(field_ty)
+                            name, field_name, field_shown
                         ),
                         struct_span,
                         TypeErrorKind::TypeMismatch,
+                        format!(
+                            "give '{field_shown}' a `Default` (`#[derive(Default)]` on it, or \
+                             `impl Default for {field_shown}`), or drop the derive and write \
+                             `impl Default for {name}` choosing the field's value"
+                        ),
                     );
                 }
             }

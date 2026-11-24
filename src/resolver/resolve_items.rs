@@ -150,7 +150,10 @@ impl<'a> super::Resolver<'a> {
                     ),
                     span: extra.span,
                     kind: ResolveErrorKind::EffectVarKindMismatch,
-                    suggestion: None,
+                    suggestion: Some(format!(
+                        "use the first effect variable for every field's clause and remove `with {}`",
+                        extra.name
+                    )),
                     replacement: None,
                     stub_hint: None,
                 });

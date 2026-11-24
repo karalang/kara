@@ -268,6 +268,11 @@ impl<'a> super::EffectChecker<'a> {
                                 subtype_trace: None,
                                 replacement: None,
                                 undeclared: None,
+                                help: Some(format!(
+                                    "pass arguments {first_idx} and {idx} functions that perform \
+                                     the same effects, or give their parameters separate effect \
+                                     variables in the callee's signature"
+                                )),
                             });
                         }
                     }

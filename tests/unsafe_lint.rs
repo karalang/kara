@@ -499,12 +499,16 @@ fn test_unsafe_fn_declaration_and_inner_block_both_fire() {
 }
 
 #[test]
-fn test_unsafe_fn_doc_diag_has_no_help_or_note() {
-    // `undocumented_unsafe` emits single-line diagnostics (help/note are
-    // scoped to `unsafe_op_in_unsafe_fn`) — the form-3 emission matches.
+fn test_unsafe_fn_doc_diag_names_the_section_to_add() {
+    // The form-3 emission's help names the `/// # Safety` section to add
+    // (help-gap batch 1); it still has no note.
     let diags = lint("unsafe fn raw() {}");
     assert_eq!(diags.len(), 1, "expected 1 diagnostic, got: {diags:?}");
-    assert!(diags[0].help.is_none(), "got help: {:?}", diags[0].help);
+    let help = diags[0].help.as_deref().unwrap_or_default();
+    assert!(
+        help.contains("`/// # Safety`") && help.contains("`fn raw`"),
+        "got help: {help}"
+    );
     assert!(diags[0].note.is_none(), "got note: {:?}", diags[0].note);
 }
 
@@ -824,19 +828,17 @@ fn test_unsafe_method_call_diagnostic_has_slice4_shape() {
 }
 
 #[test]
-fn test_undocumented_unsafe_diags_have_no_help_or_note() {
-    // Slice 4's `help` / `note` carrier is wired through the same
-    // `LintDiagnostic` struct, but it is scoped to `unsafe_op_in_unsafe_fn`.
-    // The `undocumented_unsafe` lint shares the struct only as a transport;
-    // it must continue to emit single-line diagnostics until its own polish
-    // pass lands. This test pins that scoping decision.
+fn test_undocumented_unsafe_diags_name_the_comment_to_add() {
+    // The `undocumented_unsafe` help names the comment to add (help-gap
+    // batch 1, its polish pass); the justification itself is the author's,
+    // so there is still no fix, and no note.
     let diags = lint("fn f() {\n    unsafe { }\n}");
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].lint_name, "undocumented_unsafe");
+    let help = diags[0].help.as_deref().unwrap_or_default();
     assert!(
-        diags[0].help.is_none(),
-        "undocumented_unsafe should not carry a help line yet, got: {:?}",
-        diags[0].help
+        help.contains("`// Safety:"),
+        "undocumented_unsafe should name the comment to add, got: {help}"
     );
     assert!(
         diags[0].note.is_none(),

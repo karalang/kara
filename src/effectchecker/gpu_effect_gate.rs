@@ -173,6 +173,7 @@ fn gpu_gate_dfs(
                 subtype_trace: None,
                 replacement: None,
                 undeclared: None,
+                help: None,
             });
         }
     }

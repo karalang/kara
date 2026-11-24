@@ -150,7 +150,11 @@ fn check_extern_block_safety_doc(
                       section explaining the trust contract for its imports"
                 .to_string(),
             lint_name: "undocumented_unsafe".to_string(),
-            help: None,
+            help: Some(
+                "add a `///` doc comment above the block with a `# Safety` section saying \
+                 what the foreign side guarantees (pointer validity, ownership, thread use)"
+                    .to_string(),
+            ),
             note: None,
         });
     }
@@ -182,7 +186,11 @@ fn check_unsafe_fn_safety_doc(f: &Function, level: LintLevel, diags: &mut Vec<Li
                 f.name
             ),
             lint_name: "undocumented_unsafe".to_string(),
-            help: None,
+            help: Some(format!(
+                "add a `/// # Safety` section to the doc comment above `fn {}`, saying \
+                 what a caller must guarantee before calling it",
+                f.name
+            )),
             note: None,
         });
     }
@@ -326,7 +334,11 @@ fn check_unsafe_span(
             span: *span,
             message: "unsafe block is not preceded by a `// Safety:` comment".to_string(),
             lint_name: "undocumented_unsafe".to_string(),
-            help: None,
+            help: Some(
+                "add a `// Safety: <why the operations inside are sound>` comment on the \
+                 line above the `unsafe` block"
+                    .to_string(),
+            ),
             note: None,
         });
     }

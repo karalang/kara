@@ -340,14 +340,24 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             }
             let span = p.variance_span.unwrap_or(p.span);
-            self.type_error(
-                "error[E_VARIANCE_USER_DECL_NOT_YET]: variance declarations are \
+            let message = "error[E_VARIANCE_USER_DECL_NOT_YET]: variance declarations are \
                  reserved for stdlib types in 0.8; remove the marker — the parameter \
                  will be invariant"
-                    .to_string(),
-                span,
-                TypeErrorKind::TypeMismatch,
-            );
+                .to_string();
+            // The marker's own span: deleting it is the edit the message
+            // names, and the parameter is then what it would be anyway.
+            match p.variance_span {
+                Some(marker) => self.type_error_with_fix_it(
+                    message,
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                    super::FixIt {
+                        span: marker,
+                        replacement: String::new(),
+                    },
+                ),
+                None => self.type_error(message, span, TypeErrorKind::TypeMismatch),
+            }
         }
     }
 

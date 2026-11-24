@@ -228,6 +228,7 @@ impl<'a> super::EffectChecker<'a> {
             }),
             replacement: None,
             undeclared: None,
+            help: None,
         });
     }
 

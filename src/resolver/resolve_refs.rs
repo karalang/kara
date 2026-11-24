@@ -171,7 +171,9 @@ impl<'a> super::Resolver<'a> {
                         ),
                         span: effects.span,
                         kind: ResolveErrorKind::EffectVarKindMismatch,
-                        suggestion: None,
+                        suggestion: Some(format!(
+                            "remove the `with ...` argument from `{name}[...]`"
+                        )),
                         replacement: None,
                         stub_hint: None,
                     });
@@ -660,7 +662,9 @@ impl<'a> super::Resolver<'a> {
                 message: format!("'{}' is bound more than once in the same pattern", name),
                 span,
                 kind: ResolveErrorKind::DuplicateDefinition,
-                suggestion: None,
+                suggestion: Some(format!(
+                    "rename one of the two '{name}' bindings, or match the second position with `_`"
+                )),
                 replacement: None,
                 stub_hint: None,
             });

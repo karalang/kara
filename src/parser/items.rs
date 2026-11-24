@@ -1831,7 +1831,7 @@ impl super::Parser {
                 continue;
             }
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for arg in &attr.args {
+            for (ai, arg) in attr.args.iter().enumerate() {
                 // Extract the lint name. The attribute parser
                 // produces three shapes for an arg:
                 //   - bare `IDENT` → name=None, value=Some(Identifier(N))
@@ -1874,6 +1874,22 @@ impl super::Parser {
                         ),
                         span: arg.span,
                     });
+                    // The repeat says nothing the first did not, so the fix
+                    // deletes it with the comma before it.
+                    if let Some(prev) = ai.checked_sub(1).map(|i| &attr.args[i]) {
+                        let from = prev.span.offset + prev.span.length;
+                        let to = arg.span.offset + arg.span.length;
+                        if to > from {
+                            self.fix_edits.insert(
+                                crate::resolver::SpanKey::from_span(&arg.span),
+                                crate::resolver::TextEdit {
+                                    offset: from,
+                                    length: to - from,
+                                    replacement: String::new(),
+                                },
+                            );
+                        }
+                    }
                     continue;
                 }
                 if let Some(first) = in_scope.get(&name) {
@@ -1882,8 +1898,9 @@ impl super::Parser {
                         message: format!(
                             "error[E_DUPLICATE_LINT_LEVEL]: lint \
                              name `{}` already has a level here, from \
-                             `#[{}]`; one scope sets a lint's level once",
-                            name, first,
+                             `#[{}]`; one scope sets a lint's level once. Remove `{}` from \
+                             one of the two attributes",
+                            name, first, name,
                         ),
                         span: arg.span,
                     });

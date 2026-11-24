@@ -552,6 +552,7 @@ impl<'a> super::EffectChecker<'a> {
                         }),
                         replacement: None,
                         undeclared: None,
+                        help: Some(slot_help(&effect_str, &slot_str)),
                     });
                 }
             }
@@ -614,6 +615,7 @@ impl<'a> super::EffectChecker<'a> {
             subtype_trace: None,
             replacement: None,
             undeclared: None,
+            help: None,
         });
     }
 
@@ -1204,6 +1206,7 @@ impl<'a> super::EffectChecker<'a> {
                 }),
                 replacement: None,
                 undeclared: None,
+                help: Some(slot_help(&effect_str, &slot_str)),
             });
         }
     }
@@ -1468,4 +1471,15 @@ fn slot_clause(slot: &[String]) -> String {
     } else {
         slot.join(" ")
     }
+}
+
+/// E0404's help: the two edits that resolve a slot violation. Which one is
+/// right depends on what the slot is for, so neither is applied.
+fn slot_help(effect: &str, slot: &[String]) -> String {
+    let mut widened = slot.to_vec();
+    widened.push(effect.to_string());
+    format!(
+        "add `{effect}` to the slot's clause (`with {}`), or pass a function that does not perform it",
+        widened.join(" ")
+    )
 }

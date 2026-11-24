@@ -993,6 +993,12 @@ pub struct TypeError {
     /// hasn't been migrated to the typed-fields helper yet. Line
     /// 619 slice 4.
     pub got: Option<String>,
+    /// Help text naming the edit that resolves the diagnostic, when the
+    /// emitting site can name one but not apply it (an alternative, or a
+    /// name the author chooses). Rendered as a `help:` line under the
+    /// message and as the JSON record's `suggestion` (a `hints` entry).
+    /// The message keeps the cause; this carries the remedy.
+    pub help: Option<String>,
 }
 
 /// One machine-applicable fix-it edit attached to a `TypeError`.
@@ -6216,7 +6222,14 @@ impl<'a> TypeChecker<'a> {
                  fires this very lint, which the outer `#[expect]` would silence, \
                  fulfilling itself, so the user gets no signal either way)",
             );
-            self.type_error(message, span, TypeErrorKind::ExpectOnUnfulfilled);
+            self.type_error_with_help(
+                message,
+                span,
+                TypeErrorKind::ExpectOnUnfulfilled,
+                "remove `unfulfilled_lint_expectation` from the `#[expect(...)]`; an \
+                 unfulfilled `#[expect]` is reported on its own"
+                    .to_string(),
+            );
         }
     }
 
@@ -6462,6 +6475,62 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// E0211: a condition that is not a `bool`, with the test its type
+    /// usually means as help. Which test is meant is the author's call, so
+    /// it is not applied.
+    pub(super) fn condition_not_bool(&mut self, what: &str, cond_ty: &Type, span: Span) {
+        let mut t = cond_ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        let help = match t {
+            Type::Int(_) | Type::UInt(_) => {
+                "compare the integer with a value, such as `n != 0`: an integer is not a truth value"
+            }
+            Type::Float(_) => "compare the float with a value, such as `x > 0.0`",
+            Type::Str => "test the string with `!s.is_empty()`, or compare it with `==`",
+            Type::Named { name, .. } if name == "Option" => {
+                "test it with `.is_some()`, or bind its value with `if let Some(v) = ...`"
+            }
+            Type::Named { name, .. } if name == "Result" => {
+                "test it with `.is_ok()`, or bind its value with `if let Ok(v) = ...`"
+            }
+            Type::Named { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet" | "Deque"
+                ) =>
+            {
+                "test it with `!xs.is_empty()`"
+            }
+            _ => "compare the value with `==`, or `match` on it",
+        };
+        self.type_error_with_help(
+            format!(
+                "{what} must be 'bool', found '{}'",
+                types::type_display(cond_ty)
+            ),
+            span,
+            TypeErrorKind::ConditionNotBool,
+            help.to_string(),
+        );
+    }
+
+    /// [`Self::type_error`] with the edit that resolves it as help, when the
+    /// site can name the edit but not apply it.
+    pub(super) fn type_error_with_help(
+        &mut self,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+        help: String,
+    ) {
+        self.type_error(message, span, kind);
+        if let Some(last) = self.errors.last_mut() {
+            last.help = Some(help);
+        }
+    }
+
     pub(super) fn type_error(&mut self, message: String, span: Span, kind: TypeErrorKind) {
         let class = class_for_type_error_kind(&kind);
         self.errors.push(TypeError {
@@ -6473,6 +6542,7 @@ impl<'a> TypeChecker<'a> {
             class,
             expected: None,
             got: None,
+            help: None,
         });
     }
 
@@ -6501,6 +6571,7 @@ impl<'a> TypeChecker<'a> {
             class,
             expected: Some(types::type_display(expected)),
             got: Some(types::type_display(got)),
+            help: None,
         });
     }
 
@@ -6753,6 +6824,7 @@ impl<'a> TypeChecker<'a> {
             class,
             expected: None,
             got: None,
+            help: None,
         });
     }
 
@@ -6950,6 +7022,31 @@ impl<'a> TypeChecker<'a> {
         lint_name: &'static str,
         fix_it: Option<FixIt>,
     ) {
+        self.type_lint_warning_full(message, span, kind, lint_name, fix_it, None)
+    }
+
+    /// [`Self::type_lint_warning`] carrying help text: the edit the lint
+    /// asks for when it cannot apply it itself.
+    pub(super) fn type_lint_warning_with_help(
+        &mut self,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+        lint_name: &'static str,
+        help: String,
+    ) {
+        self.type_lint_warning_full(message, span, kind, lint_name, None, Some(help))
+    }
+
+    pub(super) fn type_lint_warning_full(
+        &mut self,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+        lint_name: &'static str,
+        fix_it: Option<FixIt>,
+        help: Option<String>,
+    ) {
         use crate::lints::LintLevel;
         let level = self.effective_lint_level(lint_name);
         let mut message = message;
@@ -6970,6 +7067,7 @@ impl<'a> TypeChecker<'a> {
             class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
             expected: None,
             got: None,
+            help,
         };
         match level {
             LintLevel::Allow => {
@@ -9556,6 +9654,7 @@ impl<'a> TypeChecker<'a> {
             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
             expected: Some(shown.clone()),
             got: Some(format!("{kw} {shown}")),
+            help: None,
         });
         true
     }
@@ -10603,6 +10702,7 @@ impl<'a> TypeChecker<'a> {
                     class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                     expected: Some(type_display(expected)),
                     got: Some(type_display(found)),
+                    help: None,
                 });
                 return false;
             }
@@ -10660,6 +10760,7 @@ impl<'a> TypeChecker<'a> {
                             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                             expected: Some(shown.clone()),
                             got: Some(format!("{kw} {shown}")),
+                            help: None,
                         });
                         return false;
                     }
@@ -10692,6 +10793,7 @@ impl<'a> TypeChecker<'a> {
                             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                             expected: Some(shown.clone()),
                             got: Some(format!("{kw} {shown}")),
+                            help: None,
                         });
                         return false;
                     }
@@ -10748,6 +10850,7 @@ impl<'a> TypeChecker<'a> {
                         class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                         expected: Some(shown.clone()),
                         got: Some(format!("{kw} {shown}")),
+                        help: None,
                     });
                     return false;
                 }
@@ -11087,6 +11190,7 @@ impl<'a> TypeChecker<'a> {
                 class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                 expected: Some(type_display(expected)),
                 got: Some(type_display(found)),
+                help: None,
             });
             return false;
         }
@@ -11117,6 +11221,7 @@ impl<'a> TypeChecker<'a> {
                 class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                 expected: Some(type_display(expected)),
                 got: Some(type_display(found)),
+                help: None,
             });
             return false;
         }
@@ -11147,6 +11252,7 @@ impl<'a> TypeChecker<'a> {
                 class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
                 expected: Some(type_display(expected)),
                 got: Some(type_display(found)),
+                help: None,
             });
             return false;
         }
@@ -11552,6 +11658,7 @@ impl<'a> TypeChecker<'a> {
             class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
             expected: Some(want),
             got: Some(got),
+            help: None,
         });
     }
 
