@@ -4771,6 +4771,12 @@ pub struct TypeChecker<'a> {
     /// offers that literal's suffix, which types the position of every
     /// tuple pushed (kata 1129, B-2026-11-12-2).
     pub(super) literal_tuple_pushes: FxHashMap<String, Vec<Option<Expr>>>,
+    /// The first unsuffixed integer literal a map's values were written
+    /// with, by the map's binding: `0` of `*count.entry(x).or_insert(0) +=
+    /// 1` or `count.insert(k, 0)`. A `for c in count.values()` or `for (k,
+    /// c) in count.iter()` reads it back, so a refusal at a use of `c`
+    /// offers the literal's suffix (kata 2475's Rust arm).
+    pub(super) literal_map_values: FxHashMap<String, Expr>,
     /// `let moves = [(p + a, false)]` with `p` a [`LiteralLet`]: each
     /// tuple position's first element that reads one, by the binding's
     /// name, for `for (q, dir) in moves` to read back (kata 1654).
@@ -5336,6 +5342,7 @@ impl<'a> TypeChecker<'a> {
             literal_feeds: FxHashMap::default(),
             literal_pushes: FxHashMap::default(),
             literal_tuple_pushes: FxHashMap::default(),
+            literal_map_values: FxHashMap::default(),
             literal_tuple_sources: FxHashMap::default(),
             literal_tuple_lets: FxHashMap::default(),
             read_only_slice_lets: FxHashMap::default(),

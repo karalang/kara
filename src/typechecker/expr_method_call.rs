@@ -2130,6 +2130,7 @@ impl<'a> super::TypeChecker<'a> {
         );
         self.method_call_ends.push(ends);
         self.note_literal_push(object, method, args);
+        self.note_literal_map_value(object, method, args);
         self.note_d5_ref_fill(object, method, args);
         self.note_last_mut_receiver(object, args);
         // The dependency traits the file this call is written in does not

@@ -15468,6 +15468,90 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `*count.entry(x).or_insert(0) += 1` or `count.insert(k, 0)`: the
+    /// map's values are that literal's, which took the default when the
+    /// map was built, so it is remembered against `count` for a loop that
+    /// reads the values back (kata 2475's Rust arm).
+    pub(super) fn note_literal_map_value(&mut self, object: &Expr, method: &str, args: &[CallArg]) {
+        let (map, lit) = match (method, args) {
+            ("or_insert", [v]) => {
+                let ExprKind::MethodCall {
+                    object: m,
+                    method: e,
+                    args: key,
+                    ..
+                } = &object.kind
+                else {
+                    return;
+                };
+                if e != "entry" || key.len() != 1 {
+                    return;
+                }
+                (m.as_ref(), &v.value)
+            }
+            ("insert", [_, v]) => (object, &v.value),
+            _ => return,
+        };
+        let ExprKind::Identifier(root) = &map.kind else {
+            return;
+        };
+        let bare = matches!(lit.kind, ExprKind::Integer(_, None))
+            || matches!(&lit.kind, ExprKind::Unary { op: UnaryOp::Neg, operand }
+                if matches!(operand.kind, ExprKind::Integer(_, None)));
+        if bare && !self.literal_map_values.contains_key(root.as_str()) {
+            self.literal_map_values.insert(root.clone(), lit.clone());
+        }
+    }
+
+    /// The [`super::LiteralLet`] of a map value read by a loop over
+    /// `m.values()` (or `m.values().iter()`): the literal the values were
+    /// written with, see [`Self::note_literal_map_value`].
+    fn literal_map_value_entry(&self, iterable: &Expr, name: &str) -> Option<super::LiteralLet> {
+        let mut at = iterable;
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &at.kind
+        {
+            if args.is_empty() && matches!(method.as_str(), "iter" | "into_iter") {
+                at = object;
+            }
+        }
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &at.kind
+        else {
+            return None;
+        };
+        if method != "values" || !args.is_empty() {
+            return None;
+        }
+        let ExprKind::Identifier(root) = &object.kind else {
+            return None;
+        };
+        self.literal_map_value_lit(root, name)
+    }
+
+    fn literal_map_value_lit(&self, root: &str, name: &str) -> Option<super::LiteralLet> {
+        let lit = self.literal_map_values.get(root)?;
+        let ty = self.expr_types.get(&SpanKey::from_span(&lit.span))?.clone();
+        let at = Span {
+            offset: lit.span.offset + lit.span.length,
+            length: 0,
+            ..lit.span
+        };
+        // Named by the map, whose values the literal types: "the elements
+        // of `count`", read at the loop variable itself.
+        let _ = name;
+        self.literal_entry(lit, &ty, at, true, true, root)
+            .map(|e| super::LiteralLet { depth: 0, ..e })
+    }
+
     /// How many element indexes `e` takes from its collection's root:
     /// 1 for `left[k]` and `ref left[k]`, 0 for `left` and `left.iter()`.
     /// A range subscript keeps the collection's depth.
@@ -15511,7 +15595,8 @@ impl<'a> super::TypeChecker<'a> {
             .literal_pushed_entry(iterable, 1)
             .or_else(|| self.literal_array_entry(name, iterable, false))
             .or_else(|| self.literal_range_for_entry(iterable, name))
-            .or_else(|| self.literal_fill_for_entry(iterable));
+            .or_else(|| self.literal_fill_for_entry(iterable))
+            .or_else(|| self.literal_map_value_entry(iterable, name));
         let prev = match entry {
             Some(e) => self.literal_lets.insert(name.clone(), e),
             None => self.literal_lets.remove(name.as_str()),
@@ -15602,7 +15687,14 @@ impl<'a> super::TypeChecker<'a> {
                         .filter(|s| s.len() == pats.len())?[i]
                         .clone()
                 })
-                .or_else(|| enumerated.clone().filter(|_| i == 1));
+                .or_else(|| enumerated.clone().filter(|_| i == 1))
+                // `for (k, c) in count.iter()`: `c` is a map value.
+                .or_else(|| {
+                    let root = Self::collection_root_name(iterable)?;
+                    (i == 1 && pats.len() == 2)
+                        .then(|| self.literal_map_value_lit(root, name))
+                        .flatten()
+                });
             let prev = match entry {
                 Some(e) => self.literal_lets.insert(name.clone(), e),
                 None => self.literal_lets.remove(name.as_str()),
