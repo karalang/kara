@@ -1112,6 +1112,11 @@ pub struct Program {
     /// its line. What `karac fix` leaves of `let n = n as i64;` once the
     /// cast goes (katas 2851, 2852); the `self_rebinding` lint reads it.
     pub self_rebinding_lets: rustc_hash::FxHashMap<usize, Span>,
+    /// The source text of each plain `"..."` literal (not raw, not
+    /// triple-quoted) whose body holds a `$`, keyed by its start offset. The
+    /// `dollar_interpolation` lint reads it to write the f-string its fix
+    /// offers with the literal's own escapes kept (B-2026-11-24-47).
+    pub dollar_literals: rustc_hash::FxHashMap<usize, String>,
     /// A cast that is a whole index, `pos[(b - b'a') as usize]`, keyed by
     /// its span: the slot takes an `i64`, so an `as usize` over a narrower
     /// integer can go entirely rather than become `as i64`

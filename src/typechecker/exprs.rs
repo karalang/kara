@@ -18289,9 +18289,10 @@ impl<'a> super::TypeChecker<'a> {
                 element: Box::new(Type::UInt(UIntSize::U8)),
                 size: ConstArg::Literal(bytes.len() as i64),
             },
-            ExprKind::StringLit(_) => {
+            ExprKind::StringLit(value) => {
                 self.string_literal_spans
                     .insert(crate::resolver::SpanKey::from_span(&expr.span), expr.id);
+                self.lint_dollar_interpolation(value, expr.span);
                 Type::Str
             }
             // `c"..."` C-string literal — typed `ref CStr` per

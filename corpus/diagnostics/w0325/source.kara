@@ -1,0 +1,5 @@
+#[warn(dollar_interpolation)]
+fn main() {
+    let n = 3;
+    println("n is $n");
+}

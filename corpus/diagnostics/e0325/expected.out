@@ -1,0 +1,1 @@
+ERROR at line 4: `$n` in a plain string is the text `$n`, not the value of `n`: Kāra interpolates only in an f-string, so write `f"...{n}..."` (Kotlin, Dart and the shells interpolate `$name`; Kāra does not)

@@ -56,6 +56,7 @@ mod cross_task_check;
 mod deprecated_variant;
 mod derive_names;
 mod derives;
+mod dollar_interpolation_lint;
 pub mod env;
 mod env_build;
 mod expr_call;

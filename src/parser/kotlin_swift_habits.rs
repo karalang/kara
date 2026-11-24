@@ -11,11 +11,29 @@
 //! differs (`mapOf` keeps insertion order, `downTo`, `?.let`) is told, with
 //! no edit.
 
-use crate::token::Token;
+use crate::token::{Span, Token};
 
 use super::Parser;
 
 impl Parser {
+    /// Record the source of a plain `"..."` literal holding a `$` for the
+    /// `dollar_interpolation` lint (see
+    /// [`crate::ast::Program::dollar_literals`]). A raw or triple-quoted
+    /// literal is left out: `r"..."` is where a regex's `$` lives, and its
+    /// body is not an f-string's.
+    pub(super) fn note_dollar_literal(&mut self, span: Span) {
+        let Some(text) = self.source_between(span.offset, span.offset + span.length) else {
+            return;
+        };
+        if text.len() >= 2
+            && text.starts_with('"')
+            && text.ends_with('"')
+            && !text.starts_with("\"\"\"")
+        {
+            self.dollar_literals.insert(span.offset, text);
+        }
+    }
+
     /// The whole-file pass for Kotlin and Swift.
     pub(super) fn mend_kotlin_swift_tokens(&mut self) {
         if self.source.is_none() {

@@ -190,6 +190,16 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A feature core-semantics.md §13 leaves to a later track (`#[gpu]`, `comptime` beyond `#[derive]`), which compiles as ordinary code today.",
     },
     LintInfo {
+        name: "dollar_interpolation",
+        // Allow by default: over the corpus, kara-katas and examples every
+        // hit (9, in three apps) was a sigil that is meant as text, Mongo's
+        // `"$id"`, PHP's `"$sql"`, a JSON `"$call"` key (B-2026-11-24-47).
+        default_level: LintLevel::Allow,
+        description: "`$name` or `${expr}` in a plain string literal where `name` (every name in \
+             `expr`) is a binding in scope: Kāra interpolates only in an f-string, so the text \
+             prints as written. `karac fix` writes the f-string.",
+    },
+    LintInfo {
         name: "redundant_cast",
         default_level: LintLevel::Warn,
         description: "An `as` cast to the type its operand already has.",

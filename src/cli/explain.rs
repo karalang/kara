@@ -764,6 +764,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0323", lint_own("self_rebinding")),
     ("W0324", lint_own("unused_variable")),
     ("E0324", lint_own("unused_variable")),
+    ("W0325", lint_own("dollar_interpolation")),
+    ("E0325", lint_own("dollar_interpolation")),
     ("E0801", ty("GpuNotSafe", None)),
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),

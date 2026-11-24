@@ -2145,9 +2145,13 @@ impl super::Parser {
             Token::StringLiteral(s) => {
                 let s = s.clone();
                 self.advance();
+                let span = self.span_from(&start);
+                if s.contains('$') {
+                    self.note_dollar_literal(span);
+                }
                 Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
-                    span: self.span_from(&start),
+                    span,
                     kind: ExprKind::StringLit(s),
                 })
             }
