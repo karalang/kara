@@ -1,0 +1,5 @@
+note: `a` was declared inside `:provide Db` (cell 8) and went out of scope when `:end-provide Db` closed it
+error[E0100]: cell 10:1:1: undefined name 'a'
+   |
+ 1 | a
+   | ^

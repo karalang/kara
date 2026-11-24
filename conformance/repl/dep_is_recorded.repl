@@ -1,0 +1,4 @@
+:dep
+:dep serde = "1.0"
+:dep
+:dep serde

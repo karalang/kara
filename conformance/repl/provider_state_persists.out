@@ -1,0 +1,8 @@
+Kāra REPL  (type :help for commands, :quit to exit)
+(provider scope `:provide Db` opened)
+2
+5
+15
+(provider scope `:provide Db` from cell 6 closed)
+session saved to saved.kara
+

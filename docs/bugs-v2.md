@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 741 |
+| diagnostics | 742 |
 | false-positive | 364 |
 | missing-feature | 251 |
 | perf | 201 |
 | other | 149 |
 | soundness | 128 |
 | miscompile | 107 |
+| run-vs-build | 65 |
 | crash | 65 |
-| run-vs-build | 64 |
 | codegen-gap | 45 |
 | use-after-free | 13 |
 | leak | 5 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 890 |
 | mir | 327 |
 | mir-llvm | 323 |
-| cli | 299 |
+| cli | 301 |
 | parser | 156 |
 | ownership | 136 |
 | runtime | 109 |
@@ -120,6 +120,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-19 | 2026-11-24 | ownership | low | An `impl Tok` result whose trait has `Copy` as a supertrait still moves at `karac check` (E0500), though MIR treats it as Copy | — |
 | B-2026-11-24-20 | 2026-11-24 | ownership | medium | `karac check` accepts a use of an owned `dyn` value after it was moved (`let b = a; a.area()`); `karac run` then refuses it in the MIR move check | — |
 | B-2026-11-24-23 | 2026-11-24 | effect | low | E0400 for a call through a clause-less `dyn` field names the internal function `__dyn_every.T.t`, and its effect list's order changes from run to run | — |
+| B-2026-11-24-29 | 2026-11-24 | cli | medium | REPL: a statement cell under `:provide` lost the provider's state for the next cell (printed 2,3 where the saved file prints 2,5), and a use of a `let` from a closed `:provide` scope got no note naming the scope | — |
+| B-2026-11-24-30 | 2026-11-24 | cli | low | REPL: E_NO_PROVIDER for a cell that calls a provider-needing fn outside `:provide` is located at the synthetic `__karac_cell_N()` call in main (`<repl>:14:1`), not in the cell | — |
 
 ### Relocated
 

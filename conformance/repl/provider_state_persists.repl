@@ -1,0 +1,13 @@
+trait Store { fn touch(mut ref self, n: i64) -> i64; }
+effect resource Db: Store;
+struct Mem { acc: i64 }
+impl Store for Mem { fn touch(mut ref self, n: i64) -> i64 { self.acc += n; self.acc } }
+fn bump(n: i64) -> i64 with writes(Db) { Db.touch(n) }
+:provide Db = Mem { acc: 0 }
+println(f"{bump(2)}");
+println(f"{bump(3)}");
+let a = bump(10);
+a
+:end-provide Db
+a
+:save saved.kara

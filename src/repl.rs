@@ -3024,13 +3024,18 @@ impl Session {
             .iter()
             .map(|f| f.resource.clone())
             .collect();
-        if active_scope.is_empty() {
+        // Under a provider the cell is replayed whole too, inside the
+        // provider's closure (`Session::push_in_scopes`): the provider is
+        // built again for each cell, and only replaying what the scope's
+        // cells did to it (`bump(10);`, not just `let a = bump(2);`) gives
+        // the next cell the provider the saved `with_provider` block would
+        // (deferred.md § Cross-Cell Providers: "connect once, analyze";
+        // B-2026-11-24-29). A cell with a `defer` keeps the `let`-only form.
+        if active_scope.is_empty() || !cell_src.contains("defer") {
             // v2 carries no values across cells, so a later cell replays
             // this one whole: its statements as well as its `let`s, so a
             // mutation (`v.push(x)`, `n = 5`) reaches the cells after it.
             // What the replay prints is dropped (`repl_v2::CELL_START`).
-            // Under a provider the cell's `let`s alone are replayed, inside
-            // the provider's closure (`Session::push_in_scopes`).
             // The cell as kept (a `()` final expression has its `;`).
             let kept = self.cell_history.last().map_or(cell_src, String::as_str);
             // As the cell ran: a last statement lacking its `;` has it.
@@ -3651,7 +3656,19 @@ impl Session {
         for (i, scope) in self.persistent_let_provider_scope.iter().enumerate() {
             if scope == &active_at_close {
                 let let_src = &self.persistent_lets[i];
+                let origin = self.persistent_let_origin.get(i).copied().unwrap_or(0);
                 for binding in parse_let_binding_names(let_src) {
+                    // A later use is refused as an undefined name; this note
+                    // names the scope it left with (deferred.md § Cross-Cell
+                    // Providers, B-2026-11-24-29).
+                    self.retired_values.retain(|(n, _)| n != &binding);
+                    self.retired_values.push((
+                        binding.clone(),
+                        format!(
+                            "note: `{binding}` was declared inside `:provide {}` (cell {origin}) and went out of scope when `:end-provide {}` closed it",
+                            frame.resource, frame.resource
+                        ),
+                    ));
                     self.pruned_provider_lets.push(PrunedProviderLet {
                         binding_name: binding,
                     });

@@ -1,0 +1,4 @@
+Kāra REPL  (type :help for commands, :quit to exit)
+(:dep registered: serde = "1.0")
+  note: package resolution is not in 0.8: the entry is recorded but `serde`'s symbols are not in scope.
+

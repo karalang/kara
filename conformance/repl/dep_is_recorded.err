@@ -1,0 +1,4 @@
+usage: :dep <name> = "<version>"  or  :dep <name> = { git = "..." }
+usage: :dep <name> = "<version>"  or  :dep <name> = { git = "..." }
+error: invalid `:dep` syntax — expected `.`, `=`
+  expected: :dep <name> = "version"  or  :dep <name> = { git = "..." }

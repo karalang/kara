@@ -1,0 +1,20 @@
+// Saved Kāra REPL session.
+// Re-runs via `karac build` for identical observable behavior.
+
+trait Store { fn touch(mut ref self, n: i64) -> i64; }
+effect resource Db: Store;
+struct Mem { acc: i64 }
+impl Store for Mem { fn touch(mut ref self, n: i64) -> i64 { self.acc += n; self.acc } }
+fn bump(n: i64) -> i64 with writes(Db) { Db.touch(n) }
+
+fn main() with writes(Stdout) allocates(Heap) {
+    with_provider[Db](Mem { acc: 0 }, || {
+        println(f"{bump(2)}");
+
+        println(f"{bump(3)}");
+
+        let a = bump(10);
+
+        let _ = a;
+    });
+}
