@@ -1,0 +1,4 @@
+// design.md §9 CrossTask: it "cannot be ... derived".
+#[derive(CrossTask)]
+struct P { n: i64 }
+fn main() { println(P { n: 1 }.n); }

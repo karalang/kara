@@ -1,0 +1,11 @@
+// design.md §9 dyn Trait, Crossing tasks: "each coercion into it checking
+// that the concrete type is `CrossTask`": a type holding a `shared` handle
+// is not.
+trait Shape { fn area(self) -> i64; }
+shared struct Cell { mut n: i64 }
+struct Holds { c: Cell }
+impl Shape for Holds { fn area(self) -> i64 { self.c.n } }
+fn main() {
+    let d: dyn Shape + CrossTask = Holds { c: Cell { n: 2 } };
+    println(d.area());
+}

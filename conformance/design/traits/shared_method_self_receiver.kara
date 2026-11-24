@@ -1,0 +1,9 @@
+// Control for shared_method_mut_ref_receiver_refused: a `self` receiver.
+shared struct C { n: i64 }
+impl C {
+    fn get(self) -> i64 { self.n }
+}
+fn main() {
+    let c = C { n: 1 };
+    println(c.get());
+}

@@ -1,0 +1,12 @@
+// design.md §9 Index and IndexMut: with `IndexSet`, the replaced value "is
+// dropped".
+struct D { n: i64 }
+impl Drop for D {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn main() {
+    let mut m: Map[String, D] = Map.new();
+    m["a"] = D { n: 1 };
+    m["a"] = D { n: 2 };
+    println("set");
+}

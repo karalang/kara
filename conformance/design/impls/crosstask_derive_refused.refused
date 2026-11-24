@@ -1,0 +1,2 @@
+E_DERIVE_UNKNOWN
+`CrossTask` is not derivable: derive takes the built-in traits (PartialEq, Eq,

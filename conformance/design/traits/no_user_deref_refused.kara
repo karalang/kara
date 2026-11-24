@@ -1,0 +1,7 @@
+// design.md §9 Method resolution: "No user `Deref`".
+struct W { n: i64 }
+impl Deref for W {
+    type Target = i64;
+    fn deref(self) -> ref i64 { self.n }
+}
+fn main() { println(1); }

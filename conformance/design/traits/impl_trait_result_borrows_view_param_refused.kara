@@ -1,0 +1,9 @@
+// design.md §9 impl Trait: the result borrows every view parameter, so
+// the vector it views cannot change while the result lives.
+fn evens(xs: Slice[i64]) -> impl Iterator[Item = ref i64] { xs.iter() }
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    let it = evens(v.as_slice());
+    v.push(4);
+    println(it.count());
+}

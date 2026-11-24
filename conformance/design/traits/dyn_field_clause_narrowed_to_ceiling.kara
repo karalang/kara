@@ -1,0 +1,9 @@
+// design.md §9 dyn Trait, Effects: a call through a field has the type's
+// clause "narrowed to the method's own ceiling when the trait declares
+// one": the field has no clause, the method's ceiling is writes(Stdout).
+pub trait T { fn t(self) -> i64 with writes(Stdout); }
+struct P {}
+impl T for P { fn t(self) -> i64 with writes(Stdout) { println("t"); 1 } }
+pub struct H { h: dyn T }
+pub fn call(x: ref H) -> i64 with writes(Stdout) { x.h.t() }
+fn main() { println(call(H { h: P {} })); }

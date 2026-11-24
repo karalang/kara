@@ -1,0 +1,2 @@
+E0516
+cannot mutably borrow `v` while `r` still holds a borrow of it, taken at 10:18

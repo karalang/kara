@@ -1,0 +1,11 @@
+// design.md §9 dyn Trait: a `dyn Trait` value is "two machine words", and
+// `Option[dyn Trait]` is two words as well. A qualified receiver may name a
+// `dyn` type (B-2026-11-24-9).
+trait Shape { fn area(self) -> i64; }
+type D = dyn Shape;
+fn main() {
+    println(D.size_of());
+    println(Option[dyn Shape].size_of());
+    let v = Vec[dyn Shape].new();
+    println(v.len());
+}

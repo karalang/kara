@@ -1,0 +1,14 @@
+// design.md §9 impl Trait, what the result borrows: the value is live until
+// its scope ends, so what it borrows stays borrowed until then, whatever the
+// hidden type is, a `Copy` one included. `size` returns an `i64` behind
+// `impl Show`, and still borrows `v` past its last use.
+trait Show { fn show(self) -> i64; }
+impl Show for i64 { fn show(self) -> i64 { self } }
+fn size(v: Vec[i64]) -> impl Show { v.len() }
+fn main() {
+    let mut v = [1, 2];
+    let r = size(v);
+    println(r.show());
+    v.push(3);
+    println(v.len());
+}

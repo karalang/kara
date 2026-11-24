@@ -1,0 +1,13 @@
+// design.md §9 impl Trait: for a method with a `self` receiver, the result
+// borrows `self`, so `self` cannot move while the result lives.
+struct Bag { v: Vec[i64] }
+impl Bag {
+    fn items(self) -> impl Iterator[Item = ref i64] { self.v.iter() }
+}
+fn eat(b: own Bag) { println(b.v.len()); }
+fn main() {
+    let b = Bag { v: [1, 2, 3] };
+    let it = b.items();
+    eat(b);
+    println(it.count());
+}

@@ -1,0 +1,2 @@
+E0238
+cannot infer type parameter 'Iterator' of `Option[Iterator.Item]`, this call's result:

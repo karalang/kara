@@ -1,0 +1,4 @@
+// design.md §9 Derive: `Arithmetic` derives on "distinct types only".
+#[derive(Arithmetic)]
+struct P { n: i64 }
+fn main() { println(P { n: 1 }.n); }

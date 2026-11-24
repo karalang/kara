@@ -1,0 +1,2 @@
+E0400
+but does not declare it (via a call of `T.t` at line 8 through a `dyn` value whose type writes no `with` clause

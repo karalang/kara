@@ -1,0 +1,10 @@
+// Control: declared.
+struct H { n: i64 }
+impl Drop for H {
+    fn drop(mut ref self) { println("drop"); }
+}
+pub fn make() -> i64 with writes(Stdout) {
+    let h = H { n: 1 };
+    h.n
+}
+fn main() { println(make()); }

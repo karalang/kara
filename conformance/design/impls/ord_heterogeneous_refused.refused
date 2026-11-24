@@ -1,0 +1,2 @@
+E0200
+parameter 'o' of impl method 'M.cmp' is `i64`, but trait 'Ord' declares `M` there: an

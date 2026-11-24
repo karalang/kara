@@ -1,0 +1,2 @@
+E0236
+no method 'm' on type '*const S'; a raw pointer's methods are `offset`, `add`, `read`,

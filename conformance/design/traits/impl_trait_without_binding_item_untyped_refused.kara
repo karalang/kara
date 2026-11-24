@@ -1,0 +1,7 @@
+// design.md §9 impl Trait: "without the binding `it.next()` has no type
+// the caller can use".
+fn nums() -> impl Iterator { [1, 2].into_iter() }
+fn main() {
+    let x: i64 = nums().next().unwrap();
+    println(x);
+}

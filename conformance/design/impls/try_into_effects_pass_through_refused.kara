@@ -1,0 +1,15 @@
+// design.md §9 Conversion traits: effects pass through `try_into`: the
+// public caller declares none, and the `TryFrom` impl prints.
+struct Small { n: i64 }
+impl TryFrom[i64] for Small {
+    type Error = String;
+    fn try_from(n: own i64) -> Result[Small, String] with writes(Stdout) {
+        println("conv");
+        Ok(Small { n: n })
+    }
+}
+pub fn conv(n: i64) -> i64 {
+    let s: Result[Small, String] = n.try_into();
+    s.unwrap().n
+}
+fn main() { println(conv(3)); }

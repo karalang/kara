@@ -1,0 +1,6 @@
+// Control: `T: Copy + CrossTask`.
+fn total[T: Copy + CrossTask](xs: ref Vec[T]) -> i64 {
+    let ns = par for x in xs.iter() { 1 };
+    ns.len()
+}
+fn main() { println(total([1, 2])); }

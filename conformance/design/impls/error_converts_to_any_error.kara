@@ -1,0 +1,16 @@
+// design.md §9 Conversions: every `Error` type converts into `AnyError`
+// through `?`.
+struct Bad { code: i64 }
+impl Display for Bad { fn to_string(self) -> String { f"bad {self.code}" } }
+impl Error for Bad {}
+fn inner() -> Result[i64, Bad] { Err(Bad { code: 7 }) }
+fn outer() -> Result[i64, AnyError] {
+    let v = inner()?;
+    Ok(v)
+}
+fn main() {
+    match outer() {
+        Ok(v) => println(v),
+        Err(e) => println(e.to_string()),
+    }
+}

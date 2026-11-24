@@ -1,0 +1,4 @@
+// design.md §9 impl Trait: "An inline binding names a type, not a type
+// constructor": `Item = Vec` is refused.
+fn vs() -> impl Iterator[Item = Vec] { [[1]].into_iter() }
+fn main() { println(vs().count()); }

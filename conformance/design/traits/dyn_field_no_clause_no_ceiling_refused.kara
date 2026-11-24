@@ -1,0 +1,9 @@
+// design.md §9 dyn Trait, Effects: "A type with neither a clause nor a
+// ceiling has every effect", so a public caller declaring writes(Stdout)
+// does not cover a call through the field.
+pub trait T { fn t(self) -> i64; }
+struct P {}
+impl T for P { fn t(self) -> i64 { println("t"); 1 } }
+pub struct H { h: dyn T }
+pub fn call(x: ref H) -> i64 with writes(Stdout) { x.h.t() }
+fn main() { println(call(H { h: P {} })); }

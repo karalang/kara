@@ -1,0 +1,8 @@
+// design.md §9 Default: a tuple field gets "the tuple of its parts'
+// defaults", an `Array[T, N]` field N defaults.
+#[derive(Default)]
+struct T { p: (i64, bool), a: Array[Option[i64], 3] }
+fn main() {
+    let t = T.default();
+    println(f"{t.p.0} {t.p.1} {t.a.len()} {t.a[2].is_none()}");
+}

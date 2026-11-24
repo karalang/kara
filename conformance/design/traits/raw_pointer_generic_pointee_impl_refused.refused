@@ -1,0 +1,2 @@
+E0240
+`impl Show for *mut T`: a trait impl for a raw pointer whose pointee is a type parameter

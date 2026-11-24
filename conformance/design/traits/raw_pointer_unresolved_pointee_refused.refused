@@ -1,0 +1,2 @@
+E_RAW_POINTER_UNRESOLVED_POINTEE
+method 'read' on a raw pointer requires a known pointee type; the pointee type 'T' is

@@ -1,0 +1,2 @@
+E_NOT_CROSS_TASK
+capture of `d` (type `ref dyn Shape`) cannot cross a par {} task boundary

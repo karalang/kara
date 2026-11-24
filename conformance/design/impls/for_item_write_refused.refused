@@ -1,0 +1,2 @@
+E0517
+`s` is a `ref` to an element of the collection the `for` iterates (§4.6), so `s.push_str`

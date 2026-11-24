@@ -1,0 +1,2 @@
+E0240
+`impl *mut i64`: a raw pointer type has no inherent impl beyond its own methods; declare

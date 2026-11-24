@@ -1,0 +1,10 @@
+// design.md §9 dyn Trait, Crossing tasks: "A trait with `CrossTask` among
+// its supertraits makes every `dyn` of it `CrossTask`."
+trait Shape: CrossTask { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+fn both(d: dyn Shape) -> i64 {
+    let (a, b) = par { d.area(), d.area() };
+    a + b
+}
+fn main() { println(both(Sq { s: 3 })); }

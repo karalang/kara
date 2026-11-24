@@ -1,0 +1,7 @@
+// Control: the same instantiation at a quiet impl needs no clause.
+trait Q { fn q(self) -> i64; }
+struct Quiet {}
+impl Q for Quiet { fn q(self) -> i64 { 2 } }
+fn g[T: Q](x: T) -> i64 { x.q() }
+pub fn h() -> i64 { g(Quiet {}) }
+fn main() { println(h()); }

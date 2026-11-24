@@ -1,0 +1,9 @@
+// design.md §9 dyn Trait: a supertrait's required methods must be
+// dispatchable too (`Self` as a parameter is not).
+trait B { fn same(self, o: Self) -> bool; }
+trait A: B { fn a(self) -> i64; }
+struct S {}
+impl B for S { fn same(self, o: Self) -> bool { true } }
+impl A for S { fn a(self) -> i64 { 1 } }
+fn f(x: dyn A) -> i64 { x.a() }
+fn main() { println(f(S {})); }

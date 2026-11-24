@@ -1,0 +1,2 @@
+E_NOT_CROSS_TASK
+the item `x` of a `par for` (type `ref T`) cannot cross a task boundary

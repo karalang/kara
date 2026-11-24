@@ -1,0 +1,2 @@
+E0240
+conflicting impl: `P` already implements `M`; a type implements a trait once, and two

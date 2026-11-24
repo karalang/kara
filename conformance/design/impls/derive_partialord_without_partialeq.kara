@@ -1,0 +1,7 @@
+// design.md §9 Derive: "`PartialOrd` needs `PartialEq`"; in 0.8.x a missing
+// one is filled in with a deprecation warning.
+#[derive(PartialOrd)]
+struct V { n: i64 }
+fn main() {
+    println(V { n: 1 } < V { n: 2 });
+}

@@ -1,0 +1,6 @@
+// Control: a value within the clause.
+trait Shape { fn area(self) -> i64; }
+struct Quiet {}
+impl Shape for Quiet { fn area(self) -> i64 { 1 } }
+fn make() -> (dyn Shape with reads(Clock)) { Quiet {} }
+fn main() { println(make().area()); }

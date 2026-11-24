@@ -1,0 +1,11 @@
+// Control for any_error_not_error_refused: a type that implements `Error`
+// meets the bound, and an `AnyError` still displays.
+struct Bad { code: i64 }
+impl Display for Bad { fn to_string(self) -> String { f"bad {self.code}" } }
+impl Error for Bad {}
+fn describe[E: Error](e: E) -> String { e.to_string() }
+fn main() {
+    let e: AnyError = AnyError.from(Bad { code: 1 });
+    println(describe(Bad { code: 2 }));
+    println(e.to_string());
+}

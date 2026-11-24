@@ -1,0 +1,45 @@
+// design.md §9 Serialization, "Effects come from the format": the traits
+// and the derived code name no effects. Serializing into a String buffer
+// charges only what the buffer does, so a public caller declares nothing.
+
+struct Trace {
+    out: String,
+}
+
+impl Serializer for Trace {
+    fn serialize_bool(mut ref self, v: bool) { self.out.push_str(f"b{v} "); }
+    fn serialize_i64(mut ref self, v: i64) { self.out.push_str(f"i{v} "); }
+    fn serialize_u64(mut ref self, v: u64) { self.out.push_str(f"u{v} "); }
+    fn serialize_f64(mut ref self, v: f64) { self.out.push_str(f"f{v} "); }
+    fn serialize_string(mut ref self, v: String) { self.out.push_str(f"s{v} "); }
+    fn serialize_none(mut ref self) { self.out.push_str("none "); }
+    fn serialize_seq_begin(mut ref self, len: i64) { self.out.push_str(f"[{len} "); }
+    fn serialize_element(mut ref self) { self.out.push_str(", "); }
+    fn serialize_seq_end(mut ref self) { self.out.push_str("] "); }
+    fn serialize_map_begin(mut ref self, len: i64) { self.out.push_str(f"<{len} "); }
+    fn serialize_key(mut ref self) { self.out.push_str("k "); }
+    fn serialize_value(mut ref self) { self.out.push_str("v "); }
+    fn serialize_map_end(mut ref self) { self.out.push_str("> "); }
+    fn serialize_struct_begin(mut ref self, name: String, len: i64) { self.out.push_str(f"{name}{{{len} "); }
+    fn serialize_field(mut ref self, name: String) { self.out.push_str(f"{name}= "); }
+    fn serialize_struct_end(mut ref self) { self.out.push_str("} "); }
+    fn serialize_unit_variant(mut ref self, name: String, variant: String) { self.out.push_str(f"{name}::{variant} "); }
+    fn serialize_variant_begin(mut ref self, name: String, variant: String) { self.out.push_str(f"{name}::{variant}( "); }
+    fn serialize_variant_end(mut ref self) { self.out.push_str(") "); }
+}
+
+#[derive(Serialize)]
+pub struct Point {
+    pub x: i64,
+    pub ok: bool,
+}
+
+pub fn dump(p: Point) -> String {
+    let mut t = Trace { out: String.new() };
+    p.serialize(mut t);
+    t.out
+}
+
+fn main() {
+    println(dump(Point { x: 3, ok: false }).trim());
+}

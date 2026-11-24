@@ -1,0 +1,2 @@
+E0404
+returned value coerces `Loud` to `dyn Shape with reads(Clock)`, but `Loud.area` has

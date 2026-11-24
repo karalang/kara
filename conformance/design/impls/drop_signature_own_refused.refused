@@ -1,0 +1,2 @@
+E0288
+impl method 'H.drop' takes its receiver as `own self`, but 'Drop.drop' declares `mut ref

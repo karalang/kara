@@ -1,0 +1,5 @@
+// design.md §9 Coherence: "A tuple has no inherent impl".
+impl (i64, i64) {
+    fn s(self) -> i64 { self.0 + self.1 }
+}
+fn main() { println((1, 2).s()); }

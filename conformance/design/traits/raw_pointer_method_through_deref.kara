@@ -1,0 +1,8 @@
+// Control: `(*p).m()`.
+struct S { n: i64 }
+impl S { fn m(self) -> i64 { self.n } }
+fn main() {
+    let s = S { n: 4 };
+    let p: *const S = ptr.const(s);
+    unsafe { println((*p).m()); }
+}

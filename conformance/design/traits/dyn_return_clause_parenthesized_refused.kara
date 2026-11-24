@@ -1,0 +1,8 @@
+// design.md §9 dyn Trait, Effects: "`fn make() -> (dyn Shape with
+// reads(Clock))` gives the returned value the clause", and "Coercing a
+// value whose methods exceed the clause is an error at the coercion".
+trait Shape { fn area(self) -> i64; }
+struct Loud {}
+impl Shape for Loud { fn area(self) -> i64 { println("area"); 1 } }
+fn make() -> (dyn Shape with reads(Clock)) { Loud {} }
+fn main() { println(make().area()); }

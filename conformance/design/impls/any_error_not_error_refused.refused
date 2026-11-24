@@ -1,0 +1,2 @@
+E0200
+trait bound `E: Error` is not satisfied; `AnyError` does not implement `Error`; trait

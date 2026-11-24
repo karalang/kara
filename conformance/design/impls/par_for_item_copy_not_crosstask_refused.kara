@@ -1,0 +1,7 @@
+// design.md §9 CrossTask: a `par for` item must be CrossTask; `T: Copy`
+// alone is not enough.
+fn total[T: Copy](xs: ref Vec[T]) -> i64 {
+    let ns = par for x in xs.iter() { 1 };
+    ns.len()
+}
+fn main() { println(total([1, 2])); }

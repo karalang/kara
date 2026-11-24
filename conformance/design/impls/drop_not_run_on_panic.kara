@@ -1,0 +1,10 @@
+// design.md §9 Destructors: drops "do not run on a panic".
+struct D {}
+impl Drop for D {
+    fn drop(mut ref self) { println("drop"); }
+}
+fn main() {
+    let _d = D {};
+    println("before");
+    panic("x");
+}

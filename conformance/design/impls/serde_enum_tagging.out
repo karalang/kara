@@ -1,0 +1,8 @@
+"Stop" "Stop"
+{"Move":{"x":1}} {"Move":{"x":1}}
+{"Say":"hi"} {"Say":"hi"}
+{"type":"Stop"} {"type":"Stop"}
+{"type":"Move","x":2} {"type":"Move","x":2}
+3 3
+"t" "t"
+{"x":4,"y":5} {"x":4,"y":5}

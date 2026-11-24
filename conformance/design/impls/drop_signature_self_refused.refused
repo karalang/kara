@@ -1,0 +1,2 @@
+E_DROP_SIGNATURE_INVALID
+`impl Drop for H` does not match `trait Drop { fn drop(mut ref self); }` — the `drop`

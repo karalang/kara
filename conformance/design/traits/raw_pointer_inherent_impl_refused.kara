@@ -1,0 +1,5 @@
+// design.md §9: "an inherent impl on a pointer type [is] refused".
+impl *mut i64 {
+    fn z(self) -> i64 { 0 }
+}
+fn main() { println(1); }

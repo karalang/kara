@@ -1,0 +1,10 @@
+// design.md §9 Clone: "For an enum, every variant's fields must be
+// `Clone`".
+struct NoClone { n: i64 }
+#[derive(Clone)]
+enum E { A(NoClone), B }
+fn main() {
+    let e = E.A(NoClone { n: 1 });
+    let f = e.clone();
+    println(1);
+}

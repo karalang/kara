@@ -1,0 +1,7 @@
+// design.md §9 Index and IndexMut: range assignment "requires `T: Copy`".
+fn main() {
+    let mut v: Vec[String] = ["a".to_string(), "b".to_string()];
+    let w: Vec[String] = ["c".to_string()];
+    v[0..1] = w.as_slice();
+    println(v[0]);
+}

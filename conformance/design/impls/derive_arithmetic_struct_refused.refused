@@ -1,0 +1,2 @@
+E0200
+#[derive(Arithmetic)] is only valid on `distinct type`, not on struct 'P'; use manual

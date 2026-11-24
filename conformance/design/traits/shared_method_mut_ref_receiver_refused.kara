@@ -1,0 +1,9 @@
+// design.md §9 rules: "A `shared` type's methods take `self` only."
+shared struct C { n: i64 }
+impl C {
+    fn bump(mut ref self) { }
+}
+fn main() {
+    let c = C { n: 1 };
+    c.bump();
+}

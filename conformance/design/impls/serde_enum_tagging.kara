@@ -1,0 +1,46 @@
+// design.md §9 Serialization: enums are externally tagged by default;
+// `#[serde(tag: "type")]` makes them internally tagged and
+// `#[serde(untagged)]` untagged. Reading a tagged or untagged enum reads
+// ahead and back, so each form round-trips (re-serialized to show it).
+
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize)]
+enum Ext {
+    Stop,
+    Move { x: i64 },
+    Say(String),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag: "type")]
+enum Int {
+    Stop,
+    Move { x: i64 },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Un {
+    Num(i64),
+    Text(String),
+    Pt { x: i64, y: i64 },
+}
+
+fn main() {
+    for e in [Ext.Stop, Ext.Move { x: 1 }, Ext.Say("hi".to_string())] {
+        let s = Json.serialize(e);
+        let back: Ext = Json.deserialize(s.as_str()).unwrap();
+        println(f"{s} {Json.serialize(back)}");
+    }
+    for e in [Int.Stop, Int.Move { x: 2 }] {
+        let s = Json.serialize(e);
+        let back: Int = Json.deserialize(s.as_str()).unwrap();
+        println(f"{s} {Json.serialize(back)}");
+    }
+    for e in [Un.Num(3), Un.Text("t".to_string()), Un.Pt { x: 4, y: 5 }] {
+        let s = Json.serialize(e);
+        let back: Un = Json.deserialize(s.as_str()).unwrap();
+        println(f"{s} {Json.serialize(back)}");
+    }
+}

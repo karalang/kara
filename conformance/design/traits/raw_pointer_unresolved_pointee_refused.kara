@@ -1,0 +1,6 @@
+// design.md §9 Raw pointers need a known pointee: `ptr.null()` leaves the
+// pointee unknown, and the check is reported inside an `unsafe` block too.
+fn main() {
+    let p = ptr.null();
+    unsafe { let v = p.read(); }
+}

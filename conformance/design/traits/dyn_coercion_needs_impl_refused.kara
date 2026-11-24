@@ -1,0 +1,7 @@
+// design.md §9 dyn Trait: "S must implement `Trait`".
+trait Shape { fn area(self) -> i64; }
+struct NotShape {}
+fn main() {
+    let d: dyn Shape = NotShape {};
+    println(d.area());
+}

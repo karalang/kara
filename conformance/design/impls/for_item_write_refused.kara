@@ -1,0 +1,6 @@
+// design.md §9 Iterable: the `for` item cannot be "written through".
+fn main() {
+    let v: Vec[String] = ["a".to_string()];
+    for s in v.iter() { s.push_str("x"); }
+    println(v[0]);
+}

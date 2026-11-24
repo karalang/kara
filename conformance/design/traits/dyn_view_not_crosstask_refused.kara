@@ -1,0 +1,10 @@
+// design.md §9 dyn Trait, Crossing tasks: "There is no view carve-out: an
+// unmarked `dyn Trait` may not reach ... a `par` branch even as a view".
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+fn both(d: ref dyn Shape) -> i64 {
+    let (a, b) = par { d.area(), 1 };
+    a + b
+}
+fn main() { println(both(Sq { s: 3 })); }

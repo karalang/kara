@@ -1,0 +1,7 @@
+// design.md §9 dyn Trait: S implements the trait "with the bound
+// associated types": a String iterator is no `dyn Iterator[Item = i64]`.
+fn main() {
+    let words: Vec[String] = ["a".to_string()];
+    let it: dyn Iterator[Item = i64] = words.into_iter();
+    println(it.count());
+}

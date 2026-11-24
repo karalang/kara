@@ -1,0 +1,6 @@
+// design.md §9 Drop: "The signature is fixed: `fn drop(mut ref self)`".
+struct H { n: i64 }
+impl Drop for H {
+    fn drop(own self) { println("drop"); }
+}
+fn main() { let h = H { n: 1 }; println(h.n); }

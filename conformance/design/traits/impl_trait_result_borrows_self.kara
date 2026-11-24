@@ -1,0 +1,12 @@
+// Control: the result used up before `self` moves.
+struct Bag { v: Vec[i64] }
+impl Bag {
+    fn items(self) -> impl Iterator[Item = ref i64] { self.v.iter() }
+}
+fn eat(b: own Bag) { println(b.v.len()); }
+fn main() {
+    let b = Bag { v: [1, 2, 3] };
+    let it = b.items();
+    println(it.count());
+    eat(b);
+}

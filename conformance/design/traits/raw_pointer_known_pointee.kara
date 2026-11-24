@@ -1,0 +1,11 @@
+// Control for raw_pointer_unresolved_pointee_refused: the check "does not
+// fire" when the binding is annotated or the pointee is a generic parameter.
+fn rd[T: Copy](p: *const T) -> T {
+    unsafe { p.read() }
+}
+fn main() {
+    let x: i64 = 7;
+    let p: *const i64 = ptr.const(x);
+    unsafe { println(p.read()); }
+    println(rd(p));
+}

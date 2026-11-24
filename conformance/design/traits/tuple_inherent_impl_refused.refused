@@ -1,0 +1,2 @@
+E0240
+`impl (i64, i64)`: a tuple type has no inherent impl; wrap the tuple in a struct, or

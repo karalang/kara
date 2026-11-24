@@ -1,0 +1,2 @@
+E0200
+method 'bump' of the shared type 'C' takes `mut ref self`, but a shared type's methods

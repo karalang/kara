@@ -1,0 +1,3 @@
+// design.md §9 impl Trait: `impl Trait` in a type alias is deferred.
+type Evens = impl Iterator[Item = i64];
+fn main() { println(1); }

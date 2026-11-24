@@ -1,0 +1,6 @@
+// design.md §9 Iterable: the `for` item "cannot be moved out".
+fn keep(s: own String) { println(s); }
+fn main() {
+    let v: Vec[String] = ["a".to_string()];
+    for s in v.iter() { keep(s); }
+}

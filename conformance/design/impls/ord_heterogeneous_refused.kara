@@ -1,0 +1,6 @@
+// design.md §9 Operator traits: "`Eq` and `Ord` stay homogeneous".
+struct M { n: i64 }
+impl Ord[i64] for M {
+    fn cmp(self, o: i64) -> Ordering { self.n.cmp(o) }
+}
+fn main() { println(1); }

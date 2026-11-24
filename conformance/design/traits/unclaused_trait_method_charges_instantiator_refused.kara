@@ -1,0 +1,10 @@
+// design.md §9 rules, Effects: "A trait method with no clause has no
+// ceiling, so a call through a bound has the effects of the instance's
+// method, charged to whoever instantiates the generic function." `h`
+// instantiates `g` at `Loud`, whose `q` prints, and declares nothing.
+trait Q { fn q(self) -> i64; }
+struct Loud {}
+impl Q for Loud { fn q(self) -> i64 { println("loud"); 1 } }
+fn g[T: Q](x: T) -> i64 { x.q() }
+pub fn h() -> i64 { g(Loud {}) }
+fn main() { println(h()); }

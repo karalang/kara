@@ -1,0 +1,10 @@
+// design.md §9 Derive: a derive that implies another trait is deprecated,
+// and `karac fix` writes the implied traits into the derive list.
+#[derive(Hash, PartialEq, Eq)]
+struct Key { n: i64 }
+#[derive(PartialOrd, PartialEq)]
+struct Ver { n: i64 }
+fn main() {
+    println(Key { n: 1 } == Key { n: 1 });
+    println(Ver { n: 1 } < Ver { n: 2 });
+}

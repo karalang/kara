@@ -1,0 +1,8 @@
+// design.md §9 rules, Effects: "a call through a bound has the clause's
+// effects". `f` is public and declares none, so the bound call's
+// `writes(Stdout)` is undeclared.
+pub trait R { fn r(self) -> i64 with writes(Stdout); }
+struct S {}
+impl R for S { fn r(self) -> i64 with writes(Stdout) { println("r"); 1 } }
+pub fn f[T: R](x: T) -> i64 { x.r() }
+fn main() { println(f(S {})); }

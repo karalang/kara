@@ -1,4 +1,5 @@
-// derive(Hash) does not require PartialEq or Eq.
+// design.md §9 Derive: `derive(Hash)` without `PartialEq` and `Eq` is still
+// accepted in 0.8.x, with a deprecation warning: the derive implies them.
 #[derive(Hash)]
 struct Key { n: i64 }
 struct Rec { count: i64 }

@@ -1,0 +1,9 @@
+// design.md §9 impl Trait: "Only a bound that is itself Copy makes the
+// value Copy": `0..3` is Copy, but `impl Iterator` is not, so `a` moves.
+fn three() -> impl Iterator[Item = i64] { 0..3 }
+fn main() {
+    let a = three();
+    let b = a;
+    println(b.count());
+    println(a.count());
+}

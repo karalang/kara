@@ -1,0 +1,8 @@
+// design.md §9 Index and IndexMut: a write to a part (`m[k].f = v`) of a
+// missing key panics; only a whole-value write inserts.
+struct P { n: i64 }
+fn main() {
+    let mut m: Map[String, P] = Map.new();
+    m["x"].n = 1;
+    println("unreached");
+}

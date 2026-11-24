@@ -1,0 +1,2 @@
+E_DYN_NOT_DISPATCHABLE
+`A` cannot be used as `dyn`: its required method `same` (from its supertrait `B`) cannot

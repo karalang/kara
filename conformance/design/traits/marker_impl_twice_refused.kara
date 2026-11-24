@@ -1,0 +1,7 @@
+// design.md §9 Marker traits: "Coherence and the orphan rule apply
+// unchanged": a second impl of a marker for one type conflicts.
+marker trait M;
+struct P {}
+impl M for P {}
+impl M for P {}
+fn main() { println(1); }

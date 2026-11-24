@@ -1,0 +1,12 @@
+// design.md §9 Drop: "A drop's effects are ... charged to the scope where
+// the drop happens": `make` drops `H`, whose body prints, and declares
+// nothing.
+struct H { n: i64 }
+impl Drop for H {
+    fn drop(mut ref self) { println("drop"); }
+}
+pub fn make() -> i64 {
+    let h = H { n: 1 };
+    h.n
+}
+fn main() { println(make()); }

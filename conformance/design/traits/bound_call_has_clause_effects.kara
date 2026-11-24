@@ -1,0 +1,6 @@
+// Control for bound_call_has_clause_effects_refused: declared.
+pub trait R { fn r(self) -> i64 with writes(Stdout); }
+struct S {}
+impl R for S { fn r(self) -> i64 with writes(Stdout) { println("r"); 1 } }
+pub fn f[T: R](x: T) -> i64 with writes(Stdout) { x.r() }
+fn main() { println(f(S {})); }

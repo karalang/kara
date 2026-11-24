@@ -1,0 +1,2 @@
+E0200
+assigning to a range copies elements in, which needs `String: Copy`; clone them in with

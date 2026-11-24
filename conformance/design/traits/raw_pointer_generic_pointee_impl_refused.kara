@@ -1,0 +1,5 @@
+// design.md §9: "A pointee that is a type parameter (`impl[T] Show for
+// *mut T`) ... [is] refused".
+trait Show { fn show(self) -> i64; }
+impl[T] Show for *mut T { fn show(self) -> i64 { 1 } }
+fn main() { println(1); }

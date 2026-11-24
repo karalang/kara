@@ -1,0 +1,10 @@
+// design.md §9 Clone: "Manual impls are allowed."
+struct P { n: i64 }
+impl Clone for P {
+    fn clone(self) -> P { P { n: self.n + 1 } }
+}
+fn main() {
+    let a = P { n: 1 };
+    let b = a.clone();
+    println(f"{a.n} {b.n}");
+}
