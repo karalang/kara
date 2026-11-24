@@ -411,50 +411,88 @@ impl[T: Display] Slice[T] {
     }
 }
 
-/// The elements of a `Vec`, front to back, each moved out. `items` holds
-/// the ones not yet taken: in order while `rev` is false, so `pop` takes
-/// the last, and reversed while it is true, so `pop` takes the first. A
-/// walk turns the vector round in place the first time it needs the other
-/// end, so a walk from either end allocates nothing (B-2026-11-24-32: each
-/// element was pushed one at a time into a second, growing `Vec`).
+/// The elements of a `Vec`, front to back, each moved out. The ones not
+/// yet taken are `items[front..back]`; a walk from either end reads one
+/// out and moves its end past it, as Rust's `vec::IntoIter` does, so
+/// nothing is copied up front and the first `next` costs what any other
+/// does (B-2026-11-24-32 turned the vector round on the first `next`, and
+/// before it every element was pushed into a second, growing `Vec`).
+/// The slots outside `front..back` hold the bits of elements already moved
+/// out, so the vector must never drop them: `drop` forgets every slot.
 struct VecIntoIter[T] {
     items: Vec[T],
-    rev: bool,
+    front: i64,
+    back: i64,
 }
 
 impl[T] Iterator for VecIntoIter[T] {
     type Item = T;
 
     fn next(mut ref self) -> Option[T] {
-        if not self.rev {
-            self.items.reverse();
-            self.rev = true;
+        if self.front < self.back {
+            let at = self.front;
+            self.front = at + 1;
+            // Safety: `at` is below `back`, so in bounds and not yet taken;
+            // `front` has moved past it, so it is read out once.
+            Some(unsafe { self.items.as_mut_ptr().offset(at).read() })
+        } else {
+            None
         }
-        self.items.pop()
     }
 }
 
 impl[T] DoubleEndedIterator for VecIntoIter[T] {
     fn next_back(mut ref self) -> Option[T] {
-        if self.rev {
-            self.items.reverse();
-            self.rev = false;
+        if self.front < self.back {
+            let at = self.back - 1;
+            self.back = at;
+            // Safety: as in `next`, from the other end.
+            Some(unsafe { self.items.as_mut_ptr().offset(at).read() })
+        } else {
+            None
         }
-        self.items.pop()
     }
 }
 
 impl[T] ExactSizeIterator for VecIntoIter[T] {
     fn len(ref self) -> i64 {
-        self.items.len()
+        self.back - self.front
     }
 }
 
 impl[T] Drop for VecIntoIter[T] {
-    /// The elements not taken drop front to back, as the vector's would.
+    /// The elements not taken drop front to back, as the vector's would;
+    /// then the vector forgets every slot and frees only its buffer. The
+    /// `defer` forgets them on a panicking element drop too, which leaks
+    /// the rest rather than dropping a taken one twice.
     fn drop(mut ref self) {
-        if self.rev {
-            self.items.reverse();
+        defer {
+            // Safety: every slot was read out, here or by `next`/`next_back`.
+            unsafe {
+                self.items.set_len(0);
+            }
+        }
+        let p = self.items.as_mut_ptr();
+        while self.front < self.back {
+            let at = self.front;
+            self.front = at + 1;
+            // Safety: as in `next`.
+            let x = unsafe { p.offset(at).read() };
+            drop(x);
+        }
+    }
+}
+
+impl[T] Vec[T] {
+    /// Sets the length to `n` without dropping or initializing any element:
+    /// the elements at `n..` are forgotten. `n` must be at most the length
+    /// (more is undefined behaviour), and the caller must have moved out
+    /// or otherwise owns what the forgotten slots held. A native of each
+    /// MIR backend.
+    #[compiler_builtin]
+    unsafe fn set_len(mut ref self, n: i64) {
+        unsafe {
+            self.set_len(n);
         }
     }
 }
@@ -550,7 +588,8 @@ impl[T] Vec[T] {
         // `append` moves the tail back in one step; `extend` pushes it an
         // element at a time, 60 times slower under the interpreter (kata 1047).
         self.append(mut tail);
-        VecIntoIter { items: taken, rev: false }
+        let n = taken.len();
+        VecIntoIter { items: taken, front: 0, back: n }
     }
 
     /// Removes and returns the first element `pred` accepts, shifting the
@@ -2566,7 +2605,8 @@ impl[T] IntoIterator for Vec[T] {
 
     /// The elements, front to back, each moved out of the vector.
     fn into_iter(own self) -> VecIntoIter[T] {
-        VecIntoIter { items: self, rev: false }
+        let n = self.len();
+        VecIntoIter { items: self, front: 0, back: n }
     }
 }
 

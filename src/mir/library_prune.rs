@@ -195,6 +195,9 @@ const ALWAYS_KEPT: &[&str] = &[
     // only through `as_deref`.
     "as_deref",
     "__view",
+    // `Vec.set_len`, a `#[compiler_builtin]` both backends answer by name;
+    // `VecIntoIter`'s drop calls it (B-2026-11-20-109).
+    "set_len",
 ];
 
 /// Names in [`ALWAYS_KEPT`] the compiler answers, natively or by

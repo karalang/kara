@@ -2924,6 +2924,13 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.drop_moved(&args[1..])?;
                 }
             }
+            ("set_len", [k]) if is_vec => {
+                // `unsafe fn set_len`: the length becomes `k` and nothing
+                // drops; `VecIntoIter`'s drop forgets the slots it read out.
+                let k = self.int_arg(k)?;
+                let v = self.ref_arg(recv)?;
+                self.store(self.offset(v, 8)?, k.into())?;
+            }
             ("truncate", [k]) if is_vec => {
                 // The tail drops first to last, as a dying Vec's does.
                 let k = self.int_arg(k)?;

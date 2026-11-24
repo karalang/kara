@@ -583,6 +583,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `Vec.set_len(n)`, an `unsafe fn`: the length becomes `n` and the
+  elements past it are forgotten, not dropped, for code that has read them
+  out through a raw pointer (docs/library/collections.md). Only shrinking
+  is defined; the interpreter refuses a larger `n`.
 - A program's trait impl for a tuple may be generic over its parts:
   `impl[A: Show, B: Show] Show for (A, B)` applies to every pair whose
   parts meet the bounds, nested pairs included, through a method call,
@@ -2368,12 +2372,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 ### Performance
 
 - `v.into_iter()` no longer copies the vector into a second one on its
-  first `next`: the elements not yet taken stay in one vector, turned round
-  in place the first time a walk needs the other end. Kata 1752's bench
+  first `next`: it walks a cursor over the vector it took, as Rust's
+  `vec::IntoIter` does, reading each element out in place, so the first
+  `next` costs what any other does. Kata 1752's bench
   (`nums.windows(2).into_iter().filter(..).count()` over 500,000 arrays)
-  runs 2.67G instructions rather than 3.35G, about 230 ms rather than 300.
-  `drain(..)` and a `Map` or `Set`'s `into_iter` take the same path
-  (B-2026-11-24-32).
+  runs 1.96G instructions rather than 3.35G, about 165 ms rather than 260,
+  the same as the chain over `.iter()`. `drain(..)` and a `Map` or `Set`'s
+  `into_iter` take the same path (B-2026-11-24-32, B-2026-11-20-109).
 - On the MIR interpreter (`karac repl`, comptime, `--interp`), an insert
   into a `SortedMap` or `SortedSet` no longer shifts every later entry: the
   table keeps its key order in a chunked index of slots. 10^5 inserts in

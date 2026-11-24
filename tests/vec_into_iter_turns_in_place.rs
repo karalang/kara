@@ -1,10 +1,12 @@
-//! `Vec.into_iter` keeps the elements not yet taken in one vector, turned
-//! round in place the first time a walk needs its other end
-//! (B-2026-11-24-32). It used to push every element, one at a time, into
-//! a second, growing vector on the first `next`. Every walk gives what it
-//! gave before: front to back, back to front, the two ends alternately,
-//! `drain(..).rev()`, and the elements a partial walk leaves drop front to
-//! back.
+//! `Vec.into_iter` walks a cursor over the vector it took: `next` and
+//! `next_back` each read one element out through a raw pointer and move
+//! their end past it, and the iterator's drop drops what is left front to
+//! back, then forgets every slot with `set_len(0)`. It used to turn the
+//! vector round on the first `next` (B-2026-11-24-32), and before that to
+//! push every element, one at a time, into a second, growing vector.
+//! Every walk gives what it gave before: front to back, back to front, the
+//! two ends alternately, `drain(..).rev()`, and the elements a partial
+//! walk leaves drop front to back, each once (the ASan run checks).
 #![cfg(feature = "llvm")]
 
 mod common;

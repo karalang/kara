@@ -4472,6 +4472,21 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Bool(false))
             }
+            // `unsafe fn set_len`: the elements at `n..` are forgotten, not
+            // dropped (their bits were read out through a raw pointer, as
+            // `VecIntoIter` does). Growing has no initialized slots to show,
+            // so it is refused.
+            (true, "set_len", [v, Value::Int(n)]) => {
+                let id = self.box_behind(v)?;
+                let len = self.vec_elems(id)?.len();
+                if *n < 0 || *n > len as i128 {
+                    return err(format!(
+                        "Vec.set_len({n}) on a vector of length {len}: the length may only shrink"
+                    ));
+                }
+                self.vec_elems(id)?.truncate(*n as usize);
+                Ok(Value::Unit)
+            }
             (true, "truncate", [v, Value::Int(n)]) => {
                 let id = self.box_behind(v)?;
                 let e = self.vec_elem_ty(arg_tys, &name.to_string())?;
@@ -15660,9 +15675,16 @@ impl<'a> Interp<'a> {
     /// `get` or `first` of a `Vec[ref T]` is the element, a `ref T`.
     /// What the native `name` gave, with a borrow of a borrow made the
     /// borrow. `index_slot`'s is kept: the slot of a reference element,
-    /// which a raw pointer reads and writes (B-2026-11-20-40).
+    /// which a raw pointer reads and writes (B-2026-11-20-40), and so is
+    /// `as_ptr`'s and `as_mut_ptr`'s: a raw pointer to the first slot, which
+    /// `offset` moves along the sequence. Collapsed, it pointed into the
+    /// first element's referent, so `VecIntoIter` over a `Vec[ref T]` read
+    /// the referent's neighbours (B-2026-11-20-109).
     pub(super) fn native_result(&mut self, name: &str, v: Value) -> Value {
-        if name.ends_with(".index_slot") {
+        if name.ends_with(".index_slot")
+            || name.ends_with(".as_ptr")
+            || name.ends_with(".as_mut_ptr")
+        {
             return v;
         }
         self.collapse_ref_of_ref(v)
