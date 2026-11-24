@@ -260,26 +260,53 @@ pub fn evaluate_on_mir(
         splice(program, spliced);
         return errors;
     }
-    let mut eval = program.clone();
-    for aside in bodies {
-        crate::mir::lower::restore_library_bodies(&mut eval, (*aside).clone());
-    }
-    for item in &mut eval.items {
-        if let Item::Function(f) = item {
-            if f.is_comptime {
-                comptime_params_as_receivers(f);
-            }
-        }
-    }
-    eval.items.extend(roots);
-    crate::node_ids::assign_node_ids(&mut eval);
-    let r = crate::resolve_v2(&eval);
-    let tc = retype(&eval, &r);
-    let refl = reflection(&eval, &tc);
+    // The evaluation runs only what its roots reach, so it gets back only
+    // the library bodies they can reach by name, and type-checks and lowers
+    // those rather than the whole library (B-2026-11-23-6). A body the
+    // builder reaches without its name being written (an operator's, a
+    // `for` loop's) shows up among the lowered bodies by its name, and is
+    // put back for another round. `KARAC_COMPTIME_ALL_BODIES=1` puts back
+    // every body, as before.
+    let mut keep = reached_library_bodies(program, &roots, bodies);
     let names: Vec<String> = jobs.iter().map(|j| j.root.clone()).collect();
     let user_len = program.library_start;
-    let mut lowered =
-        crate::mir::lower::lower_program_with_roots(&eval, src, user_len, &tc, &r, &names);
+    if std::env::var("KARAC_COMPTIME_ALL_BODIES").as_deref() == Ok("1") {
+        for (set, b) in bodies.iter().enumerate() {
+            keep[set] = (0..b.len()).collect();
+        }
+    }
+    let mut rounds = 0;
+    let (eval, r, tc, mut lowered) = loop {
+        rounds += 1;
+        let mut eval = program.clone();
+        for (aside, keep) in bodies.iter().zip(&keep) {
+            crate::mir::lower::restore_some_library_bodies(&mut eval, aside, keep);
+        }
+        for item in &mut eval.items {
+            if let Item::Function(f) = item {
+                if f.is_comptime {
+                    comptime_params_as_receivers(f);
+                }
+            }
+        }
+        eval.items.extend(roots.iter().cloned());
+        crate::node_ids::assign_node_ids(&mut eval);
+        let r = crate::resolve_v2(&eval);
+        let tc = retype(&eval, &r);
+        let lowered =
+            crate::mir::lower::lower_program_with_roots(&eval, src, user_len, &tc, &r, &names);
+        if !keep_lowered_bodies(&lowered.program.bodies, bodies, &mut keep) {
+            break (eval, r, tc, lowered);
+        }
+    };
+    if std::env::var("KARAC_MIR_TIME").as_deref() == Ok("1") {
+        let kept: usize = keep.iter().map(|k| k.len()).sum();
+        let all: usize = bodies.iter().map(|b| b.len()).sum();
+        eprintln!(
+            "[mir-time] evaluation restored {kept} of {all} library bodies in {rounds} round(s)"
+        );
+    }
+    let refl = reflection(&eval, &tc);
     // A root the builder cannot lower is reported at its own site; the
     // others still run, from a lowering of their own.
     let mut broken: HashMap<String, Vec<String>> = HashMap::new();
@@ -485,6 +512,205 @@ fn non_foldable(job: &Job, why: &str) -> ComptimeError {
         ),
         span: job.site,
     }
+}
+
+/// For each set of library bodies in `bodies`, the ones the evaluation's
+/// `roots` can reach. A body is reached when its function's or method's
+/// name is written in a root or in a body already reached (the program's
+/// own included), and, for a method of a type the library defines, once
+/// that type's name is written too, in a body or in a reached signature.
+/// By name, not by resolved function, so it over-keeps (every reached
+/// type's `len` once one `len` is called); what it misses, a body the
+/// builder reaches without its name being written, [`keep_lowered_bodies`]
+/// adds.
+fn reached_library_bodies(
+    program: &Program,
+    roots: &[Item],
+    bodies: &[&crate::mir::lower::LibraryBodies],
+) -> Vec<rustc_hash::FxHashSet<usize>> {
+    use rustc_hash::{FxHashMap, FxHashSet};
+    let in_library = |s: &Span| program.library_start.is_some_and(|n| s.offset >= n);
+    // The types the library defines: a method of one waits for its name.
+    let mut defined: FxHashSet<&str> = FxHashSet::default();
+    // What each name reaches that is always there: the program's own
+    // functions and methods, the roots, and the library's signatures.
+    let mut own: FxHashMap<&str, Vec<Vec<String>>> = FxHashMap::default();
+    let mut sigs: FxHashMap<(Option<&str>, &str), Vec<String>> = FxHashMap::default();
+    for item in program.items.iter().chain(roots) {
+        match item {
+            Item::StructDef(d) if in_library(&d.span) => {
+                defined.insert(&d.name);
+            }
+            Item::EnumDef(d) if in_library(&d.span) => {
+                defined.insert(&d.name);
+            }
+            Item::Function(f) => {
+                let names = function_names(f);
+                if in_library(&f.span) {
+                    sigs.entry((None, &f.name)).or_default().extend(names);
+                } else {
+                    own.entry(&f.name).or_default().push(names);
+                }
+            }
+            Item::ImplBlock(b) => {
+                let target = match &b.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                    _ => None,
+                };
+                for it in &b.items {
+                    if let ImplItem::Method(m) = it {
+                        let names = function_names(m);
+                        if in_library(&b.span) {
+                            sigs.entry((target, &m.name)).or_default().extend(names);
+                        } else {
+                            own.entry(&m.name).or_default().push(names);
+                        }
+                    }
+                }
+            }
+            Item::TraitDef(t) if !in_library(&t.span) => {
+                for it in &t.items {
+                    if let TraitItem::Method(m) = it {
+                        if let Some(b) = &m.body {
+                            let mut names = Vec::new();
+                            body_names(&b.stmts, b.final_expr.as_deref(), &mut names);
+                            own.entry(&m.name).or_default().push(names);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // The set-aside bodies by name, and those waiting on their type's.
+    let mut by_name: FxHashMap<&str, Vec<(usize, usize)>> = FxHashMap::default();
+    for (set, b) in bodies.iter().enumerate() {
+        for i in 0..b.len() {
+            by_name.entry(b.name(i)).or_default().push((set, i));
+        }
+    }
+    let mut waiting: FxHashMap<&str, Vec<(usize, usize)>> = FxHashMap::default();
+    let mut keep = vec![FxHashSet::default(); bodies.len()];
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    let mut work: Vec<String> = Vec::new();
+    for root in roots {
+        if let Item::Function(f) = root {
+            work.extend(function_names(f));
+        }
+    }
+    let mut take = |set: usize, i: usize, next: &mut Vec<String>| {
+        if keep[set].insert(i) {
+            let (stmts, fin) = bodies[set].body(i);
+            body_names(stmts, fin, next);
+            if let Some(sig) = sigs.get(&(bodies[set].target(i), bodies[set].name(i))) {
+                next.extend(sig.iter().cloned());
+            }
+        }
+    };
+    while let Some(name) = work.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let mut next = Vec::new();
+        for names in own.get(name.as_str()).into_iter().flatten() {
+            next.extend(names.iter().cloned());
+        }
+        for &(set, i) in by_name.get(name.as_str()).into_iter().flatten() {
+            match bodies[set].target(i) {
+                Some(t) if defined.contains(t) && !seen.contains(t) => {
+                    waiting.entry(t).or_default().push((set, i));
+                }
+                _ => take(set, i, &mut next),
+            }
+        }
+        for (set, i) in waiting.remove(name.as_str()).into_iter().flatten() {
+            take(set, i, &mut next);
+        }
+        work.extend(next.into_iter().filter(|n| !seen.contains(n)));
+    }
+    keep
+}
+
+/// The names a function writes, in its signature and its body:
+/// [`body_names`]'s, and its types'.
+fn function_names(f: &Function) -> Vec<String> {
+    let mut out = Vec::new();
+    crate::span_visitor::walk_function_mut_with(&mut f.clone(), &mut Names(&mut out));
+    out
+}
+
+/// The names a body writes that could name a function, a method or a type:
+/// its identifiers, paths, fields, methods, types and patterns' types.
+fn body_names(stmts: &[Stmt], fin: Option<&Expr>, out: &mut Vec<String>) {
+    let mut names = Names(out);
+    for s in stmts {
+        crate::span_visitor::walk_stmt_mut_with(&mut s.clone(), &mut names);
+    }
+    if let Some(e) = fin {
+        crate::span_visitor::walk_expr_mut_with(&mut e.clone(), &mut names);
+    }
+}
+
+/// What [`body_names`] collects with.
+struct Names<'a>(&'a mut Vec<String>);
+
+impl MutVisitor for Names<'_> {
+    fn span(&mut self, _: &mut Span) {}
+    fn expr(&mut self, e: &mut Expr) {
+        match &e.kind {
+            ExprKind::Identifier(n) => self.0.push(n.clone()),
+            ExprKind::Path { segments, .. } => self.0.extend(segments.iter().cloned()),
+            ExprKind::StructLiteral { path, .. } => self.0.extend(path.iter().cloned()),
+            ExprKind::FieldAccess { field, .. } => self.0.push(field.clone()),
+            ExprKind::MethodCall { method, .. } => self.0.push(method.clone()),
+            ExprKind::OptionalChain {
+                field_or_method, ..
+            } => self.0.push(field_or_method.clone()),
+            _ => {}
+        }
+    }
+    fn type_expr(&mut self, t: &mut TypeExpr) {
+        if let TypeKind::Path(p) = &t.kind {
+            self.0.extend(p.segments.iter().cloned());
+        }
+    }
+    fn pattern(&mut self, p: &mut Pattern) {
+        match &p.kind {
+            PatternKind::Struct { path, .. } | PatternKind::TupleVariant { path, .. } => {
+                self.0.extend(path.iter().cloned())
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Adds to `keep` each set-aside body not in it that `lowered` holds a body
+/// of the same name for: possibly one the builder reached without its name
+/// being written, lowered empty. Whether it added any.
+fn keep_lowered_bodies(
+    lowered: &std::collections::BTreeMap<String, crate::mir::Body>,
+    bodies: &[&crate::mir::lower::LibraryBodies],
+    keep: &mut [rustc_hash::FxHashSet<usize>],
+) -> bool {
+    let reached: rustc_hash::FxHashSet<&str> = lowered
+        .keys()
+        .map(|k| {
+            let last = k.rsplit('.').next().unwrap_or(k);
+            let end = last
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(last.len());
+            &last[..end]
+        })
+        .collect();
+    let mut added = false;
+    for (set, b) in bodies.iter().enumerate() {
+        for i in 0..b.len() {
+            if reached.contains(b.name(i)) && keep[set].insert(i) {
+                added = true;
+            }
+        }
+    }
+    added
 }
 
 /// The jobs of `program`, each with its root function.

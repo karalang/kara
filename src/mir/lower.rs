@@ -32750,7 +32750,7 @@ fn panic_handler_name(src: &str) -> Option<String> {
 /// check reads it to tell what the method's result borrows
 /// (`through_ref_fields`, B-2026-10-21-59).
 pub fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::ops::Range<usize>) {
-    for_each_library_body(program, range, &mut |b| {
+    for_each_library_body(program, range, &mut |_, _, b| {
         b.stmts.clear();
         b.final_expr = None;
     });
@@ -32764,6 +32764,39 @@ pub fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::o
 pub struct LibraryBodies {
     range: std::ops::Range<usize>,
     bodies: Vec<(Vec<crate::ast::Stmt>, Option<Box<crate::ast::Expr>>)>,
+    /// Each body's function or method name, in the order of `bodies`.
+    names: Vec<String>,
+    /// The type a method's impl is for, by its last segment, in the same
+    /// order; `None` for a function or a trait's default body.
+    targets: Vec<Option<String>>,
+}
+
+impl LibraryBodies {
+    /// How many bodies were set aside.
+    pub fn len(&self) -> usize {
+        self.bodies.len()
+    }
+
+    /// Whether none were.
+    pub fn is_empty(&self) -> bool {
+        self.bodies.is_empty()
+    }
+
+    /// The name of the function or method the `i`th body belongs to.
+    pub fn name(&self, i: usize) -> &str {
+        &self.names[i]
+    }
+
+    /// The type the `i`th body's impl is for, when it is an impl's method.
+    pub fn target(&self, i: usize) -> Option<&str> {
+        self.targets[i].as_deref()
+    }
+
+    /// The `i`th body's statements and its final expression.
+    pub fn body(&self, i: usize) -> (&[crate::ast::Stmt], Option<&crate::ast::Expr>) {
+        let (stmts, fin) = &self.bodies[i];
+        (stmts, fin.as_deref())
+    }
 }
 
 /// Empty the library's bodies in `range` as [`library_bodies_unchecked`]
@@ -32773,20 +32806,48 @@ pub fn take_library_bodies(
     range: std::ops::Range<usize>,
 ) -> LibraryBodies {
     let mut bodies = Vec::new();
-    for_each_library_body(program, range.clone(), &mut |b| {
+    let mut names = Vec::new();
+    let mut targets = Vec::new();
+    for_each_library_body(program, range.clone(), &mut |name, target, b| {
         bodies.push((std::mem::take(&mut b.stmts), b.final_expr.take()));
+        names.push(name.to_string());
+        targets.push(target.map(str::to_string));
     });
-    LibraryBodies { range, bodies }
+    LibraryBodies {
+        range,
+        bodies,
+        names,
+        targets,
+    }
 }
 
 /// Put back the bodies [`take_library_bodies`] set aside.
 pub fn restore_library_bodies(program: &mut crate::ast::Program, aside: LibraryBodies) {
     let mut it = aside.bodies.into_iter();
-    for_each_library_body(program, aside.range, &mut |b| {
+    for_each_library_body(program, aside.range, &mut |_, _, b| {
         if let Some((stmts, final_expr)) = it.next() {
             b.stmts = stmts;
             b.final_expr = final_expr;
         }
+    });
+}
+
+/// Put back a copy of each body [`take_library_bodies`] set aside whose
+/// index `keep` holds; the others stay empty.
+pub fn restore_some_library_bodies(
+    program: &mut crate::ast::Program,
+    aside: &LibraryBodies,
+    keep: &FxHashSet<usize>,
+) {
+    let mut i = 0;
+    for_each_library_body(program, aside.range.clone(), &mut |_, _, b| {
+        if keep.contains(&i) {
+            if let Some((stmts, final_expr)) = aside.bodies.get(i) {
+                b.stmts = stmts.clone();
+                b.final_expr = final_expr.clone();
+            }
+        }
+        i += 1;
     });
 }
 
@@ -32795,10 +32856,11 @@ pub fn restore_library_bodies(program: &mut crate::ast::Program, aside: LibraryB
 fn for_each_library_body(
     program: &mut crate::ast::Program,
     range: std::ops::Range<usize>,
-    visit: &mut dyn FnMut(&mut crate::ast::Block),
+    visit: &mut dyn FnMut(&str, Option<&str>, &mut crate::ast::Block),
 ) {
-    use crate::ast::{Block, ImplItem, Item, TraitItem, TypeKind};
-    let mut empty = |b: &mut Block| visit(b);
+    use crate::ast::{ImplItem, Item, TraitItem, TypeKind};
+    let mut empty =
+        |name: &str, target: Option<&str>, b: &mut crate::ast::Block| visit(name, target, b);
     let ref_structs: FxHashSet<String> = program
         .items
         .iter()
@@ -32817,25 +32879,29 @@ fn for_each_library_body(
         .collect();
     for item in &mut program.items {
         match item {
-            Item::Function(f) if range.contains(&f.span.offset) => empty(&mut f.body),
+            Item::Function(f) if range.contains(&f.span.offset) => {
+                empty(&f.name, None, &mut f.body)
+            }
             Item::TraitDef(t) if range.contains(&t.span.offset) => {
                 for it in &mut t.items {
                     if let TraitItem::Method(m) = it {
                         if let Some(b) = m.body.as_mut() {
-                            empty(b);
+                            empty(&m.name, None, b);
                         }
                     }
                 }
             }
             Item::ImplBlock(b) if range.contains(&b.span.offset) => {
-                if let TypeKind::Path(p) = &b.target_type.kind {
-                    if p.segments.last().is_some_and(|n| ref_structs.contains(n)) {
-                        continue;
-                    }
+                let target = match &b.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                };
+                if target.as_ref().is_some_and(|n| ref_structs.contains(n)) {
+                    continue;
                 }
                 for it in &mut b.items {
                     if let ImplItem::Method(f) = it {
-                        empty(&mut f.body);
+                        empty(&f.name, target.as_deref(), &mut f.body);
                     }
                 }
             }
