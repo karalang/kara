@@ -55,6 +55,9 @@ pub(super) struct Amalgam {
     /// The root package's first import of each dependency whose public
     /// effects are inferred, placed in `text`.
     pub inferred_imports: Vec<crate::manifest::InferredImport>,
+    /// `(start, end, dotted module path)` of each copied file of a module
+    /// other than a package's root.
+    module_ranges: Vec<(usize, usize, String)>,
 }
 
 impl Amalgam {
@@ -100,6 +103,8 @@ impl Amalgam {
     pub fn package_effects_into(&self, config: &mut crate::manifest::ProfileConfig) {
         config.package_effects = self.package_effects.clone();
         config.inferred_imports = self.inferred_imports.clone();
+        config.shown_names = self.names.clone();
+        config.module_ranges = self.module_ranges.clone();
     }
 
     /// Hand the line map to the MIR interpreter and to codegen, which report
@@ -824,6 +829,7 @@ pub(super) fn amalgamate(
     let mut text = String::new();
     let mut lines = Vec::new();
     let mut bytes = Vec::new();
+    let mut module_ranges = Vec::new();
     let mut line = 1;
     for (h, file, l) in header {
         lines.push((line, file, l));
@@ -841,6 +847,9 @@ pub(super) fn amalgamate(
     for (f, body) in files.iter().zip(bodies) {
         lines.push((line, shown(f.path), 1));
         bytes.push((text.len(), body.len(), shown(f.path)));
+        if !f.module.path.is_empty() {
+            module_ranges.push((text.len(), text.len() + body.len(), f.module.path.join(".")));
+        }
         match &f.module.package {
             Some(package) => package_effects.push(crate::manifest::PackageEffects {
                 start: text.len(),
@@ -904,6 +913,7 @@ pub(super) fn amalgamate(
         hidden,
         package_effects,
         inferred_imports,
+        module_ranges,
     })
 }
 

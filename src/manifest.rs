@@ -271,6 +271,13 @@ pub struct ProfileConfig {
     /// `public_effects = "inferred"`, where the
     /// `inferred_dependency_effects` lint reports it.
     pub inferred_imports: Vec<InferredImport>,
+    /// A package's combined source: each declaration a rename gave another
+    /// name, as `(name in the combined text, module-path name)` (`make__a`
+    /// is `a.make`), and each module file's byte range with its dotted
+    /// path, so a report names a function by its source path
+    /// (B-2026-11-25-52).
+    pub shown_names: Vec<(String, String)>,
+    pub module_ranges: Vec<(usize, usize, String)>,
 }
 
 /// One package's code in a program of several: the span offsets
@@ -318,6 +325,8 @@ impl ProfileConfig {
             public_effects: Default::default(),
             package_effects: Vec::new(),
             inferred_imports: Vec::new(),
+            shown_names: Vec::new(),
+            module_ranges: Vec::new(),
         }
     }
 

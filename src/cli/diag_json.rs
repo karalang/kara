@@ -2320,7 +2320,11 @@ pub(super) fn public_function_effects_json(pipeline: &Pipeline) -> String {
         .function_visibility
         .iter()
         .filter_map(|(n, is_pub)| {
-            if *is_pub && n != "main" && !pipeline.library_fns.contains(n) {
+            if *is_pub
+                && n != "main"
+                && !pipeline.library_fns.contains(n)
+                && !spliced_fn(pipeline, n)
+            {
                 Some(n)
             } else {
                 None
@@ -2344,10 +2348,71 @@ pub(super) fn public_function_effects_json(pipeline: &Pipeline) -> String {
                         .collect()
                 })
                 .unwrap_or_default();
-            format!("{}:{}", json_string(name), json_string_list(&list))
+            format!(
+                "{}:{}",
+                json_string(&shown_fn_name(pipeline, name)),
+                json_string_list(&list)
+            )
         })
         .collect();
     format!("{{{}}}", entries.join(","))
+}
+
+/// Whether `name` is a gated module's function an import spliced into the
+/// program (`import std.random` brings `next_u64`): it sits among the
+/// program's items, after `library_fns` was taken, but carries
+/// `stdlib_origin`, so it is the library's (B-2026-11-25-52).
+fn spliced_fn(pipeline: &Pipeline, name: &str) -> bool {
+    pipeline.parsed.program.items.iter().any(
+        |item| matches!(item, crate::ast::Item::Function(f) if f.name == name && f.stdlib_origin),
+    )
+}
+
+/// A function of a package's combined source by its source path: `a.make`
+/// for the `make` module `a` declares, whether the combined text renamed
+/// it (`make__a`) or not; a root-module function, and any function of a
+/// single file, by its own name (B-2026-11-25-52).
+fn shown_fn_name(pipeline: &Pipeline, name: &str) -> String {
+    let config = &pipeline.profile_config;
+    if let Some((_, shown)) = config.shown_names.iter().find(|(fresh, _)| fresh == name) {
+        return shown.clone();
+    }
+    if config.module_ranges.is_empty() {
+        return name.to_string();
+    }
+    use crate::ast::{ImplItem, Item, TypeKind};
+    let offset = pipeline
+        .parsed
+        .program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == name => Some(f.span.offset),
+            Item::ImplBlock(b) => {
+                let (ty, method) = name.split_once('.')?;
+                let TypeKind::Path(path) = &b.target_type.kind else {
+                    return None;
+                };
+                (path.segments.last().map(String::as_str) == Some(ty))
+                    .then(|| {
+                        b.items.iter().find_map(|it| match it {
+                            ImplItem::Method(m) if m.name == method => Some(m.span.offset),
+                            _ => None,
+                        })
+                    })
+                    .flatten()
+            }
+            _ => None,
+        });
+    match offset.and_then(|o| {
+        config
+            .module_ranges
+            .iter()
+            .find(|(start, end, _)| (*start..*end).contains(&o))
+    }) {
+        Some((_, _, module)) => format!("{module}.{name}"),
+        None => name.to_string(),
+    }
 }
 
 pub(super) fn mutual_recursion_groups_json(pipeline: &Pipeline) -> String {

@@ -3919,6 +3919,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Tooling
 
+- `karac check --output=json` keys `public_function_effects` by each
+  function's source path: in a package, a module's `make` is `a.make`, not
+  the `make__a` the combined source named it. A standard-library function
+  an import brings in is no longer listed: `import std.random` showed
+  `next_u64` as the program's own (B-2026-11-25-52).
 - `karac fmt` keeps a byte literal in a pattern as written: `b'M' => 0` and
   `b'a'..=b'z'` stayed byte literals in expressions but came out of a pattern
   as `77u8 => 0` and `97u8..=122u8` (B-2026-11-21-48).
