@@ -21306,6 +21306,21 @@ impl<'a> super::TypeChecker<'a> {
                         // its text's end is not known here.
                         let fix_end = (!matches!(inner.kind, ExprKind::Cast { .. }))
                             .then(|| inner.span.offset + inner.span.length);
+                        // The two pointer casts design.md § FFI refuses with
+                        // a named fix get it (B-2026-11-25-16): the whole
+                        // cast, operand to target type, becomes the call.
+                        let from = resolve_type_var_top(&from_ty, &self.env.substitutions);
+                        if let Some(fixed) = pointer_cast_fix(inner, &from, &to_ty) {
+                            let end = ty.span.offset + ty.span.length;
+                            self.error_fix_diffs.insert(
+                                SpanKey::from_span(&inner.span),
+                                vec![crate::resolver::TextEdit {
+                                    offset: inner.span.offset,
+                                    length: end.saturating_sub(inner.span.offset),
+                                    replacement: fixed,
+                                }],
+                            );
+                        }
                         self.check_cast_pair(&from_ty, &to_ty, &inner.span, fix_end)
                     }
                 }
@@ -22650,4 +22665,57 @@ pub(super) fn is_with_provider_call(expr: &Expr) -> bool {
             ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
             _ => false,
         }
+}
+
+/// The call that replaces a refused pointer cast (design.md § FFI): a
+/// pointer cast to an integer reads the address, `ptr.addr(p)`, the weaker
+/// of the two reads the message names; a reference cast to a raw pointer
+/// of the same pointee and mutability takes the place's address,
+/// `ptr.const(place)` / `ptr.mut(place)`. `None` where no one call says the
+/// same: another pointee, or an operand that is not a place.
+fn pointer_cast_fix(operand: &Expr, from: &Type, to: &Type) -> Option<String> {
+    match (from, to) {
+        (Type::Pointer { .. }, to) if is_integer(to) => {
+            let call = format!("ptr.addr({})", crate::formatter::render_expr(operand));
+            Some(if matches!(to, Type::UInt(UIntSize::Usize)) {
+                call
+            } else {
+                format!("{call} as {}", type_display(to))
+            })
+        }
+        (
+            Type::Ref(pointee) | Type::MutRef(pointee),
+            Type::Pointer {
+                is_mut,
+                inner: target,
+            },
+        ) if pointee == target && *is_mut == matches!(from, Type::MutRef(_)) => {
+            let place = match &operand.kind {
+                ExprKind::Unary {
+                    op: UnaryOp::Ref | UnaryOp::MutRef,
+                    operand,
+                } => operand.as_ref(),
+                _ => operand,
+            };
+            let is_place = matches!(
+                place.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::Index { .. }
+                    | ExprKind::TupleIndex { .. }
+                    | ExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        ..
+                    }
+            );
+            is_place.then(|| {
+                format!(
+                    "ptr.{}({})",
+                    if *is_mut { "mut" } else { "const" },
+                    crate::formatter::render_expr(place)
+                )
+            })
+        }
+        _ => None,
+    }
 }

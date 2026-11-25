@@ -906,7 +906,8 @@ impl super::Parser {
             }
         };
         match abi.as_str() {
-            "C" | "C-unwind" => {}
+            "C" => {}
+            "C-unwind" => self.cunwind_abi_spans.push(abi_span),
             "host" => {
                 self.error_at(
                     "`\"host\"` is not an FFI export ABI — use a `host fn` \

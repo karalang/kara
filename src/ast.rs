@@ -899,6 +899,10 @@ pub struct Program {
     /// `wasm_browser`), with that name: the typechecker warns that it is not
     /// in v1 (lint `later_track`, B-2026-11-22-35).
     pub later_track_target_gates: Vec<(crate::token::Span, String)>,
+    /// The span of each `"C-unwind"` ABI string, on an `extern` block or an
+    /// exported `extern fn`, in source order: E0415's fix rewrites it to
+    /// `"C"` (design.md § FFI, B-2026-11-25-16).
+    pub cunwind_abi_spans: Vec<crate::token::Span>,
     /// Unsuffixed integer literals past `i128::MAX` (B-2026-11-13-28): only
     /// `u128` holds one, so the parser gives it the `u128` suffix, with the
     /// wrapped bit pattern a written `u128` suffix gets, and marks its span

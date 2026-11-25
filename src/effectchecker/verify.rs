@@ -690,7 +690,25 @@ impl<'a> super::EffectChecker<'a> {
             }
         }
 
+        // The fix rewrites the ABI string to `"C"`, carried once per string:
+        // the last `"C-unwind"` that starts before the offender ends is its
+        // block's or its own.
+        let mut fixed: std::collections::HashSet<usize> = std::collections::HashSet::new();
         for (what, name, span) in offenders {
+            let abi = self
+                .program
+                .cunwind_abi_spans
+                .iter()
+                .rev()
+                .find(|s| s.offset < span.offset + span.length)
+                .copied();
+            let replacement = abi.filter(|s| fixed.insert(s.offset)).map(|s| {
+                Box::new(crate::resolver::TextEdit {
+                    offset: s.offset,
+                    length: s.length,
+                    replacement: "\"C\"".to_string(),
+                })
+            });
             let subject = if what == "import" {
                 format!("`extern \"C-unwind\"` declaration of `{name}`")
             } else {
@@ -709,7 +727,7 @@ impl<'a> super::EffectChecker<'a> {
                 span,
                 kind: EffectErrorKind::ExternCUnwindRequiresUnwindProfile,
                 subtype_trace: None,
-                replacement: None,
+                replacement,
                 undeclared: None,
                 help: None,
             });

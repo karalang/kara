@@ -23,9 +23,11 @@
 //!    never warns on an end-user compile.
 //!
 //! Suppression (all forms):
-//!   - `#[allow(undocumented_unsafe)]` on the enclosing function (form 1),
-//!     the block itself (form 2), or the `unsafe fn` / its impl method
-//!     (form 3) silences the warning.
+//!   - `#[allow(undocumented_unsafe)]` on the block itself (its
+//!     statement), the enclosing function or method, its impl block, or
+//!     the module (`#![allow(..)]`) silences the warning, the innermost
+//!     attribute naming the lint deciding (design.md § `unsafe` blocks,
+//!     "Suppression"; B-2026-11-25-15).
 //!   - `#[deny(undocumented_unsafe)]` promotes the warning to an error.
 
 use crate::ast::{
@@ -84,9 +86,20 @@ pub fn check_undocumented_unsafe(
     let mut diags = Vec::new();
     for item in &program.items {
         if let Item::ExternBlock(b) = item {
-            let source_allow = has_lint_attr(&b.attributes, "allow");
-            let source_deny = has_lint_attr(&b.attributes, "deny");
-            let source_expect = has_lint_attr(&b.attributes, "expect");
+            // The block's own attribute, else the module's `#![..]`: an
+            // extern block has no lint-override list for the module's
+            // levels to be folded into.
+            let attrs = if ["allow", "deny", "expect"]
+                .iter()
+                .any(|k| has_lint_attr(&b.attributes, k))
+            {
+                &b.attributes
+            } else {
+                &program.inner_attrs
+            };
+            let source_allow = has_lint_attr(attrs, "allow");
+            let source_deny = has_lint_attr(attrs, "deny");
+            let source_expect = has_lint_attr(attrs, "expect");
             // Slice 4b cross-cutting — fold source attrs + CLI
             // fall-through through the shared cascade helper.
             let severity = crate::lints::effective_level_for_module_lint(
@@ -101,25 +114,24 @@ pub fn check_undocumented_unsafe(
             }
             continue;
         }
-        let (fn_allow, fn_deny, fn_expect) = match item {
-            Item::Function(f) => (
-                has_lint_attr(&f.attributes, "allow"),
-                has_lint_attr(&f.attributes, "deny"),
-                has_lint_attr(&f.attributes, "expect"),
-            ),
-            _ => (false, false, false),
-        };
-        let severity = crate::lints::effective_level_for_module_lint(
-            fn_allow,
-            fn_deny,
-            fn_expect,
-            cli_lint_overrides,
-            "undocumented_unsafe",
-        );
-        let Some(fn_level) = severity_to_level(severity) else {
-            continue;
-        };
-        collect_item_unsafe(item, &lines, fn_level, cli_lint_overrides, &mut diags);
+        // Each finding takes the level in force where it is: the innermost
+        // attribute naming the lint (its statement's, an enclosing
+        // statement's, its function's or method's, its impl block's, which
+        // carry the module's `#![..]` levels too), else the CLI's.
+        let mut found = Vec::new();
+        collect_item_unsafe(item, &lines, &mut found);
+        for mut d in found {
+            let severity = crate::lints::severity_at(
+                program,
+                &d.span,
+                cli_lint_overrides,
+                "undocumented_unsafe",
+            );
+            if let Some(level) = severity_to_level(severity) {
+                d.level = level;
+                diags.push(d);
+            }
+        }
     }
     diags
 }
@@ -237,51 +249,24 @@ fn has_lint_attr(attrs: &[Attribute], kind: &str) -> bool {
     })
 }
 
-fn collect_item_unsafe(
-    item: &Item,
-    lines: &[&str],
-    outer_level: LintLevel,
-    cli: &crate::lints::CliLintOverrides,
-    diags: &mut Vec<LintDiagnostic>,
-) {
+/// Every `undocumented_unsafe` finding in `item`, at warning level; the
+/// caller sets each one's level from the attributes around it.
+fn collect_item_unsafe(item: &Item, lines: &[&str], diags: &mut Vec<LintDiagnostic>) {
+    let level = LintLevel::Warning;
     match item {
         Item::Function(f) => {
             // Form 3: the `unsafe fn` declaration itself needs a `# Safety`
             // doc section (no-op for a safe fn). Peer of the body-block walk.
-            check_unsafe_fn_safety_doc(f, outer_level, diags);
-            walk_block(&f.body, lines, outer_level, diags);
+            check_unsafe_fn_safety_doc(f, level, diags);
+            walk_block(&f.body, lines, level, diags);
         }
         Item::ImplBlock(imp) => {
             for item in &imp.items {
                 if let crate::ast::ImplItem::Method(method) = item {
-                    // Per-method source attrs win over the outer
-                    // (impl-block) level — innermost cascade rule.
-                    // Re-resolve via the shared helper so source +
-                    // CLI compose consistently.
-                    let m_allow = has_lint_attr(&method.attributes, "allow");
-                    let m_deny = has_lint_attr(&method.attributes, "deny");
-                    let m_expect = has_lint_attr(&method.attributes, "expect");
-                    let method_severity = crate::lints::effective_level_for_module_lint(
-                        m_allow,
-                        m_deny,
-                        m_expect,
-                        cli,
-                        "undocumented_unsafe",
-                    );
-                    let method_level = match method_severity {
-                        crate::lints::ModuleLintSeverity::Suppress => continue,
-                        crate::lints::ModuleLintSeverity::Deny => LintLevel::Error,
-                        crate::lints::ModuleLintSeverity::Warn => {
-                            // No source / CLI override fired on this
-                            // method — inherit the outer level
-                            // (which already folded in CLI).
-                            outer_level
-                        }
-                    };
-                    // Form 3 on an impl method — same doc requirement as a
-                    // free `unsafe fn`, gated on the per-method severity.
-                    check_unsafe_fn_safety_doc(method, method_level, diags);
-                    walk_block(&method.body, lines, method_level, diags);
+                    // Form 3 on an impl method: the same doc requirement as
+                    // a free `unsafe fn`.
+                    check_unsafe_fn_safety_doc(method, level, diags);
+                    walk_block(&method.body, lines, level, diags);
                 }
             }
         }

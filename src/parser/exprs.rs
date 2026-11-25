@@ -4057,7 +4057,8 @@ impl super::Parser {
         // it is a method of that value, as after `Some(1)`, not a path
         // (B-2026-11-19-59).
         let none_method = name == "None"
-            && matches!(self.peek_token_ref_at(1), Token::Identifier { name: ref seg, .. } if !starts_upper(seg));
+            && (matches!(self.peek_token_ref_at(1), Token::Identifier { name: ref seg, .. } if !starts_upper(seg))
+                || self.peek_token_ref_at(1).keyword_spelling().is_some());
         if self.check(&Token::Dot)
             && (starts_upper(&name) || module_qualified_struct_lit)
             && !none_method
@@ -4070,6 +4071,17 @@ impl super::Parser {
             {
                 self.advance();
                 path.push(self.expect_identifier()?);
+            }
+            // A keyword names an associated function directly after `.`,
+            // as it names a method (design.md §3): `Handle.type()` is the
+            // path call `Handle.r#type()` spells (B-2026-11-25-9). Only
+            // before `(`, so `FUT.await` stays the postfix form.
+            if self.check(&Token::Dot) && matches!(self.peek_token_ref_at(2), Token::LeftParen) {
+                if let Some(kw) = self.peek_token_ref_at(1).keyword_spelling() {
+                    self.advance();
+                    self.advance();
+                    path.push(kw.to_string());
+                }
             }
 
             // Check for struct literal: Path { field: value }

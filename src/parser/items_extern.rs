@@ -74,6 +74,9 @@ impl super::Parser {
         // lower to (phase-10) — accepting it here would let an extern
         // block mint host-marked functions while bypassing `host fn`'s
         // required-`with` and boundary-type rules.
+        if abi == "C-unwind" {
+            self.cunwind_abi_spans.push(abi_span);
+        }
         if abi == "host" {
             self.error(
                 "`\"host\"` is not an ABI — use a `host fn` declaration for \
