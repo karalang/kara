@@ -540,6 +540,9 @@ pub struct Parser {
     /// same call stack — an expression nested inside a type inside a pattern
     /// consumes one budget. B-2026-08-16-4.
     pub(crate) recursion_depth: usize,
+    /// Where the item being parsed begins after its attributes: its
+    /// `pub` / `private` / `shared` when it has one (B-2026-11-24-39).
+    pub(crate) item_head: Option<Span>,
     /// B-2026-08-01-33 mechanism 3, stage 1: `true` only while parsing the
     /// TOP-LEVEL type of a parameter, which is the one position the stage
     /// claims. `frozen` elsewhere (a `let` annotation, a struct field, a
@@ -946,6 +949,7 @@ impl Parser {
             bare_label_names: std::collections::HashSet::new(),
             errors: Vec::new(),
             recursion_depth: 0,
+            item_head: None,
             pending_extra_items: Vec::new(),
             frozen_ok: false,
             generic_defaults_ok: false,

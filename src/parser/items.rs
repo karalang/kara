@@ -201,6 +201,16 @@ impl super::Parser {
         false
     }
 
+    /// The start of the declaration whose keyword is at `keyword`: its
+    /// first modifier (`pub`, `private`, `shared`) on the same line, else
+    /// the keyword (B-2026-11-24-39).
+    fn item_head_on(&mut self, keyword: &Span) -> Span {
+        match self.item_head.take() {
+            Some(h) if h.line == keyword.line && h.offset <= keyword.offset => h,
+            _ => *keyword,
+        }
+    }
+
     pub(crate) fn parse_item(&mut self) -> Option<Item> {
         // Collect any leading `///` doc-comment tokens. The text gets
         // attached to the next item via `take_pending_doc` at the
@@ -208,6 +218,7 @@ impl super::Parser {
         self.collect_leading_doc_comments();
         let attributes = self.parse_attributes();
         self.mend_ts_java_item_forms();
+        self.item_head = Some(self.current_span());
         // Visibility keyword: `pub` OR `private`, never both.
         let is_pub = self.eat_pub();
         let is_private = if !is_pub {
@@ -3035,8 +3046,10 @@ impl super::Parser {
         let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
 
+        let head = self.item_head_on(&struct_keyword_span);
         Some(StructDef {
             span: self.span_from(&start),
+            head,
             attributes,
             doc_comment,
             is_pub,
@@ -3314,8 +3327,10 @@ impl super::Parser {
         let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
 
+        let head = self.item_head_on(&start);
         Some(EnumDef {
             span: self.span_from(&start),
+            head,
             attributes,
             doc_comment,
             is_pub,

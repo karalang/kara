@@ -462,6 +462,10 @@ impl_vis!(DistinctTypeDef);
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub span: Span,
+    /// The declaration's first token after its attributes, the `pub`,
+    /// `private` or `shared` before the keyword when there is one, so a
+    /// fix inserting a line above it matches its indent (B-2026-11-24-39).
+    pub head: Span,
     pub attributes: Vec<Attribute>,
     /// Joined contents of `///` doc comments preceding the struct.
     pub doc_comment: Option<String>,
@@ -598,6 +602,10 @@ pub struct UnionField {
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub span: Span,
+    /// The declaration's first token after its attributes, the `pub`,
+    /// `private` or `shared` before the keyword when there is one, so a
+    /// fix inserting a line above it matches its indent (B-2026-11-24-39).
+    pub head: Span,
     pub attributes: Vec<Attribute>,
     /// Joined contents of `///` doc comments preceding the enum.
     pub doc_comment: Option<String>,

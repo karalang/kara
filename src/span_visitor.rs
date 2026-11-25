@@ -37,6 +37,7 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::Function(f) => visit_function(f, visit),
         Item::StructDef(s) => {
             visit(&s.span);
+            visit(&s.head);
             visit_generics(
                 s.generic_params.as_ref(),
                 &[],
@@ -77,6 +78,7 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         }
         Item::EnumDef(e) => {
             visit(&e.span);
+            visit(&e.head);
             visit_generics(
                 e.generic_params.as_ref(),
                 &[],
@@ -1467,6 +1469,7 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
         }
         Item::StructDef(s) => {
             visit.span(&mut s.span);
+            visit.span(&mut s.head);
             visit_generics_mut(
                 s.generic_params.as_mut(),
                 &mut [],
@@ -1500,6 +1503,7 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
         }
         Item::EnumDef(e) => {
             visit.span(&mut e.span);
+            visit.span(&mut e.head);
             visit_generics_mut(
                 e.generic_params.as_mut(),
                 &mut [],

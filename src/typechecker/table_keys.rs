@@ -486,7 +486,7 @@ impl<'a> super::TypeChecker<'a> {
             Item::StructDef(s) if &s.name == name && s.generic_params.is_none() => {
                 let info = self.env.structs.get(name)?;
                 let fields: Vec<Type> = info.fields.iter().map(|(_, t, _)| t.clone()).collect();
-                Some((s.span, fields, info.derived_traits.clone()))
+                Some((head_of(s.span, s.head), fields, info.derived_traits.clone()))
             }
             Item::EnumDef(e) if &e.name == name && e.generic_params.is_none() => {
                 let info = self.env.enums.get(name)?;
@@ -501,7 +501,7 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     })
                     .collect();
-                Some((e.span, fields, info.derived_traits.clone()))
+                Some((head_of(e.span, e.head), fields, info.derived_traits.clone()))
             }
             _ => None,
         })?;
@@ -509,6 +509,20 @@ impl<'a> super::TypeChecker<'a> {
             return None;
         }
         Some((name.as_str(), span, fields, derived))
+    }
+}
+
+/// The declaration at `span` as seen from the start of its line: from its
+/// first modifier (`pub struct P`), whose column is the line's indent,
+/// rather than from the keyword (B-2026-11-24-39).
+fn head_of(span: Span, head: Span) -> Span {
+    if head.length == 0 || head.line != span.line || head.offset > span.offset {
+        return span;
+    }
+    Span {
+        offset: head.offset,
+        column: head.column,
+        ..span
     }
 }
 

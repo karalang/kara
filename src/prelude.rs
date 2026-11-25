@@ -3412,6 +3412,7 @@ fn baked_item_for(name: &str) -> Option<Item> {
 fn stub_struct(name: &str, span: &Span) -> Item {
     Item::StructDef(StructDef {
         span: *span,
+        head: *span,
         attributes: Vec::new(),
         doc_comment: None,
         is_pub: true,
