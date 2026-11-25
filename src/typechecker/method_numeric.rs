@@ -522,6 +522,27 @@ impl<'a> super::TypeChecker<'a> {
             // must match the receiver type exactly — the same strict same-type
             // rule the `+`/`-`/`*` operators enforce (mixed concrete integer
             // types are a hard error; cast with `as`).
+            // On a `usize`, Rust's `i.wrapping_sub(1)` at 0 wraps past every
+            // length, which `if j < n` then skips; once the `usize` becomes
+            // `i64` it is -1, and the fix keeps it past every length as the
+            // floors below are kept (kata 1345's Rust arm, B-2026-11-24-49).
+            if method == "wrapping_sub"
+                && matches!(receiver_for_lookup, Type::UInt(UIntSize::Usize))
+            {
+                if let Some(name) = self
+                    .program
+                    .unsigned_floor_names
+                    .get(&args_close_span.offset)
+                    .copied()
+                {
+                    self.usize_floor_calls.push((
+                        method.to_string(),
+                        name,
+                        *args_close_span,
+                        *span,
+                    ));
+                }
+            }
             let arg = &args[0].value;
             let arg_ty = self.infer_expr(arg);
             if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {

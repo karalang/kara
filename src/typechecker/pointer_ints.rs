@@ -237,8 +237,11 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             }
             let checked = method.starts_with("checked_");
+            let wrapping = method == "wrapping_sub";
             let floor = if checked {
                 ".filter(|v| v >= 0)"
+            } else if wrapping {
+                ".rem_euclid(i64.MAX)"
             } else {
                 ".max(0)"
             };
@@ -258,6 +261,12 @@ impl<'a> super::TypeChecker<'a> {
                     "this `usize` becomes `i64` (design.md §5), which has no `{method}`: \
                      its `{to}` takes the `i64` the `isize` becomes, and `{floor}` keeps \
                      the floor at 0 the `usize` had"
+                )
+            } else if wrapping {
+                format!(
+                    "this `usize` becomes `i64` (design.md §5), and an `i64`'s `{method}` \
+                     goes below 0 where the `usize` one wrapped past every length, so \
+                     `{floor}` keeps it past every length (a value of 0 or more is unchanged)"
                 )
             } else if checked {
                 format!(

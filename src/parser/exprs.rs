@@ -744,6 +744,7 @@ impl super::Parser {
                                         method.as_str(),
                                         "checked_sub"
                                             | "saturating_sub"
+                                            | "wrapping_sub"
                                             | "checked_add_signed"
                                             | "saturating_add_signed"
                                     )
