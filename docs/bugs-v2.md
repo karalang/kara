@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 751 |
+| diagnostics | 752 |
 | false-positive | 369 |
 | missing-feature | 253 |
 | perf | 203 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 899 |
+| typecheck | 900 |
 | mir | 333 |
 | mir-llvm | 324 |
-| cli | 307 |
+| cli | 308 |
 | parser | 159 |
 | ownership | 136 |
 | runtime | 110 |
@@ -2265,6 +2265,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-44 | mir | high | Two `par` branches that each sort, clone or dedup a `Vec` of a program type, or file or look up its key in a `Map` / `Set`, are accepted with no E041… | c8cca30308 |
 | B-2026-11-24-45 | mir | medium | A function declaring a keyed resource (`fn save(i: u64) with writes(UserDb[i])`, over the deferred `effect resource UserDb[id: u64];`) is charged not… | f2af9c2119 |
 | B-2026-11-24-47 | parser | low | Kotlin and Swift first-day habits had no Kāra form or a misleading one: `val`, `fun f(): T = e`, `Int` / `Double` / `Bool`, `T?`, `?:`, `!!` / `!`, `… | 6be22cb42b |
+| B-2026-11-25-2 | typecheck+cli | low | 116 diagnostic codes carried neither a machine fix nor help on any emission (the fix-coverage table's kind none); type and effect errors had no help… | 32ed7d3767 |
 
 </details>
 
