@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 257 |
 | perf | 204 |
 | other | 149 |
-| soundness | 132 |
+| soundness | 133 |
 | miscompile | 110 |
 | run-vs-build | 73 |
 | crash | 68 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 919 |
+| typecheck | 920 |
 | mir | 339 |
 | mir-llvm | 330 |
 | cli | 314 |
@@ -135,6 +135,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-45 | 2026-11-25 | typecheck | medium | A partial move by a destructuring pattern (`let P { a, .. } = p;`, `match p { P { a, .. } => .. }`, `let (a, _, _) = t;`) makes the whole root unusable, so a later read of an unmoved field (`p.k`, `p.b.n`, `t.2`) is E0500 'value moved'; the same move written as a field read (`let a = p.a;`) leaves the other fields usable, as core-semantics §3.6 requires | — |
 | B-2026-11-25-46 | 2026-11-25 | typecheck | medium | A closure that calls an `own self` trait method on a captured `dyn Trait` or generic `T: Trait` value (`|| a.w()`) captures it by reference, so the call is refused E0516 'cannot move a non-Copy value out of a borrowed place', in a OnceFn argument, `TaskGroup.spawn` or a local closure; the same call on a concrete type, `W.w(a)` in UFCS, or `{ let b = a; b.w() }` captures by move and runs | — |
 | B-2026-11-25-47 | 2026-11-25 | typecheck | low | The signed integer types have no abs family: `checked_abs`, `wrapping_abs`, `saturating_abs`, `overflowing_abs` and `unsigned_abs` are E0236 'no method' on every iN, though design.md says the four method families cover every arithmetic operation that can overflow and `iN.MIN.abs()` traps | — |
+| B-2026-11-25-48 | 2026-11-25 | typecheck | medium | `Vec.resize`, `Vec.filled` and `fill` do not enforce their `where T: Clone` bound: a struct with no Clone impl, a `Mutex[i64]`, and an unbounded generic `T` all pass `karac check` and get field-by-field copies, so `v.resize(2, Mutex.new(1))` makes two independent mutexes (and the interpreter stops with 'Mutex[i64] has no field 0') | — |
 
 ### Relocated
 
