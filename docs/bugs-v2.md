@@ -135,9 +135,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-25 | 2026-11-25 | mir-llvm | low | A `shared` field's borrow conflict panics with panic-record kind `explicit`, not `borrow_conflict`, on the JIT and the MIR interpreter | — |
 | B-2026-11-25-26 | 2026-11-25 | mir | low | `..mut ref rest` over a `mut ref Array[T, N]` is refused E0516 ('not lowered yet'): the checker types `rest` as `mut ref Array[T, K]`, which needs a sub-array place (remainder of B-2026-11-25-1) | — |
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
-| B-2026-11-25-32 | 2026-11-25 | interp | medium | The interpreter stopped with `expected a sequence, found Agg([..])` when a fixed `Array[u8, N]` reached a library native by value (`f.write(b"hello")`, `conn.write_all(b"ping")`, `String.from_utf8(arr)`); the build ran it | — |
-| B-2026-11-25-33 | 2026-11-25 | effect | medium | I/O natives that return a new heap value are not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts a function that calls `fs.read_to_string`, `fs.read_bytes`, `fs.read_dir`, `stdin.read_line` or `env.args()` | — |
-| B-2026-11-25-34 | 2026-11-25 | interp | low | `Stdio.from_file` of a file a `FileSystem` fake opened stopped the interpreted program with an internal `error[mir]: run:` and exit 3; the build prints one `error:` line and exits 101 | — |
 | B-2026-11-25-35 | 2026-11-25 | effect | medium | A `pub fn` over `f: ref File` cannot declare io.md's `writes(f)`: E0400 asks for `writes(FileSystem)`; `karac query effects` shows the class, and a `TcpStream` read is charged `sends(Network)` beside `receives(Network)` | — |
 
 ### Relocated
@@ -2304,6 +2301,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-28 | typecheck | low | `s.as_str().hash(mut h)` was refused ("no method 'hash' on type 'Str'"), though collections.md § Hashing says a `Str` view hashes as its `String` doe… | 5b52c1c2df |
 | B-2026-11-25-29 | mir-llvm | medium | `==` on a `Map` or `Set` of a user `BuildHasher` was false when compiled, even for a table and its clone (`s == s.clone()`); the interpreter said true | 5b52c1c2df |
 | B-2026-11-25-30 | effect | medium | E0406 refused a call whose function values at one effect variable's positions perform different effects; the spec solves the variable as their union | c655355b2e |
+| B-2026-11-25-32 | interp | medium | The interpreter stopped with `expected a sequence, found Agg([..])` when a fixed `Array[u8, N]` reached a library native by value (`f.write(b"hello")… | 1dee859327 |
+| B-2026-11-25-33 | effect | medium | I/O natives that return a new heap value are not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts a function that calls `fs.read_to… | 1dee859327 |
+| B-2026-11-25-34 | interp | low | `Stdio.from_file` of a file a `FileSystem` fake opened stopped the interpreted program with an internal `error[mir]: run:` and exit 3; the build prin… | 1dee859327 |
 
 </details>
 
