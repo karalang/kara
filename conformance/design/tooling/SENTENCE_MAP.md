@@ -5,13 +5,14 @@ Status: covered, partial, FAILS (routed, the owner named), not testable, not dra
 - `c17:`, `c17b:`, `c17c:` name a check (its printed name) in `probes/cases17.py`, `probes/cases17b.py` and `probes/cases17c.py`, run by `tests/tooling_sentence_probes_2026_11_24.rs` on the `--features llvm` leg (`K=<karac> python3 probes/<file>` by hand). `cases17` and `cases17b` are the 2026-11-21 design-14-17 pass, moved here from the shared folder; `cases17c` is this audit's.
 - A bare `tests/<file>` or `lsp/tests/<file>` is a Rust test file; `repl/` is `conformance/repl/`.
 
-**Totals (2026-11-25):** 174 table rows (normative sentences), plus the REPL subsection's 14, pinned in `conformance/repl/`. Of the 174: 160 covered, 2 partial (7560, 7652; sent to the review), 2 FAILS (B-2026-11-25-24, B-2026-11-25-25), 10 not testable (client obligations, scope and stability statements, and `#[cfg]` conditions, since `#[cfg]` is not implemented). The probes: `cases17` 120/120, `cases17b` 20/20, `cases17c` 119/121 (its two failures are the FAILS rows, allowlisted by name in the harness). `cases17c` and the LSP pins in `lsp/tests/protocol_contract_2026_11_24.rs` and `lsp/src/analysis.rs` are new.
+**Totals (2026-11-25):** 174 table rows (normative sentences), plus the REPL subsection's 14, pinned in `conformance/repl/`. Of the 174: 162 covered, 0 partial, 2 FAILS (B-2026-11-25-24, B-2026-11-25-25), 10 not testable (client obligations, scope and stability statements, and `#[cfg]` conditions, since `#[cfg]` is not in 0.8). The probes: `cases17` 120/120, `cases17b` 20/20, `cases17c` 119/121 (its two failures are the FAILS rows, allowlisted by name in the harness). `cases17c` and the LSP pins in `lsp/tests/protocol_contract_2026_11_24.rs` and `lsp/src/analysis.rs` are new.
 
 **Drift found.**
 - FIXED: design.md said the language server's text sync is full-document. Since B-2026-11-21-33 it advertises incremental sync (range edits), which `lsp/tests/server.rs` pins. The row now says so.
 - DOC CHANGED (review ruling 2026-11-25): a bare `panic()` records `"explicit panic"`; design.md line 7576 said `"<no message>"`, which is now only the renderer's fallback for a record without one.
 - FAILS, B-2026-11-25-24 (run-vs-build): `karac run` ignores `[profile.dev] runtime_debug_metadata = false`, and `--interp` always answers `false`, while `karac build` honors the key.
 - FAILS, B-2026-11-25-25: a `shared` field's borrow conflict records kind `explicit`, not `borrow_conflict`.
+- DOC CHANGED (review rulings 2026-11-25): the debugger contract's root reference is `parent_task_id: u64` with `0` for no parent (it said a sentinel tagged `"root"`); `#[cfg]` is marked not in 0.8 in the attribute table and §4, with a deferred.md entry.
 
 ## Structured compiler output (7211–7263)
 
@@ -171,7 +172,7 @@ Every sentence is pinned by a cell in `conformance/repl/` (its README maps them)
 | 7557 | Metadata on by default in `[profile.dev]`, off in `[profile.release]` | covered | c17c: debug metadata on in dev; release: no debug metadata |
 | 7557 | Set by `runtime_debug_metadata` in either profile | FAILS (B-2026-11-25-24) | `karac build` honors it (tests/mir_debug_metadata.rs mir_debug_metadata_follows_the_manifest_profiles); `karac run` does not (c17c: [profile.dev] runtime_debug_metadata = false turns it off) |
 | 7559 | A `SpawnSiteId` per `par {}` block, stable across runs | covered | tests/mir_debug_metadata.rs mir_debug_metadata_lists_running_par_blocks |
-| 7560 | A parent-frame reference per worker; the root's is `"root"` | partial | tests/mir_debug_metadata.rs (worker entries). `std.runtime` gives `parent_task_id: u64`, `0` for the root task (runtime/stdlib/runtime.kara), not a value tagged `"root"`; sent to the review 2026-11-25 |
+| 7560 | A parent-frame reference per worker: `parent_task_id: u64`, ids from 1, `0` only for the root | covered | tests/mir_debug_metadata.rs (parent ids in the rows); the runtime's counters start at 1 (runtime/src/mir_task.rs `ids`, runtime/src/dbg.rs `TASK_ID_COUNTER`). Doc changed by review ruling 2026-11-25 |
 | 7561 | An await-chain `WaitTarget` per suspended task | covered | tests/mir_debug_metadata.rs mir_debug_metadata_lists_suspended_tasks |
 | 7562 | `list_tasks()` / `list_par_blocks()`; empty without the metadata | covered | tests/mir_debug_metadata.rs; c17c: release: no debug metadata, lists empty |
 | 7566 | `has_debug_metadata()` reports it | covered | c17c: debug metadata on in dev |
@@ -234,7 +235,7 @@ Every sentence is pinned by a cell in `conformance/repl/` (its README maps them)
 |---|---|---|---|
 | 7643 | An attribute not in the registry is `E_UNKNOWN_ATTRIBUTE` | covered | c17: E_UNKNOWN_ATTRIBUTE: reported as error |
 | 7649 | The v1 core set is in the registry: derive, default, serde, target, repr, non_exhaustive, track_caller, no_effect | covered | c17c: #[<name>] is in the registry |
-| 7652 | `#[cfg(...)]` | partial | c17c: cfg is refused as not implemented, naming `#[target]`; line 7653 says `#[target]` is interim until `#[cfg]` is implemented, while this row lists `#[cfg]` in the v1 core set; sent to the review 2026-11-25 |
+| 7652 | `#[cfg(...)]`: not in 0.8; refused, naming `#[target]` | covered | c17c: cfg: refused as not implemented yet, naming #[target]. Doc changed by review ruling 2026-11-25 (deferred.md § Item-Level `#[cfg]`) |
 | 7655 | `#[must_use]` warns on a discarded value | covered | c17c: #[must_use]: discarding the value warns |
 | 7657 | `#[deprecated]` warns at a use | covered | c17c: #[deprecated]: a use warns |
 | 7659 | `#[panic_handler]` | covered | c17c: custom panic handler runs after the record |

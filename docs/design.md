@@ -941,7 +941,7 @@ An unknown key or value is an error.
 - There is no run-time `if target == ...`. `#[cfg]` is the one mechanism.
 - Under `karac check` with several targets, each target's pass sees exactly the declarations that target's build sees ([§16](#checking-several-targets)).
 
-`#[cfg]` is not yet implemented. Until it is, `#[target(native)]` or `#[target(wasm_wasi)]` gates an item on one target, with the same rules (the item does not exist elsewhere; a use there is an error naming the target). `#[target]` is an interim spelling: when `#[cfg]` lands it becomes a deprecation warning whose fix rewrites it to `#[cfg(target: "...")]`.
+`#[cfg]` is not in 0.8 ([deferred.md § Item-Level `#[cfg]`](deferred.md#item-level-cfg)). Until it is, `#[target(native)]` or `#[target(wasm_wasi)]` gates an item on one target, with the same rules (the item does not exist elsewhere; a use there is an error naming the target). `#[target]` is an interim spelling: when `#[cfg]` lands it becomes a deprecation warning whose fix rewrites it to `#[cfg(target: "...")]`.
 
 `#[target(gpu)]` and `#[target(wasm_browser)]` name later tracks' targets ([§16](#16-targets-and-compilation)). They are accepted, so code written for those tracks still parses, with a `later_track` warning: an item gated only on them does not exist in a v1 build, and `karac check` runs no `gpu` or `wasm_browser` pass, so its body is not checked (review-thread ruling 2026-11-21, B-2026-11-22-35).
 
@@ -7555,7 +7555,7 @@ A debugger attaching to a Kāra binary needs more than DWARF: the runtime model 
 **The contract: four elements.** A binary built with runtime debug metadata (on by default in `[profile.dev]`, off in `[profile.release]`, set by `runtime_debug_metadata = true|false` in either [build profile](#build-profiles)) emits four runtime structures, reachable through `std.runtime`:
 
 1. **Static spawn-site ids per `par {}` block.** Each `par {}` block gets a compile-time `SpawnSiteId` (a `u32`). The id is per block, not per worker: workers within one block are anonymous and interchangeable. A tool that wants one worker combines the block id with the worker's thread-local index. Ids are stable across runs of the same binary and stored in its metadata table.
-2. **A parent-frame reference per worker.** Every worker frame created by a `par {}` block or `TaskGroup.spawn()` points back to the frame that created it, which makes the structured-concurrency invariant (the parent outlives its children) observable from any child. The root task's parent reference is a sentinel tagged `"root"`. There is no free `spawn` ([§13](#13-concurrency)), so every task has this shape.
+2. **A parent-frame reference per worker.** Every worker frame created by a `par {}` block or `TaskGroup.spawn()` points back to the frame that created it, which makes the structured-concurrency invariant (the parent outlives its children) observable from any child. `std.runtime` reports the reference as `parent_task_id: u64`, the id of the task that created the frame: task ids start at 1, and `0` means no parent, which only the root task has (review-thread ruling 2026-11-25). There is no free `spawn` ([§13](#13-concurrency)), so every task has this shape.
 3. **An await-chain pointer per suspended task.** A task suspended at a waiting point carries a pointer to the task it waits on, or to the I/O handle it is blocked on, as a typed `WaitTarget` enum. The pointer is per task, because tasks have distinct awaiters and the wait tree cannot be rebuilt from per-block data.
 4. **`std.runtime.list_tasks()` and `std.runtime.list_par_blocks()`.** `list_tasks()` returns every suspended task with its `WaitTarget`, source location and effect summary. `list_par_blocks()` returns every active `par {}` block with its `SpawnSiteId`, worker count and each worker's `file:line`. In a binary without the metadata both return an empty list, not an error, so generic tools can try and degrade.
 
@@ -7647,7 +7647,7 @@ The v1 core set:
 | `#[derive(...)]` | Generate trait impls. | [§9](#9-traits) |
 | `#[default]` | Mark the default variant for `#[derive(Default)]` (a derive helper). | [§9](#default-and-default) |
 | `#[serde(...)]` | Rename, skip or default a field, and choose an enum's tagging, for `#[derive(Serialize, Deserialize)]` (a derive helper). | [§9](#serialize-and-deserialize) |
-| `#[cfg(...)]` | Conditional compilation, including `target:`. | [§4](#4-modules-and-packages) |
+| `#[cfg(...)]` | Conditional compilation, including `target:`. **Not in 0.8:** the compiler refuses it and names `#[target]`, the 0.8 spelling ([deferred.md](deferred.md#item-level-cfg)). | [§4](#4-modules-and-packages) |
 | `#[target(...)]` | Interim single-target gating until `#[cfg]` is implemented. | [§4](#4-modules-and-packages) |
 | `#[repr(...)]` | ABI layout: `C`, an integer type, `transparent`. | [§15](#repr-abi-layout) |
 | `#[must_use]` | Warn when a value is discarded. | [§11](#must_use) |

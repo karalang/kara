@@ -2554,10 +2554,21 @@ fn fnv1a(bytes: Slice[u8]) -> u64 {
 
 **Cross-reference:** [design.md §5](design.md#numeric-semantics) (the trapping default and the `checked_*`/`wrapping_*`/`saturating_*`/`overflowing_*` method families that are the v1 per-site opt-out); [Embedded-Profile Arithmetic](#embedded-profile-arithmetic); [Karac-Side Bounds-Check Elimination Pass](#karac-side-bounds-check-elimination-pass) (the bounds-check counterpart, with the same promotion-by-real-frequency gate); [Production Contract Checking](#production-contract-checking-checked) (the `#[checked]` spelling this collides with). A compile-time overflow prover was tried and rejected; this scoped opt-out is the lever recommended instead.
 
+<a id="item-level-cfg"></a>
+### Item-Level `#[cfg]`
+
+**Decision:** `#[cfg(...)]` as [design.md §4](design.md#4-modules-and-packages) specifies it (the `target` and `target_os` keys, the `all`, `any` and `not` combinators, on items, impl members, struct fields and enum variants) is not in 0.8. The compiler refuses `#[cfg]` with a diagnostic that names the 0.8 spelling: `#[target(native)]` or `#[target(wasm_wasi)]` gates an item on one target, and a platform file suffix (`_linux`, `_macos`, `_windows`, `_wasm`) gates a file on one OS (review-thread ruling 2026-11-25).
+
+**Why deferred:** `#[target]` and platform files cover the single-target and single-OS cases real 0.8 programs have. The combinators and `target_os` on an item are what `#[cfg]` adds, and they are not implemented yet.
+
+**Why non-breaking:** Purely additive. When `#[cfg]` lands, `#[target(X)]` becomes a deprecation warning whose fix rewrites it to `#[cfg(target: "X")]` (design.md §4), so 0.8 code keeps building.
+
+**Feature flags** stay out, as [Conditional Compilation Beyond Targets](#fine-grained-conditional-compilation-cfg) says: design.md §4 rejects Cargo-style `[features]` and `#[cfg(feature: ...)]`.
+
 <a id="fine-grained-conditional-compilation-cfg"></a>
 ### Conditional Compilation Beyond Targets
 
-v1 has item-level `#[cfg]` with the `target` and `target_os` keys and the `all`, `any` and `not` combinators, on items, impl members, struct fields and enum variants, plus platform files ([design.md §4](design.md#4-modules-and-packages)). This entry covers what v1 leaves out: CPU-feature keys and `#[cfg]` on statements.
+Once [item-level `#[cfg]`](#item-level-cfg) lands, it has the `target` and `target_os` keys and the `all`, `any` and `not` combinators, on items, impl members, struct fields and enum variants, plus platform files ([design.md §4](design.md#4-modules-and-packages)). This entry covers what it leaves out: CPU-feature keys and `#[cfg]` on statements.
 
 **Why deferred:** Platform files and item-level `#[cfg]` cover the common cases. Every case where `#[cfg]` would be needed on a statement can be handled by extracting the platform-specific part into a function and calling it from shared code. Slightly more verbose but keeps conditional logic in one place rather than scattered through the codebase. A `target_feature` key is needed only by code that calls architecture-specific intrinsics, which arrives with [Portable SIMD](#portable-simd--vectort-n).
 
