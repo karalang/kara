@@ -7231,7 +7231,63 @@ impl<'a> TypeChecker<'a> {
         else {
             return;
         };
-        self.emit_deprecated_warning(span, display_name, note.as_deref(), since.as_deref());
+        let def = self
+            .resolve_result
+            .symbol_table
+            .get_symbol(sym_id)
+            .span
+            .offset;
+        self.emit_deprecated_warning(
+            span,
+            display_name,
+            Some(def),
+            note.as_deref(),
+            since.as_deref(),
+        );
+    }
+
+    /// The package and module path of a deprecated item used at `span`,
+    /// when it is defined in a dependency other than the code using it:
+    /// `("lib", "lib.load_config")`. A package's combined source places it
+    /// by `def`, its declaration's offset, in the dependency files' ranges
+    /// (`ProfileConfig::package_effects`); the per-module check reads the
+    /// import's origin module in the tree. `None` for an item of the same
+    /// package and for the standard library's.
+    fn deprecated_item_origin(
+        &self,
+        def: Option<usize>,
+        span: &Span,
+        name: &str,
+    ) -> Option<(String, String)> {
+        let ranges = &self.profile_config.package_effects;
+        let package_at = |offset: usize| {
+            ranges
+                .iter()
+                .find(|p| (p.start..p.end).contains(&offset))
+                .map(|p| (p.package.as_str(), p.module.as_str()))
+        };
+        if let Some(def) = def.filter(|_| !ranges.is_empty()) {
+            let (pkg, module) = package_at(def)?;
+            let here = package_at(span.offset).map(|(p, _)| p);
+            if pkg.is_empty() || here == Some(pkg) {
+                return None;
+            }
+            let module = if module.is_empty() { pkg } else { module };
+            return Some((pkg.to_string(), format!("{module}.{name}")));
+        }
+        let tree = self.tree?;
+        let head = name.split('.').next()?;
+        let (origin_path, _, _) = self.type_origins.get(head)?;
+        let id = *tree.graph.by_path.get::<[String]>(origin_path)?;
+        let pkg = tree.module(id).package.clone()?;
+        let here = self
+            .current_module
+            .and_then(|m| tree.module(m).package.clone());
+        if here.as_deref() == Some(pkg.as_str()) {
+            return None;
+        }
+        let module = tree.module(id).path.join(".");
+        Some((pkg, format!("{module}.{name}")))
     }
 
     /// Emit the `deprecated` lint warning for `display_name` at `span`.
@@ -7240,10 +7296,13 @@ impl<'a> TypeChecker<'a> {
     /// `#[deprecated]` payload from different tables (the symbol-table
     /// sidecar vs. the baked-stdlib side-table) but build and route the
     /// diagnostic identically.
+    ///
+    /// `def` is the item's declaration's offset, where it is known.
     fn emit_deprecated_warning(
         &mut self,
         span: &Span,
         display_name: &str,
+        def: Option<usize>,
         note: Option<&str>,
         since: Option<&str>,
     ) {
@@ -7256,7 +7315,15 @@ impl<'a> TypeChecker<'a> {
         // a contradiction: the promoted `error[…]` header followed by the
         // message calling itself a warning. design.md § Deprecation shows the
         // single-prefix shape this now produces. B-2026-08-18-25.
-        let mut message = format!("use of deprecated item `{display_name}`");
+        // An item of another package is named by its path there and its
+        // package, so the migration target is clear across re-exports
+        // (design.md § `#[deprecated]`, B-2026-11-24-52).
+        let mut message = match self.deprecated_item_origin(def, span, display_name) {
+            Some((pkg, path)) => {
+                format!("use of deprecated item `{path}` from package `{pkg}`")
+            }
+            None => format!("use of deprecated item `{display_name}`"),
+        };
         if let Some(note) = note {
             message.push_str(&format!(": {note}"));
         }
@@ -7391,9 +7458,16 @@ impl<'a> TypeChecker<'a> {
                 self.emit_unstable_warning(span, &display_name, note.as_deref());
             }
             if let Some((note, since)) = deprecation {
+                let def = self
+                    .resolve_result
+                    .symbol_table
+                    .get_symbol(sym_id)
+                    .span
+                    .offset;
                 self.emit_deprecated_warning(
                     span,
                     &display_name,
+                    Some(def),
                     note.as_deref(),
                     since.as_deref(),
                 );
@@ -7421,6 +7495,7 @@ impl<'a> TypeChecker<'a> {
                 self.emit_deprecated_warning(
                     span,
                     &display_name,
+                    None,
                     note.as_deref(),
                     since.as_deref(),
                 );

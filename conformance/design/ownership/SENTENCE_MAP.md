@@ -4,7 +4,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, or "→ dr
 
 Run with `python3 conformance/cases.py conformance/design/ownership` and, for the package cells (directories), `python3 conformance/packages.py conformance/design/ownership`.
 
-**Totals (2026-11-24):** 165 normative sentences: 151 covered, 6 partial, 7 not testable and 1 FAILS (B-2026-11-24-52, open). Three covered sentences failed when the audit started and are fixed with it: `ref_eq` on frozen handles (B-2026-11-24-50), the constructor named in the `#[non_exhaustive]` literal refusal (B-2026-11-24-51), and the wording of two `freeze` refusals (B-2026-11-24-53). A dependency's own lint warnings printed in a dependent's check is filed open (B-2026-11-24-54). The 2026-11-22 pass's fixes are pinned in tests/design_11_conformance_2026_11_22.rs; its cells were not kept. The 23 borrow-check and drop sentences are covered by the drop schedule's cells (f9557a6bfe), run on interp, build and ASan.
+**Totals (2026-11-24):** 165 normative sentences: 153 covered, 5 partial and 7 not testable. The one that failed, the defining package named in the `deprecated` warning, is fixed (B-2026-11-24-52). Three covered sentences failed when the audit started and are fixed with it: `ref_eq` on frozen handles (B-2026-11-24-50), the constructor named in the `#[non_exhaustive]` literal refusal (B-2026-11-24-51), and the wording of two `freeze` refusals (B-2026-11-24-53). A dependency's own lint warnings printed in a dependent's check is fixed too (B-2026-11-24-54, pinned in tests/dependency_warnings.rs). The 2026-11-22 pass's fixes are pinned in tests/design_11_conformance_2026_11_22.rs; its cells were not kept. The 23 borrow-check and drop sentences are covered by the drop schedule's cells (f9557a6bfe), run on interp, build and ASan.
 
 ## Introduction and the core rules in brief
 
@@ -212,11 +212,11 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 | 5251 | The bare form gives a default warning; `since:` and `note:` are labeled and optional | covered | deprecated_bare_note_and_since_forms_warn_at_each_use |
 | 5253 | The diagnostic shows the item, the note and the suppression on one line | covered | deprecated_bare_note_and_since_forms_warn_at_each_use (the page's block showed `= note` / `= help` lines; review ruled 2026-11-24 that typecheck warnings are one line, and the block now shows that) |
 | 5263 | With `since`, the diagnostic adds the version | covered | deprecated_bare_note_and_since_forms_warn_at_each_use |
-| 5263 | For a `pub` item it names the defining package | FAILS, B-2026-11-24-52 (open) | deprecated_pub_item_names_its_defining_package (new): the warning for a dependency's item does not name its package; the package check's combined source, which reports it, has no module tree to find the package in |
+| 5263 | For a `pub` item it names the defining package | covered | deprecated_pub_item_names_its_defining_package: the warning names the item by its path in its package and the package (`lib.load_config` from package `lib`), fixed by B-2026-11-24-52 |
 | 5265 | `#[allow(deprecated)]` works at a use site, on a function or on a module | covered | deprecated_allow_at_use_site_function_and_module, deprecated_allowed_for_a_whole_module |
 | 5265 | `#[expect(deprecated)]` reports itself once the use is gone | covered | deprecated_allow_at_use_site_function_and_module |
 | 5266 | It is not transitive: callers and a struct's methods are not marked | covered | deprecated_is_not_transitive |
 | 5266 | It does not remove the item or change its behavior | covered | deprecated_bare_note_and_since_forms_warn_at_each_use (runs) |
-| 5265 | (implied) the defining package's own uses warn in that package | partial | the package's own `deprecated` and `must_use` warnings are also printed when a DEPENDENT package is checked: B-2026-11-24-54 (open) |
+| 5265 | (implied) the defining package's own uses warn in that package | covered | they warn when that package is checked, and not in a dependent's `check` or `run` (B-2026-11-24-54, tests/dependency_warnings.rs) |
 | 5267 | Rejected on an `impl` block (`E_DEPRECATED_ON_IMPL`) | covered | deprecated_on_an_impl_block_refused |
 | 5267 | Rejected on a struct field | covered | deprecated_on_a_struct_field_refused |

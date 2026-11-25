@@ -53,6 +53,7 @@ pub(super) fn of_tree(tree: &ProgramTree, end: usize) -> Vec<PackageEffects> {
             end: modules.get(i + 1).map_or(end, |next| next.span_base),
             package: package.clone(),
             policy: policies.get(package).copied().unwrap_or_default(),
+            module: m.path.join("."),
         });
     }
     out
@@ -71,6 +72,7 @@ pub(crate) fn library_declared(config: &mut ProfileConfig, start: usize) {
         end: usize::MAX,
         package: String::new(),
         policy: PublicEffectsPolicy::Declared,
+        module: String::new(),
     });
 }
 

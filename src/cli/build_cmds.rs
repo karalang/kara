@@ -1281,6 +1281,14 @@ pub(super) fn typecheck_modules(
         // carries them and only `.errors` was read, so a project build was
         // structurally incapable of reporting `deprecated` no matter what the
         // render path did.
+        //
+        // A dependency's own warnings are its author's, who sees them when
+        // checking that package; the dependent cannot act on them, so its
+        // check shows only its own code's, as Cargo caps a dependency's
+        // lints (B-2026-11-24-54). Its errors still stop the build.
+        if m.package.is_some() {
+            result.warnings.clear();
+        }
         if !result.warnings.is_empty() {
             // The map is keyed by span: where an error shares a warning's
             // span, the edits are the error's (B-2026-11-21-74).

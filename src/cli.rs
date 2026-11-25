@@ -1242,6 +1242,52 @@ pub(crate) enum LibraryBodiesState {
 }
 
 impl Pipeline {
+    /// A package's combined source copies its dependencies' files in: a
+    /// warning in one of them is the dependency author's, who sees it when
+    /// checking that package, and the dependent cannot act on it, so the
+    /// dependent's commands do not show it, as Cargo caps a dependency's
+    /// lints (B-2026-11-24-54). Its errors still stop the command.
+    fn in_dependency_offset(&self, offset: usize) -> bool {
+        self.profile_config
+            .package_effects
+            .iter()
+            .any(|p| (p.start..p.end).contains(&offset))
+    }
+
+    /// [`Self::in_dependency_offset`] for the start of the 1-based `line`.
+    fn in_dependency_line(&self, line: usize) -> bool {
+        if self.profile_config.package_effects.is_empty() || line == 0 {
+            return false;
+        }
+        let Some(source) = self.source.as_deref() else {
+            return false;
+        };
+        let start = if line == 1 {
+            Some(0)
+        } else {
+            source.match_indices('\n').nth(line - 2).map(|(i, _)| i + 1)
+        };
+        start.is_some_and(|o| self.in_dependency_offset(o))
+    }
+
+    /// Whether a rendered text block is a warning placed in a dependency's
+    /// copied file ([`Self::in_dependency_offset`]).
+    fn is_dependency_warning_block(&self, block: &str) -> bool {
+        if !block.starts_with("warning[") {
+            return false;
+        }
+        let header = block.lines().next().unwrap_or("");
+        let key = format!("]: {}:", self.filename);
+        let Some(at) = header.find(&key) else {
+            return false;
+        };
+        let rest = &header[at + key.len()..];
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        rest[..digits]
+            .parse()
+            .is_ok_and(|line| self.in_dependency_line(line))
+    }
+
     fn new(filename: &str, source: &str) -> Self {
         let mut parsed = crate::parse(source);
         source_fixes::complete_parsed(source, &mut parsed);
@@ -4151,6 +4197,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
         }
     }
     out.into_iter()
+        .filter(|block| !pipeline.is_dependency_warning_block(block))
         .map(|block| hoist_embedded_code(&block))
         .collect()
 }

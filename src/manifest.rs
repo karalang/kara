@@ -282,6 +282,9 @@ pub struct PackageEffects {
     pub end: usize,
     pub package: String,
     pub policy: crate::effectchecker::PublicEffectsPolicy,
+    /// The module's path, dotted (`lib.util`), where the range is one
+    /// module's; empty otherwise.
+    pub module: String,
 }
 
 /// An import of a dependency whose public effects are inferred: the

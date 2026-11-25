@@ -1,5 +1,5 @@
 warning[deprecated]
-`load_config`
+`lib.load_config`
 package `lib`
 use `parse_config` instead
 1.2.0

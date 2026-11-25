@@ -50,9 +50,15 @@ impl TypeChecker<'_> {
         else {
             return;
         };
+        let def = self
+            .resolve_result
+            .symbol_table
+            .lookup_in_scope(crate::resolver::ScopeId(0), enum_name)
+            .map(|s| s.span.offset);
         self.emit_deprecated_warning(
             span,
             &format!("{enum_name}.{variant}"),
+            def,
             note.as_deref(),
             since.as_deref(),
         );

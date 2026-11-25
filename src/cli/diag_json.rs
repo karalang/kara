@@ -1569,6 +1569,27 @@ impl DiagnosticJson {
         self.files.push(d.filename.to_string());
     }
 
+    /// Drop the warnings placed in a dependency's copied file
+    /// (`Pipeline::in_dependency_offset`, B-2026-11-24-54).
+    fn drop_dependency_warnings(&mut self, pipeline: &Pipeline) {
+        let keep: Vec<bool> = (0..self.entries.len())
+            .map(|i| {
+                self.severities[i] != "warning"
+                    || !pipeline.in_dependency_offset(self.spans[i].offset)
+            })
+            .collect();
+        let mut k = keep.iter();
+        self.entries.retain(|_| *k.next().unwrap());
+        let mut k = keep.iter();
+        self.spans.retain(|_| *k.next().unwrap());
+        let mut k = keep.iter();
+        self.severities.retain(|_| *k.next().unwrap());
+        let mut k = keep.iter();
+        self.phases.retain(|_| *k.next().unwrap());
+        let mut k = keep.iter();
+        self.files.retain(|_| *k.next().unwrap());
+    }
+
     pub(super) fn to_json_array(&self) -> String {
         if self.entries.is_empty() {
             return "[]".to_string();
@@ -2250,6 +2271,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         }
     }
 
+    diags.drop_dependency_warnings(pipeline);
     // Every machine-applicable fix is also a hint in the spec's shape.
     if let Some(source) = pipeline.source.as_deref() {
         for entry in &mut diags.entries {

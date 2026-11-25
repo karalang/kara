@@ -826,6 +826,7 @@ pub(super) fn amalgamate(
                 end: text.len() + body.len(),
                 package: package.clone(),
                 policy: policies.get(package).copied().unwrap_or_default(),
+                module: f.module.path.join("."),
             }),
             // The root package's own file: its imports of a dependency
             // whose effects are inferred, the first of each. The import is
