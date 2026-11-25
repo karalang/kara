@@ -5057,7 +5057,7 @@ fn module_binding_single_letter_name_withholds_identity_rename() {
     //
     // `suggest_const_name` is the identity on a name whose only letter is
     // already uppercase, while CN-7 classifies a single-letter name as
-    // Type-class regardless — so no case transform can reach Const-class here.
+    // Type-class regardless — so no case transform names a new spelling here.
     let src = "pub let M: i32 = 3;";
     let errors = resolve_errors(src);
     let err = errors
@@ -5079,10 +5079,17 @@ fn module_binding_single_letter_name_withholds_identity_rename() {
         "message must not suggest the name it already has: {}",
         err.message
     );
-    // Still actionable: it explains why, and what to do instead.
+    // Still actionable: as a `const`, one uppercase letter is Const-class
+    // (design.md §3 CN-7, the 2026-11-19 ruling; B-2026-11-25-4), so the
+    // advice is no longer to use more than one letter.
     assert!(
-        err.message.contains("single letter") && err.message.contains("more than one letter"),
-        "message should explain the single-letter rule: {}",
+        err.message.contains("as a `const`, `M` is Const-class"),
+        "message should name the CN-7 const rule: {}",
+        err.message
+    );
+    assert!(
+        !err.message.contains("more than one letter"),
+        "message must not ask for more letters: {}",
         err.message
     );
 }

@@ -64,3 +64,14 @@ fn check(dir: &str, name: &str) -> String {
 fn raw_true_binding_leaves_the_literal() {
     runs("lexical", "raw_ident_true_false_literals_still_literals");
 }
+
+/// B-2026-11-25-4: `const n` is refused, and the help names `N` (CN-7).
+#[test]
+fn one_letter_const_help_names_the_capital() {
+    let out = check("lexical", "cn7_one_letter_lowercase_const");
+    assert!(out.contains("consider renaming to `N`"), "{out}");
+    assert!(
+        !out.contains("no capitalization change can make it"),
+        "{out}"
+    );
+}

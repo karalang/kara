@@ -4724,6 +4724,17 @@ impl Parser {
         // loop-inducing — but it is the same defect and shares the fix.
         let advice = match crate::lexer::suggest_name_for_class(name, expected) {
             Some(s) => format!("consider renaming to `{s}`"),
+            // After `const` one uppercase letter is a constant's name
+            // (design.md §3 CN-7, the 2026-11-19 ruling).
+            None if expected == IdentClass::Const
+                && crate::lexer::is_one_letter_const(&name.to_ascii_uppercase()) =>
+            {
+                format!(
+                    "consider renaming to `{}`: after `const`, one uppercase letter is \
+                     Const-class (design.md §3 CN-7)",
+                    name.to_ascii_uppercase()
+                )
+            }
             None if crate::lexer::has_single_letter(name) => format!(
                 "a name with a single letter is always Type-class, so no capitalization change \
                  can make it {expected_desc} — use a name with more than one letter"

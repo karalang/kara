@@ -1124,6 +1124,14 @@ impl<'a> super::Resolver<'a> {
             // the diagnostic states the constraint and leaves the choice.
             let advice = match &suggestion {
                 Some(s) => format!("consider renaming to `{s}`"),
+                // As a `const`, one uppercase letter is Const-class
+                // (design.md §3 CN-7, the 2026-11-19 ruling).
+                None if crate::lexer::is_one_letter_const(&b.name.to_ascii_uppercase()) => {
+                    format!(
+                        "as a `const`, `{}` is Const-class (design.md §3 CN-7)",
+                        b.name.to_ascii_uppercase()
+                    )
+                }
                 None if crate::lexer::has_single_letter(&b.name) => {
                     "a name with a single letter is always Type-class (so `T` / `K` / `V` read \
                      as type parameters), and no capitalization change can make it Const-class \
