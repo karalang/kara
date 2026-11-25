@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 749 |
+| diagnostics | 751 |
 | false-positive | 369 |
-| missing-feature | 252 |
+| missing-feature | 253 |
 | perf | 203 |
 | other | 149 |
 | soundness | 130 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 897 |
-| mir | 332 |
+| typecheck | 899 |
+| mir | 333 |
 | mir-llvm | 324 |
-| cli | 305 |
+| cli | 307 |
 | parser | 159 |
 | ownership | 136 |
 | runtime | 110 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -113,14 +113,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-6 | 2026-11-19 | typecheck | low | Tracker for the next minor release: `==`, `!=`, `<`, `<=`, `>`, `>=` or an f-string interpolation on a value of an unbounded type parameter becomes a compile error; in 0.8.x it is a `deprecated` warning whose machine fix adds the bound (design.md §8 Bounds and generic bodies) | — |
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, so kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 2.0x Rust's lazy `windows` (0.264 s vs 0.132 s); the same count over indices runs at Rust's time | — |
-| B-2026-11-24-36 | 2026-11-24 | typecheck+mir | medium | A `mut ref` element binding in a slice pattern (`[mut ref first, ..]`) cannot write through the element: over a local Array it is bound as `ref` (E0209), and over a `mut ref Vec` parameter the borrow checker refuses it (E0517) | — |
-| B-2026-11-24-37 | 2026-11-24 | mir | medium | A closure's disjoint capture goes only one field deep: a closure reading `u.address.city` captures `u.address` whole, so writing `u.address.zip` while it lives is refused (E0516) | — |
 | B-2026-11-24-38 | 2026-11-24 | typecheck+cli | medium | `a === b` on two handles of a `shared struct`, JavaScript's identity test, became a structural comparison under `karac fix`: the `===` habit mends it to `==`, and the refusal that follows said only "add #[derive(PartialEq)]" and applied that derive whenever every field compares, so the program then printed true for two distinct handles with equal fields; neither message named `a.ref_eq(b)`, a handle's identity | — |
 | B-2026-11-24-39 | 2026-11-24 | cli | low | `karac fix`'s `#[derive(PartialEq)]` (and PartialOrd, Hash) line for a `pub struct` or `shared struct` at the top level is indented by the width of `pub ` or `shared `: derive_line takes the `struct` keyword's column as the item's indentation | — |
 | B-2026-11-24-41 | 2026-11-24 | mir-llvm+runtime | medium | Counting 10^5 random keys into a compiled `SortedMap` takes about 3.4x Rust's `BTreeMap` (`*count.entry(x).or_insert(0) += 1`, 100 rounds: 5.5 to 5.8 s against 1.6 s), and plain `insert(x, 1)` about 2.8x (4.6 s against 1.6 s), so kata 1296's bench runs 2x Rust's | — |
 | B-2026-11-24-42 | 2026-11-24 | typecheck+cli | low | `half.find(|c: char| c != 'a')` on `half = s[..n / 2]`, Rust's `str::find` over a string's first half, got only the bare "'find' takes a `Str` pattern, found 'Fn(char) -> bool'" with no fix: the `char_indices().find(..).map(|(i, _)| i)` fix (B-2026-11-20-140) reached only a `String` receiver with an unannotated closure, and a `Str` view or a `c: char` parameter missed it | — |
 | B-2026-11-24-43 | 2026-11-24 | typecheck | medium | `let mat: Vec[Vec[i32]] = [[3, 3, 1, 1].to_vec(), ..].to_vec();`, a list of integer literals turned `.to_vec()` as Rust writes a `Vec`, is refused with "expected 'Vec[Vec[i32]]', found 'Vec[Vec[i64]]'" and the advice to annotate the binding, which is annotated: the wanted element type reaches a list behind `.to_vec()` only when it holds a `Str` (B-2026-11-09-49), so the literals keep the default `i64` | — |
 | B-2026-11-24-46 | 2026-11-24 | cli | low | `karac explain` on a function in a recursive group gives each effect's call chain but not the fixpoint chain design.md § Effects promises (`∅ = φ₀ ⊊ φ₁ ⊊ … ⊊ φ*`, with the callee or operation that added atoms at each step) | — |
+| B-2026-11-24-48 | 2026-11-24 | typecheck+cli | low | `min(gap, 360.0 - gap)` on two `f64`s, the free `min` (and `max`), is refused with E0200 "`f64` does not implement `Ord`" and the advice to wrap in `F64` or drop an `Ord` bound the author never wrote; the documented float method `gap.min(360.0 - gap)` (library/core-types.md, Float methods) is not named, and there is no machine fix | — |
+| B-2026-11-24-49 | 2026-11-24 | typecheck+cli | medium | `karac fix` retypes a Rust `usize` index to `i64` and keeps `i.wrapping_sub(1)` as it was, so the idiom `for j in [i.wrapping_sub(1), i + 1] { if j < n { .. arr[j] } }` no longer skips 0 - 1: on `usize` it wrapped past every length, on `i64` it is -1, passes `j < n`, and the fixed program dies with index out of bounds; `checked_sub` and `saturating_sub` get the floor edit, `wrapping_sub` none | — |
+| B-2026-11-25-1 | 2026-11-25 | mir | low | Remainders of B-2026-11-24-36: two `mut ref` elements in one slice pattern over a view (`[mut ref a, .., mut ref b]`) are refused E0516, and `..mut ref rest` over a `mut ref Array[T, N]` is not lowered | — |
 
 ### Relocated
 
@@ -2258,6 +2259,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-33 | typecheck | medium | An `@` binding over an or-pattern of unit variants (`x @ (K.A \| K.B)`) on an owned scrutinee is refused at run as E_AT_BINDING_DOUBLE_CONSUME, though… | 8ff0808383 |
 | B-2026-11-24-34 | typecheck | medium | A range pattern whose two bounds are named consts of different integer types (`LO ..= HI` with `const LO: u8`, `const HI: i32`) is accepted: each bou… | 8ff0808383 |
 | B-2026-11-24-35 | parser | low | A bare `..` match arm and a call in a range-pattern bound get generic parse errors that do not say what is accepted: `..` alone is the rest marker, a… | 8ff0808383 |
+| B-2026-11-24-36 | typecheck+mir | medium | A `mut ref` element binding in a slice pattern (`[mut ref first, ..]`) cannot write through the element: over a local Array it is bound as `ref` (E02… | f0fd3f3144 |
+| B-2026-11-24-37 | mir | medium | A closure's disjoint capture goes only one field deep: a closure reading `u.address.city` captures `u.address` whole, so writing `u.address.zip` whil… | f0fd3f3144 |
 | B-2026-11-24-40 | typecheck | low | `(0..5).scan(v, \|x, _\| Some((x * x, x)))` with `v` the `ref i64` that iterating a `Set` gives is refused with a bare E0200 "expected 'Option[(ref i64… | 6d730ff01b |
 | B-2026-11-24-44 | mir | high | Two `par` branches that each sort, clone or dedup a `Vec` of a program type, or file or look up its key in a `Map` / `Set`, are accepted with no E041… | c8cca30308 |
 | B-2026-11-24-45 | mir | medium | A function declaring a keyed resource (`fn save(i: u64) with writes(UserDb[i])`, over the deferred `effect resource UserDb[id: u64];`) is charged not… | f2af9c2119 |
