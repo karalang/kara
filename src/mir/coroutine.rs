@@ -1623,6 +1623,92 @@ pub fn layout_with(
     }
 }
 
+/// Adds to each point of `layout` the owned locals that are initialized
+/// there and that nothing uses again: their drop is out of reach (behind an
+/// endless loop), so liveness leaves them out, and a resume that returns
+/// `Pending` would leave each one in a dead activation, never dropped and
+/// read by the interpreter as a missing drop (B-2026-11-25-56). The frame
+/// holds them instead, and the frame's drop releases them if the coroutine
+/// is dropped there. Only a local initialized whole on every path, so no
+/// drop flag has to come along.
+fn hold_unreachable_drops(
+    body: &Body,
+    tys: &TyInterner,
+    layout: &mut CoroutineLayout,
+) -> Result<(), String> {
+    use super::elaborate::{
+        apply, dataflow, entry_state, gather_move_paths, statement_effects, terminator_effects,
+        Effect,
+    };
+    if layout.points.is_empty() {
+        return Ok(());
+    }
+    let paths = gather_move_paths(body, tys, &|t| tys.needs_drop(t))?;
+    let stmt_effects: Vec<Vec<Vec<Effect>>> = body
+        .blocks
+        .iter()
+        .map(|b| {
+            b.statements
+                .iter()
+                .map(|s| statement_effects(&paths, &s.kind))
+                .collect()
+        })
+        .collect();
+    let term_effects: Vec<Vec<Effect>> = body
+        .blocks
+        .iter()
+        .map(|b| terminator_effects(&paths, &b.terminator.kind))
+        .collect();
+    let states = dataflow(
+        body,
+        &paths,
+        &entry_state(body, &paths),
+        &stmt_effects,
+        &term_effects,
+    );
+    let mut frame: BTreeSet<Local> = layout.frame.iter().copied().collect();
+    for pt in &mut layout.points {
+        let bi = pt.block.index();
+        let mut st = states[bi].clone();
+        for effs in &stmt_effects[bi] {
+            apply(&paths, &mut st, effs);
+        }
+        let moved: Vec<Effect> = term_effects[bi]
+            .iter()
+            .copied()
+            .filter(|e| matches!(e, Effect::Uninit(_)))
+            .collect();
+        apply(&paths, &mut st, &moved);
+        let TerminatorKind::Call { destination, .. } = &body.block(pt.block).terminator.kind else {
+            continue;
+        };
+        let mut added = false;
+        for i in 1..body.locals.len() {
+            let l = Local(i as u32);
+            if l == destination.local || pt.across.contains(&l) {
+                continue;
+            }
+            let Some(p) = paths.lookup(&Place::local(l)) else {
+                continue;
+            };
+            if paths
+                .subtree(p)
+                .iter()
+                .all(|&q| st.init[q] && !st.uninit[q])
+            {
+                pt.across.push(l);
+                frame.insert(l);
+                added = true;
+            }
+        }
+        if added {
+            pt.across.sort();
+        }
+    }
+    layout.frame = frame.into_iter().collect();
+    Ok(())
+}
+
 /// Coroutines that reach themselves through suspending calls, whose frame
 /// therefore contains itself (the compiled backends box that callee frame).
 /// Each cycle is named once, by its members in order.
@@ -1888,10 +1974,13 @@ pub fn transform_with_tables(
             h as &dyn Fn(&InstanceId) -> super::borrowck::ResultBorrows,
         )
     });
-    let layouts: BTreeMap<&str, CoroutineLayout> = by_name
+    let mut layouts: BTreeMap<&str, CoroutineLayout> = by_name
         .iter()
         .map(|(&n, b)| (n, layout_with(b, &set, loans)))
         .collect();
+    for (n, l) in layouts.iter_mut() {
+        hold_unreachable_drops(by_name[n], tys, l)?;
+    }
     // A frame holds its callees' frames, so every frame type is named
     // before any is defined: a recursive coroutine's frame holds its own
     // type, which the compiled backends box (`layout::boxed_field`) and the
