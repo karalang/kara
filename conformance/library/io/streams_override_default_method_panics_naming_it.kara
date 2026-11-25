@@ -1,0 +1,11 @@
+struct Quiet {}
+impl StdoutProvider for Quiet {
+    fn write(mut ref self, s: Str) {}
+}
+fn main() {
+    with_provider[Stdout](Quiet {}, || {
+        println("swallowed");
+        stdout.flush();
+    });
+    println("unreached");
+}

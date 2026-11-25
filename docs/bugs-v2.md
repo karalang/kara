@@ -59,13 +59,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 765 |
-| false-positive | 375 |
+| false-positive | 376 |
 | missing-feature | 256 |
 | perf | 204 |
 | other | 149 |
-| soundness | 131 |
+| soundness | 132 |
 | miscompile | 108 |
-| run-vs-build | 70 |
+| run-vs-build | 72 |
 | crash | 67 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -83,8 +83,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 162 |
 | ownership | 138 |
 | runtime | 111 |
-| interp | 106 |
-| effect | 65 |
+| interp | 108 |
+| effect | 67 |
 | resolver | 57 |
 | other | 53 |
 | codegen | 22 |
@@ -135,6 +135,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-25 | 2026-11-25 | mir-llvm | low | A `shared` field's borrow conflict panics with panic-record kind `explicit`, not `borrow_conflict`, on the JIT and the MIR interpreter | — |
 | B-2026-11-25-26 | 2026-11-25 | mir | low | `..mut ref rest` over a `mut ref Array[T, N]` is refused E0516 ('not lowered yet'): the checker types `rest` as `mut ref Array[T, K]`, which needs a sub-array place (remainder of B-2026-11-25-1) | — |
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
+| B-2026-11-25-32 | 2026-11-25 | interp | medium | The interpreter stopped with `expected a sequence, found Agg([..])` when a fixed `Array[u8, N]` reached a library native by value (`f.write(b"hello")`, `conn.write_all(b"ping")`, `String.from_utf8(arr)`); the build ran it | — |
+| B-2026-11-25-33 | 2026-11-25 | effect | medium | I/O natives that return a new heap value are not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts a function that calls `fs.read_to_string`, `fs.read_bytes`, `fs.read_dir`, `stdin.read_line` or `env.args()` | — |
+| B-2026-11-25-34 | 2026-11-25 | interp | low | `Stdio.from_file` of a file a `FileSystem` fake opened stopped the interpreted program with an internal `error[mir]: run:` and exit 3; the build prints one `error:` line and exits 101 | — |
+| B-2026-11-25-35 | 2026-11-25 | effect | medium | A `pub fn` over `f: ref File` cannot declare io.md's `writes(f)`: E0400 asks for `writes(FileSystem)`; `karac query effects` shows the class, and a `TcpStream` read is charged `sends(Network)` beside `receives(Network)` | — |
 
 ### Relocated
 

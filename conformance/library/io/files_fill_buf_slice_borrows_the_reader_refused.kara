@@ -1,0 +1,8 @@
+import std.io.{File, BufReader};
+fn main() {
+    fs.write("f.txt", "abcdef").unwrap();
+    let mut br = BufReader.new(File.open("f.txt").unwrap());
+    let b = br.fill_buf().unwrap();
+    br.consume(1);
+    println(b.len());
+}

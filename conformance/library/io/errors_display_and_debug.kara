@@ -1,0 +1,10 @@
+fn main() {
+    let all = [IoError.NotFound, IoError.PermissionDenied, IoError.AlreadyExists, IoError.InvalidInput,
+               IoError.UnexpectedEof, IoError.InvalidUtf8, IoError.Interrupted, IoError.Unsupported,
+               IoError.ProviderUnavailable, IoError.Other("disk on fire".to_string())];
+    for e in all { println(e); }
+    println(f"{VarError.NotPresent} | {VarError.NotUnicode}");
+    let path = "nope";
+    let e = fs.read_to_string(path).unwrap_err();
+    eprintln(f"lgrep: {path}: {e}");
+}

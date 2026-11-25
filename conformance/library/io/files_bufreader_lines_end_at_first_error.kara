@@ -1,0 +1,13 @@
+import std.io.{File, BufReader};
+fn main() {
+    fs.write_bytes("bad.txt", [97u8, 10, 255, 10, 98, 10]).unwrap();
+    let br = BufReader.new(File.open("bad.txt").unwrap());
+    let mut seen: Vec[String] = Vec.new();
+    for l in br.lines() {
+        match l { Ok(s) => seen.push(s), Err(e) => seen.push(f"err {e}") }
+    }
+    println(seen);
+    let mut more = String.new();
+    println(br.read_line(mut more).unwrap());
+    println(more.trim_end());
+}

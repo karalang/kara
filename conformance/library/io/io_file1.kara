@@ -1,0 +1,225 @@
+// File, OpenOptions, seek/set_len, BufReader/BufWriter.
+fn r(x: Result[(), IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+fn ri(x: Result[i64, IoError]) -> String {
+    match x { Ok(n) => f"ok {n}", Err(e) => f"err[{e}]" }
+}
+fn ro(x: Result[File, IoError]) -> String {
+    match x { Ok(_) => "opened".to_string(), Err(e) => f"err[{e}]" }
+}
+fn bytes(p: Str) -> String {
+    match fs.read_bytes(p) { Ok(b) => f"{b}", Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    // invalid OpenOptions combos
+    println(f"none: {ro(File.options().open("x"))}");
+    println(f"truncate w/o write: {ro(File.options().read(true).truncate(true).open("x"))}");
+    println(f"create w/o write: {ro(File.options().read(true).create(true).open("x"))}");
+    println(f"create_new w/o write: {ro(File.options().read(true).create_new(true).open("x"))}");
+    println(f"create_new+truncate: {ro(File.options().write(true).create_new(true).truncate(true).open("x"))}");
+    println(f"append+truncate: {ro(File.options().append(true).truncate(true).open("x"))}");
+    println(f"x created by any? {fs.exists("x")}");
+    println(f"write+missing: {ro(File.options().read(true).write(true).open("x"))}");
+    println(f"open missing: {ro(File.open("x"))}");
+    println(f"create_new: {ro(File.options().write(true).create_new(true).open("lock"))}");
+    println(f"create_new again: {ro(File.options().write(true).create_new(true).open("lock"))}");
+    println(f"append implies write: {ro(File.options().append(true).create(true).open("ap"))}");
+    // write then read
+    match File.create("f") {
+        Ok(f) => {
+            let data: Vec[u8] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            println(f"write: {ri(f.write(data.as_slice()))}");
+            println(f"write_all: {r(f.write_all(data.as_slice()))}");
+            println(f"flush: {r(f.flush())}");
+            println(f"pos: {ri(f.seek(SeekFrom.Current, 0))}");
+            println(f"seek End -4: {ri(f.seek(SeekFrom.End, -4))}");
+            println(f"seek Start -1: {ri(f.seek(SeekFrom.Start, -1))}");
+            println(f"seek Current -100: {ri(f.seek(SeekFrom.Current, -100))}");
+            println(f"pos after: {ri(f.seek(SeekFrom.Current, 0))}");
+            println(f"seek Start 30: {ri(f.seek(SeekFrom.Start, 30))}");
+            let tail: Vec[u8] = [99];
+            println(f"write past end: {ri(f.write(tail.as_slice()))}");
+            println(f"set_len -1: {r(f.set_len(-1))}");
+            println(f"set_len 5: {r(f.set_len(5))}");
+            println(f"pos kept: {ri(f.seek(SeekFrom.Current, 0))}");
+            println(f"write after cut: {ri(f.write(tail.as_slice()))}");
+            println(f"set_len 40: {r(f.set_len(40))}");
+            println(f"sync_all: {r(f.sync_all())} sync_data: {r(f.sync_data())}");
+            // read on a write-only file
+            let mut buf: Array[u8, 4] = [0; 4];
+            println(f"read on write-only: {ri(f.read(mut buf))}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    println(f"f: {bytes("f")}");
+    match File.open("f") {
+        Ok(f) => {
+            let mut buf: Array[u8, 4] = [0; 4];
+            println(f"read: {ri(f.read(mut buf))} {buf}");
+            println(f"read_exact: {r(f.read_exact(mut buf))} {buf}");
+            println(f"seek End -2: {ri(f.seek(SeekFrom.End, -2))}");
+            println(f"read_exact short: {r(f.read_exact(mut buf))}");
+            println(f"read at eof: {ri(f.read(mut buf))}");
+            let w: Vec[u8] = [1];
+            println(f"write on read-only: {ri(f.write(w.as_slice()))}");
+            println(f"set_len on read-only: {r(f.set_len(0))}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match File.open(".") {
+        Ok(f) => {
+            let mut buf: Array[u8, 4] = [0; 4];
+            println(f"open dir read: {ri(f.read(mut buf))}");
+        }
+        Err(e) => println(f"open dir: err[{e}]"),
+    }
+    // append
+    let _ = fs.write("ap", "ab");
+    match File.append("ap") {
+        Ok(f) => {
+            let _ = f.seek(SeekFrom.Start, 0);
+            let w: Vec[u8] = [67];
+            println(f"append write: {ri(f.write(w.as_slice()))}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match fs.read_to_string("ap") { Ok(s) => println(f"ap: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    match File.append("newap") { Ok(_) => println(f"append creates: {fs.exists("newap")}"), Err(e) => println(f"err[{e}]") }
+    // create truncates
+    match File.create("ap") { Ok(_) => println(f"create truncates: {bytes("ap")}"), Err(e) => println(f"err[{e}]") }
+    // open read+write keeps contents
+    let _ = fs.write("rw", "hello");
+    match File.options().read(true).write(true).open("rw") {
+        Ok(f) => {
+            let w: Vec[u8] = [74];
+            let _ = f.write(w.as_slice());
+            let mut buf: Array[u8, 8] = [0; 8];
+            println(f"rw read: {ri(f.read(mut buf))}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match fs.read_to_string("rw") { Ok(s) => println(f"rw: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    // BufReader
+    let _ = fs.write("lines", "alpha\r\nbeta\n\ngamma");
+    match File.open("lines") {
+        Ok(f) => {
+            let br = BufReader.new(f);
+            let mut s = String.new();
+            println(f"read_line: {ri(br.read_line(mut s))} {q(s)}");
+            println(f"read_line: {ri(br.read_line(mut s))} {q(s)}");
+            let mut rest = String.new();
+            println(f"read_to_string: {ri(br.read_to_string(mut rest))} {q(rest)}");
+            let mut e = String.new();
+            println(f"read_line eof: {ri(br.read_line(mut e))} {q(e)}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match File.open("lines") {
+        Ok(f) => {
+            let br = BufReader.new(f);
+            for l in br.lines() {
+                match l { Ok(s) => println(f"line {q(s)}"), Err(e) => println(f"line err[{e}]") }
+            }
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match File.open("lines") {
+        Ok(f) => {
+            let mut br = BufReader.with_capacity(f, 4);
+            let n = {
+                match br.fill_buf() {
+                    Ok(b) => { println(f"fill_buf: {b}"); b.len() }
+                    Err(e) => { println(f"err[{e}]"); 0 }
+                }
+            };
+            br.consume(2);
+            let m = {
+                match br.fill_buf() {
+                    Ok(b) => { println(f"after consume 2: {b}"); b.len() }
+                    Err(e) => { println(f"err[{e}]"); 0 }
+                }
+            };
+            br.consume(100);
+            match br.fill_buf() { Ok(b) => println(f"after consume 100: {b}"), Err(e) => println(f"err[{e}]") }
+            println(f"{n} {m}");
+            let mut buf: Array[u8, 3] = [0; 3];
+            println(f"br read_exact: {r(br.read_exact(mut buf))} {buf}");
+            let mut buf2: Array[u8, 64] = [0; 64];
+            println(f"br read: {ri(br.read(mut buf2))}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    // invalid UTF-8 through BufReader
+    let bad: Vec[u8] = [111, 107, 10, 255, 10, 111, 107, 10];
+    let _ = fs.write_bytes("bad", bad.as_slice());
+    match File.open("bad") {
+        Ok(f) => {
+            let br = BufReader.new(f);
+            for l in br.lines() {
+                match l { Ok(s) => println(f"bad line {q(s)}"), Err(e) => println(f"bad line err[{e}]") }
+            }
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match File.open("bad") {
+        Ok(f) => {
+            let br = BufReader.new(f);
+            let mut s = String.new();
+            println(f"bad read_line: {ri(br.read_line(mut s))} {q(s)}");
+            println(f"bad read_line: {ri(br.read_line(mut s))} {q(s)}");
+            println(f"bad read_line: {ri(br.read_line(mut s))} {q(s)}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    // BufWriter flushes on drop
+    {
+        match File.create("bw") {
+            Ok(f) => {
+                let bw = BufWriter.new(f);
+                let w: Vec[u8] = [104, 105];
+                println(f"bw write: {ri(bw.write(w.as_slice()))}");
+                println(f"bw before drop: {bytes("bw")}");
+                println(f"bw write_all: {r(bw.write_all(w.as_slice()))}");
+            }
+            Err(e) => println(f"err[{e}]"),
+        }
+    }
+    println(f"bw after drop: {bytes("bw")}");
+    match File.create("bw2") {
+        Ok(f) => {
+            let bw = BufWriter.with_capacity(f, 2);
+            let w: Vec[u8] = [1, 2, 3, 4, 5];
+            println(f"bw2 write: {ri(bw.write(w.as_slice()))}");
+            println(f"bw2 flush: {r(bw.flush())} {bytes("bw2")}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

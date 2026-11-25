@@ -1,0 +1,23 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+import std.process.{Command, Stdio};
+fn main() {
+    let c = Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn().unwrap();
+    let i = c.stdin().unwrap();
+    println(c.stdin().is_none());
+    println(r(i.write_all("line\n".bytes())));
+    println(r(i.close()));
+    println(r(i.close()));
+    println(r(i.write("x".bytes())));
+    let o = c.stdout().unwrap();
+    println(c.stdout().is_none());
+    let mut s = String.new();
+    println(o.read_to_string(mut s).unwrap());
+    println(s.trim());
+    c.wait().unwrap();
+    let n = Command.new("true").spawn().unwrap();
+    println(n.stdout().is_none());
+    n.wait().unwrap();
+}

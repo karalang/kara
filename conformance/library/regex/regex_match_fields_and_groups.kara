@@ -1,0 +1,13 @@
+import std.regex.{Regex, Match, Captures};
+fn main() {
+    let s = "név: Ödön 42";
+    let re = Regex.compile("(\\p{L}+) (\\d+)").unwrap();
+    let m = re.find(s).unwrap();
+    println(f"{m.start} {m.end} {m.text} {s[m.start..m.end] == m.text}");
+    let n = Regex.compile("((a)(b))(c)").unwrap().captures("xabc").unwrap();
+    let mut i = 0;
+    while i < n.len() { println(f"{i}: {n.get(i).unwrap().text}"); i = i + 1; }
+    let alt = Regex.compile("(?<x>a)|b").unwrap().captures("b").unwrap();
+    println(f"{alt.len()} {alt.name("x").is_none()} {alt.get(1).is_none()} {alt.get(2).is_none()}");
+    match Regex.compile("(unclosed") { Ok(_) => println("?"), Err(e) => println(e.message.contains("(unclosed")) }
+}

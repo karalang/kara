@@ -1,0 +1,16 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+import std.io.{File, SeekFrom, OpenOptions};
+fn main() {
+    let f = File.options().read(true).write(true).create(true).open("s.bin").unwrap();
+    f.write_all("abcdef".bytes()).unwrap();
+    println(r(f.set_len(2)));
+    println(f.seek(SeekFrom.Current, 0).unwrap());
+    f.write_all("Z".bytes()).unwrap();
+    println(fs.read_bytes("s.bin").unwrap());
+    println(r(f.set_len(-1)));
+    println(r(f.set_len(10)));
+    println(fs.metadata("s.bin").unwrap().len);
+}

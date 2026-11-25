@@ -1,0 +1,10 @@
+import std.process.Command;
+fn main() {
+    let o = Command.new("echo").args(["-n", "x", "y"]).output().unwrap();
+    println(String.from_utf8(o.stdout) ?? "?".to_string());
+    let words: Vec[String] = ["p".to_string(), "q".to_string()];
+    let mut cmd = Command.new("echo");
+    for w in words { cmd = cmd.arg(w); }
+    let o2 = cmd.output().unwrap();
+    print(String.from_utf8(o2.stdout) ?? "?".to_string());
+}

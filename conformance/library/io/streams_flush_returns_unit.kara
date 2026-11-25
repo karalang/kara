@@ -1,0 +1,6 @@
+fn main() {
+    print("Guess: ");
+    let u: () = stdout.flush();
+    let w: () = stderr.flush();
+    println("done");
+}

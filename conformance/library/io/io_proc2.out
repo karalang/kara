@@ -1,0 +1,11 @@
+out line [a]
+out line [b]
+out line [c]
+stderr 5 [E1
+E2]
+stderr again none: true
+bw write_all: ok
+tr: [HELLO
+]
+write to dead child: err[Broken pipe (os error 32)]
+still alive

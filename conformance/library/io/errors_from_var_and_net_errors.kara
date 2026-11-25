@@ -1,0 +1,16 @@
+import std.net.{TcpStream, NetError};
+fn var_or_io() -> Result[String, IoError] { let v = env.var("KARA_CONF_SURELY_UNSET_VAR")?; Ok(v) }
+fn both() -> Result[i64, IoError] {
+    let s = fs.read_to_string("nope2");
+    if s.is_ok() { return Ok(0); }
+    let c = TcpStream.connect("not an address")?;
+    Ok(1)
+}
+fn main() {
+    println(var_or_io().unwrap_err());
+    println(IoError.from(VarError.NotUnicode));
+    println(both().unwrap_err());
+    println(IoError.from(NetError.UnexpectedEof));
+    println(IoError.from(NetError.Interrupted));
+    println(IoError.from(NetError.TimedOut));
+}

@@ -1,0 +1,17 @@
+write: ok
+draft
+error: not found
+fake open any
+read: ok 1 65
+line [BC]
+fake close 7
+fake open out
+fake write h=7 n=3
+write: ok 3
+flush: ok sync_all: ok sync_data: ok
+seek: err[unsupported]
+set_len: err[unsupported]
+after override write: err[provider unavailable]
+after override read: err[provider unavailable]
+after override flush: err[provider unavailable]
+dropped after override

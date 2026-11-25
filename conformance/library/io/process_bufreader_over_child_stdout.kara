@@ -1,0 +1,9 @@
+import std.process.{Command, Stdio};
+import std.io.BufReader;
+fn main() {
+    let c = Command.new("printf").arg("a\\nb\\nc\\n").stdout(Stdio.piped()).spawn().unwrap();
+    let mut n = 0;
+    for l in BufReader.new(c.stdout().unwrap()).lines() { n += l.unwrap().len(); }
+    println(n);
+    c.wait().unwrap();
+}

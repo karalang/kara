@@ -1,0 +1,118 @@
+// Path-based fs functions and their documented error cases.
+fn r(x: Result[(), IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    println(f"create_dir d: {r(fs.create_dir("d"))}");
+    println(f"create_dir d again: {r(fs.create_dir("d"))}");
+    println(f"create_dir missing parent: {r(fs.create_dir("q/r"))}");
+    println(f"create_dir_all d/e/f: {r(fs.create_dir_all("d/e/f"))}");
+    println(f"create_dir_all d/e/f again: {r(fs.create_dir_all("d/e/f"))}");
+    println(f"write d/b.txt: {r(fs.write("d/b.txt", "bee\n"))}");
+    println(f"write d/a.txt: {r(fs.write("d/a.txt", "one\r\ntwo\nthree\r"))}");
+    println(f"write d/B.txt: {r(fs.write("d/B.txt", ""))}");
+    println(f"write d/é.txt: {r(fs.write("d/é.txt", "e"))}");
+    println(f"write d/z/x: {r(fs.write("d/z/x", "e"))}");
+    println(f"write into dir: {r(fs.write("d", "x"))}");
+    match fs.read_dir("d") { Ok(v) => println(f"read_dir d: {qv(v)}"), Err(e) => println(f"read_dir d: err[{e}]") }
+    match fs.read_dir("nope") { Ok(v) => println(f"read_dir nope: {qv(v)}"), Err(e) => println(f"read_dir nope: err[{e}]") }
+    match fs.read_dir("d/a.txt") { Ok(v) => println(f"read_dir file: {qv(v)}"), Err(e) => println(f"read_dir file: err[{e}]") }
+    match fs.read_lines("d/a.txt") { Ok(v) => println(f"read_lines a: {qv(v)}"), Err(e) => println(f"err[{e}]") }
+    match fs.read_lines("d/B.txt") { Ok(v) => println(f"read_lines empty: {qv(v)}"), Err(e) => println(f"err[{e}]") }
+    match fs.read_lines("d/b.txt") { Ok(v) => println(f"read_lines b: {qv(v)}"), Err(e) => println(f"err[{e}]") }
+    match fs.read_lines("nope") { Ok(v) => println(f"{qv(v)}"), Err(e) => println(f"read_lines nope: err[{e}]") }
+    match fs.read_to_string("d/a.txt") { Ok(s) => println(f"read_to_string a: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    match fs.read_to_string("d") { Ok(s) => println(f"{q(s)}"), Err(e) => println(f"read_to_string dir: err[{e}]") }
+    let bad: Vec[u8] = [104, 105, 255, 10];
+    println(f"write_bytes bad: {r(fs.write_bytes("d/bad.bin", bad.as_slice()))}");
+    match fs.read_to_string("d/bad.bin") { Ok(s) => println(f"{q(s)}"), Err(e) => println(f"read_to_string bad: err[{e}]") }
+    match fs.read_lines("d/bad.bin") { Ok(s) => println(f"{qv(s)}"), Err(e) => println(f"read_lines bad: err[{e}]") }
+    match fs.read_bytes("d/bad.bin") { Ok(b) => println(f"read_bytes bad: {b}"), Err(e) => println(f"err[{e}]") }
+    println(f"exists d: {fs.exists("d")} d/a.txt: {fs.exists("d/a.txt")} nope: {fs.exists("nope")} empty: {fs.exists("")}");
+    match fs.metadata("d/a.txt") { Ok(m) => println(f"meta a: len={m.len} file={m.is_file} dir={m.is_dir} link={m.is_symlink} mode={m.mode:o} mtime>0={m.modified_ms > 1700000000000}"), Err(e) => println(f"err[{e}]") }
+    match fs.metadata("d") { Ok(m) => println(f"meta d: file={m.is_file} dir={m.is_dir} link={m.is_symlink}"), Err(e) => println(f"err[{e}]") }
+    match fs.metadata("nope") { Ok(_) => println("?"), Err(e) => println(f"meta nope: err[{e}]") }
+    match fs.metadata("") { Ok(_) => println("?"), Err(e) => println(f"meta empty: err[{e}]") }
+    // copy, rename
+    match fs.copy("d/a.txt", "d/c.txt") { Ok(n) => println(f"copy: {n}"), Err(e) => println(f"err[{e}]") }
+    match fs.copy("nope", "d/c2.txt") { Ok(n) => println(f"copy: {n}"), Err(e) => println(f"copy nope: err[{e}]") }
+    match fs.copy("d", "d/c3.txt") { Ok(n) => println(f"copy dir: {n}"), Err(e) => println(f"copy dir: err[{e}]") }
+    println(f"rename c->b (replaces): {r(fs.rename("d/c.txt", "d/b.txt"))}");
+    match fs.read_to_string("d/b.txt") { Ok(s) => println(f"b now: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    println(f"rename nope: {r(fs.rename("nope", "d/x"))}");
+    // permissions
+    println(f"set_permissions 0o600: {r(fs.set_permissions("d/b.txt", 0o600))}");
+    match fs.metadata("d/b.txt") { Ok(m) => println(f"mode {m.mode:o}"), Err(e) => println(f"err[{e}]") }
+    println(f"set_permissions 0o10000: {r(fs.set_permissions("d/b.txt", 0o10000))}");
+    println(f"set_permissions -1: {r(fs.set_permissions("d/b.txt", -1))}");
+    println(f"set_permissions 0o7777: {r(fs.set_permissions("d/b.txt", 0o7777))}");
+    match fs.metadata("d/b.txt") { Ok(m) => println(f"mode {m.mode:o}"), Err(e) => println(f"err[{e}]") }
+    println(f"set_permissions nope: {r(fs.set_permissions("nope", 0o644))}");
+    println(f"set_modified 86400000: {r(fs.set_modified("d/b.txt", 86400000))}");
+    match fs.metadata("d/b.txt") { Ok(m) => println(f"mtime {m.modified_ms}"), Err(e) => println(f"err[{e}]") }
+    println(f"set_modified -1500: {r(fs.set_modified("d/b.txt", -1500))}");
+    match fs.metadata("d/b.txt") { Ok(m) => println(f"mtime {m.modified_ms}"), Err(e) => println(f"err[{e}]") }
+    println(f"set_modified nope: {r(fs.set_modified("nope", 0))}");
+    // symlinks
+    println(f"symlink: {r(fs.symlink("a.txt", "d/la"))}");
+    println(f"symlink dangling: {r(fs.symlink("missing", "d/lm"))}");
+    println(f"symlink exists: {r(fs.symlink("a.txt", "d/la"))}");
+    match fs.read_link("d/la") { Ok(s) => println(f"read_link: {s}"), Err(e) => println(f"err[{e}]") }
+    match fs.read_link("d/a.txt") { Ok(s) => println(f"{s}"), Err(e) => println(f"read_link file: err[{e}]") }
+    match fs.read_link("nope") { Ok(s) => println(f"{s}"), Err(e) => println(f"read_link nope: err[{e}]") }
+    match fs.metadata("d/la") { Ok(m) => println(f"meta link: len={m.len} file={m.is_file} link={m.is_symlink}"), Err(e) => println(f"err[{e}]") }
+    match fs.symlink_metadata("d/la") { Ok(m) => println(f"lmeta link: file={m.is_file} dir={m.is_dir} link={m.is_symlink}"), Err(e) => println(f"err[{e}]") }
+    match fs.symlink_metadata("d/a.txt") { Ok(m) => println(f"lmeta file: file={m.is_file} link={m.is_symlink}"), Err(e) => println(f"err[{e}]") }
+    match fs.metadata("d/lm") { Ok(_) => println("?"), Err(e) => println(f"meta dangling: err[{e}]") }
+    println(f"exists dangling: {fs.exists("d/lm")}");
+    match fs.read_to_string("d/la") { Ok(s) => println(f"through link: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    // removals
+    println(f"remove_file nope: {r(fs.remove_file("nope"))}");
+    println(f"remove_file dir: {r(fs.remove_file("d/e"))}");
+    println(f"remove_dir nonempty: {r(fs.remove_dir("d/e"))}");
+    println(f"remove_dir file: {r(fs.remove_dir("d/a.txt"))}");
+    println(f"remove_dir d/e/f: {r(fs.remove_dir("d/e/f"))}");
+    println(f"remove_dir nope: {r(fs.remove_dir("nope"))}");
+    println(f"remove_file link: {r(fs.remove_file("d/la"))}");
+    println(f"a.txt still: {fs.exists("d/a.txt")}");
+    println(f"create_dir over file: {r(fs.create_dir("d/a.txt"))}");
+    println(f"create_dir_all over file: {r(fs.create_dir_all("d/a.txt/x"))}");
+    // remove_dir_all does not follow links out
+    println(f"mkdir out: {r(fs.create_dir("out"))}");
+    println(f"write out/keep: {r(fs.write("out/keep", "k"))}");
+    println(f"symlink to out: {r(fs.symlink("../out", "d/e/toout"))}");
+    println(f"remove_dir_all d: {r(fs.remove_dir_all("d"))}");
+    println(f"d gone: {not fs.exists("d")} out/keep kept: {fs.exists("out/keep")}");
+    println(f"remove_dir_all nope: {r(fs.remove_dir_all("nope"))}");
+    // read-only file
+    println(f"write ro: {r(fs.write("ro", "x"))}");
+    println(f"chmod 0o444: {r(fs.set_permissions("ro", 0o444))}");
+    println(f"write to ro: {r(fs.write("ro", "y"))}");
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

@@ -1,0 +1,5 @@
+import std.process.{Command, Stdio};
+fn main() {
+    let s = Command.new("true").stdout(Stdio.null()).status().unwrap();
+    println(s.success());
+}

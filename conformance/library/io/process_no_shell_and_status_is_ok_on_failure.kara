@@ -1,0 +1,15 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+import std.process.{Command, Stdio};
+fn main() {
+    let o = Command.new("printf").arg("%s|").arg("a b").arg("*").arg("$HOME").output().unwrap();
+    println(String.from_utf8(o.stdout) ?? "?".to_string());
+    let s = Command.new("false").status().unwrap();
+    println(f"{s.success()} {s.code() ?? -1}");
+    println(r(Command.new("definitely-not-a-program-kara").status()));
+    println(r(Command.new("true").current_dir("/no/such/dir").status()));
+    println(r(Command.new("true").env("A=B", "x").status()));
+    println(r(Command.new("echo").arg("a\0b").output()));
+}

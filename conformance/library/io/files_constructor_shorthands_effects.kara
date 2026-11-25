@@ -1,0 +1,13 @@
+import std.io.{File, OpenOptions};
+fn opens() -> bool { File.open("a").is_ok() }
+fn creates() -> bool { File.create("a").is_ok() }
+fn appends() -> bool { File.append("a").is_ok() }
+fn general() -> bool { File.options().read(true).open("a").is_ok() }
+fn builds() -> bool { let o = File.options().read(true).write(true); true }
+fn main() {
+    println(creates());
+    println(opens());
+    println(appends());
+    println(general());
+    println(builds());
+}

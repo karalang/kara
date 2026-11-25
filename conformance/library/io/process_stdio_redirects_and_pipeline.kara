@@ -1,0 +1,24 @@
+import std.process.{Command, Stdio};
+import std.io.File;
+fn count_entries() -> Result[String, IoError] {
+    let ls = Command.new("ls").stdout(Stdio.piped()).spawn()?;
+    let wc = Command.new("wc").arg("-l")
+        .stdin(Stdio.from_stdout(ls.stdout().unwrap()))
+        .stdout(Stdio.piped())
+        .spawn()?;
+    let out = wc.wait_with_output()?;
+    ls.wait()?;
+    Ok(String.from_utf8(out.stdout).unwrap_or("".to_string()).trim().to_string())
+}
+fn main() {
+    fs.write("a", "").unwrap();
+    fs.write("b", "").unwrap();
+    println(count_entries().unwrap());
+    let f = File.create("out.txt").unwrap();
+    Command.new("echo").arg("to file").stdout(Stdio.from_file(f)).status().unwrap();
+    print(fs.read_to_string("out.txt").unwrap());
+    let n = Command.new("cat").stdin(Stdio.null()).output().unwrap();
+    println(n.stdout.len());
+    let q = Command.new("echo").arg("quiet").stdout(Stdio.null()).status().unwrap();
+    println(q.success());
+}

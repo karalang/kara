@@ -1,0 +1,18 @@
+send PUT http://x/y [A=1;] b
+send: 503 fake true
+send GET http://x/z [] 
+get: 503
+bind 1.2.3.4:5
+accept 100 -> 1
+read_exact 65 66
+three: unexpected eof
+clone: unsupported
+addr: unsupported
+timeout ok
+timeout0: invalid input
+write 1 3
+shutdown 1
+connect 9.9.9.9:1 -> 2
+close 1
+close 100
+after: provider unavailable

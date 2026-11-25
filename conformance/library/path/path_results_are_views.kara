@@ -1,0 +1,8 @@
+import std.path.{parent, components};
+fn dir_of(p: Str) -> Str { parent(p) ?? "" }
+fn main() {
+    let s = "x/y/z.txt".to_string();
+    let d = dir_of(s);
+    let cs = components(s);
+    println(f"{d} {cs.len()} {cs[2]}");
+}

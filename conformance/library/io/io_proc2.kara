@@ -1,0 +1,47 @@
+// Child pipes through BufReader/BufWriter; ChildStderr; writing to a dead child's stdin.
+fn r(x: Result[(), IoError]) -> String { match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" } }
+fn main() {
+    match Command.new("sh").args(["-c", "printf 'a\\nb\\r\\nc'; printf 'E1\\nE2' >&2"]).stdout(Stdio.piped()).stderr(Stdio.piped()).spawn() {
+        Ok(c) => {
+            let br = BufReader.new(c.stdout().unwrap());
+            for l in br.lines() {
+                match l { Ok(s) => println(f"out line [{s}]"), Err(e) => println(f"err[{e}]") }
+            }
+            match c.stderr() {
+                Some(e) => {
+                    let mut s = String.new();
+                    match e.read_to_string(mut s) { Ok(n) => println(f"stderr {n} [{s}]"), Err(x) => println(f"err[{x}]") }
+                }
+                None => println("none"),
+            }
+            println(f"stderr again none: {c.stderr().is_none()}");
+            let _ = c.wait();
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match Command.new("tr").args(["a-z", "A-Z"]).stdin(Stdio.piped()).stdout(Stdio.piped()).spawn() {
+        Ok(c) => {
+            {
+                let bw = BufWriter.new(c.stdin().unwrap());
+                let w: Vec[u8] = [104, 101, 108, 108, 111, 10];
+                println(f"bw write_all: {r(bw.write_all(w.as_slice()))}");
+            }
+            match c.wait_with_output() {
+                Ok(o) => println(f"tr: [{String.from_utf8(o.stdout).unwrap_or("".to_string())}]"),
+                Err(e) => println(f"err[{e}]"),
+            }
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    // writing to the stdin of a child that has exited: an IoError, not SIGPIPE
+    match Command.new("true").stdin(Stdio.piped()).spawn() {
+        Ok(c) => {
+            let i = c.stdin().unwrap();
+            let _ = c.wait();
+            let big: Vec[u8] = Vec.filled(200000, 120u8);
+            match i.write_all(big.as_slice()) { Ok(_) => println("write to dead child: ok?"), Err(e) => println(f"write to dead child: err[{e}]") }
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    println("still alive");
+}

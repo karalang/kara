@@ -1,0 +1,1 @@
+the result borrows `s`, which this function owns, so it would outlive it

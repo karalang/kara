@@ -1,0 +1,49 @@
+fn show(e: NetError) -> String {
+    match e {
+        NetError.TimedOut => "timed out".to_string(),
+        NetError.InvalidInput => "invalid input".to_string(),
+        NetError.ConnectionRefused => "refused".to_string(),
+        NetError.Other(n) => f"other {n}",
+        _ => "other kind".to_string(),
+    }
+}
+
+fn main() {
+    let a = UdpSocket.bind("127.0.0.1:0").unwrap();
+    let b = UdpSocket.bind("127.0.0.1:0").unwrap();
+    let aa = a.local_addr().unwrap();
+    let ba = b.local_addr().unwrap();
+    // truncation: datagram longer than buf
+    a.send_to("hello world".bytes(), ba.as_str()).unwrap();
+    let mut small = [0u8; 5];
+    let (n, from) = b.recv_from(mut small).unwrap();
+    println(f"got {n} from a: {from == aa}");
+    // the rest is lost: next recv times out
+    b.set_read_timeout(Some(50)).unwrap();
+    match b.recv_from(mut small) {
+        Ok((n, _)) => println(f"second {n}"),
+        Err(e) => println(f"second: {show(e)}"),
+    }
+    // connect + send/recv
+    b.connect(aa.as_str()).unwrap();
+    b.send("xyz".bytes()).unwrap();
+    let mut buf = [0u8; 8];
+    let (m, _) = a.recv_from(mut buf).unwrap();
+    println(f"a got {m}");
+    // after connect, b ignores datagrams from c
+    let c = UdpSocket.bind("127.0.0.1:0").unwrap();
+    c.send_to("zz".bytes(), ba.as_str()).unwrap();
+    a.send_to("ok".bytes(), ba.as_str()).unwrap();
+    let k = b.recv(mut buf).unwrap();
+    println(f"b got {k} bytes, first {buf[0]}");
+    // try_clone shares the socket
+    let a2 = a.try_clone().unwrap();
+    println(f"clone addr same: {a2.local_addr().unwrap() == aa}");
+    match a.set_read_timeout(Some(0)) {
+        Ok(_) => println("0 ok"),
+        Err(e) => println(f"0: {show(e)}"),
+    }
+    // empty datagram
+    a2.send_to("".bytes(), ba.as_str()).unwrap();
+    println(f"empty {b.recv(mut buf).unwrap()}");
+}

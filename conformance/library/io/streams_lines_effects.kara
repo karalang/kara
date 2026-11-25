@@ -1,0 +1,6 @@
+fn count_lines() -> i64 {
+    let mut n = 0;
+    for _ in stdin.lines() { n += 1; }
+    n
+}
+fn main() { println(count_lines()); }

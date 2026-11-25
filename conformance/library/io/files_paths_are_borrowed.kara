@@ -1,0 +1,11 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    let p: String = "b.txt".to_string();
+    fs.write(p, "x").unwrap();
+    let f = File.open(p).unwrap();
+    let c = File.create(p);
+    println(f"{p} {c.is_ok()}");
+}

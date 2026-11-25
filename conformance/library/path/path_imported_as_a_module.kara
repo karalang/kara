@@ -1,0 +1,6 @@
+import std.path;
+fn main() {
+    println(path.parent("a/b") ?? "none");
+    println(path.join("a", "b"));
+    println(path.is_absolute("/x"));
+}

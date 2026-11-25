@@ -1,0 +1,17 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    fs.create_dir("d").unwrap();
+    fs.write("d/t.txt", "x").unwrap();
+    println(r(fs.symlink("t.txt", "d/l")));
+    println(fs.read_to_string("d/l").unwrap());
+    println(fs.read_link("d/l").unwrap());
+    let s = fs.symlink_metadata("d/l").unwrap();
+    println(f"{s.is_symlink} {s.is_file} {s.is_dir}");
+    let m = fs.metadata("d/l").unwrap();
+    println(f"{m.is_symlink} {m.is_file}");
+    println(r(fs.symlink("missing", "dangling")));
+    println(fs.exists("dangling"));
+}

@@ -1,0 +1,17 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    println(r(fs.create_dir("a")));
+    println(r(fs.create_dir("a")));
+    println(r(fs.create_dir_all("a/b/c")));
+    println(r(fs.create_dir_all("a/b/c")));
+    fs.write("a/b/c/f", "x").unwrap();
+    println(r(fs.remove_dir("a")));
+    fs.create_dir("out").unwrap();
+    fs.write("out/keep", "k").unwrap();
+    fs.symlink("../out", "a/b/link").unwrap();
+    println(r(fs.remove_dir_all("a")));
+    println(f"{fs.exists("a")} {fs.exists("out/keep")}");
+}

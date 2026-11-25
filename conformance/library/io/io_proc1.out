@@ -1,0 +1,59 @@
+true: success=true code=Some(0) signal=None
+false: success=false code=Some(1) signal=None
+exit 7: success=false code=Some(7) signal=None
+exit 300 (sh wraps): success=false code=Some(44) signal=None
+killed: success=false code=None signal=Some(15)
+missing: err[not found]
+missing abs: err[not found]
+not executable: err[permission denied]
+dir as program: err[permission denied]
+bad cwd: err[not found]
+env empty name: err[invalid input]
+env = in name: err[invalid input]
+env NUL value: err[invalid input]
+arg NUL: err[invalid input]
+program NUL: err[invalid input]
+output: success=false code=Some(3) signal=None out="out\nafter-cat\n" err="err\n"
+args verbatim: success=true code=Some(0) signal=None out="a b|*|$HOME||" err=""
+env: success=true code=Some(0) signal=None out=":2:haspath\n" err=""
+env_clear: success=true code=Some(0) signal=None out="KY=y\n" err=""
+PATH lookup via env: success=true code=Some(0) signal=None out="mytool ran\n" err=""
+PATH lookup without: err[not found]
+current_dir does not change lookup: err[not found]
+current_dir: ends in /bin: true
+id>0: true
+write: ok 3
+write_all: ok
+flush: ok
+close: ok
+close again: ok
+write after close: err[invalid input]
+stdin again none: true
+read_to_string: 6 "hi\nhi\n"
+read at eof: 0
+stderr not piped none: true
+wait: success=true code=Some(0) signal=None
+wait again: success=true code=Some(0) signal=None
+try_wait after: true
+wait closes stdin: success=true code=Some(0) signal=None
+try_wait running: true
+kill: ok
+after kill: success=false code=None signal=Some(9)
+kill again: ok
+read_exact: [97, 98]
+rts invalid: err[invalid UTF-8] buf="keep"
+rte after: 0 []
+read_exact eof: err[unexpected end of file]
+wwo: true 168890 168890
+pipeline: 4
+first run: success=true code=Some(0) signal=None
+second run: err[invalid input]
+from_file 1: success=true code=Some(0) signal=None
+from_file 2: success=true code=Some(0) signal=None
+redir: "to file\nto file\n"
+stdin from_file: success=true code=Some(0) signal=None out="from file\n" err=""
+before-child child-line
+after-child
+run twice: success=true code=Some(0) signal=None out="twice\n" err="" / success=true code=Some(0) signal=None out="twice\n" err=""
+null stdin: success=true code=Some(0) signal=None out="" err=""
+stderr null: success=true code=Some(0) signal=None out="" err=""

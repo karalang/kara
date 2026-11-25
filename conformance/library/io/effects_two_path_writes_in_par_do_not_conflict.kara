@@ -1,0 +1,4 @@
+fn main() {
+    let (a, b) = par { fs.write("same.txt", "a"), fs.write("same.txt", "b") };
+    println(f"{a.is_ok()} {b.is_ok()}");
+}

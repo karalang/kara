@@ -1,0 +1,7 @@
+import std.process.{exit};
+struct D {}
+impl Drop for D { fn drop(mut ref self) { println("in drop"); exit(7); } }
+fn main() {
+    let _d = D {};
+    println("main");
+}

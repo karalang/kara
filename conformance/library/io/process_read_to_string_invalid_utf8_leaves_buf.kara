@@ -1,0 +1,8 @@
+import std.process.{Command, Stdio};
+fn main() {
+    let c = Command.new("printf").arg("\\377").stdout(Stdio.piped()).spawn().unwrap();
+    let o = c.stdout().unwrap();
+    let mut s = "kept".to_string();
+    match o.read_to_string(mut s) { Ok(_) => println("ok"), Err(e) => println(f"{e} [{s}]") }
+    c.wait().unwrap();
+}

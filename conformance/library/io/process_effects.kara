@@ -1,0 +1,4 @@
+import std.process.{Command, Stdio};
+fn run_it() -> bool { Command.new("true").status().is_ok() }
+fn build_it() -> bool { let c = Command.new("true").arg("x"); true }
+fn main() { println(run_it()); println(build_it()); }

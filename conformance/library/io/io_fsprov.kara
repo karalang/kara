@@ -1,0 +1,77 @@
+// FileSystem provider override: path ops, files under an override, after it ends.
+fn r(x: Result[(), IoError]) -> String { match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" } }
+fn ri(x: Result[i64, IoError]) -> String { match x { Ok(n) => f"ok {n}", Err(e) => f"err[{e}]" } }
+
+struct MemFs { files: Map[String, String], pos: i64 }
+
+impl FileSystemProvider for MemFs {
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        match self.files.get(path) {
+            Some(s) => Ok(s.clone()),
+            None => Err(IoError.NotFound),
+        }
+    }
+    fn write(mut ref self, path: Str, contents: Str) -> Result[(), IoError] {
+        self.files.insert(path.to_string(), contents.to_string());
+        Ok(())
+    }
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] {
+        println(f"fake open {path}");
+        Ok(7)
+    }
+    fn read_handle(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, IoError] {
+        if self.pos >= 3 { return Ok(0); }
+        buf[0] = 65u8 + (self.pos as u8);
+        self.pos = self.pos + 1;
+        Ok(1)
+    }
+    fn write_handle(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, IoError] {
+        println(f"fake write h={h} n={buf.len()}");
+        Ok(buf.len())
+    }
+    fn close(mut ref self, h: i64) {
+        println(f"fake close {h}");
+    }
+}
+
+fn main() {
+    let mut kept: Option[File] = None;
+    with_provider[FileSystem](MemFs { files: Map.new(), pos: 0 }, || {
+        println(f"write: {r(fs.write("notes.txt", "draft"))}");
+        match fs.read_to_string("notes.txt") { Ok(s) => println(s), Err(e) => println(f"error: {e}") }
+        match fs.read_to_string("other") { Ok(s) => println(s), Err(e) => println(f"error: {e}") }
+    });
+    with_provider[FileSystem](MemFs { files: Map.new(), pos: 0 }, || {
+        match File.open("any") {
+            Ok(f) => {
+                let mut buf: Array[u8, 8] = [0; 8];
+                println(f"read: {ri(f.read(mut buf))} {buf[0]}");
+                let br = BufReader.new(f);
+                for l in br.lines() { match l { Ok(x) => println(f"line [{x}]"), Err(e) => println(f"err[{e}]") } }
+            }
+            Err(e) => println(f"err[{e}]"),
+        }
+        match File.create("out") {
+            Ok(f) => {
+                let w: Vec[u8] = [1, 2, 3];
+                println(f"write: {ri(f.write(w.as_slice()))}");
+                println(f"flush: {r(f.flush())} sync_all: {r(f.sync_all())} sync_data: {r(f.sync_data())}");
+                println(f"seek: {ri(f.seek(SeekFrom.Start, 0))}");
+                println(f"set_len: {r(f.set_len(0))}");
+                kept = Some(f);
+            }
+            Err(e) => println(f"err[{e}]"),
+        }
+    });
+    match kept.take() {
+        Some(f) => {
+            let w: Vec[u8] = [1];
+            println(f"after override write: {ri(f.write(w.as_slice()))}");
+            let mut buf: Array[u8, 2] = [0; 2];
+            println(f"after override read: {ri(f.read(mut buf))}");
+            println(f"after override flush: {r(f.flush())}");
+        }
+        None => println("none"),
+    }
+    println("dropped after override");
+}

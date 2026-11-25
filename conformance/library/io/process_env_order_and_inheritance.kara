@@ -1,0 +1,12 @@
+import std.process.Command;
+fn main() {
+    env.set("KARA_CONF_INHERIT", "yes");
+    let a = Command.new("sh").arg("-c").arg("echo $KARA_CONF_INHERIT").output().unwrap();
+    print(String.from_utf8(a.stdout) ?? "?".to_string());
+    let b = Command.new("sh").arg("-c").arg("echo [$KARA_CONF_INHERIT][$X]")
+        .env("X", "1").env_remove("KARA_CONF_INHERIT").output().unwrap();
+    print(String.from_utf8(b.stdout) ?? "?".to_string());
+    let c = Command.new("/bin/sh").arg("-c").arg("echo [$X][$KARA_CONF_INHERIT]")
+        .env("X", "1").env_clear().env("KARA_CONF_INHERIT", "back").output().unwrap();
+    print(String.from_utf8(c.stdout) ?? "?".to_string());
+}

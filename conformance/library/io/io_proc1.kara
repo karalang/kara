@@ -1,0 +1,204 @@
+// Command / Stdio / Child / ExitStatus.
+fn st(x: Result[ExitStatus, IoError]) -> String {
+    match x {
+        Ok(s) => f"success={s.success()} code={qo(s.code())} signal={qo(s.signal())}",
+        Err(e) => f"err[{e}]",
+    }
+}
+fn txt(v: Vec[u8]) -> String { String.from_utf8(v).unwrap_or("<bad utf8>".to_string()) }
+fn outp(x: Result[Output, IoError]) -> String {
+    match x {
+        Ok(o) => f"{st(Ok(o.status))} out={q(txt(o.stdout))} err={q(txt(o.stderr))}",
+        Err(e) => f"err[{e}]",
+    }
+}
+
+fn main() {
+    println(f"true: {st(Command.new("true").status())}");
+    println(f"false: {st(Command.new("false").status())}");
+    println(f"exit 7: {st(Command.new("sh").args(["-c", "exit 7"]).status())}");
+    println(f"exit 300 (sh wraps): {st(Command.new("sh").args(["-c", "exit 300"]).status())}");
+    println(f"killed: {st(Command.new("sh").args(["-c", "kill -TERM $$"]).status())}");
+    println(f"missing: {st(Command.new("no-such-program-xyz").status())}");
+    println(f"missing abs: {st(Command.new("/no/such/prog").status())}");
+    let _ = fs.write("noexec.sh", "#!/bin/sh\necho hi\n");
+    let _ = fs.set_permissions("noexec.sh", 0o644);
+    println(f"not executable: {st(Command.new("./noexec.sh").status())}");
+    println(f"dir as program: {st(Command.new("/").status())}");
+    println(f"bad cwd: {st(Command.new("true").current_dir("no/such/dir").status())}");
+    println(f"env empty name: {st(Command.new("true").env("", "x").status())}");
+    println(f"env = in name: {st(Command.new("true").env("A=B", "x").status())}");
+    println(f"env NUL value: {st(Command.new("true").env("A", "x\0y").status())}");
+    println(f"arg NUL: {st(Command.new("echo").arg("x\0y").status())}");
+    println(f"program NUL: {st(Command.new("ec\0ho").status())}");
+    // output pipes stdout/stderr, gives stdin null
+    println(f"output: {outp(Command.new("sh").args(["-c", "echo out; echo err >&2; cat; echo after-cat; exit 3"]).output())}");
+    // no shell: args reach verbatim
+    println(f"args verbatim: {outp(Command.new("printf").args(["%s|", "a b", "*", "$HOME", ""]).output())}");
+    // env manipulation in order
+    println(f"env: {outp(Command.new("sh").args(["-c", "echo \"$KA:$KB:${PATH:+haspath}\""]).env("KA", "1").env("KB", "2").env_remove("KA").output())}");
+    println(f"env_clear: {outp(Command.new("/usr/bin/env").env("KZ", "z").env_clear().env("KY", "y").output())}");
+    // PATH from the command's env
+    let _ = fs.create_dir("bin");
+    let _ = fs.write("bin/mytool", "#!/bin/sh\necho mytool ran\n");
+    let _ = fs.set_permissions("bin/mytool", 0o755);
+    match env.var("PWD") { Ok(_) => {}, Err(_) => {} }
+    println(f"PATH lookup via env: {outp(Command.new("mytool").env("PATH", "bin:/usr/bin:/bin").output())}");
+    println(f"PATH lookup without: {outp(Command.new("mytool").output())}");
+    println(f"current_dir does not change lookup: {outp(Command.new("mytool").current_dir("bin").output())}");
+    match Command.new("pwd").current_dir("bin").output() { Ok(o) => println(f"current_dir: ends in /bin: {txt(o.stdout).ends_with("/bin\n")}"), Err(e) => println(f"err[{e}]") }
+    // spawn / pipes
+    match Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.piped()).spawn() {
+        Ok(c) => {
+            println(f"id>0: {c.id() > 0}");
+            match c.stdin() {
+                Some(i) => {
+                    let w: Vec[u8] = [104, 105, 10];
+                    println(f"write: {ri(i.write(w.as_slice()))}");
+                    println(f"write_all: {r(i.write_all(w.as_slice()))}");
+                    println(f"flush: {r(i.flush())}");
+                    println(f"close: {r(i.close())}");
+                    println(f"close again: {r(i.close())}");
+                    match i.write(w.as_slice()) { Ok(n) => println(f"write after close: ok {n}"), Err(e) => println(f"write after close: err[{e}]") }
+                }
+                None => println("no stdin"),
+            }
+            println(f"stdin again none: {c.stdin().is_none()}");
+            match c.stdout() {
+                Some(o) => {
+                    let mut s = String.new();
+                    match o.read_to_string(mut s) { Ok(n) => println(f"read_to_string: {n} {q(s)}"), Err(e) => println(f"err[{e}]") }
+                    let mut buf: Array[u8, 4] = [0; 4];
+                    match o.read(mut buf) { Ok(n) => println(f"read at eof: {n}"), Err(e) => println(f"err[{e}]") }
+                }
+                None => println("no stdout"),
+            }
+            println(f"stderr not piped none: {c.stderr().is_none()}");
+            println(f"wait: {st(c.wait())}");
+            println(f"wait again: {st(c.wait())}");
+            match c.try_wait() { Ok(x) => println(f"try_wait after: {x.is_some()}"), Err(e) => println(f"err[{e}]") }
+        }
+        Err(e) => println(f"spawn err[{e}]"),
+    }
+    // wait closes untaken stdin
+    match Command.new("cat").stdin(Stdio.piped()).stdout(Stdio.null()).spawn() {
+        Ok(c) => println(f"wait closes stdin: {st(c.wait())}"),
+        Err(e) => println(f"err[{e}]"),
+    }
+    // try_wait / kill
+    match Command.new("sleep").arg("10").spawn() {
+        Ok(c) => {
+            match c.try_wait() { Ok(x) => println(f"try_wait running: {x.is_none()}"), Err(e) => println(f"err[{e}]") }
+            println(f"kill: {r(c.kill())}");
+            println(f"after kill: {st(c.wait())}");
+            match c.kill() { Ok(_) => println("kill again: ok"), Err(e) => println(f"kill again: err[{e}]") }
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    // read_exact / read_to_end / invalid utf8
+    match Command.new("printf").arg("ab\\377cd").stdout(Stdio.piped()).spawn() {
+        Ok(c) => {
+            match c.stdout() {
+                Some(o) => {
+                    let mut buf: Array[u8, 2] = [0; 2];
+                    match o.read_exact(mut buf) { Ok(_) => println(f"read_exact: {buf}"), Err(e) => println(f"err[{e}]") }
+                    let mut s = "keep".to_string();
+                    match o.read_to_string(mut s) { Ok(n) => println(f"rts: {n} {q(s)}"), Err(e) => println(f"rts invalid: err[{e}] buf={q(s)}") }
+                    let mut v: Vec[u8] = Vec.new();
+                    match o.read_to_end(mut v) { Ok(n) => println(f"rte after: {n} {v}"), Err(e) => println(f"err[{e}]") }
+                    match o.read_exact(mut buf) { Ok(_) => println(f"?"), Err(e) => println(f"read_exact eof: err[{e}]") }
+                }
+                None => println("none"),
+            }
+            let _ = c.wait();
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    // wait_with_output collects untaken pipes; large output both streams
+    match Command.new("sh").args(["-c", "i=0; while [ $i -lt 20000 ]; do echo out$i; echo err$i >&2; i=$((i+1)); done"]).stdout(Stdio.piped()).stderr(Stdio.piped()).spawn() {
+        Ok(c) => match c.wait_with_output() {
+            Ok(o) => println(f"wwo: {o.status.success()} {o.stdout.len()} {o.stderr.len()}"),
+            Err(e) => println(f"err[{e}]"),
+        },
+        Err(e) => println(f"err[{e}]"),
+    }
+    // pipeline ls | wc -l
+    let _ = fs.write("p1", "");
+    let _ = fs.write("p2", "");
+    match Command.new("ls").stdout(Stdio.piped()).spawn() {
+        Ok(ls) => {
+            match Command.new("wc").arg("-l").stdin(Stdio.from_stdout(ls.stdout().unwrap())).stdout(Stdio.piped()).spawn() {
+                Ok(wc) => match wc.wait_with_output() {
+                    Ok(o) => println(f"pipeline: {txt(o.stdout).trim()}"),
+                    Err(e) => println(f"err[{e}]"),
+                },
+                Err(e) => println(f"err[{e}]"),
+            }
+            let _ = ls.wait();
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    // from_stdout a second time -> InvalidInput
+    match Command.new("echo").arg("x").stdout(Stdio.piped()).spawn() {
+        Ok(src) => {
+            let cmd = Command.new("cat").stdin(Stdio.from_stdout(src.stdout().unwrap())).stdout(Stdio.null());
+            println(f"first run: {st(cmd.status())}");
+            println(f"second run: {st(cmd.status())}");
+            let _ = src.wait();
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    // from_file: redirection, each run its own copy
+    match File.create("redir.txt") {
+        Ok(f) => {
+            let cmd = Command.new("echo").arg("to file").stdout(Stdio.from_file(f));
+            println(f"from_file 1: {st(cmd.status())}");
+            println(f"from_file 2: {st(cmd.status())}");
+        }
+        Err(e) => println(f"err[{e}]"),
+    }
+    match fs.read_to_string("redir.txt") { Ok(s) => println(f"redir: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    let _ = fs.write("in.txt", "from file\n");
+    match File.open("in.txt") {
+        Ok(f) => println(f"stdin from_file: {outp(Command.new("cat").stdin(Stdio.from_file(f)).output())}"),
+        Err(e) => println(f"err[{e}]"),
+    }
+    // stdout flushed before a child starts (child inherits stdout)
+    print("before-child ");
+    let _ = Command.new("echo").arg("child-line").status();
+    println("after-child");
+    // command run twice
+    let c2 = Command.new("echo").arg("twice");
+    println(f"run twice: {outp(c2.output())} / {outp(c2.output())}");
+    println(f"null stdin: {outp(Command.new("cat").stdin(Stdio.null()).output())}");
+    println(f"stderr null: {outp(Command.new("sh").args(["-c", "echo e >&2"]).stderr(Stdio.null()).output())}");
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }
+
+fn r(x: Result[(), IoError]) -> String { match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" } }
+fn ri(x: Result[i64, IoError]) -> String { match x { Ok(n) => f"ok {n}", Err(e) => f"err[{e}]" } }

@@ -1,0 +1,3 @@
+str split empty: 1
+regex split empty: 1 2 1
+empty pattern split: [, a, b, ]

@@ -1,0 +1,11 @@
+import std.net.{TcpListener, TcpStream};
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    let data = TcpStream.connect(l.local_addr().unwrap()).unwrap();
+    let s = l.accept().unwrap();
+    s.write_all("payload".bytes()).unwrap();
+    drop(s);
+    let mut got: Vec[u8] = "x".bytes().to_vec();
+    println(data.read_to_end(mut got).unwrap());
+    println(got.len());
+}

@@ -1,0 +1,7 @@
+fn put(f: ref File) -> bool { f.write("z".bytes()).is_ok() }
+fn main() {
+    let a = File.create("a.txt").unwrap();
+    let b = File.create("b.txt").unwrap();
+    let (x, y) = par { put(a), put(b) };
+    println(f"{x} {y}");
+}

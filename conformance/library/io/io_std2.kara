@@ -1,0 +1,32 @@
+// read_to_string with invalid UTF-8 and lone last line without newline.
+fn main() {
+    match stdin.read_line() { Ok(s) => println(f"read_line: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    match stdin.read_to_string() { Ok(s) => println(f"rest: {q(s)}"), Err(e) => println(f"rest err[{e}]") }
+    match stdin.read_to_string() { Ok(s) => println(f"rest again: {q(s)}"), Err(e) => println(f"rest again err[{e}]") }
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

@@ -1,0 +1,27 @@
+a -> 1
+b -> 22
+is_match: true false true
+find: 1..3:12 None
+find_all: [1..3:12 4..7:345 8..9:6 ]
+unicode offsets: [0..6:héllo 7..13:wörld 14..16:42 ]
+slice: wörld
+dot: [0..1:a 1..3:é 3..6:日 ]
+ascii digit: false false true
+flags: true [0..1:a 3..4:c ] [0..1:a ] true false true
+empty: [0..0: 1..4:aaa 5..5: ]
+empty2: [0..0: 1..1: 3..3: ]
+replace: a#b22c a#b#c abc
+rep groups: [a|1|ax|$|] [b||bx|$|]
+rep named: lovelace, ada lovelace_x |
+rep longest:  aa
+split: [a, b, c] [, a, ] [] [x, y, z]
+captures: len=2 g0=0..1:b g1=None g5=None g-1=None
+named: 3..7:2026 8..10:11 None 3 8..10:11
+captures none: true
+captures_all: 3 0..2:1x/1..2:x 2..3:2/None 4..5:3/None 
+escape: a\.b\*c\(1\)\[x\]\+\?\^\$\|\\ true false
+err: true true
+err2: true
+backref refused
+lookahead refused
+no blowup: false

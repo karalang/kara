@@ -1,0 +1,11 @@
+import std.net.{TcpListener, TcpStream};
+fn read_file() -> bool { fs.read_to_string("x").is_ok() }
+fn write_file() -> bool { fs.write("x", "y").is_ok() }
+fn listen() -> bool { TcpListener.bind("127.0.0.1:0").is_ok() }
+fn dial(a: Str) -> bool { TcpStream.connect(a).is_ok() }
+fn main() {
+    println(write_file());
+    println(read_file());
+    println(listen());
+    println(dial("127.0.0.1:1"));
+}

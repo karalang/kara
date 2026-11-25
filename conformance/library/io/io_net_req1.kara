@@ -1,0 +1,15 @@
+fn show(r: Request) {
+    let mut q = "".to_string();
+    for (k, v) in r.query() { q.push_str(f"{k}={v};"); }
+    let mut hs = "".to_string();
+    for (k, v) in r.headers() { hs.push_str(f"{k}={v};"); }
+    println(f"{r.method()} url={r.url()} path={r.path()} q=[{q}] h=[{hs}] accept={r.header("accept").unwrap_or("-".to_string())} body={r.body()} bytes={r.bytes().len()}");
+}
+fn main() {
+    show(Request.new("GET".to_string(), "/items?id=3&x=a%2Fb&flag".to_string()).with_header("Accept".to_string(), "text/plain".to_string()).with_header("Accept".to_string(), "b".to_string()));
+    show(Request.new("POST".to_string(), "http://host/items?id=3".to_string()).with_body("héllo".to_string()));
+    show(Request.new("GET".to_string(), "http://host".to_string()));
+    show(Request.new("GET".to_string(), "http://host?a=1".to_string()));
+    show(Request.new("GET".to_string(), "".to_string()));
+    show(Request.new("GET".to_string(), "/p?a=1&a=2&b=+c".to_string()));
+}

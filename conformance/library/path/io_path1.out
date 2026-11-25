@@ -1,0 +1,34 @@
+"a/b/c.txt": parent=Some("a/b") file_name=Some("c.txt") ext=Some("txt") stem=Some("c") abs=false comps=["a", "b", "c.txt"] norm="a/b/c.txt"
+"a": parent=Some("") file_name=Some("a") ext=None stem=Some("a") abs=false comps=["a"] norm="a"
+"/a": parent=Some("/") file_name=Some("a") ext=None stem=Some("a") abs=true comps=["/", "a"] norm="/a"
+"/": parent=None file_name=None ext=None stem=None abs=true comps=["/"] norm="/"
+"": parent=None file_name=None ext=None stem=None abs=false comps=[] norm="."
+"a/.": parent=Some("") file_name=Some("a") ext=None stem=Some("a") abs=false comps=["a"] norm="a"
+"a/b/": parent=Some("a") file_name=Some("b") ext=None stem=Some("b") abs=false comps=["a", "b"] norm="a/b"
+"a//b//": parent=Some("a") file_name=Some("b") ext=None stem=Some("b") abs=false comps=["a", "b"] norm="a/b"
+"c.tar.gz": parent=Some("") file_name=Some("c.tar.gz") ext=Some("gz") stem=Some("c.tar") abs=false comps=["c.tar.gz"] norm="c.tar.gz"
+"f.": parent=Some("") file_name=Some("f.") ext=Some("") stem=Some("f") abs=false comps=["f."] norm="f."
+".bashrc": parent=Some("") file_name=Some(".bashrc") ext=None stem=Some(".bashrc") abs=false comps=[".bashrc"] norm=".bashrc"
+"a/..": parent=Some("a") file_name=None ext=None stem=None abs=false comps=["a", ".."] norm="."
+"..": parent=Some("") file_name=None ext=None stem=None abs=false comps=[".."] norm=".."
+".": parent=Some("") file_name=None ext=None stem=None abs=false comps=["."] norm="."
+"/usr//lib/./x": parent=Some("/usr//lib") file_name=Some("x") ext=None stem=Some("x") abs=true comps=["/", "usr", "lib", "x"] norm="/usr/lib/x"
+"./x": parent=Some(".") file_name=Some("x") ext=None stem=Some("x") abs=false comps=[".", "x"] norm="x"
+"../x/./y": parent=Some("../x") file_name=Some("y") ext=None stem=Some("y") abs=false comps=["..", "x", "y"] norm="../x/y"
+"dir/.hidden.txt": parent=Some("dir") file_name=Some(".hidden.txt") ext=Some("txt") stem=Some(".hidden") abs=false comps=["dir", ".hidden.txt"] norm="dir/.hidden.txt"
+"x/y.z/w": parent=Some("x/y.z") file_name=Some("w") ext=None stem=Some("w") abs=false comps=["x", "y.z", "w"] norm="x/y.z/w"
+/etc/passwd
+data/../../x
+a/b
+a/b
+b
+a/
+/b
+logs/x
+a/c
+/a
+../..
+.
+/
+/a
+logs/2026

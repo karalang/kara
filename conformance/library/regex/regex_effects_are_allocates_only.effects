@@ -1,0 +1,8 @@
+esc = allocates(Heap)
+comp = allocates(Heap), panics
+test has allocates(Heap)
+test lacks blocks, suspends, writes(Stdout), reads(FileSystem)
+first has allocates(Heap)
+first lacks blocks, suspends
+swap has allocates(Heap)
+swap lacks blocks, suspends

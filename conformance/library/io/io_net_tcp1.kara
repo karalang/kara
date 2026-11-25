@@ -1,0 +1,73 @@
+fn show(e: NetError) -> String {
+    match e {
+        NetError.TimedOut => "timed out".to_string(),
+        NetError.InvalidInput => "invalid input".to_string(),
+        NetError.UnexpectedEof => "unexpected eof".to_string(),
+        NetError.ConnectionRefused => "refused".to_string(),
+        NetError.Other(n) => f"other {n}",
+        _ => "other kind".to_string(),
+    }
+}
+
+fn main() {
+    let listener = match TcpListener.bind("127.0.0.1:0") {
+        Ok(l) => l,
+        Err(e) => { println(f"bind: {show(e)}"); return; }
+    };
+    let addr = listener.local_addr().unwrap();
+    println(f"has port: {addr.starts_with("127.0.0.1:")}");
+    let client = TcpStream.connect(addr.as_str()).unwrap();
+    let server = listener.accept().unwrap();
+
+    // timeout below 1 ms is refused
+    match server.set_read_timeout(Some(0)) {
+        Ok(_) => println("timeout 0 accepted"),
+        Err(e) => println(f"timeout 0: {show(e)}"),
+    }
+    // a read with nothing to read times out
+    server.set_read_timeout(Some(50)).unwrap();
+    let mut b1 = [0u8; 4];
+    match server.read(mut b1) {
+        Ok(n) => println(f"read {n}"),
+        Err(e) => println(f"read: {show(e)}"),
+    }
+    server.set_read_timeout(None).unwrap();
+
+    // read_exact across two writes
+    client.write_all("ab".bytes()).unwrap();
+    client.write_all("cdef".bytes()).unwrap();
+    let mut head = [0u8; 3];
+    server.read_exact(mut head).unwrap();
+    println(f"head {head[0]} {head[1]} {head[2]}");
+    // empty buffer
+    let mut none: Vec[u8] = Vec.new();
+    match server.read_exact(mut none) {
+        Ok(_) => println("empty ok"),
+        Err(e) => println(f"empty: {show(e)}"),
+    }
+    // read_to_end after shutdown
+    client.write_all("ghi".bytes()).unwrap();
+    client.shutdown_write().unwrap();
+    let mut rest = Vec.new();
+    let n = server.read_to_end(mut rest).unwrap();
+    println(f"rest {n} {String.from_utf8_lossy(rest)}");
+    // read_exact past the end
+    let mut more = [0u8; 2];
+    match server.read_exact(mut more) {
+        Ok(_) => println("more ok"),
+        Err(e) => println(f"more: {show(e)}"),
+    }
+    // read after end returns 0
+    let mut z = [0u8; 2];
+    println(f"after end {server.read(mut z).unwrap()}");
+    // connect refused
+    drop(listener);
+    match TcpStream.connect(addr.as_str()) {
+        Ok(_) => println("connected to closed"),
+        Err(e) => println(f"connect closed: {show(e)}"),
+    }
+    match TcpStream.connect("not an address") {
+        Ok(_) => println("connected to junk"),
+        Err(e) => println(f"junk: {show(e)}"),
+    }
+}

@@ -1,0 +1,16 @@
+import std.io.File;
+fn main() {
+    fs.write("c.txt", "long text").unwrap();
+    let c = File.create("c.txt").unwrap();
+    c.write_all("ab".bytes()).unwrap();
+    drop(c);
+    println(fs.read_to_string("c.txt").unwrap());
+    let a = File.append("c.txt").unwrap();
+    a.write_all("cd".bytes()).unwrap();
+    drop(a);
+    println(fs.read_to_string("c.txt").unwrap());
+    let n = File.append("fresh.txt").unwrap();
+    n.write_all("x".bytes()).unwrap();
+    drop(n);
+    println(fs.read_to_string("fresh.txt").unwrap());
+}

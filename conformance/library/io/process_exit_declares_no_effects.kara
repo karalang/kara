@@ -1,0 +1,6 @@
+import std.process.{exit};
+fn leave() { exit(4); }
+fn main() {
+    println("before");
+    leave();
+}

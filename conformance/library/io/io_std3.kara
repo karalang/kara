@@ -1,0 +1,35 @@
+// lone last line, \r handling, read_line on an invalid line then on.
+fn main() {
+    match stdin.read_line() { Ok(s) => println(f"1: {q(s)}"), Err(e) => println(f"1 err[{e}]") }
+    match stdin.read_line() { Ok(s) => println(f"2: {q(s)}"), Err(e) => println(f"2 err[{e}]") }
+    match stdin.read_line() { Ok(s) => println(f"3: {q(s)}"), Err(e) => println(f"3 err[{e}]") }
+    for l in stdin.lines() {
+        match l { Ok(s) => println(f"l: {q(s)}"), Err(e) => println(f"l err[{e}]") }
+    }
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

@@ -1,0 +1,16 @@
+import std.io.{File, BufReader};
+fn main() {
+    fs.write("f.txt", "abcdef").unwrap();
+    let mut br = BufReader.with_capacity(File.open("f.txt").unwrap(), 4);
+    let n = { let b = br.fill_buf().unwrap(); b.len() };
+    println(n);
+    br.consume(2);
+    let m = { let b = br.fill_buf().unwrap(); b[0] };
+    println(m);
+    br.consume(100);
+    let rest = { let b = br.fill_buf().unwrap(); b.len() };
+    println(rest);
+    br.consume(10);
+    let end = { let b = br.fill_buf().unwrap(); b.len() };
+    println(end);
+}

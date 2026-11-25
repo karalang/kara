@@ -1,0 +1,7 @@
+struct Empty {}
+impl FileSystemProvider for Empty {}
+fn main() {
+    with_provider[FileSystem](Empty {}, || {
+        println(fs.exists("x"));
+    });
+}

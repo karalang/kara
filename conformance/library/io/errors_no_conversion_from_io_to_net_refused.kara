@@ -1,0 +1,6 @@
+import std.net.NetError;
+fn f() -> Result[(), NetError] {
+    let s = fs.read_to_string("x")?;
+    Ok(())
+}
+fn main() { println(f().is_ok()); }

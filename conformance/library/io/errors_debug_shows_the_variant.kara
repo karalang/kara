@@ -1,0 +1,7 @@
+fn main() {
+    let e = fs.read_to_string("nope").unwrap_err();
+    dbg(e);
+    dbg(IoError.Other("x".to_string()));
+    let v: Vec[i64] = Vec.new();
+    println(v[0]);
+}

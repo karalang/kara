@@ -1,0 +1,23 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+import std.io.{File, OpenOptions};
+fn main() {
+    fs.write("e.txt", "keep").unwrap();
+    println(r(File.options().open("e.txt")));
+    println(r(File.options().read(true).truncate(true).open("e.txt")));
+    println(r(File.options().read(true).create(true).open("new1")));
+    println(r(File.options().write(true).create_new(true).open("e.txt")));
+    println(r(File.options().write(true).create_new(true).open("lock")));
+    println(r(File.options().write(true).create_new(true).open("lock")));
+    println(r(File.options().read(true).write(true).open("missing")));
+    println(r(File.options().read(true).write(true).create(true).open("made")));
+    let a = File.options().append(true).open("e.txt").unwrap();
+    a.write_all("+".bytes()).unwrap();
+    drop(a);
+    println(fs.read_to_string("e.txt").unwrap());
+    let t = File.options().write(true).truncate(true).open("e.txt").unwrap();
+    drop(t);
+    println(fs.metadata("e.txt").unwrap().len);
+}

@@ -1,0 +1,16 @@
+import std.process.{Command, Stdio};
+// io.md: a fake's file cannot become a child process's standard stream.
+struct MemFs {}
+impl FileSystemProvider for MemFs {
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(7) }
+    fn close(mut ref self, h: i64) {}
+}
+fn main() {
+    with_provider[FileSystem](MemFs {}, || {
+        let f = File.create("out.txt").unwrap();
+        match Command.new("echo").arg("hi").stdout(Stdio.from_file(f)).status() {
+            Ok(s) => println(f"ran {s.success()}"),
+            Err(e) => println(f"err[{e}]"),
+        }
+    });
+}

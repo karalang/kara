@@ -1,0 +1,12 @@
+struct Eat {}
+impl StderrProvider for Eat {
+    fn write(mut ref self, s: Str) {}
+    fn flush(mut ref self) {}
+}
+fn main() {
+    with_provider[Stderr](Eat {}, || {
+        eprintln("eaten");
+        let v: Vec[i64] = Vec.new();
+        println(v[3]);
+    });
+}

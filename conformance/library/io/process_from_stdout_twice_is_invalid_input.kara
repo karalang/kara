@@ -1,0 +1,12 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+import std.process.{Command, Stdio};
+fn main() {
+    let a = Command.new("echo").arg("x").stdout(Stdio.piped()).spawn().unwrap();
+    let cmd = Command.new("cat").stdin(Stdio.from_stdout(a.stdout().unwrap())).stdout(Stdio.null());
+    println(r(cmd.status()));
+    println(r(cmd.status()));
+    a.wait().unwrap();
+}

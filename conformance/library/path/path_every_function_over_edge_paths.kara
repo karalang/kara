@@ -1,0 +1,17 @@
+import std.path.{parent, file_name, extension, stem, join, normalize, is_absolute, components};
+fn o(x: Option[Str]) -> String { match x { Some(s) => f"\"{s}\"", None => "None" } }
+fn main() {
+    for p in ["a/b/c.txt", "a", "/a", "/", "", "a/", "a//", "a/.", "a/..", "/a/b/", ".", "..", "./a", "../a", "a/./b", "//a", "c.tar.gz", "f.", ".bashrc", "a/.bashrc", "a/b.", "..x", "a/..b", "dir.d/file", "/usr//lib/./x", "./", "a/b/./", "x.y/"] {
+        let cs = components(p);
+        let mut j = "";
+        let mut out = String.new();
+        for c in cs { out.push_str(j); out.push_str(f"\"{c}\""); j = ","; }
+        println(f"{p}|{o(parent(p))}|{o(file_name(p))}|{o(extension(p))}|{o(stem(p))}|{normalize(p)}|{is_absolute(p)}|[{out}]");
+    }
+    for (a, b) in [("data", "x"), ("data/", "x"), ("data", "/etc/passwd"), ("data", "../../x"), ("", "x"), ("a", ""), ("/", "x"), ("a//", "/"), ("a", "./b")] {
+        println(f"join {a}+{b} = {join(a, b)}");
+    }
+    for p in ["a/./b/../c", "../a", "/../a", "a/../..", "a/..", "/..", "", "//", "a/b/../../../c", "./.", "/a/./../b//c/"] {
+        println(f"norm {p} = {normalize(p)}");
+    }
+}

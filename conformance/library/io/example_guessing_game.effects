@@ -1,0 +1,1 @@
+main = allocates(Heap), writes(Stdin), writes(Stdout), blocks

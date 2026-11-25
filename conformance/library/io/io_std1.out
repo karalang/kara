@@ -1,0 +1,14 @@
+read_line: "first\n"
+line: "second"
+line: "third"
+line: ""
+read_line after lines: "fifth\n"
+line2 err[invalid UTF-8]
+line3: "seventh"
+line3: "eighth"
+line3: "last-no-newline"
+rest: ""
+eof read_line: ""
+eof rest: ""
+ac
+epartial

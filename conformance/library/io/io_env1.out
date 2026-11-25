@@ -1,0 +1,13 @@
+argc=5
+arg 1: "x y"
+arg 2: "bad�arg"
+arg 3: ""
+arg 4: "é"
+unset: environment variable not found
+bad: environment variable is not valid unicode
+empty: ok ""
+name empty: environment variable not found
+name with =: environment variable not found
+set: v1 é
+child sees v1 é
+from: not found / invalid UTF-8

@@ -1,0 +1,7 @@
+import std.process.{Command, Stdio};
+fn main() {
+    let c = Command.new("sh").arg("-c").arg("head -c 200000 /dev/zero; head -c 150000 /dev/zero >&2")
+        .stdout(Stdio.piped()).stderr(Stdio.piped()).spawn().unwrap();
+    let o = c.wait_with_output().unwrap();
+    println(f"{o.stdout.len()} {o.stderr.len()} {o.status.success()}");
+}

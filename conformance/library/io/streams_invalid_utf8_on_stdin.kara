@@ -1,0 +1,7 @@
+fn main() {
+    match stdin.read_to_string() {
+        Ok(s) => println(f"ok {s.len()}"),
+        Err(IoError.InvalidUtf8) => println("err InvalidUtf8"),
+        Err(e) => println(f"other {e}"),
+    }
+}

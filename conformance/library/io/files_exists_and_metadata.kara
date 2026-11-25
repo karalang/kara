@@ -1,0 +1,14 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    fs.write("f.txt", "hello").unwrap();
+    fs.create_dir("d").unwrap();
+    println(f"{fs.exists("f.txt")} {fs.exists("nope")} {fs.exists("")}");
+    let m = fs.metadata("f.txt").unwrap();
+    println(f"{m.len} {m.is_file} {m.is_dir} {m.is_symlink} {m.modified_ms > 0} {m.mode <= 0o7777}");
+    let d = fs.metadata("d").unwrap();
+    println(f"{d.is_dir} {d.is_file}");
+    match fs.metadata("nope") { Ok(_) => println("?"), Err(IoError.NotFound) => println("NotFound"), Err(e) => println(e) }
+}

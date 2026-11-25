@@ -1,0 +1,19 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+import std.io.{File, BufReader};
+fn main() {
+    fs.write("l.txt", "one\ntwo\r\nthree").unwrap();
+    let br = BufReader.new(File.open("l.txt").unwrap());
+    let mut s = "pre:".to_string();
+    println(br.read_line(mut s).unwrap());
+    println(s);
+    let mut rest: Vec[String] = Vec.new();
+    for l in br.lines() { rest.push(l.unwrap()); }
+    println(rest);
+    let b2 = BufReader.with_capacity(File.open("l.txt").unwrap(), 4);
+    let mut all = String.new();
+    println(b2.read_to_string(mut all).unwrap());
+    println(all.len());
+}

@@ -1,0 +1,66 @@
+import std.path.*;
+
+fn o(x: Option[Str]) -> String {
+    match x { Some(s) => f"Some({q(s)})", None => "None".to_string() }
+}
+
+fn main() {
+    let ps = ["a/b/c.txt", "a", "/a", "/", "", "a/.", "a/b/", "a//b//", "c.tar.gz", "f.", ".bashrc", "a/..", "..", ".", "/usr//lib/./x", "./x", "../x/./y", "dir/.hidden.txt", "x/y.z/w"];
+    for p in ps {
+        println(f"{q(p)}: parent={o(parent(p))} file_name={o(file_name(p))} ext={o(extension(p))} stem={o(stem(p))} abs={is_absolute(p)} comps={qvs(components(p))} norm={q(normalize(p))}");
+    }
+    println(join("data", "/etc/passwd"));
+    println(join("data", "../../x"));
+    println(join("a/", "b"));
+    println(join("a", "b"));
+    println(join("", "b"));
+    println(join("a", ""));
+    println(join("/", "b"));
+    println(normalize("logs/./2026/../x"));
+    println(normalize("a/./b/../c"));
+    println(normalize("/../a"));
+    println(normalize("../../a/.."));
+    println(normalize("a/.."));
+    println(normalize("/"));
+    println(normalize("//a//"));
+    let p = "logs/2026/app.log";
+    let dir = parent(p) ?? "";
+    println(dir);
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }
+fn qvs(v: Vec[Str]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}

@@ -1,0 +1,57 @@
+// stdin: read_line, lines, read_to_string sharing one buffer; stdout/stderr ordering.
+fn main() {
+    match stdin.read_line() { Ok(s) => println(f"read_line: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    let mut n = 0;
+    for l in stdin.lines() {
+        match l { Ok(s) => println(f"line: {q(s)}"), Err(e) => println(f"line err[{e}]") }
+        n = n + 1;
+        if n == 3 { break; }
+    }
+    match stdin.read_line() { Ok(s) => println(f"read_line after lines: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    for l in stdin.lines() {
+        match l { Ok(s) => println(f"line2: {q(s)}"), Err(e) => println(f"line2 err[{e}]") }
+    }
+    for l in stdin.lines() {
+        match l { Ok(s) => println(f"line3: {q(s)}"), Err(e) => println(f"line3 err[{e}]") }
+    }
+    match stdin.read_to_string() { Ok(s) => println(f"rest: {q(s)}"), Err(e) => println(f"rest err[{e}]") }
+    match stdin.read_line() { Ok(s) => println(f"eof read_line: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    match stdin.read_to_string() { Ok(s) => println(f"eof rest: {q(s)}"), Err(e) => println(f"err[{e}]") }
+    stdout.print("a");
+    stderr.print("B");
+    stdout.println("c");
+    stderr.println("D");
+    print("e");
+    eprintln("F");
+    stdout.print("partial");
+    stdout.flush();
+    stderr.flush();
+    stderr.print("G");
+    println("");
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

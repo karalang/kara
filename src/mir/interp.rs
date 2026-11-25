@@ -1017,6 +1017,8 @@ fn run_with(
         sweep_at: SWEEP_FLOOR,
         bytes_snapshots: Vec::new(),
         bytes_owned: Default::default(),
+        view_temps: Vec::new(),
+        native_depth: 0,
         calls: 0,
         arenas: 0,
         channels: Vec::new(),
@@ -1797,6 +1799,11 @@ struct Interp<'a> {
     /// inside a callback, where [`Interp::sweep_snapshots`] cannot run,
     /// then holds one snapshot per live String rather than one per call.
     bytes_owned: rustc_hash::FxHashMap<AllocId, (Box<[u8]>, AllocId)>,
+    /// The copies [`Interp::view_of`] makes of an array a native was handed
+    /// by value, freed when the outermost native call returns
+    /// (B-2026-11-25-32); and how deep in natives the interpreter is.
+    view_temps: Vec<AllocId>,
+    native_depth: u32,
     /// How many [`Interp::call`]s are running: the entry's, and one per
     /// call back into Kāra from a library method or a drop.
     calls: u32,
@@ -2081,7 +2088,7 @@ impl<'a> Interp<'a> {
     fn call(&mut self, name: &str, args: Vec<Value>) -> R<Value> {
         let Some(body) = self.program.bodies.get(name) else {
             let unit = self.tys.unit();
-            return self.native(name, args, &[], unit);
+            return self.native_scoped(name, args, &[], unit);
         };
         self.calls += 1;
         let r = self.call_body(name, body, args);
@@ -2260,6 +2267,18 @@ impl<'a> Interp<'a> {
             matches!(adt.name.as_str(), "CStr" | "CString")
                 && adt.variants.iter().any(|v| !v.fields.is_empty())
         })
+    }
+
+    fn native_scoped(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
+        self.native_depth += 1;
+        let r = self.native(name, args, arg_tys, ret);
+        self.native_depth -= 1;
+        if self.native_depth == 0 {
+            for id in std::mem::take(&mut self.view_temps) {
+                self.free_slot(id);
+            }
+        }
+        r
     }
 
     fn native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
@@ -3672,7 +3691,7 @@ impl<'a> Interp<'a> {
                 rest.extend(args[1..].iter().cloned());
                 let unit = self.tys.unit();
                 let base_name = name.replacen(".sorted", ".sort", 1);
-                self.native(&base_name, rest, arg_tys, unit)?;
+                self.native_scoped(&base_name, rest, arg_tys, unit)?;
                 Ok(sorted)
             }
             ("Map" | "SortedMap" | "Set" | "SortedSet", "reserve" | "shrink_to_fit") => {
@@ -3695,7 +3714,7 @@ impl<'a> Interp<'a> {
                 let mut rest = vec![scratch.clone()];
                 rest.extend(args[1..].iter().cloned());
                 let unit = self.tys.unit();
-                self.native(&vec_name, rest, arg_tys, unit)?;
+                self.native_scoped(&vec_name, rest, arg_tys, unit)?;
                 let Value::Box(sid) = scratch else {
                     unreachable!()
                 };
@@ -3736,7 +3755,7 @@ impl<'a> Interp<'a> {
                     return self.variant_named(ret, None, "Err", vec![e]);
                 }
                 let base_name = name.replacen(".try_", ".", 1);
-                let v = self.native(&base_name, args, arg_tys, ok_ty)?;
+                let v = self.native_scoped(&base_name, args, arg_tys, ok_ty)?;
                 self.variant_named(ret, None, "Ok", vec![v])
             }
             ("Slice" | "Array", "fill") => {
@@ -8237,11 +8256,15 @@ impl<'a> Interp<'a> {
                 ("from_file", Some(f)) => {
                     let id = self.handle_id(f, name)?;
                     if id < 0 {
-                        return err(
-                            "Stdio.from_file of a file a FileSystem provider opened; a child \
-                             process can only use a file the OS opened"
-                                .to_string(),
+                        // The program stops as the build's does: this line
+                        // on stderr and exit 101 (runtime/src/mir_process.rs),
+                        // not an interpreter error exiting 3 (B-2026-11-25-34).
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "error: Stdio.from_file of a file a FileSystem provider opened; \
+                             a child process can only use a file the OS opened"
                         );
+                        return Err(Stop::Exit(101));
                     }
                     let f = usize::try_from(id - 1)
                         .ok()
@@ -10466,6 +10489,23 @@ impl<'a> Interp<'a> {
             }
             (_, Value::Slice { base, lo, len }) => Ok((*base, lo, len)),
             (Some(addr), Value::Agg(fs)) => Ok((addr, 0, fs.len() as u64)),
+            // An array handed to a native by value (`f.write(buf)` with a
+            // `Copy` `[0u8; 4]`, as the build takes it): a copy on the heap
+            // to view, freed when the native returns (B-2026-11-25-32).
+            (None, Value::Agg(fs)) => {
+                let n = fs.len() as u64;
+                let id = self.alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: Value::Agg(fs),
+                });
+                self.view_temps.push(id);
+                let base = Addr {
+                    root: Root::Heap(id),
+                    path: Path::new(),
+                };
+                Ok((base, 0, n))
+            }
             (_, other) => err(format!("expected a sequence, found {other:?}")),
         }
     }
@@ -17181,7 +17221,7 @@ impl<'a> Interp<'a> {
                         let ret_ty = place_ty(body, self.tys, destination)
                             .map_err(|e| Stop::Error(format!("call destination: {e}")))?
                             .ty;
-                        let v = self.native(name, vals, &arg_tys, ret_ty)?;
+                        let v = self.native_scoped(name, vals, &arg_tys, ret_ty)?;
                         let v = self.native_result(name, v);
                         self.inline_str(v, ret_ty)?
                     }

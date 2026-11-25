@@ -1,0 +1,1 @@
+runtime error: Stdin.read_to_string called on a provider that does not implement it

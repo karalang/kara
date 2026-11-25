@@ -1,0 +1,20 @@
+// Review rulings 2026-11-20: fs.copy onto itself, eprint, path.parent.
+import std.path.{parent};
+fn main() {
+    let _ = fs.write("f.txt", "keep me");
+    match fs.copy("f.txt", "f.txt") { Ok(n) => println(f"same path: ok {n}"), Err(e) => println(f"same path: err[{e}]") }
+    let _ = fs.symlink("f.txt", "l.txt");
+    match fs.copy("f.txt", "l.txt") { Ok(n) => println(f"through link: ok {n}"), Err(e) => println(f"through link: err[{e}]") }
+    match fs.copy("l.txt", "./f.txt") { Ok(n) => println(f"link to file: ok {n}"), Err(e) => println(f"link to file: err[{e}]") }
+    match fs.read_to_string("f.txt") { Ok(s) => println(f"intact: {s}"), Err(e) => println(f"err[{e}]") }
+    match fs.copy("f.txt", "g.txt") { Ok(n) => println(f"other: ok {n}"), Err(e) => println(f"err[{e}]") }
+    match fs.copy("f.txt", "g.txt") { Ok(n) => println(f"over existing: ok {n}"), Err(e) => println(f"err[{e}]") }
+    eprint("to stderr ");
+    eprint(42);
+    eprintln("");
+    stderr.print("x");
+    eprint('\n');
+    for p in ["/usr//lib/./x", "../x/./y", "a/./b", "/./x", "./x", "a/././b/", "a/b/c", "/a", "a"] {
+        match parent(p) { Some(s) => println(f"{p} -> [{s}]"), None => println(f"{p} -> None") }
+    }
+}

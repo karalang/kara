@@ -1,0 +1,13 @@
+struct Fake {}
+impl NetworkProvider for Fake {}
+fn open_udp() -> bool {
+    UdpSocket.bind("127.0.0.1:0").is_ok()
+}
+fn call_it(f: Fn() -> bool) -> bool { f() }
+fn main() {
+    providers { Network => Fake {} } in {
+        println(f"{open_udp()}");
+        println(f"{call_it(open_udp)}");
+        println(f"{call_it(|| WebSocket.accept(TcpListener.bind("127.0.0.1:0").unwrap()).is_ok())}");
+    }
+}

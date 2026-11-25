@@ -666,7 +666,7 @@ fn main() -> Result[(), IoError] {
 }
 ```
 
-Its inferred effects are `writes(Stdin), writes(Stdout), blocks`. Like any private function, `main` has its effects inferred ([design.md §12](../design.md#12-effects)). It has no `panics`: `parse` returns a `Result` that the `match` handles, and `?` propagates rather than panicking. `blocks` comes from the stdin read, which parks the thread until input or end of file arrives.
+Its inferred effects are `allocates(Heap), writes(Stdin), writes(Stdout), blocks`. Like any private function, `main` has its effects inferred ([design.md §12](../design.md#12-effects)). It has no `panics`: `parse` returns a `Result` that the `match` handles, and `?` propagates rather than panicking. `blocks` comes from the stdin read, which parks the thread until input or end of file arrives, and `allocates(Heap)` from the line read and the formatted reply (default-permitted, so a declaration need not name it).
 
 A command-line tool skeleton:
 
@@ -683,4 +683,4 @@ fn main() -> Result[(), IoError] {
 }
 ```
 
-Its inferred effects are `reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), blocks, panics`. The `blocks` comes from the file read, and the `panics` from the `args[1]` index.
+Its inferred effects are `allocates(Heap), reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), blocks, panics`. The `blocks` comes from the file read, the `allocates(Heap)` from the arguments and the file's text, and the `panics` from the `args[1]` index.

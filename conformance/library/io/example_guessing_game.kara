@@ -1,0 +1,10 @@
+fn main() -> Result[(), IoError] {
+    print("Guess: ");
+    stdout.flush();
+    let line = stdin.read_line()?;
+    match i64.parse(line.trim()) {
+        Ok(guess) => println(f"You guessed {guess}"),
+        Err(_) => println("Not a number"),
+    }
+    Ok(())
+}

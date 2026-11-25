@@ -1,0 +1,2 @@
+import std.io.stdin;
+fn main() { println(stdin.read_line().is_ok()); }

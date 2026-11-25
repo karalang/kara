@@ -1,0 +1,62 @@
+// std.regex: every method, offsets, empty matches, replacement syntax, errors.
+import std.regex.{Regex, Match, Captures, RegexError};
+
+fn ms(m: Option[Match]) -> String {
+    match m { Some(x) => f"{x.start}..{x.end}:{x.text}", None => "None".to_string() }
+}
+fn all(v: Vec[Match]) -> String {
+    let mut o = "[".to_string();
+    for m in v.iter() { o.push_str(f"{m.start}..{m.end}:{m.text} "); }
+    o.push_str("]");
+    o
+}
+fn re(p: Str) -> Regex {
+    match Regex.compile(p) { Ok(r) => r, Err(e) => { println(f"compile error: {e.message}"); Regex.compile("$^").unwrap() } }
+}
+fn main() {
+    let r = re("(?P<key>\\w+)=(?P<value>\\d+)");
+    for c in r.captures_all("a=1, b=22") {
+        match (c.name("key"), c.name("value")) {
+            (Some(k), Some(v)) => println(f"{k.text} -> {v.text}"),
+            _ => {}
+        }
+    }
+    let d = re("\\d+");
+    println(f"is_match: {d.is_match("ab12")} {d.is_match("abc")} {d.is_match("٣")}");
+    println(f"find: {ms(d.find("x12y345"))} {ms(d.find("none"))}");
+    println(f"find_all: {all(d.find_all("x12y345z6"))}");
+    let s = "héllo wörld 42";
+    let w = re("\\w+");
+    println(f"unicode offsets: {all(w.find_all(s))}");
+    let m = w.find_all(s);
+    println(f"slice: {s[m[1].start..m[1].end]}");
+    println(f"dot: {all(re(".").find_all("aé日"))}");
+    println(f"ascii digit: {re("[0-9]").is_match("٣")} {re("(?-u:\\d)").is_match("٣")} {re("\\d").is_match("٣")}");
+    println(f"flags: {re("(?i)abc").is_match("xAbC")} {all(re("(?m)^\\w").find_all("ab\ncd"))} {all(re("^\\w").find_all("ab\ncd"))} {re("(?s)a.b").is_match("a\nb")} {re("a.b").is_match("a\nb")} {re("(?x) a b # c").is_match("ab")}");
+    println(f"empty: {all(re("a*").find_all("baaab"))}");
+    println(f"empty2: {all(re("").find_all("aé"))}");
+    println(f"replace: {d.replace("a1b22c", "#")} {d.replace_all("a1b22c", "#")} {d.replace("abc", "#")}");
+    let g = re("(\\w)(\\d)?");
+    println(f"rep groups: {g.replace_all("a1 b", "[$1|$2|${1}x|$$|$9]")}");
+    let n = re("(?P<first>\\w+) (?P<last>\\w+)");
+    println(f"rep named: {n.replace("ada lovelace", "$last, $first")} {n.replace("ada lovelace", "${last}_x $lastx|")}");
+    println(f"rep longest: {g.replace("a1", "$1a")} {g.replace("a1", "${1}a")}");
+    println(f"split: {d.split("a1b22c")} {d.split("1a2")} {d.split("")} {re(",\\s*").split("x, y,z")}");
+    let c = re("(a)|b").captures("b").unwrap();
+    println(f"captures: len={c.len()} g0={ms(c.get(0))} g1={ms(c.get(1))} g5={ms(c.get(5))} g-1={ms(c.get(-1))}");
+    let c2 = re("(?<yr>\\d{4})-(?<mo>\\d{2})").captures("on 2026-11!").unwrap();
+    println(f"named: {ms(c2.name("yr"))} {ms(c2.name("mo"))} {ms(c2.name("day"))} {c2.len()} {ms(c2.get(2))}");
+    println(f"captures none: {re("z").captures("abc").is_none()}");
+    let ca = re("(\\d)(x)?").captures_all("1x2 3");
+    let mut co = "".to_string();
+    for c in ca.iter() { co.push_str(f"{ms(c.get(0))}/{ms(c.get(2))} "); }
+    println(f"captures_all: {ca.len()} {co}");
+    let esc = Regex.escape("a.b*c(1)[x]+?^$|\\");
+    println(f"escape: {esc} {re(esc.as_str()).is_match("a.b*c(1)[x]+?^$|\\")} {re(esc.as_str()).is_match("aXb")}");
+    match Regex.compile("(unclosed") { Ok(_) => println("bad ok"), Err(e) => println(f"err: {e.message.len() > 0} {e.message.contains("(unclosed")}") }
+    match Regex.compile("a{2,1}") { Ok(_) => println("bad ok"), Err(e) => println(f"err2: {e.message.len() > 0}") }
+    match Regex.compile("(a)\\1") { Ok(_) => println("backref ok"), Err(e) => println("backref refused") }
+    match Regex.compile("a(?=b)") { Ok(_) => println("lookahead ok"), Err(e) => println("lookahead refused") }
+    let big = "a".repeat(30) + "!";
+    println(f"no blowup: {re("(a+)+$").is_match(big.as_str())}");
+}

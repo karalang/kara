@@ -1,0 +1,1 @@
+main = allocates(Heap), reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), blocks, panics

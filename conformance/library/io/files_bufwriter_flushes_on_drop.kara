@@ -1,0 +1,13 @@
+import std.io.{File, BufWriter};
+fn main() {
+    {
+        let w = BufWriter.new(File.create("w.txt").unwrap());
+        w.write_all("held".bytes()).unwrap();
+        println(fs.read_to_string("w.txt").unwrap().len());
+    }
+    println(fs.read_to_string("w.txt").unwrap());
+    let w2 = BufWriter.with_capacity(File.create("w2.txt").unwrap(), 2);
+    println(w2.write("abc".bytes()).unwrap());
+    w2.flush().unwrap();
+    println(fs.read_to_string("w2.txt").unwrap());
+}

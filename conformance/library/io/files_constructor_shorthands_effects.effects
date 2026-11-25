@@ -1,0 +1,8 @@
+opens has reads(FileSystem)
+opens lacks writes(FileSystem)
+creates has writes(FileSystem)
+creates lacks reads(FileSystem)
+appends has writes(FileSystem)
+appends lacks reads(FileSystem)
+general has reads(FileSystem), writes(FileSystem)
+builds lacks reads(FileSystem), writes(FileSystem), blocks

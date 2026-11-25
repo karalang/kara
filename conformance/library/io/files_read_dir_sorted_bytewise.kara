@@ -1,0 +1,11 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    fs.create_dir("d").unwrap();
+    for n in ["b", "B", "a", "é", "Z"] { fs.write(f"d/{n}", "").unwrap(); }
+    fs.create_dir("d/sub").unwrap();
+    println(fs.read_dir("d").unwrap());
+    println(r(fs.read_dir("nope")));
+}

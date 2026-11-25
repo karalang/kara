@@ -1,0 +1,26 @@
+// Non-UTF-8 names and link targets; copy keeps permissions; stdin-free extras.
+fn r(x: Result[(), IoError]) -> String { match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" } }
+fn main() {
+    let _ = fs.create_dir("n");
+    let _ = Command.new("sh").args(["-c", "touch n/ok \"$(printf 'n/bad\\377')\"; ln -s \"$(printf 'tgt\\377')\" n2link"]).status();
+    match fs.read_dir("n") { Ok(v) => println(f"read_dir: {v.len()}"), Err(e) => println(f"read_dir non-utf8: err[{e}]") }
+    match fs.read_link("n2link") { Ok(s) => println(f"read_link: {s}"), Err(e) => println(f"read_link non-utf8: err[{e}]") }
+    match fs.symlink_metadata("n2link") { Ok(m) => println(f"lmeta: link={m.is_symlink}"), Err(e) => println(f"err[{e}]") }
+    println(f"remove_dir_all with bad name: {r(fs.remove_dir_all("n"))}");
+    let _ = fs.write("x.sh", "#!/bin/sh\n");
+    let _ = fs.set_permissions("x.sh", 0o751);
+    match fs.copy("x.sh", "y.sh") { Ok(n) => println(f"copy {n}"), Err(e) => println(f"err[{e}]") }
+    match fs.metadata("y.sh") { Ok(m) => println(f"copy mode {m.mode:o}"), Err(e) => println(f"err[{e}]") }
+    match fs.copy("x.sh", "x.sh") { Ok(n) => println(f"copy onto itself {n}"), Err(e) => println(f"copy onto itself: err[{e}]") }
+    match fs.metadata("x.sh") { Ok(m) => println(f"x.sh len after {m.len}"), Err(e) => println(f"err[{e}]") }
+    let _ = fs.write("mid", "a\rb\nc\r\r\nd");
+    match fs.read_lines("mid") {
+        Ok(v) => { for l in v { println(f"[{l.replace("\r", "<CR>")}]"); } }
+        Err(e) => println(f"err[{e}]"),
+    }
+    println(f"rename dir over file: {r(fs.rename("mid", "."))}");
+    let _ = fs.create_dir("dd");
+    println(f"rename dir onto empty dir: {r(fs.rename("dd", "ee"))} {fs.exists("ee")}");
+    println(f"create_dir empty: {r(fs.create_dir(""))}");
+    println(f"write empty path: {r(fs.write("", "x"))}");
+}

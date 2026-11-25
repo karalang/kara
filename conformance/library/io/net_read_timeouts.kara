@@ -1,0 +1,23 @@
+import std.net.{TcpListener, TcpStream, UdpSocket, NetError};
+fn kind(e: NetError) -> Str {
+    match e {
+        NetError.InvalidInput => "InvalidInput",
+        NetError.TimedOut => "TimedOut",
+        NetError.UnexpectedEof => "UnexpectedEof",
+        _ => "other",
+    }
+}
+fn main() {
+    let u = UdpSocket.bind("127.0.0.1:0").unwrap();
+    println(kind(u.set_read_timeout(Some(0)).unwrap_err()));
+    u.set_read_timeout(Some(30)).unwrap();
+    let mut buf = [0u8; 8];
+    println(kind(u.recv_from(mut buf).unwrap_err()));
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
+    let _s = l.accept().unwrap();
+    c.set_read_timeout(Some(30)).unwrap();
+    println(kind(c.read(mut buf).unwrap_err()));
+    c.set_read_timeout(None).unwrap();
+    println("none ok");
+}

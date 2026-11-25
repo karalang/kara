@@ -1,0 +1,69 @@
+none: err[invalid input]
+truncate w/o write: err[invalid input]
+create w/o write: err[invalid input]
+create_new w/o write: err[invalid input]
+create_new+truncate: err[invalid input]
+append+truncate: err[invalid input]
+x created by any? false
+write+missing: err[not found]
+open missing: err[not found]
+create_new: opened
+create_new again: err[already exists]
+append implies write: opened
+write: ok 10
+write_all: ok
+flush: ok
+pos: ok 20
+seek End -4: ok 16
+seek Start -1: err[invalid input]
+seek Current -100: err[invalid input]
+pos after: ok 16
+seek Start 30: ok 30
+write past end: ok 1
+set_len -1: err[invalid input]
+set_len 5: ok
+pos kept: ok 31
+write after cut: ok 1
+set_len 40: ok
+sync_all: ok sync_data: ok
+read on write-only: err[Bad file descriptor (os error 9)]
+f: [1, 2, 3, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99, 0, 0, 0, 0, 0, 0, 0, 0]
+read: ok 4 [1, 2, 3, 4]
+read_exact: ok [5, 0, 0, 0]
+seek End -2: ok 38
+read_exact short: err[unexpected end of file]
+read at eof: ok 0
+write on read-only: err[Bad file descriptor (os error 9)]
+set_len on read-only: err[invalid input]
+open dir read: err[Is a directory (os error 21)]
+append write: ok 1
+ap: "abC"
+append creates: true
+create truncates: []
+rw read: ok 4
+rw: "Jello"
+read_line: ok 7 "alpha\r\n"
+read_line: ok 5 "alpha\r\nbeta\n"
+read_to_string: ok 6 "\ngamma"
+read_line eof: ok 0 ""
+line "alpha"
+line "beta"
+line ""
+line "gamma"
+fill_buf: [97, 108, 112, 104]
+after consume 2: [112, 104]
+after consume 100: [97, 13, 10, 98]
+4 2
+br read_exact: ok [97, 13, 10]
+br read: ok 1
+bad line "ok"
+bad line err[invalid UTF-8]
+bad read_line: ok 3 "ok\n"
+bad read_line: err[invalid UTF-8] "ok\n"
+bad read_line: ok 3 "ok\nok\n"
+bw write: ok 2
+bw before drop: []
+bw write_all: ok
+bw after drop: [104, 105, 104, 105]
+bw2 write: ok 5
+bw2 flush: ok [1, 2, 3, 4, 5]

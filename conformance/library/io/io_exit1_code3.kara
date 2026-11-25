@@ -1,0 +1,11 @@
+import std.process.{exit};
+struct D {}
+impl Drop for D { fn drop(mut ref self) { println("drop ran"); } }
+fn main() {
+    let _d = D {};
+    defer println("defer ran");
+    print("partial-no-newline");
+    stderr.print("err-partial");
+    let code: i32 = i32.parse(env.args()[1]).unwrap_or(0);
+    exit(code);
+}

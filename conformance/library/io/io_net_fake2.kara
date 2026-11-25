@@ -1,0 +1,10 @@
+struct Fake {}
+impl NetworkProvider for Fake {}
+fn main() {
+    providers { Network => Fake {} } in {
+        let u = UdpSocket.bind("127.0.0.1:0");
+        let t = TlsListener.bind_tls("127.0.0.1:0", "a", "b");
+        let s = Server.serve("127.0.0.1:0".to_string(), |r| Response { status: 200, body: r.path() });
+        println(f"{u.is_ok()} {t.is_ok()} {s.is_ok()}");
+    }
+}

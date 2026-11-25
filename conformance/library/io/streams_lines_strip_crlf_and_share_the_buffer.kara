@@ -1,0 +1,10 @@
+fn main() {
+    let first = stdin.read_line().unwrap();
+    print(f"first={first}");
+    let mut n = 0;
+    for line in stdin.lines() {
+        let l = line.unwrap();
+        n += 1;
+        println(f"{n}:[{l}]");
+    }
+}

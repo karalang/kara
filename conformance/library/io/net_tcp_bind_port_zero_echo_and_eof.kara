@@ -1,0 +1,16 @@
+import std.net.{TcpListener, TcpStream};
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    println(addr.starts_with("127.0.0.1:"));
+    println(not addr.ends_with(":0"));
+    let c = TcpStream.connect(addr).unwrap();
+    let s = l.accept().unwrap();
+    c.write_all("ping".bytes()).unwrap();
+    let mut head = [0u8; 4];
+    s.read_exact(mut head).unwrap();
+    println(String.from_utf8(head) ?? "?".to_string());
+    drop(c);
+    let mut b = [0u8; 8];
+    println(s.read(mut b).unwrap());
+}

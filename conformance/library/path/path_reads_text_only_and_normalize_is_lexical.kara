@@ -1,0 +1,14 @@
+import std.path.{parent, file_name, normalize, join};
+fn main() {
+    println(parent("no/such/dir/f") ?? "none");
+    println(file_name("no/such/dir/f") ?? "none");
+    fs.create_dir_all("real/sub").unwrap();
+    fs.write("real/b", "on disk").unwrap();
+    fs.symlink("real/sub", "a").unwrap();
+    let lexical = normalize("a/../b");
+    println(lexical);
+    println(fs.exists(lexical));
+    println(fs.read_to_string("a/../b").unwrap());
+    println(join("data", "/etc/passwd"));
+    println(join("data", "../../x"));
+}

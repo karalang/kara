@@ -1,0 +1,12 @@
+struct Lines { n: i64 }
+impl StdoutProvider for Lines {
+    fn write(mut ref self, s: Str) { self.n = self.n + 1; eprintln(f"line {self.n}: {s.trim()}"); }
+}
+fn main() {
+    with_provider[Stdout](Lines { n: 0 }, || {
+        println("hello");
+        stdout.println("world");
+        print("no newline");
+    });
+    println("after");
+}

@@ -1,0 +1,63 @@
+// Stream providers: overriding Stdout/Stderr/Stdin; default methods panic.
+struct Cap { n: i64 }
+impl StdoutProvider for Cap {
+    fn write(mut ref self, s: Str) { self.n = self.n + 1; eprintln(f"cap {self.n}: {q(s)}"); }
+    fn flush(mut ref self) { eprintln("cap flush"); }
+}
+struct In { k: i64 }
+impl StdinProvider for In {
+    fn read_line(mut ref self) -> Result[String, IoError] {
+        self.k = self.k + 1;
+        if self.k > 2 { Ok("".to_string()) } else { Ok(f"fake {self.k}\n") }
+    }
+}
+struct NoFlush {}
+impl StdoutProvider for NoFlush {
+    fn write(mut ref self, s: Str) { stderr.print(s); }
+}
+fn main() {
+    with_provider[Stdout](Cap { n: 0 }, || {
+        println("hello");
+        print(42);
+        stdout.print("x");
+        stdout.println("y");
+        stdout.flush();
+    });
+    println("back");
+    with_provider[Stdin](In { k: 0 }, || {
+        match stdin.read_line() { Ok(s) => println(f"got {q(s)}"), Err(e) => println(f"err[{e}]") }
+        match stdin.read_line() { Ok(s) => println(f"got {q(s)}"), Err(e) => println(f"err[{e}]") }
+        match stdin.read_line() { Ok(s) => println(f"got {q(s)}"), Err(e) => println(f"err[{e}]") }
+    });
+    with_provider[Stdout](NoFlush {}, || {
+        println("via eprint");
+        stdout.flush();
+    });
+    println("unreached");
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

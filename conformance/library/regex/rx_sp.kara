@@ -1,0 +1,10 @@
+import std.regex.{Regex};
+fn main() {
+    let e = "";
+    let v: Vec[Str] = e.split(",").collect();
+    println(f"str split empty: {v.len()}");
+    let r = Regex.compile(",").unwrap();
+    println(f"regex split empty: {r.split("").len()} {r.split(",").len()} {r.split("a").len()}");
+    let r2 = Regex.compile("").unwrap();
+    println(f"empty pattern split: {r2.split("ab")}");
+}

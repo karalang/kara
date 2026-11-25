@@ -1,0 +1,15 @@
+read_dir non-utf8: err[invalid UTF-8]
+read_link non-utf8: err[invalid UTF-8]
+lmeta: link=true
+remove_dir_all with bad name: ok
+copy 10
+copy mode 751
+copy onto itself: err[invalid input]
+x.sh len after 10
+[a<CR>b]
+[c<CR>]
+[d]
+rename dir over file: err[Device or resource busy (os error 16)]
+rename dir onto empty dir: ok true
+create_dir empty: err[not found]
+write empty path: err[not found]

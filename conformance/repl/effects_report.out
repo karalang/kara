@@ -1,8 +1,8 @@
 Kāra REPL  (type :help for commands, :quit to exit)
-session effects: blocks, panics, reads(FileSystem)
-  read_config: blocks, panics, reads(FileSystem)
-session effects: blocks, panics, reads(FileSystem), writes(Stdout)
+session effects: allocates(Heap), blocks, panics, reads(FileSystem)
+  read_config: allocates(Heap), blocks, panics, reads(FileSystem)
+session effects: allocates(Heap), blocks, panics, reads(FileSystem), writes(Stdout)
   add: panics
   hi: writes(Stdout)
-  read_config: blocks, panics, reads(FileSystem)
+  read_config: allocates(Heap), blocks, panics, reads(FileSystem)
 

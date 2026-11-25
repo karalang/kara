@@ -1,0 +1,19 @@
+import std.net.{TcpListener, TcpStream};
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let g = TaskGroup.new();
+    let server = g.spawn(|| {
+            let s = l.accept().unwrap();
+            let mut b = [0u8; 5];
+            s.read_exact(mut b).unwrap();
+        String.from_utf8_lossy(b)
+    });
+    let client = g.spawn(|| {
+        let c = TcpStream.connect(addr).unwrap();
+        c.write_all("hello".bytes()).unwrap();
+        1
+    });
+    println(client.join());
+    println(server.join());
+}

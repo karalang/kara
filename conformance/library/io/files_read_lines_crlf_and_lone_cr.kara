@@ -1,0 +1,11 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    println(r(fs.write("t.txt", "a\r\nb\nc\r")));
+    println(fs.read_lines("t.txt").unwrap());
+    println(r(fs.write_bytes("b.bin", [104u8, 255])));
+    println(fs.read_bytes("b.bin").unwrap());
+    println(r(fs.read_to_string("b.bin")));
+}

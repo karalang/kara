@@ -1,0 +1,78 @@
+create_dir d: ok
+create_dir d again: err[already exists]
+create_dir missing parent: err[not found]
+create_dir_all d/e/f: ok
+create_dir_all d/e/f again: ok
+write d/b.txt: ok
+write d/a.txt: ok
+write d/B.txt: ok
+write d/é.txt: ok
+write d/z/x: err[not found]
+write into dir: err[Is a directory (os error 21)]
+read_dir d: ["B.txt", "a.txt", "b.txt", "e", "é.txt"]
+read_dir nope: err[not found]
+read_dir file: err[Not a directory (os error 20)]
+read_lines a: ["one", "two", "three\r"]
+read_lines empty: []
+read_lines b: ["bee"]
+read_lines nope: err[not found]
+read_to_string a: "one\r\ntwo\nthree\r"
+read_to_string dir: err[Is a directory (os error 21)]
+write_bytes bad: ok
+read_to_string bad: err[invalid UTF-8]
+read_lines bad: err[invalid UTF-8]
+read_bytes bad: [104, 105, 255, 10]
+exists d: true d/a.txt: true nope: false empty: false
+meta a: len=15 file=true dir=false link=false mode=644 mtime>0=true
+meta d: file=false dir=true link=false
+meta nope: err[not found]
+meta empty: err[not found]
+copy: 15
+copy nope: err[not found]
+copy dir: err[invalid input]
+rename c->b (replaces): ok
+b now: "one\r\ntwo\nthree\r"
+rename nope: err[not found]
+set_permissions 0o600: ok
+mode 600
+set_permissions 0o10000: err[invalid input]
+set_permissions -1: err[invalid input]
+set_permissions 0o7777: ok
+mode 7777
+set_permissions nope: err[not found]
+set_modified 86400000: ok
+mtime 86400000
+set_modified -1500: ok
+mtime -1500
+set_modified nope: err[not found]
+symlink: ok
+symlink dangling: ok
+symlink exists: err[already exists]
+read_link: a.txt
+read_link file: err[invalid input]
+read_link nope: err[not found]
+meta link: len=15 file=true link=false
+lmeta link: file=false dir=false link=true
+lmeta file: file=true link=false
+meta dangling: err[not found]
+exists dangling: false
+through link: "one\r\ntwo\nthree\r"
+remove_file nope: err[not found]
+remove_file dir: err[Is a directory (os error 21)]
+remove_dir nonempty: err[Directory not empty (os error 39)]
+remove_dir file: err[Not a directory (os error 20)]
+remove_dir d/e/f: ok
+remove_dir nope: err[not found]
+remove_file link: ok
+a.txt still: true
+create_dir over file: err[already exists]
+create_dir_all over file: err[Not a directory (os error 20)]
+mkdir out: ok
+write out/keep: ok
+symlink to out: ok
+remove_dir_all d: ok
+d gone: true out/keep kept: true
+remove_dir_all nope: err[not found]
+write ro: ok
+chmod 0o444: ok
+write to ro: ok

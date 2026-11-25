@@ -1,0 +1,28 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+import std.io.{File, SeekFrom};
+fn main() {
+    let f = File.create("f.bin").unwrap();
+    println(f.write("hello world".bytes()).unwrap());
+    println(r(f.write_all("!".bytes())));
+    println(r(f.flush()));
+    println(r(f.sync_all()));
+    println(r(f.sync_data()));
+    drop(f);
+    let g = File.open("f.bin").unwrap();
+    let mut b = [0u8; 5];
+    println(r(g.read_exact(mut b)));
+    println(String.from_utf8(b) ?? "?".to_string());
+    println(g.seek(SeekFrom.Current, 0).unwrap());
+    println(g.seek(SeekFrom.End, -4).unwrap());
+    let mut t = [0u8; 4];
+    println(g.read(mut t).unwrap());
+    println(String.from_utf8(t) ?? "?".to_string());
+    println(r(g.seek(SeekFrom.Start, -1)));
+    let mut big = [0u8; 64];
+    println(r(g.read_exact(mut big)));
+    let mut none: Vec[u8] = Vec.new();
+    println(r(g.read_exact(mut none)));
+}

@@ -1,0 +1,10 @@
+fn main() {
+    stdout.println("to out");
+    stderr.println("to err");
+    let stdout = 5;
+    println(stdout + 1);
+    eprint("e");
+    eprintln("!");
+    print("a");
+    println("b");
+}

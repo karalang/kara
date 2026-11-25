@@ -1,0 +1,6 @@
+fn main() {
+    let a = stdin.read_line().unwrap();
+    let b = stdin.read_line().unwrap();
+    let c = stdin.read_line().unwrap();
+    println(f"[{a.trim_end()}] {a.ends_with("\n")} [{b}] {b.ends_with("\n")} [{c}] {c.len()}");
+}

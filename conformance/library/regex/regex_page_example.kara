@@ -1,0 +1,14 @@
+import std.regex.{Regex};
+fn main() {
+    match Regex.compile("(?P<key>\\w+)=(?P<value>\\d+)") {
+        Ok(re) => {
+            for c in re.captures_all("a=1, b=22") {
+                match (c.name("key"), c.name("value")) {
+                    (Some(k), Some(v)) => println(f"{k.text} -> {v.text}"),
+                    _ => {}
+                }
+            }
+        }
+        Err(e) => eprintln(f"bad pattern: {e.message}"),
+    }
+}

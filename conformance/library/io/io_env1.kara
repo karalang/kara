@@ -1,0 +1,46 @@
+fn main() {
+    let a = env.args();
+    println(f"argc={a.len()}");
+    let mut i = 1;
+    while i < a.len() { println(f"arg {i}: {q(a[i])}"); i = i + 1; }
+    match env.var("KARA_CONF_UNSET") { Ok(s) => println(f"?{s}"), Err(e) => println(f"unset: {e}") }
+    match env.var("KARA_CONF_BAD") { Ok(s) => println(f"bad: ok {q(s)}"), Err(e) => println(f"bad: {e}") }
+    match env.var("KARA_CONF_EMPTY") { Ok(s) => println(f"empty: ok {q(s)}"), Err(e) => println(f"empty: {e}") }
+    match env.var("") { Ok(s) => println(f"name empty: ok {q(s)}"), Err(e) => println(f"name empty: {e}") }
+    match env.var("A=B") { Ok(s) => println(f"name with =: ok {q(s)}"), Err(e) => println(f"name with =: {e}") }
+    env.set("KARA_CONF_SET", "v1 é");
+    match env.var("KARA_CONF_SET") { Ok(s) => println(f"set: {s}"), Err(e) => println(f"set: {e}") }
+    match Command.new("sh").args(["-c", "echo child sees $KARA_CONF_SET"]).output() {
+        Ok(o) => print(String.from_utf8(o.stdout).unwrap_or("".to_string())),
+        Err(e) => println(f"{e}"),
+    }
+    let e: IoError = IoError.from(VarError.NotPresent);
+    let e2: IoError = IoError.from(VarError.NotUnicode);
+    println(f"from: {e} / {e2}");
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

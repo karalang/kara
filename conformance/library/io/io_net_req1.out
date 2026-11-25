@@ -1,0 +1,6 @@
+GET url=/items?id=3&x=a%2Fb&flag path=/items q=[id=3;x=a/b;flag=;] h=[Accept=text/plain;Accept=b;] accept=text/plain body= bytes=0
+POST url=http://host/items?id=3 path=/items q=[id=3;] h=[] accept=- body=héllo bytes=6
+GET url=http://host path=/ q=[] h=[] accept=- body= bytes=0
+GET url=http://host?a=1 path=/ q=[a=1;] h=[] accept=- body= bytes=0
+GET url= path= q=[] h=[] accept=- body= bytes=0
+GET url=/p?a=1&a=2&b=+c path=/p q=[a=1;a=2;b= c;] h=[] accept=- body= bytes=0

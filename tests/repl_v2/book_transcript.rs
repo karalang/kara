@@ -157,7 +157,7 @@ fn repl_effects_lists_the_session_functions() {
         s.effects_report(),
         // `a + 1` can overflow, so `bump` panics: the report reads the typed
         // effect pass, as `karac query effects` does (B-2026-11-24-11).
-        "session effects: blocks, panics, reads(FileSystem)\n  bump: panics\n  read_config: blocks, panics, reads(FileSystem)\n"
+        "session effects: allocates(Heap), blocks, panics, reads(FileSystem)\n  bump: panics\n  read_config: allocates(Heap), blocks, panics, reads(FileSystem)\n"
     );
 }
 

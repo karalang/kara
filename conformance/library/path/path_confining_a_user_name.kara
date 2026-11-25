@@ -1,0 +1,11 @@
+import std.path.{join, is_absolute, components};
+fn inside(dir: Str, name: Str) -> Option[String] {
+    if is_absolute(name) { return None; }
+    for c in components(name) { if c == ".." { return None; } }
+    Some(join(dir, name))
+}
+fn main() {
+    for n in ["notes.txt", "/etc/passwd", "../../x", "sub/./f", "a/../b"] {
+        println(inside("data", n) ?? "refused");
+    }
+}

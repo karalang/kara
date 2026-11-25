@@ -1,0 +1,1 @@
+`stdin.lines()` reads the process's own stdin, so it cannot run under a `Stdin` override (core-semantics §14.10); read with `stdin.read_line()` in a loop instead

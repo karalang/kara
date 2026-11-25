@@ -1,0 +1,15 @@
+import std.process.{Command, Stdio};
+fn main() {
+    let c = Command.new("sleep").arg("5").spawn().unwrap();
+    println(c.id() > 0);
+    println(c.try_wait().unwrap().is_none());
+    c.kill().unwrap();
+    let s = c.wait().unwrap();
+    println(f"{s.success()} {s.code().is_none()} {s.signal() ?? -1}");
+    let again = c.wait().unwrap();
+    println(again.signal() ?? -1);
+    let t = Command.new("true").spawn().unwrap();
+    let st = t.wait().unwrap();
+    let copy = st;
+    println(f"{st.success()} {copy.code() ?? -1}");
+}

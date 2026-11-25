@@ -1,0 +1,13 @@
+import std.path.{parent, file_name, extension, join, normalize};
+fn main() {
+    let p = "logs/2026/app.log";
+    let dir = parent(p) ?? "";
+    let ext = extension(p);
+    let out = join(dir, "app.1.log");
+    let clean = normalize("logs/./2026/../x");
+    println(dir);
+    println(ext ?? "none");
+    println(out);
+    println(clean);
+    println(file_name(p) ?? "none");
+}

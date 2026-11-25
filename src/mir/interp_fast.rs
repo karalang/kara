@@ -1579,7 +1579,7 @@ impl<'a> Interp<'a> {
             vals.push(v);
             arg_tys.push(t);
         }
-        let v = self.native(name, vals, &arg_tys, ret_ty)?;
+        let v = self.native_scoped(name, vals, &arg_tys, ret_ty)?;
         let v = self.native_result(name, v);
         let ret = self.inline_str(v, ret_ty)?;
         self.finish_call(body, destination, target, ret, name)

@@ -2964,6 +2964,48 @@ impl<'a> EffectChecker<'a> {
             seed("FileSystem.copy", &[r("FileSystem"), w("FileSystem")]);
         }
 
+        // The I/O natives that return a new `String` or `Vec`, or grow the
+        // one they are given, allocate, so they carry `allocates(Heap)` beside
+        // their resource effects: without it `#[no_effect(allocates(Heap))]`
+        // accepted a function that reads a file (B-2026-11-25-33). design.md § Default-permitted
+        // effects: `allocates(Heap)` is inferred and shown, never required.
+        {
+            let alloc_heap = Effect {
+                verb: EffectVerbKind::Allocates,
+                resource: "Heap".to_string(),
+            };
+            for name in [
+                "Stdin.read_line",
+                "Stdin.read_to_string",
+                "Env.args",
+                "Env.var",
+                "FileSystem.read_to_string",
+                "FileSystem.read_lines",
+                "FileSystem.read_dir",
+                "FileSystem.read_bytes",
+                "FileSystem.read_link",
+                "Stdin.lines",
+                "BufReader.read_line",
+                "BufReader.read_to_string",
+                "BufReader.lines",
+                "BufReader[TcpStream].read_line",
+                "BufReader[TcpStream].read_to_string",
+                "BufReader[TcpStream].lines",
+                "TcpStream.read_to_end",
+                "TlsStream.read_to_end",
+                "WebSocket.recv_text",
+                "WebSocket.recv_binary",
+                "Client.get",
+                "Client.post",
+                "RequestBuilder.send",
+            ] {
+                let key = self.interner.intern(name);
+                if let Some(set) = self.inferred_effects.get_mut(&key) {
+                    set.add(alloc_heap.clone(), EffectOrigin::Direct(builtin_span));
+                }
+            }
+        }
+
         // `blocks` on every operation that may park the OS thread
         // (B-2026-10-21-62, B-2026-10-21-70). design.md § `blocks`: "In v1 all
         // I/O blocks the thread it runs on", and unlike `allocates(Heap)` and

@@ -1,0 +1,10 @@
+import std.regex.{Regex, Match};
+fn comp() -> bool { Regex.compile("a+").is_ok() }
+fn esc() -> String { Regex.escape("a.b") }
+fn test(re: ref Regex, s: Str) -> bool { re.is_match(s) }
+fn first(re: ref Regex, s: Str) -> i64 { match re.find(s) { Some(m) => m.start, None => -1 } }
+fn swap(re: ref Regex, s: Str) -> String { re.replace_all(s, "-") }
+fn main() {
+    let re = Regex.compile("a+").unwrap();
+    println(f"{comp()} {esc()} {test(re, "caat")} {first(re, "caat")} {swap(re, "caat")}");
+}

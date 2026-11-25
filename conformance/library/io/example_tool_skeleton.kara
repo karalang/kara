@@ -1,0 +1,10 @@
+fn main() -> Result[(), IoError] {
+    let args = env.args();
+    if args.len() < 2 {
+        eprintln("usage: tool <path>");
+        return Err(IoError.Other("missing argument"));
+    }
+    let content = fs.read_to_string(args[1])?;
+    println(content);
+    Ok(())
+}

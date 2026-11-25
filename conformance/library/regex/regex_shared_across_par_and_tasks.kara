@@ -1,0 +1,10 @@
+import std.regex.{Regex};
+fn count(re: ref Regex, s: Str) -> i64 { re.find_all(s).len() }
+fn main() {
+    let re = Regex.compile("[0-9]+").unwrap();
+    let (a, b) = par { count(re, "1 22 333"), count(re, "x9y") };
+    println(f"{a} {b}");
+    let g = TaskGroup.new();
+    let h = g.spawn(|| count(re, "4 5"));
+    println(h.join());
+}

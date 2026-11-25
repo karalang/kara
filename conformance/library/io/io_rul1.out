@@ -1,0 +1,15 @@
+same path: err[invalid input]
+through link: err[invalid input]
+link to file: err[invalid input]
+intact: keep me
+other: ok 7
+over existing: ok 7
+/usr//lib/./x -> [/usr//lib]
+../x/./y -> [../x]
+a/./b -> [a]
+/./x -> [/]
+./x -> [.]
+a/././b/ -> [a]
+a/b/c -> [a/b]
+/a -> [/]
+a -> []

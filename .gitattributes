@@ -4,3 +4,8 @@
 # checkout with core.autocrlf=true would rewrite them to CRLF and
 # break the comparison against LF-emitting code.
 * text=auto eol=lf
+
+# A conformance cell's stdin and expected output are bytes the program reads
+# or must print exactly, carriage returns included (io.md's `\r\n` cells).
+conformance/**/*.stdin -text
+conformance/**/*.out -text

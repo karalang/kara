@@ -1,0 +1,6 @@
+import std.path.{parent};
+fn dir_of_built() -> Str {
+    let s = "a/b".to_string();
+    parent(s) ?? ""
+}
+fn main() { println(dir_of_built()); }

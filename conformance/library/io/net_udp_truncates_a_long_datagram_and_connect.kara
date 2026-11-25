@@ -1,0 +1,16 @@
+import std.net.UdpSocket;
+fn main() {
+    let a = UdpSocket.bind("127.0.0.1:0").unwrap();
+    let b = UdpSocket.bind("127.0.0.1:0").unwrap();
+    a.send_to("0123456789".bytes(), b.local_addr().unwrap()).unwrap();
+    let mut small = [0u8; 4];
+    let (n, from) = b.recv_from(mut small).unwrap();
+    println(f"{n} {from == a.local_addr().unwrap()} {small[3]}");
+    b.connect(a.local_addr().unwrap()).unwrap();
+    b.send("hi".bytes()).unwrap();
+    let mut buf = [0u8; 8];
+    let (m, _) = a.recv_from(mut buf).unwrap();
+    println(m);
+    a.send_to("back".bytes(), b.local_addr().unwrap()).unwrap();
+    println(b.recv(mut buf).unwrap());
+}

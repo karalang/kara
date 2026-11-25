@@ -1,0 +1,8 @@
+// stdin.lines() under a Stdin override is refused (compile error expected).
+struct In {}
+impl StdinProvider for In {}
+fn main() {
+    with_provider[Stdin](In {}, || {
+        for l in stdin.lines() { match l { Ok(s) => println(s), Err(_) => {} }; }
+    });
+}

@@ -1,0 +1,1 @@
+error: Stdio.from_file of a file a FileSystem provider opened; a child process can only use a file the OS opened

@@ -1,0 +1,14 @@
+import std.net.{TcpListener, TcpStream, UdpSocket, NetError};
+fn kind(e: NetError) -> Str {
+    match e {
+        NetError.InvalidInput => "InvalidInput",
+        NetError.TimedOut => "TimedOut",
+        NetError.UnexpectedEof => "UnexpectedEof",
+        _ => "other",
+    }
+}
+fn main() {
+    println(TcpListener.bind("nonsense").is_err());
+    match TcpStream.connect("not an address") { Ok(_) => println("?"), Err(e) => println(kind(e)) }
+    match UdpSocket.bind("1.2.3.4") { Ok(_) => println("?"), Err(e) => println(kind(e)) }
+}

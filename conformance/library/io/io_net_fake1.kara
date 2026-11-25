@@ -1,0 +1,92 @@
+struct Fake {
+    log: Vec[String],
+    next: i64,
+    served: i64,
+}
+
+impl NetworkProvider for Fake {
+    fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
+        let mut hs = "".to_string();
+        for (k, v) in req.headers() { hs.push_str(f"{k}={v};"); }
+        println(f"send {req.method()} {req.url()} [{hs}] {req.body()}");
+        Ok(Response { status: 503, body: "fake".to_string() })
+    }
+    fn connect(mut ref self, addr: Str) -> Result[i64, NetError] {
+        self.next += 1;
+        println(f"connect {addr} -> {self.next}");
+        Ok(self.next)
+    }
+    fn bind(mut ref self, addr: Str) -> Result[i64, NetError] {
+        println(f"bind {addr}");
+        Ok(100)
+    }
+    fn accept(mut ref self, l: i64) -> Result[i64, NetError] {
+        self.next += 1;
+        println(f"accept {l} -> {self.next}");
+        Ok(self.next)
+    }
+    fn read_stream(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, NetError] {
+        if self.served >= 3 { return Ok(0); }
+        self.served += 1;
+        buf[0] = 64u8 + self.served as u8;
+        Ok(1)
+    }
+    fn write_stream(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, NetError] {
+        println(f"write {h} {buf.len()}");
+        Ok(buf.len())
+    }
+    fn shutdown(mut ref self, h: i64) -> Result[(), NetError] {
+        println(f"shutdown {h}");
+        Ok(())
+    }
+    fn close(mut ref self, h: i64) {
+        println(f"close {h}");
+    }
+}
+
+fn kind(e: NetError) -> String {
+    match e {
+        NetError.Unsupported => "unsupported".to_string(),
+        NetError.ProviderUnavailable => "provider unavailable".to_string(),
+        NetError.InvalidInput => "invalid input".to_string(),
+        NetError.UnexpectedEof => "unexpected eof".to_string(),
+        _ => "other".to_string(),
+    }
+}
+
+fn main() {
+    let fake = Fake { log: Vec.new(), next: 0, served: 0 };
+    let kept = providers { Network => fake } in {
+        let c = Client.new();
+        match c.request("PUT".to_string(), "http://x/y".to_string()).header("A".to_string(), "1".to_string()).body("b".to_string()).timeout(5).send() {
+            Ok(r) => println(f"send: {r.status} {r.body} {r.header("A").is_none()}"),
+            Err(e) => println(f"send err: {e.message()}"),
+        }
+        match c.get("http://x/z".to_string()) {
+            Ok(r) => println(f"get: {r.status}"),
+            Err(e) => println(f"get err: {e.message()}"),
+        }
+        let l = TcpListener.bind("1.2.3.4:5").unwrap();
+        let s = l.accept().unwrap();
+        let mut two = [0u8; 2];
+        s.read_exact(mut two).unwrap();
+        println(f"read_exact {two[0]} {two[1]}");
+        let mut three = [0u8; 3];
+        match s.read_exact(mut three) {
+            Ok(_) => println("three ok"),
+            Err(e) => println(f"three: {kind(e)}"),
+        }
+        match s.try_clone() { Ok(_) => println("clone ok"), Err(e) => println(f"clone: {kind(e)}") }
+        match l.local_addr() { Ok(_) => println("addr ok"), Err(e) => println(f"addr: {kind(e)}") }
+        match s.set_read_timeout(Some(10)) { Ok(_) => println("timeout ok"), Err(e) => println(f"timeout: {kind(e)}") }
+        match s.set_read_timeout(Some(0)) { Ok(_) => println("timeout0 ok"), Err(e) => println(f"timeout0: {kind(e)}") }
+        s.write_all("hey".bytes()).unwrap();
+        s.shutdown_write().unwrap();
+        TcpStream.connect("9.9.9.9:1").unwrap()
+    };
+    match kept.write("x".bytes()) {
+        Ok(_) => println("after: write ok"),
+        Err(e) => println(f"after: {kind(e)}"),
+    }
+    drop(kept);
+}

@@ -1,0 +1,6 @@
+import std.net.UdpSocket;
+fn main() {
+    let a = UdpSocket.bind("127.0.0.1:0").unwrap();
+    let mut b = [0u8; 2];
+    a.read_exact(mut b).unwrap();
+}

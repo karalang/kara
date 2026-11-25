@@ -1,0 +1,21 @@
+struct MemFs { files: Map[String, String] }
+impl FileSystemProvider for MemFs {
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        match self.files.get(path) { Some(s) => Ok(s.clone()), None => Err(IoError.NotFound) }
+    }
+    fn write(mut ref self, path: Str, content: Str) -> Result[(), IoError] {
+        self.files.insert(path.to_string(), content.to_string());
+        Ok(())
+    }
+    fn exists(ref self, path: Str) -> bool { self.files.contains_key(path) }
+}
+fn main() {
+    let fake = MemFs { files: Map.new() };
+    with_provider[FileSystem](fake, || {
+        fs.write("/etc/kara-conf-fake", "in memory").unwrap();
+        println(fs.read_to_string("/etc/kara-conf-fake").unwrap());
+        println(fs.exists("/etc/kara-conf-fake"));
+        println(fs.read_to_string("/nope").is_err());
+    });
+    println(fs.exists("/etc/kara-conf-fake"));
+}

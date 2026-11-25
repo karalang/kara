@@ -1,0 +1,25 @@
+import std.path.*;
+
+fn show(o: Option[Str]) -> String {
+    match o { Some(s) => f"[{s}]", None => "None" }
+}
+
+fn main() {
+    let ps = ["", "/", "a", "/a", "a/", "a//", "a/b/c.txt", "/usr//lib/./x", "./x", "./x/y", ".", "..", "../x", "a/..", "a/.", "a/./b", "../x/./y", "//a//b//", "c.tar.gz", "f.", ".bashrc", "..rc", "a/.hidden.tar", "a/b.", "dir.d/file", "/..", "/../a", "a/../..", "x/y/../../..", "é/ü.ß", ".../x", "a/.../b"];
+    for p in ps.iter() {
+        let cs = components(*p);
+        let mut c = "";
+        for x in cs.iter() { c = c + "<" + x.to_string() + ">"; }
+        println(f"{p}|{show(parent(*p))}|{show(file_name(*p))}|{show(extension(*p))}|{show(stem(*p))}|{is_absolute(*p)}|{c}|{normalize(*p)}");
+    }
+    println(join("data", "/etc/passwd"));
+    println(join("data", "../../x"));
+    println(join("a", "b"));
+    println(join("a/", "b"));
+    println(join("a//", "/b"));
+    println(join("", "b"));
+    println(join("a", ""));
+    println(join("/", "x"));
+    println(join("", ""));
+    println(join("a", "./b"));
+}

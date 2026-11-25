@@ -1,0 +1,10 @@
+has port: true
+timeout 0: invalid input
+read: timed out
+head 97 98 99
+empty ok
+rest 6 defghi
+more: unexpected eof
+after end 0
+connect closed: refused
+junk: invalid input

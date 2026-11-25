@@ -1,0 +1,6 @@
+fn main() {
+    let f = File.create("one.txt").unwrap();
+    let g = File.create("two.txt").unwrap();
+    let (a, b) = par { f.write("a".bytes()), g.write("b".bytes()) };
+    println(f"{a.is_ok()} {b.is_ok()}");
+}

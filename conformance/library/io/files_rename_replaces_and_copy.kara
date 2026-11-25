@@ -1,0 +1,18 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    fs.write("tmp", "new").unwrap();
+    fs.write("target", "old").unwrap();
+    println(r(fs.rename("tmp", "target")));
+    println(fs.read_to_string("target").unwrap());
+    println(fs.exists("tmp"));
+    println(fs.copy("target", "copy").unwrap());
+    println(fs.read_to_string("copy").unwrap());
+    println(r(fs.copy("target", "target")));
+    println(fs.read_to_string("target").unwrap());
+    fs.symlink("target", "ln").unwrap();
+    println(r(fs.copy("target", "ln")));
+    println(fs.read_to_string("target").unwrap());
+}

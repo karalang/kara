@@ -1,0 +1,15 @@
+fn r[T](x: Result[T, IoError]) -> String {
+    match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
+}
+
+fn main() {
+    fs.write("p.txt", "x").unwrap();
+    println(r(fs.set_permissions("p.txt", 0o640)));
+    println(fs.metadata("p.txt").unwrap().mode == 0o640);
+    println(r(fs.set_permissions("p.txt", 0o10000)));
+    println(r(fs.set_permissions("p.txt", -1)));
+    println(r(fs.set_modified("p.txt", 86400000)));
+    println(fs.metadata("p.txt").unwrap().modified_ms);
+    println(r(fs.set_modified("p.txt", -1000)));
+    println(fs.metadata("p.txt").unwrap().modified_ms);
+}
