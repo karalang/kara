@@ -1,0 +1,17 @@
+import std.hash.Identity;
+
+shared struct Node { name: String }
+impl Drop for Node {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+fn main() {
+    let mut seen: Set[Identity[Node]] = Set.new();
+    {
+        let n = Node { name: "n" };
+        seen.insert(Identity.of(n));
+        println("handle gone");
+    }
+    println(f"seen {seen.len()}");
+    seen.clear();
+    println("end");
+}

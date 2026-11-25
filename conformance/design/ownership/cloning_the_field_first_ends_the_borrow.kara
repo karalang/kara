@@ -1,0 +1,14 @@
+shared struct Inbox {
+    mut items: Vec[String],
+}
+fn requeue(inbox: Inbox) {
+    let again: Vec[String] = inbox.items.clone();
+    for x in again.into_iter() {
+        inbox.items.push(x);
+    }
+}
+fn main() {
+    let i = Inbox { items: ["a", "b"] };
+    requeue(i);
+    println(f"{i.items}");
+}

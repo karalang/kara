@@ -1,0 +1,5 @@
+drop b
+after let _
+end
+drop c
+drop a

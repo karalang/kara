@@ -1,0 +1,2 @@
+borrow_projection_copy
+cannot move 'name': it borrows its value

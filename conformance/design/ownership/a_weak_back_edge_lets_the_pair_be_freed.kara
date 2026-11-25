@@ -1,0 +1,27 @@
+shared struct Parent {
+    name: String,
+    mut children: Vec[Child],
+}
+shared struct Child {
+    name: String,
+    mut parent: weak Parent,
+}
+impl Drop for Parent {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+impl Drop for Child {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+fn main() {
+    {
+        let p = Parent { name: "p", children: Vec.new() };
+        let c = Child { name: "c", parent: None };
+        c.parent = p;
+        p.children.push(c);
+        match c.parent {
+            Some(q) => println(f"parent {q.name}"),
+            None => println("none"),
+        }
+    }
+    println("end");
+}

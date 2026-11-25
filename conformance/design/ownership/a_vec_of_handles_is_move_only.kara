@@ -1,0 +1,7 @@
+shared struct Node { val: i64 }
+fn main() {
+    let v = [Node { val: 1 }];
+    let w = v;
+    println(w.len());
+    println(v.len());
+}

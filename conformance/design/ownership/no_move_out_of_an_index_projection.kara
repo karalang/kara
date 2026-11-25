@@ -1,0 +1,5 @@
+fn main() {
+    let v = [String.from("a"), String.from("b")];
+    let s = v[0];
+    println(s);
+}

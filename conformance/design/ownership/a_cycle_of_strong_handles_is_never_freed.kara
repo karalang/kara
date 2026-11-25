@@ -1,0 +1,15 @@
+shared struct P {
+    name: String,
+    mut other: Option[P],
+}
+impl Drop for P {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+fn main() {
+    {
+        let a = P { name: "a", other: None };
+        let b = P { name: "b", other: Some(a) };
+        a.other = Some(b);
+    }
+    println("end");
+}

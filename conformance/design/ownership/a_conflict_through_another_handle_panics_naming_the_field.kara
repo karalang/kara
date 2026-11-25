@@ -1,0 +1,16 @@
+shared struct Inbox {
+    mut items: Vec[String],
+}
+fn copy_items(from: Inbox, to: Inbox) {
+    for x in from.items {
+        to.items.push(x.clone());
+    }
+}
+fn main() {
+    let a = Inbox { items: ["a"] };
+    let b = Inbox { items: Vec.new() };
+    copy_items(a, b);
+    println(f"{b.items}");
+    copy_items(a, a);
+    println("unreached");
+}

@@ -1,0 +1,6 @@
+shared struct Node { name: String }
+fn main() {
+    let n = Node { name: String.from("a") };
+    let s = n.name;
+    println(s);
+}

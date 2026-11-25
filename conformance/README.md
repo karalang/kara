@@ -20,7 +20,7 @@ compiled. Both must give the expected output.
 | `tls_client.py` | io.md HTTP client, HTTPS | A local test PKI (expired, not-yet-valid, wrong-host, CN-only, wildcard and IP-SAN, self-signed, untrusted-root, incomplete, bad-signature, non-CA issuer, clientAuth-only, RSA-1024 and SHA-1 certificates) against `Client.get` through a CONNECT proxy: each verdict against Python `ssl`, each refusal's message in words; SNI and ALPN off the ClientHello, h2 and HTTP/1.1, TLS 1.1 refused, `close_notify` against truncation, `KARAC_HTTP_EXTRA_CA` errors |
 | `overflow.py` | design.md §5 Integer overflow, Division, remainder and shifts | Every integer type: the edges that must not trap, computed from the page's rules, and each trap the page lists exiting 101 with its message |
 | `layout.py` | design.md §15 #[repr], extern "C" | Random `#[repr(C)]` structs over every type that crosses (integers to 128 bits, floats, `bool`, `char`, pointers, `#[repr]` enums, arrays, nested structs): `size_of` / `align_of` against the C compiler, each struct to C by pointer and by value and back by value and through a pointer, scalar calls past the argument registers, enums as their C integer; on interp, build and `karac run` |
-| `cases.py <dir>...` | design.md §3, §6 and §12 (`design/lexical`, `design/expressions`, `design/effects`), log.md, secret.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
+| `cases.py <dir>...` | design.md §3, §6, §11 and §12 (`design/lexical`, `design/expressions`, `design/ownership`, `design/effects`), log.md, secret.md, pool.md, concurrency.md, the random and env half of time-random-env.md, and the examples on encoding.md and crypto.md | The page, as fixed cases (below) |
 
 A fixed case is `<name>.kara` with files beside it, each written from the page:
 
@@ -57,7 +57,7 @@ python3 conformance/literals.py --seed 1
 python3 conformance/tls_client.py
 python3 conformance/cases.py conformance/log conformance/secret conformance/pool conformance/encoding conformance/crypto \
     conformance/concurrency conformance/random_env conformance/data \
-    conformance/design/lexical conformance/design/expressions conformance/design/effects
+    conformance/design/lexical conformance/design/expressions conformance/design/ownership conformance/design/effects
 ```
 
 `CONF_LANES=interp,build,asan,tsan` adds the AddressSanitizer and

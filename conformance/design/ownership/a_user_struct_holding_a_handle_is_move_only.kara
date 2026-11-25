@@ -1,0 +1,8 @@
+shared struct Node { val: i64 }
+struct Wrap { n: Node }
+fn main() {
+    let a = Wrap { n: Node { val: 1 } };
+    let b = a;
+    println(b.n.val);
+    println(a.n.val);
+}

@@ -1,0 +1,14 @@
+shared struct Rec { name: String, mut n: i64 }
+fn keep(s: own String) -> String { s }
+fn main() {
+    let r = Rec { name: "a", n: 1 };
+    match r {
+        Rec { name, .. } => println(keep(name.clone())),
+    }
+    let h = match Some(r) {
+        Some(x) => x,
+        None => Rec { name: "z", n: 0 },
+    };
+    h.n = 7;
+    println(f"{r.n} {h.name} {r.ref_eq(h)}");
+}

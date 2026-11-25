@@ -1,0 +1,9 @@
+fn main() {
+    let a = String.from("x");
+    let b = a.clone();
+    println(f"{a} {b}");
+    let v = [1, 2, 3];
+    let mut w = v.clone();
+    w.push(4);
+    println(f"{v} {w}");
+}

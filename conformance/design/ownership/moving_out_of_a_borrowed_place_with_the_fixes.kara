@@ -1,0 +1,19 @@
+struct Guard { name: String, slot: Option[String] }
+impl Drop for Guard {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+fn main() {
+    let mut v = [String.from("a"), String.from("b"), String.from("c")];
+    let c = v[0].clone();
+    let t = mem.take(mut v[1]);
+    let r = mem.replace(mut v[2], String.from("z"));
+    println(f"{c} {t} {r} {v}");
+    let mut x = String.from("p");
+    let mut y = String.from("q");
+    mem.swap(mut x, mut y);
+    println(f"{x} {y}");
+    let mut g = Guard { name: String.from("g"), slot: Some(String.from("s")) };
+    let s = g.slot.take();
+    let n = mem.take(mut g.name);
+    println(f"{s} {n} {g.slot}");
+}

@@ -1,0 +1,7 @@
+struct Box1 { s: String }
+fn main() {
+    let b = Box1 { s: String.from("x") };
+    let r = ref b;
+    let t = r.s;
+    println(t);
+}

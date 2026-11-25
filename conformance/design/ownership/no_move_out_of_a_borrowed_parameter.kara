@@ -1,0 +1,7 @@
+fn take(s: String) -> String {
+    s
+}
+fn main() {
+    let a = String.from("x");
+    println(take(a));
+}

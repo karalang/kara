@@ -1,0 +1,11 @@
+struct Loud { n: String }
+impl Drop for Loud {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn main() {
+    let a = Loud { n: "a" };
+    println("before");
+    let v: Vec[i64] = Vec.new();
+    println(v[3]);
+    println(a.n);
+}

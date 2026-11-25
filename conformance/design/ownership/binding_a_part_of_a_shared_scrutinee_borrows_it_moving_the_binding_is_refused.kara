@@ -1,0 +1,8 @@
+shared struct Rec { name: String }
+fn keep(s: own String) -> String { s }
+fn main() {
+    let r = Rec { name: "a" };
+    let Rec { name } = r;
+    let s = keep(name);
+    println(s);
+}

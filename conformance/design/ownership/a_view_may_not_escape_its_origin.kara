@@ -1,0 +1,7 @@
+fn first_two() -> Slice[i64] {
+    let v = [1, 2, 3];
+    v[0..2]
+}
+fn main() {
+    println(first_two().len());
+}

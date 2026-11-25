@@ -1,0 +1,2 @@
+E0516
+while the `for` loop over `inbox.items` borrows it

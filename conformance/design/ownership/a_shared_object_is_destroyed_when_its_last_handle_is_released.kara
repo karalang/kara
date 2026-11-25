@@ -1,0 +1,17 @@
+shared struct Node { name: String }
+impl Drop for Node {
+    fn drop(mut ref self) { println(f"drop {self.name}"); }
+}
+struct Holder { n: Node }
+fn main() {
+    let a = Node { name: "n" };
+    let b = a;
+    {
+        let h = Holder { n: b };
+        println("holder made");
+    }
+    println("holder dropped");
+    println(f"{make_temp(a).name}");
+    println("temp dropped");
+}
+fn make_temp(n: Node) -> Node { n }

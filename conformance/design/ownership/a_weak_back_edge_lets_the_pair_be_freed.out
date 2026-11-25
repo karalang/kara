@@ -1,0 +1,4 @@
+parent p
+drop p
+drop c
+end

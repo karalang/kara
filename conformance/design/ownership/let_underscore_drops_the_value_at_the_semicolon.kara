@@ -1,0 +1,12 @@
+struct Loud { n: String }
+impl Drop for Loud {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn make(n: own String) -> Loud { Loud { n: n } }
+fn main() {
+    let a = make("a");
+    let _ = make("b");
+    println("after let _");
+    let _keep = make("c");
+    println("end");
+}

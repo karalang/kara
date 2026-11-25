@@ -1,0 +1,28 @@
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+fn remove_next(cur: ListNode) {
+    match cur.next {
+        Some(nxt) => { cur.next = nxt.next; }
+        None => {}
+    }
+}
+shared struct Counter { mut n: i64 }
+fn main() {
+    let c = ListNode { val: 3, next: None };
+    let b = ListNode { val: 2, next: Some(c) };
+    let a = ListNode { val: 1, next: Some(b) };
+    remove_next(a);
+    let mut out = "";
+    let mut cur = Some(a);
+    while let Some(n) = cur {
+        out = f"{out}{n.val} ";
+        cur = n.next;
+    }
+    println(out);
+    let k = Counter { n: 1 };
+    if let 1 = k.n { k.n = 5; }
+    while let Some(n) = a.next { a.next = n.next; }
+    println(f"{k.n} {a.next.is_none()}");
+}

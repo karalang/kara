@@ -1,0 +1,10 @@
+struct Open {}
+struct Closed {}
+struct Conn[S] { id: i64 }
+fn connect(c: own Conn[Closed]) -> Conn[Open] { Conn { id: c.id } }
+fn main() {
+    let c: Conn[Closed] = Conn { id: 1 };
+    let o = connect(c);
+    let o2 = connect(c);
+    println(o.id + o2.id);
+}

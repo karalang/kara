@@ -1,0 +1,9 @@
+shared struct Inbox {
+    mut items: Vec[String],
+}
+fn main() {
+    let i = Inbox { items: ["a"] };
+    let r = ref i.items;
+    i.items.push("b");
+    println(r.len());
+}

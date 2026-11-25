@@ -1,0 +1,9 @@
+inner end
+drop c
+temp 1
+drop t
+after temp
+main end
+drop d
+drop b
+drop a
