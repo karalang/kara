@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 768 |
+| diagnostics | 769 |
 | false-positive | 384 |
 | missing-feature | 257 |
 | perf | 204 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 924 |
 | mir | 340 |
 | mir-llvm | 330 |
-| cli | 315 |
+| cli | 316 |
 | parser | 162 |
 | ownership | 138 |
 | runtime | 112 |
@@ -116,7 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-19 | 2026-11-25 | typecheck+cli | low | `lossless_cast` misses a widening cast of a `ref` operand in a binary operation or compound assignment: `total += x as i64` and `total + x as i64`, with `x` the `ref i32` that `target.iter()` yields and `total: i64`, pass silently, while `total += n as i64` with `n: i32` and `let z: i64 = x as i64` are linted and `total += x` checks and runs | — |
 | B-2026-11-25-20 | 2026-11-25 | typecheck | low | `at = parent[at]`, with `let mut at = start;` an `i32` from `for start in 0..n` (`n: i32`) and `parent: Vec[i64]`, is refused with E0200 'Write an explicit `as i32`' at the `i64` value: the binding took its type from its first value, and the help names only the narrowing cast, not the binding's type (`let mut at: i64 = start;`), which keeps every value | — |
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
-| B-2026-11-25-35 | 2026-11-25 | effect | medium | A `pub fn` over `f: ref File` cannot declare io.md's `writes(f)`: E0400 asks for `writes(FileSystem)`; `karac query effects` shows the class, and a `TcpStream` read is charged `sends(Network)` beside `receives(Network)` | — |
 | B-2026-11-25-38 | 2026-11-25 | typecheck | low | A program's own `enum Option` or `enum Result` (or `struct Option`) draws no `prelude_shadow` warning, while its own `Vec` or `Map` does; design.md §4 says a lint flags a declaration that shadows a prelude name and book ch05 says the compiler warns for `Option` | — |
 | B-2026-11-25-39 | 2026-11-25 | mir | high | An escaping closure that reads a field path two deep (`|| o.i.t.len()` pushed into a `Vec[Fn() -> i64]`) passes `karac check`, which moves only `o.i.t`, but every backend then refuses the later read of the sibling `o.i.u` with MIR's internal 'move check main: use of _1.0.1, which may have been moved or never initialized'; one level deep (`o.t` / `o.u`) runs | — |
 | B-2026-11-25-40 | 2026-11-25 | typecheck | medium | A UFCS call of a built-in type's method is refused 'no associated function' (E0236): `i64.abs(-3)`, `f64.sqrt(4.0)`, `i64.pow(2, 10)`, `u8.is_ascii_digit(49u8)`, `char.is_alphabetic('x')`, `Vec.len(v)`, and `Vec.len` as a value; `String.len(s)` and user types' `P.get(p)` work, and `let f = i64.abs; f(-4)` (the value form, 3e78d89862) runs | — |
@@ -138,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-56 | 2026-11-25 | interp | medium | `karac run --interp` stops with `error[mir]: run: in main#resume ...: _3: String still owns a value at return; a drop is missing` (exit 3) when a program waits (accept, recv) inside an endless loop after its last use of an owned local; `karac run` and `karac build` serve | — |
 | B-2026-11-25-57 | 2026-11-25 | other | low | The browser playground crate (`playground/`, karac-playground) no longer builds for `wasm32-unknown-unknown`: about 45 errors, so examples/cartographer's studio.sh (a wasm-pack build of it) fails | — |
 | B-2026-11-25-58 | 2026-11-25 | cli | low | `karac query ownership` gives a derivation reason for a mode it does not report: tangle's `eval` reports `scope` as `ref` with the reason "`scope` is moved here, so the body takes it"; `Editor.set` reports `cell` as `own` with "`cell` is written here, so the body needs `mut ref`" | — |
+| B-2026-11-25-59 | 2026-11-25 | cli | low | `karac query effects` shows a private function's parameter-rooted effect as its class alone (`sends(Channel)` for `fn inner(tx: ref Sender[i64]) { tx.send(2) }`): `"roots"` comes only from a clause | — |
 
 ### Relocated
 
@@ -2325,6 +2325,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-32 | interp | medium | The interpreter stopped with `expected a sequence, found Agg([..])` when a fixed `Array[u8, N]` reached a library native by value (`f.write(b"hello")… | 1dee859327 |
 | B-2026-11-25-33 | effect | medium | I/O natives that return a new heap value are not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts a function that calls `fs.read_to… | 1dee859327 |
 | B-2026-11-25-34 | interp | low | `Stdio.from_file` of a file a `FileSystem` fake opened stopped the interpreted program with an internal `error[mir]: run:` and exit 3; the build prin… | 1dee859327 |
+| B-2026-11-25-35 | effect | medium | A `pub fn` over `f: ref File` cannot declare io.md's `writes(f)`: E0400 asks for `writes(FileSystem)`; `karac query effects` shows the class, and a `… | 0795824a4f |
 | B-2026-11-25-36 | typecheck+mir | medium | `min(1.5, 2.5)`, or `let x = 0.5; min(x, 2.5)`, the free `min` / `max` over float literals only, passes `karac check` and then stops __mir-run with '… | 46f8e5961a |
 | B-2026-11-25-37 | runtime | low | A `Json` read through `Json.deserialize` kept a repeated key twice: `{"id":7,"x":1,"id":8}` in a `data: Json` field became a three-entry `Json.Object… | 93508495cd |
 
