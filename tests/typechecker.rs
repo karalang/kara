@@ -48094,10 +48094,10 @@ fn shadowing_a_prelude_type_name_warns_and_is_suppressible() {
     // ("the language does not reserve them"). What it buys is a signal at the
     // declaration for the name-capture class behind B-2026-08-02-13,
     // B-2026-08-15-12 and B-2026-08-27-11.
-    let src = "struct F64 { x: i64 }
+    let src = "struct Entry { x: i64 }
         enum Ordering2 { A, B }
         struct Map { y: i64 }
-        fn main() { println(f\"{F64 { x: 1 }.x}\"); }";
+        fn main() { println(f\"{Entry { x: 1 }.x}\"); }";
     let warns = type_warnings_of(src);
     let shadow: Vec<&String> = warns
         .iter()
@@ -48108,15 +48108,15 @@ fn shadowing_a_prelude_type_name_warns_and_is_suppressible() {
         2,
         "expected exactly the two PRELUDE names to warn (not `Ordering2`); got: {shadow:?}"
     );
-    assert!(shadow.iter().any(|m| m.contains("'F64'")));
+    assert!(shadow.iter().any(|m| m.contains("'Entry'")));
     assert!(shadow.iter().any(|m| m.contains("'Map'")));
 
     // Suppressible PER DECLARATION. Without the override frame the attribute
     // parses and is silently ignored, which is worse than no lint: the author
     // writes the documented suppression and still gets the warning.
     let allowed = "#[allow(prelude_shadow)]
-        struct F64 { x: i64 }
-        fn main() { println(f\"{F64 { x: 1 }.x}\"); }";
+        struct Entry { x: i64 }
+        fn main() { println(f\"{Entry { x: 1 }.x}\"); }";
     assert!(
         type_warnings_of(allowed)
             .iter()

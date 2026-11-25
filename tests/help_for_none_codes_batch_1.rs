@@ -93,7 +93,7 @@ fn undocumented_unsafe_names_the_comment_to_add() {
 fn prelude_shadow_names_the_rename_and_the_allow() {
     assert_help(
         "W0282",
-        "struct Span { x: i64 }\nfn main() { println(Span { x: 1 }.x); }\n",
+        "struct Entry { x: i64 }\nfn main() { println(Entry { x: 1 }.x); }\n",
         "#[allow(prelude_shadow)]",
     );
 }

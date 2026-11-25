@@ -54,11 +54,18 @@ fn allow_prelude_shadow_silences_a_renamed_option() {
     assert!(!out.contains("prelude_shadow"), "{out}");
 }
 
+/// library/README.md § The prelude is the list: a domain name the compiler
+/// keeps in scope (`Server`, `Channel`, `F64`, `Span`) is not on it.
 #[test]
 fn a_renamed_domain_type_is_not_a_prelude_shadow() {
     for (tag, src) in [
         ("client", "struct Client { id: i64 }"),
         ("io_error", "struct IoError { code: i64 }"),
+        ("server", "struct Server { port: i64 }"),
+        ("request", "struct Request { path: String }"),
+        ("channel", "struct Channel { id: i64 }"),
+        ("f64", "struct F64 { x: i64 }"),
+        ("span", "struct Span { x: i64 }"),
     ] {
         let out = check(tag, src);
         assert!(!out.contains("prelude_shadow"), "{tag}: {out}");

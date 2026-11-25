@@ -3,8 +3,10 @@
 //! Vec[(String, String)] }` to send headers." The servers serve that type
 //! through their built-in paths keyed on `Response`, so the documented
 //! shape (in any field order, with or without `headers`) draws no
-//! `prelude_shadow` warning saying those paths no longer apply; any other
-//! `Response` still does.
+//! `prelude_shadow` warning saying those paths no longer apply. Nor does any
+//! other `Response`: library/README.md § The prelude says an HTTP `Response`
+//! is a domain name, "never in the prelude", so it shadows nothing (review
+//! ruling 2026-11-25, with B-2026-11-25-38).
 
 use std::process::Command;
 
@@ -49,12 +51,12 @@ fn the_documented_response_shape_draws_no_prelude_shadow_warning() {
 }
 
 #[test]
-fn another_response_still_draws_the_warning() {
+fn another_response_draws_no_warning_either() {
     for (tag, fields) in [
         ("code", "code: i64, body: String"),
         ("extra", "status: i64, body: String, at: i64"),
     ] {
         let out = check(tag, fields);
-        assert!(out.contains("prelude_shadow"), "{tag}: {out}");
+        assert!(!out.contains("prelude_shadow"), "{tag}: {out}");
     }
 }

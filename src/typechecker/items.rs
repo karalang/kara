@@ -63,40 +63,6 @@ const DOCUMENTED_PRELUDE_TYPES: &[&str] = &[
     "Entry",
 ];
 
-/// A program's own `Response` in the shape io.md § HTTP server documents
-/// for sending headers, `struct Response { status: i64, body: String,
-/// headers: Vec[(String, String)] }` (or the library's own two fields): the
-/// servers' built-in paths keyed on `Response` are what serve it, so the
-/// `prelude_shadow` warning, which says they no longer apply, is wrong for
-/// it (B-2026-11-08-26).
-fn is_documented_response(s: &StructDef) -> bool {
-    if s.name != "Response" || s.generic_params.is_some() {
-        return false;
-    }
-    let fields: Vec<(&str, String)> = s
-        .fields
-        .iter()
-        .map(|f| {
-            let ty: String = crate::formatter::render_type_expr(&f.ty)
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect();
-            (f.name.as_str(), ty)
-        })
-        .collect();
-    let want = [
-        ("status", "i64"),
-        ("body", "String"),
-        ("headers", "Vec[(String,String)]"),
-    ];
-    let has = |name: &str| fields.iter().any(|(n, _)| *n == name);
-    has("status")
-        && has("body")
-        && fields
-            .iter()
-            .all(|(n, t)| want.iter().any(|(wn, wt)| n == wn && t == wt))
-}
-
 impl<'a> super::TypeChecker<'a> {
     /// `prelude_shadow` (B-2026-08-27-15) — warn when a user declaration takes
     /// a prelude type's name.
@@ -137,30 +103,19 @@ impl<'a> super::TypeChecker<'a> {
     ) {
         // A program's own `Option` reaches here renamed apart (`Optio_`, see
         // `rename_compiler_name_shadows`), so it is judged, and named, by the
-        // name it was written with (B-2026-11-25-38). Renamed apart, no
-        // built-in path claims it, so what is left to flag is shadowing a
-        // name library/README.md § The prelude lists; a program's own
-        // `Client` or `IoError` (domain names under `std.*`, "never in the
-        // prelude") stays silent, as it was.
-        let renamed = self
+        // name it was written with (B-2026-11-25-38).
+        let name = self
             .program
             .renamed_types
             .iter()
             .find(|(new, _)| new == name)
-            .map(|(_, old)| old.as_str());
-        if renamed.is_some_and(|old| !DOCUMENTED_PRELUDE_TYPES.contains(&old)) {
-            return;
-        }
-        let name = renamed.unwrap_or(name);
-        // An item of an imported library module (`std.regex`, `std.json`)
-        // is not in a program's scope until it imports it (B-2026-10-21-56).
-        if stdlib_origin
-            || self.compiling_stdlib
-            || !crate::prelude::PRELUDE_TYPES.contains(&name)
-            || crate::library_imports::is_import_required(name)
-            // A name v1's library does not have (B-2026-10-30-34).
-            || crate::prelude::REMOVED_LIBRARY_TYPES.contains(&name)
-        {
+            .map_or(name, |(_, old)| old.as_str());
+        // The prelude is the list library/README.md § The prelude gives, not
+        // every name the compiler keeps in scope: a program's own `Server`,
+        // `Response`, `Channel` or `F64` shadows no prelude type (domain
+        // names "are never in the prelude"), and io.md documents a program
+        // declaring its own `Response`.
+        if stdlib_origin || self.compiling_stdlib || !DOCUMENTED_PRELUDE_TYPES.contains(&name) {
             return;
         }
         self.lint_override_stack.push(lint_overrides.to_vec());
@@ -610,14 +565,7 @@ impl<'a> super::TypeChecker<'a> {
                 Item::ModuleBinding(b) => self.check_module_binding(b),
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
-                    if !is_documented_response(s) {
-                        self.warn_prelude_shadow(
-                            &s.name,
-                            s.stdlib_origin,
-                            s.span,
-                            &s.lint_overrides,
-                        );
-                    }
+                    self.warn_prelude_shadow(&s.name, s.stdlib_origin, s.span, &s.lint_overrides);
                     self.validate_all_bounds(&s.generic_params, &s.where_clause, &gp);
                     // Variance declarations (design.md § Variance):
                     // user-side `+`/`-` rejection, stdlib-side
