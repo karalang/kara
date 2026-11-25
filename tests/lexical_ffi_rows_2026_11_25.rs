@@ -99,3 +99,9 @@ fn from_utf8_takes_a_byte_string_by_value() {
 fn c_string_literal_ends_in_a_nul() {
     runs("lexical", "c_string_nul_terminated");
 }
+
+/// B-2026-11-25-8: on native a `host fn` is an `extern "C"` call.
+#[test]
+fn host_fn_on_native_calls_c() {
+    runs("ffi", "host_fn_native_lowers_to_c");
+}
