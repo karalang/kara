@@ -245,17 +245,74 @@ impl crate::span_visitor::MutVisitor for FnTypeParams<'_> {
         }
     }
     fn type_expr(&mut self, t: &mut TypeExpr) {
-        let TypeKind::FnType {
-            params, own_params, ..
-        } = &mut t.kind
-        else {
-            return;
+        borrow_one_fn_type(t, self.copy);
+    }
+    /// A `let` annotation inside a body is not walked as a type by the
+    /// span walker (it visits only its span), so the function types in it
+    /// are rewritten here, nested ones included: `let fs: Vec[Fn(String) ->
+    /// i64]` borrows at the call `fs[0](s)` as a field of that type does
+    /// (B-2026-11-25-41, -42).
+    fn stmt(&mut self, s: &mut Stmt) {
+        let ty = match &mut s.kind {
+            StmtKind::Let { ty: Some(t), .. } | StmtKind::LetElse { ty: Some(t), .. } => t,
+            StmtKind::LetUninit { ty, .. } => ty,
+            _ => return,
         };
-        for (i, p) in params.iter_mut().enumerate() {
-            if !own_params.get(i).copied().unwrap_or(false) && borrows(p, self.copy) {
-                wrap_ref(p);
+        borrow_fn_types_within(ty, self.copy);
+    }
+}
+
+/// Rewrite one function type's bare parameters to borrows.
+fn borrow_one_fn_type(t: &mut TypeExpr, copy: &FxHashSet<String>) {
+    let TypeKind::FnType {
+        params, own_params, ..
+    } = &mut t.kind
+    else {
+        return;
+    };
+    for (i, p) in params.iter_mut().enumerate() {
+        if !own_params.get(i).copied().unwrap_or(false) && borrows(p, copy) {
+            wrap_ref(p);
+        }
+    }
+}
+
+/// [`borrow_one_fn_type`] on every function type in `t`, at any depth.
+fn borrow_fn_types_within(t: &mut TypeExpr, copy: &FxHashSet<String>) {
+    borrow_one_fn_type(t, copy);
+    match &mut t.kind {
+        TypeKind::Path(p) => {
+            for a in p.generic_args.iter_mut().flatten() {
+                if let GenericArg::Type(inner) = a {
+                    borrow_fn_types_within(inner, copy);
+                }
             }
         }
+        TypeKind::Tuple(tys) => {
+            for inner in tys {
+                borrow_fn_types_within(inner, copy);
+            }
+        }
+        TypeKind::Array { element, .. } => borrow_fn_types_within(element, copy),
+        TypeKind::Pointer { inner, .. }
+        | TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::MutSlice(inner)
+        | TypeKind::Weak(inner)
+        | TypeKind::Frozen(inner) => borrow_fn_types_within(inner, copy),
+        TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => {
+            for p in params {
+                borrow_fn_types_within(p, copy);
+            }
+            if let Some(rt) = return_type {
+                borrow_fn_types_within(rt, copy);
+            }
+        }
+        _ => {}
     }
 }
 

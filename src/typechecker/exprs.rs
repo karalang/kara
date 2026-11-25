@@ -4523,6 +4523,12 @@ impl<'a> super::TypeChecker<'a> {
                             && matches!(slot, Type::Named { .. })
                             && expectation_is_concrete(slot))
                         || is_dyn_slot(slot)
+                        // A closure literal into a function slot takes its
+                        // parameter types from the slot, as at a `let`:
+                        // `(|s| s.len(), 1)` into `(Fn(String) -> i64, i64)`
+                        // (B-2026-11-25-42).
+                        || (matches!(e.kind, ExprKind::Closure { .. })
+                            && matches!(slot, Type::Function { .. } | Type::OnceFunction { .. }))
                         // B-2026-11-18-71 — a read of an item a closure
                         // was handed (`*a`, `p.0`) into a number slot: the
                         // slot fixes an open literal behind it, as

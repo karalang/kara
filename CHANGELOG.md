@@ -1106,6 +1106,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A function type held in a `let`'s annotated `Vec`, `Map`, `Option`,
+  tuple or nested `Vec` borrows its bare parameters, as a `Fn(T)`
+  parameter does: `let fs: Vec[Fn(String) -> i64] = [nf]; fs[0](s);
+  println(s)` is accepted and runs. `karac check` refused the later use of
+  `s` as moved (B-2026-11-25-42) and the interpreter failed with "deref of
+  non-reference Box" (B-2026-11-25-41). A closure literal in an annotated
+  tuple slot now takes its parameter types from the slot.
 - `karac run` and `karac run --interp` now answer `has_debug_metadata()`
   from the package's `[profile.dev] runtime_debug_metadata`, on by default,
   as `karac build` does. `karac run` used to answer true whatever the
