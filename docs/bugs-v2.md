@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 134 |
 | miscompile | 110 |
 | run-vs-build | 76 |
-| crash | 68 |
+| crash | 69 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
 | leak | 5 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 927 |
-| mir | 340 |
+| typecheck | 928 |
+| mir | 341 |
 | mir-llvm | 330 |
 | cli | 317 |
 | parser | 162 |
@@ -141,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-61 | 2026-11-25 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[profile(..)]` (deferred.md's systems and embedded tracks) check with no diagnostic, `#[profile(kernel)]` is even enforced, the `@deprecated` shorthand works, and `#[with_provider(R, e)]` on a plain `fn` is silent; design.md says the list is generated from the registry and anything else is E_UNKNOWN_ATTRIBUTE | — |
 | B-2026-11-25-62 | 2026-11-25 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default method body that calls it | — |
 | B-2026-11-25-63 | 2026-11-25 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and the copy is `substring`; book ch09b taught `s.slice` (now `s[a..b]`) | — |
+| B-2026-11-25-64 | 2026-11-25 | typecheck+mir | medium | Remainder of B-2026-11-25-22: a `shared struct` cursor started from a `for` item whose child is read into a local first, `let next = at.left; let Some(child) = next else { break; }; at = child;`, still passes `karac check` and stops every lane with invalid MIR ('assigning shared TreeNode to _N of type ref shared TreeNode') | — |
 
 ### Relocated
 
