@@ -2299,8 +2299,13 @@ impl<'a> super::EffectChecker<'a> {
                 //
                 // Skipped as well for an ambient module's method (`fs.write`),
                 // which the alias map above routed to its own key.
+                // And for a `.clone()` whose receiver's closed type copies
+                // no buffer: the `Map.clone` seed a tuple of numbers took by
+                // name is charged by type now, below (B-2026-11-25-51).
+                let clone_free =
+                    method.as_str() == "clone" && self.clone_free_nodes.contains(&object.id);
                 if let Some(quals) = method_sym
-                    .filter(|_| !resolved_to_body && !through_dyn && !ambient_routed)
+                    .filter(|_| !resolved_to_body && !through_dyn && !ambient_routed && !clone_free)
                     .and_then(|m| self.stdlib_method_seeds.get(&m))
                     .filter(|q| !resolved_elsewhere(q))
                 {
@@ -2316,6 +2321,19 @@ impl<'a> super::EffectChecker<'a> {
                 // program method of the same name is over-approximated, the
                 // direction the name-matched seeds above already take.
                 if matches!(method.as_str(), "collect" | "to_vec" | "to_string") {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
+                }
+                // `.clone()` of a `String`, a collection or a derived-`Clone`
+                // value holding one copies its buffer; `Option[ref T]`'s
+                // `.cloned()` clones the `T` (B-2026-11-25-51). Keyed on the
+                // receiver's type, so a `Copy` or counted clone stays free,
+                // and skipped for a program `clone` with a body, which is
+                // inferred from it.
+                if !program_body
+                    && ((method.as_str() == "clone" && self.clone_alloc_nodes.contains(&object.id))
+                        || (method.as_str() == "cloned"
+                            && self.cloned_alloc_nodes.contains(&object.id)))
+                {
                     calls.push((self.syms.builtin_heap_alloc, expr.span));
                 }
                 // Fallible-allocation instance companions (phase-8-stdlib-floor

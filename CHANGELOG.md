@@ -37,6 +37,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `drop 1`). A later use of the array, which then stopped with MIR's
   internal move check, runs when nothing was moved out and is refused at
   `karac check` when an element was (B-2026-11-25-44).
+- `#[no_effect(allocates(Heap))]` refuses a `.clone()` that copies a heap
+  buffer: a `String`, a `Vec` or other collection, a `Box`, or an
+  `Option`, `Result`, tuple, array or derived-`Clone` type holding one,
+  and `Option[ref T]`'s `.cloned()` of one. Only a `Map`, `Set` or
+  `SortedMap` clone was charged, and a clone of a tuple of numbers was
+  charged by mistake; it is free now (B-2026-11-25-51).
 - Two `par` branches that each sort, clone or dedup a `Vec` of a program
   type, or file or look up its key in a `Map` or `Set`, conflict when that
   type's `cmp`, `clone`, `eq` or `hash` writes a resource: the branch is

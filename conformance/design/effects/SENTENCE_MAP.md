@@ -205,7 +205,7 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 | 5565 | A `pub fn` never has to declare them, although it may | covered | pub_fn_need_not_declare_allocates_heap_or_panics, pub_fn_may_declare_allocates_and_panics_explicitly |
 | 5566 | Only `#[no_effect]` forbids them | covered | no_effect_allocates_heap_rejects_a_transitive_allocation, no_effect_panics_rejects_checked_arithmetic |
 | 5570 | `allocates` never conflicts, even with itself | covered | allocates_panics_blocks_never_conflict (new) |
-| 5572 | `#[no_effect(allocates(Heap))]` follows the whole call graph | covered | no_effect_allocates_heap_rejects_a_transitive_allocation; corpus/core/err_no_effect_heap_allocations, no_effect_heap_free_loop |
+| 5572 | `#[no_effect(allocates(Heap))]` follows the whole call graph | covered | no_effect_allocates_heap_rejects_a_transitive_allocation, no_effect_allocates_heap_rejects_a_clone; corpus/core/err_no_effect_heap_allocations, no_effect_heap_free_loop |
 | 5578 | Allocation failure is covered by `allocates(Heap)`, not `panics` | covered | allocation_alone_is_not_a_panics_atom (new) |
 | 5580 | `#[no_effect(panics)]` proves nothing below panics | covered | no_effect_panics_rejects_checked_arithmetic; corpus/core/no_effect_panics_wrapping_arithmetic |
 

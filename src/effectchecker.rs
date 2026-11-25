@@ -1331,6 +1331,16 @@ pub struct DynCoercion {
 pub struct NodeTypeFacts {
     pub ints: FxHashSet<crate::ids::NodeId>,
     pub heap: FxHashSet<crate::ids::NodeId>,
+    /// Receivers whose `.clone()` builds a heap value: a `String`, a
+    /// collection, a `Box`, or an `Option`, tuple, array or derived-`Clone`
+    /// type holding one (B-2026-11-25-51). And those typed `Option[ref T]`
+    /// whose `.cloned()` does, by `T`.
+    pub clone_allocs: FxHashSet<crate::ids::NodeId>,
+    pub cloned_allocs: FxHashSet<crate::ids::NodeId>,
+    /// Receivers of a closed type whose `.clone()` builds nothing on the
+    /// heap (`(i64, bool)`, a derived-`Clone` struct of numbers): the
+    /// name-matched `Map.clone` seed is not charged on them.
+    pub clone_free: FxHashSet<crate::ids::NodeId>,
     /// Expressions typed `BufReader[TcpStream]` or `BufWriter[TcpStream]`
     /// (or over a `TlsStream`, B-2026-11-10-28): a call on one has the
     /// connection's effects (B-2026-11-10-14).
@@ -1689,6 +1699,11 @@ pub struct EffectChecker<'a> {
     /// Expressions typed as a heap collection (`Vec`, `Map`, `Set`, …): a
     /// bare `[1, 2]` literal typed `Vec[i64]` allocates (B-2026-11-04-28).
     pub(crate) heap_nodes: FxHashSet<crate::ids::NodeId>,
+    /// [`NodeTypeFacts::clone_allocs`] and [`NodeTypeFacts::cloned_allocs`].
+    pub(crate) clone_alloc_nodes: FxHashSet<crate::ids::NodeId>,
+    pub(crate) cloned_alloc_nodes: FxHashSet<crate::ids::NodeId>,
+    /// [`NodeTypeFacts::clone_free`].
+    pub(crate) clone_free_nodes: FxHashSet<crate::ids::NodeId>,
     /// [`NodeTypeFacts::net_buffers`].
     pub(crate) net_buffer_nodes: FxHashSet<crate::ids::NodeId>,
     /// B-2026-10-15-21: per function, the `(type parameter, method)` pairs its
@@ -1949,6 +1964,9 @@ impl<'a> EffectChecker<'a> {
             typeparam_nodes: FxHashMap::default(),
             int_nodes: FxHashSet::default(),
             heap_nodes: FxHashSet::default(),
+            clone_alloc_nodes: FxHashSet::default(),
+            cloned_alloc_nodes: FxHashSet::default(),
+            clone_free_nodes: FxHashSet::default(),
             net_buffer_nodes: FxHashSet::default(),
             bound_calls: FxHashMap::default(),
             bound_traits: FxHashMap::default(),
@@ -2100,6 +2118,9 @@ impl<'a> EffectChecker<'a> {
     pub fn with_node_type_facts(mut self, facts: NodeTypeFacts) -> Self {
         self.int_nodes = facts.ints;
         self.heap_nodes = facts.heap;
+        self.clone_alloc_nodes = facts.clone_allocs;
+        self.cloned_alloc_nodes = facts.cloned_allocs;
+        self.clone_free_nodes = facts.clone_free;
         self.net_buffer_nodes = facts.net_buffers;
         self.drop_nodes = facts.drops;
         self.drops_by_type = facts.drops_by_type;

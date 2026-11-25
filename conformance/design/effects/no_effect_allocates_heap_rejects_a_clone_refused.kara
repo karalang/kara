@@ -1,0 +1,8 @@
+#[derive(Clone)]
+struct Hold { w: Vec[i64] }
+#[no_effect(allocates(Heap))]
+fn quiet(h: ref Hold) -> i64 {
+    let t = h.clone();
+    t.w.len() as i64
+}
+fn main() { println(quiet(Hold { w: [1, 2] })); }

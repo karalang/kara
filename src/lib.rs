@@ -762,6 +762,97 @@ pub fn typeparam_value_nodes(
 /// (design.md §12), and an operator the lowering does not rewrite into a
 /// call (`x += 1`) is recognised by its operand's type (B-2026-11-04-29); a
 /// bare `[1, 2]` allocates when it is typed `Vec[i64]` (B-2026-11-04-28).
+/// Whether cloning a value of `ty` builds a heap value the language
+/// allocates (B-2026-11-25-51): a `String`, a collection or a `Box` copies
+/// its buffer, and an `Option`, `Result`, tuple, array or derived-`Clone`
+/// struct or enum clones its parts. A reference, a counted handle (`Rc`,
+/// `Arc`, `shared`) and a type parameter do not: the parameter's clone is
+/// the instance's, charged through its bound. A program `Clone` impl with
+/// a body is inferred from that body. `memo` holds each named type's
+/// answer, `false` while it is being asked, so a recursive type ends.
+fn clone_allocates(
+    ty: &crate::typechecker::Type,
+    typed: &crate::typechecker::TypeCheckResult,
+    memo: &mut FxHashMap<String, bool>,
+) -> bool {
+    use crate::typechecker::Type;
+    match ty {
+        // `Type::Str` is the owned `String`.
+        Type::Str => true,
+        Type::Tuple(parts) => parts.iter().any(|t| clone_allocates(t, typed, memo)),
+        Type::Array { element, .. } => clone_allocates(element, typed, memo),
+        Type::Named { name, args } => {
+            match name.as_str() {
+                "String" | "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet" | "VecDeque"
+                | "Box" => return true,
+                "Option" | "Result" => {
+                    return args.iter().any(|t| clone_allocates(t, typed, memo));
+                }
+                _ => {}
+            }
+            let key = format!("{ty:?}");
+            if let Some(&known) = memo.get(&key) {
+                return known;
+            }
+            memo.insert(key.clone(), false);
+            let subst = |generics: &[String], t: &Type| -> Type {
+                match t {
+                    Type::TypeParam(p) => generics
+                        .iter()
+                        .position(|g| g == p)
+                        .and_then(|i| args.get(i))
+                        .cloned()
+                        .unwrap_or_else(|| t.clone()),
+                    _ => t.clone(),
+                }
+            };
+            let answer = if let Some(info) = typed.struct_info.get(name) {
+                !info.is_shared
+                    && info.derived_traits.contains("Clone")
+                    && info.fields.iter().any(|(_, t, _)| {
+                        clone_allocates(&subst(&info.generic_params, t), typed, memo)
+                    })
+            } else if let Some(info) = typed.enum_info.get(name) {
+                use crate::typechecker::VariantTypeInfo as V;
+                !info.is_shared
+                    && info.derived_traits.contains("Clone")
+                    && info.variants.iter().any(|(_, v)| match v {
+                        V::Unit => false,
+                        V::Tuple(ts) => ts
+                            .iter()
+                            .any(|t| clone_allocates(&subst(&info.generic_params, t), typed, memo)),
+                        V::Struct(fs) => fs.iter().any(|(_, t)| {
+                            clone_allocates(&subst(&info.generic_params, t), typed, memo)
+                        }),
+                    })
+            } else {
+                false
+            };
+            memo.insert(key, answer);
+            answer
+        }
+        _ => false,
+    }
+}
+
+/// Whether `ty` leaves its clone to an instance the walk cannot see: a type
+/// parameter, an unsolved variable or a `dyn` or opaque value.
+fn clone_type_is_open(ty: &crate::typechecker::Type) -> bool {
+    use crate::typechecker::Type;
+    match ty {
+        Type::TypeParam(_)
+        | Type::TypeVar(_)
+        | Type::Existential { .. }
+        | Type::Dyn { .. }
+        | Type::AssocProjection { .. } => true,
+        Type::Tuple(parts) => parts.iter().any(clone_type_is_open),
+        Type::Array { element, .. } => clone_type_is_open(element),
+        Type::Named { args, .. } => args.iter().any(clone_type_is_open),
+        Type::Ref(inner) | Type::MutRef(inner) => clone_type_is_open(inner),
+        _ => false,
+    }
+}
+
 pub fn node_type_facts(
     typed: &crate::typechecker::TypeCheckResult,
 ) -> effectchecker::NodeTypeFacts {
@@ -816,10 +907,29 @@ pub fn node_type_facts(
             facts.drops.insert(node, owned);
         }
     }
+    let mut clone_memo: FxHashMap<String, bool> = FxHashMap::default();
     for (&node, (ty, _)) in &typed.node_types {
         let owned = drops.of(ty);
         if !owned.is_empty() {
             facts.drops.insert(node, owned);
+        }
+        let mut peeled = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = peeled {
+            peeled = inner;
+        }
+        if clone_allocates(peeled, typed, &mut clone_memo) {
+            facts.clone_allocs.insert(node);
+        } else if !clone_type_is_open(peeled) {
+            facts.clone_free.insert(node);
+        }
+        if let Type::Named { name, args } = peeled {
+            if name == "Option" {
+                if let [Type::Ref(inner) | Type::MutRef(inner)] = args.as_slice() {
+                    if clone_allocates(inner, typed, &mut clone_memo) {
+                        facts.cloned_allocs.insert(node);
+                    }
+                }
+            }
         }
         let mut ty = ty;
         while let Type::Ref(inner) | Type::MutRef(inner) = ty {
