@@ -5,13 +5,13 @@ resources, with no written `par`. It was the first measurement workload for
 auto-par on the pre-M3 backend.
 
 > **What holds on 0.8.** The package builds and runs (`karac build` from this
-> directory, then `./dist/native/parallax_lite`), but **auto-par declines this
-> workload today**, so a default build and a `KARAC_AUTO_PAR=0` build run in
-> the same time. The speedup tables this README used to carry (2.81x, and a
-> 15.88x scaling run) were measured on the pre-M3 backend, which was deleted
-> at M3; they do not reproduce and have been removed. Since
-> B-2026-11-16-274 the three writes no longer conflict; what declines them
-> now is auto-par's cost rule.
+> directory, then `./dist/native/parallax_lite`), and **auto-par runs the three
+> calls in parallel**: a default build runs in 0.020 s against 0.050 s for a
+> `KARAC_AUTO_PAR=0` build (below). The speedup tables this README carried
+> before M3 (2.81x, and a 15.88x scaling run) were measured on the pre-M3
+> backend and have been removed. On 2026-11-16 auto-par still declined this
+> workload (its cost rule did not count a loop one call away); it takes it as
+> of 838ece7512.
 
 ## What it demonstrates
 
@@ -41,12 +41,11 @@ karac query concurrency /tmp/parallax_lite.kara.process_request
 ```
 
 It reports the parallel group `[0, 1, 2]` ("independent effects on different
-resources"), then an `auto_par` entry with `tasks: false` and the reason "0 of
-its 3 statements nest loops or recurse". The writes are independent (that was
-B-2026-11-16-274, fixed at ec237045da), but the loop is inside the provider's
-method, one call away, so the cost rule does not count it, and auto-par keeps
-the statements in order. The same three calls written as
-`par { record_a(), record_b(), record_c() }` run in parallel.
+resources"), then an `auto_par` entry for the provider-bound instance
+`process_request{MetricsA=InMemoryMetrics, ...}` with `tasks: true`: the three
+calls run as tasks. The writes are independent (that was B-2026-11-16-274,
+fixed at ec237045da). Written as `par { record_a(), record_b(), record_c() }`
+they run the same way.
 
 ## How to run
 
@@ -62,13 +61,13 @@ KARAC_AUTO_PAR=0 karac build && time ./dist/native/parallax_lite
 
 ## Measured on 0.8
 
-The examples probe, 2026-11-16, on a 4-core Linux x86_64 container with a
-release karac (`--features llvm`) at 236666ac41, best of 5:
+The examples audit, 2026-11-25, on a 4-core Linux x86_64 container with a
+release karac (`--features llvm`) at 838ece7512, best of 5:
 
 | Build | Wall-clock |
 |---|---|
-| default (auto-par on) | 0.049 s |
-| `KARAC_AUTO_PAR=0` | 0.049 s |
+| default (auto-par on) | 0.020 s |
+| `KARAC_AUTO_PAR=0` | 0.050 s |
 | the same calls in a written `par { ... }` | 0.018 s |
 
 ## Files

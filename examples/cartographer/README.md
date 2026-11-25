@@ -42,7 +42,7 @@ internals were chosen to exercise the whole effect surface:
 
 | Function | Effect class | Why it's interesting |
 |---|---|---|
-| `build_dashboard` | **pure** (green) | no effects — assembles strings |
+| `build_dashboard` | **pure** (green) | no external effects — assembles strings, so only the default-permitted `allocates(Heap)` |
 | `fetch_profile` / `fetch_orders` / `fetch_notifications` | **reads** (blue) | one distinct resource each |
 | `record_access` / `double_audit` | **writes** (orange) | mutate `AuditLog` |
 | `get_dashboard` | reads ×3 | **fans out** — the compiler runs the three reads in one parallel band |
@@ -60,7 +60,7 @@ The headline contrast is two functions written the same plain sequential way:
 ## Run it
 
 ```bash
-# 1. See the program run (tree-walk interpreter):
+# 1. See the program run (MIR interpreter):
 karac run src/service.kara
 #   user-42: 84 orders, 43 notifications
 #     [audit] access by 42

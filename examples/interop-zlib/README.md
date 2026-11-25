@@ -61,19 +61,16 @@ round-trip: OK
 
 Verified surfaces (all byte-identical to a C reference implementation of the
 same pipeline): the default (auto-parallelizing) build, `KARAC_AUTO_PAR=0`,
-and `karac run` (JIT lane).
+`karac run` (JIT lane) and `karac run --interp`.
 
 ## `karac run` and FFI
 
-`karac run`'s JIT lane resolves foreign symbols from the JIT-runner process
-itself, not from the manifest's `[link]` libraries. This example happens to
-work under `karac run` because the runner embeds LLVM, and LLVM links libz —
-an incidental fact about *this* library, not a property of FFI programs in
-general (a libpng or sqlite3 binding would fail symbol resolution under the
-JIT). The tree-walk interpreter (`karac run --interp`) refuses raw-pointer
-FFI outright — it has no pointer representation — and directs you to
-`karac build`. Treat FFI programs as an AOT surface: `karac build` is the
-lane where the `[link]` table actually governs linking.
+All three lanes honor the manifest's `[link]` table. `karac build` puts
+`-lz` on the link line; `karac run` (the JIT runner) and `karac run --interp`
+(the MIR interpreter) `dlopen` each `[link]` library before the first
+foreign call and find the symbols there, then in the process itself (libc's
+`malloc` and `free`) (`src/mir/foreign.rs`). The program prints the same
+bytes in all three.
 
 ## Requirements
 

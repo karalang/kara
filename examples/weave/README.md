@@ -41,8 +41,8 @@ failure class):
 summary: 3 rows, usd_total=94.48920000000001
 ```
 
-Runs both ways with byte-identical output: under the tree-walk interpreter
-(`karac run`, above) **and** as a native binary via `karac build
+Runs every way with byte-identical output: under the JIT (`karac run`,
+above), the MIR interpreter (`karac run --interp`) **and** as a native binary via `karac build
 examples/weave/src/main.kara` (drops `./main` in the CWD). Weave is the first
 dogfood to drive the full refinement-types + contracts + effects + provider-
 injection + struct-variant `impl Display` surface through codegen; getting there

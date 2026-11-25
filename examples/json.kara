@@ -12,7 +12,7 @@
 // literal token (precision-preserving), so the canonical output is exact and the
 // oracle has no float-formatting noise. Expected output: examples/json.expected.
 //
-//   karac run examples/json.kara     # JIT (or tree-walk via KARAC_RUN_JIT=0)
+//   karac run examples/json.kara     # JIT (or the MIR interpreter via --interp)
 //   karac build examples/json.kara   # native binary — output byte-identical
 //
 // This dogfood found and fixed THREE compiler bugs (its job, cf.

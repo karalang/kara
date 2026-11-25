@@ -28,15 +28,15 @@ fn main() {
     let seed_queries = [
         Query.Insert {
             table: "users",
-            row: Map["id": Value.Int(1), "name": Value.Text("Alice")],
+            row: ["id": Value.Int(1), "name": Value.Text("Alice")],
         },
         Query.Insert {
             table: "users",
-            row: Map["id": Value.Int(2), "name": Value.Text("Bob")],
+            row: ["id": Value.Int(2), "name": Value.Text("Bob")],
         },
         Query.Insert {
             table: "orders",
-            row: Map["user_id": Value.Int(1), "item": Value.Text("Widget")],
+            row: ["user_id": Value.Int(1), "item": Value.Text("Widget")],
         },
     ];
 

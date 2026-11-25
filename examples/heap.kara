@@ -10,9 +10,9 @@
 //
 // The oracle is deterministic: heapsort of a fixed permutation yields the sorted
 // sequence, and a priority-queue drain yields ascending order. Both run on the
-// tree-walk interpreter AND a native binary, byte-identical.
+// MIR interpreter AND a native binary, byte-identical.
 //
-//   karac run examples/heap.kara      # JIT (or tree-walk via KARAC_RUN_JIT=0)
+//   karac run examples/heap.kara      # JIT (or the MIR interpreter via --interp)
 //   karac build examples/heap.kara    # native binary — output byte-identical
 //
 // Expected output: examples/heap.expected.

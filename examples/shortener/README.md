@@ -41,15 +41,15 @@ struct Response {
 }
 ```
 
-Codegen detects the third field and lowers each pair through
-`karac_runtime_http_response_set_header` (`src/codegen/http.rs`). Pairs
-are applied in order; `content-type` defaults to `text/plain;
+Both backends read the third field when they turn the handler's
+`Response` into the reply (the compiled one in `src/backend/mir/io.rs`,
+through `karac_mir_http_wire`). Pairs are applied in order; `content-type` defaults to `text/plain;
 charset=utf-8` unless a pair sets it (B-2026-11-16-275). The two-field form keeps working unchanged.
 
 ## Oracle
 
 `tests/http_server.rs::test_shortener_example_end_to_end` builds this
-file with `karac build --mir`, spawns it, and pins every route above — including the `302`'s
+file with the compiled backend, spawns it, and pins every route above — including the `302`'s
 `location` header and the `/stats` hit counts. It substitutes
 `127.0.0.1:0` for the hardcoded `:8080` so it binds an ephemeral port
 like every other test in that file; the routing and responses are this

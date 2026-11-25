@@ -19,12 +19,12 @@ fn max(a: Array[i64, 4]) -> i64 {
 }
 
 fn main() {
-    let data = Array[10, 40, 20, 30];
+    let data: Array[i64, 4] = [10, 40, 20, 30];
 
     println(sum(data));
     println(max(data));
 
-    let mut scores = Array[0, 0, 0, 0];
+    let mut scores: Array[i64, 4] = [0, 0, 0, 0];
     scores[0] = 100;
     scores[1] = 85;
     scores[2] = 92;

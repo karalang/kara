@@ -6,14 +6,14 @@
 // It dogfoods the compiler's SEQUENTIAL ITERATOR + CLOSURE surface — the least-
 // exercised hot path — over heap-bearing element types (`String` fields), which
 // is exactly where run-vs-build divergences hide: every query below runs on the
-// tree-walk interpreter, and the native/JIT build must agree byte-for-byte.
+// MIR interpreter, and the native/JIT build must agree byte-for-byte.
 //
 // Aggregation is expressed with `fold` on purpose (counts as
 // `fold(0, |acc, r| acc + 1)`, sums as `fold(0, |acc, x| acc + x)`, max as a
 // fold with a branch) — a terminal the fused-iterator codegen did not handle
 // until the vm.kara → pipeline.kara dogfooding run added it.
 //
-//   karac run examples/pipeline.kara     # JIT (or tree-walk via KARAC_RUN_JIT=0)
+//   karac run examples/pipeline.kara     # JIT (or the MIR interpreter via --interp)
 //   karac build examples/pipeline.kara   # native binary — output byte-identical
 //
 // Expected output: examples/pipeline.expected.

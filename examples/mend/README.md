@@ -57,11 +57,17 @@ examples/mend/
 │   ├── welcome_emails/        ownership: use-after-move on Vec
 │   ├── order_status/          pattern exhaustiveness on enum match
 │   ├── user_lookup/           type mismatch: Option[T] from Map.get
-│   └── concurrent_emails/     effect: shared-counter race in a par { } block
+│   ├── concurrent_emails/     effect: shared-counter race in a par { } block
+│   ├── render_status/         an enum match that must name every variant
+│   ├── grade_histogram/       a struct with parallel Vecs and a Map index
+│   ├── link_registry/         the URL shortener's state layer (examples/shortener)
+│   ├── two_source_totals/     a trait over two providers
+│   └── canonical_request/     AWS SigV4's canonical request string
 ├── casts/                     asciinema recordings (recordable artifact)
 │   ├── demo.sh                narrated wrapper for recording
 │   ├── welcome_emails.cast
-│   └── order_status.cast
+│   ├── order_status.cast
+│   └── concurrent_emails.cast
 └── runs/                      harness output (per-iteration logs, gitignored)
 ```
 

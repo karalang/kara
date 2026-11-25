@@ -22,7 +22,7 @@ model is most likely to get wrong). The *organic at-scale* leg is **Chronicle**
 
 | Structure | File | Proves | Ownership signal |
 |---|---|---|---|
-| Parent-pointer tree | `src/parent_tree.kara` | up/down cycle without `Rc<RefCell>`+`Weak` | `representation:"shared (Rc)"` (declared RC) |
+| Parent-pointer tree | `src/parent_tree.kara` | up/down links without `Rc<RefCell>`: children strong, the parent back-edge `weak`, so the tree is freed | `representation:"shared (Rc)"` (declared RC) |
 | Cross-edge graph (diamond) | `src/cross_graph.kara` | shared descendant reachable from two parents | `representation:"shared (Rc)"` (declared RC; it was RC fallback until the v2 core removed that) |
 | Doubly-linked list | `src/doubly_linked.kara` | both-way links + neighbor-relink splice, no `Weak` | `representation:"shared (Rc)"` (declared RC) |
 | Undo/redo over shared state | `src/undo_redo.kara` | shared **mutable** state, undo writes back through the shared handle | `representation:"shared (Rc)"` (declared RC) |
@@ -185,7 +185,7 @@ There are **two distinct RC signals**, and Tangle is designed to show both:
   {"function":"add_child",
    "parameters":[{"name":"parent","mode":"own","representation":"shared (Rc)"},
                  {"name":"child","mode":"own","representation":"shared (Rc)"}],
-   "rc_values":[],"closures":[]}
+   "rc_values":[],"closures":[], "derivation":[...]}
   ```
 
 - **`rc_values`** (with the trigger) — an *owned* (non-`shared`) value the
@@ -201,8 +201,8 @@ There are **two distinct RC signals**, and Tangle is designed to show both:
 
   ```text
   // the same program with `GraphNode` as a plain `struct`, under `karac check`
-  error[ownership]: cross_graph.kara:42:16: value 'd' was moved into a container
-  (moved at line 41:16), used again here
+  // (beside an E0517: `link`'s `ref self` cannot push into a plain struct's field)
+  error[E0500]: cross_graph.kara:42:16: value 'd' moved here, used again here (moved at line 41:16)
   ```
 
 So: the parent-pointer tree proves "the cyclic shape works, and its RC is
@@ -212,14 +212,14 @@ that names both lines.
 
 ## Status
 
-Front-end legs (typecheck · `karac query ownership` · interpret) are the current
-focus. Tangle's leg #4 — "runs leak-/use-after-free–clean under ASAN (codegen
-path)" — is deferred until the active codegen leak cluster
-(`bugs.md` B-2026-06-12-6 / -10) settles, so the clean ASAN run is a meaningful
-verification pass rather than a re-hit of in-flight leaks. When that leg is
-picked up, **verify codegen has the projection-write fix too** — the
-shared-struct field-write bug below was fixed in the interpreter; the codegen
-path needs the same check.
+All four legs run on 0.8: typecheck, `karac query ownership`, the MIR
+interpreter, and the compiled build, with identical output; each program is
+also clean under AddressSanitizer and LeakSanitizer
+(`karac __mir-llvm-asan`, checked 2026-11-25). `parent_tree.kara` declares its
+parent back-edge `weak`; with a strong one it leaked its six nodes, as design.md
+§ Cycles and `weak` says a cycle of strong handles does. `doubly_linked.kara`
+keeps a strong `prev`: its run ends with one node, so nothing cycles at exit,
+but a longer-lived list would leak.
 
 Follow-ons from this work:
 1. **Fixed.** Writing through a *plain* value-type struct projection

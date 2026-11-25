@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 767 |
+| diagnostics | 768 |
 | false-positive | 384 |
 | missing-feature | 257 |
 | perf | 204 |
-| other | 150 |
+| other | 151 |
 | soundness | 134 |
 | miscompile | 110 |
-| run-vs-build | 75 |
+| run-vs-build | 76 |
 | crash | 68 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -79,14 +79,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 924 |
 | mir | 340 |
 | mir-llvm | 330 |
-| cli | 314 |
+| cli | 315 |
 | parser | 162 |
 | ownership | 138 |
 | runtime | 112 |
-| interp | 109 |
+| interp | 110 |
 | effect | 69 |
 | resolver | 57 |
-| other | 53 |
+| other | 54 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -136,6 +136,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-53 | 2026-11-25 | typecheck | medium | `karac check src/main.kara` inside a package refuses programs that `karac check` (no file), `karac run src/main.kara` and `karac build` all accept: a `pub import` re-export is a different type (`expected 'Raw', found 'Connection__db_conn'`), `a.make()` takes `b.make()`'s return type, an impl in a module nobody imports is unseen, and an error in another module is reported only as a count with empty JSON diagnostics | — |
 | B-2026-11-25-54 | 2026-11-25 | typecheck | medium | Method visibility is not enforced: a non-`pub` method of a dependency's type (`c.inner()`) and a `private fn` method from another directory or another package (`c.very()`) are callable, though a non-`pub` field or free fn in the same place is E0111 | — |
 | B-2026-11-25-55 | 2026-11-25 | typecheck | low | A program's own `enum Ordering` cannot be used: `Ordering.Mine` is E0236 `no associated function 'Mine' on type 'Ordering'` and a match arm is E0273 `Ordering is not an enum`, though the same enum named `Option`, `Result` or `Duration` works | — |
+| B-2026-11-25-56 | 2026-11-25 | interp | medium | `karac run --interp` stops with `error[mir]: run: in main#resume ...: _3: String still owns a value at return; a drop is missing` (exit 3) when a program waits (accept, recv) inside an endless loop after its last use of an owned local; `karac run` and `karac build` serve | — |
+| B-2026-11-25-57 | 2026-11-25 | other | low | The browser playground crate (`playground/`, karac-playground) no longer builds for `wasm32-unknown-unknown`: about 45 errors, so examples/cartographer's studio.sh (a wasm-pack build of it) fails | — |
+| B-2026-11-25-58 | 2026-11-25 | cli | low | `karac query ownership` gives a derivation reason for a mode it does not report: tangle's `eval` reports `scope` as `ref` with the reason "`scope` is moved here, so the body takes it"; `Editor.set` reports `cell` as `own` with "`cell` is written here, so the body needs `mut ref`" | — |
 
 ### Relocated
 

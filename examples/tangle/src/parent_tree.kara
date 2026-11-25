@@ -6,13 +6,14 @@
 // have a tree with parent pointers in safe Rust without Rc/RefCell/Weak" case.
 //
 // In Kāra it is a plain `shared struct`: reference semantics via RC, no `'a`
-// lifetimes, no `Weak`, no `RefCell`. The one real cost — the cycle is
-// RC-managed — is not hidden: `karac query ownership` surfaces exactly where
-// the model escalates to RC. That visibility is the whole point of Tangle.
+// lifetimes, no `RefCell`. The back-edge is declared `weak` (design.md
+// § Cycles and `weak`): a child does not keep its parent alive, so the up/down
+// links form no cycle of strong handles and the whole tree is freed when
+// `main`'s handles drop. Reading a `weak` field gives an `Option`.
 
 shared struct TreeNode {
     val: i64,
-    mut parent: Option[TreeNode],
+    mut parent: weak TreeNode,
     mut children: Vec[TreeNode],
 }
 
@@ -21,10 +22,10 @@ fn new_node(val: i64) -> TreeNode {
 }
 
 // Link `child` under `parent`. This is the line that creates the up/down
-// cycle: parent.children points down at child, child.parent points back up
-// at parent. Both handles refer to the same RC-managed nodes.
+// cycle: parent.children points down at child (strong), child.parent points
+// back up at parent (weak). Both handles refer to the same RC-managed nodes.
 fn add_child(parent: own TreeNode, child: own TreeNode) {
-    child.parent = Some(parent);
+    child.parent = parent;
     parent.children.push(child);
 }
 

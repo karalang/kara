@@ -63,9 +63,9 @@ large-scale turbulence. Bring it back down and the flow reattaches.
   `wasm_*` target and `host_macos`/`host_linux` natively. This is the
   one-source/two-target structure **Iris** proves, applied to the flagship.
 
-The wing is defined by a *slope* (rise/run), using only `sqrt`, to avoid the
-tracked `sin`/`cos` stdlib gap — the same precedent Plume set with its rational
-vortices.
+The wing is defined by a *slope* (rise/run), using only `sqrt`. It was written
+that way while `sin`/`cos` were missing from the library — the same precedent
+Plume set with its rational vortices; `f64.sin`, `cos` and `atan2` exist now.
 
 ## Where is the threading code?
 
@@ -162,5 +162,6 @@ the compiler — the demo uses the natural shared-read fan-out, not a workaround
   [`docs/dogfooding.md`](../../docs/dogfooding.md) and
   [`docs/implementation_checklist/phase-10-targets.md`](../../docs/implementation_checklist/phase-10-targets.md)
   (GPU-LBM / GPU-SLIP / GPU-GATE-1).
-- `sin`/`cos`/`atan2` remain a tracked stdlib gap, so the wing is parameterised
-  by slope rather than a true angle.
+- The wing is parameterised by slope rather than a true angle, from when
+  `sin`/`cos`/`atan2` were a stdlib gap; they exist now (`f64.sin` and the rest),
+  so an angle would work, but the checksums above are pinned to the slope form.

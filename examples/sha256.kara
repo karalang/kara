@@ -3,8 +3,9 @@
 //
 // Why this exists: every route to a cloud data store goes through a request
 // signature, and AWS SigV4 is an HMAC-SHA256 chain over a SHA-256 payload
-// hash. The runtime exposes no hashing primitive at all, so the choice was to
-// add one in Rust or to write it in Kāra. Writing it in Kāra makes it a
+// hash. When this was written the runtime had no hashing primitive, so it was
+// written in Kāra; a program today imports `std.crypto.sha2.{sha256}` and
+// `std.crypto.hmac.{hmac_sha256}` (docs/library/crypto.md). It stays as a
 // dogfood with a REAL oracle: these vectors are bit-exact published answers,
 // so "it compiled" and even "it produced 64 hex characters" are not enough —
 // the digest either matches the standard or it does not.
@@ -14,16 +15,14 @@
 // packing and unpacking, and 64 rounds of state rotation per block, all
 // index-driven over `Vec` state.
 //
-// THE u32 WORKAROUND. SHA-256 is defined on u32 with wrapping addition, but
-// `wrapping_add` is deferred on narrow widths — `let a: i32 = 1;
-// a.wrapping_add(2)` does not typecheck (pinned by the compiler's own
-// `wrapping_arith_rejects_narrow_width`). So every 32-bit word is carried in
-// a `u64` and reduced with `m32` after each add; `x ^ 0xFFFFFFFF` stands in
-// for a 32-bit bitwise NOT. That is the standard way to host u32 arithmetic
-// in a wider type and costs only the extra mask — the vectors below prove it
-// is exact.
+// THE u32 WORKAROUND. SHA-256 is defined on u32 with wrapping addition, and
+// when this was written `wrapping_add` did not typecheck on narrow widths, so
+// every 32-bit word is carried in a `u64` and reduced with `m32` after each
+// add; `x ^ 0xFFFFFFFF` stands in for a 32-bit bitwise NOT. `u32.wrapping_add`
+// works today, so new code would hold the words in `u32`; the vectors below
+// prove the wide form exact.
 //
-//   karac run examples/sha256.kara      # JIT (--interp for the tree-walk lane)
+//   karac run examples/sha256.kara      # JIT (--interp for the MIR interpreter)
 //   karac build examples/sha256.kara    # native binary — output byte-identical
 //
 // Expected output: examples/sha256.expected.

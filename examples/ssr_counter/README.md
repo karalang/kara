@@ -1,5 +1,13 @@
 # ssr_counter — server-side rendering with provider injection
 
+> **The client leg is not in 0.8.** `--target=wasm_browser` is scheduled
+> after v1 ([deferred.md § Web](../../docs/deferred.md#web)); on 0.8
+> `karac build` answers "`--target=wasm_browser` builds the browser wasm
+> bindings, which is not in 0.8", and `karac check` warns that
+> `#[target(wasm_browser)]` names a target that is not in v1 (`later_track`),
+> so `hydrate` is not checked. The server leg below builds and runs on 0.8;
+> the client leg describes the demo as it ran on the pre-M3 backend.
+
 One Kāra source file, two targets, one shared component. The server
 renders the component to HTML; the browser hydrates it and drives live
 DOM updates — running the **same** component function on both sides.
@@ -42,7 +50,7 @@ response. `index.html` shows it inlined inside `<div id="app">`.
 
 ## Run the client leg
 
-Under node, with a mock DOM (this is also the CI E2E):
+Under node, with a mock DOM (this was the pre-M3 CI E2E):
 
 ```sh
 karac build ssr_counter.kara --target=wasm_browser   # emits .wasm + .js + .d.ts

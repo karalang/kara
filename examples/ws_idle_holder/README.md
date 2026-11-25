@@ -80,15 +80,13 @@ same bytes live in `tests/fixtures/tls/cert.pem` + `key.pem` (phase-6
 line 236 slice 4) — they are committed test fixtures, so inlining
 exposes nothing not already in the repo.
 
-**Why inlined rather than read from disk?** The natural shape —
-`FileSystem.read_to_string("tests/fixtures/tls/cert.pem").unwrap()` —
-trips a codegen gap: `FileSystem.read_to_string` is a `#[compiler_builtin]`
-stub with no codegen lowering yet (only the stateful `File` handle path
-from Phase 8 slice F is wired), so the call returns an `i64 0` at the
-LLVM layer instead of a `Result`. Disk-loading lands when the
-`FileSystem.read_to_string` codegen lowering ships (tracked as a
-follow-on under phase-6 line 236); the bench harness (Demo 1 slice 3)
-will load real certs from disk once that gap closes.
+**Why inlined rather than read from disk?** It was a codegen gap when the
+demo was written: `fs.read_to_string` had no compiled lowering. That gap is
+closed (`fs.read_to_string` returns the file under `karac build`, `karac run`
+and `karac run --interp` alike, checked 2026-11-25), so the cert stays inline
+now only so the binary runs from any working directory with no files beside
+it. A real deployment would take the cert and key paths from args, env or
+config.
 
 The recv_text loop is a pure "wait-and-wake" pattern: the parking
 primitive (`karac_park_on_fd`) suspends the per-connection task on the
@@ -139,20 +137,28 @@ slices landed as direct unblockers:
 ## How to run
 
 ```sh
-# from karac-rust workspace root:
-cargo build --bin karac --features llvm
-cargo build -p karac-runtime --release
+# from the repository root, once per checkout: karac and the runtime
+# archives (CLAUDE.md § Runtime archives has the full recipe)
+cargo build --release --features llvm
+cargo rustc -p karac-runtime --release --crate-type staticlib
 
 cd examples/ws_idle_holder/
-../../target/debug/karac build
-./ws_idle_holder &
+../../target/release/karac build          # writes dist/native/ws_idle_holder
+KARAC_ANNOUNCE_PORT=1 dist/native/ws_idle_holder &
 ```
 
-Run with `KARAC_ANNOUNCE_PORT=1`, the binary prints `BOUND_PORT=<n>` on
+`karac run` (the JIT) serves the same way without a build step. Under the
+MIR interpreter (`karac run --interp`) the program stops at its first wait
+for a connection with an internal `String still owns a value` error,
+compiler bug B-2026-11-25-56.
+
+With `KARAC_ANNOUNCE_PORT=1` set, the binary prints `BOUND_PORT=<n>` on
 stderr for the `:0` ephemeral bind, so smoke-test scripts can read back the
-assigned port (the scripts in `bench/scripts/` set it). To pin a
-fixed port, edit `src/main.kara`'s
-`TlsListener.bind_tls("127.0.0.1:0", ...)` to the desired port literal.
+assigned port (the scripts in `bench/scripts/` set it). Without it the binary
+prints nothing. The bench scripts take the server binary's path as their
+first argument: pass `dist/native/ws_idle_holder`. To pin a fixed port, edit
+`src/main.kara`'s `TlsListener.bind_tls("127.0.0.1:0", ...)` to the desired
+port literal.
 
 ## Manual smoke test
 
@@ -162,8 +168,10 @@ raw `nc` connection no longer works. Easiest path is a short Python
 HTTP upgrade:
 
 ```sh
-# 1. Start the demo (it auto-binds to 127.0.0.1:0)
-./ws_idle_holder > /tmp/demo.out &
+# 1. Start the demo (it auto-binds to 127.0.0.1:0 and, with
+#    KARAC_ANNOUNCE_PORT=1, prints BOUND_PORT=<n> on stderr)
+KARAC_ANNOUNCE_PORT=1 dist/native/ws_idle_holder > /tmp/demo.out 2>&1 &
+sleep 1
 DEMO=$!
 
 # 2. Read the ephemeral port from BOUND_PORT

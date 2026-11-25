@@ -1704,6 +1704,24 @@ impl<'a> super::Resolver<'a> {
         if module.is_empty() {
             return;
         }
+        // `import data.{Column}` is data.md's own import line: the `data`
+        // module is the post-v1 `kara-data` package, so say that rather than
+        // "unknown module".
+        if module[0] == "data" {
+            self.errors.push(ResolveError {
+                message: format!(
+                    "unknown module `{}`: `data` is the `kara-data` package, which arrives after v1 and is not in 0.8 \
+                     (docs/library/data.md, docs/deferred.md § M4c data)",
+                    module.join(".")
+                ),
+                span: imp.span,
+                kind: ResolveErrorKind::UnknownModule,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
         self.errors.push(ResolveError {
             message: format!(
                 "unknown module `{}`: this file belongs to no package, so the only modules \
@@ -1937,6 +1955,16 @@ impl<'a> super::Resolver<'a> {
                 None => suggest_similar(&wanted, &candidates),
             };
             let mut message = format!("unknown module `{wanted}`");
+            // data.md's import line in a package without the dependency.
+            let suggestion = if imp.path.first().map(String::as_str) == Some("data") {
+                message.push_str(
+                    ": `data` is the `kara-data` package, which arrives after v1 and is not \
+                     in 0.8 (docs/library/data.md, docs/deferred.md § M4c data)",
+                );
+                None
+            } else {
+                suggestion
+            };
             if let Some(on) = elsewhere {
                 let files: Vec<String> = on
                     .iter()
