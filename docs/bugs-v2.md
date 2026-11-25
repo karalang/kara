@@ -141,7 +141,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-61 | 2026-11-25 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[profile(..)]` (deferred.md's systems and embedded tracks) check with no diagnostic, `#[profile(kernel)]` is even enforced, the `@deprecated` shorthand works, and `#[with_provider(R, e)]` on a plain `fn` is silent; design.md says the list is generated from the registry and anything else is E_UNKNOWN_ATTRIBUTE | — |
 | B-2026-11-25-62 | 2026-11-25 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default method body that calls it | — |
 | B-2026-11-25-63 | 2026-11-25 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and the copy is `substring`; book ch09b taught `s.slice` (now `s[a..b]`) | — |
-| B-2026-11-25-64 | 2026-11-25 | typecheck+mir | medium | Remainder of B-2026-11-25-22: a `shared struct` cursor started from a `for` item whose child is read into a local first, `let next = at.left; let Some(child) = next else { break; }; at = child;`, still passes `karac check` and stops every lane with invalid MIR ('assigning shared TreeNode to _N of type ref shared TreeNode') | — |
 
 ### Relocated
 
@@ -2333,6 +2332,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-36 | typecheck+mir | medium | `min(1.5, 2.5)`, or `let x = 0.5; min(x, 2.5)`, the free `min` / `max` over float literals only, passes `karac check` and then stops __mir-run with '… | 46f8e5961a |
 | B-2026-11-25-37 | runtime | low | A `Json` read through `Json.deserialize` kept a repeated key twice: `{"id":7,"x":1,"id":8}` in a `data: Json` field became a three-entry `Json.Object… | 93508495cd |
 | B-2026-11-25-38 | typecheck | low | A program's own `enum Option` or `enum Result` (or `struct Option`) draws no `prelude_shadow` warning, while its own `Vec` or `Map` does; design.md §… | 8f382a26c1 |
+| B-2026-11-25-64 | typecheck+mir | medium | Remainder of B-2026-11-25-22: a `shared struct` cursor started from a `for` item whose child is read into a local first, `let next = at.left; let Som… | a04a0d1cf7 |
 
 </details>
 
