@@ -23,7 +23,7 @@ use crate::token::Span;
 use super::elem_impls::{self, ElemTrait, Family, ImplReach, Scope, TypeImpls};
 use super::{
     tarjan_scc, BoundEvent, DeclaredEffects, Effect, EffectError, EffectErrorKind, EffectOrigin,
-    EffectSet, TraitImpls,
+    EffectSet, TracedEffect, TraitImpls,
 };
 
 /// Which edge kinds `build_call_graph_with` puts in the graph.
@@ -340,20 +340,28 @@ impl<'a> super::EffectChecker<'a> {
             .copied()
             .collect();
         let sccs = tarjan_scc(&all_fn_names, &call_graph, &self.interner);
+        self.fixpoint_chains.clear();
 
         for scc in &sccs {
             if scc.len() == 1 {
                 // Non-recursive: one pass is sufficient because all callees
-                // (in earlier SCCs) are already fully resolved.
+                // (in earlier SCCs) are already fully resolved. A function
+                // that calls itself converges in that pass too, since the
+                // self-call adds only what it already has.
                 let name = scc[0];
                 let body = self
                     .function_bodies
                     .get(&name)
                     .cloned()
                     .or_else(|| self.method_bodies.get(&name).cloned());
+                let calls_itself = call_graph
+                    .get(&name)
+                    .is_some_and(|edges| edges.iter().any(|&(callee, _)| callee == name));
+                let before = self.fixpoint_len(name, calls_itself);
                 if let Some(f) = body {
                     self.infer_function_effects(name, &f.body);
                 }
+                self.record_fixpoint_step(name, scc, before);
             } else {
                 // Mutually-recursive SCC: iterate until convergence.
                 // Effects are monotone, so at most |SCC| passes are needed
@@ -366,17 +374,52 @@ impl<'a> super::EffectChecker<'a> {
                             .get(&name)
                             .cloned()
                             .or_else(|| self.method_bodies.get(&name).cloned());
+                        let before = self.fixpoint_len(name, true);
                         if let Some(f) = body {
                             if self.infer_function_effects(name, &f.body) {
                                 changed = true;
                             }
                         }
+                        self.record_fixpoint_step(name, scc, before);
                     }
                     if !changed {
                         break;
                     }
                 }
             }
+        }
+    }
+
+    /// The size of `name`'s set before a pass of the fixed point, when its
+    /// chain is recorded: it is in a recursive group (`recursive`).
+    fn fixpoint_len(&self, name: Symbol, recursive: bool) -> Option<usize> {
+        recursive.then(|| {
+            self.inferred_effects
+                .get(&name)
+                .map_or(0, |s| s.effects.len())
+        })
+    }
+
+    /// Record what one pass added to `name`'s set, as one step of the chain
+    /// `karac explain` shows (design.md §12 Recursion and fixpoints;
+    /// B-2026-11-24-46). A pass that adds nothing is no step: the chain is
+    /// strictly increasing. `EffectSet::add` only appends, so the atoms a
+    /// pass added are the set's tail.
+    fn record_fixpoint_step(&mut self, name: Symbol, group: &[Symbol], before: Option<usize>) {
+        let Some(before) = before else {
+            return;
+        };
+        let added: Vec<TracedEffect> = self
+            .inferred_effects
+            .get(&name)
+            .map(|s| s.effects[before.min(s.effects.len())..].to_vec())
+            .unwrap_or_default();
+        let entry = self
+            .fixpoint_chains
+            .entry(name)
+            .or_insert_with(|| (group.to_vec(), Vec::new()));
+        if !added.is_empty() {
+            entry.1.push(added);
         }
     }
 

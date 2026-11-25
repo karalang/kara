@@ -1209,11 +1209,30 @@ pub struct MutualRecursionGroup {
     pub call_recursive_members: Vec<String>,
 }
 
+/// How one function's effect set grew in the fixed point over its
+/// recursive group: design.md §12 (Recursion and fixpoints, `karac
+/// explain`) promises the chain `∅ = φ₀ ⊊ φ₁ ⊊ … ⊊ φ*` with, for each step,
+/// the callee or operation that added atoms (B-2026-11-24-46). The passes
+/// are the checker's own: a pass visits the members in order and each sees
+/// what the members before it already gained.
+#[derive(Debug, Clone, Default)]
+pub struct FixpointChain {
+    /// The group, the function itself included, sorted. One name when the
+    /// function only calls itself.
+    pub group: Vec<String>,
+    /// Each pass that grew the set: the atoms it added, each with the
+    /// callee or operation that added it. Never empty steps.
+    pub steps: Vec<Vec<TracedEffect>>,
+}
+
 // ── Result ──────────────────────────────────────────────────────
 
 pub struct EffectCheckResult {
     /// Inferred effects for each function (by name).
     pub inferred_effects: HashMap<String, EffectSet>,
+    /// For each function in a recursive group (or calling itself), how its
+    /// set grew in the fixed point: the chain `karac explain` shows.
+    pub fixpoint_chains: HashMap<String, FixpointChain>,
     /// Declared effects for each function.
     pub declared_effects: HashMap<String, DeclaredEffects>,
     /// Expanded effect groups.
@@ -1463,6 +1482,9 @@ pub struct EffectChecker<'a> {
     pub(crate) declared_effects: FxHashMap<Symbol, DeclaredEffects>,
     /// Inferred effects per function name.
     pub(crate) inferred_effects: FxHashMap<Symbol, EffectSet>,
+    /// For each function in a recursive group, the group and what each
+    /// pass of the fixed point added to its set (B-2026-11-24-46).
+    pub(crate) fixpoint_chains: FxHashMap<Symbol, (Vec<Symbol>, Vec<Vec<TracedEffect>>)>,
     /// Whether each function is public.
     pub(crate) function_visibility: FxHashMap<Symbol, bool>,
     /// The library's `#[observability]` functions (`std.log`): a call to
@@ -1856,6 +1878,7 @@ impl<'a> EffectChecker<'a> {
             transparent_effects: FxHashSet::default(),
             declared_effects: FxHashMap::default(),
             inferred_effects: FxHashMap::default(),
+            fixpoint_chains: FxHashMap::default(),
             function_visibility: FxHashMap::default(),
             observability: FxHashSet::default(),
             function_spans: FxHashMap::default(),
@@ -3184,6 +3207,7 @@ impl<'a> EffectChecker<'a> {
         let EffectChecker {
             interner,
             inferred_effects,
+            fixpoint_chains,
             declared_effects,
             expanded_groups,
             transparent_effects,
@@ -3197,6 +3221,20 @@ impl<'a> EffectChecker<'a> {
             inferred_effects: inferred_effects
                 .into_iter()
                 .map(|(k, v)| (interner.resolve(k).to_string(), v))
+                .collect(),
+            fixpoint_chains: fixpoint_chains
+                .into_iter()
+                .map(|(k, (group, steps))| {
+                    let mut group: Vec<String> = group
+                        .iter()
+                        .map(|&g| interner.resolve(g).to_string())
+                        .collect();
+                    group.sort();
+                    (
+                        interner.resolve(k).to_string(),
+                        FixpointChain { group, steps },
+                    )
+                })
                 .collect(),
             declared_effects: declared_effects
                 .into_iter()

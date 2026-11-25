@@ -1,0 +1,4 @@
+// design.md §12 Recursion and fixpoints: explain shows the chain from the empty set, each step with what added atoms.
+fn a(n: i64) -> i64 { if n > 0 { b(n - 1) } else { println(n); 0 } }
+fn b(n: i64) -> i64 { if n > 0 { a(n - 1) } else { let v: Vec[i64] = Vec.new(); v.len() } }
+fn main() { println(a(3)); }

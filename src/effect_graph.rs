@@ -1161,6 +1161,79 @@ pub fn derivation(
     steps
 }
 
+/// One step of a recursive function's fixpoint chain: the atoms it added
+/// and, for each distinct cause, the line and the callee or operation that
+/// added them.
+#[derive(Debug, Clone)]
+pub struct FixpointStep {
+    pub added: Vec<String>,
+    pub causes: Vec<DerivationStep>,
+}
+
+/// Why a function in a recursive group has its set, as design.md §12
+/// (Recursion and fixpoints, `karac explain`) promises: the group, and the
+/// chain `∅ = φ₀ ⊊ φ₁ ⊊ … ⊊ φ_k`, each step with the callee or operation
+/// that added atoms (B-2026-11-24-46). `None` for a function in no cycle.
+pub fn fixpoint_chain(
+    effects: &EffectCheckResult,
+    function: &str,
+    file: &str,
+) -> Option<(Vec<String>, Vec<FixpointStep>)> {
+    use crate::effectchecker::EffectOrigin;
+    let chain = effects.fixpoint_chains.get(function)?;
+    let steps = chain
+        .steps
+        .iter()
+        .map(|added| {
+            let mut by_cause: Vec<(usize, String, Vec<String>)> = Vec::new();
+            for te in added {
+                let (line, reason) = match &te.origin {
+                    EffectOrigin::Callee { fn_name, span } => match builtin_construct(fn_name) {
+                        Some(what) => (
+                            span.line,
+                            format!("{} has {what}", trait_method_name(function)),
+                        ),
+                        None => (
+                            span.line,
+                            format!(
+                                "{} calls {}",
+                                trait_method_name(function),
+                                shown_callee(fn_name)
+                            ),
+                        ),
+                    },
+                    EffectOrigin::Direct(span) => (
+                        span.line,
+                        format!("{} performs it", trait_method_name(function)),
+                    ),
+                };
+                // One line per cause, naming the atoms it added.
+                let atom = effect_display(&te.effect);
+                match by_cause
+                    .iter_mut()
+                    .find(|(l, r, _)| *l == line && *r == reason)
+                {
+                    Some((_, _, atoms)) => atoms.push(atom),
+                    None => by_cause.push((line, reason, vec![atom])),
+                }
+            }
+            let causes = by_cause
+                .into_iter()
+                .map(|(line, reason, atoms)| DerivationStep {
+                    file: file.to_string(),
+                    line,
+                    reason: format!("{reason}, adding {}", atoms.join(", ")),
+                })
+                .collect();
+            FixpointStep {
+                added: added.iter().map(|te| effect_display(&te.effect)).collect(),
+                causes,
+            }
+        })
+        .collect();
+    Some((chain.group.clone(), steps))
+}
+
 /// A derivation as the JSON array design.md §17 shows:
 /// `[{"file", "line", "reason"}, ...]`.
 pub fn derivation_json(steps: &[DerivationStep]) -> String {

@@ -4,7 +4,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable. Cell names
 
 Run with `python3 conformance/cases.py conformance/design/effects` and, for the two package cells, `python3 conformance/packages.py conformance/design/modules`. Kinds this directory adds to cases.py: `.effects` (the sets `karac query effects` infers), `.cmd` (a karac command's output), `.json` (a predicate over a JSON document), `.notes` and `.absent` (text `karac check` must or must not print).
 
-**Totals (2026-11-24):** 219 normative sentences, 203 covered, 6 partial, 10 not testable. Two of the covered failed when the audit started and are fixed with it: a `par` branch was not charged the program impls a native runs on what it holds (B-2026-11-24-44), and a function declaring a keyed resource was charged nothing for it (B-2026-11-24-45). 39 sentences had no cell before the audit; the rest were covered by the earlier pass, the probe's sweep and the Rust suites.
+**Totals (2026-11-24):** 219 normative sentences, 204 covered, 5 partial, 10 not testable. Two of the covered failed when the audit started and are fixed with it: a `par` branch was not charged the program impls a native runs on what it holds (B-2026-11-24-44), and a function declaring a keyed resource was charged nothing for it (B-2026-11-24-45). 39 sentences had no cell before the audit; the rest were covered by the earlier pass, the probe's sweep and the Rust suites.
 
 ## Introduction
 
@@ -174,7 +174,7 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 | 5522 | Allocation failure is not a `panics` atom | covered | allocation_alone_is_not_a_panics_atom (new) |
 | 5524 | Monotonicity and a unique least fixed point from the empty assignment | covered | self_recursion_with_no_effects_stays_empty_least_fixed |
 | 5526 | A group that exceeds `n · m` iterations is an internal compiler error | not testable | a guard against a monotonicity bug |
-| 5528 | `karac explain` reports the chain `φ₀ ⊊ … ⊊ φ*` with the step that added atoms | partial | explain_shows_default_permitted_effects_and_their_chain (new): explain gives each effect's call chain to the operation that adds it, not the iteration chain; B-2026-11-24-46 (open) |
+| 5528 | `karac explain` reports the chain `φ₀ ⊊ … ⊊ φ*` with the step that added atoms | covered | explain_reports_the_fixpoint_chain_of_a_recursive_group (new): a `Fixpoint:` section names the group and each step's added atoms with the callee or operation that added them, ending at φ*; explain_shows_default_permitted_effects_and_their_chain for the per-effect chain; B-2026-11-24-46 (fixed) |
 
 ### Mutual recursion
 

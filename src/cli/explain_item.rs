@@ -4,7 +4,9 @@
 //! `karac fix` and `karac explain`, §2 Reported behavior; B-2026-11-05-28).
 
 use super::*;
-use crate::effect_graph::{derivation, derivation_json, effect_display, DerivationStep};
+use crate::effect_graph::{
+    derivation, derivation_json, effect_display, fixpoint_chain, DerivationStep, FixpointStep,
+};
 use crate::effectchecker::DeclaredEffects;
 
 /// One parameter: its name, its declared mode and the weakest mode its
@@ -28,6 +30,9 @@ struct ItemReport {
     /// `#[repr]`: the enum and the call's line (design.md § Semver lock,
     /// B-2026-11-25-17).
     local_discriminants: Vec<(String, usize)>,
+    /// For a function in a recursive group: the group and how the fixed
+    /// point grew its set (B-2026-11-24-46).
+    fixpoint: Option<(Vec<String>, Vec<FixpointStep>)>,
 }
 
 /// The span of `item`'s body: a free function `f`, or a method
@@ -160,6 +165,7 @@ fn report(file: &str, item: &str) -> Result<ItemReport, String> {
         }
         _ => Vec::new(),
     };
+    let fixpoint = effects.and_then(|e| fixpoint_chain(e, item, file));
     Ok(ItemReport {
         item: item.to_string(),
         file: file.to_string(),
@@ -169,6 +175,7 @@ fn report(file: &str, item: &str) -> Result<ItemReport, String> {
         declared_json: crate::effect_graph::declared_effects_json(declared_effects),
         params,
         local_discriminants,
+        fixpoint,
     })
 }
 
@@ -196,6 +203,49 @@ fn render_text(r: &ItemReport) -> String {
         Some(d) if !d.is_empty() => out.push_str(&format!("Declared effects: {d}\n")),
         Some(_) => out.push_str("Declared effects: none (an empty `with` clause)\n"),
         None => out.push_str("Declared effects: no `with` clause\n"),
+    }
+    if let Some((group, steps)) = &r.fixpoint {
+        // design.md §12 Recursion and fixpoints: the chain from ∅, each step
+        // with the callee or operation that added atoms (B-2026-11-24-46).
+        if group.len() > 1 {
+            out.push_str(&format!(
+                "\nFixpoint: `{}` is in the recursive group {{{}}}; its set grew from ∅ in {} step{}\n",
+                r.item,
+                group.join(", "),
+                steps.len(),
+                if steps.len() == 1 { "" } else { "s" }
+            ));
+        } else {
+            out.push_str(&format!(
+                "\nFixpoint: `{}` calls itself; its set grew from ∅ in {} step{}\n",
+                r.item,
+                steps.len(),
+                if steps.len() == 1 { "" } else { "s" }
+            ));
+        }
+        out.push_str("  φ0 = ∅\n");
+        // The last step is φ* when the chain reaches the whole inferred set.
+        let reached: std::collections::HashSet<&str> = steps
+            .iter()
+            .flat_map(|s| s.added.iter().map(String::as_str))
+            .collect();
+        let complete = r.inferred.iter().all(|(e, _)| reached.contains(e.as_str()));
+        for (i, step) in steps.iter().enumerate() {
+            let last = if complete && i + 1 == steps.len() {
+                " = φ*"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "  φ{} = φ{} + {}{last}\n",
+                i + 1,
+                i,
+                step.added.join(", ")
+            ));
+            for c in &step.causes {
+                out.push_str(&format!("    {}:{}  {}\n", c.file, c.line, c.reason));
+            }
+        }
     }
     if !r.params.is_empty() {
         out.push_str("\nParameters:\n");
@@ -256,8 +306,30 @@ fn render_json(r: &ItemReport) -> String {
             )
         })
         .collect();
+    let fixpoint = match &r.fixpoint {
+        None => "null".to_string(),
+        Some((group, steps)) => {
+            let group: Vec<String> = group.iter().map(|g| json_string(g)).collect();
+            let chain: Vec<String> = steps
+                .iter()
+                .map(|s| {
+                    let added: Vec<String> = s.added.iter().map(|e| json_string(e)).collect();
+                    format!(
+                        "{{\"added\":[{}],\"derivation\":{}}}",
+                        added.join(","),
+                        derivation_json(&s.causes)
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"group\":[{}],\"chain\":[{}]}}",
+                group.join(","),
+                chain.join(",")
+            )
+        }
+    };
     format!(
-        "{{\"kind\":\"item\",\"item\":{},\"file\":{},\"line\":{},\"inferred_effects\":[{}],\"declared_effects\":{},\"effects\":[{}],\"parameters\":[{}],\"local_discriminants\":[{}]}}",
+        "{{\"kind\":\"item\",\"item\":{},\"file\":{},\"line\":{},\"inferred_effects\":[{}],\"declared_effects\":{},\"effects\":[{}],\"parameters\":[{}],\"local_discriminants\":[{}],\"fixpoint\":{}}}",
         json_string(&r.item),
         json_string(&r.file),
         r.line,
@@ -273,6 +345,7 @@ fn render_json(r: &ItemReport) -> String {
             ))
             .collect::<Vec<_>>()
             .join(","),
+        fixpoint,
     )
 }
 

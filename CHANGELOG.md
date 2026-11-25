@@ -583,6 +583,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `karac explain <file>.<fn>` on a function in a recursive group, or one
+  that calls itself, adds a `Fixpoint:` section: the group, then the
+  chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added
+  and the callee or operation that added them (design.md §12 Recursion
+  and fixpoints). `--format=json` carries it as `"fixpoint"`, `null` for a
+  function in no cycle (B-2026-11-24-46).
 - `Vec.set_len(n)`, an `unsafe fn`: the length becomes `n` and the
   elements past it are forgotten, not dropped, for code that has read them
   out through a raw pointer (docs/library/collections.md). Only shrinking

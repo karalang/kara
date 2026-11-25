@@ -493,6 +493,7 @@ mod tests {
             call_effect_subs: Default::default(),
             unused_effects: Vec::new(),
             inferred_public: Vec::new(),
+            fixpoint_chains: Default::default(),
         }
     }
 
