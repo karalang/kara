@@ -897,7 +897,7 @@ pub(super) fn cmd_check_project(
     let mut v2_warnings_json: Vec<String> = Vec::new();
     let mut v2_effects: Option<(String, String)> = None;
     if pc.refuses_only_by_type() {
-        let entry = &pc.tree.modules[pc.tree.root as usize].file;
+        let entry = &pc.tree.modules[pc.tree.root].file;
         let filename = super::project_v2::shown(entry);
         match super::project_v2::source_files(&pc.tree, false).and_then(|files| {
             super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "")
@@ -1441,6 +1441,21 @@ fn cmd_check_package_member(
     };
     let mut pc = match checked {
         Ok(pc) => pc,
+        // A package with its entry that still cannot be assembled (a
+        // `src/db/mod.kara`, a module directory not in snake_case) is refused
+        // by `karac check` with no file and by `karac build`, so the file
+        // check refuses it with the same error: checked on its own, the
+        // file's imports name nothing and the check reported an internal
+        // E0516 (B-2026-11-25-53).
+        Err(e)
+            if script.is_none()
+                && ["main.kara", "lib.kara"]
+                    .iter()
+                    .any(|f| root.join("src").join(f).is_file()) =>
+        {
+            emit_build_error(&e, output);
+            process::exit(1);
+        }
         Err(e) => {
             // No package VIEW could be formed at all — most often a directory
             // holding a `kara.toml` and modules but no `src/main.kara` /
@@ -1468,6 +1483,35 @@ fn cmd_check_package_member(
     if pc.lone_entry(root).is_some() {
         return false;
     }
+    // The verdict is the package's: `karac check` with no file, `run` and
+    // `build` judge the combined source by the v2 check once the module
+    // boundaries hold, so the named file is judged by it too, and its part of
+    // that check reported. The per-module typecheck alone refused a re-export
+    // as a different type, took another module's `make()` return type, and
+    // missed an impl no file imports (B-2026-11-25-53).
+    let mut elsewhere_tests = 0;
+    if script.is_none() && output == OutputMode::Text && pc.refuses_only_by_type() {
+        if let Some((pipeline, a, entry)) = package_v2_check(root, &pc, &lints) {
+            if pipeline.total_errors() > 0 {
+                report_v2_for_file(filename, root, &pipeline, &a, &entry);
+            }
+            pc.past_the_v2_check();
+            pc.type_warnings.clear();
+            // Its warnings stand in for the modules' own, as in project
+            // mode; the named file's are shown.
+            for block in super::render_text_diagnostics(&pipeline) {
+                let file = a.header_file(&entry, block.lines().next().unwrap_or(""));
+                if file.is_some_and(|f| same_file(f, filename)) {
+                    eprintln!("{}", a.remap_text(&entry, &block));
+                }
+            }
+            // The package's test files are checked by `karac check` with no
+            // file; an error there is one in another file (k27).
+            if !pc.has_errors() && !filename.ends_with("_test.kara") {
+                elsewhere_tests = package_test_errors(root, &lints);
+            }
+        }
+    }
     let had_errors = pc.has_errors();
     // Machine output that reaches here is a package the combined source could
     // not be formed for (a parse error in a module, a cycle): the package
@@ -1482,7 +1526,7 @@ fn cmd_check_package_member(
         emit_found_entries(&diags, &package_files(&pc.tree), output, None);
         process::exit(i32::from(had_errors));
     }
-    let elsewhere = pc.restrict_to_file(std::path::Path::new(filename));
+    let elsewhere = pc.restrict_to_file(std::path::Path::new(filename)) + elsewhere_tests;
 
     match output {
         OutputMode::Json | OutputMode::Jsonl => unreachable!("reported above"),
@@ -1517,10 +1561,87 @@ fn cmd_check_package_member(
             }
         }
     }
-    if had_errors {
+    if had_errors || elsewhere_tests > 0 {
         process::exit(1);
     }
     true
+}
+
+/// Whether `a` and `b` name the same file, canonically where both resolve.
+fn same_file(a: &str, b: &str) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// The v2 check of the package's combined source, as `karac check` with no
+/// file runs it ([`cmd_check_project`]): the pipeline, the combined source,
+/// and the name the pipeline knows it by. `None` when the package does not
+/// combine, which the package check reports.
+fn package_v2_check(
+    root: &std::path::Path,
+    pc: &super::build_cmds::PackageCheck,
+    lints: &crate::lints::CliLintOverrides,
+) -> Option<(Pipeline, super::project_v2::Amalgam, String)> {
+    let entry = super::project_v2::shown(&pc.tree.modules[pc.tree.root].file);
+    let files = super::project_v2::source_files(&pc.tree, false).ok()?;
+    let a = super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "").ok()?;
+    let mf = manifest::load_from_root(root).ok();
+    let pipeline =
+        super::run_v2::check_v2_unreported(&entry, &a.text, Some(&a), mf.as_ref(), lints.clone());
+    Some((pipeline, a, entry))
+}
+
+/// A refusal of the package's combined source, reported as `karac check
+/// <filename>` reports: the diagnostics in that file, and a count of the
+/// rest. Exits 1.
+fn report_v2_for_file(
+    filename: &str,
+    root: &std::path::Path,
+    pipeline: &Pipeline,
+    a: &super::project_v2::Amalgam,
+    entry: &str,
+) -> ! {
+    let mut shown = 0usize;
+    let mut elsewhere = 0usize;
+    for block in super::render_text_diagnostics(pipeline) {
+        let error = block.starts_with("error");
+        let file = a.header_file(entry, block.lines().next().unwrap_or(""));
+        if file.is_none_or(|f| same_file(f, filename)) {
+            eprintln!("{}", a.remap_text(entry, &block));
+            shown += usize::from(error);
+        } else {
+            elsewhere += usize::from(error);
+        }
+    }
+    if shown > 0 {
+        println!("\n{shown} error(s) found.");
+    }
+    if elsewhere > 0 {
+        eprintln!(
+            "note: {elsewhere} further error(s) in other modules of the package at \
+             `{}` — run `cd {} && karac check` to see them",
+            root.display(),
+            root.display(),
+        );
+    }
+    process::exit(1);
+}
+
+/// The errors `karac check` with no file finds in the package's test files,
+/// counted without printing them.
+fn package_test_errors(root: &std::path::Path, lints: &crate::lints::CliLintOverrides) -> usize {
+    let cwd = std::env::current_dir().ok();
+    if std::env::set_current_dir(root).is_err() {
+        return 0;
+    }
+    let mut json = Vec::new();
+    let errors = super::test_v2::check_package_tests(root, lints, OutputMode::Json, &mut json);
+    if let Some(cwd) = cwd {
+        let _ = std::env::set_current_dir(cwd);
+    }
+    errors
 }
 
 /// `karac check <x_test.kara>` in a package: when the package's own modules
@@ -1585,6 +1706,22 @@ fn check_package_machine(
     if errors == 0 {
         if let Some(pc) = &a.refusal {
             render_package_refusal(pc, output);
+        }
+        // The package's test files, as `karac check` with no file checks
+        // them (B-2026-11-25-53): an error there fails this check too.
+        if output == OutputMode::Json && !filename.ends_with("_test.kara") {
+            let cwd = std::env::current_dir().ok();
+            if std::env::set_current_dir(root).is_ok() {
+                let mut json = Vec::new();
+                let n = super::test_v2::check_package_tests(root, lints, output, &mut json);
+                if let Some(cwd) = cwd {
+                    let _ = std::env::set_current_dir(cwd);
+                }
+                if n > 0 {
+                    println!("{{\"diagnostics\":[{}]}}", json.join(","));
+                    process::exit(1);
+                }
+            }
         }
     }
     match output {
@@ -2516,7 +2653,16 @@ pub(super) fn emit_build_error(msg: &str, output: OutputMode) {
         return;
     }
     match output {
-        OutputMode::Json | OutputMode::Jsonl => {
+        // The document every refusal is reported in, its one diagnostic
+        // coded (design.md § 17): a bare object had no `diagnostics` for a
+        // tool to read (B-2026-11-25-60).
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"build\",\"concept\":\"compilation/pipeline\",\"code\":\"build\",\"message\":{}}}]}}",
+                json_string(msg)
+            );
+        }
+        OutputMode::Jsonl => {
             println!(
                 "{{\"severity\":\"error\",\"phase\":\"build\",\"concept\":\"compilation/pipeline\",\"message\":{}}}",
                 json_string(msg)

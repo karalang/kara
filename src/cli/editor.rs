@@ -201,6 +201,88 @@ pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDi
         pipeline.run_all_checks();
         return diagnostics_of(&pipeline);
     }
+    // Judged as `karac check` judges the package: by the v2 check of its
+    // combined source, the buffer in place of the file, once the module
+    // boundaries hold. Its diagnostics in this file are reported in the
+    // file's own offsets (B-2026-11-25-53).
+    let mut v2 = Vec::new();
+    if pc.refuses_only_by_type() {
+        if let Some(found) = v2_diagnostics_in(&pc, path, source, mf.as_ref(), &lints) {
+            v2 = found;
+            pc.past_the_v2_check();
+            pc.type_warnings.clear();
+        }
+    }
     pc.restrict_to_file(path);
-    pc.editor_diagnostics(path)
+    let mut out = pc.editor_diagnostics(path);
+    out.extend(v2);
+    out
+}
+
+/// The v2 check of the package's combined source with `source` as the file
+/// at `path`, and its diagnostics placed in that file. `None` when the
+/// package does not combine.
+fn v2_diagnostics_in(
+    pc: &super::build_cmds::PackageCheck,
+    path: &std::path::Path,
+    source: &str,
+    mf: Option<&manifest::Manifest>,
+    lints: &crate::lints::CliLintOverrides,
+) -> Option<Vec<PlaygroundDiagnostic>> {
+    let files =
+        super::project_v2::source_files_with_buffer(&pc.tree, false, Some((path, source))).ok()?;
+    let a = super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "").ok()?;
+    let entry_name = super::project_v2::shown(&pc.tree.modules[pc.tree.root].file);
+    let pipeline =
+        super::run_v2::check_v2_unreported(&entry_name, &a.text, Some(&a), mf, lints.clone());
+    let here = |f: &str| match (std::fs::canonicalize(f), std::fs::canonicalize(path)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => std::path::Path::new(f) == path,
+    };
+    let diags = collect_diagnostics(&pipeline);
+    let mut out = Vec::new();
+    for (entry, span) in diags.entries.iter().zip(&diags.spans) {
+        // Placed as `karac check --output=json` places it: the file, and
+        // the line and column in it.
+        let Ok(v) =
+            serde_json::from_str::<serde_json::Value>(&a.remap_json_text(&entry_name, entry))
+        else {
+            continue;
+        };
+        if !v["file"].as_str().is_some_and(here) {
+            continue;
+        }
+        let (Some(line), Some(column)) = (v["line"].as_u64(), v["column"].as_u64()) else {
+            continue;
+        };
+        let (line, column) = (line as usize, column as usize);
+        let line_start: usize = source
+            .split_inclusive('\n')
+            .take(line.saturating_sub(1))
+            .map(str::len)
+            .sum();
+        let offset = source[line_start.min(source.len())..]
+            .char_indices()
+            .nth(column.saturating_sub(1))
+            .map_or(source.len(), |(i, _)| line_start + i);
+        out.push(PlaygroundDiagnostic {
+            phase: phase_of(v["phase"].as_str().unwrap_or("")),
+            severity: severity_of(v["severity"].as_str().unwrap_or("")),
+            message: v["message"].as_str().unwrap_or("").to_string(),
+            code: v["code"].as_str().map(str::to_string),
+            help: v["hints"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|h| h["description"].as_str())
+                .map(str::to_string)
+                .collect(),
+            line,
+            column,
+            offset,
+            length: span.length,
+            fixes: fixes_of(&v),
+        });
+    }
+    Some(out)
 }

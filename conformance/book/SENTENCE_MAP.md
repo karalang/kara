@@ -22,7 +22,7 @@ A cell can also be a package: a directory `<name>/` with a `kara.toml`, run in p
 
 A cell is named for the claim it pins, so `ch02/narrowing_needs_as` is the one to read when that sentence changes. `tests/book_snippets.rs` still checks that every `kara` block compiles; this map is about what the text says the code does. A REPL claim is pinned by `tests/repl_v2/book_transcript.rs` and `conformance/repl/`.
 
-**Totals (2026-11-25), all chapters:** 188 claims: 179 covered, 1 FAILS (B-2026-11-25-60), 8 not testable. 231 cells, all passing on the interpreter and compiled except the one `.open` cell. Chapters 1 to 7 hold 70 of the claims and 89 of the cells; their one FAILS row, B-2026-11-25-38, is fixed.
+**Totals (2026-11-25), all chapters:** 188 claims: 180 covered, 8 not testable. 231 cells, all passing on the interpreter and compiled. B-2026-11-25-60, the one FAILS row, is fixed. Chapters 1 to 7 hold 70 of the claims and 89 of the cells; their one FAILS row, B-2026-11-25-38, is fixed.
 
 **The book changed where it contradicted the spec** (each marked FIXED in its row):
 - ch01: `karac run hello.kara  # interpret it` now says it builds and runs the program; design.md §16 leaves the backend to the implementation and names `--interp` for the interpreter.
@@ -245,7 +245,7 @@ A cell is named for the claim it pins, so `ch02/narrowing_needs_as` is the one t
 
 | Line | Claim | Status | Cells |
 |---|---|---|---|
-| 19 | A module directory must be snake_case | FAILS (B-2026-11-25-60: refused, but outside the JSON document) | ch13/module_name_case (.open) |
+| 19 | A module directory must be snake_case | covered (B-2026-11-25-60, fixed) | ch13/module_name_case |
 | 27 | Default visibility reaches the project; `private` stays in the directory | covered | ch13/visibility, ch13/private_is_directory_only (E0111) |
 | 55 | Imports, renames, grouped imports | covered | ch13/visibility, ch13/reexport, ch13/prelude |
 | 74 | `pub import` re-exports, same type | covered | ch13/reexport |

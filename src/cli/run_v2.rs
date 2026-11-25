@@ -191,25 +191,10 @@ pub(super) fn check_v2_or_exit(
     lint_overrides: crate::lints::CliLintOverrides,
     output: OutputMode,
 ) -> Pipeline {
-    let mut lint_overrides = lint_overrides;
-    if let Some(m) = manifest {
-        lint_overrides.apply_manifest_lints(&m.lints);
-    }
-    // A dependency's trait the file does not import supplies no method there,
-    // in this check and in the MIR builder's of the same source.
-    if let Some(a) = project {
-        lint_overrides.hidden_traits = a.hidden.clone();
-        crate::trait_scope::set_program(a.hidden.clone());
-    }
+    let lint_overrides = v2_lints(project, manifest, lint_overrides);
     // An error `karac check` reports fails the command too (core semantics
     // §0): the MIR builder does not repeat every rule.
-    let checked = || {
-        let mut p = v2_pipeline(filename, source, manifest, lint_overrides.clone());
-        if let Some(a) = project {
-            a.package_effects_into(&mut p.profile_config);
-        }
-        p
-    };
+    let checked = || v2_checked(filename, source, project, manifest, &lint_overrides);
     let mut pipeline = checked();
     pipeline.run_all_checks();
     let total = pipeline.total_errors();
@@ -234,6 +219,54 @@ pub(super) fn check_v2_or_exit(
         }
         process::exit(1);
     }
+    pipeline
+}
+
+/// The lints [`check_v2_or_exit`] checks under: the manifest's, and a
+/// dependency's traits the file does not import hidden, here and in the MIR
+/// builder's check of the same source.
+fn v2_lints(
+    project: Option<&super::project_v2::Amalgam>,
+    manifest: Option<&manifest::Manifest>,
+    lint_overrides: crate::lints::CliLintOverrides,
+) -> crate::lints::CliLintOverrides {
+    let mut lint_overrides = lint_overrides;
+    if let Some(m) = manifest {
+        lint_overrides.apply_manifest_lints(&m.lints);
+    }
+    if let Some(a) = project {
+        lint_overrides.hidden_traits = a.hidden.clone();
+        crate::trait_scope::set_program(a.hidden.clone());
+    }
+    lint_overrides
+}
+
+fn v2_checked(
+    filename: &str,
+    source: &str,
+    project: Option<&super::project_v2::Amalgam>,
+    manifest: Option<&manifest::Manifest>,
+    lint_overrides: &crate::lints::CliLintOverrides,
+) -> Pipeline {
+    let mut p = v2_pipeline(filename, source, manifest, lint_overrides.clone());
+    if let Some(a) = project {
+        a.package_effects_into(&mut p.profile_config);
+    }
+    p
+}
+
+/// [`check_v2_or_exit`]'s check, returned whatever it finds: `karac check
+/// <file>` in a package reports the part of it in that file (B-2026-11-25-53).
+pub(super) fn check_v2_unreported(
+    filename: &str,
+    source: &str,
+    project: Option<&super::project_v2::Amalgam>,
+    manifest: Option<&manifest::Manifest>,
+    lint_overrides: crate::lints::CliLintOverrides,
+) -> Pipeline {
+    let lint_overrides = v2_lints(project, manifest, lint_overrides);
+    let mut pipeline = v2_checked(filename, source, project, manifest, &lint_overrides);
+    pipeline.run_all_checks();
     pipeline
 }
 

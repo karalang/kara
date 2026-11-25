@@ -224,7 +224,7 @@ impl Amalgam {
     }
 
     /// The file a rendered diagnostic's `name:L:C` header places it in.
-    fn header_file(&self, name: &str, line: &str) -> Option<&str> {
+    pub(super) fn header_file(&self, name: &str, line: &str) -> Option<&str> {
         let rest = &line[line.find(&format!("{name}:"))? + name.len() + 1..];
         let digits = rest.chars().take_while(char::is_ascii_digit).count();
         Some(self.locate(rest[..digits].parse().ok()?)?.0)
@@ -509,6 +509,24 @@ pub(super) fn source_files(
     tree: &ProgramTree,
     with_tests: bool,
 ) -> Result<Vec<SourceFile<'_>>, String> {
+    source_files_with_buffer(tree, with_tests, None)
+}
+
+/// [`source_files`] with one file's text taken from an editor buffer rather
+/// than the disk (B-2026-11-25-53).
+pub(super) fn source_files_with_buffer<'t>(
+    tree: &'t ProgramTree,
+    with_tests: bool,
+    buffer: Option<(&std::path::Path, &str)>,
+) -> Result<Vec<SourceFile<'t>>, String> {
+    let is_buffer = |p: &std::path::Path| {
+        buffer.is_some_and(
+            |(b, _)| match (std::fs::canonicalize(p), std::fs::canonicalize(b)) {
+                (Ok(x), Ok(y)) => x == y,
+                _ => p == b,
+            },
+        )
+    };
     let mut out = Vec::new();
     for id in crate::module::emission_order(tree) {
         let m = &tree.modules[id];
@@ -524,8 +542,11 @@ pub(super) fn source_files(
             }
         }
         for path in paths {
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            let text = match buffer {
+                Some((_, text)) if is_buffer(path) => text.to_string(),
+                _ => std::fs::read_to_string(path)
+                    .map_err(|e| format!("cannot read {}: {e}", path.display()))?,
+            };
             let mut parsed = crate::parse(&text);
             // A dependency's imports name its own dependencies as its
             // source writes them; the tree registers them by import name.
