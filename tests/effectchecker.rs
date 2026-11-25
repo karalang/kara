@@ -3718,13 +3718,12 @@ fn test_trait_method_effects_compose_at_call_site_not_during_unification() {
 // ── Round 9: `with E` same-signature unification ────────────────
 
 #[test]
-fn test_with_e_two_slots_disagreeing_closures_conflict() {
-    // Two `with E` slots, closures with different effect sets → conflict.
-    // The diagnostic names E and both bindings. (Other diagnostics may
-    // also fire from the existing `with _` viral rule and Fn-slot
-    // subtyping checks — those are separate concerns; round 9 ships the
-    // conflict-detection diagnostic.)
-    let errors = effectcheck_errors(
+fn test_with_e_two_slots_disagreeing_closures_take_the_union() {
+    // Two `with E` slots, closures with different effect sets: E is their
+    // union (design.md § Effect variables, "Several values give the union
+    // of their sets"), so the call is accepted. It refused this as E0406
+    // until B-2026-11-25-30; the code is retired.
+    effectcheck_ok(
         "effect resource Log;
          effect resource Db;
          pub fn write_log() with writes(Log) {}
@@ -3734,49 +3733,19 @@ fn test_with_e_two_slots_disagreeing_closures_conflict() {
              pipe(|| write_log(), || read_db())
          }",
     );
-    let conflict = errors
-        .iter()
-        .find(|e| e.kind == EffectErrorKind::EffectVariableConflict)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected EffectVariableConflict, got: {:?}",
-                errors
-                    .iter()
-                    .map(|e| (&e.kind, &e.message))
-                    .collect::<Vec<_>>()
-            )
-        });
-    assert!(
-        conflict.message.contains("`E`")
-            && conflict.message.contains("writes(Log)")
-            && conflict.message.contains("reads(Db)"),
-        "conflict diagnostic should name E and both bindings, got: {}",
-        conflict.message
-    );
 }
 
 #[test]
-fn test_with_e_function_ref_args_conflict() {
-    // Same conflict shape with function-ref args (not closures). Effect
-    // sets come from each function's inferred effects, unified at the
-    // call site.
-    let errors = effectcheck_errors(
+fn test_with_e_function_ref_args_take_the_union() {
+    // Same shape with function-ref args (not closures): each function's
+    // effects join E's union at the call site (B-2026-11-25-30).
+    effectcheck_ok(
         "effect resource Log;
          effect resource Db;
          pub fn write_log() with writes(Log) {}
          pub fn read_db() with reads(Db) {}
          pub fn pipe[with E](a: Fn() with E, b: Fn() with E) with E { a(); b(); }
          pub fn run() with writes(Log) reads(Db) { pipe(write_log, read_db) }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == EffectErrorKind::EffectVariableConflict),
-        "expected EffectVariableConflict for function-ref args, got: {:?}",
-        errors
-            .iter()
-            .map(|e| (&e.kind, &e.message))
-            .collect::<Vec<_>>()
     );
 }
 
@@ -3863,11 +3832,10 @@ fn test_with_e_agreeing_function_refs_no_viral_or_subtype_error() {
 }
 
 #[test]
-fn test_with_e_disagreeing_no_spurious_subtype_error() {
-    // When `with E` slots disagree, only the EffectVariableConflict
-    // diagnostic fires — the Fn-slot subtyping check uses the union of
-    // referenced args' effects so each individual arg satisfies its
-    // resolved slot vacuously, avoiding double-reporting.
+fn test_with_e_disagreeing_args_raise_no_error_of_any_kind() {
+    // The Fn-slot subtyping check resolves `with E` to the union of the
+    // referenced args' effects, so each arg fits its slot; and the union
+    // is no conflict (B-2026-11-25-30). Nothing is reported.
     let result = effectcheck_all(
         "effect resource Log;
          effect resource Db;
@@ -3878,26 +3846,14 @@ fn test_with_e_disagreeing_no_spurious_subtype_error() {
              pipe(|| write_log(), || read_db())
          }",
     );
-    let subtype_errors: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
-        .collect();
     assert!(
-        subtype_errors.is_empty(),
-        "`with E` disagreement must not raise spurious subtype errors, got: {:?}",
-        subtype_errors
-    );
-    let conflicts: Vec<_> = result
-        .errors
-        .iter()
-        .filter(|e| e.kind == EffectErrorKind::EffectVariableConflict)
-        .collect();
-    assert_eq!(
-        conflicts.len(),
-        1,
-        "expected exactly one EffectVariableConflict, got: {:?}",
-        result.errors
+        result.errors.is_empty(),
+        "the union of the args' effects solves E, got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -6118,10 +6074,11 @@ fn test_method_call_function_ref_arg_propagates_effects() {
 }
 
 #[test]
-fn test_method_call_with_e_unification_disagreeing_closures_conflict() {
-    // F2: method-call analogue of `test_with_e_two_slots_disagreeing_closures_conflict`.
-    // Two `with E` slots on a method, closures with different effect sets →
-    // EffectVariableConflict.
+fn test_method_call_with_e_disagreeing_closures_take_the_union() {
+    // F2: method-call analogue of
+    // `test_with_e_two_slots_disagreeing_closures_take_the_union`: a
+    // method's own `with E` at two slots is solved as the union
+    // (B-2026-11-25-30).
     let result = effectcheck_full_pipeline(
         "effect resource Log;
          effect resource Db;
@@ -6136,26 +6093,14 @@ fn test_method_call_with_e_unification_disagreeing_closures_conflict() {
              r.pipe(|| write_log(), || read_db())
          }",
     );
-    let conflict = result
-        .errors
-        .iter()
-        .find(|e| e.kind == EffectErrorKind::EffectVariableConflict)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected EffectVariableConflict on r.pipe(...), got: {:?}",
-                result
-                    .errors
-                    .iter()
-                    .map(|e| (&e.kind, &e.message))
-                    .collect::<Vec<_>>()
-            )
-        });
     assert!(
-        conflict.message.contains("`E`")
-            && conflict.message.contains("writes(Log)")
-            && conflict.message.contains("reads(Db)"),
-        "conflict diagnostic should name E and both bindings, got: {}",
-        conflict.message
+        result.errors.is_empty(),
+        "expected r.pipe(...) to be accepted, got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
     );
 }
 

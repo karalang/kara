@@ -213,7 +213,7 @@ Bucket key: **A✓** applied · **A⚠** emitted-not-applied · **B** mechanical
 | E0403 | UndefinedEffectGroup | references undefined group | B | remove ref / define group |
 | E0404 | EffectSubtypeViolation | arg effects exceed slot | B | widen slot `with` to inferred set |
 | E0405 | ProfileViolation | extern effect forbidden by profile | B | remove forbidden effect |
-| E0406 | EffectVariableConflict | `with E` slots conflict | C | unify/split — restructure |
+| E0406 | EffectVariableConflict | retired: several values at one use give the union (B-2026-11-25-30) | — | — |
 | E0407 | ProfileIncompatibleEffect | profile fn has forbidden effect | C | policy decision |
 | E0408 | ModuleBindingWriteInPar | module `let mut` written in `par` | C | Atomic/Mutex/thread_local — design |
 | E0409 | PubFnSyntheticResource | unnameable synthetic resource | C | wrap/opt-in — policy |

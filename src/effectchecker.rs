@@ -33,7 +33,6 @@ mod subtyping;
 mod target_gate;
 pub mod unused_effect;
 mod verify;
-mod with_e;
 
 pub use elem_impls::{ElemImplIndex, TypeImpls};
 pub use unused_effect::UnusedEffect;
@@ -899,11 +898,12 @@ pub enum EffectErrorKind {
     ImplExceedsTraitCeiling,
     /// A trait default method body's inferred effects exceed the method's declared ceiling.
     TraitDefaultExceedsCeiling,
-    /// A named effect variable `E` (declared in `[with E]`) appears at multiple
-    /// `with E` slots in a call's signature, but the closure arguments at those
-    /// slots have inferred effect sets that disagree. Per design.md:315–317,
-    /// `E` is single-assignment per call: the first `with E` slot binds it; later
-    /// slots must match. Two `with _` slots, by contrast, are independent.
+    /// Retired (E0406, B-2026-11-25-30): nothing constructs it. It refused a
+    /// call whose function values at one effect variable's positions had
+    /// different sets, but several values at one use give the union of
+    /// their sets (design.md § Effect variables); a later binding that does
+    /// not fit the solved set is the subtyping error E0404. Kept so the
+    /// code-table and JSON mappings stay total.
     EffectVariableConflict,
     /// A function with `#[profile(P1, P2, ...)]` declared compatibility
     /// with a set of profiles, but its transitive (declared + inferred)
@@ -1540,12 +1540,10 @@ pub struct EffectChecker<'a> {
     /// Per-function effect-variable position index: function key → effect
     /// variable name → list of parameter indices whose `Fn(...) with E`
     /// type references that variable. Populated after `collect_function_info`;
-    /// consulted by `check_with_e_unification` to enforce single-assignment
-    /// of `E` across multiple `with E` slots in one signature
-    /// (design.md:315–317). A variable that appears at only one position
-    /// adds no constraint beyond the existing `with _` polymorphic behavior;
-    /// a variable at 2+ positions requires every closure argument's effect
-    /// set to agree, with a conflict diagnostic otherwise.
+    /// consulted by `compute_call_var_bindings`, which solves each variable
+    /// at a call as the union of the function values bound to its positions
+    /// (design.md § Effect variables, "Several values give the union of
+    /// their sets"; B-2026-11-25-30).
     pub(crate) fn_effect_var_positions: FxHashMap<Symbol, FxHashMap<String, Vec<usize>>>,
     /// The parameter positions of each method whose function type names an
     /// effect variable its `impl` block declares (design.md § Effect
@@ -1554,8 +1552,7 @@ pub struct EffectChecker<'a> {
     pub(crate) impl_effect_var_positions: FxHashMap<Symbol, FxHashMap<String, Vec<usize>>>,
     /// Method-call → resolved `Type.method` key, populated by the typechecker
     /// (`TypeCheckResult.method_callee_types`). Used by `MethodCall` arms in
-    /// `collect_calls_in_expr` (function-reference arg propagation), in
-    /// `check_with_e_in_expr` (`with E` unification), and in
+    /// `collect_calls_in_expr` (function-reference arg propagation) and in
     /// `check_subtyping_in_expr_owned` (Fn-slot subtyping) to resolve the
     /// callee precisely instead of falling back to per-method-name heuristics.
     /// Empty when constructed via the unparameterised `new` family.
@@ -3106,7 +3103,6 @@ impl<'a> EffectChecker<'a> {
         });
         self.check_call_site_subtyping();
         self.check_remaining_dyn_coercions();
-        self.check_with_e_unification();
         self.check_profile_compat();
         self.check_no_effect();
         self.check_modbind_par_conflicts();
@@ -3895,9 +3891,8 @@ impl<'a> EffectChecker<'a> {
     /// union of `get_arg_effects(arg)` (excluding transparent verbs) over
     /// every parameter position that references `E`. This is used by the
     /// Fn-slot subtyping check to resolve `with E` slots to concrete sets.
-    /// If positions disagree, round 9's unification check fires separately;
-    /// using the union here means subtyping passes vacuously in that case
-    /// (avoiding double-reporting the same disagreement).
+    /// Positions that disagree are not an error: several values at one use
+    /// give the union of their sets (design.md § Effect variables).
     fn compute_call_var_bindings(
         &self,
         callee_name: Symbol,

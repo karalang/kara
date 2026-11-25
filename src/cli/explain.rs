@@ -2791,15 +2791,6 @@ const CODE_PROSE: &[(&str, &str)] = &[
          Name;`.",
     ),
     (
-        "E0406",
-        "One effect variable is bound to two different effect sets at one \
-         call (design.md § Effect variables): `pipe[with E](a: Fn() with E, \
-         b: Fn() with E)` called with a closure that writes `Log` and one \
-         that reads `Db`. Every slot that names `E` must agree, because `E` \
-         is one set. Give the function two variables, `[with E1, E2]`, or \
-         make the closures' effects match.",
-    ),
-    (
         "E0412",
         "A trait method's receiver and its effect clause disagree about a \
          resource (design.md § Effect verbs). A `mut ref self` method on a \
@@ -5035,6 +5026,7 @@ const RETIRED_CODES: &[(&str, &str)] = &[
     ("E0508", "A closure that would outlive a value it borrows is E0515."),
     ("E0281", "The deny form of the retired lint W0281: module-level `let mut` is the error E_MODULE_LET (design.md § Constants, \"No mutable globals\")."),
     ("E0315", "The deny form of the retired lint W0315: moving a payload out of an enum that has a `Drop` body is the error E0289 (core-semantics.md §3.7)."),
+    ("E0406", "Function values at one effect variable's positions in a call may perform different effects: several values at one use give the union of their sets, and the call is charged the union (design.md § Effect variables). A value bound later that does not fit the solved set, such as one registered in another function through a parameter whose type fixed the set, is E0404."),
     ("E0408", "A `par` branch writing a module-level binding needs a mutable module binding, and the language has none: a module-level `let` is E_MODULE_LET, and a write to shared state across branches is checked as E0418 (core-semantics.md §11.2)."),
     ("E0502", "`#![no_rc]` refused an inserted reference count, and the compiler inserts none (core-semantics.md §6.4, \"No implicit sharing\"): where one would have been, the program has the move error E0500."),
     ("E_RC_BUDGET_EXCEEDED", "The budget counted inserted reference counts, and the compiler inserts none (core-semantics.md §6.4): where one would have been, the program has the move error E0500."),

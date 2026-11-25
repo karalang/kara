@@ -163,15 +163,6 @@ fn a_capitalised_binding_offers_the_variant_or_the_rename() {
 }
 
 #[test]
-fn conflicting_effect_variable_bindings_name_both_edits() {
-    assert_help(
-        "E0406",
-        "effect resource Log;\neffect resource Db;\npub fn write_log() with writes(Log) {}\npub fn read_db() with reads(Db) {}\npub fn pipe[with E](a: Fn() with E, b: Fn() with E) with E {\n    a();\n    b();\n}\npub fn run() with writes(Log) reads(Db) {\n    pipe(|| write_log(), || read_db())\n}\nfn main() {}\n",
-        "separate effect variables",
-    );
-}
-
-#[test]
 fn an_unknown_effect_name_says_to_write_the_effects_out() {
     assert_help(
         "E0403",
