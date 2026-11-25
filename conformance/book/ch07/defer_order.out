@@ -1,0 +1,9 @@
+open a
+second defer a
+close a
+Ok(1)
+open b
+second defer b
+rollback b
+close b
+Err(failed)

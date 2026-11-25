@@ -1,0 +1,17 @@
+fn greet(name: String) {
+    println(f"Hello, {name}!");
+}
+
+fn keep(name: own String) -> String { name }
+
+fn shout(name: mut ref String) { name.push_str("!"); }
+
+fn main() {
+    let mut s = "Ada".to_string();
+    greet(s);
+    println(s);
+    shout(mut s);
+    println(s);
+    let t = keep(s);
+    println(t);
+}

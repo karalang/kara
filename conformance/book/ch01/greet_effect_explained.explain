@@ -1,0 +1,3 @@
+greet
+writes(Stdout)
+greet calls println

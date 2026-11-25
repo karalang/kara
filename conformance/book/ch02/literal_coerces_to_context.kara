@@ -1,0 +1,10 @@
+fn takes_byte(x: u8) -> u8 {
+    x
+}
+
+fn main() {
+    let n = 0;
+    let b: u8 = 200;
+    let c = takes_byte(255);
+    println(f"{n} {b} {c}");
+}

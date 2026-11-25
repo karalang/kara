@@ -1,0 +1,9 @@
+#[derive(Arithmetic)]
+distinct type Meters = f64;
+
+fn main() {
+    let a = Meters(3.0);
+    let b = Meters(4.0);
+    let c = a + b;
+    println(f"{c.raw()}");
+}

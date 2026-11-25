@@ -1,0 +1,4 @@
+fn main() {
+    let z = 0i64;
+    println(f"{z}");
+}

@@ -1,0 +1,12 @@
+enum Option[T] {
+    Some(T),
+    None,
+}
+
+fn main() {
+    let o: Option[i64] = Option.Some(1);
+    match o {
+        Option.Some(x) => println(f"{x}"),
+        Option.None => println("none"),
+    }
+}

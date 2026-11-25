@@ -1,0 +1,15 @@
+fn name(day: i64) -> String {
+    match day {
+        1 => "Monday",
+        2 => "Tuesday",
+        3 => "Wednesday",
+        4 => "Thursday",
+        5 => "Friday",
+        6 | 7 => "Weekend",
+        _ => "Invalid",
+    }
+}
+
+fn main() {
+    println(f"{name(3)} {name(7)} {name(9)}");
+}

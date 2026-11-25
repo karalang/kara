@@ -1,0 +1,12 @@
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+fn main() {
+    let origin = Point { x: 0.0, y: 0.0 };
+    let p = Point { x: 3.0, y: 4.0 };
+
+    println(f"({p.x}, {p.y})");
+    println(f"({origin.x}, {origin.y})");
+}

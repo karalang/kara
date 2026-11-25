@@ -1,0 +1,9 @@
+fn shout(text: mut ref String) {
+    text.push_str("!");
+}
+
+fn main() {
+    let mut t = "hey".to_string();
+    shout(t);
+    println(t);
+}

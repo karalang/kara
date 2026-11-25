@@ -1,0 +1,26 @@
+struct Circle {
+    radius: f64,
+}
+
+impl Circle {
+    fn area(self) -> f64 {
+        3.14159 * self.radius * self.radius
+    }
+
+    fn scale(mut ref self, factor: f64) {
+        self.radius = self.radius * factor;
+    }
+
+    fn new(radius: f64) -> Circle {
+        Circle { radius }
+    }
+}
+
+fn main() {
+    let mut c = Circle.new(5.0);
+    let a = c.area();
+    let b = Circle.area(c);
+    println(f"{a} {b} {a == b}");
+    c.scale(2.0);
+    println(f"{c.radius}");
+}

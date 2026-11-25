@@ -1,0 +1,19 @@
+fn parse_port(s: String) -> Result[u16, String] {
+    match i64.parse(s) {
+        Ok(n) if n >= 0 and n <= 65535 => Ok(n as u16),
+        Ok(n) => Err(f"{n} is out of range"),
+        Err(_) => Err(f"`{s}` is not a number"),
+    }
+}
+
+fn double_port(s: String) -> Result[i64, String] {
+    let p = parse_port(s)?;
+    println("parsed");
+    Ok(p as i64 * 2)
+}
+
+fn main() {
+    println(f"{double_port("80")}");
+    println(f"{double_port("x")}");
+    println(f"{double_port("70000")}");
+}

@@ -1,0 +1,6 @@
+fn main() {
+    let b: u8 = 65;
+    let c = b as char;
+    let e: u8 = 233;
+    println(f"{c} {e as char}");
+}

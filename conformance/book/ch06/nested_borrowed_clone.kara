@@ -1,0 +1,17 @@
+struct User {
+    name: String,
+    age: i64,
+}
+
+fn get_name(user: Option[User]) -> String {
+    match user {
+        Some(User { name, .. }) => name.clone(),
+        None => "anonymous",
+    }
+}
+
+fn main() {
+    let u = Some(User { name: "Ada", age: 36 });
+    println(get_name(u));
+    println(get_name(u));
+}

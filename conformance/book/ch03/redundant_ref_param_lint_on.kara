@@ -1,0 +1,10 @@
+#![warn(redundant_ref_param)]
+
+fn char_count(text: ref String) -> i64 {
+    text.len()
+}
+
+fn main() {
+    let s = "abc".to_string();
+    println(f"{char_count(s)}");
+}

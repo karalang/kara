@@ -1,0 +1,16 @@
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn name(c: Color) -> String {
+    match c {
+        Color.Red => "red",
+        Color.Green => "green",
+    }
+}
+
+fn main() {
+    println(name(Color.Red));
+}

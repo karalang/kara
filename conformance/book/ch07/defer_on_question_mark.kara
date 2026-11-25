@@ -1,0 +1,19 @@
+fn parse(s: String) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err("bad"),
+    }
+}
+
+fn process(s: String) -> Result[i64, String] {
+    println("open");
+    defer println("close");
+    errdefer println("errdefer");
+    let n = parse(s)?;
+    Ok(n)
+}
+
+fn main() {
+    println(f"{process("5")}");
+    println(f"{process("x")}");
+}

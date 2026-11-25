@@ -1,0 +1,5 @@
+fn main() {
+    let x = 5;
+    x = 10;
+    println(f"{x}");
+}

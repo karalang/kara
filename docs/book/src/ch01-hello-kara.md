@@ -38,13 +38,15 @@ fn main() {
 Save it as `hello.kara` and run it:
 
 ```bash
-karac run hello.kara      # interpret it: prints Hello, world!
+karac run hello.kara      # build it and run it: prints Hello, world!
 karac build hello.kara    # compile a native binary, ./hello
 ./hello
 ```
 
-`karac run` starts at once and is the fast way to iterate; `karac build`
-produces an optimized executable. The two print the same thing.
+`karac run` builds the program and runs it without leaving a binary
+behind, the fast way to iterate; `karac build` produces an optimized
+executable. The two print the same thing. (`karac run --interp` runs the
+program on the reference interpreter instead, with the same output.)
 
 Let's break it down:
 

@@ -1,0 +1,8 @@
+fn main() {
+    let name = "world";
+    let msg = f"Hello, {name}!";
+    println(msg);
+    let x = 10;
+    let y = 20;
+    println(f"{x} + {y} = {x + y}");
+}

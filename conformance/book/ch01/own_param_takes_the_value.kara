@@ -1,0 +1,7 @@
+fn keep(name: own String) -> String { name }
+
+fn main() {
+    let s = "Ada".to_string();
+    let t = keep(s);
+    println(s);
+}

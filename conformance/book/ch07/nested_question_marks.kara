@@ -1,0 +1,19 @@
+struct City { name: String }
+struct Address { city: Option[City] }
+struct User { address: Option[Address] }
+
+fn city_name(user: own User) -> Option[String] {
+    Some(user.address?.city?.name)
+}
+
+fn main() {
+    let a = User { address: Some(Address { city: Some(City { name: "Pune" }) }) };
+    let b = User { address: Some(Address { city: None }) };
+    let c = User { address: None };
+    println(f"{city_name(a)} {city_name(b)} {city_name(c)}");
+    let u = User { address: Some(Address { city: Some(City { name: "Oslo" }) }) };
+    let name = u.address.and_then(|a| a.city).map(|c| c.name) ?? "unknown";
+    let v = User { address: None };
+    let other = v.address.and_then(|a| a.city).map(|c| c.name) ?? "unknown";
+    println(f"{name} {other}");
+}

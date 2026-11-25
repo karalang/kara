@@ -1,0 +1,2 @@
+const pi: f64 = 3.14;
+fn main() { println(f"{pi}"); }

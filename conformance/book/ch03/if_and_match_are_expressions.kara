@@ -1,0 +1,16 @@
+fn abs(x: i64) -> i64 {
+    if x >= 0 { x } else { -x }
+}
+
+fn describe(n: i64) -> String {
+    match n {
+        0 => "zero",
+        1..=9 => "single digit",
+        _ => "big number",
+    }
+}
+
+fn main() {
+    println(f"{abs(-4)} {abs(3)}");
+    println(f"{describe(0)}, {describe(9)}, {describe(10)}");
+}

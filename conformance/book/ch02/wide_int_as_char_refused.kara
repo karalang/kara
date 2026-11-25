@@ -1,0 +1,5 @@
+fn main() {
+    let n: u32 = 65;
+    let c = n as char;
+    println(f"{c}");
+}

@@ -1,0 +1,11 @@
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut acc = 0;
+    for x in xs { acc = acc + x; }
+    acc
+}
+
+fn main() {
+    let v: Vec[i64]    = [1, 2, 3];
+    let a: Array[i64, 2] = [10, 20];
+    println(f"{sum(v)} {sum(a)} {v.len()}");
+}

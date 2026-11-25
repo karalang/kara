@@ -1,0 +1,14 @@
+fn double(x: i64) -> i64 {
+    x * 2
+}
+
+fn first_positive(v: Vec[i64]) -> i64 {
+    for x in v {
+        if x > 0 { return x; }
+    }
+    0
+}
+
+fn main() {
+    println(f"{double(21)} {first_positive([-1, 5, 7])}");
+}

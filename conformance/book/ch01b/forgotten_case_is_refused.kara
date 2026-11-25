@@ -1,0 +1,6 @@
+fn f(o: Option[i64]) -> i64 {
+    match o {
+        Some(i) => i,
+    }
+}
+fn main() { println(f"{f(Some(1))}"); }

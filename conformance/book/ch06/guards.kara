@@ -1,0 +1,12 @@
+fn classify_temp(temp: f64) -> String {
+    match temp {
+        t if t < 0.0 => "freezing",
+        t if t < 20.0 => "cold",
+        t if t < 30.0 => "comfortable",
+        _ => "hot",
+    }
+}
+
+fn main() {
+    println(f"{classify_temp(-5.0)} {classify_temp(10.0)} {classify_temp(25.0)} {classify_temp(35.0)}");
+}

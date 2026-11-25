@@ -1,0 +1,32 @@
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+struct User {
+    name: String,
+}
+
+fn get_point() -> Point {
+    Point { x: 1.0, y: 2.0 }
+}
+
+fn get_pair() -> (i64, String) {
+    (7, "seven")
+}
+
+fn find_user(id: i64) -> Option[User] {
+    if id == 42 { Some(User { name: "Ada" }) } else { None }
+}
+
+fn main() {
+    let Point { x, y } = get_point();
+    let (first, second) = get_pair();
+    println(f"{x} {y} {first} {second}");
+    if let Some(user) = find_user(42) {
+        println(f"Found: {user.name}");
+    }
+    if let Some(user) = find_user(1) {
+        println(f"Found: {user.name}");
+    }
+}

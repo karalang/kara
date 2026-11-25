@@ -177,7 +177,7 @@ fn read_to_string(path: String) { ... }   // Value class
 let count = 0;                            // Value class (function body)
 ```
 
-`fn ReadFile()`, `struct user_account`, and `const pi: f64 = 3.14` are all compile errors. One quirk worth knowing: multi-word types treat acronyms as words — `HttpClient`, not `HTTPClient`; `IoError`, not `IOError`. That keeps the classification unambiguous at a glance.
+`fn ReadFile()`, `struct user_account`, and `const pi: f64 = 3.14` are all compile errors. One quirk worth knowing: multi-word types treat acronyms as words — `HttpClient`, not `HTTPClient`; `IoError`, not `IOError`. That keeps the classification unambiguous at a glance. This one is a warning rather than an error (`acronym_case`), and `karac fix` renames the type everywhere it is used.
 
 Note: `_` on its own isn't a name — it's a wildcard used in patterns, `let _ = expr` and `with _` effects. Only *leading* `_` (like `_tmp`) is a valid identifier you can read later.
 

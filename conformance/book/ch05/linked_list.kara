@@ -1,0 +1,39 @@
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+// Build a list from a slice, tail to head, preserving order.
+fn from_slice(xs: Slice[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = xs.len() - 1;
+    while i >= 0 {
+        head = Some(ListNode { val: xs[i], next: head });
+        i = i - 1;
+    }
+    head
+}
+fn sum(node: Option[ListNode]) -> i64 {
+    if let Some(n) = node {
+        n.val + sum(n.next)
+    } else {
+        0
+    }
+}
+
+fn length(node: Option[ListNode]) -> i64 {
+    let mut count = 0;
+    let mut cur = node;
+    while let Some(n) = cur {
+        count = count + 1;
+        cur = n.next;
+    }
+    count
+}
+
+fn main() {
+    let xs: Vec[i64] = [1, 2, 3, 4];
+    let list = from_slice(xs);
+    println(f"{sum(list)} {length(list)}");
+    println(f"{length(from_slice([10]))}");
+}

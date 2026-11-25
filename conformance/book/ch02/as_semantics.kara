@@ -1,0 +1,13 @@
+fn main() {
+    let x: i64 = 1000;
+    let y: i32 = x as i32;
+    let big: i64 = 300;
+    let trunc = big as u8;
+    let total: i64 = 7;
+    let count: i64 = 2;
+    let avg = total as f64 / count as f64;
+    let k = 3.9 as i64;
+    let m = -3.9 as i64;
+    let low = 4294967297 as i32;
+    println(f"{y} {trunc} {avg} {k} {m} {low} {total / count}");
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let line = "  a,b,c  ";
+    let total = line.trim().split(",").count();
+    println(f"{total}");
+}

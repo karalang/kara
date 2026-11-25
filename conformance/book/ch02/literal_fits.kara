@@ -1,0 +1,4 @@
+fn main() {
+    let small: u8 = 255;
+    println(f"{small}");
+}

@@ -1,0 +1,10 @@
+fn keep(text: own String) -> Vec[String] {
+    [text]
+}
+
+fn main() {
+    let t = "hey".to_string();
+    let kept = keep(t);
+    println(t);
+    println(f"{kept.len()}");
+}

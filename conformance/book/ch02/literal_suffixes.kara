@@ -1,0 +1,6 @@
+fn main() {
+    let mask = 0xFFu8;
+    let ratio = 1.0f32;
+    let big = 1u64 << 40;
+    println(f"{mask} {ratio} {big}");
+}

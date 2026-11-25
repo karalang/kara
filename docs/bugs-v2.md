@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 765 |
+| diagnostics | 766 |
 | false-positive | 376 |
 | missing-feature | 256 |
 | perf | 204 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 912 |
+| typecheck | 913 |
 | mir | 337 |
 | mir-llvm | 330 |
 | cli | 314 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
 | B-2026-11-25-35 | 2026-11-25 | effect | medium | A `pub fn` over `f: ref File` cannot declare io.md's `writes(f)`: E0400 asks for `writes(FileSystem)`; `karac query effects` shows the class, and a `TcpStream` read is charged `sends(Network)` beside `receives(Network)` | — |
 | B-2026-11-25-36 | 2026-11-25 | typecheck+mir | medium | `min(1.5, 2.5)`, or `let x = 0.5; min(x, 2.5)`, the free `min` / `max` over float literals only, passes `karac check` and then stops __mir-run with 'call of unknown function min': the bound `T: Ord` is skipped while T is still the literals' open float type, so the refusal a typed `f64` gets never comes | — |
+| B-2026-11-25-38 | 2026-11-25 | typecheck | low | A program's own `enum Option` or `enum Result` (or `struct Option`) draws no `prelude_shadow` warning, while its own `Vec` or `Map` does; design.md §4 says a lint flags a declaration that shadows a prelude name and book ch05 says the compiler warns for `Option` | — |
 
 ### Relocated
 

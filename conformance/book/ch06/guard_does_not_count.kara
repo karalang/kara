@@ -1,0 +1,10 @@
+fn sign(n: i64) -> String {
+    match n {
+        t if t < 0 => "negative",
+        t if t >= 0 => "non-negative",
+    }
+}
+
+fn main() {
+    println(sign(1));
+}

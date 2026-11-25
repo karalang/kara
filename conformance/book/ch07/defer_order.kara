@@ -1,0 +1,15 @@
+fn step(name: String, fail: bool) -> Result[i64, String] {
+    println(f"open {name}");
+    defer println(f"close {name}");
+    errdefer println(f"rollback {name}");
+    defer println(f"second defer {name}");
+    if fail {
+        return Err("failed");
+    }
+    Ok(1)
+}
+
+fn main() {
+    println(f"{step("a", false)}");
+    println(f"{step("b", true)}");
+}

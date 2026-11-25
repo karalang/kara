@@ -1,0 +1,14 @@
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+fn main() {
+    let n = ListNode { val: 1, next: None };
+    let alias = n;
+    n.next = Some(ListNode { val: 2, next: None });
+    match alias.next {
+        Some(m) => println(f"{alias.val} -> {m.val}"),
+        None => println("none"),
+    }
+}

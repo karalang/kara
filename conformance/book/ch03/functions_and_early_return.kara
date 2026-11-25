@@ -1,0 +1,22 @@
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn greet(name: String) {
+    println(f"Hello, {name}!");
+}
+
+fn first_positive(numbers: Vec[i64]) -> Option[i64] {
+    for n in numbers {
+        if n > 0 {
+            return Some(n);
+        }
+    }
+    None
+}
+
+fn main() {
+    println(f"{add(2, 3)}");
+    greet("Ada");
+    println(f"{first_positive([-1, 0, 4, 7])} {first_positive([-2])}");
+}

@@ -1,0 +1,9 @@
+distinct type Meters = f64;
+distinct type Seconds = f64;
+
+fn wait(s: Seconds) {}
+
+fn main() {
+    let m = Meters(3.0);
+    wait(m);
+}

@@ -1,0 +1,8 @@
+fn save() -> Result[i64, String] {
+    Err("disk full")
+}
+
+fn main() {
+    save();
+    println("done");
+}

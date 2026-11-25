@@ -1,0 +1,28 @@
+fn byte_count(text: String) -> i64 {
+    text.len()
+}
+
+fn keep(text: own String) -> Vec[String] {
+    [text]
+}
+
+fn shout(text: mut ref String) {
+    text.push_str("!");
+}
+
+fn main() {
+    let s = "héllo".to_string();
+    println(f"{byte_count(s)} {s}");
+    let mut t = "hey".to_string();
+    shout(mut t);
+    println(t);
+    let kept = keep(t);
+    println(f"{kept.len()}");
+    let n: i64 = 5;
+    let copied = keep_int(n);
+    println(f"{n} {copied}");
+}
+
+fn keep_int(x: own i64) -> i64 {
+    x
+}

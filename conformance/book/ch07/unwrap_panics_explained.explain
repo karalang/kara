@@ -1,0 +1,4 @@
+first
+panics
+first calls get
+get has panics (an `unwrap`)

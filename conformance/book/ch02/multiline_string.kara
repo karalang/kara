@@ -1,0 +1,14 @@
+fn main() {
+    let greeting = "Hello";
+    let multiline = """
+    This is a
+    multi-line string.
+""";
+    println(multiline);
+    let dedented = """
+        This is a
+          multi-line string.
+        """;
+    println(dedented);
+    println(greeting);
+}

@@ -1,0 +1,20 @@
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+fn describe(p: Point) -> String {
+    match p {
+        Point { x: 0.0, y: 0.0 } => "origin",
+        Point { x, y: 0.0 } => f"on the x-axis at {x}",
+        Point { x: 0.0, y } => f"on the y-axis at {y}",
+        Point { x, y } => f"at ({x}, {y})",
+    }
+}
+
+fn main() {
+    println(describe(Point { x: 0.0, y: 0.0 }));
+    println(describe(Point { x: 2.5, y: 0.0 }));
+    println(describe(Point { x: 0.0, y: -1.0 }));
+    println(describe(Point { x: 1.0, y: 2.0 }));
+}

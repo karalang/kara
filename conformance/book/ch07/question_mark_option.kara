@@ -1,0 +1,9 @@
+fn first_letter(text: own Option[String]) -> Option[String] {
+    let t = text?;
+    if t.len() == 0 { return None; }
+    Some(t.substring(0, 1))
+}
+
+fn main() {
+    println(f"{first_letter(Some("kara"))} {first_letter(Some(""))} {first_letter(None)}");
+}

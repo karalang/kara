@@ -1,0 +1,4 @@
+fn main() {
+    let overflow: u8 = 256;
+    println(f"{overflow}");
+}

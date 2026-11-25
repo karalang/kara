@@ -1,0 +1,24 @@
+fn binary_search(haystack: Vec[i32], needle: i32) -> Option[i64] {
+    let mut lo: i64 = 0;
+    let mut hi: i64 = haystack.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let value = haystack[mid];
+        if value == needle {
+            return Some(mid);
+        } else if value < needle {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    None
+}
+
+fn main() {
+    let nums: Vec[i32] = [1, 3, 5, 7, 9, 11, 13];
+    match binary_search(nums, 7) {
+        Some(i) => println(f"found at index {i}"),
+        None => println("not found"),
+    }
+}

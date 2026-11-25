@@ -1,0 +1,14 @@
+struct Circle {
+    radius: f64,
+}
+
+impl Circle {
+    fn grow(self) {
+        self.radius = self.radius * 2.0;
+    }
+}
+
+fn main() {
+    let c = Circle { radius: 1.0 };
+    c.grow();
+}

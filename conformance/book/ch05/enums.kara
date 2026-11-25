@@ -1,0 +1,37 @@
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn describe(d: Direction) -> String {
+    match d {
+        Direction.North => "going up",
+        Direction.South => "going down",
+        Direction.East => "going right",
+        Direction.West => "going left",
+    }
+}
+
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle { a: f64, b: f64, c: f64 },
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Shape.Circle(r) => 3.14159 * r * r,
+        Shape.Rectangle(w, h) => w * h,
+        Shape.Triangle { a, b, c } => {
+            let s = (a + b + c) / 2.0;
+            (s * (s - a) * (s - b) * (s - c)).sqrt()
+        }
+    }
+}
+
+fn main() {
+    println(describe(Direction.West));
+    println(f"{area(Shape.Circle(1.0))} {area(Shape.Rectangle(2.0, 3.0))} {area(Shape.Triangle { a: 3.0, b: 4.0, c: 5.0 })}");
+}

@@ -1,0 +1,18 @@
+fn report(temperature: i64) {
+    if temperature > 100 {
+        println("Warning: overheating!");
+    } else if temperature > 80 {
+        println("Running warm.");
+    } else {
+        println("All good.");
+    }
+}
+
+fn main() {
+    let score = 93;
+    let status = if score >= 90 { "excellent" } else { "keep going" };
+    println(status);
+    report(120);
+    report(90);
+    report(20);
+}

@@ -1,0 +1,20 @@
+fn fallback(tag: String) -> i64 {
+    println(f"fallback {tag} evaluated");
+    8080
+}
+
+fn parse_port(s: String) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err("bad"),
+    }
+}
+
+fn main() {
+    let nickname: Option[String] = None;
+    let name = nickname ?? "anonymous";
+    let port = parse_port("x") ?? 8080;
+    let a = parse_port("443") ?? fallback("a");
+    let b = parse_port("nope") ?? fallback("b");
+    println(f"{name} {port} {a} {b}");
+}

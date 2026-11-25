@@ -1,0 +1,8 @@
+#[no_effect(panics)]
+fn get(o: Option[i64]) -> i64 {
+    o.unwrap()
+}
+
+fn main() {
+    println(f"{get(Some(2))}");
+}

@@ -1,0 +1,7 @@
+fn main() {
+    let million = 1_000_000;
+    let flags = 0b1010_0011;
+    let color = 0xFF_AA_00;
+    let permissions = 0o755;
+    println(f"{million} {flags} {color} {permissions}");
+}

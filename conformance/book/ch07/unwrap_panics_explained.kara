@@ -1,0 +1,11 @@
+fn get(o: Option[i64]) -> i64 {
+    o.unwrap()
+}
+
+pub fn first(o: Option[i64]) -> i64 {
+    get(o)
+}
+
+fn main() {
+    println(f"{first(Some(2))}");
+}

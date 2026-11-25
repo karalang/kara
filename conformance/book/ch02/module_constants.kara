@@ -1,0 +1,7 @@
+const MAX_RETRIES: i32 = 5;
+const TIMEOUT_MS: i64 = 60 * 1000;
+const APP_NAME: Str = "myapp";
+
+fn main() {
+    println(f"{MAX_RETRIES} {TIMEOUT_MS} {APP_NAME}");
+}

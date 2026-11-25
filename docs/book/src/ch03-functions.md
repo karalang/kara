@@ -58,12 +58,12 @@ This means you rarely need temporary variables — you can use control flow inli
 Here's a function that reads a string but doesn't consume it:
 
 ```kara
-fn char_count(text: String) -> i64 {
-    text.len()
+fn byte_count(text: String) -> i64 {
+    text.len()             // a String's length is in bytes
 }
 ```
 
-A bare parameter *borrows*. `text: String` means `char_count` reads the caller's
+A bare parameter *borrows*. `text: String` means `byte_count` reads the caller's
 string for the length of the call; nothing is copied, and the caller still owns
 its string afterwards. That is the common case, so it takes no annotation.
 
@@ -84,8 +84,10 @@ fn shout(text: mut ref String) {
 - `mut ref T` borrows exclusively and may write. The caller marks the argument
   too: `shout(mut s)`.
 
-Writing `text: ref String` is accepted and means the same as `text: String`;
-`karac fix` removes the redundant `ref`. We'll cover ownership in depth in
+Writing `text: ref String` is accepted and means the same as `text: String`.
+The `redundant_ref_param` style lint flags the redundant `ref`; like every
+style lint it is off until you turn it on (`#![warn(redundant_ref_param)]`),
+and then `karac fix` removes it. We'll cover ownership in depth in
 [Chapter 12](./ch12-ownership.md).
 
 To take a *sequence* without copying it — and without locking the caller into

@@ -202,12 +202,12 @@ fn sum(node: Option[ListNode]) -> i64 {
     if let Some(n) = node {
         n.val + sum(n.next)
     } else {
-        0i64
+        0
     }
 }
 
 fn length(node: Option[ListNode]) -> i64 {
-    let mut count = 0i64;
+    let mut count = 0;
     let mut cur = node;
     while let Some(n) = cur {
         count = count + 1;

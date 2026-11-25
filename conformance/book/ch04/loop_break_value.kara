@@ -1,0 +1,22 @@
+fn try_connect(n: i64) -> bool {
+    n == 5
+}
+
+fn attempt_until(limit: i64) -> String {
+    let mut attempt = 0;
+    let result = loop {
+        attempt = attempt + 1;
+        if try_connect(attempt) {
+            break "connected";
+        }
+        if attempt >= limit {
+            break "failed";
+        }
+    };
+    f"{result} after {attempt}"
+}
+
+fn main() {
+    println(attempt_until(3));
+    println(attempt_until(9));
+}

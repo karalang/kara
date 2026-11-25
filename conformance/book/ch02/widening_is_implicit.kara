@@ -1,0 +1,7 @@
+fn main() {
+    let small: u8 = 7;
+    let wide: i64 = small;
+    let w32: i32 = 70000;
+    let f: f64 = w32;
+    println(f"{wide} {f}");
+}

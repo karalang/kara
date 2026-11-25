@@ -1,0 +1,5 @@
+fn main() {
+    let x: i64 = 1000;
+    let y: f64 = x;
+    println(f"{y}");
+}

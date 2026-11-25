@@ -1,0 +1,12 @@
+fn main() {
+    let n: u32 = 0x1F600;
+    match char.try_from(n) {
+        Ok(c) => println(f"ok {c}"),
+        Err(_) => println("not a scalar"),
+    }
+    let bad: u32 = 0xD800;
+    match char.try_from(bad) {
+        Ok(c) => println(f"ok {c}"),
+        Err(_) => println("not a scalar"),
+    }
+}

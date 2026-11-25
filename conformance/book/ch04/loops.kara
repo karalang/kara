@@ -1,0 +1,19 @@
+fn main() {
+    let mut count = 0;
+    while count < 3 {
+        println(count);
+        count = count + 1;
+    }
+    let names = ["Alice", "Bob", "Charlie"];
+    for name in names {
+        println(f"Hello, {name}!");
+    }
+    for i in 0..5 {
+        print(f"{i} ");
+    }
+    println("");
+    for i in 0..=5 {
+        print(f"{i} ");
+    }
+    println("");
+}

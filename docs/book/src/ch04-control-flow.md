@@ -20,7 +20,7 @@ if temperature > 100 {
 }
 ```
 
-No parentheses around the condition. Braces are always required.
+No parentheses are needed around the condition (they are allowed, as around any expression). Braces are always required.
 
 ## Loops
 

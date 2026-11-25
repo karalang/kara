@@ -1,0 +1,5 @@
+// This is a line comment.
+
+/* This is a block comment.
+   Block comments /* can nest */. */
+fn main() { println("ok"); }

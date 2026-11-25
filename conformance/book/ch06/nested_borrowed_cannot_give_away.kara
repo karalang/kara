@@ -1,0 +1,15 @@
+struct User {
+    name: String,
+    age: i64,
+}
+
+fn get_name(user: Option[User]) -> String {
+    match user {
+        Some(User { name, .. }) => name,
+        None => "anonymous",
+    }
+}
+
+fn main() {
+    println(get_name(Some(User { name: "Ada", age: 36 })));
+}

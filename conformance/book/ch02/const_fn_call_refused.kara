@@ -1,0 +1,5 @@
+fn five() -> i32 {
+    5
+}
+const MAX_RETRIES: i32 = five();
+fn main() { println(f"{MAX_RETRIES}"); }

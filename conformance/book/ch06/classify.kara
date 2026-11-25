@@ -1,0 +1,12 @@
+fn classify(n: i64) -> String {
+    match n {
+        0 => "zero",
+        1 | 2 | 3 => "small",
+        4..=9 => "medium",
+        _ => "large",
+    }
+}
+
+fn main() {
+    println(f"{classify(0)} {classify(3)} {classify(4)} {classify(9)} {classify(10)}");
+}

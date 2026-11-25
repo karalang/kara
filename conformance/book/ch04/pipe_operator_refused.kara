@@ -1,0 +1,8 @@
+fn double(x: i64) -> i64 {
+    x * 2
+}
+
+fn main() {
+    let r = 3 |> double;
+    println(f"{r}");
+}

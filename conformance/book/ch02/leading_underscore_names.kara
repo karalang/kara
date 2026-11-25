@@ -1,0 +1,5 @@
+fn main() {
+    let _tmp = 3;
+    let _ = 4;
+    println(f"{_tmp}");
+}

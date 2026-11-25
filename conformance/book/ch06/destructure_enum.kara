@@ -1,0 +1,19 @@
+enum Message {
+    Quit,
+    Echo(String),
+    Move { x: i64, y: i64 },
+}
+
+fn handle(msg: Message) {
+    match msg {
+        Message.Quit => println("Goodbye."),
+        Message.Echo(text) => println(f"Echo: {text}"),
+        Message.Move { x, y } => println(f"Moving to ({x}, {y})"),
+    }
+}
+
+fn main() {
+    handle(Message.Echo("hi"));
+    handle(Message.Move { x: 1, y: -2 });
+    handle(Message.Quit);
+}
