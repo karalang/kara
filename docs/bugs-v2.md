@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 149 |
 | soundness | 132 |
 | miscompile | 109 |
-| run-vs-build | 72 |
+| run-vs-build | 73 |
 | crash | 68 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -83,7 +83,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 162 |
 | ownership | 138 |
 | runtime | 112 |
-| interp | 108 |
+| interp | 109 |
 | effect | 67 |
 | resolver | 57 |
 | other | 53 |
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-38 | 2026-11-25 | typecheck | low | A program's own `enum Option` or `enum Result` (or `struct Option`) draws no `prelude_shadow` warning, while its own `Vec` or `Map` does; design.md §4 says a lint flags a declaration that shadows a prelude name and book ch05 says the compiler warns for `Option` | — |
 | B-2026-11-25-39 | 2026-11-25 | mir | high | An escaping closure that reads a field path two deep (`|| o.i.t.len()` pushed into a `Vec[Fn() -> i64]`) passes `karac check`, which moves only `o.i.t`, but every backend then refuses the later read of the sibling `o.i.u` with MIR's internal 'move check main: use of _1.0.1, which may have been moved or never initialized'; one level deep (`o.t` / `o.u`) runs | — |
 | B-2026-11-25-40 | 2026-11-25 | typecheck | medium | A UFCS call of a built-in type's method is refused 'no associated function' (E0236): `i64.abs(-3)`, `f64.sqrt(4.0)`, `i64.pow(2, 10)`, `u8.is_ascii_digit(49u8)`, `char.is_alphabetic('x')`, `Vec.len(v)`, and `Vec.len` as a value; `String.len(s)` and user types' `P.get(p)` work, and `let f = i64.abs; f(-4)` (the value form, 3e78d89862) runs | — |
+| B-2026-11-25-41 | 2026-11-25 | interp | high | The MIR interpreter stops with 'deref of non-reference Box' when a function value taken from a Vec element is called with a non-Copy argument for a borrowed parameter: `let fs: Vec[Fn(String) -> i64] = [up]; fs[0]("aB".to_string())` (and `for f in fs.iter() { f(s) }`, and built-in method values `[String.to_uppercase, String.to_lowercase]`) exits 3 on `--interp` / `__mir-run`, while `karac run` and `karac build` print the answer | — |
 
 ### Relocated
 
