@@ -4236,6 +4236,10 @@ pub struct TypeChecker<'a> {
     /// nothing at the call fixed, with those variables, judged at the end of
     /// `check` (`report_unsolved_call_vars`).
     pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
+    /// Pointee variables a sized raw-pointer method already reported as
+    /// `E_RAW_POINTER_UNRESOLVED_POINTEE`, so the end-of-body inference
+    /// error does not repeat it.
+    pub(super) reported_pointee_vars: HashSet<types::TypeVarId>,
     /// B-2026-11-17-144: method calls on a closure parameter nothing had
     /// typed yet, judged at the end of `check`.
     pub(super) open_receiver_calls: Vec<open_receiver::OpenReceiverCall>,
@@ -5271,6 +5275,7 @@ impl<'a> TypeChecker<'a> {
             method_call_ends: Vec::new(),
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
+            reported_pointee_vars: HashSet::new(),
             open_receiver_calls: Vec::new(),
             fold_seed_frames: Vec::new(),
             deferred_operand_vars: Vec::new(),

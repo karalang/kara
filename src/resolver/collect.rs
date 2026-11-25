@@ -1442,12 +1442,34 @@ impl<'a> super::Resolver<'a> {
             || wanted == "std.cell"
             || wanted.starts_with("std.rc.")
             || wanted.starts_with("std.cell.");
-        let suggestion = if rust_rc {
+        // `import std.mem.uninitialized`: Rust's hazard, which Kāra does not
+        // offer under any name (design.md §15, "No `mem.uninitialized()`").
+        let mem_uninit = wanted == "std.mem.uninitialized"
+            || (wanted == "std.mem" && imp.items.iter().any(|it| it.name == "uninitialized"));
+        let suggestion = if rust_rc || mem_uninit {
             None
         } else {
             suggest_similar(&wanted, &candidates)
         };
         let mut message = format!("unknown module `{wanted}`");
+        if mem_uninit {
+            // `std.mem` is a module (`mem.zeroed`); the item is what is missing.
+            message = String::from(
+                "`std.mem` has no `uninitialized`: it does not exist in Kāra under any name, because \
+                 holding a `T` whose bits are uninitialised is undefined behaviour for every \
+                 type with a validity invariant; use `MaybeUninit[T]`, whose `assume_init` \
+                 is the one way to a `T` (design.md §15, Uninitialised memory)",
+            );
+            self.errors.push(ResolveError {
+                message,
+                span: imp.span,
+                kind: ResolveErrorKind::UnknownModule,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
         // `std.data` / `std.data.{DataFrame}`: the data types are the post-v1
         // `kara-data` package, not `std` and not the prelude, so neither the
         // near module nor "delete the import" is an answer.

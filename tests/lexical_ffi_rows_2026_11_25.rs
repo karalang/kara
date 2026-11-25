@@ -155,3 +155,31 @@ fn mutfn_and_oncefn_are_reserved_type_names() {
 fn primitive_type_name_may_name_a_field_or_method() {
     runs("lexical", "primitive_name_as_field_or_method_allowed");
 }
+
+/// Drift (§15, 6395): `ptr.null()` with nothing to fix its pointee is an
+/// inference error, not E0516 "is not lowered yet"; a later use fixes it.
+#[test]
+fn ptr_null_without_a_pointee_is_an_inference_error() {
+    let out = check("ffi", "ptr_null_needs_an_expected_type_refused");
+    assert!(
+        out.contains("cannot infer type parameter 'T' of `*const T`"),
+        "{out}"
+    );
+    assert!(!out.contains("E0516"), "{out}");
+    runs("ffi", "ptr_null_pointee_fixed_by_a_later_use");
+}
+
+/// Drift (§15, 6459): `mem.uninitialized` names `MaybeUninit[T]`, as an
+/// import and as a call.
+#[test]
+fn mem_uninitialized_points_at_maybe_uninit() {
+    for name in [
+        "mem_uninitialized_import_unresolved_refused",
+        "mem_uninitialized_call_unresolved_refused",
+    ] {
+        let out = check("ffi", name);
+        assert!(out.contains("MaybeUninit[T]"), "{out}");
+        assert!(!out.contains("did you mean `std.web`"), "{out}");
+        assert!(!out.contains("undefined name 'mem'\n"), "{out}");
+    }
+}

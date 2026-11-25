@@ -59,7 +59,9 @@ impl<'a> super::TypeChecker<'a> {
         };
         if let Type::Pointer { inner, is_mut } = obj_ty {
             let is_mut = *is_mut;
-            let inner_ty = (**inner).clone();
+            // Resolved, so a pointee a variable stood for (`let p =
+            // ptr.null();`, fixed by an earlier use) is recorded as its type.
+            let inner_ty = self.resolved_now(inner);
             // Record the pointee for every raw-pointer method so codegen can
             // (a) identify the receiver as a raw pointer — the method-call span
             // equals the receiver span, and the call's result type overwrites the
@@ -111,21 +113,32 @@ impl<'a> super::TypeChecker<'a> {
                     | "write_volatile"
             );
             if sized_ptr_op {
+                // An opened pointee (`let p = ptr.null();`) nothing has
+                // fixed by this call is unresolved too; it is reported here,
+                // once.
+                let open_var = match self.resolved_now(&inner_ty) {
+                    Type::TypeVar(v) if super::inference::literal_var_kind(v).is_none() => Some(v),
+                    _ => None,
+                };
                 let unresolved: Option<String> = {
                     let in_scope: std::collections::HashSet<&str> =
                         self.enclosing_bounds.keys().map(|s| s.as_str()).collect();
                     super::inference::find_unbound_type_param(&inner_ty, &in_scope)
                         .map(|s| s.to_string())
+                        .or_else(|| open_var.map(|_| "T".to_string()))
                 };
+                if let Some(v) = open_var {
+                    self.reported_pointee_vars.insert(v);
+                }
                 if let Some(pointee_name) = unresolved {
                     self.type_error(
                         format!(
                             "error[E_RAW_POINTER_UNRESOLVED_POINTEE]: method '{method}' on a \
                              raw pointer requires a known pointee type; the pointee type \
                              '{pointee_name}' is unresolved at this call site. Annotate the \
-                             pointer's declared type (e.g. `let p: *const u8 = ...`), or pin it \
-                             with a turbofish on the originating constructor (e.g. \
-                             `ptr.null[u8]()`)."
+                             pointer's declared type (e.g. `let p: *const u8 = ...`): Kāra \
+                             has no call-site type arguments, so `ptr.null()` takes `T` from \
+                             the expected type."
                         ),
                         object.span,
                         TypeErrorKind::CannotInferTypeParam,

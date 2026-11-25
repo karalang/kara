@@ -6606,11 +6606,18 @@ fn raw_pointer_write_wrong_type_rejected() {
 //    resolved `T`; construction is safe (deferred to the use site).
 
 #[test]
-fn raw_pointer_unresolved_construction_alone_accepts() {
-    // Construction is safe — `let p = ptr.null()` with an un-pinned pointee must
-    // NOT error at the binding (only a size-dependent USE requires a known T).
-    // `is_null` is pointee-agnostic, so using it keeps the program error-free.
-    typecheck_ok("fn main() { let p = ptr.null(); if p.is_null() { } }");
+fn raw_pointer_unresolved_construction_alone_is_an_inference_error() {
+    // Construction is safe, and a later use may fix the pointee; one nothing
+    // fixes is the inference error, not a type MIR cannot lower (this used to
+    // pass `check` and then fail as E0516 "is not lowered yet"; design.md §15:
+    // `ptr.null` takes `T` from the expected type).
+    let errors = typecheck_errors("fn main() { let p = ptr.null(); if p.is_null() { } }");
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("cannot infer type parameter 'T' of `*const T`")),
+        "{errors:?}"
+    );
 }
 
 #[test]
@@ -6661,9 +6668,31 @@ fn raw_pointer_unresolved_offset_rejected() {
 }
 
 #[test]
-fn raw_pointer_unresolved_is_null_accepts() {
-    // `is_null` reads no pointee → accepts an unresolved `T` (design slice 6).
-    typecheck_ok("fn main() { let p = ptr.null(); let _ = p.is_null(); }");
+fn raw_pointer_unresolved_is_null_needs_the_pointee_fixed_somewhere() {
+    // `is_null` reads no pointee, so it does not itself fire
+    // E_RAW_POINTER_UNRESOLVED_POINTEE; a pointee nothing fixes is still the
+    // binding's inference error.
+    let errors = typecheck_errors("fn main() { let p = ptr.null(); let _ = p.is_null(); }");
+    assert!(
+        errors
+            .iter()
+            .all(|e| !e.message.contains("E_RAW_POINTER_UNRESOLVED_POINTEE")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("cannot infer type parameter 'T'")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn raw_pointer_pointee_is_fixed_by_a_later_use() {
+    typecheck_ok(
+        "fn take(p: *const u8) -> bool { p.is_null() } \
+         fn main() { let p = ptr.null(); let _ = p.is_null(); let _ = take(p); }",
+    );
 }
 
 #[test]

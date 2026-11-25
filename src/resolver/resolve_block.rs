@@ -516,11 +516,35 @@ impl<'a> super::Resolver<'a> {
 
             ExprKind::MethodCall {
                 object,
+                method,
                 args,
                 turbofish,
                 ..
             } => {
-                self.resolve_expr(object);
+                // `mem.uninitialized()`: Rust's hazard, which Kāra does not
+                // offer under any name (design.md §15, "No
+                // `mem.uninitialized()`"); without this the report was
+                // "undefined name 'mem'", though `mem.zeroed()` resolves.
+                let mem_uninit = method == "uninitialized"
+                    && matches!(&object.kind, ExprKind::Identifier(n) if n == "mem")
+                    && self.table.lookup("mem").is_none();
+                if mem_uninit {
+                    self.errors.push(ResolveError {
+                        message: "undefined name 'mem.uninitialized': it does not exist in Kāra \
+                                  under any name, because holding a `T` whose bits are \
+                                  uninitialised is undefined behaviour for every type with a \
+                                  validity invariant; use `MaybeUninit[T]`, whose `assume_init` \
+                                  is the one way to a `T` (design.md §15, Uninitialised memory)"
+                            .to_string(),
+                        span: expr.span,
+                        kind: ResolveErrorKind::UndefinedName,
+                        suggestion: None,
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                } else {
+                    self.resolve_expr(object);
+                }
                 for arg in args {
                     self.resolve_expr(&arg.value);
                 }

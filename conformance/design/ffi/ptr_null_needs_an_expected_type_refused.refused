@@ -1,1 +1,1 @@
-error
+cannot infer type parameter 'T' of `*const T`

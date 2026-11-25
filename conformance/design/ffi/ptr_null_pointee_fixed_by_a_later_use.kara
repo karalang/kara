@@ -1,0 +1,13 @@
+// design.md §15 (6395) with §9 (Raw pointers need a known pointee): the
+// pointee of `ptr.null()` comes from the expected type, and a later use
+// that expects one fixes it, as for `Vec.new()`.
+fn is_none(p: *const u8) -> bool { p.is_null() }
+fn main() {
+    let p = ptr.null();
+    let mut x: u32 = 7;
+    let mut q = ptr.null_mut();
+    println(f"{is_none(p)} {q.is_null()}");
+    q = ptr.mut(x);
+    // Safety: q points at the live local x.
+    println(f"{unsafe { q.read() }}");
+}

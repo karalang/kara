@@ -9023,8 +9023,8 @@ impl<'a> super::TypeChecker<'a> {
     /// parameter the initializer leaves unbound (`T` of `None`, of
     /// `none_of()`, of `make()`) becomes a fresh variable in the binding's
     /// type, judged once the program has been checked
-    /// (`report_unsolved_call_vars`). A pointer's pointee keeps its own
-    /// use-site check.
+    /// (`report_unsolved_call_vars`). A pointer's pointee too; a sized
+    /// pointer method before then is its own use-site check.
     /// A closure checked against a return type its call leaves open
     /// (`group.spawn(|| { .. Ok(x) })`, `spawn[T]`'s `T`) whose body leaves a
     /// parameter unbound (`Ok`'s `E`) opens it as a variable a later use
@@ -9169,7 +9169,11 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn open_unsolved_let_params(&mut self, inferred: Type, value: &Expr) -> Type {
-        if matches!(inferred, Type::Error | Type::Pointer { .. }) {
+        // A pointer's pointee opens too (`let p = ptr.null();`): a later use
+        // can fix it (`take(p)` with `take(p: *const u8)`), and one nothing
+        // fixes is the inference error below rather than a type MIR cannot
+        // lower (design.md §15, `ptr.null` takes `T` from the expected type).
+        if matches!(inferred, Type::Error) {
             return inferred;
         }
         // A tuple literal of calls that each leave a parameter open

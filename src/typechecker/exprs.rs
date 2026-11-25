@@ -410,6 +410,7 @@ pub(super) fn contains_type_var(t: &Type) -> bool {
         Type::TypeVar(_) => true,
         Type::Named { args, .. } => args.iter().any(contains_type_var),
         Type::Ref(i) | Type::MutRef(i) => contains_type_var(i),
+        Type::Pointer { inner, .. } => contains_type_var(inner),
         Type::Tuple(ts) => ts.iter().any(contains_type_var),
         Type::Array { element, .. } => contains_type_var(element),
         Type::Slice { element, .. } => contains_type_var(element),
@@ -437,6 +438,7 @@ pub(super) fn type_var_ids(t: &Type, out: &mut Vec<TypeVarId>) {
         Type::TypeVar(id) => out.push(*id),
         Type::Named { args, .. } => args.iter().for_each(|a| type_var_ids(a, out)),
         Type::Ref(i) | Type::MutRef(i) => type_var_ids(i, out),
+        Type::Pointer { inner, .. } => type_var_ids(inner, out),
         Type::Tuple(ts) => ts.iter().for_each(|a| type_var_ids(a, out)),
         Type::Array { element, .. } | Type::Slice { element, .. } => type_var_ids(element, out),
         Type::Function {
@@ -9056,6 +9058,7 @@ impl<'a> super::TypeChecker<'a> {
                             &no_consts,
                         ),
                         Type::TypeVar(v) if inference::literal_var_kind(v).is_none()
+                            && !self.reported_pointee_vars.contains(&v)
                     )
                 });
             let Some((_, name)) = unsolved else {
