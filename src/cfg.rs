@@ -64,6 +64,29 @@ pub type PlacePath = Vec<PlaceSeg>;
 /// borrow checker's `places_overlap` place algebra, extended with tuple-
 /// position distinction (`Projection::Index` there conflates tuple and
 /// array indices; here `TupleIndex` is precise).
+/// The place of the consume at `consume` that a witness pairs with the use
+/// at `use_span` of `binding`: the part it overlaps, when the leaf moves
+/// several parts (a destructuring pattern, B-2026-11-25-45).
+pub fn witness_consume_place(
+    cfg: &Cfg,
+    binding: &str,
+    consume: Span,
+    use_span: Span,
+) -> Option<PlacePath> {
+    let sites = || cfg.blocks.iter().flat_map(|b| b.uses.iter());
+    let used = sites()
+        .find(|u| u.binding == binding && u.span == use_span && u.kind != UseKind::Consume)
+        .or_else(|| sites().find(|u| u.binding == binding && u.span == use_span))?;
+    sites()
+        .find(|c| {
+            c.binding == binding
+                && c.span == consume
+                && c.kind == UseKind::Consume
+                && !place_paths_disjoint(&c.place, &used.place)
+        })
+        .map(|c| c.place.clone())
+}
+
 pub fn place_paths_disjoint(a: &PlacePath, b: &PlacePath) -> bool {
     for (sa, sb) in a.iter().zip(b.iter()) {
         if sa == sb {
@@ -268,6 +291,16 @@ pub struct Classification {
     /// call of such a closure is over by the end of the statement
     /// (B-2026-10-29-43).
     pub statement_closures: FxHashMap<SpanKey, (usize, usize)>,
+    /// Further uses of the same root identifier-leaf, keyed by its span: a
+    /// destructuring pattern that takes several parts out of a local
+    /// (`let P { a, b, .. } = p`) moves or reads each part, so the leaf
+    /// stands for one use per part (core §3.6, B-2026-11-25-45). The leaf's
+    /// own kind and place carry the first part.
+    pub extra_uses: FxHashMap<SpanKey, Vec<(UseKind, PlacePath)>>,
+    /// Root identifier-leaves whose consume is a destructuring pattern
+    /// taking parts out of them ([`Self::extra_uses`]), keyed by span: a
+    /// use after it names the part, and the repair is `ref` on the binding.
+    pub core_pattern_part_roots: FxHashSet<SpanKey>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use
@@ -1137,6 +1170,25 @@ impl<'a> CfgBuilder<'a> {
                         capture_scope: None,
                     },
                 );
+                let extra = self
+                    .classification
+                    .extra_uses
+                    .get(&SpanKey::from_span(&expr.span))
+                    .cloned()
+                    .unwrap_or_default();
+                for (kind, place) in extra {
+                    self.record_use(
+                        cur,
+                        UseSite {
+                            binding: name.clone(),
+                            kind,
+                            span: expr.span,
+                            consume_origin,
+                            place,
+                            capture_scope: None,
+                        },
+                    );
+                }
                 cur
             }
             ExprKind::SelfValue => {

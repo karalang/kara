@@ -3017,8 +3017,9 @@ impl Pipeline {
                 else {
                     continue;
                 };
-                e.message += " (a binding in that pattern moves its part out; \
-                               bind it as `ref name` to borrow it)";
+                if !e.message.ends_with(crate::ownership::PATTERN_PART_MOVE) {
+                    e.message += crate::ownership::PATTERN_PART_MOVE;
+                }
                 e.replacement = None;
                 ownership
                     .error_fix_diffs

@@ -1592,6 +1592,135 @@ pub(crate) fn core_copied_parts(
     Some(parts)
 }
 
+/// The note on a use after a destructuring pattern moved the part it
+/// uses (core §4.6): `ref` on that binding borrows the part instead.
+pub(crate) const PATTERN_PART_MOVE: &str =
+    " (a binding in that pattern moves its part out; bind it as `ref name` to borrow it)";
+
+/// v2 core §3.6, §4.6: the parts of the local `value` a destructuring
+/// pattern takes out of it or reads, when it takes some and leaves others:
+/// `let P { a, .. } = p` moves `p.a` alone, as `let a = p.a` does, so `p.k`
+/// stays usable after it (B-2026-11-25-45). Each entry is a non-`Copy`
+/// part's projection path and whether a binding moves it (`false` for a
+/// `ref` binding or a refutable sub-pattern, which read it); a part inside
+/// another listed one is left out. `None` when no binding moves a part,
+/// when the pattern covers the whole value, for a shape or type it does
+/// not see into, and outside the strict commands.
+pub(crate) fn core_pattern_parts(
+    patterns: &[&Pattern],
+    value: &Expr,
+    tc: &TypeCheckResult,
+    is_copy: &dyn Fn(&Type) -> bool,
+    binds: &dyn Fn(&Pattern) -> bool,
+) -> Option<Vec<(crate::cfg::PlacePath, bool)>> {
+    use crate::cfg::PlaceSeg;
+    if !core_rules() || !matches!(value.kind, ExprKind::Identifier(_)) {
+        return None;
+    }
+    struct Walk<'a> {
+        tc: &'a TypeCheckResult,
+        is_copy: &'a dyn Fn(&Type) -> bool,
+        binds: &'a dyn Fn(&Pattern) -> bool,
+        taken: Vec<(crate::cfg::PlacePath, bool)>,
+    }
+    impl Walk<'_> {
+        /// The part at `path`, of type `ty` when known, is taken (`moves`)
+        /// or read by the pattern; a `Copy` one is neither.
+        fn part(&mut self, path: &[PlaceSeg], ty: Option<&Type>, moves: bool) {
+            if !ty.is_some_and(|t| (self.is_copy)(t)) {
+                self.taken.push((path.to_vec(), moves));
+            }
+        }
+        fn pattern(&mut self, p: &Pattern, ty: Option<&Type>, path: &mut Vec<PlaceSeg>) {
+            match (&p.kind, ty) {
+                (PatternKind::Wildcard, _) => {}
+                (PatternKind::Struct { fields, .. }, Some(Type::Named { name, .. })) => {
+                    let Some(info) = self.tc.struct_info.get(name).filter(|i| !i.is_shared) else {
+                        let moves = (self.binds)(p);
+                        return self.part(path, ty, moves);
+                    };
+                    for f in fields {
+                        let fty = info
+                            .fields
+                            .iter()
+                            .find(|(n, _, _)| *n == f.name)
+                            .map(|(_, t, _)| t.clone());
+                        path.push(PlaceSeg::Field(f.name.clone()));
+                        match &f.pattern {
+                            Some(sub) => self.pattern(sub, fty.as_ref(), path),
+                            // Shorthand `P { a }` binds `a` by value.
+                            None => self.part(path, fty.as_ref(), true),
+                        }
+                        path.pop();
+                    }
+                }
+                (PatternKind::Tuple(ps), Some(Type::Tuple(ts))) if ps.len() == ts.len() => {
+                    for (i, (sub, t)) in ps.iter().zip(ts).enumerate() {
+                        path.push(PlaceSeg::TupleIndex(i));
+                        self.pattern(sub, Some(t), path);
+                        path.pop();
+                    }
+                }
+                _ => {
+                    let moves = (self.binds)(p);
+                    self.part(path, ty, moves)
+                }
+            }
+        }
+    }
+    let mut walk = Walk {
+        tc,
+        is_copy,
+        binds,
+        taken: Vec::new(),
+    };
+    for pattern in patterns {
+        walk.pattern(pattern, tc.expr_type(value), &mut Vec::new());
+    }
+    let taken = walk.taken;
+    if !taken.iter().any(|(_, moves)| *moves) || taken.iter().any(|(p, _)| p.is_empty()) {
+        return None;
+    }
+    // A part inside another listed part (`p.inner` taken by one arm,
+    // `p.inner.x` by another) is covered by it: keep the outer one, moving
+    // when either moves.
+    let mut out: Vec<(crate::cfg::PlacePath, bool)> = Vec::new();
+    for (path, moves) in taken {
+        if let Some(outer) = out.iter_mut().find(|(o, _)| path.starts_with(o)) {
+            outer.1 |= moves;
+            continue;
+        }
+        let inner_moves = out.iter().any(|(o, m)| o.starts_with(&path) && *m);
+        out.retain(|(o, _)| !o.starts_with(&path));
+        out.push((path, moves || inner_moves));
+    }
+    Some(out)
+}
+
+/// `value.path` as an expression: the place a part of a local is.
+pub(crate) fn place_expr(value: &Expr, path: &[crate::cfg::PlaceSeg]) -> Option<Expr> {
+    let mut place = value.clone();
+    for seg in path {
+        let object = Box::new(place);
+        place = Expr {
+            kind: match seg {
+                crate::cfg::PlaceSeg::Field(field) => ExprKind::FieldAccess {
+                    object,
+                    field: field.clone(),
+                },
+                crate::cfg::PlaceSeg::TupleIndex(i) => ExprKind::TupleIndex {
+                    object,
+                    index: *i as u64,
+                },
+                _ => return None,
+            },
+            span: value.span,
+            id: value.id,
+        };
+    }
+    Some(place)
+}
+
 fn is_copy_type_basic(ty: &Type) -> bool {
     matches!(
         ty,
@@ -2245,6 +2374,13 @@ pub struct OwnershipChecker<'a> {
     /// [`crate::cfg::Classification::core_projection_consumes`], across
     /// every function.
     pub(crate) core_projection_consumes: FxHashMap<SpanKey, (Span, String)>,
+    /// [`crate::cfg::Classification::core_pattern_part_roots`], across
+    /// every function.
+    pub(crate) core_pattern_part_roots: rustc_hash::FxHashSet<SpanKey>,
+    /// The part a use-after-move witness pairs, keyed by its consume and
+    /// use spans, when the consume moves a part of its root
+    /// ([`crate::cfg::witness_consume_place`], B-2026-11-25-45).
+    pub(crate) core_witness_parts: FxHashMap<(SpanKey, SpanKey), crate::cfg::PlacePath>,
     /// Consume sites (keyed by span) that move a place a `let`-bound
     /// closure, used after the move, captures by borrow, with that
     /// closure's name (B-2026-11-03-6).
@@ -2908,6 +3044,8 @@ impl<'a> OwnershipChecker<'a> {
             core_escaping_borrow_captures: Vec::new(),
             core_bare_ref_returns: Vec::new(),
             core_projection_consumes: FxHashMap::default(),
+            core_pattern_part_roots: Default::default(),
+            core_witness_parts: FxHashMap::default(),
             core_live_closure_moves: FxHashMap::default(),
             panic_on_alloc_failure: true,
             elided_bindings: HashMap::new(),
@@ -3133,6 +3271,33 @@ impl<'a> OwnershipChecker<'a> {
             else {
                 continue;
             };
+            // §3.6: a destructuring pattern moved parts of its root; the use
+            // overlaps one of them, which the message names, and the clone
+            // that repairs it is of the root the pattern takes them from
+            // (B-2026-11-25-45).
+            let pattern = self
+                .core_pattern_part_roots
+                .contains(&SpanKey::from_span(&consume));
+            let (text, root) = if pattern {
+                let root = text.split('.').next().unwrap_or(&text).to_string();
+                let part = self
+                    .core_witness_parts
+                    .get(&(SpanKey::from_span(&consume), SpanKey::from_span(&e.span)))
+                    .and_then(|path| {
+                        path.iter()
+                            .map(|seg| match seg {
+                                crate::cfg::PlaceSeg::Field(f) => Some(format!(".{f}")),
+                                crate::cfg::PlaceSeg::TupleIndex(i) => Some(format!(".{i}")),
+                                crate::cfg::PlaceSeg::Index => None,
+                            })
+                            .collect::<Option<String>>()
+                    })
+                    .map(|p| format!("{root}{p}"))
+                    .unwrap_or(text);
+                (part, root)
+            } else {
+                (text.clone(), text)
+            };
             // §9.6: the move was the call of an `OnceFn` field
             // (`(job.run)()`), worded as a binding's (B-2026-11-07-37).
             let once = &self.typecheck_result.core_once_calls;
@@ -3159,6 +3324,10 @@ impl<'a> OwnershipChecker<'a> {
                 "value '{text}' moved here, used again here (moved at line {}:{})",
                 consume.line, consume.column
             );
+            if pattern {
+                e.message += PATTERN_PART_MOVE;
+            }
+            let text = root;
             // Inline rather than `derive_copy_fix`: `self.errors` is borrowed.
             let derive_copy = if supports_clone || !core_rules() {
                 None
@@ -4133,6 +4302,8 @@ impl<'a> OwnershipChecker<'a> {
                 .iter()
                 .map(|(k, v)| (*k, v.clone())),
         );
+        self.core_pattern_part_roots
+            .extend(classification.core_pattern_part_roots.iter().copied());
         self.current_classification = Some(classification);
 
         // Walk the body
@@ -4491,6 +4662,18 @@ impl<'a> OwnershipChecker<'a> {
             .collect();
         drop(sites);
         for (binding, w) in uam_witnesses {
+            if let Some(place) =
+                crate::cfg::witness_consume_place(&cfg, &binding, w.consume_span, w.other_use_span)
+                    .filter(|p| !p.is_empty())
+            {
+                self.core_witness_parts.insert(
+                    (
+                        SpanKey::from_span(&w.consume_span),
+                        SpanKey::from_span(&w.other_use_span),
+                    ),
+                    place,
+                );
+            }
             // Strip the internal rename suffix for the user-facing message
             // (a within-arm sequential consume+use is dominance-comparable and
             // surfaces here; the arm rename must not leak into the diagnostic).

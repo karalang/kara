@@ -528,6 +528,42 @@ impl<'a> UseClassifier<'a> {
         matches!(ty, Some(Type::Ref(_)) | Some(Type::MutRef(_)))
     }
 
+    /// The local `value` a destructuring pattern takes `parts` out of
+    /// ([`crate::ownership::core_pattern_parts`]): each moving part is a
+    /// consume of its place and each `ref` part a read, so a later use of a
+    /// part the pattern left is not a use after move (core §3.6,
+    /// B-2026-11-25-45). The first moving part is walked as the projection
+    /// it is; the rest ride on the root leaf as extra uses. `mode` is the
+    /// whole value's mode, the fallback when no place can be spelled.
+    fn walk_pattern_parts(&mut self, value: &Expr, mut parts: Vec<(PlacePath, bool)>, mode: Mode) {
+        let first = parts.iter().position(|(_, moves)| *moves).unwrap_or(0);
+        let (path, _) = parts.remove(first);
+        let Some(place) = crate::ownership::place_expr(value, &path) else {
+            return self.walk_expr(value, mode);
+        };
+        self.walk_expr(&place, Mode::Consuming);
+        self.classification
+            .core_pattern_part_roots
+            .insert(SpanKey::from_span(&value.span));
+        if parts.is_empty() {
+            return;
+        }
+        let extra = parts
+            .into_iter()
+            .map(|(path, moves)| {
+                let kind = if moves {
+                    UseKind::Consume
+                } else {
+                    UseKind::Read
+                };
+                (kind, path)
+            })
+            .collect();
+        self.classification
+            .extra_uses
+            .insert(SpanKey::from_span(&value.span), extra);
+    }
+
     fn record(&mut self, span: &crate::token::Span, kind: UseKind) {
         self.record_named(span, kind, None);
     }
@@ -986,13 +1022,26 @@ impl<'a> UseClassifier<'a> {
                 } else {
                     0
                 };
-                match &copied_parts {
-                    Some(parts) => {
+                // v2 core §3.6: a pattern that takes some parts out of a
+                // local moves those parts, not the local (B-2026-11-25-45).
+                let moved_parts = match (&copied_parts, rhs_mode) {
+                    (None, Mode::Consuming) => crate::ownership::core_pattern_parts(
+                        &[pattern],
+                        value,
+                        self.tc,
+                        &|t| self.is_copy_type(t),
+                        &|p| self.pattern_binds_anything(p),
+                    ),
+                    _ => None,
+                };
+                match (&copied_parts, moved_parts) {
+                    (Some(parts), _) => {
                         for part in parts {
                             self.walk_expr(part, Mode::Reading);
                         }
                     }
-                    None => self.walk_expr(value, rhs_mode),
+                    (None, Some(parts)) => self.walk_pattern_parts(value, parts, rhs_mode),
+                    (None, None) => self.walk_expr(value, rhs_mode),
                 }
                 let rhs_is_once = rhs_is_closure && {
                     let post_capture_count = self
@@ -1685,7 +1734,23 @@ impl<'a> UseClassifier<'a> {
                 } else {
                     Mode::Reading
                 };
-                self.walk_expr(value, scrut_mode);
+                // §3.6: as `let` and `match` do, a pattern that takes parts
+                // out of a local moves those parts (B-2026-11-25-45).
+                let moved_parts = (scrut_mode == Mode::Consuming)
+                    .then(|| {
+                        crate::ownership::core_pattern_parts(
+                            &[pattern],
+                            value,
+                            self.tc,
+                            &|t| self.is_copy_type(t),
+                            &|p| self.pattern_binds_anything(p),
+                        )
+                    })
+                    .flatten();
+                match moved_parts {
+                    Some(parts) => self.walk_pattern_parts(value, parts, scrut_mode),
+                    None => self.walk_expr(value, scrut_mode),
+                }
                 let shadowed = self.shadow_locals(&pattern.binding_names());
                 self.walk_block(then_block, mode);
                 self.unshadow_locals(shadowed);
@@ -1754,7 +1819,25 @@ impl<'a> UseClassifier<'a> {
                 } else {
                     Mode::Reading
                 };
-                self.walk_expr(scrutinee, scrut_mode);
+                // v2 core §3.6, §4.6: the arms' bindings take parts out of a
+                // local scrutinee, which moves those parts and leaves the
+                // rest usable (B-2026-11-25-45).
+                let moved_parts = (scrut_mode == Mode::Consuming && !scrut_is_borrow)
+                    .then(|| {
+                        let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                        crate::ownership::core_pattern_parts(
+                            &patterns,
+                            scrutinee,
+                            self.tc,
+                            &|t| self.is_copy_type(t),
+                            &|p| self.pattern_binds_anything(p),
+                        )
+                    })
+                    .flatten();
+                match moved_parts {
+                    Some(parts) => self.walk_pattern_parts(scrutinee, parts, scrut_mode),
+                    None => self.walk_expr(scrutinee, scrut_mode),
+                }
             }
 
             ExprKind::While {
