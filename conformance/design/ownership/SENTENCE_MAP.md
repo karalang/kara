@@ -4,7 +4,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, or "→ dr
 
 Run with `python3 conformance/cases.py conformance/design/ownership` and, for the package cells (directories), `python3 conformance/packages.py conformance/design/ownership`.
 
-**Totals (2026-11-24):** 165 normative sentences: 127 covered, 6 partial, 7 not testable, 23 → drop schedule, 1 FAILS (B-2026-11-24-52, open) and 1 pending review's ruling (the `_ => todo()` fix). Three covered sentences failed when the audit started and are fixed with it: `ref_eq` on frozen handles (B-2026-11-24-50), the constructor named in the `#[non_exhaustive]` literal refusal (B-2026-11-24-51), and the wording of two `freeze` refusals (B-2026-11-24-53). A dependency's own lint warnings printed in a dependent's check is filed open (B-2026-11-24-54). The 2026-11-22 pass's fixes are pinned in tests/design_11_conformance_2026_11_22.rs; its cells were not kept.
+**Totals (2026-11-24):** 165 normative sentences: 128 covered, 6 partial, 7 not testable, 23 → drop schedule and 1 FAILS (B-2026-11-24-52, open). Three covered sentences failed when the audit started and are fixed with it: `ref_eq` on frozen handles (B-2026-11-24-50), the constructor named in the `#[non_exhaustive]` literal refusal (B-2026-11-24-51), and the wording of two `freeze` refusals (B-2026-11-24-53). A dependency's own lint warnings printed in a dependent's check is filed open (B-2026-11-24-54). The 2026-11-22 pass's fixes are pinned in tests/design_11_conformance_2026_11_22.rs; its cells were not kept.
 
 ## Introduction and the core rules in brief
 
@@ -199,7 +199,7 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 | 5221 | Inside the defining package, matches are exhaustive as usual | covered | non_exhaustive_enum_match_with_wildcard_runs (lib's `name`) |
 | 5222 | A struct literal outside the package is an error whose diagnostic names the package's constructor function | covered, FAILED at the audit | non_exhaustive_struct_literal_names_the_constructor_refused (new): the refusal said "commonly `Options.new(...)`" whatever the package declares; fixed, B-2026-11-24-51 |
 | 5222 | A pattern there must end with `..` | covered | non_exhaustive_struct_pattern_without_rest_refused, non_exhaustive_struct_pattern_with_rest_runs |
-| 5223 | A `match` without the wildcard gets a machine-applicable fix that adds `_ => todo()` | PENDING review | non_exhaustive_match_fix_adds_a_todo_wildcard: the fix writes `_ => panic("handle new variant")` |
+| 5223 | A `match` without the wildcard gets a machine-applicable fix that adds `_ => panic("handle new variant")` | covered | non_exhaustive_match_fix_adds_a_wildcard (the page said `_ => todo()`; review ruled 2026-11-24 to change the page to what `karac fix` writes) |
 | 5234 | The standard library marks its growing public error enums and option structs | partial | not every such type checked; std's `#[non_exhaustive]` uses are covered by tests/ |
 
 ## `#[deprecated]`
@@ -210,7 +210,7 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 | 5238 | Every use (a call, a type name, a variant constructor, a pattern) warns at the use site | covered | deprecated_applies_to_every_item_kind |
 | 5238 | The lint warns by default and code keeps compiling | covered | deprecated_bare_note_and_since_forms_warn_at_each_use |
 | 5251 | The bare form gives a default warning; `since:` and `note:` are labeled and optional | covered | deprecated_bare_note_and_since_forms_warn_at_each_use |
-| 5253 | The diagnostic shows the note and the suppression | covered | deprecated_bare_note_and_since_forms_warn_at_each_use (on one line; the page's block shows them as `= note` / `= help` lines) |
+| 5253 | The diagnostic shows the item, the note and the suppression on one line | covered | deprecated_bare_note_and_since_forms_warn_at_each_use (the page's block showed `= note` / `= help` lines; review ruled 2026-11-24 that typecheck warnings are one line, and the block now shows that) |
 | 5263 | With `since`, the diagnostic adds the version | covered | deprecated_bare_note_and_since_forms_warn_at_each_use |
 | 5263 | For a `pub` item it names the defining package | FAILS, B-2026-11-24-52 (open) | deprecated_pub_item_names_its_defining_package (new): the warning for a dependency's item does not name its package; the package check's combined source, which reports it, has no module tree to find the package in |
 | 5265 | `#[allow(deprecated)]` works at a use site, on a function or on a module | covered | deprecated_allow_at_use_site_function_and_module, deprecated_allowed_for_a_whole_module |

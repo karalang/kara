@@ -5221,7 +5221,7 @@ The mandate is enforced by a standard library lint, not by a compiler rule on us
 
 - **On an enum**, a `match` outside the defining package needs a wildcard arm, even when it names every current variant. Adding a variant is then a minor change. Inside the defining package, matches are checked for exhaustiveness as usual, which is where a forgotten new variant is caught.
 - **On a struct**, a struct literal outside the defining package is an error whose diagnostic names the package's constructor function, and a pattern there must end with `..` (`let Options { port, .. } = opts;`). Adding a field is then a minor change.
-- **Fix.** A `match` without the wildcard arm gets a machine-applicable fix that adds `_ => todo()`.
+- **Fix.** A `match` without the wildcard arm gets a machine-applicable fix that adds `_ => panic("handle new variant")`, which says why the arm exists.
 
 ```kara,uses=d-fetch-error-value
 // In another package
@@ -5252,16 +5252,13 @@ pub fn load_config(path: Str) -> Config { ... }
 The bare form gives a default warning. Otherwise it takes two labeled arguments, either of which may be left out: `since: "version"`, which is advisory and not checked against `kara.toml`, and `note: "text"`, the migration message.
 
 ```
-warning[deprecated]: use of deprecated function `read_file_contents`
-  --> src/main.kara:42:13
+warning[deprecated]: src/main.kara:42:13: use of deprecated item `read_file_contents`: use `fs.read_to_string` instead — suppress with `#[allow(deprecated)]` on the enclosing item
    |
 42 |     let s = read_file_contents(p);
    |             ^^^^^^^^^^^^^^^^^^
-   = note: use `fs.read_to_string` instead
-   = help: suppress with `#[allow(deprecated)]`
 ```
 
-With `since`, the diagnostic adds `= deprecated since: "1.2.0"`. For a `pub` item it also names the defining package, so the migration target is clear across re-exports.
+The warning is one line, like every typecheck warning: the item, then the note, then how to suppress it. With `since`, it adds the version after the note (`use `parse_config` instead (since 1.2.0)`). For a `pub` item it also names the defining package, so the migration target is clear across re-exports.
 
 - **Suppression** follows the [lint levels](#lint-levels). `#[allow(deprecated)]` works at a use site, or on a function or module, for example for the defining package's own callers during the deprecation window. `#[expect(deprecated)]` suits a planned migration: once the call is rewritten, the expectation reports itself as unfulfilled.
 - **What it does not do.** It does not remove the item, change its visibility or behavior, or change its semver category: adding `#[deprecated]` is a minor change, and removing the item later is a major one. It is not transitive: deprecating a function does not mark its callers, and deprecating a struct does not mark its methods.

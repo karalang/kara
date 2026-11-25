@@ -1,2 +1,0 @@
-import lib.{FetchError};
-fn main() { let e = FetchError.Timeout; let s = match e { FetchError.Timeout => "timeout", FetchError.NotFound => "nf", _ => todo() }; println(s); }
