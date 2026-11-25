@@ -1,1 +1,1 @@
-[[['run']], [['build'], ['./dist/native/app']]]
+[[['run', '--interp']], [['run']], [['build'], ['./dist/native/app']]]

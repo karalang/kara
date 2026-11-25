@@ -17845,15 +17845,29 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// Releases one strong handle to `id`, dropping and freeing the box
+    /// when it was the last. A chain of boxes, each holding the next one's
+    /// last handle in the field it drops last, is released in a loop, not
+    /// by one call per level (B-2026-11-25-27; the compiled glue's loop is
+    /// B-2026-11-16-311): the next box's release would be the last thing
+    /// this one's drop does, so it runs after that drop returns, and the
+    /// boxes are freed afterwards, innermost first, as the recursion frees
+    /// them. `Drop` bodies, field drops and frees keep their order.
     fn release(&mut self, id: AllocId, ty: Ty, a: AdtId) -> R<()> {
         debug_assert!(id != EMPTY_WEAK);
-        let obj = self.live(id)?;
-        obj.count -= 1;
-        let c = obj.count;
-        if self.trace {
-            self.events.push(Event::Release(id, c));
-        }
-        if c == 0 {
+        let mut next = Some((id, ty, a));
+        let mut dropped: Vec<AllocId> = Vec::new();
+        let mut result = Ok(());
+        while let Some((id, ty, a)) = next.take() {
+            let obj = self.live(id)?;
+            obj.count -= 1;
+            let c = obj.count;
+            if self.trace {
+                self.events.push(Event::Release(id, c));
+            }
+            if c != 0 {
+                break;
+            }
             let root = Addr {
                 root: Root::Heap(id),
                 path: Path::new(),
@@ -17863,20 +17877,103 @@ impl<'a> Interp<'a> {
             // the length of the drop, so releasing that handle cannot free
             // it under us.
             self.live(id)?.weak += 1;
-            self.drop_adt(&root, ty, a)?;
+            next = self.take_tail_handle(id, ty, a)?;
+            // A shape the loop does not take (a tree's first child, a node
+            // with a `Drop` body) still recurses; it gets a fresh stack
+            // segment once this one runs low, as a call does.
+            if let Err(e) =
+                stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || self.drop_adt(&root, ty, a))
+            {
+                result = Err(e);
+                next = None;
+            }
+            dropped.push(id);
+        }
+        for id in dropped.into_iter().rev() {
             let obj = self.live(id)?;
             obj.weak -= 1;
             if obj.weak > 0 {
                 // Weak handles keep the slot, dead, for `Upgrade` to see.
                 obj.value = Value::Uninit;
-                return Ok(());
+                continue;
             }
             self.free_slot(id);
             if self.trace {
                 self.events.push(Event::Free(id));
             }
         }
-        Ok(())
+        result
+    }
+
+    /// For [`Interp::release`]: when the box `id` (a `shared` struct or
+    /// enum with no `Drop` body) drops a `shared` handle last of all its
+    /// fields that need a drop, either the field itself or the payload of
+    /// an `Option`-shaped variant, takes that handle out of the field and
+    /// returns it, so the caller releases it after the box's drop instead
+    /// of from inside it. The fields after it in drop order (the lower
+    /// indices; fields drop last to first) need no drop, so nothing is
+    /// reordered.
+    fn take_tail_handle(
+        &mut self,
+        id: AllocId,
+        ty: Ty,
+        a: AdtId,
+    ) -> R<Option<(AllocId, Ty, AdtId)>> {
+        let adt = self.tys.adt(a);
+        if adt.has_drop_impl
+            || adt.library_name().is_some()
+            || coroutine::frame_owner(&adt.name).is_some()
+        {
+            return Ok(None);
+        }
+        let root = Addr {
+            root: Root::Heap(id),
+            path: Path::new(),
+        };
+        let (variant, n) = match self.slot_ref(&root)? {
+            Value::Variant(k, fs) => (Some(*k), fs.len()),
+            Value::Agg(fs) => (None, fs.len()),
+            _ => return Ok(None),
+        };
+        // The field dropped last that needs a drop: the lowest such index.
+        let mut last = None;
+        for i in 0..n {
+            let Some(fty) = self.tys.field_ty(ty, variant, i as u32) else {
+                return Ok(None);
+            };
+            if self.needs_drop(fty) {
+                last = Some((i, fty));
+                break;
+            }
+        }
+        let Some((i, fty)) = last else {
+            return Ok(None);
+        };
+        let at = root.child(i as u64);
+        match (self.tys.kind(fty).clone(), self.slot_ref(&at)?.clone()) {
+            (TyKind::Shared(ca), Value::Shared(cid)) if cid != EMPTY_WEAK => {
+                *self.slot_mut(&at)? = Value::Uninit;
+                Ok(Some((cid, fty, ca)))
+            }
+            (TyKind::Adt(oa), Value::Variant(k, ps)) if ps.len() == 1 => {
+                let oadt = self.tys.adt(oa);
+                if oadt.has_drop_impl || oadt.library_name().is_some() {
+                    return Ok(None);
+                }
+                let Some(pty) = self.tys.field_ty(fty, Some(k), 0) else {
+                    return Ok(None);
+                };
+                match (self.tys.kind(pty).clone(), &ps[0]) {
+                    (TyKind::Shared(ca), Value::Shared(cid)) if *cid != EMPTY_WEAK => {
+                        let cid = *cid;
+                        *self.slot_mut(&at.child(0))? = Value::Uninit;
+                        Ok(Some((cid, pty, ca)))
+                    }
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Drops one weak handle to `id`, freeing the slot when it was the
