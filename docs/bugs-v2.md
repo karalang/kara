@@ -60,13 +60,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 761 |
 | false-positive | 373 |
-| missing-feature | 254 |
+| missing-feature | 255 |
 | perf | 203 |
 | other | 149 |
 | soundness | 131 |
 | miscompile | 107 |
 | run-vs-build | 70 |
-| crash | 66 |
+| crash | 67 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
 | leak | 5 |
@@ -77,13 +77,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 909 |
-| mir | 335 |
+| mir | 336 |
 | mir-llvm | 328 |
 | cli | 312 |
 | parser | 162 |
 | ownership | 136 |
 | runtime | 110 |
-| interp | 105 |
+| interp | 106 |
 | effect | 64 |
 | resolver | 57 |
 | other | 53 |
@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-46 | 2026-11-24 | cli | low | `karac explain` on a function in a recursive group gives each effect's call chain but not the fixpoint chain design.md § Effects promises (`∅ = φ₀ ⊊ φ₁ ⊊ … ⊊ φ*`, with the callee or operation that added atoms at each step) | — |
 | B-2026-11-24-48 | 2026-11-24 | typecheck+cli | low | `min(gap, 360.0 - gap)` on two `f64`s, the free `min` (and `max`), is refused with E0200 "`f64` does not implement `Ord`" and the advice to wrap in `F64` or drop an `Ord` bound the author never wrote; the documented float method `gap.min(360.0 - gap)` (library/core-types.md, Float methods) is not named, and there is no machine fix | — |
 | B-2026-11-24-49 | 2026-11-24 | typecheck+cli | medium | `karac fix` retypes a Rust `usize` index to `i64` and keeps `i.wrapping_sub(1)` as it was, so the idiom `for j in [i.wrapping_sub(1), i + 1] { if j < n { .. arr[j] } }` no longer skips 0 - 1: on `usize` it wrapped past every length, on `i64` it is -1, passes `j < n`, and the fixed program dies with index out of bounds; `checked_sub` and `saturating_sub` get the floor edit, `wrapping_sub` none | — |
-| B-2026-11-25-1 | 2026-11-25 | mir | low | Remainders of B-2026-11-24-36: two `mut ref` elements in one slice pattern over a view (`[mut ref a, .., mut ref b]`) are refused E0516, and `..mut ref rest` over a `mut ref Array[T, N]` is not lowered | — |
 | B-2026-11-25-9 | 2026-11-25 | typecheck | medium | An associated function named by a keyword and called bare, `Handle.type()` / `Handle.match(2)`, fails with `E0516 a type that failed to check is not lowered yet`; design.md 283 says any keyword may name a method or associated function and is usable after `.` (`Handle.r#type()` and keyword-named methods work) | — |
 | B-2026-11-25-10 | 2026-11-25 | resolver | medium | Reserved type names are not reserved everywhere: `fn u8()` and a field named `char` are accepted (and `u8()` calls the user's fn), and `enum MutFn` / `trait OnceFn` are accepted (only `struct Fn` is E0102); design.md 224 says primitive names and `Fn`/`MutFn`/`OnceFn` cannot be declared or bound as names | — |
 | B-2026-11-25-11 | 2026-11-25 | interp | medium | A pointee-changing raw-pointer cast is ignored by the interpreter: `*(c as *const u8)` with `c: *const u32` at `0x0A0B0C0D` reads `168496141`, not the low byte `13` a build reads, and `offset(1)` on the cast pointer fails (no sequence) | — |
@@ -138,6 +137,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-23 | 2026-11-25 | mir+mir-llvm | medium | `mx.max(f)` with `mx: i64` (a literal's default) and `f: ref i32` from an adapted iterator (`flips.iter().rev()`, `.skip(1)`, `.filter(..)`) passes `karac check` and stops both lanes: 'call of unknown function i64.max' (interp), 'native `i64.max` is not lowered yet' (llvm); over a plain `flips.iter()` it runs | — |
 | B-2026-11-25-24 | 2026-11-25 | mir-llvm | medium | `karac run` (and `--interp`) ignore the package profile's `runtime_debug_metadata`: `has_debug_metadata()` is true under `karac run` with `[profile.dev] runtime_debug_metadata = false`, false under `--interp` always, while `karac build` honors the key | — |
 | B-2026-11-25-25 | 2026-11-25 | mir-llvm | low | A `shared` field's borrow conflict panics with panic-record kind `explicit`, not `borrow_conflict`, on the JIT and the MIR interpreter | — |
+| B-2026-11-25-26 | 2026-11-25 | mir | low | `..mut ref rest` over a `mut ref Array[T, N]` is refused E0516 ('not lowered yet'): the checker types `rest` as `mut ref Array[T, K]`, which needs a sub-array place (remainder of B-2026-11-25-1) | — |
+| B-2026-11-25-27 | 2026-11-25 | interp | medium | `karac run --interp` aborts with a Rust stack overflow (exit 134, 'thread has overflowed its stack') dropping a 1,000,000-node `shared` chain; `karac run` (JIT) and a built binary drop it, as design.md §16 promises (no frames per level, B-2026-11-16-311) | — |
 
 ### Relocated
 
@@ -2282,6 +2283,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-45 | mir | medium | A function declaring a keyed resource (`fn save(i: u64) with writes(UserDb[i])`, over the deferred `effect resource UserDb[id: u64];`) is charged not… | f2af9c2119 |
 | B-2026-11-24-47 | parser | low | Kotlin and Swift first-day habits had no Kāra form or a misleading one: `val`, `fun f(): T = e`, `Int` / `Double` / `Bool`, `T?`, `?:`, `!!` / `!`, `… | 6be22cb42b |
 | B-2026-11-25-2 | typecheck+cli | low | 116 diagnostic codes carried neither a machine fix nor help on any emission (the fix-coverage table's kind none); type and effect errors had no help… | 32ed7d3767 |
+| B-2026-11-25-1 | mir | low | Remainders of B-2026-11-24-36: two `mut ref` elements in one slice pattern over a view (`[mut ref a, .., mut ref b]`) are refused E0516, and `..mut r… | 9e1af571fa |
 | B-2026-11-25-3 | parser | medium | `let r#true = 18;` makes every bare `true` and `false` before `,` `;` `)` a refused use of that binding (E_RESERVED_KEYWORD, `write r#true`), even in… | 56ee320fa6 |
 | B-2026-11-25-4 | parser+resolver | low | `const n: i64 = 3;` is refused (right) with help saying a one-letter name 'is always Type-class, so no capitalization change can make it Const-class'… | cc870a7942 |
 | B-2026-11-25-5 | parser | low | A `\u{...}` escape in a byte literal says `.. | 9ed493aeb7 |
