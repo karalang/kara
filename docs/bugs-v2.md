@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 766 |
+| diagnostics | 767 |
 | false-positive | 382 |
 | missing-feature | 257 |
 | perf | 204 |
 | other | 149 |
-| soundness | 133 |
+| soundness | 134 |
 | miscompile | 110 |
-| run-vs-build | 73 |
+| run-vs-build | 75 |
 | crash | 68 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 920 |
-| mir | 339 |
+| typecheck | 921 |
+| mir | 340 |
 | mir-llvm | 330 |
 | cli | 314 |
 | parser | 162 |
 | ownership | 138 |
 | runtime | 112 |
 | interp | 109 |
-| effect | 67 |
+| effect | 69 |
 | resolver | 57 |
 | other | 53 |
 | codegen | 22 |
@@ -136,6 +136,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-46 | 2026-11-25 | typecheck | medium | A closure that calls an `own self` trait method on a captured `dyn Trait` or generic `T: Trait` value (`|| a.w()`) captures it by reference, so the call is refused E0516 'cannot move a non-Copy value out of a borrowed place', in a OnceFn argument, `TaskGroup.spawn` or a local closure; the same call on a concrete type, `W.w(a)` in UFCS, or `{ let b = a; b.w() }` captures by move and runs | — |
 | B-2026-11-25-47 | 2026-11-25 | typecheck | low | The signed integer types have no abs family: `checked_abs`, `wrapping_abs`, `saturating_abs`, `overflowing_abs` and `unsigned_abs` are E0236 'no method' on every iN, though design.md says the four method families cover every arithmetic operation that can overflow and `iN.MIN.abs()` traps | — |
 | B-2026-11-25-48 | 2026-11-25 | typecheck | medium | `Vec.resize`, `Vec.filled` and `fill` do not enforce their `where T: Clone` bound: a struct with no Clone impl, a `Mutex[i64]`, and an unbounded generic `T` all pass `karac check` and get field-by-field copies, so `v.resize(2, Mutex.new(1))` makes two independent mutexes (and the interpreter stops with 'Mutex[i64] has no field 0') | — |
+| B-2026-11-25-49 | 2026-11-25 | typecheck | medium | `#[derive(Serialize, Deserialize)]` accepts an `i128`, `u128`, `Array[T, N]` or `Result[T, E]` field (and `Vec[i128]`, `Option[u128]`), which `karac check` passes and every backend refuses: interp, JIT and build stop at `error[mir]: typecheck: 3:1: no method 'serialize' on type 'i128'` | — |
+| B-2026-11-25-50 | 2026-11-25 | mir | medium | A provider method that reaches a resource whose provider can reach it back passes `karac check` and is refused by every backend with an internal `borrow check Cap.write{Stderr=ErrCap, Stdout=Cap}: mutable borrow of (*_3) while it is borrowed mutably [E0516]`, even when the two overrides never nest | — |
+| B-2026-11-25-51 | 2026-11-25 | effect | medium | `.clone()` of a `Vec`, `String`, `Option[Vec[T]]` or a derived-Clone struct holding a `Vec` is not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts it, while a `Map`, `Set` or `SortedMap` clone is refused | — |
+| B-2026-11-25-52 | 2026-11-25 | effect | low | `karac check --output=json` lists the standard library's `next_u64` under `public_function_effects` for any program that calls `random.next_u64()`, though that key is only for the program's own pub fns under `public_effects = "inferred"` | — |
 
 ### Relocated
 
