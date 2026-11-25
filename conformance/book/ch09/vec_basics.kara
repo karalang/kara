@@ -1,0 +1,13 @@
+fn main() {
+    let mut numbers = Vec.new();
+    numbers.push(1);
+    numbers.push(2);
+    numbers.push(3);
+    let names = ["Alice", "Bob", "Charlie"];
+    for name in names {
+        println(name);
+    }
+    println(names[0]);
+    println(names.len());
+    println(f"{numbers}");
+}

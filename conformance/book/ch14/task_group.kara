@@ -1,0 +1,18 @@
+fn square(n: i64) -> i64 { n * n }
+
+fn main() {
+    let pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 1;
+    while k <= 4 {
+        let n = k;                          // a fresh binding per task
+        handles.push(pool.spawn(|| square(n)));
+        k = k + 1;
+    }
+
+    let mut total = 0;
+    for handle in handles.into_iter() {
+        total = total + handle.join();      // wait for each, collect its result
+    }
+    println(total);                          // 1 + 4 + 9 + 16 = 30
+}

@@ -1,0 +1,11 @@
+#[derive(Clone)]
+shared struct Node {
+    mut value: i64,
+}
+
+fn main() {
+    let a = Node { value: 1 };
+    let b = a.clone();
+    b.value = 9;
+    println(f"{a.value}");
+}

@@ -1,0 +1,16 @@
+struct State {
+    cache: Vec[i64],
+}
+
+fn update(c: mut ref Vec[i64]) {
+    c.push(1);
+}
+
+fn helper(s: mut ref State) {
+    update(s.cache);
+}
+
+fn main() {
+    let mut st = State { cache: [] };
+    helper(mut st);
+}

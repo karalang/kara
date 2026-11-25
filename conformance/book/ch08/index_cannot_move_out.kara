@@ -1,0 +1,8 @@
+fn first_owned(items: own Vec[String]) -> String {
+    let s = items[0];
+    s
+}
+
+fn main() {
+    println(first_owned(["a"]));
+}

@@ -1,0 +1,4 @@
+fn main() -> Result[(), String] {
+    println("starting");
+    Err("config missing")
+}

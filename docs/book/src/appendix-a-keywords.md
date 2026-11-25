@@ -71,7 +71,7 @@ is fine.
 | `where` | follows a signature or a type head |
 | `with` | starts an effect clause |
 | `effect`, `resource` | start an effect resource declaration |
-| `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks` | appear inside an effect clause or an effect attribute such as `#[no_effect(...)]` |
+| `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks`, `suspends` | appear inside an effect clause or an effect attribute such as `#[no_effect(...)]` |
 
 So these are legal:
 
@@ -83,7 +83,7 @@ fn create_server(host: String, port: u16) { ... }
 
 Words that belong to deferred features (`lock`, `seq`, `layout`, `group`,
 `stable`, `alias`, `independent`, `providers`, `requires`, `ensures`,
-`invariant`, `suspends`) are not keywords in v1. They come back as contextual
+`invariant`) are not keywords in v1. They come back as contextual
 keywords with their features.
 
 ## Keywords as member names

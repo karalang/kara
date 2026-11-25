@@ -1,0 +1,15 @@
+sync struct Counter { count: Atomic[i64] }
+
+fn bump(counter: Counter) {
+    let _ = counter.count.fetch_add(1);
+}
+
+fn main() {
+    let counter: Counter = Counter { count: Atomic.new(0) };
+    par {
+        bump(counter),
+        bump(counter),
+        bump(counter),
+    };
+    println(counter.count.load());   // 3
+}

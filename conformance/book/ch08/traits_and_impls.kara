@@ -1,0 +1,33 @@
+trait Area {
+    fn area(self) -> f64;
+}
+
+struct Circle {
+    radius: f64,
+}
+
+struct Rectangle {
+    width: f64,
+    height: f64,
+}
+
+impl Area for Circle {
+    fn area(self) -> f64 {
+        3.14159 * self.radius * self.radius
+    }
+}
+
+impl Area for Rectangle {
+    fn area(self) -> f64 {
+        self.width * self.height
+    }
+}
+
+fn total[T: Area](a: T, b: T) -> f64 {
+    a.area() + b.area()
+}
+
+fn main() {
+    println(f"{Circle { radius: 1.0 }.area()} {Rectangle { width: 2.0, height: 3.0 }.area()}");
+    println(f"{total(Rectangle { width: 1.0, height: 1.0 }, Rectangle { width: 2.0, height: 2.0 })}");
+}

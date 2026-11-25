@@ -1,0 +1,9 @@
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    eprintln(f"PANIC: {info.message} at {info.location}");
+}
+
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    println(f"{v[3]}");
+}

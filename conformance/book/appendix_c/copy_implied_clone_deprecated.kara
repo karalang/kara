@@ -1,0 +1,11 @@
+#[derive(Copy)]
+struct Pt {
+    x: i64,
+}
+
+fn main() {
+    let a = Pt { x: 1 };
+    let b = a;
+    let c = a.clone();
+    println(f"{a.x} {b.x} {c.x}");
+}

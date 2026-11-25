@@ -1,0 +1,14 @@
+#[derive(PartialEq, Eq, Hash, Display, Clone)]
+struct GridCell {
+    row: i64,
+    col: i64,
+}
+
+fn main() {
+    let a = GridCell { row: 1, col: 2 };
+    let b = GridCell { row: 1, col: 2 };
+    let mut seen: Set[GridCell] = Set.new();
+    seen.insert(a.clone());
+    seen.insert(b.clone());
+    println(f"{a == b} {a != b} {seen.len()} {a}");
+}

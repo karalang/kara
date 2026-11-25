@@ -4,11 +4,15 @@ Attributes are metadata attached to declarations. Two syntactic forms are suppor
 
 ```kara,ignore
 #[attribute_name]               // marker
-#[attribute_name(arg, ...)]     // with arguments
-@attribute_name                 // shorthand marker (selected attributes only)
+#[attribute_name(arg, ...)]     // with arguments: positional, or `key: value`
 ```
 
-Attributes appear immediately before the item they annotate.
+Attributes appear immediately before the item they annotate. An attribute
+path has one segment (`#[derive]`, `#[must_use]`), except for the compiler's
+own `karac::` and `diagnostic::` namespaces. A bare name the compiler does not
+know is `error[E_UNKNOWN_ATTRIBUTE]`, and so is a path in any other namespace
+(`#[karafmt::skip]`): tool namespaces come later. The authority is
+design.md § Attributes, whose list is generated from the compiler's registry.
 
 ---
 
@@ -22,6 +26,10 @@ Generates trait implementations for the annotated `struct` or `enum`. See [Appen
 #[derive(PartialEq, Eq, Hash, Display, Clone)]
 struct UserId { value: u64 }
 ```
+
+### `#[default]`
+
+Marks the variant `#[derive(Default)]` uses on an enum. Exactly one unit variant carries it.
 
 ---
 
@@ -39,52 +47,49 @@ Ensure a lint is at warning level even if it would otherwise be suppressed.
 
 Promote a lint to a hard error within the annotated item.
 
-**Available lint names:**
+### `#[expect(lint_name)]`
+
+Suppress a lint and check that it fired: if it fires nowhere in the item,
+`unfulfilled_lint_expectation` warns at the attribute.
+
+Written as an inner attribute among a file's first lines, `#![allow(lint_name)]`
+sets the level for the whole file.
+
+**Some lint names** (`karac lint --list` prints the full registry, with each
+lint's default level):
 
 | Lint name | Default | What it checks |
 |-----------|---------|----------------|
-| `undocumented_unsafe` | warning | Every `unsafe { }` block must be preceded by a `// Safety:` comment |
-| `ffi_float_eq` / `ffi_float_eq` | warning | Comparing an `extern "C"` float return with `==` or `!=` |
-| `redundant_suffix` | warning | Literal suffix that matches the default type (e.g., `42i64`) |
-| `mutual_recursion_note` | note | Note when the SCC pass detects a mutual-recursion group |
-| `module_mut_binding` | warning (`lib` profile) | `let mut` at module scope |
-| `rc_fallback` | note | Compiler chose RC tier to satisfy ownership analysis |
+| `undocumented_unsafe` | warn | An `unsafe { }` block without a `// Safety:` comment, or an `unsafe extern` block without a `# Safety` doc comment |
+| `ffi_float_eq` | warn | Comparing an `extern "C"` float return with `==` or `!=` |
+| `redundant_suffix` | warn | A literal suffix that matches the default type (`42i64`) |
+| `acronym_case` | warn | A Type name that writes an acronym in capitals (`HTTPClient`) |
+| `prelude_shadow` | warn | A declaration that takes a prelude type's name |
+| `must_use` | warn | A discarded `Result`, or a value of a `#[must_use]` type |
+| `deprecated` | warn | A use of a `#[deprecated]` item, or of a form scheduled for removal |
+| `mutual_recursion_note` | warn | A mutual-recursion group whose effects are computed together |
+| `redundant_ref_param` | allow | A redundant `ref` on a parameter (a style lint: off until turned on) |
 
 ---
 
-## Linker control
+## Memory layout
 
-### `#[unsafe(no_mangle)]`
+### `#[repr(C)]`
 
-Use the Kāra identifier as the exported symbol name without any name mangling. Required when a foreign caller (C, linker script, debugger) must reference the symbol by its exact Kāra name. Does not imply `extern "C"` — the calling convention is independent.
+On a `struct`: lay out fields in C ABI order (declaration order, with C padding rules). Required for types passed through `extern "C"` boundaries.
 
-The `#[unsafe(...)]` wrap is mandatory: disabling name mangling can collide with foreign symbols, an obligation the compiler cannot verify. Bare `#[no_mangle]` is rejected at parse time.
+### `#[repr(u8)]`, `#[repr(i32)]`, ...
 
-```kara,ignore
-#[unsafe(no_mangle)]
-pub fn kara_entry() { ... }
-```
+On an enum: fix the discriminant's integer type.
 
-### `#[used]`
+### `#[repr(transparent)]`
 
-Prevent dead-code elimination for the annotated symbol even if no Kāra code references it. Use for linker-section entries, interrupt vectors, or other symbols that are referenced only from outside the compiler's visibility (linker scripts, hardware, debuggers). Stays plain (no `#[unsafe(...)]` wrap) — `#[used]` only suppresses DCE, no soundness obligation.
+On a single-field wrapper: the same layout as its field.
 
-```kara
-#[unsafe(link_section(".vectors"))]
-#[used]
-const VECTOR_TABLE: Array[u32, 16] = [0; 16];
-```
-
-### `#[unsafe(link_section("name"))]`
-
-Place the annotated symbol in a named linker section. Required for embedded targets that map specific sections to specific memory regions (flash, DTCM RAM, etc.).
-
-The `#[unsafe(...)]` wrap is mandatory: section placement carries layout and aliasing obligations the compiler cannot verify. Bare `#[link_section(...)]` is rejected at parse time.
-
-```kara
-#[unsafe(link_section(".dtcmram"))]
-const LOOKUP: Array[u8, 1024] = [0; 1024];
-```
+`#[repr(packed)]` and `#[repr(align(N))]` are not in v1: the compiler refuses
+them (`E_REPR_DEFERRED`). They belong to the systems track, with linker
+control (`#[unsafe(no_mangle)]`, `#[unsafe(link_section("..."))]`, `#[used]`),
+`#[thread_local]` and per-function `#[profile(...)]` checks (deferred.md).
 
 ---
 
@@ -106,53 +111,22 @@ unsafe extern "C" {
 
 ---
 
-## Module-level bindings
+## Targets
 
-### `#[thread_local]`
+### `#[target(...)]`
 
-**Deferred past v1** (the systems track, [deferred.md](https://github.com/karalang/kara/blob/main/docs/deferred.md#systems)): Kāra has no module-level `let` or `let mut` in v1, so there is nothing to mark yet. The planned form gives each OS thread its own copy of a module-level binding whose initializer is a compile-time constant.
-
-```kara,error=E_MODULE_LET
-#[thread_local]
-let mut request_count: i64 = 0;
-```
-
----
-
-## Memory layout
-
-### `#[repr(C)]`
-
-On a `struct`: lay out fields in C ABI order (declaration order, with C padding rules). Required for types passed through `extern "C"` boundaries.
-
-### `#[repr(packed)]`
-
-On a `struct`: remove all padding. Fields may be unaligned — use `unsafe` for pointer access to packed fields.
-
-### `#[repr(align(N))]`
-
-On a `struct` or as a wrapper type: require at least `N`-byte alignment.
+Gates an item to the named targets (`#[target(native)]`). It is the 0.8
+spelling; the general `#[cfg(...)]` is not in 0.8, and the compiler refuses it
+and names `#[target]`. See [Server-Side Rendering](ch17-ssr.md) for where it
+belongs: on entry points, not inside components.
 
 ---
 
 ## Functions
 
-### `#[profile(P1, P2, ...)]`
-
-On a function: asserts that its transitive effect set is compatible with the *intersection* of the listed profiles' constraints — the function must satisfy the strictest constraint from any listed profile. The v1 profile names are `default` (forbids nothing), `embedded` (forbids `allocates(Heap)`), and `kernel` (forbids `allocates(*)`, `panics`, `blocks`, `suspends`). A forbidden effect in the function's declared or inferred set is `error[E_PROFILE_INCOMPATIBLE_EFFECT]`; an unknown profile name is `error[E_UNKNOWN_PROFILE]`.
-
-```kara
-#[profile(embedded, kernel)]
-fn scale(x: i64, factor: i64) -> i64 {
-    x.wrapping_mul(factor)
-}
-```
-
-Checked arithmetic may panic on overflow, and `/` and `%` on a zero divisor, so a `kernel` function uses the `wrapping_`, `saturating_` or `checked_` forms.
-
 ### `#[no_effect(VERB, ...)]`
 
-On a function: asserts the named effects are **absent** from its transitive effect set. The arguments are effect verbs in the same grammar a `with` clause uses. It is the per-function counterpart of `#[profile(...)]` — that one inherits a target environment's forbidden set, this one names the forbidden effects directly and is independent of any profile, which is what makes it usable on the default profile where `allocates(Heap)` is permitted.
+On a function: asserts the named effects are **absent** from its transitive effect set. The arguments are effect verbs in the same grammar a `with` clause uses. It is what makes a default-permitted effect such as `allocates(Heap)` or `panics` checkable on one function.
 
 A bare verb forbids every occurrence of it; a verb with a resource narrows it to that resource, so `#[no_effect(allocates(Heap))]` still permits `allocates(Arena)`. A forbidden effect in the declared or inferred set is `error[E_NO_EFFECT_VIOLATED]`. The attribute is `fn`-only (`error[E_NO_EFFECT_INVALID_TARGET]` elsewhere), and an empty list is rejected rather than treated as a vacuous guarantee.
 
@@ -174,76 +148,61 @@ On a **function**: the return value must not be silently discarded. `Result` ret
 struct Connection { ... }
 ```
 
+### `#[track_caller]`
+
+A panic inside the function reports its caller's location, as `unwrap()` does.
+
+### `#[panic_handler]`
+
+Marks the program's one custom panic handler ([Chapter 20](ch20-debugging-crashes.md#running-code-on-a-panic)).
+
+### `#[deprecated]`, `#[unstable]`, `#[non_exhaustive]`
+
+`#[deprecated(since: "1.2.0", note: "...")]` warns at every use of an item
+scheduled for removal; `#[unstable]` makes a use require
+`#[allow(unstable_api)]`; `#[non_exhaustive]` lets a public type gain variants
+or fields, so other packages need a wildcard arm or `..`.
+
 ---
 
 ## Testing
 
-### `#[test]`
+Tests are `test "name" { ... }` blocks ([Chapter 16](ch16-testing.md)), not
+attributed functions: `#[test]` on a `fn` is
+`error[E_TEST_ATTR_INVALID_TARGET]`. Three attributes go on a test block:
 
-Mark a `test_`-prefixed function as a test case.
+### `#[with_provider(Resource, provider)]`
 
-### `#[test(requires: [resource, ...])]`
+Runs the test body inside `with_provider[Resource](provider, || body)`, with the
+provider built afresh for the case. Several stack, outermost first.
 
-Mark a test that needs a live external resource. When the resource is unavailable, the test is skipped (or fails with `reason: "unsatisfied_requires"` when `karac test --all` is used).
+### `#[test(requires: [Resource, ...])]`
 
-### `#[with_provider(resource_path, constructor_fn)]`
+Marks a test that needs a live external resource. When the resource is
+unavailable, the test is skipped (or fails with `reason: "unsatisfied_requires"`
+when `karac test --all` is used).
 
-Supply an in-memory provider for a test. The provider scope wraps the entire test body. Multiple `#[with_provider]` attributes are allowed; source order is outer-to-inner.
+### `#[test(timeout_seconds: N)]`
+
+Bounds the case's run time; without it the limit is `kara.toml`'s
+`[test] timeout_seconds`, else 30 seconds.
 
 ---
 
-## Tool-namespaced attributes
+## The `diagnostic::` namespace
 
-Multi-segment attribute paths of the form `#[TOOL::NAME(...)]` are reserved for external tools — formatters, linters, doc generators, IDE plugins, custom analyzers. The compiler accepts them syntactically, stores them on the AST, and otherwise ignores them; semantic interpretation is each tool's responsibility. The full design lives at *design.md § Tool-Namespaced Attributes*; this appendix entry catalogs the v1-reserved names and the read surface.
+Trait authors can shape the error a failed bound produces:
 
 ```kara,ignore
-#[karafmt::skip]
-fn manually_aligned_table() { 0 }
-
-#[karalint::allow(complexity)]
-fn complicated_inner_loop(data: Slice[Frame]) -> Frame {
-    // ...
-}
-
-#[acmecorp_security::audit_required(level: "strict")]
-pub fn login(username: String, password: String) -> Result[Session, AuthError] { /* ... */ }
+#[diagnostic::on_unimplemented(
+    message: "the type `{Self}` cannot be used as a map key",
+    label: "`{Self}` is not Hash",
+    note: "derive it with `#[derive(Hash)]` or write an impl"
+)]
+trait Hash { ... }
 ```
 
-The discriminator is structural: a *bare-name* path (`#[derive]`, `#[no_mangle]`) must match a known compiler attribute or it is `error[E_UNKNOWN_ATTRIBUTE]`; a *multi-segment* path is either a compiler-reserved namespace (`#[diagnostic::*]` — validated per *Appendix D § Diagnostic*) or a tool namespace (silently accepted). There is no per-project tool registration at v1; the open-namespace rule applies.
-
-### v1-reserved first-party tool namespaces
-
-The Kāra organisation reserves three tool namespaces at v1 for the canonical first-party tools that will ship post-v1. User code may write attributes against them today — they parse and store like any other tool namespace — but their semantics are defined when the corresponding tool ships, and the names will not be reused by any other tool. The reservation is a name-claim, not an implementation commitment.
-
-#### `#[karafmt::*]`  *(post-v1, reserved)*
-
-The canonical formatter. Initial members:
-
-- `karafmt::skip` — on any item: suppresses formatting for that item.
-
-Until `karafmt` ships, `#[karafmt::skip]` is functionally a no-op.
-
-#### `#[karalint::*]`  *(post-v1, reserved)*
-
-The canonical lint pack ride-along — separate from the compiler-built-in lints from *Appendix D § Lint control*. Initial members:
-
-- `karalint::allow(NAME)` / `karalint::warn(NAME)` / `karalint::deny(NAME)` / `karalint::expect(NAME)` — same shape as the compiler's built-in lint attributes but scoped to lints that live in the external `karalint` package.
-
-#### `#[karadoc::*]`  *(post-v1, reserved)*
-
-The canonical doc generator. Initial members:
-
-- `karadoc::hidden` — on any item: omits the item from generated docs.
-
-### Third-party tool namespaces
-
-Any other multi-segment path is also accepted. By convention, third-party tools use a namespace matching their package or organisation name (e.g., `acmecorp_security::audit_required`, `mytool::config(level: 9)`) to avoid collision with the reserved names above. The compiler does not enforce this convention; conflict-resolution authority is social — first registered, first served, with the v1-reserved names taking absolute precedence.
-
-### Reading tool attributes from outside the compiler
-
-Tools consume tool-namespaced attributes via one of three paths:
-
-- **`karac query attributes [--tool=PREFIX]`** — emits a JSON list of every multi-segment attribute on every item, optionally filtered by first-segment prefix. `--tool=karafmt` returns every `#[karafmt::*]`. Without `--tool`, returns every multi-segment attribute (including `#[diagnostic::*]`).
-- **Language Server Protocol** (post-v1) — the IDE-facing surface exposes the same data through workspace-symbol and document-symbol responses.
-- **Direct AST access** — tools written in Kāra and using the compiler-as-library API read the same `Attribute { path, args, span }` structures the typechecker stores.
-
+`#[diagnostic::do_not_recommend]` on an `impl` keeps it out of the
+"the trait is implemented by ..." suggestions. Both are advisory: an unknown
+name in this namespace is accepted silently, and a malformed one warns
+(`malformed_diagnostic_attribute`) rather than failing the build.

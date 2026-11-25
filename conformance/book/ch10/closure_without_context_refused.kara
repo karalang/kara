@@ -1,0 +1,4 @@
+fn main() {
+    let f = |n| n;
+    println("x");
+}

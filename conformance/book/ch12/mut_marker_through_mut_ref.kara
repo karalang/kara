@@ -1,0 +1,27 @@
+struct State {
+    cache: Vec[i64],
+    counter: i64,
+}
+
+fn update(c: mut ref Vec[i64]) {
+    c.push(1);
+}
+
+fn reset(n: mut ref i64) {
+    *n = 0;
+}
+
+fn helper(s: mut ref State) {
+    update(mut s.cache);
+    reset(mut s.counter);
+}
+
+fn main() {
+    let mut st = State { cache: [], counter: 5 };
+    helper(mut st);
+    let mut v = [1, 2];
+    v.push(3);
+    st.counter = 7;
+    v[0] = 9;
+    println(f"{st.cache} {st.counter} {v}");
+}

@@ -1,0 +1,8 @@
+#[derive(Arithmetic)]
+distinct type Metres = f64;
+
+fn main() {
+    let a = Metres(3.0);
+    let b = Metres(1.5);
+    println(f"{(a + b).raw()} {(a - b).raw()} {(a * b).raw()} {(a / b).raw()} {(a % b).raw()}");
+}

@@ -1,0 +1,11 @@
+#[track_caller]
+fn check(n: i64) {
+    if n < 0 {
+        panic("negative");
+    }
+}
+
+fn main() {
+    check(1);
+    check(-1);
+}

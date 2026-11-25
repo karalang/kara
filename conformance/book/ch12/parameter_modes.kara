@@ -1,0 +1,19 @@
+fn greet(name: String) {
+    println(f"Hello, {name}!");
+}
+
+fn take_name(name: own String) -> String {
+    name
+}
+
+fn add_suffix(name: mut ref String) {
+    name.push_str("!");
+}
+
+fn main() {
+    let mut n = "Ada".to_string();
+    greet(n);
+    add_suffix(mut n);
+    let t = take_name(n);
+    println(t);
+}

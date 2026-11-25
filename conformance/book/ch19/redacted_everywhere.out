@@ -1,0 +1,2 @@
+Config { host: db, token: <redacted> }|Config { host: db, token: <redacted> }
+Outer { name: o, config: Config { host: h, token: <redacted> } }

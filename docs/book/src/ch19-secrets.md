@@ -122,7 +122,7 @@ tokens match
 
 Why not just `==`? Because a normal string compare returns the instant it finds a differing byte. An attacker who can time your token check learns *how many leading bytes were correct* from the response latency, and walks the secret out one byte per round of guesses. `.ct_eq()` compares the whole length every time — it accumulates the differences and only then decides — so the timing carries no information about *where* two values diverge. This is the right primitive for tokens, HMAC tags, and CSRF values, and it's the reason `Secret` withholds `==` in the first place.
 
-(Today `.ct_eq()` covers `Secret[String]` — the token/HMAC/CSRF case. Byte-array secrets are on the way.)
+(`.ct_eq()` covers `Secret[String]` and `Secret[Vec[u8]]`: tokens, HMAC tags, CSRF values and raw key bytes.)
 
 ## The posture: wrap at the type, not at the call site
 
@@ -130,4 +130,4 @@ The habit Kāra pushes you toward is to make the secret a `Secret[T]` *at the bo
 
 The opposite habit — passing a raw `String` around and being *careful* at each use — is the one that fails, because "be careful everywhere" is not a property a compiler can check. Wrapping at the type makes the safe path the default and the unsafe path a visible, greppable exception.
 
-> **A note on zeroization.** The language reference (`design.md § Secret Type`) also specifies that a `Secret` *wipes its bytes when it's dropped*, so a freed buffer doesn't linger in memory. That behavior is being wired through the compiler's drop paths and is **not complete yet** — so don't rely on a dropped `Secret`'s memory being zeroed today. Everything else in this chapter — the wrapper, `.expose()`, the trait blocklist, `<redacted>` rendering, and constant-time `.ct_eq()` — is enforced now.
+> **A note on zeroization.** A `Secret` *wipes its bytes when it's dropped*: a compiled program overwrites a `Secret[String]`'s or `Secret[Vec[u8]]`'s buffer before freeing it, so a freed buffer doesn't linger in memory (library/secret.md § Clone, drop and zeroize). A copy you take out with `.expose().clone()` is an ordinary value and is not wiped; that is the cost of copying it out, visible at the call site.

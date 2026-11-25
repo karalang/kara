@@ -1,0 +1,21 @@
+fn find(xs: Vec[i64]) -> Option[i64] {
+    defer println("defer");
+    errdefer println("errdefer");
+    for x in xs {
+        if x > 2 {
+            return Some(x);
+        }
+    }
+    None
+}
+
+fn main() {
+    for i in 0..2 {
+        defer println(f"loop {i}");
+        if i == 1 {
+            break;
+        }
+    }
+    println(f"{find([5])}");
+    println(f"{find([1])}");
+}

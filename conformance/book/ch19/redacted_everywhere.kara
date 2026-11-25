@@ -1,0 +1,15 @@
+import std.secret.{Secret};
+
+#[derive(Display)]
+struct Config { host: String, token: Secret[String] }
+
+#[derive(Display)]
+struct Outer { name: String, config: Config }
+
+fn main() {
+    let c = Config { host: "db", token: Secret.new("hunter2") };
+    let s = c.to_string();
+    println(f"{s}|{c}");
+    let o = Outer { name: "o", config: Config { host: "h", token: Secret.new("pw") } };
+    println(o);
+}

@@ -1,0 +1,15 @@
+fn main() {
+    let s = "HelloWorld";
+    let head = s[0..5];
+    let tail = s[5..];
+    let all  = s[..];
+    let incl = s[0..=4];
+    let pre = s[..5];
+    println(f"{head} {tail} {all} {incl} {pre}");
+    let mut owned = head.to_string();
+    owned.push_str("!");
+    println(f"{owned} {s}");
+    println(f"{s.substring(5, 10)} {s.substring(5, 100)} [{s.substring(7, 2)}]");
+    let h = "héllo";
+    println(f"{h[0..3]} {h.len()}");
+}

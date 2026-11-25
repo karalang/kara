@@ -1,0 +1,8 @@
+unsafe extern "C" {
+    fn abs(x: i32) -> i32;
+}
+
+fn main() {
+    let n = unsafe { abs(-42) };
+    println(n);
+}

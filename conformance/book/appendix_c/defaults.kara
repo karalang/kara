@@ -1,0 +1,18 @@
+#[derive(Default, Display)]
+struct Config {
+    timeout_ms: i64,
+    retries: i64,
+    verbose: bool,
+}
+
+#[derive(Default, Display)]
+enum Level {
+    High,
+    #[default]
+    Low,
+}
+
+fn main() {
+    let cfg = Config.default();
+    println(f"{cfg} {Level.default()}");
+}

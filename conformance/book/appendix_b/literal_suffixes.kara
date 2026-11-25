@@ -1,0 +1,13 @@
+fn main() {
+    let a = 42i8;
+    let b = 42i16;
+    let c = 42i32;
+    let d = 42u8;
+    let e = 42u16;
+    let f = 42u32;
+    let g = 42u64;
+    let h = 1.5f32;
+    let x: i32 = 7;
+    let promoted = x + 1;
+    println(f"{a} {b} {c} {d} {e} {f} {g} {h} {promoted}");
+}

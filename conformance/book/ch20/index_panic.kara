@@ -1,0 +1,8 @@
+fn dashboard(ids: Vec[i64], k: i64) -> i64 {
+    ids[k]
+}
+
+fn main() {
+    let ids: Vec[i64] = [10, 20, 30];
+    println(f"{dashboard(ids, 99)}");
+}

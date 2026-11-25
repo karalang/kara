@@ -1,0 +1,19 @@
+shared struct TreeNode {
+    value: i64,
+    left: Option[TreeNode],
+    right: Option[TreeNode],
+}
+
+fn sum(t: Option[TreeNode]) -> i64 {
+    match t {
+        Some(n) => n.value + sum(n.left) + sum(n.right),
+        None => 0,
+    }
+}
+
+fn main() {
+    let leaf = TreeNode { value: 3, left: None, right: None };
+    let a = TreeNode { value: 1, left: Some(leaf), right: None };
+    let b = TreeNode { value: 2, left: Some(leaf), right: Some(leaf) };
+    println(f"{sum(Some(a))} {sum(Some(b))}");
+}

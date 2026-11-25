@@ -1,0 +1,9 @@
+pub fn make(n: i64) -> Vec[i64] with panics {
+    let mut v = Vec.new();
+    v.push(n);
+    v
+}
+
+fn main() {
+    println(f"{make(3)}");
+}

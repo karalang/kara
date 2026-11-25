@@ -1,0 +1,24 @@
+fn main() {
+    let numbers = [1, 2, 3, 4, 5];
+    let doubled: Vec[i64] = numbers
+        .iter()
+        .map(|n| n * 2)
+        .filter(|n| n > 4)
+        .collect();
+    println(f"{doubled}");
+    let items = [3, 12, 7];
+    let other = ["a", "b", "c"];
+    println(f"{items.iter().fold(0, |acc, x| acc + x)} {items.iter().any(|x| x > 10)} {items.iter().all(|x| x > 0)}");
+    let e: Vec[(i64, i64)] = items.iter().enumerate().collect();
+    let z: Vec[(i64, String)] = items.iter().zip(other.iter().cloned()).collect();
+    let t: Vec[i64] = items.iter().take(2).collect();
+    let s: Vec[i64] = items.iter().skip(2).collect();
+    println(f"{e} {z} {t} {s}");
+    let lines = ["  ab ", "", " c"];
+    let result: Vec[i64] = lines.iter()
+        .map(|l| l.trim())
+        .filter(|l| not l.is_empty())
+        .map(|l| l.len())
+        .collect();
+    println(f"{result}");
+}

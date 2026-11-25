@@ -1,0 +1,13 @@
+fn load_data(path: String) -> String {
+    FileSystem.read_to_string(path).unwrap_or("")
+}
+
+fn save_report(data: String) {
+    FileSystem.write("/tmp/kara-book-report.txt", data).unwrap();
+    println("Saved.");
+}
+
+fn main() {
+    save_report("x");
+    println(load_data("/tmp/kara-book-report.txt"));
+}

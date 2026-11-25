@@ -1,0 +1,10 @@
+#[derive(PartialEq, PartialOrd, Display)]
+struct P {
+    x: f64,
+}
+
+fn main() {
+    let a = P { x: 1.0 };
+    let b = P { x: 2.0 };
+    println(f"{a == b} {a < b} {a}");
+}

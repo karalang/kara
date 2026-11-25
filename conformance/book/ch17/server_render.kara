@@ -1,0 +1,35 @@
+// The calls a component may make on `Sink` are the methods of its provider
+// trait (core-semantics.md §14.2); each target's provider implements it.
+trait Render {
+    fn heading(mut ref self, title: String);
+    fn count(mut ref self, n: i64);
+    fn parity(mut ref self, p: i64);
+}
+effect resource Sink: Render;
+
+// Target-agnostic: compiles unchanged for the server and the client.
+pub fn render_counter(count: i64) with writes(Sink) {
+    Sink.heading("Kāra SSR Counter");
+    Sink.count(count);
+    Sink.parity(count % 2);
+}
+
+struct StringSink {}
+impl Render for StringSink {
+    fn heading(mut ref self, title: String) { print(f"<h1>{title}</h1>"); }
+    fn count(mut ref self, n: i64) { print(f"<output id=\"count\">{n}</output>"); }
+    fn parity(mut ref self, p: i64) {
+        if p == 0 { println("<span id=\"parity\">even</span>"); }
+        else { println("<span id=\"parity\">odd</span>"); }
+    }
+}
+
+#[target(native)]
+fn main() {
+    with_provider[Sink](StringSink {}, || {
+        render_counter(42);
+    });
+    with_provider[Sink](StringSink {}, || {
+        render_counter(7);
+    });
+}

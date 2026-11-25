@@ -1,0 +1,15 @@
+#[derive(Display)]
+enum Status {
+    Active,
+    OnHold(i64),
+}
+
+#[derive(Display(snake_case))]
+enum Mode {
+    ReadOnly,
+    ReadWrite,
+}
+
+fn main() {
+    println(f"{Status.Active} {Status.OnHold(3)} {Mode.ReadOnly} {Mode.ReadWrite}");
+}

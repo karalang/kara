@@ -1,0 +1,8 @@
+fn main() {
+    let mut total = 0;
+    par {
+        { total = total + 1; },
+        { total = total + 2; },
+    };
+    println(total);
+}

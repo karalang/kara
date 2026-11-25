@@ -1,0 +1,8 @@
+import Db.connection.Connection;
+import Db.connection.helper;
+import Db.connection.open as connect;
+
+fn main() {
+    let c: Connection = connect("pg");
+    println(f"{c.name} {helper()}");
+}

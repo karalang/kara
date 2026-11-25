@@ -90,8 +90,9 @@ myproject/
   src/
     main.kara           // executable entry point
     lib.kara            // library entry point (instead of main.kara)
-  tests/
-    db_test.kara        // integration tests
+    db/
+      pool.kara         // module db.pool
+      pool_test.kara    // its tests, beside it (see Chapter 16)
   examples/
     basic.kara          // runnable examples
 ```

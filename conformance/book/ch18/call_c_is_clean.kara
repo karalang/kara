@@ -1,0 +1,17 @@
+/// # Safety
+/// `abs` is pure integer math from libc; `strlen` reads only the
+/// NUL-terminated bytes behind the pointer, which `c"..."` literals guarantee.
+unsafe extern "C" {
+    fn abs(x: i32) -> i32;
+    fn strlen(s: *const u8) -> usize;
+}
+
+fn main() {
+    // Safety: abs has no preconditions for any value but i32::MIN.
+    let n = unsafe { abs(-42) };
+    println(n);                           // 42
+    let msg = c"hello from C land";
+    // Safety: msg is a static NUL-terminated literal.
+    let len = unsafe { strlen(msg.as_ptr()) };
+    println(len as i64);                  // 17
+}

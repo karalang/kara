@@ -1,0 +1,13 @@
+trait Describable {
+    fn name(self) -> String;
+
+    fn description(self) -> String {
+        f"A thing called {self.name()}"
+    }
+}
+
+struct Rock {}
+
+impl Describable for Rock {}
+
+fn main() {}

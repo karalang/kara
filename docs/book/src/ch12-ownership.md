@@ -2,7 +2,7 @@
 
 If you've used Rust, you know the ownership system: powerful but demanding. Lifetimes, borrowing rules, the borrow checker rejecting code you know is safe.
 
-Kāra keeps the semantics and drops the lifetimes. A parameter borrows unless its signature says otherwise: `own` takes ownership and `mut ref` borrows to write. The compiler checks that the body matches, and RC fills in when a single owner can't be proven.
+Kāra keeps the semantics and drops the lifetimes. A parameter borrows unless its signature says otherwise: `own` takes ownership and `mut ref` borrows to write. The compiler checks that the body matches. Shared ownership is never added behind your back: a type that needs it says so.
 
 ## The three tiers
 
@@ -10,7 +10,7 @@ Every value in Kāra lives in one of three ownership tiers:
 
 1. **Owned** — the default. The value has one owner. When the owner goes out of scope, the value is dropped.
 2. **Borrowed** — a temporary view of someone else's value. A bare parameter is a shared, read-only borrow; a `mut ref` parameter is exclusive and mutable. Like Rust's `&T` / `&mut T`, without lifetime variables.
-3. **RC (reference-counted)** — shared ownership. Multiple owners, reference-counted. The compiler adds this automatically when needed.
+3. **Shared (reference-counted)** — multiple owners. A type opts in by its declaration: `shared struct` / `shared enum` within one task, `sync struct` / `sync enum` (atomically counted) across tasks. The compiler never turns an owned value into a shared one.
 
 You write the tier at the signature. The compiler infers *nothing* about the public contract — what the source says is what callers see.
 
@@ -46,7 +46,7 @@ impl Builder {
 }
 ```
 
-A `ref self` or `x: ref T` still parses as a redundant spelling of the bare form, and `karac fix` removes the `ref`.
+A `ref self` or `x: ref T` still parses as a redundant spelling of the bare form. The `redundant_ref_param` style lint flags it once you turn it on, and then `karac fix` removes the `ref`.
 
 ### `karac query ownership`
 
@@ -93,17 +93,17 @@ println(b);          // ok
 
 This prevents use-after-move bugs at compile time. No dangling pointers, no double frees.
 
-## RC fallback
+## No hidden sharing
 
-Sometimes the compiler can't prove a single-owner model works — the value is shared across data structures, or its lifetime can't be statically determined. In these cases, the compiler falls back to reference counting:
+When a value would need two owners, the compiler does not quietly switch it to reference counting. It refuses the second move:
 
 ```kara,uses=b-node
 let node = Node { value: 42, children: Vec.new() };
-// If `node` ends up shared across a graph structure,
-// the compiler automatically wraps it in RC.
+let a = Node { value: 1, children: [node] };
+// let b = Node { value: 2, children: [node] };   // error[E0500]: `node` was moved into `a`
 ```
 
-You don't write `Rc[Node]` or `Arc[Node]`. The source code always says `Node`. The compiler picks the representation, and `karac query cost-summary` counts the reference-counting operations it emitted.
+The fix is a choice you make in the source: `.clone()` the value if each parent should own its own copy, or declare the type `shared struct Node` if the parents should point at one node (see [shared types](#shared-types) below). Either way the representation is visible where the type or the call is written.
 
 ## Slices
 
@@ -166,9 +166,9 @@ shared struct TreeNode {
 Kāra's ownership model: **Rust semantics, no lifetimes, one word per mode.**
 
 - Signatures declare the mode: bare borrows, `own` takes ownership, `mut ref` borrows to write.
-- Call sites mark mutation for fresh bindings with `mut`; forwarded mut-refs and method calls stay silent.
+- Call sites mark every argument to a `mut ref` parameter with `mut`, a forwarded `mut ref` included; method calls stay silent.
 - The compiler never silently copies expensive data. Moves are explicit in the semantics.
-- When you need to see what the compiler chose, `karac query` shows you: `ownership` for modes, `cost-summary` for the RC operations it emitted.
+- When you need to see a function's contract as data, `karac query ownership` reports each parameter's mode.
 - Lifetimes never appear in source. The compiler infers borrow scoping below the signature surface.
 
 The goal is Rust-level safety with mainstream-language readability — no `<'a>`, no turbofish, one unified rule for borrows across free functions, methods, and traits.

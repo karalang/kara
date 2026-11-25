@@ -1,0 +1,4 @@
+fn main() {
+    let f = |n| n * 2;
+    println(f(3));
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let s = "HelloWorld";
+    let mut head = s[0..5];
+    head.push_str("!");
+}

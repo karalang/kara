@@ -1,0 +1,10 @@
+struct Node {
+    value: i64,
+    children: Vec[Node],
+}
+
+fn main() {
+    let node = Node { value: 42, children: Vec.new() };
+    let parent_a = Node { value: 1, children: [node] };
+    let parent_b = Node { value: 2, children: [node] };
+}

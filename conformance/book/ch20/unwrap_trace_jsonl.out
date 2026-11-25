@@ -1,0 +1,2 @@
+{"type":"runtime_error","message":"called unwrap() on Err","location":{"file":"main.kara","line":14,"col":16},"kind":"unwrap"}
+{"type":"error_return_trace","frames":[{"file":"main.kara","line":9,"column":13,"expr":"parse_port(s)?","context":null},{"file":"main.kara","line":14,"column":16,"expr":null,"context":null}],"truncated":false}

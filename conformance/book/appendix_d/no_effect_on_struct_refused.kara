@@ -1,0 +1,6 @@
+#[no_effect(panics)]
+struct S {
+    a: i64,
+}
+
+fn main() {}

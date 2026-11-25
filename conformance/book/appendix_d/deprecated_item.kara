@@ -1,0 +1,8 @@
+#[deprecated(since: "1.2.0", note: "use h")]
+fn g() -> i64 {
+    1
+}
+
+fn main() {
+    println(f"{g()}");
+}

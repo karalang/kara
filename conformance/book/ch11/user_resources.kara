@@ -1,0 +1,7 @@
+effect resource Database;
+effect resource Cache;
+effect resource Net;
+
+fn main() {
+    println("declared");
+}

@@ -45,7 +45,7 @@ fn main() {
 }
 ```
 
-`sync struct` marks a type as safe to share across branches; its `Atomic[T]` field carries the shared state. The effect system enforces this: if a `par` branch tried to write an ordinary `let mut` shared by a sibling, the compiler would reject it and tell you to reach for `Atomic`, `Mutex`, or a `sync struct`. No data races slip through.
+`sync struct` marks a type as safe to share across branches; its `Atomic[T]` field carries the shared state. The effect system enforces this: if a `par` branch tried to write an ordinary `let mut` shared by a sibling, the compiler would reject it (`E0418`, naming both accesses); shared state between branches goes through `Atomic`, `Mutex` or a `sync struct`. No data races slip through.
 
 ## TaskGroup for dynamic fan-out
 

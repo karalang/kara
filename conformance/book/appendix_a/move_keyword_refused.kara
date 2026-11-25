@@ -1,0 +1,4 @@
+fn main() {
+    let s = "a".to_string();
+    let f = move || s.len();
+}

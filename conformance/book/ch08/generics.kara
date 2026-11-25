@@ -1,0 +1,17 @@
+fn first[T](items: Vec[T]) -> Option[ref T] {
+    items.get(0)
+}
+
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+fn main() {
+    let ints: Vec[i64] = [3, 4];
+    let words: Vec[String] = ["a", "b"];
+    let empty: Vec[i64] = [];
+    println(f"{first(ints)} {first(words)} {first(empty)}");
+    let p = Pair { first: "hello", second: 42 };
+    println(f"{p.first} {p.second}");
+}

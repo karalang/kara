@@ -1,0 +1,10 @@
+fn main() {
+    let names = ["Alice", "Bob", "Charlie"];
+    let numbers = [1, 2, 3];
+    let xs: Array[i64, 3] = [1, 2, 3];
+    let s: Set[i64] = [1, 2, 3, 2];
+    let m = ["a": 1, "b": 2];
+    let t = Set.from([1, 2, 3, 3]);
+    println(f"{names.len()} {numbers.len()} {xs.len()} {s.len()} {m.len()} {t.len()}");
+    println(f"{m.get("b")} {s.contains(2)}");
+}

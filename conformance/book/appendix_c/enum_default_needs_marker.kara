@@ -1,0 +1,7 @@
+#[derive(Default)]
+enum Level {
+    Low,
+    High,
+}
+
+fn main() {}

@@ -21,7 +21,7 @@ allocates(Heap)         — allocates memory
 panics                  — might crash (no resource needed)
 ```
 
-These six are the **resource verbs**: `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`. They answer *"can these two operations conflict?"* — which is what drives the auto-parallelization below.
+`reads`, `writes`, `sends` and `receives` are the **conflict verbs**: they answer *"can these two operations conflict?"*, which is what drives the auto-parallelization below. `allocates` and `panics` are capabilities that never conflict, and a public function need not declare either (`#[no_effect(...)]` forbids them where it matters).
 
 Resources are user-defined. You declare what exists in your domain:
 
@@ -50,7 +50,7 @@ fn compute(x: f64) -> f64 { ... }                                  // neither �
 
 Execution verbs take no resource — a function either may block/suspend or it may not. They don't take part in conflict analysis (placement is a separate axis from conflict), and like resource verbs they're inferred on private functions but **must be declared on public ones**: hiding whether a function blocks would defeat the point.
 
-That's the full set: six resource verbs plus these two execution verbs, eight in all.
+That's the full set: six verbs for what a function touches plus these two execution verbs, eight in all.
 
 ## Private functions: effects are inferred
 

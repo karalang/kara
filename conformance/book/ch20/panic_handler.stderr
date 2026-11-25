@@ -1,0 +1,3 @@
+runtime error: index out of bounds
+  at main.kara:8:16
+PANIC: index out of bounds at main.kara:8:16

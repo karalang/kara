@@ -1,0 +1,11 @@
+fn take_name(name: own String) -> String {
+    name
+}
+
+fn pass_on(name: String) -> String {
+    take_name(name)
+}
+
+fn main() {
+    println(pass_on("Ada"));
+}

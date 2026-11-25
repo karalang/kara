@@ -1,0 +1,22 @@
+fn step(name: String, fail: bool) -> Result[i64, String] {
+    if fail {
+        return Err(f"{name} failed");
+    }
+    Ok(1)
+}
+
+fn run() -> Result[i64, String] {
+    let (a, b, c) = par {
+        step("a", false)?,
+        step("b", true)?,
+        step("c", true)?,
+    };
+    Ok(a + b + c)
+}
+
+fn main() {
+    match run() {
+        Ok(n) => println(f"ok {n}"),
+        Err(e) => println(f"error: {e}"),
+    }
+}

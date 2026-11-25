@@ -179,7 +179,7 @@ table — fill it with zeros up front. `Vec.filled(n, value)` builds an `n`-elem
 vector, and nesting it gives an `r × c` grid:
 
 ```kara,uses=b-rows-cols
-let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0i64));
+let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0));
 ```
 
 Each row is an **independent** copy — writing `dp[0][0] = 9` leaves `dp[1][0]`
@@ -211,7 +211,7 @@ fn cell_sum(g: Vec[Vec[i64]]) -> i64 {
 }
 ```
 
-The parameter is `ref Vec[Vec[i64]]` — the grid is borrowed for reading, so the
+The bare parameter `g: Vec[Vec[i64]]` borrows the grid for reading, so the
 caller keeps ownership. To mutate cells through a parameter, take `mut ref
 Vec[Vec[i64]]` (see [Ownership](./ch12-ownership.md)).
 

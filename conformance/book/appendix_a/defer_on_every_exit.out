@@ -1,0 +1,7 @@
+loop 0
+loop 1
+defer
+Some(5)
+errdefer
+defer
+None

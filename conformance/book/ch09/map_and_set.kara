@@ -1,0 +1,21 @@
+fn main() {
+    let mut ages = Map.new();
+    ages.insert("Alice", 30);
+    ages.insert("Bob", 25);
+    let scores = ["Alice": 10, "Bob": 7];
+    match ages.get("Alice") {
+        Some(age) => println(f"Alice is {age}"),
+        None => println("Not found"),
+    }
+    match ages.get("Eve") {
+        Some(age) => println(f"Eve is {age}"),
+        None => println("Not found"),
+    }
+    let mut seen = Set.new();
+    seen.insert("hello");
+    seen.insert("world");
+    seen.insert("hello");
+    let colors = Set.from(["red", "green", "blue"]);
+    println(seen.len());
+    println(f"{colors.len()} {scores.len()}");
+}

@@ -1,0 +1,32 @@
+struct User {
+    name: String,
+    age: i64,
+}
+
+enum Color { Red, Green }
+
+fn digit(n: i64) -> String {
+    match n {
+        d @ 0..=9 => f"digit {d}",
+        _ => "big",
+    }
+}
+
+fn main() {
+    let v = [0, 1, 2, 3, 4, 5];
+    let mut s = 0;
+    for i in 0..3 { s += i; }
+    for i in 1..=5 { s += i; }
+    println(f"{s} {v[2..]} {v[..4]} {v[..]}");
+    let alice = User { name: "Alice", age: 30 };
+    let older = User { age: 31, ..alice };
+    println(f"{older.name} {older.age} {alice.age}");
+    let n: Option[i64] = None;
+    let e: Result[i64, String] = Ok(3);
+    println(f"{n ?? 1} {e ?? 2} {digit(7)} {digit(12)} {3.7 as i64}");
+    let c = Color.Green;
+    match c {
+        Color.Red => println("red"),
+        _ => println("not red"),
+    }
+}

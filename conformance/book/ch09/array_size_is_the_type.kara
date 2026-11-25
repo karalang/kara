@@ -1,0 +1,8 @@
+fn takes4(a: Array[i64, 4]) -> i64 {
+    a[0]
+}
+
+fn main() {
+    let five: Array[i64, 5] = [1, 2, 3, 4, 5];
+    println(f"{takes4(five)}");
+}

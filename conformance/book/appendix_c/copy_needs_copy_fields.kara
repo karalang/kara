@@ -1,0 +1,6 @@
+#[derive(Copy)]
+struct Named {
+    name: String,
+}
+
+fn main() {}

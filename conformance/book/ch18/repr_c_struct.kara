@@ -1,0 +1,20 @@
+#[repr(C)]
+struct DivT {
+    quot: i32,
+    rem: i32,
+}
+
+/// # Safety
+/// `div` and `sqrt` are pure math from libc and libm.
+unsafe extern "C" {
+    fn div(num: i32, denom: i32) -> DivT;
+    fn sqrt(x: f64) -> f64;
+}
+
+fn main() {
+    // Safety: denom is not zero.
+    let d = unsafe { div(17, 5) };
+    // Safety: no preconditions.
+    let r = unsafe { sqrt(2.25) };
+    println(f"{d.quot} {d.rem} {r}");
+}

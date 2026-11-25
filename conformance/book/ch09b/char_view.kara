@@ -1,0 +1,19 @@
+fn main() {
+    let s = "hello";
+    let mut vowels = 0;
+    for c in s.chars() {
+        if c == 'a' or c == 'e' or c == 'i' or c == 'o' or c == 'u' {
+            vowels = vowels + 1;
+        }
+    }
+    let mut n = 0;
+    for c in s {
+        n = n + 1;
+    }
+    let chars: Vec[char] = s.chars().collect();
+    println(chars[0]);
+    println(chars.len());
+    println(f"{vowels} {n} {s.char_at(1)} {s.char_at(9)} {"héllo".char_at(1)}");
+    let v = s[1..3];
+    println(v);
+}

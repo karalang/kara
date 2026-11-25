@@ -1,0 +1,11 @@
+import std.secret.{Secret};
+
+#[derive(Debug)]
+struct Wrapper {
+    s: i64,
+}
+
+fn main() {
+    let k = Secret.new("x");
+    println(k);
+}

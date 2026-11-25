@@ -1,0 +1,3 @@
+effect group io = reads(FileSystem) + writes(FileSystem);
+
+fn main() {}

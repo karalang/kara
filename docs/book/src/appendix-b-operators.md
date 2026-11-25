@@ -12,7 +12,7 @@
 
 All arithmetic operators lower to trait-method calls after type checking. Writing `a + b` where `A` does not implement `Add` is a type error that names the missing trait, not the operator.
 
-Integer arithmetic uses trap-on-overflow semantics in `app` and `lib` profiles. For explicit two's-complement wraparound, use the named `wrapping_*` methods (`wrapping_add`, `wrapping_sub`, `wrapping_mul`):
+Integer arithmetic traps on overflow: the result that does not fit is a panic, in every build, and no flag turns the check off. For explicit two's-complement wraparound, use the named `wrapping_*` methods (`wrapping_add`, `wrapping_sub`, `wrapping_mul`); `checked_*` and `saturating_*` are the other two families:
 
 | Method | Behavior |
 |--------|----------|
@@ -80,7 +80,7 @@ Kāra spells these as words. The symbolic forms `&&` / `\|\|` / `!` are rejected
 | Symbol | Meaning |
 |--------|---------|
 | `?` | Propagate an `Err` or `None` early out of the enclosing function |
-| `a ?? b` | Nil-coalesce: return `a` if it is `Some`, else `b` |
+| `a ?? b` | Fallback: the value inside `a` if it is `Some` or `Ok`, else `b` (evaluated only then) |
 | `a as T` | Cast `a` to type `T` |
 | `_` | Wildcard pattern or unnamed placeholder |
 | `..` | Struct-update spread in struct literals |
@@ -90,8 +90,10 @@ Kāra spells these as words. The symbolic forms `&&` / `\|\|` / `!` are rejected
 | `@` | Binds a name to a whole matched value in a pattern (`n @ 1..=9`) |
 | `#[...]` | Attribute on a declaration |
 
-There is no pipe operator `|>`, no optional chaining `?.`, and no `::`; the
-compiler rejects each with a note saying what to write instead.
+There is no pipe operator `|>` and no `::`; the compiler rejects each with a
+note saying what to write instead. There is no optional-chaining operator
+either: `a?.b` is `?` followed by a field access, and returns from the function
+at the first `None` ([Chapter 7](ch07-error-handling.md)).
 
 ## Numeric literal suffixes
 
@@ -118,4 +120,4 @@ Unsuffixed integer literals default to `i64`; unsuffixed float literals default 
 |--------|---------|
 | `"..."` | Plain string literal |
 | `f"..."` | Interpolated string — `{expr}` inserts the `Display` value of `expr` |
-| `f"...{expr:?}..."` | Interpolated with `Debug` formatting |
+| `f"...{expr:?}..."` | Reserved for `Debug` formatting; not implemented yet, and the compiler says so |

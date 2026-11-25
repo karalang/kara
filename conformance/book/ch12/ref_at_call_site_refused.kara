@@ -1,0 +1,8 @@
+fn f(v: Vec[i64]) -> i64 {
+    v.len()
+}
+
+fn main() {
+    let v = [1];
+    println(f"{f(ref v)}");
+}

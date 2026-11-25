@@ -1,0 +1,14 @@
+fn compute(i: i64) -> i64 {
+    i * i
+}
+
+fn main() {
+    let n = 5;
+    let mut out = Vec.with_capacity(2);
+    let mut i = 0;
+    while i < n {
+        out.push(compute(i));
+        i = i + 1;
+    }
+    println(f"{out} {out.len()}");
+}

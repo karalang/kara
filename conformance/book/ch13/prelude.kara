@@ -1,0 +1,22 @@
+import std.sync.{RecvTimeoutError, SendTimeoutError};
+
+fn later() -> i64 {
+    todo()
+}
+
+fn main() {
+    let v: Vec[i64] = [1];
+    let m: Map[String, i64] = ["a": 1];
+    let s: Set[i64] = [1];
+    let st: Str = "view";
+    print("a");
+    println("b");
+    eprintln("to stderr");
+    assert(v.len() == 1);
+    assert_eq(m.len(), 1);
+    let d = dbg(s.len());
+    println(f"{d} {st} {Some(1)}");
+    if d > 5 {
+        unreachable();
+    }
+}

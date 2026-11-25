@@ -1,0 +1,15 @@
+fn boom(n: i64) -> i64 {
+    if n == 2 {
+        panic("branch two");
+    }
+    n
+}
+
+fn main() {
+    defer println("deferred");
+    let (a, b) = par {
+        boom(1),
+        boom(2),
+    };
+    println(f"{a} {b}");
+}

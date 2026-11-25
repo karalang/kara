@@ -1,0 +1,5 @@
+runtime error: called unwrap() on Err
+  at main.kara:14:16
+Error return trace:
+  main.kara:9:13  parse_port(s)?
+  main.kara:14:16

@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 769 |
+| diagnostics | 771 |
 | false-positive | 384 |
 | missing-feature | 257 |
 | perf | 204 |
-| other | 151 |
+| other | 153 |
 | soundness | 134 |
 | miscompile | 110 |
 | run-vs-build | 76 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 924 |
+| typecheck | 927 |
 | mir | 340 |
 | mir-llvm | 330 |
-| cli | 316 |
+| cli | 317 |
 | parser | 162 |
 | ownership | 138 |
 | runtime | 112 |
@@ -138,6 +138,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-57 | 2026-11-25 | other | low | The browser playground crate (`playground/`, karac-playground) no longer builds for `wasm32-unknown-unknown`: about 45 errors, so examples/cartographer's studio.sh (a wasm-pack build of it) fails | — |
 | B-2026-11-25-58 | 2026-11-25 | cli | low | `karac query ownership` gives a derivation reason for a mode it does not report: tangle's `eval` reports `scope` as `ref` with the reason "`scope` is moved here, so the body takes it"; `Editor.set` reports `cell` as `own` with "`cell` is written here, so the body needs `mut ref`" | — |
 | B-2026-11-25-59 | 2026-11-25 | cli | low | `karac query effects` shows a private function's parameter-rooted effect as its class alone (`sends(Channel)` for `fn inner(tx: ref Sender[i64]) { tx.send(2) }`): `"roots"` comes only from a clause | — |
+| B-2026-11-25-60 | 2026-11-25 | cli | low | `karac check --output=json` on a package whose module directory is not snake_case (`src/Db/`) prints a bare `{"severity":"error","phase":"build",...}` object with no `code`, not the structured document (`program_effects`, `diagnostics`), so a tool reading `diagnostics` finds nothing; design.md §17 says every phase, and a package as well as a file, reports in the one shape | — |
+| B-2026-11-25-61 | 2026-11-25 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[profile(..)]` (deferred.md's systems and embedded tracks) check with no diagnostic, `#[profile(kernel)]` is even enforced, the `@deprecated` shorthand works, and `#[with_provider(R, e)]` on a plain `fn` is silent; design.md says the list is generated from the registry and anything else is E_UNKNOWN_ATTRIBUTE | — |
+| B-2026-11-25-62 | 2026-11-25 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default method body that calls it | — |
+| B-2026-11-25-63 | 2026-11-25 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and the copy is `substring`; book ch09b taught `s.slice` (now `s[a..b]`) | — |
 
 ### Relocated
 

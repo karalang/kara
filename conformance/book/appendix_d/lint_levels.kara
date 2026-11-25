@@ -1,0 +1,11 @@
+#![allow(redundant_suffix)]
+
+#[deny(unused_mut)]
+fn g() -> i64 {
+    let mut x = 1i64;
+    x
+}
+
+fn main() {
+    println(f"{g()}");
+}

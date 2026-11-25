@@ -1,0 +1,11 @@
+/// # Safety
+/// `puts` reads the NUL-terminated bytes behind the pointer.
+unsafe extern "C" {
+    fn puts(s: *const u8) -> i32 with writes(Stdout);
+}
+
+fn main() {
+    let msg = c"from puts";
+    // Safety: msg is a static NUL-terminated literal.
+    let _ = unsafe { puts(msg.as_ptr()) };
+}

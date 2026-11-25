@@ -1,0 +1,11 @@
+/// # Safety
+/// `GLXFBConfig` is an opaque handle owned by the X server; it is only passed
+/// back to the GLX functions that produced it.
+unsafe extern "C" {
+    #[kara_name("GlxFbConfig")]
+    type GLXFBConfig;
+}
+
+fn main() {
+    println("ok");
+}

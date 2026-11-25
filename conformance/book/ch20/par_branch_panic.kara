@@ -1,0 +1,7 @@
+fn fetch(ids: Vec[i64], k: i64) -> i64 { ids[k] }
+
+fn main() {
+    let ids: Vec[i64] = [1, 2, 3];
+    let (a, b) = par { fetch(ids, 0), fetch(ids, 7) };
+    println(f"{a} {b}");
+}

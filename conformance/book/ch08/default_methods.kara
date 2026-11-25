@@ -1,0 +1,32 @@
+trait Describable {
+    fn name(self) -> String;
+
+    fn description(self) -> String {
+        f"A thing called {self.name()}"
+    }
+}
+
+struct Rock {}
+
+struct Cat {}
+
+impl Describable for Rock {
+    fn name(self) -> String {
+        "rock"
+    }
+}
+
+impl Describable for Cat {
+    fn name(self) -> String {
+        "cat"
+    }
+
+    fn description(self) -> String {
+        "A cat, who does as it pleases"
+    }
+}
+
+fn main() {
+    println(Rock {}.description());
+    println(Cat {}.description());
+}

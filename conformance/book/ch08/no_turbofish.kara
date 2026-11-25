@@ -1,0 +1,10 @@
+fn sort_it[T: Ord](data: own Vec[T]) -> Vec[T] {
+    let mut d = data;
+    d.sort();
+    d
+}
+
+fn main() {
+    let data: Vec[i32] = [3, 1];
+    let s = sort_it[i32](data);
+}

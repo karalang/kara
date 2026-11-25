@@ -1,0 +1,24 @@
+fn largest[T: Ord + Clone](items: Vec[T]) -> T {
+    let mut best = items[0].clone();
+    for item in items {
+        if item > best {
+            best = item.clone();
+        }
+    }
+    best
+}
+
+fn print_sorted[T: Ord + Display](items: own Vec[T]) {
+    let mut sorted = items;
+    sorted.sort();
+    for item in sorted {
+        println(item);
+    }
+}
+
+fn main() {
+    let v: Vec[i64] = [3, 9, 2];
+    let w: Vec[String] = ["pear", "apple", "zoo"];
+    println(f"{largest(v)} {largest(w)}");
+    print_sorted(w);
+}

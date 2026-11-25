@@ -13,7 +13,7 @@ The language is built on four layers, in order of importance:
 3. **Ownership** defines aliasing and lifetimes.
 4. **Layout** defines physical memory representation.
 
-If you're coming from Rust, think of Kāra as a language that shares many of the same safety goals but takes a different path — owned by default with explicit `ref` / `mut ref` modes (no `<'a>` lifetime parameters), and using an effect system to track side effects and enable parallelization of independent work.
+If you're coming from Rust, think of Kāra as a language that shares many of the same safety goals but takes a different path — parameters borrow by default, with `own` and `mut ref` written out when a function takes or changes a value (no `<'a>` lifetime parameters), and using an effect system to track side effects and enable parallelization of independent work.
 
 If you're coming from Python, Go, or TypeScript, Kāra will feel familiar in syntax while giving you performance and safety guarantees that those languages can't offer.
 

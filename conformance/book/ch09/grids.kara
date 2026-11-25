@@ -1,0 +1,35 @@
+fn cell_sum(g: Vec[Vec[i64]]) -> i64 {
+    let rows = g.len();
+    let mut total = 0;
+    let mut i = 0;
+    while i < rows {
+        let row = ref g[i];
+        let cols = row.len();
+        let mut j = 0;
+        while j < cols {
+            total = total + row[j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    total
+}
+
+fn main() {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    grid.push([1, 2, 3]);
+    grid.push([4, 5, 6]);
+    println(grid.len());
+    println(grid[0].len());
+    println(grid[1][2]);
+    grid[0][1] = 20;
+    println(f"{grid}");
+    let rows = 2;
+    let cols = 3;
+    let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0));
+    dp[0][0] = 9;
+    println(f"{dp}");
+    println(f"{cell_sum(grid)} {grid.len()}");
+    let jagged: Vec[Vec[i64]] = [[1], [2, 3], []];
+    println(f"{cell_sum(jagged)}");
+}

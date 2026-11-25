@@ -1,0 +1,20 @@
+struct Swarm {
+    xs: Vec[f64],
+    ys: Vec[f64],
+    names: Vec[String],
+}
+
+fn drift(swarm: Swarm) -> f64 {
+    let mut sum = 0.0;
+    let mut i = 0;
+    while i < swarm.xs.len() {
+        sum = sum + swarm.xs[i] + swarm.ys[i];   // never touches `names`
+        i = i + 1;
+    }
+    sum
+}
+
+fn main() {
+    let s = Swarm { xs: [1.0, 2.0], ys: [0.5, 0.5], names: ["a", "b"] };
+    println(f"{drift(s)}");
+}

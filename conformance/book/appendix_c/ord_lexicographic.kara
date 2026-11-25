@@ -1,0 +1,11 @@
+#[derive(PartialEq, Eq, PartialOrd, Ord, Display)]
+struct Version {
+    major: i64,
+    minor: i64,
+}
+
+fn main() {
+    let mut v = [Version { major: 1, minor: 9 }, Version { major: 1, minor: 2 }, Version { major: 0, minor: 7 }];
+    v.sort();
+    println(f"{v[0]} {v[1]} {v[2]} {v[0] < v[1]}");
+}

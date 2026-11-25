@@ -1,21 +1,29 @@
 //! The Kāra Book's claims, checked: conformance/book/SENTENCE_MAP.md maps
 //! each stated output, error code and behaviour claim of docs/book/src to a
-//! cell under conformance/book/<chapter>/. A cell is `<name>.kara` and
-//! what it is checked against:
+//! cell under conformance/book/<chapter>/. A cell is `<name>.kara`, or a
+//! package directory `<name>/` holding a `kara.toml`, and what it is
+//! checked against:
 //!
 //! | File | Check |
 //! |---|---|
 //! | `.out` | `karac run` prints exactly this on stdout, on the MIR interpreter (`--interp`) and, on the `--features llvm` leg, compiled |
+//! | `.args` | extra arguments for that run (`--output=jsonl`) |
 //! | `.exit` | the run's exit code (default 0) |
 //! | `.stderr` | lines that must each appear in the run's stderr |
+//! | `.has` | lines that must each appear in the run's stdout or stderr; a cell with only `.has` is run too |
 //! | `.refused` | `karac check` fails, with each listed code among its errors |
 //! | `.warns` | `karac check` passes and reports each listed lint name or code as a warning |
 //! | `.clean` | `karac check` reports no diagnostic at all |
 //! | `.explain` | `karac explain <file>.<first line>` prints each following line |
+//! | `.test` | in a package, `karac test <first line>` exits 0 and prints each following line |
 //! | `.open` | a ledger row: the cell fails today because of it, and the run fails once the cell passes, so the fix removes the file |
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+fn is_package(p: &Path) -> bool {
+    p.is_dir() && p.join("kara.toml").is_file()
+}
 
 fn cells() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("conformance/book");
@@ -25,8 +33,9 @@ fn cells() -> Vec<PathBuf> {
             continue;
         }
         for f in std::fs::read_dir(ch.path()).unwrap().flatten() {
-            if f.path().extension().is_some_and(|e| e == "kara") {
-                out.push(f.path());
+            let p = f.path();
+            if p.extension().is_some_and(|e| e == "kara") || is_package(&p) {
+                out.push(p);
             }
         }
     }
@@ -34,12 +43,26 @@ fn cells() -> Vec<PathBuf> {
     out
 }
 
+/// A sidecar: `<cell>.<ext>` beside a file cell or a package directory.
 fn side(cell: &Path, ext: &str) -> Option<String> {
     std::fs::read_to_string(cell.with_extension(ext)).ok()
 }
 
-/// Runs `karac <args> <cell>` in a scratch copy, so a cell's own file name
-/// is `main.kara` wherever it lives.
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let dst = to.join(e.file_name());
+        if e.path().is_dir() {
+            copy_dir(&e.path(), &dst);
+        } else {
+            std::fs::copy(e.path(), dst).unwrap();
+        }
+    }
+}
+
+/// Runs `karac <args> <cell>` in a scratch copy, so a file cell's own name
+/// is `main.kara` wherever it lives; a package cell runs in its copied
+/// directory with no file argument.
 fn karac(cell: &Path, args: &[&str], after: Option<&str>) -> Output {
     let name = cell.file_stem().unwrap().to_string_lossy();
     let ch = cell
@@ -49,14 +72,20 @@ fn karac(cell: &Path, args: &[&str], after: Option<&str>) -> Output {
         .unwrap()
         .to_string_lossy();
     let dir = std::env::temp_dir().join(format!("karac-book-{}-{ch}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(cell, dir.join("main.kara")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
-    cmd.current_dir(&dir).args(args);
-    match after {
-        Some(item) => cmd.arg(format!("main.kara.{item}")),
-        None => cmd.arg("main.kara"),
-    };
+    if is_package(cell) {
+        copy_dir(cell, &dir);
+        cmd.current_dir(&dir).args(args);
+    } else {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(cell, dir.join("main.kara")).unwrap();
+        cmd.current_dir(&dir).args(args);
+        match after {
+            Some(item) => cmd.arg(format!("main.kara.{item}")),
+            None => cmd.arg("main.kara"),
+        };
+    }
     cmd.output().unwrap()
 }
 
@@ -71,21 +100,32 @@ fn label(cell: &Path) -> String {
     p.display().to_string()
 }
 
-fn check_run(cell: &Path, args: &[&str], fails: &mut Vec<String>) {
-    let Some(want) = side(cell, "out") else {
+fn nonblank(s: &str) -> impl Iterator<Item = &str> {
+    s.lines().filter(|l| !l.trim().is_empty())
+}
+
+fn check_run(cell: &Path, run: &[&str], fails: &mut Vec<String>) {
+    let want = side(cell, "out");
+    let also = side(cell, "has");
+    if want.is_none() && also.is_none() {
         return;
-    };
-    let out = karac(cell, args, None);
+    }
+    let extra = side(cell, "args").unwrap_or_default();
+    let mut args: Vec<&str> = run.to_vec();
+    args.extend(extra.split_whitespace());
+    let out = karac(cell, &args, None);
     let code = out.status.code().unwrap_or(-1);
     let want_code: i32 = side(cell, "exit").map_or(0, |s| s.trim().parse().unwrap());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     let how = args.join(" ");
-    if stdout != want {
-        fails.push(format!(
-            "{} ({how}): stdout\n--- want\n{want}--- got\n{stdout}--- stderr\n{stderr}",
-            label(cell)
-        ));
+    if let Some(want) = want {
+        if stdout != want {
+            fails.push(format!(
+                "{} ({how}): stdout\n--- want\n{want}--- got\n{stdout}--- stderr\n{stderr}",
+                label(cell)
+            ));
+        }
     }
     if code != want_code {
         fails.push(format!(
@@ -97,6 +137,15 @@ fn check_run(cell: &Path, args: &[&str], fails: &mut Vec<String>) {
         if !stderr.contains(line) {
             fails.push(format!(
                 "{} ({how}): stderr lacks `{line}`:\n{stderr}",
+                label(cell)
+            ));
+        }
+    }
+    let both = text(&out);
+    for line in nonblank(&also.unwrap_or_default()) {
+        if !both.contains(line) {
+            fails.push(format!(
+                "{} ({how}): output lacks `{line}`:\n{both}",
                 label(cell)
             ));
         }
@@ -189,6 +238,33 @@ fn check_explain(cell: &Path, fails: &mut Vec<String>) {
     }
 }
 
+fn check_test(cell: &Path, base: &[&str], fails: &mut Vec<String>) {
+    let Some(spec) = side(cell, "test") else {
+        return;
+    };
+    let mut ls = spec.lines();
+    let filter = ls.next().unwrap_or_default().trim().to_string();
+    let mut args: Vec<&str> = base.to_vec();
+    if !filter.is_empty() {
+        args.push(&filter);
+    }
+    let out = karac(cell, &args, None);
+    let got = text(&out);
+    let how = args.join(" ");
+    if !out.status.success() {
+        fails.push(format!(
+            "{} ({how}): exit {:?}\n{got}",
+            label(cell),
+            out.status.code()
+        ));
+    }
+    for want in ls.filter(|l| !l.trim().is_empty()) {
+        if !got.contains(want) {
+            fails.push(format!("{} ({how}): lacks `{want}`:\n{got}", label(cell)));
+        }
+    }
+}
+
 /// A cell with an `.open` row is expected to fail; one that passes has had
 /// its row fixed, and says so.
 fn settle(cell: &Path, mine: Vec<String>, fails: &mut Vec<String>) {
@@ -213,6 +289,7 @@ fn book_cells_static_and_interpreted() {
         check_static(cell, &mut mine);
         check_explain(cell, &mut mine);
         check_run(cell, &["run", "--interp"], &mut mine);
+        check_test(cell, &["test", "--interp"], &mut mine);
         settle(cell, mine, &mut fails);
     }
     assert!(fails.is_empty(), "{}", fails.join("\n\n"));
@@ -225,6 +302,7 @@ fn book_cells_compiled() {
     for cell in &cells() {
         let mut mine = Vec::new();
         check_run(cell, &["run"], &mut mine);
+        check_test(cell, &["test"], &mut mine);
         // An open row's cell is judged on the interpreted leg.
         if side(cell, "open").is_none() {
             fails.extend(mine);

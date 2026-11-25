@@ -1,0 +1,15 @@
+#[no_effect(allocates(Heap), panics)]
+fn mix(a: f32, b: f32) -> f32 {
+    a * 0.5 + b * 0.5
+}
+
+#[no_effect(allocates(Heap))]
+fn grow() -> Vec[i64] {
+    let mut v = Vec.new();
+    v.push(1);
+    v
+}
+
+fn main() {
+    println(f"{mix(1.0, 3.0)}");
+}

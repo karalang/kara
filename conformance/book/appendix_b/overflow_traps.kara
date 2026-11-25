@@ -1,0 +1,7 @@
+fn main() {
+    let i: i32 = 2147483647;
+    let one: i32 = 1;
+    println("before");
+    let j = i + one;
+    println(f"{j}");
+}

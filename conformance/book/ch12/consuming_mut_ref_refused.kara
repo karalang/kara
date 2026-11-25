@@ -1,0 +1,12 @@
+fn take_name(name: own String) -> String {
+    name
+}
+
+fn pass_on(name: mut ref String) -> String {
+    take_name(name)
+}
+
+fn main() {
+    let mut s = "Ada".to_string();
+    println(pass_on(mut s));
+}

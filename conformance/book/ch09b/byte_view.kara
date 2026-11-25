@@ -1,0 +1,12 @@
+fn main() {
+    let s = "h7";
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let b = bytes[0];
+    let i = 1;
+    let d = bytes[i];
+    if d >= b'0' and d <= b'9' {
+        let digit = (d - b'0') as i64;
+        println(f"{n} {b} {digit}");
+    }
+}

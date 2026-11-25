@@ -1,0 +1,10 @@
+pub fn shout_all(xs: Vec[i64]) -> Vec[i64] {
+    xs.iter().map(|x| {
+        println(f"saw {x}");
+        x * 10
+    }).collect()
+}
+
+fn main() {
+    println(f"{shout_all([1, 2])}");
+}

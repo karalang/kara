@@ -1,0 +1,12 @@
+import std.secret.{Secret};
+
+fn main() {
+    let expected = Secret.new("sk-live-abc123");
+    let presented = Secret.new("sk-live-abc123");
+
+    if expected.ct_eq(presented) {
+        println("tokens match");
+    } else {
+        println("tokens differ");
+    }
+}

@@ -1,0 +1,9 @@
+effect resource Display;
+effect resource Audio;
+
+pub fn render() with writes(Display, Audio) {
+}
+
+fn main() {
+    println("ok");
+}

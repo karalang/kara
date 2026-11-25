@@ -1,0 +1,7 @@
+import std.secret.{Secret};
+
+impl Display for Secret[String] {
+    fn to_string(self) -> String { "leak" }
+}
+
+fn main() {}

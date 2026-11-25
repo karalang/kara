@@ -1,0 +1,10 @@
+import std.time;
+
+pub fn nap() with reads(Clock) blocks suspends {
+    time.sleep(Duration.ms(1));
+}
+
+fn main() {
+    nap();
+    println("rested");
+}

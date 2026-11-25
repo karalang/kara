@@ -1,0 +1,9 @@
+fn first_row_len(g: Vec[Vec[i64]]) -> i64 {
+    let row = g[0];
+    row.len()
+}
+
+fn main() {
+    let g: Vec[Vec[i64]] = [[1, 2]];
+    println(f"{first_row_len(g)}");
+}

@@ -1,0 +1,12 @@
+import api.Connection;
+import api.open;
+import db.connection.Connection as DbConn;
+
+fn same(c: DbConn) -> String {
+    c.name.clone()
+}
+
+fn main() {
+    let c: Connection = open("pg");
+    println(same(c));
+}

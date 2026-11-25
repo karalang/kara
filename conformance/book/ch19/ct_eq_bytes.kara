@@ -1,0 +1,8 @@
+import std.secret.{Secret};
+
+fn main() {
+    let a: Secret[Vec[u8]] = Secret.new([1u8, 2, 3]);
+    let b: Secret[Vec[u8]] = Secret.new([1u8, 2, 3]);
+    let c: Secret[Vec[u8]] = Secret.new([1u8, 2, 4]);
+    println(f"{a.ct_eq(b)} {a.ct_eq(c)}");
+}

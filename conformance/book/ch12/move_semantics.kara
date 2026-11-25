@@ -1,0 +1,6 @@
+fn main() {
+    let a = Vec.filled(3, 0);
+    let b = a;
+    println(a);
+    println(b);
+}

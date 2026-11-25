@@ -1,0 +1,11 @@
+fn largest[T: Clone](items: Vec[T]) -> T {
+    let mut best = items[0].clone();
+    for item in items {
+        if item > best {
+            best = item.clone();
+        }
+    }
+    best
+}
+
+fn main() {}

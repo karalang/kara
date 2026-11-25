@@ -1,0 +1,12 @@
+#[derive(Hash, Clone)]
+struct Key {
+    id: i64,
+}
+
+fn main() {
+    let a = Key { id: 1 };
+    let mut s: Set[Key] = Set.new();
+    s.insert(a.clone());
+    s.insert(Key { id: 1 });
+    println(f"{s.len()} {a == Key { id: 1 }}");
+}

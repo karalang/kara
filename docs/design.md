@@ -266,7 +266,7 @@ Kāra keeps its hard keywords few, so that common words stay usable as names.
 | `where` | follows a signature or a type head |
 | `with` | starts an effect clause ([§12](#12-effects)) |
 | `effect`, `resource` | start an effect resource declaration ([§12](#12-effects)) |
-| `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks` | appear inside an effect clause or an effect attribute such as `#[no_effect(...)]` ([§12](#12-effects)) |
+| `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks`, `suspends` | appear inside an effect clause or an effect attribute such as `#[no_effect(...)]` ([§12](#12-effects)) |
 
 So these are legal:
 
@@ -276,7 +276,7 @@ fn union(mut ref self, a: i64, b: i64) { ... }
 fn create_server(host: String, port: u16) { ... }
 ```
 
-`use` and `mod` are not keywords. Modules come from the directory tree and imports use `import` ([§4](#4-modules-and-packages)). Words that belong to deferred features (`lock`, `seq`, `layout`, `group`, `stable`, `alias`, `independent`, `providers`, `requires`, `ensures`, `invariant`, `suspends`) are not keywords in v1; they return as contextual keywords with their tracks.
+`use` and `mod` are not keywords. Modules come from the directory tree and imports use `import` ([§4](#4-modules-and-packages)). Words that belong to deferred features (`lock`, `seq`, `layout`, `group`, `stable`, `alias`, `independent`, `providers`, `requires`, `ensures`, `invariant`) are not keywords in v1; they return as contextual keywords with their tracks. (`suspends` left this list with the 2026-11-16 ruling that made it a v1 execution effect, [Effect verbs](#effect-verbs).)
 
 The logical operators are the words `and`, `or` and `not`. The symbols `&&`, `||` and prefix `!` are rejected with a fix that rewrites them.
 

@@ -1,0 +1,19 @@
+#[diagnostic::on_unimplemented(
+    message: "the type `{Self}` cannot be used as a key here",
+    label: "`{Self}` is not Keyed",
+    note: "implement Keyed"
+)]
+trait Keyed {
+    fn key(self) -> i64;
+}
+
+#[diagnostic::polish_my_error_pretty]
+fn helper() {}
+
+fn use_key[T: Keyed](t: T) -> i64 {
+    t.key()
+}
+
+fn main() {
+    println(f"{use_key(3)}");
+}

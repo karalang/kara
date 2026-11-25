@@ -148,7 +148,7 @@ shared struct Node {
 }
 ```
 
-A `shared struct` is automatically reference-counted. Multiple owners can point to the same data without explicit `Rc` or `Arc` wrappers. The compiler picks the right reference-counting strategy behind the scenes.
+A `shared struct` is reference-counted: multiple owners can point to the same data without explicit `Rc` or `Arc` wrappers. Its handles stay within one task; the atomically counted form that crosses tasks is `sync struct` ([Chapter 14](./ch14-concurrency.md)). Sharing is always something a type declares: the compiler never turns an ordinary struct into a counted one.
 
 Use `shared` when your data naturally has multiple owners. Use regular structs (the default) for everything else.
 

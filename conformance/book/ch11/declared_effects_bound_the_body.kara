@@ -1,0 +1,11 @@
+effect resource Database;
+
+pub fn fetch(id: i64) -> i64 with reads(FileSystem) blocks {
+    let s = FileSystem.read_to_string("/tmp/x").unwrap_or("");
+    FileSystem.write("/tmp/y", s).unwrap();
+    id
+}
+
+fn main() {
+    println(f"{fetch(1)}");
+}

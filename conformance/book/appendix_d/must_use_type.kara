@@ -1,0 +1,13 @@
+#[must_use("connections must be explicitly disconnected")]
+struct Connection {
+    id: i64,
+}
+
+fn connect() -> Connection {
+    Connection { id: 1 }
+}
+
+fn main() {
+    connect();
+    println("done");
+}

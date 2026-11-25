@@ -1,0 +1,7 @@
+import std.secret.{Secret};
+
+fn main() {
+    let a = Secret.new("x");
+    let b = Secret.new("y");
+    println(a == b);
+}

@@ -1,0 +1,9 @@
+import std.secret.{Secret};
+
+#[derive(Display)]
+struct Config { host: String, token: Secret[String] }
+
+fn main() {
+    let c = Config { host: "db.internal", token: Secret.new("hunter2") };
+    println(c);
+}

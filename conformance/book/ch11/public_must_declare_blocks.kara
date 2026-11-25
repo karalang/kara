@@ -1,0 +1,9 @@
+import std.time;
+
+pub fn nap() {
+    time.sleep(Duration.ms(1));
+}
+
+fn main() {
+    nap();
+}

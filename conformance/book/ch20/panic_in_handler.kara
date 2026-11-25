@@ -1,0 +1,10 @@
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    eprintln("handler start");
+    panic("again");
+}
+
+fn main() {
+    defer println("deferred");
+    panic("first");
+}

@@ -6,7 +6,7 @@ This chapter covers the direction that ships in 0.8, calling C from Kāra, and t
 
 ## Calling C from Kāra
 
-To import C functions into Kāra, declare them in an `unsafe extern "C"` block and call them inside `unsafe`:
+To import C functions into Kāra, declare them in an `unsafe extern "C"` block. The block is where you assert that the foreign code can be trusted; after that, calls are ordinary expressions:
 
 ```kara
 /// # Safety
@@ -18,12 +18,10 @@ unsafe extern "C" {
 }
 
 fn main() {
-    // Safety: abs has no preconditions for any value but i32::MIN.
-    let n = unsafe { abs(-42) };
+    let n = abs(-42);
     println(n);                           // 42
     let msg = c"hello from C land";
-    // Safety: msg is a static NUL-terminated literal.
-    let len = unsafe { strlen(msg.as_ptr()) };
+    let len = strlen(msg.as_ptr());
     println(len as i64);                  // 17
 }
 ```
@@ -32,7 +30,7 @@ This works identically under `karac run` and `karac build`: the JIT resolves the
 
 Three rules carry most of the weight:
 
-- **The declaration block is `unsafe extern`, and every call site is `unsafe`.** The compiler can't check what's on the other side of the boundary, so both the block and each call carry a `# Safety` / `// Safety:` comment stating the trust contract — the `undocumented_unsafe` lint warns when they're missing.
+- **The declaration block is `unsafe extern`, and calls need no `unsafe`.** The compiler can't check what's on the other side of the boundary, so the block carries a `# Safety` doc comment stating the trust contract once (the `undocumented_unsafe` lint warns when it's missing). This is the deliberate difference from an `unsafe fn`, whose precondition every call acknowledges.
 - **C strings cross as `*const u8`.** A `c"..."` literal is a `ref CStr` (NUL-terminated, in rodata); hand it to C with `.as_ptr()`. Declaring an extern parameter as `ref CStr` directly is not the FFI form — `CStr` is a Kāra type, not a C one.
 - **Effects still apply.** An extern fn that writes somewhere declares it: `fn puts(s: *const u8) -> i32 with writes(Console);` — foreign code doesn't get to dodge the effect system (see [Effects](./ch11-effects.md)).
 

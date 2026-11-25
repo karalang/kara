@@ -1,0 +1,13 @@
+fn min_max(items: Vec[i64]) -> (i64, i64) {
+    (items.iter().min().unwrap(), items.iter().max().unwrap())
+}
+
+fn main() {
+    let pair = (42, "hello");
+    let (number, text) = pair;
+    println(f"{number} {text}");
+    let (lo, hi) = min_max([4, -2, 9]);
+    println(f"{lo} {hi}");
+    let empty: Vec[i64] = [];
+    println(f"{empty.iter().min()}");
+}

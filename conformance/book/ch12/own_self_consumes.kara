@@ -1,0 +1,18 @@
+struct Widget {
+    count: i64,
+}
+
+struct Builder {
+    count: i64,
+}
+
+impl Builder {
+    fn build(own self) -> Widget { Widget { count: self.count } }
+    fn peek(self) -> i64 { self.count }
+}
+
+fn main() {
+    let b = Builder { count: 0 };
+    let w = b.build();
+    println(f"{b.peek()} {w.count}");
+}

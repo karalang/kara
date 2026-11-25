@@ -1,0 +1,16 @@
+fn main() {
+    let a = 17;
+    let b = 5;
+    println(f"{a + b} {a - b} {a * b} {a / b} {a % b} {-a / b} {-a % b}");
+    println(f"{a & b} {a | b} {a ^ b} {a << 2} {a >> 1}");
+    println(f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}");
+    let t = true;
+    println(f"{t and false} {t or false} {not t}");
+    let mut x = 10;
+    x += 5; x -= 3; x *= 2; x /= 4; x %= 4;
+    let mut y = 12;
+    y &= 10; y |= 1; y ^= 3; y <<= 2; y >>= 1;
+    println(f"{x} {y}");
+    let i: i32 = 2147483647;
+    println(f"{i.wrapping_add(1)}");
+}

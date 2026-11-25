@@ -1,0 +1,6 @@
+#[derive(Arithmetic)]
+struct Metres {
+    v: f64,
+}
+
+fn main() {}

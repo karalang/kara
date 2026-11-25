@@ -1,0 +1,4 @@
+#[karafmt::skip]
+fn g() {}
+
+fn main() {}

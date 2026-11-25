@@ -1,0 +1,16 @@
+fn find[T: Eq](items: Vec[T], target: T) -> Option[i64] {
+    for i in 0..items.len() {
+        if items[i] == target {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn main() {
+    let names = ["Alice", "Bob", "Charlie"];
+    match find(names, "Bob") {
+        Some(i) => println(f"Found at index {i}"),
+        None => println("Not found"),
+    }
+}

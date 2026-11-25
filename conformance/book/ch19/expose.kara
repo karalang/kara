@@ -1,0 +1,7 @@
+import std.secret.{Secret};
+
+fn main() {
+    let api_key = Secret.new("sk-live-abc123");
+    let raw = api_key.expose();
+    println(f"Authorization: Bearer {raw}");
+}

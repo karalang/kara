@@ -24,42 +24,43 @@ something that *looks* like O(1)). Kāra refuses to guess. Instead you pick a
 Algorithmic code over ASCII almost always wants the byte view; text that has to
 respect non-ASCII characters wants the character view.
 
-## Substrings — a *range* index copies
+## Substrings — a *range* index is a view
 
-Scalar indexing is out, but a **range** index is in — and it means something
-different from range-indexing a `Vec`. `s[a..b]` returns a **fresh, owned
-`String`** holding a copy of the bytes in that range (not a borrowed `Slice`,
-and not a `Str` view):
+Scalar indexing is out, but a **range** index is in. `s[a..b]` is a `Str`: a
+borrowed view of the bytes in that range, with no copy (as `v[a..b]` on a `Vec`
+is a `Slice`):
 
 ```kara
 let s = "HelloWorld";
-let head = s[0..5];       // "Hello" — a new String
+let head = s[0..5];       // "Hello", a view into s
 let tail = s[5..];        // "World"
-let all  = s[..];         // "HelloWorld" (a full copy)
+let all  = s[..];         // "HelloWorld", the whole string
 ```
 
-Every range form works — `a..b`, `a..=b`, `a..`, `..b`, `..`. The method
-spelling `s.substring(a, b)` is identical in behaviour to `s[a..b]`.
+Every range form works — `a..b`, `a..=b`, `a..`, `..b`, `..`. When you need an
+owned `String`, call `.to_string()` on the view, or use `s.substring(a, b)`,
+which copies the range; unlike `s[a..b]`, `substring` saturates bounds that are
+out of range instead of panicking.
 
 Two things to keep in mind:
 
 - **The offsets are byte positions, not character positions** — the same units
   as `s.bytes()`. For ASCII the two coincide; for text with multi-byte
   characters they don't.
-- **A range must land on UTF-8 character boundaries.** Slicing through the
-  middle of a multi-byte character panics at runtime (`byte index 2 is not
-  a char boundary`, kind `index_out_of_bounds`) rather than handing back
-  invalid UTF-8:
+- **A range must land on UTF-8 character boundaries, inside the string.**
+  Slicing through the middle of a multi-byte character panics at runtime
+  (`byte index 2 is not a char boundary`, kind `index_out_of_bounds`) rather
+  than handing back invalid UTF-8, and so does a bound past the end:
 
   ```kara
   let s = "héllo";         // 'é' occupies bytes 1..3
   let bad = s[0..2];        // panics — byte 2 is mid-character
   ```
 
-Because the result is an owned `String`, it outlives the source and can be
-pushed, returned, or stored freely. When you only need to *read* a borrowed
-window without copying, reach for a `Str` via `s.slice(a, b)` instead
-(see [Variables and Types](./ch02-variables-and-types.md#strings)).
+Because the result is a view, it borrows `s`: it is read-only and cannot
+outlive the string. To push to it, return it past `s`, or store it, take an owned
+copy with `.to_string()` or `s.substring(a, b)` (see
+[Variables and Types](./ch02-variables-and-types.md#strings)).
 
 ## The character view
 
@@ -224,8 +225,8 @@ fn digit_char(d: i64) -> char {
 | Iterate characters once | `for c in s.chars()` | O(n) total | `char` |
 | Random access by character index | `s.chars().collect()` → `Vec[char]` | O(n) once, O(1) after | `char` |
 | One-off i-th character | `s.char_at(i)` | O(n) | `Option[char]` |
-| A copied substring (byte range) | `s[a..b]` / `s.substring(a, b)` | O(k) copy | `String` |
-| A borrowed substring view | `s.slice(a, b)` | O(1) | `Str` |
+| A borrowed substring view (byte range) | `s[a..b]` | O(1) | `Str` |
+| A copied substring (byte range) | `s.substring(a, b)` | O(k) copy | `String` |
 | Build up output | `String.new()` + `push` / `push_str` | amortized O(1) per push | — |
 
 The rule of thumb: **read as bytes, build with chars.** Byte scanning keeps the

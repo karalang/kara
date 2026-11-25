@@ -1,0 +1,4 @@
+#[noblock]
+fn g() {}
+
+fn main() {}

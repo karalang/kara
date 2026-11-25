@@ -1,0 +1,22 @@
+struct Widget {
+    count: i64,
+}
+
+struct Builder {
+    count: i64,
+}
+
+impl Builder {
+    fn build(own self) -> Widget { Widget { count: self.count } }
+    fn peek(self) -> i64 { self.count }
+    fn bump(mut ref self) { self.count = self.count + 1; }
+}
+
+fn main() {
+    let mut b = Builder { count: 0 };
+    b.bump();
+    b.bump();
+    println(f"{b.peek()}");
+    let w = b.build();
+    println(f"{w.count}");
+}

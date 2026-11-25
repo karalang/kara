@@ -1,0 +1,16 @@
+fn parse_port(s: Str) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"bad port: {s}"),
+    }
+}
+
+fn load(s: Str) -> Result[i64, String] {
+    let p = parse_port(s)?;
+    Ok(p + 1)
+}
+
+fn main() {
+    let port = load("80x").unwrap();
+    println(f"{port}");
+}

@@ -1,0 +1,12 @@
+struct Config { r#move: bool }
+
+fn r#try() -> i64 {
+    7
+}
+
+fn main() {
+    let r#async = 1;
+    let c = Config { r#move: true };
+    let o: Option[i64] = None;
+    println(f"{r#async} {c.move} {r#try()} {o.or(Some(2))}");
+}

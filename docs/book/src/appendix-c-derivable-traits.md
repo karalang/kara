@@ -12,7 +12,7 @@ struct GridCell {
 
 (Note the field types are integers. `Eq` and `Hash` require *every* field to be `Eq`/`Hash`, and `f64` is neither — `NaN != NaN` breaks reflexivity — so a struct with `f64` fields can derive `PartialEq`/`PartialOrd`/`Display` but **not** `Eq`/`Ord`/`Hash`. See the per-trait requirements below.)
 
-The compiler resolves derive dependencies automatically regardless of the order you list them. Writing `#[derive(Hash)]` when `PartialEq` and `Eq` are not yet derived causes the compiler to derive them first, in the correct order.
+The order of the list does not matter, but a derive never adds another: list every trait a derive needs. Writing `#[derive(Hash)]` without `PartialEq` and `Eq` warns (`deprecated`): 0.8.x still fills them in, `karac fix` adds them to the list, and the next minor release makes it an error.
 
 ---
 
@@ -69,7 +69,7 @@ No dependencies.
 
 ### `Debug`
 
-Generates a developer-oriented representation. Used by `{expr:?}` in interpolated strings and by the test runner when printing unexpected values.
+Generates a developer-oriented representation, used by `dbg` and by `assert_eq` when printing unexpected values. The `{expr:?}` slot in interpolated strings is reserved for it but not implemented yet.
 
 - **Structs:** always includes all fields, regardless of visibility.
 - **Enums:** includes variant name and all fields.
@@ -82,7 +82,7 @@ No dependencies.
 
 ### `Default`
 
-Generates a `T.default()` method that returns a "zero-like" value for the type. The derived implementation calls `.default()` on each field in declaration order and constructs the struct. For enums, the first declared variant is used, with each of its fields defaulted.
+Generates a `T.default()` method that returns a "zero-like" value for the type. The derived implementation calls `.default()` on each field in declaration order and constructs the struct. On an enum, exactly one unit variant is marked `#[default]`, and that is the value; an enum without the mark is `error[E_DEFAULT_NO_VARIANT_MARKED]`.
 
 ```kara
 #[derive(Default)]
@@ -113,7 +113,7 @@ Marks a type as trivially copyable (bitwise copy semantics). Assignment and pass
 
 **Requires:** every field of the type must also be `Copy`.
 
-**Auto-derives `Clone`:** `#[derive(Copy)]` automatically adds `Clone` if not already present.
+**Requires `Clone` too:** write `#[derive(Copy, Clone)]`. `#[derive(Copy)]` alone warns (`deprecated`); 0.8.x fills `Clone` in and `karac fix` adds it.
 
 ---
 
@@ -134,16 +134,16 @@ distinct type Metres = f64;   // now Metres + Metres → Metres
 
 ## Dependency summary
 
-| Trait | Auto-derives | Requires |
+| Trait | List with it | Requires |
 |-------|-------------|---------|
 | `PartialEq` | — | — |
-| `Eq` | — | `PartialEq` |
-| `PartialOrd` | — | `PartialEq` |
-| `Ord` | — | `PartialOrd + Eq` |
-| `Hash` | — | `Eq` |
+| `Eq` | `PartialEq` | — |
+| `PartialOrd` | `PartialEq` | — |
+| `Ord` | `PartialOrd`, `Eq`, `PartialEq` | — |
+| `Hash` | `PartialEq`, `Eq` | — |
 | `Display` | — | — |
 | `Debug` | — | — |
 | `Clone` | — | — |
 | `Copy` | `Clone` | every field is `Copy` |
-| `Default` | — | every field is `Default` |
+| `Default` | — | every field is `Default`; on an enum, one `#[default]` variant |
 | `Arithmetic` | — | type must be `distinct` |

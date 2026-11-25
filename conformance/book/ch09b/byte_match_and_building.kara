@@ -1,0 +1,37 @@
+fn closer_for(b: u8) -> u8 {
+    match b {
+        b'(' => b')',
+        b'[' => b']',
+        b'{' => b'}',
+        _    => 0u8,
+    }
+}
+
+fn reverse(s: String) -> String {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut out = String.new();
+    let mut i = n - 1;
+    while i >= 0 {
+        out.push(chars[i]);
+        i = i - 1;
+    }
+    out
+}
+
+fn digit_char(d: i64) -> char {
+    match char.try_from(b'0' + d as u8) {
+        Ok(c)  => c,
+        Err(_) => '?',
+    }
+}
+
+fn main() {
+    println(f"{closer_for(b'[') as char} {closer_for(b'x')}");
+    let mut out = String.new();
+    out.push('h');
+    out.push_str("ello");
+    println(out);
+    println(reverse("héllo"));
+    println(f"{digit_char(7)}");
+}

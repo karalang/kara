@@ -1,0 +1,4 @@
+#[cfg(target: linux)]
+fn g() {}
+
+fn main() {}

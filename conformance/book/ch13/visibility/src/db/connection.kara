@@ -1,0 +1,15 @@
+pub struct Connection {
+    pub name: String,
+}
+
+pub fn open(name: String) -> Connection {
+    Connection { name: f"{name}:{secret()}" }
+}
+
+fn helper() -> String {
+    "helper"
+}
+
+private fn secret() -> i64 {
+    42
+}

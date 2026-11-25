@@ -1,0 +1,10 @@
+struct Particle { x: f64, y: f64, name: String }
+
+// x and y share one contiguous array (the physics hot path);
+// name is cold, a separate allocation the hot loop never touches.
+layout swarm: Vec[Particle] {
+    group hot { x, y }
+    cold { name }
+}
+
+fn main() {}
