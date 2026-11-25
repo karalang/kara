@@ -1,0 +1,6 @@
+// design.md §13 `par for`: the loop variable binds as in a `for` loop: iterating a collection borrows it and binds `ref` elements.
+fn main() {
+    let words = ["a", "bb", "ccc"];
+    let lens = par for w in words { w.len() };
+    println(f"{lens} {words}");
+}

@@ -1,0 +1,9 @@
+// design.md §13 `par` blocks: several branches may read one place; one branch may borrow another place mutably if no other touches it.
+fn total(v: ref Vec[i64]) -> i64 { let mut s = 0; for x in v { s += x; } s }
+fn bump(v: mut ref Vec[i64]) -> i64 { v.push(9); v.len() }
+fn main() {
+    let data = [1, 2, 3];
+    let mut other = [0];
+    let (a, b, c) = par { total(data), total(data), bump(mut other) };
+    println(f"{a} {b} {c} {other}");
+}

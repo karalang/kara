@@ -1,0 +1,7 @@
+// design.md §10 Results and propagation: `??` supplies a default instead of propagating.
+fn main() {
+    let a: Option[i64] = None;
+    let b: Option[i64] = Some(4);
+    let r: Result[i64, String] = Err("x".to_string());
+    println(f"{a ?? 7} {b ?? 7} {r ?? 9}");
+}

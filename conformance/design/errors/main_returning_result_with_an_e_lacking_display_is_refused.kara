@@ -1,0 +1,3 @@
+struct E {}
+fn main() -> Result[(), E] { Ok(()) }
+// design.md conformance (moved from the shared folder's design-10-13): main returning Result with an E lacking Display is refused

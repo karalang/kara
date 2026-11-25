@@ -1,0 +1,6 @@
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
+    let _ = par { tx.send(1), tx.send(2) };
+    let _ = rx;
+}
+// design.md conformance (moved from the shared folder's design-10-13): two sends on one channel conflict

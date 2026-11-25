@@ -1,0 +1,3 @@
+println("x");
+fn main() {}
+// design.md conformance (moved from the shared folder's design-10-13): script mode and fn main together are refused

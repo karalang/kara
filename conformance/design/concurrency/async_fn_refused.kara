@@ -1,0 +1,3 @@
+// design.md §13 Concurrency: there is no `async fn` and no `.await`.
+async fn work() -> i64 { 1 }
+fn main() { println(1); }

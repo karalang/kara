@@ -1,0 +1,8 @@
+
+fn g(v: Vec[i64]) -> Option[i64] {
+    errdefer println("none path");
+    let x = v.get(3)?;
+    Some(x)
+}
+fn main() { let v: Vec[i64] = [1]; println(f"{g(v)}"); }
+// design.md conformance (moved from the shared folder's design-10-13): errdefer on Option's None

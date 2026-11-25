@@ -1,0 +1,12 @@
+import std.time.{Duration, Instant, sleep};
+
+fn step(ms: i64, n: i64, fail: bool) -> Result[i64, String] {
+    sleep(Duration.ms(ms));
+    if fail { Err(f"fail {n}") } else { Ok(n) }
+}
+fn run() -> Result[i64, String] {
+    let (a, b, c) = par { step(80, 1, true)?, step(1, 2, true)?, step(10, 3, false)? };
+    Ok(a + b + c)
+}
+fn main() { println(f"{run()}"); }
+// design.md conformance (moved from the shared folder's design-10-13): ? in a branch: the source-earliest error wins, siblings before it finish (KARAC_THREADS=4)

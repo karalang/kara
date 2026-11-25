@@ -1,0 +1,6 @@
+// design.md §10 `Error` and `AnyError`: `AnyError` does not implement `Error`.
+fn show[E: Error](e: E) -> String { f"{e}" }
+fn main() {
+    let r: Result[i64, AnyError] = i64.parse("q").context("c");
+    match r { Ok(_) => {}, Err(e) => println(show(e)) }
+}

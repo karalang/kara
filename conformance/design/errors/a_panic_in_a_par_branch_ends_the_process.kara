@@ -1,0 +1,7 @@
+
+fn boom(n: i64) -> i64 { if n > 0 { panic("in branch"); } n }
+fn main() {
+    let (a, b) = par { boom(0), boom(1) };
+    println(f"{a} {b}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): a panic in a par branch ends the process

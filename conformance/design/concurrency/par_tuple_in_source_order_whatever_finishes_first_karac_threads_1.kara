@@ -1,0 +1,8 @@
+import std.time.{Duration, Instant, sleep};
+
+fn slow(ms: i64, v: i64) -> i64 { sleep(Duration.ms(ms)); v }
+fn main() {
+    let (a, b, c) = par { slow(60, 1), slow(1, 2), slow(30, 3) };
+    println(f"{a} {b} {c}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): par tuple in source order whatever finishes first (KARAC_THREADS=1)

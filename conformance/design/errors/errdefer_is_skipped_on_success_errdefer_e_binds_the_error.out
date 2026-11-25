@@ -1,0 +1,4 @@
+Ok(0)
+plain errdefer
+cleanup after n=2
+Err(n=2)

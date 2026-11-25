@@ -1,0 +1,19 @@
+import std.time.{Duration, Instant, sleep};
+
+fn forever() -> Result[i64, String] {
+    defer println("defer ran");
+    errdefer println("errdefer ran");
+    errdefer(e) { println(f"errdefer(e) ran {e}"); }
+    sleep(Duration.ms(60000));
+    Ok(0)
+}
+fn main() {
+    let g = TaskGroup.new().with_deadline(Duration.ms(30));
+    let h = g.spawn(|| forever());
+    match h.try_join() {
+        Ok(_) => println("finished"),
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        Err(_) => println("other"),
+    }
+}
+// design.md conformance (moved from the shared folder's design-10-13): with_deadline cancels: try_join gives Cancelled, defer and plain errdefer run, errdefer(e) skipped (KARAC_THREADS=1)

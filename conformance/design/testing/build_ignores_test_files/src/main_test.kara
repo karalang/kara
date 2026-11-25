@@ -1,0 +1,2 @@
+test "x" { this is not kara }
+// design.md §14 conformance: `karac build` ignores `_test.kara` files, even one that does not parse.

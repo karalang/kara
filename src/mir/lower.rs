@@ -20948,6 +20948,112 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(Place::local(out).project(ProjElem::Deref))
     }
 
+    /// The writable places of the `mut ref` elements `muts` of the view at
+    /// `place` (of type `t`), in position order, each in its own one-element
+    /// piece of one mutable view: `split_at_mut` cuts the rest of the view
+    /// before each element and after it, so every element is reached
+    /// through a different local and none borrows the others
+    /// (B-2026-11-25-1).
+    fn split_view_elems(
+        &mut self,
+        place: &Place,
+        t: Ty,
+        elem: Ty,
+        muts: &[(&'a Pattern, SeqPos)],
+    ) -> R<FxHashMap<NodeId, Place>> {
+        let tcx = self.tys().tcx();
+        let usize_t = tcx.intern(HK::UInt(UIntSize::U64));
+        let st = tcx.intern(HK::Slice {
+            elem,
+            mutable: true,
+        });
+        let pair = tcx.tuple(&[st, st]);
+        let int = |v: u64| {
+            Operand::Const(Const {
+                ty: usize_t,
+                kind: ConstKind::Scalar(v as u128),
+            })
+        };
+        let n = self.seq_len(place, t);
+        // The whole view, through one mutable borrow of the sequence.
+        let rt = self.tys().tcx().reference(t, true);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, place.clone()));
+        let mut cur = self.temp(st);
+        let tname = self.tys().display(t);
+        self.call_native(
+            &format!("{tname}.slice_mut"),
+            vec![
+                Operand::Move(Place::local(r)),
+                int(0),
+                Operand::Copy(Place::local(n)),
+            ],
+            Place::local(cur),
+        );
+        // `cur` starts at `off`, an absolute position.
+        let off = self.temp(usize_t);
+        self.assign(off, Rvalue::Use(int(0)));
+        let sname = self.tys().display(st);
+        let mut out = FxHashMap::default();
+        for (p, pos) in muts {
+            let at = self.temp(usize_t);
+            match pos {
+                SeqPos::Start(i) => self.assign(at, Rvalue::Use(int(*i))),
+                SeqPos::End(m) => self.assign(
+                    at,
+                    Rvalue::BinaryOp(BinOp::Sub, Operand::Copy(Place::local(n)), int(*m)),
+                ),
+            }
+            let mid = self.temp(usize_t);
+            self.assign(
+                mid,
+                Rvalue::BinaryOp(
+                    BinOp::Sub,
+                    Operand::Copy(Place::local(at)),
+                    Operand::Copy(Place::local(off)),
+                ),
+            );
+            // `cur` = before ++ [elem] ++ rest.
+            let cut = |this: &mut Self, from: Local, at: Operand| -> Local {
+                let mrt = this.tys().tcx().reference(st, true);
+                let mr = this.temp(mrt);
+                this.assign(mr, Rvalue::Ref(BorrowKind::Mut, Place::local(from)));
+                let pr = this.temp(pair);
+                this.call_native(
+                    &format!("{sname}.split_at_mut"),
+                    vec![Operand::Move(Place::local(mr)), at],
+                    Place::local(pr),
+                );
+                pr
+            };
+            let first = cut(self, cur, Operand::Copy(Place::local(mid)));
+            let tail = self.temp(st);
+            self.assign(
+                tail,
+                Rvalue::Use(Operand::Move(Place::local(first).field(1, st))),
+            );
+            let second = cut(self, tail, int(1));
+            let one = self.temp(st);
+            self.assign(
+                one,
+                Rvalue::Use(Operand::Move(Place::local(second).field(0, st))),
+            );
+            let rest = self.temp(st);
+            self.assign(
+                rest,
+                Rvalue::Use(Operand::Move(Place::local(second).field(1, st))),
+            );
+            let ep = self.seq_elem_mut(&Place::local(one), st, SeqPos::Start(0))?;
+            out.insert(p.id, ep);
+            cur = rest;
+            self.assign(
+                off,
+                Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(at)), int(1)),
+            );
+        }
+        Ok(out)
+    }
+
     /// Whether `p` is a `mut ref name` binding.
     fn is_mut_ref_binding(&self, p: &Pattern) -> bool {
         matches!(p.kind, PatternKind::Binding(_))
@@ -21250,7 +21356,31 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // Over a view every element binding borrows.
                 let by_ref = by_ref || known.is_none();
                 let (k, j) = (prefix.len() as u64, suffix.len() as u64);
+                // Two or more `mut ref` elements over a view are reached
+                // through disjoint pieces of one mutable view, split apart
+                // with `split_at_mut`, so no two of them borrow the whole
+                // sequence at once (B-2026-11-25-1).
+                let mut split: FxHashMap<NodeId, Place> = FxHashMap::default();
+                let muts: Vec<(&'a Pattern, SeqPos)> = prefix
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (p, SeqPos::Start(i as u64)))
+                    .chain(
+                        suffix
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p)| (p, SeqPos::End(j - i as u64))),
+                    )
+                    .filter(|(p, _)| self.is_mut_ref_binding(p))
+                    .collect();
+                if known.is_none() && muts.len() >= 2 && !self.is_reference(elem) {
+                    split = self.split_view_elems(place, t, elem, &muts)?;
+                }
                 for (i, p) in prefix.iter().enumerate() {
+                    if let Some(ep) = split.get(&p.id) {
+                        self.bind_pattern(p, &ep.clone(), elem, by_ref, out)?;
+                        continue;
+                    }
                     if self.pattern_binds(p) {
                         let pos = SeqPos::Start(i as u64);
                         let ep = if self.is_mut_ref_binding(p) {
@@ -21262,6 +21392,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                 }
                 for (i, p) in suffix.iter().enumerate() {
+                    if let Some(ep) = split.get(&p.id) {
+                        self.bind_pattern(p, &ep.clone(), elem, by_ref, out)?;
+                        continue;
+                    }
                     if self.pattern_binds(p) {
                         let pos = SeqPos::End(j - i as u64);
                         let ep = if self.is_mut_ref_binding(p) {

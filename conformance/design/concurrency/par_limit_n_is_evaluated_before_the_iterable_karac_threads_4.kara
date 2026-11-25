@@ -1,0 +1,8 @@
+
+fn lim() -> i64 { println("limit"); 2 }
+fn items() -> Vec[i64] { println("items"); [1, 2, 3] }
+fn main() {
+    let v = par(limit: lim()) for x in items() { x * 2 };
+    println(f"{v}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): par(limit: n) is evaluated before the iterable (KARAC_THREADS=4)

@@ -1,0 +1,1 @@
+`f` is a `MutFn` bound by a pattern (it holds the `MutFn` from `o`)

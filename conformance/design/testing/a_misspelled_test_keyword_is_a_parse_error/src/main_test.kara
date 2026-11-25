@@ -1,0 +1,2 @@
+tset "x" { assert(true); }
+// design.md §14 conformance: A misspelled keyword (`tset "..." { }`) is a parse error, not a missing test.

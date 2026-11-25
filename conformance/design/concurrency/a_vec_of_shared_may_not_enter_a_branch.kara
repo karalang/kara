@@ -1,0 +1,8 @@
+// design.md §13 What may cross a task boundary: any type that contains a task-local type at any depth is task-local (`Vec[Node]` with `Node` shared).
+shared struct Node { v: i64 }
+fn total(ns: Vec[Node]) -> i64 { let mut s = 0; for n in ns { s += n.v; } s }
+fn main() {
+    let ns = [Node { v: 1 }, Node { v: 2 }];
+    let (a, b) = par { total(ns), 0 };
+    println(f"{a} {b}");
+}

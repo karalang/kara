@@ -1,0 +1,5 @@
+// design.md §10 Script mode: `?` works, because the implicit `main` returns a `Result`.
+let n = i64.parse("5")?;
+println(n * 2);
+let m = i64.parse("z")?;
+println(m);

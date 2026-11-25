@@ -1,0 +1,12 @@
+
+fn parse(s: String) -> Result[i64, ParseError] { i64.parse(s) }
+fn load(s: String) -> Result[i64, AnyError] {
+    let v = parse(s).context("while parsing")?;
+    Ok(v)
+}
+fn top(s: String) -> Result[i64, AnyError] { load(s).context("while loading") }
+fn main() {
+    match top("12".to_string()) { Ok(v) => println(f"ok {v}"), Err(e) => println(f"{e}") }
+    match top("zz".to_string()) { Ok(v) => println(f"ok {v}"), Err(e) => println(f"{e}") }
+}
+// design.md conformance (moved from the shared folder's design-10-13): AnyError: context chain outermost first; ? converts any Error

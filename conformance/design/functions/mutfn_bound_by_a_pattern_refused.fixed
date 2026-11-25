@@ -1,0 +1,26 @@
+// design.md §7 Function types and kinds: a `MutFn` bound by a pattern is rebound in its arm before it is called (review ruling 2026-11-25)
+struct Hook { cb: Option[MutFn() -> i64] }
+fn main() {
+    let mut n = 0;
+    let mut fs: Vec[MutFn() -> i64] = [];
+    fs.push(|| { n += 1; n });
+    let mut o: Option[MutFn() -> i64] = fs.pop();
+    match o.take() {
+        Some(f) => { let mut f = f; println(f()) },
+        None => println(0),
+    }
+    fs.push(|| 5);
+    if let Some(g) = fs.pop() {
+        let mut g = g;
+        println(g());
+        println(g());
+    }
+    let h = Hook { cb: Some(|| 9) };
+    match h.cb {
+        Some(k) => {
+            let mut k = k;
+            println(k());
+        }
+        None => {}
+    }
+}

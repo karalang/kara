@@ -1,0 +1,2 @@
+run --output=json {}
+[(f.get("line"), f.get("column") is not None, f.get("context")) for f in (d.get("diagnostics", [{}])[0].get("error_return_trace") or [])][:2] == [(3, True, "while reading q"), (5, True, None)]

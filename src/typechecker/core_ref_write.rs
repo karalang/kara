@@ -159,6 +159,14 @@ struct Walk<'t, 'a> {
     /// collection or a field declared to hold one), with what it came from
     /// and, for a plain `let`, the edit that makes it `let mut`.
     mut_fn_lets: Vec<((usize, usize), String, Option<FixIt>)>,
+    /// Bindings of a `match`, `if let` or `while let` pattern over a value
+    /// declared to hold a `MutFn` (`Some(f)` over `Option[MutFn()]`), with
+    /// what it came from and the edits that rebind each inside its arm,
+    /// `let mut f = f;` (review ruling 2026-11-25: no exception for
+    /// patterns).
+    pattern_mut_fns: Vec<((usize, usize), String, Vec<crate::resolver::TextEdit>)>,
+    /// Calls through such a binding, with their message and edits.
+    pattern_mut_fn_calls: Vec<(Span, String, Vec<crate::resolver::TextEdit>)>,
     /// MutFn locals a `let` or an owned argument has moved out of (§1.1: a
     /// `MutFn` is never `Copy`), with how each one moved (B-2026-10-19-36,
     /// B-2026-11-05-2).
@@ -397,6 +405,8 @@ impl<'a> TypeChecker<'a> {
             immutable_mut_closure_locals: Vec::new(),
             own_mut_fn_params: FxHashMap::default(),
             mut_fn_lets: Vec::new(),
+            pattern_mut_fns: Vec::new(),
+            pattern_mut_fn_calls: Vec::new(),
             moved_mut_fns: Vec::new(),
             kind_errors: Vec::new(),
             moved_fn_uses: Vec::new(),
@@ -466,6 +476,7 @@ impl<'a> TypeChecker<'a> {
             w.mut_closure_locals.clear();
             w.immutable_mut_closure_locals.clear();
             w.mut_fn_lets.clear();
+            w.pattern_mut_fns.clear();
             w.moved_mut_fns.clear();
             w.declared_types.clear();
             for p in &f.params {
@@ -650,6 +661,7 @@ impl<'a> TypeChecker<'a> {
         let kind_errors = w.kind_errors;
         let moved_fn_uses = w.moved_fn_uses;
         let shared_mut_fn_calls = w.shared_mut_fn_calls;
+        let pattern_mut_fn_calls = w.pattern_mut_fn_calls;
         let mut_fn_local_calls = w.mut_fn_local_calls;
         let mut_fn_place_calls = w.mut_fn_place_calls;
         let receiver_write_calls = w.receiver_write_calls;
@@ -728,6 +740,11 @@ impl<'a> TypeChecker<'a> {
                 }
                 None => self.type_error(message, span, TypeErrorKind::FnKindMismatch),
             }
+        }
+        for (span, message, edits) in pattern_mut_fn_calls {
+            self.type_error(message, span, TypeErrorKind::FnKindMismatch);
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&span), edits);
         }
         for (span, message, fix) in prefix_errors {
             self.type_error_with_fix_it(message, span, TypeErrorKind::CapturePrefixRemoved, fix);
@@ -819,6 +836,7 @@ impl Walk<'_, '_> {
         self.immutable_mut_closure_locals
             .retain(|((i, _), _)| *i < depth);
         self.mut_fn_lets.retain(|((i, _), _, _)| *i < depth);
+        self.pattern_mut_fns.retain(|((i, _), _, _)| *i < depth);
         self.moved_mut_fns.retain(|((i, _), _)| *i < depth);
         self.declared_types.retain(|((i, _), _)| *i < depth);
     }
@@ -1664,6 +1682,7 @@ impl Walk<'_, '_> {
                     self.note_pattern_read_only(&arm.pattern, scrutinee);
                     self.scopes.push(Vec::new());
                     self.bind(&arm.pattern, Origin::Owned, None);
+                    self.note_pattern_mut_fns(&arm.pattern, scrutinee, &arm.body);
                     self.branches.push((e.span.offset, i + 1));
                     if let Some(g) = &arm.guard {
                         self.expr(g);
@@ -1704,6 +1723,7 @@ impl Walk<'_, '_> {
                 self.note_pattern_read_only(pattern, value);
                 self.scopes.push(Vec::new());
                 self.bind(pattern, Origin::Owned, None);
+                self.note_pattern_mut_fns_in_block(pattern, value, then_block);
                 self.branches.push((e.span.offset, 1));
                 self.block(then_block);
                 self.branches.pop();
@@ -1729,6 +1749,7 @@ impl Walk<'_, '_> {
                 self.note_pattern_read_only(pattern, value);
                 self.scopes.push(Vec::new());
                 self.bind(pattern, Origin::Owned, None);
+                self.note_pattern_mut_fns_in_block(pattern, value, body);
                 self.block(body);
                 self.scopes.pop();
                 self.release(&keys);
@@ -2150,6 +2171,30 @@ impl Walk<'_, '_> {
                 ));
                 return;
             }
+            let found = self
+                .pattern_mut_fns
+                .iter()
+                .rev()
+                .find(|(r, _, _)| *r == (i, j))
+                .map(|(_, from, edits)| (from.clone(), edits.clone()));
+            if let Some((from, edits)) = found {
+                if matches!(
+                    self.node_types.get(&callee.id),
+                    Some((Type::Function { .. }, _))
+                ) {
+                    self.pattern_mut_fn_calls.push((
+                        callee.span,
+                        format!(
+                            "`{name}` is a `MutFn` bound by a pattern (it holds the `MutFn` \
+                             from {from}), and calling a `MutFn` changes the binding's value, \
+                             so it needs a mutable binding: rebind it in the arm, \
+                             `let mut {name} = {name};` (design.md §7 Function types and kinds)"
+                        ),
+                        edits,
+                    ));
+                }
+                return;
+            }
             if i == 0 {
                 if let Some(fix) = self.own_mut_fn_params.get(name).cloned() {
                     self.shared_mut_fn_calls.push((
@@ -2245,6 +2290,72 @@ impl Walk<'_, '_> {
         self.note_capture_write(object);
     }
 
+    /// Record the bindings of `pattern` over `scrutinee`, when the scrutinee
+    /// is declared to hold a `MutFn`, with the edits that rebind each at the
+    /// start of `body`: inside a block body before its first statement, and
+    /// around any other body as a new block.
+    fn note_pattern_mut_fns(&mut self, pattern: &Pattern, scrutinee: &Expr, body: &Expr) {
+        if let ExprKind::Block(b) = &body.kind {
+            self.note_pattern_mut_fns_in_block(pattern, scrutinee, b);
+            return;
+        }
+        self.note_pattern_mut_fns_with(pattern, scrutinee, |rebind| {
+            vec![
+                crate::resolver::TextEdit {
+                    offset: body.span.offset,
+                    length: 0,
+                    replacement: format!("{{ {rebind} "),
+                },
+                crate::resolver::TextEdit {
+                    offset: body.span.offset + body.span.length,
+                    length: 0,
+                    replacement: " }".to_string(),
+                },
+            ]
+        });
+    }
+
+    fn note_pattern_mut_fns_in_block(&mut self, pattern: &Pattern, scrutinee: &Expr, b: &Block) {
+        let first = b
+            .stmts
+            .first()
+            .map(|st| st.span)
+            .or(b.final_expr.as_ref().map(|e| e.span));
+        let Some(sp) = first else {
+            return;
+        };
+        let sep = if sp.line > b.span.line {
+            format!("\n{}", " ".repeat(sp.column.saturating_sub(1)))
+        } else {
+            " ".to_string()
+        };
+        self.note_pattern_mut_fns_with(pattern, scrutinee, |rebind| {
+            vec![crate::resolver::TextEdit {
+                offset: sp.offset,
+                length: 0,
+                replacement: format!("{rebind}{sep}"),
+            }]
+        });
+    }
+
+    fn note_pattern_mut_fns_with(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &Expr,
+        edits: impl Fn(&str) -> Vec<crate::resolver::TextEdit>,
+    ) {
+        let Some(from) = self.mut_fn_container(scrutinee) else {
+            return;
+        };
+        for (n, _) in pattern.binding_name_spans() {
+            if let Root::Local(i, j) = self.root_of(&n) {
+                let rebind = format!("let mut {n} = {n};");
+                self.pattern_mut_fns
+                    .push(((i, j), from.clone(), edits(&rebind)));
+            }
+        }
+    }
+
     /// Where `value`, a `let`'s initializer of a function type, takes a
     /// `MutFn` from, or `None` when it is not known to be one: an `own`
     /// `MutFn` parameter or another `MutFn` binding (`f`), or an element or
@@ -2261,6 +2372,7 @@ impl Walk<'_, '_> {
             }
             if let Some(Root::Local(i, j)) = self.binding_root(n) {
                 if self.mut_fn_lets.iter().any(|(r, _, _)| *r == (i, j))
+                    || self.pattern_mut_fns.iter().any(|(r, _, _)| *r == (i, j))
                     || self.mut_closure_locals.iter().any(|(r, _)| *r == (i, j))
                 {
                     return Some(format!("`{n}`"));
@@ -2273,6 +2385,14 @@ impl Walk<'_, '_> {
         ) {
             return None;
         }
+        self.mut_fn_container(value)
+    }
+
+    /// Where `value` holds a `MutFn`, by its declared type: the place it is
+    /// taken out of (down through `pop`, `unwrap`, `?` and the like) is
+    /// declared with a type that holds one (`Vec[MutFn()]`,
+    /// `Option[MutFn()]`, a field typed `MutFn`).
+    fn mut_fn_container(&self, value: &Expr) -> Option<String> {
         // Down through the calls that take an element out (`pop`,
         // `unwrap`, `remove`, ...) and `?` to the place it comes from.
         let mut e = value;

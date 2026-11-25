@@ -1,0 +1,6 @@
+// design.md §13 `TaskGroup`: a task's effects are part of the effects of the function that spawns it.
+pub fn go() {
+    let g = TaskGroup.new();
+    let _ = g.spawn(|| println("hi"));
+}
+fn main() { go(); }

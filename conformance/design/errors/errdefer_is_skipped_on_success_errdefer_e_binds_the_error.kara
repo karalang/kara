@@ -1,0 +1,12 @@
+
+fn g(n: i64) -> Result[i64, String] {
+    errdefer(e) { println(f"cleanup after {e}"); }
+    errdefer println("plain errdefer");
+    if n > 0 { return Err(f"n={n}"); }
+    Ok(n)
+}
+fn main() {
+    println(f"{g(0)}");
+    println(f"{g(2)}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): errdefer is skipped on success, errdefer(e) binds the error

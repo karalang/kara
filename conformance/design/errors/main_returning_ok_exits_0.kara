@@ -1,0 +1,2 @@
+fn main() -> Result[(), String] { println("fine"); Ok(()) }
+// design.md conformance (moved from the shared folder's design-10-13): main returning Ok(()) exits 0

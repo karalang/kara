@@ -1,0 +1,7 @@
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (s, r) = par { tx.send(5).is_ok(), rx.recv() };
+    println(f"{s} {r}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): a send branch and a recv branch do not conflict

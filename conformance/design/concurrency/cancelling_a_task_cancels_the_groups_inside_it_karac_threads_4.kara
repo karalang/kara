@@ -1,0 +1,15 @@
+import std.time.{Duration, Instant, sleep};
+
+fn inner() -> i64 { defer println("inner torn down"); sleep(Duration.ms(60000)); 0 }
+fn outer() -> i64 {
+    defer println("outer torn down");
+    let g = TaskGroup.new();
+    let h = g.spawn(|| inner());
+    h.join()
+}
+fn main() {
+    let g = TaskGroup.new().with_deadline(Duration.ms(30));
+    let h = g.spawn(|| outer());
+    println(f"{h.try_join().is_err()}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): cancelling a task cancels the groups inside it (KARAC_THREADS=4)

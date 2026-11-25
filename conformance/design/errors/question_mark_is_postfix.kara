@@ -1,0 +1,6 @@
+// design.md §10 Results and propagation: `?` is postfix, so `f()?.x` is `(f()?).x` and `-x?` is `-(x?)`.
+struct P { x: i64 }
+fn mk(ok: bool) -> Option[P] { if ok { Some(P { x: 5 }) } else { None } }
+fn get(ok: bool) -> Option[i64] { let v = mk(ok)?.x; Some(v) }
+fn neg(o: Option[i64]) -> Option[i64] { let n = -o?; Some(n) }
+fn main() { println(f"{get(true)} {get(false)} {neg(Some(3))} {neg(None)}"); }

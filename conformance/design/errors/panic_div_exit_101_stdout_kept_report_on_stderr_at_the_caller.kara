@@ -1,0 +1,9 @@
+fn one() -> i64 { 1 }
+fn zero() -> i64 { 0 }
+fn main() {
+    println("before");
+    let z = zero();
+    println(f"{10 / z}");
+    println("after");
+}
+// design.md conformance (moved from the shared folder's design-10-13): panic: div: exit 101, stdout kept, report on stderr at the caller

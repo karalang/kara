@@ -1,0 +1,28 @@
+// design.md § Slice and array patterns (s5.580): several `mut ref` elements of one pattern over a view are disjoint writable references (B-2026-11-25-1)
+fn ends(xs: mut ref Vec[String]) {
+    if let [mut ref a, mut ref b, .., mut ref z] = xs {
+        a.push_str("1");
+        b.push_str("2");
+        z.push_str("9");
+    }
+}
+fn tail(xs: mut Slice[i64]) {
+    if let [mut ref a, .., mut ref y, mut ref z] = xs { *a += 1; *y += 2; *z += 3; }
+}
+fn main() {
+    let mut v = [1, 2, 3];
+    if let [mut ref a, .., mut ref b] = v { *a = 10; *b = 30; }
+    println(f"{v[0]} {v[1]} {v[2]}");
+    let mut s = ["a", "b", "c", "d"];
+    ends(mut s);
+    println(f"{s[0]} {s[1]} {s[2]} {s[3]}");
+    let mut w = [0, 0, 0, 0];
+    tail(mut w);
+    println(f"{w[0]} {w[1]} {w[2]} {w[3]}");
+    match v {
+        [mut ref x, mut ref y] => { *x = 0; *y = 0; }
+        [mut ref x, _, mut ref z] => { *x += 1; *z += 1; }
+        _ => {}
+    }
+    println(f"{v[0]} {v[2]}");
+}

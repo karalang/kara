@@ -1,0 +1,6 @@
+fn main() {
+    let mut v = [0, 0, 0];
+    let _ = par for i in 0..3 { v[i] = i; };
+    println(f"{v}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): par for writing elements of one Vec conflicts

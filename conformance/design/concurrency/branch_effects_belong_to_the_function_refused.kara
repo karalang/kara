@@ -1,0 +1,4 @@
+// design.md §13 `par` blocks: the enclosing function's effects include the effects of every branch.
+fn noisy() -> i64 { println("x"); 1 }
+pub fn both() -> (i64, i64) { par { noisy(), 2 } }
+fn main() { println(both().1); }

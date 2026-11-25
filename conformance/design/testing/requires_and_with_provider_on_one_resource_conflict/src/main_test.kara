@@ -1,0 +1,8 @@
+struct FakeClock { t: i64 }
+impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }
+fn refuse() -> Result[FakeClock, String] { Err("refused") }
+fn boom() -> FakeClock { panic("ctor") }
+#[test(requires: [Clock])]
+#[with_provider(Clock, FakeClock { t: 5 })]
+test "both" { println("body ran"); }
+// design.md §14 conformance: A resource in both `requires` and a `#[with_provider]` of the same case fails it with `requires_and_with_provider_conflict`.

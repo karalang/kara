@@ -1,0 +1,3 @@
+// design.md §10 `Error` and `AnyError`: on `Ok` the value passes through `.context()`.
+fn parse(s: Str) -> Result[i64, AnyError] { let v = i64.parse(s).context("parsing")?; Ok(v * 2) }
+fn main() { let ok = parse("21").unwrap(); println(ok); match parse("x") { Ok(_) => println("?"), Err(e) => println(f"{e}") } }

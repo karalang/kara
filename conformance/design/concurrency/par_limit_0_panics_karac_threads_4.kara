@@ -1,0 +1,5 @@
+fn main() {
+    let v = par(limit: 0) for i in 0..3 { i };
+    println(f"{v}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): par(limit: 0) panics (KARAC_THREADS=4)

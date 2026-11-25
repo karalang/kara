@@ -1,0 +1,5 @@
+
+#[panic_handler]
+fn on_panic(info: PanicInfo) { eprintln("handler start"); panic("second"); eprintln("handler end"); }
+fn main() { panic("first"); }
+// design.md conformance (moved from the shared folder's design-10-13): a panic inside the panic handler ends the process at once

@@ -1,0 +1,10 @@
+// design.md §13 `par for`: iterations that write different elements of one Vec conflict; split it first with `split_at_mut` and give each part to its own branch.
+fn fill(s: mut Slice[i64], v: i64) { for i in 0..s.len() { s[i] = v; } }
+fn main() {
+    let mut v = [0, 0, 0, 0];
+    {
+        let (a, b) = v.split_at_mut(2);
+        let _ = par { fill(mut a, 1), fill(mut b, 2) };
+    }
+    println(f"{v}");
+}

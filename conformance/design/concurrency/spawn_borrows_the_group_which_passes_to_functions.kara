@@ -1,0 +1,8 @@
+// design.md §13 `TaskGroup`: `spawn` borrows the group, so a group can be passed borrowed to the functions that spawn into it.
+fn start(g: ref TaskGroup, n: i64) -> TaskHandle[i64] { g.spawn(|| n * 10) }
+fn main() {
+    let g = TaskGroup.new();
+    let a = start(g, 1);
+    let b = start(g, 2);
+    println(f"{a.join()} {b.join()}");
+}

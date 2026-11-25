@@ -1,0 +1,12 @@
+import std.time.{Duration, Instant, sleep};
+
+fn work() -> i64 { sleep(Duration.ms(50)); println("task done"); 1 }
+fn main() {
+    {
+        let g = TaskGroup.new();
+        let _ = g.spawn(|| work());
+        let _ = g.spawn(|| work());
+    }
+    println("after scope");
+}
+// design.md conformance (moved from the shared folder's design-10-13): dropping a TaskGroup joins its tasks before the scope ends (KARAC_THREADS=1)

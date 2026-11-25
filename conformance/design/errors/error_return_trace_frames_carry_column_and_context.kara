@@ -1,0 +1,8 @@
+
+fn inner() -> Result[i64, ParseError] { i64.parse("q") }
+fn mid() -> Result[i64, AnyError] { let v = inner().context("while reading q")?; Ok(v) }
+fn main() -> Result[(), AnyError] {
+    let _ = mid()?;
+    Ok(())
+}
+// design.md §10 The error-return trace: each frame names the ? site's line and column; a .context() site fills "context", a bare ? leaves it null (moved from design-10-13)

@@ -1,0 +1,7 @@
+test "private access" { assert(hidden(2) == 6); }
+test "dup" { assert(true); }
+test "dup" { assert(true); }
+fn test_helper() { assert(false); }
+fn make_pair() -> (i64, i64) { (1, 2) }
+test "uses helper" { let (a, b) = make_pair(); assert(a + b == 3); }
+// design.md §14 conformance: Discovery is structural: `test` blocks in `_test.kara` files are the tests; `fn test_helper()` and `fn make_pair()` are helpers; names need not be unique; a test file uses its module's private items.

@@ -1,0 +1,9 @@
+// design.md §10 Cleanup with `defer` and `errdefer`: `defer` runs when the scope ends, through `break` or `continue` too.
+fn main() {
+    for i in 0..3 {
+        defer println(f"leave {i}");
+        if i == 0 { continue; }
+        if i == 1 { break; }
+    }
+    println("done");
+}

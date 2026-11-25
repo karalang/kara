@@ -1,0 +1,7 @@
+// design.md §13 Channels: no view may be sent.
+fn main() {
+    let v = [1, 2];
+    let (tx, rx): (Sender[Slice[i64]], Receiver[Slice[i64]]) = channel(1);
+    let _ = tx.send(v.as_slice());
+    let _ = rx;
+}

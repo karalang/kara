@@ -1,0 +1,2 @@
+fn main() { if target == "native" { println("n"); } }
+// design.md §16 conformance: There is no runtime `if target == ...` form.

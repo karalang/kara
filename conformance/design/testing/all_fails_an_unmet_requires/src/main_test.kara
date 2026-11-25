@@ -1,0 +1,3 @@
+#[test(requires: [Env])]
+test "needs env" { assert(true); }
+// design.md §14 conformance: `karac test --all` fails an unmet `requires` instead of skipping it.

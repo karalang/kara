@@ -1,0 +1,6 @@
+{"type":"run_start","total_tests":5}
+"type":"test_pass","test":"private access"
+"type":"test_pass","test":"dup"
+"type":"test_pass","test":"uses helper"
+"type":"test_pass","test":"main add"
+{"type":"summary","total":5,"passed":5,"failed":0,"skipped":0,

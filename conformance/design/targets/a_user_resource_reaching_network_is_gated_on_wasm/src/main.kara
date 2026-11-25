@@ -1,0 +1,7 @@
+fn fetch() -> i64 {
+    match TcpStream.connect("127.0.0.1:1") { Ok(_) => 1, Err(_) => 0 }
+}
+fn a() -> i64 { fetch() }
+fn b() -> i64 { a() }
+fn main() { println(b()); }
+// design.md §16 conformance: The target gate sees the built-in resources a function reaches transitively, through any number of calls.

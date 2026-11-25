@@ -1,0 +1,10 @@
+// design.md §10 Results and propagation: user code may put `#[track_caller]` on its own panicking wrapper, and it is transitive.
+#[track_caller]
+fn must(o: Option[i64]) -> i64 { o.unwrap() }
+#[track_caller]
+fn must2(o: Option[i64]) -> i64 { must(o) }
+fn main() {
+    println("start");
+    let n: Option[i64] = None;
+    let _ = must2(n);
+}

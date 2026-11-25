@@ -1,0 +1,3 @@
+fn vec_of() -> Vec[i64] { [1, 2] }
+test "borrow" { let v = vec_of(); let w = vec_of(); assert_eq(v, w); assert_ne(v, [3]); assert(v.len() + w.len() == 4); }
+// design.md §14 conformance: `assert_eq` and `assert_ne` borrow both operands, so neither moves.

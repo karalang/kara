@@ -1,0 +1,5 @@
+import std.time.{Duration, sleep};
+#[test(timeout_seconds: 1)]
+test "slow" { sleep(Duration.ms(3000)); }
+test "fast" { assert(true); }
+// design.md §14 conformance: `#[test(timeout_seconds: N)]` bounds the case's run; it is killed and reported by `test_timeout`, which counts as failed.

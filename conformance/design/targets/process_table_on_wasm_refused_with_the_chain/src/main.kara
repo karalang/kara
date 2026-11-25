@@ -1,0 +1,5 @@
+import std.process.{Command};
+fn spawn_it() -> bool { Command.new("true").status().is_ok() }
+fn middle() -> bool { spawn_it() }
+fn main() { println(middle()); }
+// design.md §16 conformance: A function that reaches `ProcessTable` compiles for `native` only; for `wasm_wasi` it is E0411, showing the chain from the entry point.

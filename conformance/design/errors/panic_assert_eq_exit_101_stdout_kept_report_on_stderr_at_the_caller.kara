@@ -1,0 +1,8 @@
+fn one() -> i64 { 1 }
+fn zero() -> i64 { 0 }
+fn main() {
+    println("before");
+    assert_eq(one(), 2);
+    println("after");
+}
+// design.md conformance (moved from the shared folder's design-10-13): panic: assert_eq: exit 101, stdout kept, report on stderr at the caller

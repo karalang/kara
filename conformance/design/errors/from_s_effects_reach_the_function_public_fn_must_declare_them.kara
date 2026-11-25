@@ -1,0 +1,8 @@
+
+struct LowErr {}
+struct HighErr {}
+impl From[LowErr] for HighErr { fn from(e: LowErr) -> HighErr { println("converting"); HighErr {} } }
+fn low() -> Result[i64, LowErr] { Err(LowErr {}) }
+pub fn high() -> Result[i64, HighErr] { let v = low()?; Ok(v) }
+fn main() { let _ = high(); }
+// design.md conformance (moved from the shared folder's design-10-13): ?: From's effects reach the function (public fn must declare them)

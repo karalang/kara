@@ -1,0 +1,6 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let s = v.as_slice();
+    println(s.get_unchecked(1));
+}
+// design.md §16 conformance: `Slice[T].get_unchecked(i)` is an `unsafe fn`: calling it outside an `unsafe` block is refused.

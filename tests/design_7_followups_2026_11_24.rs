@@ -95,6 +95,8 @@ fn d7f_closure_captures_a_nested_field_path_apart() {
 fn d7f_slice_pattern_mut_ref_element_writes_through() {
     runs("types", "slice_pattern_mut_ref_element_writes");
     runs("types", "slice_pattern_mut_ref_element_through_mut_ref_vec");
+    // Several in one pattern, each its own piece of the view (B-2026-11-25-1).
+    runs("types", "slice_pattern_several_mut_ref_elements_write");
     refused(
         "types",
         "slice_pattern_mut_ref_element_over_ref_param_refused",
@@ -115,4 +117,6 @@ fn d7f_every_mutfn_call_needs_a_mutable_binding() {
     refused("functions", "own_mutfn_param_called_directly_refused");
     refused("functions", "mutfn_taken_from_a_vec_needs_let_mut_refused");
     runs("functions", "mutfn_rebound_with_let_mut_runs");
+    // A pattern binding too (review ruling 2026-11-25).
+    refused("functions", "mutfn_bound_by_a_pattern_refused");
 }

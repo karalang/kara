@@ -1,0 +1,2 @@
+test "x" { assert(true, "a", "b"); }
+// design.md §14 conformance: Assertion typing: `assert` takes a `bool`; any other number of arguments is an error; two types `==` cannot compare are a type error.

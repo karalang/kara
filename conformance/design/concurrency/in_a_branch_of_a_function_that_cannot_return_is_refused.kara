@@ -1,0 +1,6 @@
+fn r() -> Result[i64, String] { Ok(1) }
+fn main() {
+    let (a, b) = par { r()?, 2 };
+    println(f"{a} {b}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): ? in a branch of a function that cannot return is refused

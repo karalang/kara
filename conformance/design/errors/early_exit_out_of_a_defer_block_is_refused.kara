@@ -1,0 +1,7 @@
+
+fn f() -> Result[i64, String] {
+    defer { let r: Result[i64, String] = Err("x".to_string()); let _ = r?; }
+    Ok(1)
+}
+fn main() { let _ = f(); }
+// design.md conformance (moved from the shared folder's design-10-13): early exit out of a defer block is refused

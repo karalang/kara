@@ -1,0 +1,9 @@
+"type":"test_fail","test":"explicit"
+"location":{"file":"src/main_test.kara","line":3,
+"kind":"explicit"
+"kind":"index_out_of_bounds"
+"kind":"overflow"
+"kind":"unwrap"
+"kind":"div_by_zero"
+"type":"test_pass","test":"z after"
+{"type":"summary","total":6,"passed":1,"failed":5,"skipped":0,

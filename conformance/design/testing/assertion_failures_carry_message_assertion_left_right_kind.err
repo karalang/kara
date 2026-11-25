@@ -1,0 +1,7 @@
+"message":"assertion failed: x > 3","assertion":"x > 3"
+"message":"assertion failed: v == 5\n  left:  4\n  right: 5","assertion":"v == 5","left":"4","right":"5"
+"message":"assertion failed: 7 != 7\n  value: 7"
+"message":"custom words"
+"message":"eq words\n  left:  1\n  right: 2"
+"kind":"assertion"
+{"type":"summary","total":5,"passed":0,"failed":5,"skipped":0,

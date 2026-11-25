@@ -1,0 +1,2 @@
+fn f() { test "inner" { assert(true); } }
+// design.md §14 conformance: A `test "..." { }` inside a function body is `E_TEST_BLOCK_NOT_TOP_LEVEL`.

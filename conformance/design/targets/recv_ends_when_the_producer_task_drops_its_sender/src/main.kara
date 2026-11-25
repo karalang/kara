@@ -1,0 +1,11 @@
+fn main() {
+    let g = TaskGroup.new();
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
+    let _ = g.spawn(|| {
+        for i in 0..3 { let _ = tx.send(i); }
+    });
+    let mut total = 0;
+    while let Some(v) = rx.recv() { total += v; }
+    println(f"total {total}");
+}
+// design.md §16 conformance: On `native`, `recv` blocks until a value arrives or every `Sender` has been dropped; a `Sender` moved into a task is dropped by that task.

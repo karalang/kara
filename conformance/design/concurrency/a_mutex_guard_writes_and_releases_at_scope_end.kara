@@ -1,0 +1,16 @@
+// design.md §13 Locks and atomics: `m.lock()` returns a guard whose `value` is a `mut ref T`; the lock is released when the guard drops.
+struct Totals { requests: i64, bytes: i64 }
+fn add(totals: ref Mutex[Totals], n: i64) {
+    let g = totals.lock();
+    g.value.requests += 1;
+    g.value.bytes += n;
+}
+fn main() {
+    let t = Mutex.new(Totals { requests: 0, bytes: 0 });
+    {
+        let g = TaskGroup.new();
+        for n in 1..5 { let _ = g.spawn(|| add(t, n)); }
+    }
+    let g = t.lock();
+    println(f"{g.value.requests} {g.value.bytes}");
+}

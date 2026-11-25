@@ -1,0 +1,3 @@
+#[test(requires: [Env])]
+test "needs env" { assert(true); }
+// design.md §14 conformance: `KARA_RESOURCE_<NAME>` set to the empty string does not make the resource available.

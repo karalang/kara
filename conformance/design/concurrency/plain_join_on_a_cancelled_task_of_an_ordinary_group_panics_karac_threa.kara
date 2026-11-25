@@ -1,0 +1,9 @@
+import std.time.{Duration, Instant, sleep};
+
+fn forever() -> i64 { sleep(Duration.ms(60000)); 0 }
+fn main() {
+    let g = TaskGroup.new().with_deadline(Duration.ms(20));
+    let h = g.spawn(|| forever());
+    println(f"{h.join()}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): plain join on a cancelled task of an ordinary group panics (KARAC_THREADS=1)

@@ -1,0 +1,6 @@
+// design.md §10 Script mode: items are hoisted as in any module; statements form `main`'s body in file order.
+println(twice(4));
+let p = P { v: 2 };
+println(p.v);
+fn twice(x: i64) -> i64 { x * 2 }
+struct P { v: i64 }

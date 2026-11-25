@@ -1,0 +1,7 @@
+// design.md §13 Failure: a `TaskGroup` task that returns `Err` does not affect its siblings; the error reaches whoever joins its handle.
+fn work(n: i64) -> Result[i64, String] { if n == 1 { Err("one".to_string()) } else { Ok(n * 2) } }
+fn main() {
+    let g = TaskGroup.new();
+    let hs = [g.spawn(|| work(0)), g.spawn(|| work(1)), g.spawn(|| work(2))];
+    for h in hs.into_iter() { println(f"{h.join()}"); }
+}

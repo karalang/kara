@@ -1,0 +1,7 @@
+// design.md §10 Results and propagation: the alternatives to a panic are `?`, `??`, `unwrap_or(default)` and `match`.
+fn main() {
+    let a: Option[i64] = None;
+    let r: Result[i64, String] = Ok(3);
+    let m = match a { Some(v) => v, None => -1 };
+    println(f"{a.unwrap_or(10)} {r.unwrap_or(0)} {m}");
+}

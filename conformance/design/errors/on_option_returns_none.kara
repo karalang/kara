@@ -1,0 +1,8 @@
+
+fn first(v: Vec[i64]) -> Option[i64] { let x = v.get(0)?; Some(x * 10) }
+fn main() {
+    let a: Vec[i64] = [4];
+    let b: Vec[i64] = [];
+    println(f"{first(a)} {first(b)}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): ?: on Option returns None

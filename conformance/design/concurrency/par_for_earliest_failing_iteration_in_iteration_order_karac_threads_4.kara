@@ -1,0 +1,9 @@
+import std.time.{Duration, Instant, sleep};
+
+fn step(i: i64) -> Result[i64, String] {
+    sleep(Duration.ms(40 - i * 10));
+    if i >= 1 { Err(f"fail {i}") } else { Ok(i) }
+}
+fn run() -> Result[Vec[i64], String] { let v = par for i in 0..4 { step(i)? }; Ok(v) }
+fn main() { println(f"{run()}"); }
+// design.md conformance (moved from the shared folder's design-10-13): par for ?: earliest failing iteration in iteration order (KARAC_THREADS=4)

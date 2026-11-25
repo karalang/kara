@@ -1,0 +1,3 @@
+import std.time.{Duration, sleep};
+test "slow" { sleep(Duration.ms(3000)); }
+// design.md §14 conformance: The limit is `kara.toml`'s `[test] timeout_seconds`, else `KARAC_TEST_TIMEOUT_SECS`, else 30 seconds.

@@ -1,0 +1,3 @@
+test "x" { assert(true); }
+test "y" { x(); }
+// design.md §14 conformance: A test case is not callable and has no identity outside its module.

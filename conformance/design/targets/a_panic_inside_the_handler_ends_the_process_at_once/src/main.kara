@@ -1,0 +1,9 @@
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    println("once");
+    let o: Option[i64] = None;
+    println(o.unwrap());
+    println("never");
+}
+fn main() { panic("first"); }
+// design.md §16 conformance: A panic inside the handler ends the process at once, with exit code 101; the handler is not run again.

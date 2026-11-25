@@ -1,0 +1,5 @@
+fn main() {
+    println("started");
+    let x: i64 = "no";
+}
+// design.md §16 conformance: Every error `karac build` reports stops `karac run` with exit code 1 before the program starts.

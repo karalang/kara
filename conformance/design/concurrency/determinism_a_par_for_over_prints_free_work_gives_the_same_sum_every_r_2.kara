@@ -1,0 +1,9 @@
+
+fn f(i: i64) -> i64 { let mut s = 0; for k in 0..(i * 1000) { s = (s + k * i) % 7919; } s }
+fn main() {
+    let v = par for i in 0..64 { f(i) };
+    let mut t = 0;
+    for x in v.iter() { t += x; }
+    println(f"{t} {v[63]}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): determinism: a par for over prints-free work gives the same sum every run (KARAC_THREADS=4)

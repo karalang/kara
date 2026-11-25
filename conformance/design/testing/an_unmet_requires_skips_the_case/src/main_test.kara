@@ -1,0 +1,3 @@
+#[test(requires: [Env])]
+test "needs env" { assert(true); }
+// design.md §14 conformance: `#[test(requires: [R])]`: an unavailable resource skips the case with `unsatisfied_requires` and `resources`; only skips exit 0.

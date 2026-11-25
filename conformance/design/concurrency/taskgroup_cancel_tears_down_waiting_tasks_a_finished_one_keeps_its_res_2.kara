@@ -1,0 +1,15 @@
+import std.time.{Duration, Instant, sleep};
+
+fn quick() -> i64 { 7 }
+fn forever() -> i64 { defer println("torn down"); sleep(Duration.ms(60000)); 0 }
+fn main() {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| quick());
+    sleep(Duration.ms(20));
+    let b = g.spawn(|| forever());
+    sleep(Duration.ms(20));
+    g.cancel();
+    println(f"{a.try_join()}");
+    match b.try_join() { Ok(_) => println("b ok"), Err(TaskFailed.Cancelled) => println("b cancelled"), Err(_) => println("b other") }
+}
+// design.md conformance (moved from the shared folder's design-10-13): TaskGroup.cancel tears down waiting tasks; a finished one keeps its result (KARAC_THREADS=4)

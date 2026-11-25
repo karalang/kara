@@ -1,0 +1,12 @@
+struct Guard { n: i64 }
+impl Drop for Guard { fn drop(mut ref self) { println("drop ran"); } }
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    println(f"handler: {info.message}");
+}
+fn main() {
+    let _g = Guard { n: 1 };
+    println("start");
+    panic("boom");
+}
+// design.md §16 conformance: A custom panic handler is the only user code that runs on a panic: after the panic record, before exit 101; it borrows a `PanicInfo` and runs once.

@@ -1,0 +1,3 @@
+#[test(requires: [Env])]
+test "needs env" { assert(true); }
+// design.md §14 conformance: A failing `[test.resources]` health check leaves the resource unavailable, so the case is skipped.

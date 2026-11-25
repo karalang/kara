@@ -1,0 +1,8 @@
+
+struct Noisy {}
+impl Drop for Noisy { fn drop(mut ref self) { println("dropped"); } }
+fn main() -> ExitCode {
+    let _n = Noisy {};
+    ExitCode.from(3)
+}
+// design.md conformance (moved from the shared folder's design-10-13): ExitCode: returned code, drops run

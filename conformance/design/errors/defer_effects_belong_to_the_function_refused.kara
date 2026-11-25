@@ -1,0 +1,6 @@
+// design.md §10 Cleanup with `defer` and `errdefer`: a cleanup block's effects are part of the enclosing function's effects.
+pub fn work() -> i64 {
+    defer println("bye");
+    1
+}
+fn main() { println(work()); }

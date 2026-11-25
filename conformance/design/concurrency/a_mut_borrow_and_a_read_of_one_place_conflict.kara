@@ -1,0 +1,7 @@
+fn push(v: mut ref Vec[i64]) { v.push(1); }
+fn count(v: Vec[i64]) -> i64 { v.len() }
+fn main() {
+    let mut v: Vec[i64] = [];
+    let _ = par { push(mut v), count(v) };
+}
+// design.md conformance (moved from the shared folder's design-10-13): a mut borrow and a read of one place conflict

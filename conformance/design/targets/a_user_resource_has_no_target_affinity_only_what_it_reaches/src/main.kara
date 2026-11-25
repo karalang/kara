@@ -1,0 +1,4 @@
+resource Cache;
+fn remember(n: i64) with writes(Cache) writes(Stdout) { println(f"cached {n}"); }
+fn main() { remember(1); }
+// design.md §16 conformance: User-defined resources have no target affinity; the gate sees only the built-in resources reached transitively, so code using only a user resource and portable built-ins compiles for both targets.

@@ -1,0 +1,9 @@
+import std.time.{Duration, Instant, sleep};
+
+fn work() -> i64 { sleep(Duration.ms(20)); 42 }
+fn make() -> TaskHandle[i64] {
+    let g = TaskGroup.new();
+    g.spawn(|| work())
+}
+fn main() { let h = make(); println(f"{h.join()}"); }
+// design.md conformance (moved from the shared folder's design-10-13): a TaskHandle outlives its group and joins at once (KARAC_THREADS=1)

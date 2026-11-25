@@ -1,0 +1,7 @@
+
+fn f() -> i64 {
+    errdefer println("never");
+    1
+}
+fn main() { println(f"{f()}"); }
+// design.md conformance (moved from the shared folder's design-10-13): errdefer in a function that cannot fail warns

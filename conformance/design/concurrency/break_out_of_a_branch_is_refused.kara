@@ -1,0 +1,6 @@
+fn main() {
+    loop {
+        let _ = par { { break; }, 1 };
+    }
+}
+// design.md conformance (moved from the shared folder's design-10-13): break out of a branch is refused

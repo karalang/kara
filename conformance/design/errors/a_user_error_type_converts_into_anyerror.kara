@@ -1,0 +1,7 @@
+// design.md §10 `Error` and `AnyError`: every `Error` converts into `AnyError`, so `?` propagates any error into `Result[T, AnyError]`.
+struct Boom { n: i64 }
+impl Display for Boom { fn to_string(self) -> String { f"boom {self.n}" } }
+impl Error for Boom {}
+fn low() -> Result[i64, Boom] { Err(Boom { n: 3 }) }
+fn high() -> Result[i64, AnyError] { let v = low()?; Ok(v) }
+fn main() { match high() { Ok(_) => println("ok"), Err(e) => println(f"{e}") } }

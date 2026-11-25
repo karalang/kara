@@ -1,0 +1,7 @@
+fn r() -> Result[i64, String] { Ok(1) }
+fn f() -> Result[(i64, i64), String] {
+    let p = (par { r()?, r()? })?;
+    Ok(p)
+}
+fn main() { let _ = f(); }
+// design.md conformance (moved from the shared folder's design-10-13): ? applied to the block is a type error

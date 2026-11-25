@@ -1,0 +1,8 @@
+shared struct Cell { v: i64 }
+fn read(c: Cell) -> i64 { c.v }
+fn main() {
+    let c = Cell { v: 1 };
+    let (a, b) = par { read(c), 2 };
+    println(f"{a} {b}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): a shared handle may not enter a branch

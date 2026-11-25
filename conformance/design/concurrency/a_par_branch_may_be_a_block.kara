@@ -1,0 +1,8 @@
+// design.md §13 `par` blocks: a branch may be a block, and a loop inside a branch is fine.
+fn main() {
+    let (a, b) = par {
+        { let mut s = 0; for i in 0..5 { s += i; } s },
+        { let mut p = 1; let mut k = 0; while k < 3 { p *= 2; k += 1; } p },
+    };
+    println(f"{a} {b}");
+}

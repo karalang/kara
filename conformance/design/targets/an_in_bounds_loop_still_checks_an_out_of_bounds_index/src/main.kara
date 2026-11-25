@@ -1,0 +1,12 @@
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut t = 0;
+    for i in 0..xs.len() { t += xs[i]; }
+    t
+}
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    println(sum(v.as_slice()));
+    let k = v.len();
+    println(v[k]);
+}
+// design.md §16 conformance: Bounds checks stay semantically present in safe code: an idiomatic loop runs, and an index past the end still panics.

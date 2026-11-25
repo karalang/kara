@@ -1,0 +1,5 @@
+// design.md §10 The `main` function and exit codes: `process.exit` may be called anywhere, a `Drop` body included.
+import std.process;
+struct G {}
+impl Drop for G { fn drop(mut ref self) { println("in drop"); process.exit(4); } }
+fn main() { let _g = G {}; println("body"); }

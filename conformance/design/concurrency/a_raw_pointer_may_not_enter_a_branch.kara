@@ -1,0 +1,7 @@
+// design.md §13 What may cross a task boundary: raw pointers are task-local.
+fn main() {
+    let mut x = 5;
+    let p: *mut i64 = ptr.mut(x);
+    let (a, b) = par { p.is_null(), 1 };
+    println(f"{a} {b}");
+}

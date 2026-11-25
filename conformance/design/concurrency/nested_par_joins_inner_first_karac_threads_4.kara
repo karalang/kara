@@ -1,0 +1,8 @@
+import std.time.{Duration, Instant, sleep};
+
+fn slow(ms: i64, v: i64) -> i64 { sleep(Duration.ms(ms)); v }
+fn main() {
+    let (a, (x, y)) = par { slow(5, 1), par { slow(20, 2), slow(1, 3) } };
+    println(f"{a} {x} {y}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): nested par joins inner first (KARAC_THREADS=4)

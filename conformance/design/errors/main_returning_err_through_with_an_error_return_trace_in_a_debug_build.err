@@ -1,0 +1,4 @@
+Error: deep
+Error return trace:
+main.kara:3:43  inner()?
+main.kara:5:13  mid()?

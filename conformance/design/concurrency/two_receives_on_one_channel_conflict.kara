@@ -1,0 +1,7 @@
+// design.md §13 Channels: two branches that receive from one channel conflict.
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
+    let _ = tx.send(1);
+    let _ = tx.send(2);
+    let _ = par { rx.recv(), rx.recv() };
+}

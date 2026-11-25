@@ -1,0 +1,19 @@
+import std.time.{Duration, Instant, sleep};
+
+fn inner() -> i64 { defer println("inner torn down"); sleep(Duration.ms(3000)); 0 }
+fn outer() -> i64 {
+    defer println("outer torn down");
+    let g = TaskGroup.new();
+    let h = g.spawn(|| inner());
+    h.join()
+}
+
+fn main() {
+    let start = Instant.now();
+    let g = TaskGroup.new();
+    let h = g.spawn(|| outer());
+    g.cancel();
+    println(f"{h.try_join().is_err()}");
+    println(f"fast={start.elapsed().as_ms() < 1000}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): FINDING: a task cancelled before its first poll cancels the group it makes on the way to its first wait (KARAC_THREADS=1)

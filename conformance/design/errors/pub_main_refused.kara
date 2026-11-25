@@ -1,0 +1,2 @@
+// design.md §10 The `main` function and exit codes: `main` is never `pub`.
+pub fn main() { println(1); }

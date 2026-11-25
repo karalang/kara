@@ -1,0 +1,5 @@
+
+#[panic_handler]
+fn on_panic(info: PanicInfo) { eprintln(f"handler saw: {info.message}"); }
+fn main() { panic("first"); }
+// design.md conformance (moved from the shared folder's design-10-13): panic handler runs once, then exit 101

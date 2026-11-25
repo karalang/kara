@@ -1,0 +1,9 @@
+import std.time.{Duration, Instant, sleep};
+
+fn spin() -> i64 { let mut s = 0; for i in 0..30000000 { s = (s + i) % 1000003; } s }
+fn main() {
+    let g = TaskGroup.new().with_deadline(Duration.ms(1));
+    let h = g.spawn(|| spin());
+    println(f"{h.try_join().is_ok()}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): pure computation is not interrupted by a deadline: completion wins (KARAC_THREADS=4)

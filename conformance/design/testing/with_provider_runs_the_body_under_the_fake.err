@@ -1,0 +1,6 @@
+"type":"test_pass","test":"fake clock"
+"providers":["Clock"]
+"type":"test_fail","test":"ctor err","duration_ms":0,"location":{"file":"src/main_test.kara","line":10,"col":1}
+"reason":"provider_construction_failed"
+"resource":"Clock"
+"type":"test_fail","test":"ctor panics","duration_ms":0,

@@ -1,0 +1,4 @@
+#[target(native)]
+fn spawn_ok() -> bool { true }
+fn main() { println(spawn_ok()); }
+// design.md §16 conformance: An item that exists on some targets only is gated by attribute; each pass sees exactly what that target's build sees (the interim `#[target]` spelling).

@@ -1,0 +1,13 @@
+import std.time.{Instant};
+import std.random;
+fn main() {
+    let _ = fs.read_to_string("x.txt");
+    let _ = env.var("HOME");
+    let _ = env.args();
+    let _ = Instant.now();
+    let _ = random.next_u64();
+    let v: Vec[i64] = [1, 2, 3];
+    eprintln(f"{v.len()}");
+    println("ok");
+}
+// design.md §16 conformance: `wasm_wasi` provides `FileSystem`, `Stdin`/`Stdout`/`Stderr`, `Env`, `Clock`, `RandomSource` and `Heap`.

@@ -1,0 +1,4 @@
+fn main() {
+    let (a, b) = par { println("x"), println("y") };
+}
+// design.md §16 conformance: The streaming protocol reports the phases lex, parse, resolve, typecheck, effect, ownership; a `par` conflict reports under `typecheck`.

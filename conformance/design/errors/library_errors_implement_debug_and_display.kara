@@ -1,0 +1,7 @@
+// design.md §10 `Error` and `AnyError`: the library's error types implement `Debug` as well as `Display`, so `dbg(e)` takes any of them.
+fn main() {
+    match i64.parse("q") {
+        Ok(_) => {},
+        Err(e) => { let s = f"{e}"; println(s.len() > 0); let _ = dbg(e); }
+    }
+}

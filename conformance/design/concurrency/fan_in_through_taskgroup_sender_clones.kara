@@ -1,0 +1,13 @@
+// design.md §13 Channels: concurrent producers on one channel run as `TaskGroup` tasks, each with its own clone of the `Sender`; messages arrive in no fixed order.
+fn produce(tx: own Sender[i64], n: i64) { let _ = tx.send(n); }
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(8);
+    {
+        let g = TaskGroup.new();
+        for n in 0..3 { let t = tx.clone(); let _ = g.spawn(|| produce(t, n)); }
+    }
+    let mut got: Vec[i64] = [];
+    for _ in 0..3 { got.push(rx.recv().unwrap_or(-1)); }
+    got.sort();
+    println(f"{got}");
+}

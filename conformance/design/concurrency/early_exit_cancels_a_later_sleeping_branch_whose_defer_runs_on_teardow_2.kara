@@ -1,0 +1,19 @@
+import std.time.{Duration, Instant, sleep};
+
+fn fail_fast() -> Result[i64, String] { Err("early".to_string()) }
+fn long() -> Result[i64, String] {
+    defer println("long torn down");
+    sleep(Duration.ms(5000));
+    println("long finished");
+    Ok(2)
+}
+fn run() -> Result[i64, String] {
+    let (a, b) = par { fail_fast()?, long()? };
+    Ok(a + b)
+}
+fn main() {
+    let t = Instant.now();
+    println(f"{run()}");
+    println(f"fast {t.elapsed().as_ms() < 3000}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): early exit cancels a later sleeping branch, whose defer runs on teardown (KARAC_THREADS=4)

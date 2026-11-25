@@ -1,0 +1,7 @@
+shared struct Node { v: i64, next: Option[Node] }
+fn main() {
+    let mut head: Option[Node] = None;
+    for i in 0..1000000 { head = Some(Node { v: i, next: head }); }
+    match head { Some(n) => println(n.v), None => println("none") }
+}
+// design.md §16 conformance: The compiler's own drops of a deep `shared` chain take no frames per level.

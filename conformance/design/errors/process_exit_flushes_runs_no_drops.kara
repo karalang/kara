@@ -1,0 +1,11 @@
+
+import std.process;
+struct Noisy {}
+impl Drop for Noisy { fn drop(mut ref self) { println("dropped"); } }
+fn main() {
+    let _n = Noisy {};
+    defer println("deferred");
+    print("partial");
+    process.exit(4);
+}
+// design.md conformance (moved from the shared folder's design-10-13): process.exit flushes, runs no drops

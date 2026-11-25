@@ -1,0 +1,3 @@
+fn note(s: own String) -> String { println("evaluated"); s }
+test "passes" { assert(true, note("a")); assert_eq(1, 1, note("b")); assert_ne(1, 2, note("c")); }
+// design.md §14 conformance: The optional message is evaluated only when the assertion fails.

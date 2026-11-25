@@ -1,0 +1,9 @@
+fn one() -> i64 { 1 }
+fn zero() -> i64 { 0 }
+fn main() {
+    println("before");
+    let v: Vec[i64] = [];
+    println(f"{v.first().unwrap()}");
+    println("after");
+}
+// design.md conformance (moved from the shared folder's design-10-13): panic: first on empty: exit 101, stdout kept, report on stderr at the caller

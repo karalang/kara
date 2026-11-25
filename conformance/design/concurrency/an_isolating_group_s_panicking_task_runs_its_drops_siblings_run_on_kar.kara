@@ -1,0 +1,13 @@
+import std.time.{Duration, Instant, sleep};
+
+struct Noisy {}
+impl Drop for Noisy { fn drop(mut ref self) { println("panicker dropped its local"); } }
+fn bad() -> i64 { let _n = Noisy {}; sleep(Duration.ms(5)); panic("bad task") }
+fn good() -> i64 { sleep(Duration.ms(30)); 9 }
+fn main() {
+    let g = TaskGroup.isolating();
+    let a = g.spawn(|| bad());
+    let b = g.spawn(|| good());
+    println(f"{a.join().is_err()} {b.join()}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): an isolating group's panicking task runs its drops; siblings run on (KARAC_THREADS=1)

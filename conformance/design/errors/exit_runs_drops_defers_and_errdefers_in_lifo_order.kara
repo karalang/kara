@@ -1,0 +1,18 @@
+
+struct Noisy { n: String }
+impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn fail() -> Result[i64, String] { Err("bad".to_string()) }
+fn f() -> Result[i64, String] {
+    let a = Noisy { n: "a".to_string() };
+    defer println("defer 1");
+    errdefer println("errdefer 2");
+    let b = Noisy { n: "b".to_string() };
+    defer println("defer 3");
+    let v = fail()?;
+    println("unreached");
+    Ok(v)
+}
+fn main() {
+    match f() { Ok(_) => println("ok"), Err(e) => println(f"err {e}") }
+}
+// design.md conformance (moved from the shared folder's design-10-13): ? exit runs drops, defers and errdefers in LIFO order

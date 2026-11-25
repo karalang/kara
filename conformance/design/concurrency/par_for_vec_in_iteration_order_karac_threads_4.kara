@@ -1,0 +1,8 @@
+import std.time.{Duration, Instant, sleep};
+
+fn slow(i: i64) -> i64 { sleep(Duration.ms(50 - i * 10)); i * i }
+fn main() {
+    let v = par for i in 0..5 { slow(i) };
+    println(f"{v}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): par for Vec in iteration order (KARAC_THREADS=4)

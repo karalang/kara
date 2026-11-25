@@ -1,0 +1,10 @@
+// design.md §13 `par` blocks: `?` at any depth inside a branch, in a nested `if` or loop, still returns from the enclosing function.
+fn step(n: i64) -> Result[i64, String] { if n == 3 { Err(f"bad {n}") } else { Ok(n) } }
+fn run() -> Result[(i64, i64), String] {
+    let (a, b) = par {
+        { let mut s = 0; for i in 0..5 { if i > 1 { s += step(i)?; } } s },
+        7,
+    };
+    Ok((a, b))
+}
+fn main() { println(f"{run()}"); }

@@ -1,0 +1,2 @@
+// design.md §10 The `main` function and exit codes: `main` takes no parameters.
+fn main(args: Vec[String]) { println(args.len()); }

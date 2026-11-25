@@ -1,0 +1,3 @@
+// design.md §13 Concurrency: three constructs start tasks; there is no free `spawn`.
+fn work() -> i64 { 1 }
+fn main() { let h = spawn(|| work()); println(h); }

@@ -1,0 +1,4 @@
+test "assert fails" { assert(1 > 2); }
+test "eq fails" { assert_eq(1, 2); }
+test "a ok" { assert(true); }
+// design.md §14 conformance: A filter matching nothing: `total_tests` 0, an empty summary, exit 0.

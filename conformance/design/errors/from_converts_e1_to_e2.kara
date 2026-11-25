@@ -1,0 +1,11 @@
+
+struct LowErr { code: i64 }
+enum HighErr { Low(i64) }
+impl From[LowErr] for HighErr { fn from(e: LowErr) -> HighErr { HighErr.Low(e.code) } }
+fn low(n: i64) -> Result[i64, LowErr] { if n > 0 { Err(LowErr { code: n }) } else { Ok(7) } }
+fn high(n: i64) -> Result[i64, HighErr] { let v = low(n)?; Ok(v + 1) }
+fn main() {
+    match high(0) { Ok(v) => println(f"ok {v}"), Err(HighErr.Low(c)) => println(f"low {c}") }
+    match high(3) { Ok(v) => println(f"ok {v}"), Err(HighErr.Low(c)) => println(f"low {c}") }
+}
+// design.md conformance (moved from the shared folder's design-10-13): ?: From converts E1 to E2

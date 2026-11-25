@@ -1,0 +1,2 @@
+fn main() -> i64 { 1 }
+// design.md conformance (moved from the shared folder's design-10-13): main with another return type is refused, naming the three

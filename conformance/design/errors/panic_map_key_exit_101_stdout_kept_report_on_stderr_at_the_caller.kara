@@ -1,0 +1,10 @@
+fn one() -> i64 { 1 }
+fn zero() -> i64 { 0 }
+fn main() {
+    println("before");
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a".to_string(), 1);
+    println(f"{m["b".to_string()]}");
+    println("after");
+}
+// design.md conformance (moved from the shared folder's design-10-13): panic: map key: exit 101, stdout kept, report on stderr at the caller

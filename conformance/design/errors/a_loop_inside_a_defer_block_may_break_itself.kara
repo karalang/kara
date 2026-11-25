@@ -1,0 +1,9 @@
+// design.md §10 Cleanup with `defer` and `errdefer`: a loop written inside the cleanup block may use `break` and `continue` on itself.
+fn main() {
+    {
+        defer {
+            for i in 0..5 { if i == 1 { continue; } if i == 3 { break; } println(f"c {i}"); }
+        }
+        println("body");
+    }
+}

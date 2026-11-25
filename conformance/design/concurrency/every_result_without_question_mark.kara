@@ -1,0 +1,6 @@
+// design.md §13 Failure: a block whose branches produce `Result` values without `?` returns all of them, in source order.
+fn check(n: i64) -> Result[i64, String] { if n % 2 == 0 { Ok(n) } else { Err(f"odd {n}") } }
+fn main() {
+    let (a, b, c) = par { check(2), check(3), check(5) };
+    println(f"{a} {b} {c}");
+}

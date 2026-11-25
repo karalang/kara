@@ -1,0 +1,8 @@
+
+fn inner() -> Result[i64, String] { Err("deep".to_string()) }
+fn mid() -> Result[i64, String] { let v = inner()?; Ok(v) }
+fn main() -> Result[(), String] {
+    let _ = mid()?;
+    Ok(())
+}
+// design.md conformance (moved from the shared folder's design-10-13): main returning Err through ?, with an error return trace in a debug build

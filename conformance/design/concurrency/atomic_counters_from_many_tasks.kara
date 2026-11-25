@@ -1,0 +1,10 @@
+// design.md §13 Locks and atomics: `Atomic[T]` mutates state several tasks share; atomic operations have no effects.
+fn bump(c: Atomic[i64]) -> i64 { c.fetch_add(1) }
+fn main() {
+    let c = Atomic.new(0);
+    {
+        let g = TaskGroup.new();
+        for _ in 0..8 { let _ = g.spawn(|| bump(c)); }
+    }
+    println(c.load());
+}

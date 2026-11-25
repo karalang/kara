@@ -1,0 +1,3 @@
+import std.time.{Duration, sleep};
+test "slow" { sleep(Duration.ms(3000)); }
+// design.md §14 conformance: Without the attribute, `KARAC_TEST_TIMEOUT_SECS` is the limit when `kara.toml` sets none.

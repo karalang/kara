@@ -1,0 +1,20 @@
+import std.time.{Duration, Instant, sleep};
+
+fn inner() -> i64 { defer println("inner torn down"); sleep(Duration.ms(3000)); 0 }
+fn outer() -> i64 {
+    defer println("outer torn down");
+    let g = TaskGroup.new();
+    let h = g.spawn(|| inner());
+    h.join()
+}
+
+fn spin(ms: i64) { let t = Instant.now(); let mut s = 0; while t.elapsed().as_ms() < ms { s = s + 1; } }
+fn main() {
+    let start = Instant.now();
+    let g = TaskGroup.new().with_deadline(Duration.ms(30));
+    let h = g.spawn(|| outer());
+    spin(100);
+    println(f"{h.try_join().is_err()}");
+    println(f"fast={start.elapsed().as_ms() < 1000}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): FINDING: a deadline that passes before its task is first polled (KARAC_THREADS=4)

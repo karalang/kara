@@ -1,0 +1,6 @@
+
+let a = i64.parse("1")?;
+println(f"a {a}");
+let b = i64.parse("x")?;
+println(f"b {b}");
+// design.md conformance (moved from the shared folder's design-10-13): script mode: top-level statements with ?

@@ -1,0 +1,6 @@
+defer 3
+drop b
+errdefer 2
+defer 1
+drop a
+err bad

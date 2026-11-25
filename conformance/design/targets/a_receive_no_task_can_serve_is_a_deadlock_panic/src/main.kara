@@ -1,0 +1,8 @@
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    println("before");
+    let v = rx.recv();
+    println(v.is_some());
+    let _ = tx.send(1);
+}
+// design.md §16 conformance: Every task waiting on a channel no running task can serve stops the program with exit code 101 and kind `deadlock`, on the native runtime and the MIR interpreter alike.

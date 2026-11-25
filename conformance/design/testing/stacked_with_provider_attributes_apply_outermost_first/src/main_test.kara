@@ -1,0 +1,8 @@
+struct FakeClock { t: i64 }
+impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }
+fn refuse() -> Result[FakeClock, String] { Err("refused") }
+fn boom() -> FakeClock { panic("ctor") }
+#[with_provider(Clock, FakeClock { t: 1 })]
+#[with_provider(Clock, FakeClock { t: 2 })]
+test "inner wins" { assert_eq(Clock.now(), 2); }
+// design.md §14 conformance: Several `#[with_provider]` attributes stack, outermost first.

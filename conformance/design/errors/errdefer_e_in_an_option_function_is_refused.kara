@@ -1,0 +1,7 @@
+
+fn f() -> Option[i64] {
+    errdefer(e) { println("x"); }
+    None
+}
+fn main() { let _ = f(); }
+// design.md conformance (moved from the shared folder's design-10-13): errdefer(e) in an Option function is refused

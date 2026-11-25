@@ -1,0 +1,15 @@
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < xs.len() {
+        // SAFETY: i < xs.len() by the loop condition
+        t += unsafe { xs.get_unchecked(i) };
+        i += 1;
+    }
+    t
+}
+fn main() {
+    let v: Vec[i64] = [4, 5, 6];
+    println(sum(v.as_slice()));
+}
+// design.md §16 conformance: `unsafe { xs.get_unchecked(i) }` takes an `i64` index and returns `ref T`.

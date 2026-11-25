@@ -1,0 +1,8 @@
+
+import std.time.{Duration, sleep, timeout};
+fn slow() -> i64 { defer println("slow torn down"); sleep(Duration.ms(60000)); 1 }
+fn main() {
+    match timeout(Duration.ms(20), || slow()) { Ok(v) => println(f"ok {v}"), Err(_) => println("timed out") }
+    match timeout(Duration.ms(2000), || 5) { Ok(v) => println(f"ok {v}"), Err(_) => println("timed out") }
+}
+// design.md conformance (moved from the shared folder's design-10-13): std.time.timeout returns Err(TimedOut) and tears the scope down (KARAC_THREADS=4)

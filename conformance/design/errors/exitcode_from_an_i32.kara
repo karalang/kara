@@ -1,0 +1,2 @@
+// design.md §10 The `main` function and exit codes: `ExitCode.from(code: i32)` gives an arbitrary exit code.
+fn main() -> ExitCode { println("x"); ExitCode.from(3) }

@@ -1,0 +1,10 @@
+fn one() -> i64 { 1 }
+fn zero() -> i64 { 0 }
+fn main() {
+    println("before");
+    let a: i64 = 9223372036854775807;
+    let b = one();
+    println(f"{a + b}");
+    println("after");
+}
+// design.md conformance (moved from the shared folder's design-10-13): panic: overflow: exit 101, stdout kept, report on stderr at the caller

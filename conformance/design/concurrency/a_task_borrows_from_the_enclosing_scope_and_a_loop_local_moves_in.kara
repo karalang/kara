@@ -1,0 +1,15 @@
+// design.md §13 `TaskGroup`: the closure captures place by place, so a task may borrow from the enclosing scope; a loop-body local is moved into the task.
+fn main() {
+    let base = [100, 200];
+    let mut hs: Vec[TaskHandle[i64]] = [];
+    {
+        let g = TaskGroup.new();
+        for i in 0..3 {
+            let name = f"t{i}";
+            hs.push(g.spawn(|| base[0] + name.len() + i));
+        }
+    }
+    let mut out: Vec[i64] = [];
+    for h in hs.into_iter() { out.push(h.join()); }
+    println(f"{out}");
+}

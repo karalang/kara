@@ -1,0 +1,2 @@
+// design.md §10 Results and propagation: `try { ... }` blocks are deferred and `try` is reserved.
+fn main() { let try = 1; println(try); }

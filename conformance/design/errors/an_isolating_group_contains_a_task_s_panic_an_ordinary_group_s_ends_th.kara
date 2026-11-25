@@ -1,0 +1,15 @@
+
+fn boom(n: i64) -> i64 { if n > 0 { panic(f"task {n}"); } n }
+fn main() {
+    let iso = TaskGroup.isolating();
+    let h = iso.spawn(|| boom(2));
+    match h.join() {
+        Ok(v) => println(f"ok {v}"),
+        Err(TaskFailed.Panicked { message, location }) => println(f"contained: {message} at main.kara:2:37 {location.ends_with("main.kara:2:37")}"),
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+    }
+    let g = TaskGroup.new();
+    let k = g.spawn(|| boom(3));
+    println(f"{k.join()}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): an isolating group contains a task's panic; an ordinary group's ends the process

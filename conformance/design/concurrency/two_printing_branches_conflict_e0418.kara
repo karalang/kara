@@ -1,0 +1,2 @@
+fn main() { par { println("a"), println("b") }; }
+// design.md conformance (moved from the shared folder's design-10-13): two printing branches conflict (E0418)

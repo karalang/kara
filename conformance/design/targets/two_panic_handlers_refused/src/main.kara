@@ -1,0 +1,6 @@
+#[panic_handler]
+fn a(info: PanicInfo) { println("a"); }
+#[panic_handler]
+fn b(info: PanicInfo) { println("b"); }
+fn main() {}
+// design.md §16 conformance: A program defines at most one handler.

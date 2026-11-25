@@ -1,0 +1,11 @@
+
+struct Noisy {}
+impl Drop for Noisy { fn drop(mut ref self) { println("dropped"); } }
+fn f() -> Result[i64, String] {
+    let _n = Noisy {};
+    defer println("deferred");
+    errdefer println("errdeferred");
+    panic("stop");
+}
+fn main() { let _ = f(); }
+// design.md conformance (moved from the shared folder's design-10-13): a panic runs no Drop, defer or errdefer

@@ -1,0 +1,5 @@
+// design.md §10 Panics: the `extern "C-unwind"` ABI is recognized, but a declaration is refused with `"C"` as the fix.
+unsafe extern "C-unwind" {
+    fn abs(x: i32) -> i32;
+}
+fn main() { println(1); }

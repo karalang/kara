@@ -1,0 +1,7 @@
+
+struct A {}
+struct B {}
+fn a() -> Result[i64, A] { Err(A {}) }
+fn b() -> Result[i64, B] { let v = a()?; Ok(v) }
+fn main() { let _ = b(); }
+// design.md conformance (moved from the shared folder's design-10-13): ?: no From is a type error

@@ -1,0 +1,9 @@
+struct Noisy { n: i64 }
+impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let a = Noisy { n: 1 };
+    let v = [Noisy { n: 2 }, Noisy { n: 3 }];
+    let s: Vec[i64] = [5, 3, 9].iter().map(|x| x * 2).collect();
+    println(f"{s} {v.len()} {a.n}");
+}
+// design.md §16 conformance: One semantics: `karac run`, `karac run --interp` and a built binary behave the same; only speed differs.

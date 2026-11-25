@@ -1,0 +1,14 @@
+// design.md §13 `par for`: a structure that every iteration only reads is passed as a frozen handle.
+shared struct Node { v: i64, kids: Vec[Node] }
+fn sum(n: frozen Node, depth: i64) -> i64 {
+    if depth == 0 { return 0; }
+    let mut s = n.v;
+    for k in n.kids { s += sum(k, depth - 1); }
+    s
+}
+fn main() {
+    let root = Node { v: 1, kids: [Node { v: 2, kids: [] }, Node { v: 3, kids: [Node { v: 4, kids: [] }] }] };
+    let g = freeze root;
+    let sums: Vec[i64] = par for depth in 1..4 { sum(g, depth) };
+    println(f"{sums}");
+}

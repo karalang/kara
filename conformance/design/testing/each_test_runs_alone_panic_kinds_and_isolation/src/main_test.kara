@@ -1,0 +1,9 @@
+fn one() -> i64 { 1 }
+fn zero() -> i64 { 0 }
+test "explicit" { panic("boom"); }
+test "index" { let v = [1, 2]; let i = 5; let _ = v[i]; }
+test "overflow" { let a: i64 = 9223372036854775807; let b = a + one(); let _ = b; }
+test "unwrap" { let o: Option[i64] = None; let _ = o.unwrap(); }
+test "div" { let z = zero(); let _ = 1 / z; }
+test "z after" { assert(true); }
+// design.md §14 conformance: Each test runs in its own process: a panicking test fails alone and the others still run; `kind` is the panic record's kind; the exit code is non-zero.

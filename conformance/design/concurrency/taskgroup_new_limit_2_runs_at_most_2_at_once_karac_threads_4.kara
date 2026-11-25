@@ -1,0 +1,22 @@
+import std.time.{Duration, Instant, sleep};
+
+fn work(live: Atomic[i64], peak: Atomic[i64]) -> i64 {
+    let now = live.fetch_add(1) + 1;
+    let mut p = peak.load();
+    while now > p {
+        match peak.compare_exchange(p, now) { Ok(_) => { break; } Err(a) => { p = a; } }
+    }
+    sleep(Duration.ms(20));
+    let _ = live.fetch_sub(1);
+    0
+}
+fn main() {
+    let live = Atomic.new(0);
+    let peak = Atomic.new(0);
+    {
+        let g = TaskGroup.new(limit: 2);
+        for _ in 0..6 { let _ = g.spawn(|| work(live, peak)); }
+    }
+    println(f"peak {peak.load() <= 2} {peak.load() >= 1}");
+}
+// design.md conformance (moved from the shared folder's design-10-13): TaskGroup.new(limit: 2) runs at most 2 at once (KARAC_THREADS=4)
