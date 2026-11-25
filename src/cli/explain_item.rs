@@ -24,6 +24,32 @@ struct ItemReport {
     declared: Option<String>,
     declared_json: String,
     params: Vec<Param>,
+    /// Each `.discriminant()` call in the body on a C-like enum with no
+    /// `#[repr]`: the enum and the call's line (design.md § Semver lock,
+    /// B-2026-11-25-17).
+    local_discriminants: Vec<(String, usize)>,
+}
+
+/// The span of `item`'s body: a free function `f`, or a method
+/// `Type.method`.
+fn body_span(program: &crate::ast::Program, item: &str) -> Option<crate::token::Span> {
+    use crate::ast::{ImplItem, Item};
+    let (ty, name) = match item.split_once('.') {
+        Some((t, m)) => (Some(t), m),
+        None => (None, item),
+    };
+    program.items.iter().find_map(|i| match (i, ty) {
+        (Item::Function(f), None) if f.name == name => Some(f.body.span),
+        (Item::ImplBlock(b), Some(t))
+            if crate::call_graph::render_target_type(&b.target_type) == t =>
+        {
+            b.items.iter().find_map(|m| match m {
+                ImplItem::Method(m) if m.name == name => Some(m.body.span),
+                _ => None,
+            })
+        }
+        _ => None,
+    })
 }
 
 /// `a.kara.top` as `("a.kara", "top")`; a method is `a.kara.Type.method`.
@@ -117,6 +143,23 @@ fn report(file: &str, item: &str) -> Result<ItemReport, String> {
             )
         })
         .unwrap_or_default();
+    let local_discriminants = match (
+        body_span(&pipeline.parsed.program, item),
+        pipeline.typed.as_ref(),
+    ) {
+        (Some(body), Some(t)) => {
+            let mut calls: Vec<(String, usize)> = t
+                .local_discriminant_calls
+                .iter()
+                .filter(|(at, _)| at.offset >= body.offset && at.offset < body.offset + body.length)
+                .map(|(at, e)| (e.clone(), at.line))
+                .collect();
+            calls.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+            calls.dedup();
+            calls
+        }
+        _ => Vec::new(),
+    };
     Ok(ItemReport {
         item: item.to_string(),
         file: file.to_string(),
@@ -125,6 +168,7 @@ fn report(file: &str, item: &str) -> Result<ItemReport, String> {
         declared,
         declared_json: crate::effect_graph::declared_effects_json(declared_effects),
         params,
+        local_discriminants,
     })
 }
 
@@ -172,6 +216,18 @@ fn render_text(r: &ItemReport) -> String {
             }
         }
     }
+    if !r.local_discriminants.is_empty() {
+        out.push_str("\nSemver:\n");
+        for (e, line) in &r.local_discriminants {
+            out.push_str(&format!(
+                "  {}:{line}  `.discriminant()` on `{e}`, which has no `#[repr]`: its \
+                 discriminants are compiler-chosen and may shift between versions, so the \
+                 value is a local property, not a semver contract; `#[repr(intN)]` on `{e}` \
+                 fixes them (design.md § Semver lock)\n",
+                r.file
+            ));
+        }
+    }
     out
 }
 
@@ -201,7 +257,7 @@ fn render_json(r: &ItemReport) -> String {
         })
         .collect();
     format!(
-        "{{\"kind\":\"item\",\"item\":{},\"file\":{},\"line\":{},\"inferred_effects\":[{}],\"declared_effects\":{},\"effects\":[{}],\"parameters\":[{}]}}",
+        "{{\"kind\":\"item\",\"item\":{},\"file\":{},\"line\":{},\"inferred_effects\":[{}],\"declared_effects\":{},\"effects\":[{}],\"parameters\":[{}],\"local_discriminants\":[{}]}}",
         json_string(&r.item),
         json_string(&r.file),
         r.line,
@@ -209,6 +265,14 @@ fn render_json(r: &ItemReport) -> String {
         r.declared_json,
         derivations.join(","),
         params.join(","),
+        r.local_discriminants
+            .iter()
+            .map(|(e, line)| format!(
+                "{{\"enum\":{},\"line\":{line},\"semver\":\"local\"}}",
+                json_string(e)
+            ))
+            .collect::<Vec<_>>()
+            .join(","),
     )
 }
 

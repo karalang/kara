@@ -168,7 +168,7 @@ fn make_node(key: &str, span: &Span, filename: &str, is_test: bool) -> NodeInfo 
 /// entirely. Rendering the full generic form here was exactly that bug.
 ///
 /// Non-`Path` impl targets (rare) fall back to the rendered form.
-fn render_target_type(ty: &TypeExpr) -> String {
+pub(crate) fn render_target_type(ty: &TypeExpr) -> String {
     match &ty.kind {
         TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
         _ => crate::formatter::render_type_expr(ty),

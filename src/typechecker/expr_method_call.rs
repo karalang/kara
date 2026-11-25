@@ -4332,6 +4332,9 @@ impl<'a> super::TypeChecker<'a> {
                         "u64" => Type::UInt(UIntSize::U64),
                         _ => Type::UInt(UIntSize::U32),
                     };
+                    if !disc.repr_declared && !disc.repr_c {
+                        self.local_discriminant_calls.push((*span, name.clone()));
+                    }
                     self.record_expr_type(span, &ty);
                     return ty;
                 }

@@ -2673,6 +2673,12 @@ pub struct TypeCheckResult {
     /// vocabulary. Payload-carrying enums are absent by construction —
     /// design.md § Enum Discriminant Runtime Surface excludes them at v1.
     pub enum_discriminants: crate::ast::EnumDiscriminantTable,
+    /// Every `.discriminant()` call on a C-like enum with no `#[repr]`, with
+    /// the enum's name: its value is compiler-chosen and may shift between
+    /// versions, a local property and not a semver contract, which `karac
+    /// explain` on the calling function says (design.md § Semver lock,
+    /// B-2026-11-25-17).
+    pub local_discriminant_calls: Vec<(Span, String)>,
     /// Sibling of `temp_recv_elem_types` for `Map`/`Set` fresh-temp receivers
     /// (`make_map().get(k)`, `make_set().contains(x)`): span of the MethodCall →
     /// the receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr` (codegen needs K+V
@@ -4367,6 +4373,8 @@ pub struct TypeChecker<'a> {
     pub(super) index_recv_vec_types: FxHashMap<SpanKey, TypeExpr>,
     /// B-2026-08-21-10 — see `TypeCheckResult::enum_discriminants`.
     pub(super) enum_discriminants: crate::ast::EnumDiscriminantTable,
+    /// See `TypeCheckResult::local_discriminant_calls`.
+    pub(super) local_discriminant_calls: Vec<(Span, String)>,
     /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
     /// Map/Set receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_mapset_types: FxHashMap<SpanKey, TypeExpr>,
@@ -5287,6 +5295,7 @@ impl<'a> TypeChecker<'a> {
             tensor_index_recv_types: FxHashMap::default(),
             index_recv_vec_types: FxHashMap::default(),
             enum_discriminants: crate::ast::EnumDiscriminantTable::default(),
+            local_discriminant_calls: Vec::new(),
             temp_recv_mapset_types: FxHashMap::default(),
             temp_recv_len_elem_types: FxHashMap::default(),
             iter_terminal_elem_types: FxHashMap::default(),
@@ -5980,6 +5989,7 @@ impl<'a> TypeChecker<'a> {
             tensor_index_recv_types: self.tensor_index_recv_types,
             index_recv_vec_types: self.index_recv_vec_types,
             enum_discriminants: self.enum_discriminants,
+            local_discriminant_calls: self.local_discriminant_calls,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             temp_recv_len_elem_types: self.temp_recv_len_elem_types,
             iter_terminal_elem_types: self.iter_terminal_elem_types,
